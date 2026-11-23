@@ -395,8 +395,12 @@ export function createToolRules(api, options = {}) {
       },
       matches: view.enforced ? matchesOf(view.enforced) : null,
       cardDetails: cardDetails(cardSetting, currentConfig()),
-      // Whether the decision record is being kept on disk.
-      decisions: log.problem ? { state: "failing", reason: log.problem } : { state: "kept" },
+      // Whether the decision record is being kept on disk, and, apart from
+      // that, the records set aside as oversized that are still beside it.
+      decisions: {
+        ...(log.problem ? { state: "failing", reason: log.problem } : { state: "kept" }),
+        setAside: log.listSetAside(),
+      },
     };
   });
 

@@ -84,6 +84,7 @@ export function createBots(api, options = {}) {
   const versions = options.versions ?? api.runtime.state.openKeyedStore(VERSIONS);
   const records = new Records(store, versions, {
     now,
+    ...(options.monotonic ? { monotonic: options.monotonic } : {}),
     // Empty: readers fetch again, and nothing about a request goes out.
     onChange: () => emit?.("changed", {}, { scope: "operator.read" }),
   });
@@ -242,10 +243,13 @@ export function createBots(api, options = {}) {
           const { generation } = await records.transact((l, at) => L.revoke(l, id, at));
           return { id, generation, revoked: true };
         }
-        // A grant is never changed: a narrower one is a new grant, with a fresh id.
-        if (params.id !== undefined)
-          throw bad("A grant can't be changed. Add a new one and remove this one.");
-        const id = newId("g");
+        // A new grant gets a fresh id; an update names the generation it read,
+        // and the publish compares it, so a stale update can't land.
+        const update = params.id !== undefined;
+        const id = update ? requireId("g", params.id, "id") : newId("g");
+        const expected = update ? params.expectedGeneration : null;
+        if (update && !Number.isSafeInteger(expected))
+          throw bad("An update names the expectedGeneration it read.");
         if (!["see", "suggest"].includes(params.scope)) throw bad("scope must be see or suggest.");
         const all = params.bots === "all";
         if (
@@ -281,12 +285,20 @@ export function createBots(api, options = {}) {
         };
         const version = newId("gv");
         const body = { kind: "grant", grant: id, gateway: await gatewayId(), details };
+        if (update) L.grantForUpdate((await snapshot()).ledger, id, expected);
         const digest = await records.persist(version, body);
         const { generation } = await records.publish(
           version,
           digest,
-          (l, t) => L.publishGrant(l, id, { version, digest, expiresAt }, t),
-          () => expiresAt,
+          (l, t) => L.publishGrant(l, id, { version, digest, expiresAt }, expected, t),
+          // An update lives no longer than the generation it read: until that
+          // grant's expiry, or the end of its retention once revoked.
+          (ledger) => {
+            const current = update ? own(ledger.grants, id) : undefined;
+            if (!current) return expiresAt;
+            const until = current.revoked ? current.revokedAt + L.RETAIN_MS : current.expiresAt;
+            return Math.min(expiresAt, until);
+          },
         );
         return { id, generation, ...details };
       },
@@ -413,6 +425,7 @@ export function createBots(api, options = {}) {
       const tick = () =>
         records
           .transact(() => {})
+          .then(() => records.sweepOrphans())
           .catch((error) =>
             api.logger?.warn?.(`${PLUGIN_ID}: couldn't sweep its records: ${error.message}`),
           );

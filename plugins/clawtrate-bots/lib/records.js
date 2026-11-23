@@ -11,30 +11,65 @@
 //
 // Persist first, then publish: a version is written in full before the ledger
 // refers to it, and readers use only versions the ledger refers to, with a
-// matching digest. Nothing deletes a version yet: reclaiming unpublished ones
-// comes with the journal's cleanup.
+// matching digest. Cleanup and publication exclude each other through the
+// ledger: a publisher checks, after each observation, that the version still
+// exists and isn't being swept; cleanup marks the one version it deletes in
+// the ledger first, deletes it, then clears the mark. Cleanup takes only
+// versions nothing refers to: unpublished ones, replaced grant versions, and
+// those of settled requests whose ledger entries retention has removed.
 
+import { randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { canonical, digestOf } from "./canonical.js";
-import { Refusal, emptyLedger, sweep } from "./ledger.js";
+import {
+  Refusal,
+  clearAge,
+  clearSweeping,
+  emptyLedger,
+  markSweeping,
+  recordAges,
+  referenced,
+  sweep,
+} from "./ledger.js";
 
 export const NAMESPACE = "records";
-/** Versions are bounded: nothing deletes one in this part, and a refused submission keeps no row. */
+/** Versions are bounded; the sweep reclaims those nothing refers to any more. */
 export const VERSIONS = { namespace: "versions", maxEntries: 512, overflowPolicy: "reject-new" };
 const LEDGER = "ledger";
 const VERSION = "v:";
+/**
+ * Versions read per scan page. The store decodes every row of a page, and a
+ * row is at most 1 MiB of JSON (the SDK's limit for one value), so a page is
+ * at most 16 MiB of JSON however large the bodies are.
+ */
+const PAGE = 16;
+/** The end of the versions' key range, and the longest key the store takes. */
+const END = "v;";
+const KEY_MAX = 512;
 /** compareAndApply retries before giving up; each retry means another change landed. */
 const ATTEMPTS = 50;
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 export class Records {
-  constructor(store, versions, { now = Date.now, onChange = () => {} } = {}) {
+  constructor(
+    store,
+    versions,
+    { now = Date.now, monotonic = () => performance.now(), onChange = () => {} } = {},
+  ) {
     for (const need of ["observe", "compareAndApply", "withCurrent"])
       if (typeof store[need] !== "function")
         throw new Error(`clawtrate-bots needs the gateway's keyed store to offer ${need}.`);
     this.store = store;
+    for (const need of ["entriesInKeyRange", "delete"])
+      if (typeof versions[need] !== "function")
+        throw new Error(`clawtrate-bots needs the gateway's keyed store to offer ${need}.`);
     this.versions = versions;
     this.now = now;
     this.onChange = onChange;
+    this.sweepRunning = false;
+    // Ages are measured on this process's monotonic clock, so they belong to this epoch alone.
+    this.epoch = randomBytes(8).toString("hex");
+    this.monotonic = monotonic;
   }
 
   /** @returns {Promise<ReturnType<typeof emptyLedger>>} */
@@ -89,7 +124,11 @@ export class Records {
         throw error;
       }
       if (out.status === "conflict") continue;
-      this.onChange();
+      if (
+        !isDeepStrictEqual(before.proposals, ledger.proposals) ||
+        !isDeepStrictEqual(before.grants, ledger.grants)
+      )
+        this.onChange();
       return result;
     }
     throw new Error("The gateway's request records kept changing. Try again.");
@@ -111,7 +150,7 @@ export class Records {
       if (error?.code !== "PLUGIN_STATE_LIMIT_EXCEEDED") throw error;
       throw new Refusal(
         "records-full",
-        "Clawtrate has stored as many requests as its bots plugin keeps in this version, and nothing frees that space yet. New requests can't be recorded.",
+        "Clawtrate's request records on this gateway are full. Try again after the gateway clears older records.",
       );
     }
     if (!stored) throw new Error("A record with this id already exists.");
@@ -133,7 +172,8 @@ export class Records {
 
   /**
    * Publishes a stored version with `change`, checking after each observation
-   * that it still exists and reads.
+   * that it still exists and reads. The change itself refuses the version
+   * cleanup is deleting; the same update clears the version's orphan age.
    * @template R
    * @param {string} id
    * @param {string} digest
@@ -143,12 +183,123 @@ export class Records {
    */
   publish(id, digest, change, deadline) {
     return this.transact(
-      change,
+      (ledger, now) => {
+        const result = change(ledger, now);
+        clearAge(ledger, id);
+        return result;
+      },
       async () => {
         if (!(await this.version(id, digest)))
           throw new Refusal("unpublishable", "Clawtrate couldn't record this. Try again.");
       },
       deadline,
     );
+  }
+
+  /**
+   * Reclaims versions nothing has referred to for an hour, continuously, as
+   * this process has seen them: each scanned page records when its
+   * unreferenced rows were first seen, and a row is marked for deletion only
+   * an hour after that. A restart starts a fresh observation. One sweep at a
+   * time; a deletion an earlier sweep (in any process) left marked is
+   * finished first.
+   */
+  async sweepOrphans() {
+    if (this.sweepRunning) return [];
+    this.sweepRunning = true;
+    const removed = [];
+    const ages = () => ({ epoch: this.epoch, now: this.monotonic() });
+    try {
+      const pending = (await this.ledger()).sweeping;
+      if (pending) await this.reclaim(pending, removed);
+      let start = VERSION;
+      for (;;) {
+        const { page, unreadable } = await this.scan(start);
+        const live = referenced(await this.ledger());
+        const keys = [...page.map(({ key }) => key), ...(unreadable ? [unreadable] : [])];
+        const ids = keys.map((key) => key.slice(VERSION.length)).filter((id) => !live.has(id));
+        if (ids.length) await this.transact((l) => recordAges(l, ids, ages()));
+        for (const id of ids)
+          if (await this.transact((l) => markSweeping(l, id, ages())))
+            await this.reclaim(id, removed);
+        if (!unreadable && page.length < PAGE) return removed;
+        start = `${unreadable ?? page[page.length - 1].key}\u0000`;
+      }
+    } finally {
+      this.sweepRunning = false;
+    }
+  }
+
+  /**
+   * A page of versions from `start`. The store decodes each row it returns
+   * and throws PLUGIN_STATE_CORRUPT, with no key, when one doesn't read; it
+   * applies the limit first. So on that error the page is the readable rows
+   * before the bad one, and `unreadable` is the bad row's key, found by range
+   * probes, so the sweep goes on past it. An unreadable row nothing refers to
+   * is reclaimed like any other after its hour (it can never be published:
+   * version() can't read it); one the ledger refers to is never marked.
+   */
+  async scan(start) {
+    const range = (lo, hi, limit) =>
+      this.versions.entriesInKeyRange({ keyStartInclusive: lo, keyEndExclusive: hi, limit });
+    const unreadableRow = (error) => {
+      if (error?.code !== "PLUGIN_STATE_CORRUPT") throw error;
+      return null;
+    };
+    const page = await range(start, END, PAGE).catch(unreadableRow);
+    if (page) return { page, unreadable: null };
+    // The longest readable run before the bad row: the largest limit that reads.
+    let good = [];
+    for (let low = 0, high = PAGE; high - low > 1;) {
+      const mid = (low + high) >> 1;
+      const rows = await range(start, END, mid).catch(unreadableRow);
+      if (rows) [good, low] = [rows, mid];
+      else high = mid;
+    }
+    const from = good.length ? `${good[good.length - 1].key}\u0000` : start;
+    return { page: good, unreadable: await this.firstKeyFrom(from) };
+  }
+
+  /**
+   * The first key at or after `from`, when its row can't be read. A range
+   * [from, hi) holds that row exactly when hi is past its key, so the key is
+   * found a character at a time (keys are ASCII: "v:" and generated ids).
+   */
+  async firstKeyFrom(from) {
+    const holds = async (hi) => {
+      if (hi <= from) return false;
+      try {
+        return (
+          (
+            await this.versions.entriesInKeyRange({
+              keyStartInclusive: from,
+              keyEndExclusive: hi,
+              limit: 1,
+            })
+          ).length > 0
+        );
+      } catch (error) {
+        if (error?.code !== "PLUGIN_STATE_CORRUPT") throw error;
+        return true;
+      }
+    };
+    let key = "";
+    while (key.length <= KEY_MAX) {
+      if (await holds(`${key}\u0000`)) return key;
+      let low = 0;
+      for (let high = 128; high - low > 1;) {
+        const mid = (low + high) >> 1;
+        if (await holds(key + String.fromCharCode(mid))) high = mid;
+        else low = mid;
+      }
+      key += String.fromCharCode(low);
+    }
+    throw new Error("clawtrate-bots couldn't find the unreadable version's key.");
+  }
+
+  async reclaim(id, removed) {
+    await this.versions.delete(VERSION + id);
+    await this.transact((l) => clearSweeping(l, id));
+    removed.push(id);
   }
 }

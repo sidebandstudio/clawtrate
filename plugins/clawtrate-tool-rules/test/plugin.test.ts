@@ -4,7 +4,7 @@
 
 import { createHash } from "node:crypto";
 import type * as fs from "node:fs";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
@@ -105,7 +105,7 @@ describe("status says only what the plugin itself knows", () => {
         hook: { registered: true, lastCallAt: null },
         matches: { tools: [], fallback: [], exempt: ["ask_user"] },
         cardDetails: { mode: "full", because: "no-forwarding" },
-        decisions: { state: "kept" },
+        decisions: { state: "kept", setAside: [] },
       },
     });
     await h.save("otto", [{ action: "ask", tools: ["write", "edit"] }], true);
@@ -566,7 +566,7 @@ describe("the decision record", () => {
     expect((await h.call("decisions.list", { runId: "r".repeat(513) })).error?.code).toBe(
       "INVALID_REQUEST",
     );
-    expect((await h.call("status")).payload!.decisions).toEqual({ state: "kept" });
+    expect((await h.call("status")).payload!.decisions).toEqual({ state: "kept", setAside: [] });
     expect((await h.call("decisions.list", {})).payload).toMatchObject({
       records: [],
       hasMore: false,
@@ -778,6 +778,44 @@ describe("thirty days means thirty days", () => {
     open({ stateDir: h.stateDir, now: () => now, log: { now: () => now } });
     const file = join(h.stateDir, "clawtrate-tool-rules", "decisions.jsonl");
     expect(readFileSync(file, "utf8")).not.toContain("old-run");
+  });
+});
+
+describe("a decision record set aside as oversized", () => {
+  it("is named by status after later writes and a restart, until it is removed", async () => {
+    const day = 86_400_000;
+    let now = 1_000 * day;
+    const { dir, done } = tempState();
+    cleanups.push(done);
+    const file = join(dir, "clawtrate-tool-rules", "decisions.jsonl");
+    mkdirSync(join(dir, "clawtrate-tool-rules"), { recursive: true });
+    writeFileSync(file, "");
+    truncateSync(file, 64 * 1024 * 1024 + 1);
+    const start = () => open({ stateDir: dir, now: () => now, log: { now: () => now } });
+    const decisions = async (h: ReturnType<typeof start>) =>
+      (await h.call("status")).payload!.decisions;
+    const named = {
+      state: "kept",
+      setAside: [
+        {
+          file: expect.stringMatching(/^decisions\.jsonl\.oversize-\d+-[0-9a-f]{12}$/),
+          setAsideAt: 1_000 * day,
+        },
+      ],
+    };
+    const first = start();
+    first.before("otto", "read", { path: "a" }, { runId: "after-aside" });
+    expect(readFileSync(file, "utf8")).toContain("after-aside");
+    expect(await decisions(first)).toEqual(named);
+    first.stop();
+    now += day;
+    const restarted = start();
+    restarted.before("otto", "read", { path: "a" }, { runId: "after-restart" });
+    expect(await decisions(restarted)).toEqual(named);
+    restarted.stop();
+    // Thirty days after it was set aside, the next start removes it, and it is no longer named.
+    now = 1_031 * day;
+    expect(await decisions(start())).toEqual({ state: "kept", setAside: [] });
   });
 });
 

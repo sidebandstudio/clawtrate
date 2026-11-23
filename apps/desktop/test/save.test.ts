@@ -61,6 +61,7 @@ vi.mock("electron", () => {
     nativeTheme: { shouldUseDarkColors: false },
     session: {
       defaultSession: {
+        setSpellCheckerLanguages() {},
         webRequest: { onBeforeRequest() {} },
         setPermissionRequestHandler() {},
         setPermissionCheckHandler() {},

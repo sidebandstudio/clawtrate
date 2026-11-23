@@ -12,6 +12,9 @@ const pagesPort = process.env.SCRIPTED_PAGES_PORT ? Number(process.env.SCRIPTED_
 const server = startFakeProvider({
   port,
   log,
+  ...(process.env.SCRIPTED_STREAM_HOLD_FILE
+    ? { streamHoldFile: process.env.SCRIPTED_STREAM_HOLD_FILE }
+    : {}),
   ...(pagesPort ? { pagesOrigin: `http://127.0.0.1:${pagesPort}` } : {}),
   ...(process.env.SCRIPTED_PROVIDER_DUMP ? { dumpPath: process.env.SCRIPTED_PROVIDER_DUMP } : {}),
 });

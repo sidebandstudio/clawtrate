@@ -31,7 +31,7 @@ const open = (l: ReturnType<typeof L.emptyLedger>) =>
   Object.values(l.proposals).filter((e) => e.state === "open").length;
 const withGrant = (expiresAt = T + 1e9) => {
   const l = L.emptyLedger();
-  L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt }, T);
+  L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt }, null, T);
   return l;
 };
 
@@ -101,14 +101,57 @@ describe("grants", () => {
     );
   });
 
-  it("a grant is created once, and revoking it is final", () => {
+  it("an update needs the generation it read, so it can't undo a revocation", () => {
     const l = withGrant(T + 1000);
+    L.admit(l, proposal("p", agent("g", 1)), T);
     const next = { version: "gv2", digest: "y", expiresAt: T + 1000 };
-    expect(reason(() => L.publishGrant(l, "g", next, T))).toBe("invalid");
+    expect(reason(() => L.publishGrant(l, "g", next, null, T))).toBe("invalid");
+    expect(L.publishGrant(l, "g", next, 1, T).generation).toBe(2);
+    expect(l.proposals.p.state).toBe("withdrawn");
     L.revoke(l, "g", T);
-    expect(reason(() => L.publishGrant(l, "g", next, T))).toBe("invalid");
-    expect(l.grants.g).toMatchObject({ generation: 2, revoked: "removed" });
-    expect(reason(() => L.publishGrant(l, "late", { ...next, expiresAt: T }, T))).toBe("expired");
+    expect(reason(() => L.publishGrant(l, "g", { ...next, version: "gv3" }, 2, T))).toBe(
+      "grant-generation",
+    );
+    expect(L.publishGrant(l, "g", { ...next, version: "gv3" }, 3, T)).toEqual({ generation: 4 });
+    expect(l.grants.g).toMatchObject({ revoked: false, version: "gv3" });
+    expect(reason(() => L.publishGrant(l, "new", next, 1, T))).toBe("grant-missing");
+    expect(reason(() => L.publishGrant(l, "late", { ...next, expiresAt: T }, null, T))).toBe(
+      "expired",
+    );
+  });
+
+  it("each removal invalidates earlier grant updates and keeps the first removal date", () => {
+    const l = withGrant();
+    const first = L.revoke(l, "g", T);
+    L.revoke(l, "g", T + 1000);
+    const next = { version: "gv2", digest: "y", expiresAt: T + 10_000 };
+    expect(reason(() => L.publishGrant(l, "g", next, first.generation, T + 2000))).toBe(
+      "grant-generation",
+    );
+    expect(l.grants.g).toMatchObject({ revoked: "removed", revokedAt: T, generation: 3 });
+  });
+
+  it("only a version unreferenced for an hour in this epoch can be marked, one at a time", () => {
+    const l = withGrant();
+    L.admit(l, proposal("p", fromBot("pip")), T);
+    const at = (now: number, epoch = "e") => ({ epoch, now });
+    L.recordAges(l, ["p", "gv1", "orphan", "other"], at(0));
+    expect(Object.keys(l.orphanAges!.since).sort()).toEqual(["orphan", "other"]);
+    expect([
+      L.markSweeping(l, "p", at(L.ORPHAN_MS)),
+      L.markSweeping(l, "gv1", at(L.ORPHAN_MS)),
+    ]).toEqual([false, false]);
+    expect(L.markSweeping(l, "orphan", at(L.ORPHAN_MS - 1))).toBe(false);
+    expect(L.markSweeping(l, "orphan", at(L.ORPHAN_MS, "another-process"))).toBe(false);
+    expect(L.markSweeping(l, "orphan", at(L.ORPHAN_MS))).toBe(true);
+    expect(L.markSweeping(l, "other", at(L.ORPHAN_MS))).toBe(false);
+    expect(reason(() => L.admit(l, proposal("orphan", fromBot("main"), bot("main")), T))).toBe(
+      "unpublishable",
+    );
+    L.clearSweeping(l, "orphan");
+    expect(Object.keys(l.orphanAges!.since)).toEqual(["other"]);
+    L.recordAges(l, [], at(5, "another-process"));
+    expect(l.orphanAges).toBeUndefined();
   });
 
   it("an expired grant is revoked, and a revoked grant leaves after 30 days", () => {
@@ -116,6 +159,8 @@ describe("grants", () => {
     L.admit(l, proposal("q", agent("g", 1), bot("main")), T);
     L.sweep(l, T + 1000);
     expect([l.grants.g.revoked, l.proposals.q.state]).toEqual(["expired", "withdrawn"]);
+    L.revoke(l, "g", T + 2000);
+    expect(l.grants.g).toMatchObject({ revoked: "expired", revokedAt: T + 1000 });
     L.sweep(l, T + 1000 + L.RETAIN_MS - 1);
     expect(l.grants.g).toBeDefined();
     L.sweep(l, T + 1000 + L.RETAIN_MS);
@@ -152,7 +197,7 @@ describe("decisions, expiry and size", () => {
   it("refuses a new request when the records would be full, and every open one can still settle", () => {
     // Each admission runs on a copy, kept only when admitted, as a transaction keeps it.
     let l = L.emptyLedger();
-    const budget = 20_000;
+    const budget = 60_000;
     let admitted = 0;
     for (let i = 0; i < 200; i += 1) {
       const next = structuredClone(l);
@@ -164,12 +209,22 @@ describe("decisions, expiry and size", () => {
       l = next;
       admitted += 1;
     }
+    expect(admitted).toBeGreaterThan(0);
     expect(admitted).toBeLessThan(200);
     expect(Object.keys(l.proposals)).toHaveLength(admitted);
     expect(
       reason(() => L.admit(structuredClone(l), proposal("x", fromBot("x"), bot("x")), T, budget)),
     ).toBe("records-full");
     for (let i = 0; i < admitted; i += 1) L.decline(l, `p${i}`, `d-p${i}`, "0123456789abcdef", T);
-    expect(Buffer.byteLength(JSON.stringify({ ...l, rev: 1e12 }))).toBeLessThanOrEqual(budget);
+    // Settled, with the largest age map the sweep can hold (one entry per version row), it still fits.
+    const since = Object.fromEntries(
+      Array.from({ length: 512 }, (_, n) => [`p_${n.toString(16).padStart(32, "0")}`, 1e15 + n]),
+    );
+    const orphanAges = { epoch: "f".repeat(16), since };
+    expect(
+      Buffer.byteLength(
+        JSON.stringify({ ...l, rev: 1e12, sweeping: `p_${"0".repeat(32)}`, orphanAges }),
+      ),
+    ).toBeLessThanOrEqual(budget);
   });
 });

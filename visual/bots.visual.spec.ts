@@ -274,24 +274,30 @@ test("F-020: a working bot's avatar animates, and its row is named <Bot>, workin
   await expect(otto).toHaveAccessibleName(/^Otto, working,/);
   const presence = otto.locator(".presence");
   await expect(presence).toHaveAttribute("data-state", "working");
-  // The ring travels round the avatar and the body bobs.
+  // The ring travels round the avatar, and the creature bobs and snaps its claws.
   expect(await presence.evaluate((el) => getComputedStyle(el, "::before").animationName)).toBe(
     "orbit",
   );
   expect(await presence.evaluate((el) => getComputedStyle(el, "::before").opacity)).toBe("1");
   expect(
     await presence
-      .locator("svg")
-      .first()
+      .locator('[data-part="creature"]')
       .evaluate((el) => getComputedStyle(el).animationName),
-  ).toBe("bob");
+  ).toBe("av-bob");
+  expect(
+    await presence
+      .locator('[data-part="claw"]')
+      .evaluateAll((claws) => claws.map((el) => getComputedStyle(el).animationName)),
+  ).toEqual(["av-snap", "av-snap"]);
+  // A bot whose task failed acts it out in the rail too: drooping, its colour faded.
+  await expect(bot(page, "Pip").locator("svg.creature")).toHaveAttribute("data-state", "blocked");
+  await expect(bot(page, "Pip").locator("svg.creature")).toHaveAttribute("data-muted", "");
   // An idle bot is still.
   const marlow = bot(page, "Marlow").locator(".presence");
   expect(await marlow.evaluate((el) => getComputedStyle(el, "::before").opacity)).toBe("0");
   expect(
     await marlow
-      .locator("svg")
-      .first()
+      .locator('[data-part="creature"]')
       .evaluate((el) => getComputedStyle(el).animationName),
   ).toBe("none");
   // When the run ends, the row and the avatar say so.

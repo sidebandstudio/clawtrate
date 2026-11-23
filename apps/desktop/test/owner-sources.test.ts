@@ -198,6 +198,74 @@ const ALLOWED: Record<string, string> = {
     "one forward process's listener from its supervisor, gone with the process",
   "apps/desktop/src/main/ssh/transport.ts:startForward>exits":
     "one forward process's listener from its supervisor, gone with the process",
+  // The avatar spec (avatar.ts): constant part lists, geometry and keyframes, and one bounded cache.
+  "packages/core/src/avatar.ts:BEFORE_PALETTE": "static, eight PNG chunk types",
+  "packages/core/src/avatar.ts:BEFORE_DATA": "static, six PNG chunk types",
+  "packages/core/src/avatar.ts:AFTER_PALETTE": "static, three PNG chunk types",
+  "packages/core/src/avatar.ts:AVATAR_FAMILIES": "static, one avatar part or state list",
+  "packages/core/src/avatar.ts:CLAWLING_BODIES": "static, one avatar part or state list",
+  "packages/core/src/avatar.ts:CLAWLING_EYES": "static, one avatar part or state list",
+  "packages/core/src/avatar.ts:CLAWLING_CLAWS": "static, one claw's two factors",
+  "packages/core/src/avatar.ts:SHELLFOLK_SHELLS": "static, one avatar part or state list",
+  "packages/core/src/avatar.ts:LANTERN_BODIES": "static, one avatar part or state list",
+  "packages/core/src/avatar.ts:LANTERN_LURES": "static, one lure's ball",
+  "packages/core/src/avatar.ts:LANTERN_EYES": "static, one avatar part or state list",
+  "packages/core/src/avatar.ts:AVATAR_STATES": "static, one avatar part or state list",
+  "packages/core/src/avatar.ts:PNG_SIGNATURE": "static, the eight bytes that start a PNG",
+  "packages/core/src/avatar.ts:read": "the pictures already read, at most 64, oldest dropped first",
+  "packages/core/src/avatar.ts:SMOOTH": "static, one easing curve",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.blink.easing":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.blink-large.easing":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.bob.frames":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.lean.frames":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.hop.easing":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.hop.frames":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.snap.easing":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.snap.frames":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.crawl.frames":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.ping.easing":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.ping.frames":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.glow.easing":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:AVATAR_MOTIONS.glow.frames":
+    "static, one motion's keyframes or easing",
+  "packages/core/src/avatar.ts:CLAWLING_BODY.dome.shoulders":
+    "static, one body's three coordinates",
+  "packages/core/src/avatar.ts:CLAWLING_BODY.dome.stalks": "static, one body's three coordinates",
+  "packages/core/src/avatar.ts:CLAWLING_BODY.tall.shoulders":
+    "static, one body's three coordinates",
+  "packages/core/src/avatar.ts:CLAWLING_BODY.tall.stalks": "static, one body's three coordinates",
+  "packages/core/src/avatar.ts:CLAWLING_BODY.wide.shoulders":
+    "static, one body's three coordinates",
+  "packages/core/src/avatar.ts:CLAWLING_BODY.wide.stalks": "static, one body's three coordinates",
+  "packages/core/src/avatar.ts:CLAWLING_BODY.round.shoulders":
+    "static, one body's three coordinates",
+  "packages/core/src/avatar.ts:CLAWLING_BODY.round.stalks": "static, one body's three coordinates",
+  "packages/core/src/avatar.ts:CLAWLING_CLAW.even.left": "static, one claw's two factors",
+  "packages/core/src/avatar.ts:CLAWLING_CLAW.even.right": "static, one claw's two factors",
+  "packages/core/src/avatar.ts:CLAWLING_CLAW.fiddler.left": "static, one claw's two factors",
+  "packages/core/src/avatar.ts:CLAWLING_CLAW.fiddler.right": "static, one claw's two factors",
+  "packages/core/src/avatar.ts:CLAWLING_CLAW.big.left": "static, one claw's two factors",
+  "packages/core/src/avatar.ts:CLAWLING_CLAW.big.right": "static, one claw's two factors",
+  "packages/core/src/avatar.ts:LANTERN_BODY.round.eyes": "static, one body's eye coordinates",
+  "packages/core/src/avatar.ts:LANTERN_BODY.bell.eyes": "static, one body's eye coordinates",
+  "packages/core/src/avatar.ts:LANTERN_BODY.oval.eyes": "static, one body's eye coordinates",
+  "packages/core/src/avatar.ts:LANTERN_BODY.box.eyes": "static, one body's eye coordinates",
+  "packages/core/src/avatar.ts:LANTERN_LURE.hook.ball": "static, one lure's ball",
+  "packages/core/src/avatar.ts:LANTERN_LURE.flick.ball": "static, one lure's ball",
+  "packages/core/src/avatar.ts:LANTERN_LURE.wave.ball": "static, one lure's ball",
+  "packages/core/src/avatar.ts:LANTERN_LURE.reach.ball": "static, one lure's ball",
 };
 
 describe("the source keeps no collection outside the registry", () => {

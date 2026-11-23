@@ -1,10 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   checkIds,
+  isIosCheck,
   listPlaywright,
   listVitest,
+  listVitestJson,
   parityProblems,
   parseTable,
   playwrightChecks,
@@ -15,12 +17,15 @@ import {
 } from "./parity.ts";
 
 const ROOT = join(import.meta.dirname, "..");
-const LISTING = 60_000;
+// Five listings in parallel (Vitest once at the root, the Simulator suite, and three Playwright
+// configs). Collecting all ~250 Vitest files takes ~10 s idle and ~97 s at load ~110, so give
+// it room for heavier queues without racing a real assertion failure.
+const LISTING = 240_000;
 
 describe("the parity table", () => {
   it(
     "has a check that runs for every row marked done, and every check names a real row",
-    () => {
+    async () => {
       const rows = parseTable(readFileSync(join(ROOT, "docs/parity.md"), "utf8"));
       expect(rows.length).toBeGreaterThan(400);
       const configs = [
@@ -28,16 +33,25 @@ describe("the parity table", () => {
         "playwright.visual.config.ts",
         "playwright.updates.config.ts",
       ];
-      const listings = new Map(
-        configs.map((config) => [config, listPlaywright(ROOT, join(ROOT, config))]),
-      );
+      const [vitestJson, simulator, ...playwrightListings] = await Promise.all([
+        listVitestJson(ROOT),
+        listVitest(ROOT, join(ROOT, "apps/mobile/simulator")),
+        ...configs.map((config) => listPlaywright(ROOT, join(ROOT, config))),
+      ]);
+      const listings = new Map(configs.map((config, i) => [config, playwrightListings[i]!]));
       const desktopUpdates = listings.get("playwright.updates.config.ts") ?? [];
       expect(desktopUpdates.length).toBeGreaterThan(0);
       for (const titlePath of desktopUpdates) expect(checkIds([titlePath])).toContain("F-231");
       expect(checkIds(listings.get("playwright.visual.config.ts") ?? [])).toContain("F-030");
-      const checks = [...listVitest(ROOT), ...[...listings.values()].flat()];
-      expect(checks.length).toBeGreaterThan(400);
-      expect(parityProblems(rows, new Set(checkIds(checks)))).toEqual([]);
+      const desktop = [
+        ...vitestChecks(vitestJson, (file) => !isIosCheck(file)),
+        ...playwrightListings.flat(),
+      ];
+      // The iOS app's unit tests, and its Simulator checks (`pnpm mobile:check`).
+      const ios = [...vitestChecks(vitestJson, isIosCheck), ...simulator];
+      expect(desktop.length).toBeGreaterThan(400);
+      expect(ios.length).toBeGreaterThan(5);
+      expect(parityProblems(rows, new Set(checkIds(desktop)), new Set(checkIds(ios)))).toEqual([]);
       // No file that names a row skips any of its checks. The guard's own tests are exempt.
       const files = ["e2e", "e2e-updates", "visual", "test", "packages", "apps", "tools"]
         .flatMap((dir) => testFiles(join(ROOT, dir)))
@@ -50,6 +64,37 @@ describe("the parity table", () => {
     },
     LISTING,
   );
+
+  it("walks no generated native project or build output, and no link that a build left dangling", () => {
+    mkdirSync(join(ROOT, "test-results"), { recursive: true });
+    const root = mkdtempSync(join(ROOT, "test-results", "walk-"));
+    try {
+      for (const dir of [
+        "apps/mobile/test",
+        "apps/mobile/ios/Pods/Headers",
+        "apps/mobile/build/x",
+        "apps/desktop/test",
+      ])
+        mkdirSync(join(root, dir), { recursive: true });
+      writeFileSync(join(root, "apps/mobile/test/a.test.ts"), "");
+      writeFileSync(join(root, "apps/desktop/test/b.test.ts"), "");
+      writeFileSync(join(root, "apps/mobile/ios/Pods/c.test.ts"), "");
+      writeFileSync(join(root, "apps/mobile/build/x/d.test.ts"), "");
+      // A link to a file a build has not written yet, as Pods holds while it installs.
+      symlinkSync(join(root, "missing"), join(root, "apps/mobile/ios/Pods/Headers/e.h"));
+      symlinkSync(join(root, "missing"), join(root, "apps/desktop/test/f.test.ts"));
+      expect(
+        testFiles(join(root, "apps"))
+          .map((path) => relative(root, path))
+          .sort(),
+      ).toEqual([
+        join("apps", "desktop", "test", "b.test.ts"),
+        join("apps", "mobile", "test", "a.test.ts"),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("reads ids, platforms and statuses from table rows", () => {
     const rows = parseTable(
@@ -139,6 +184,38 @@ describe("the parity table", () => {
     );
   });
 
+  it("needs a desktop check and an iOS check for a both row that is done, and the platform's own for the rest", () => {
+    const rows = [
+      { id: "F-001", platform: "both", status: "done" },
+      { id: "F-002", platform: "both", status: "done" },
+      { id: "F-003", platform: "both", status: "done" },
+      { id: "F-004", platform: "iOS", status: "done" },
+      { id: "F-005", platform: "iOS", status: "done" },
+      { id: "F-006", platform: "desktop", status: "done" },
+      { id: "F-007", platform: "both", status: "desktop done" },
+    ];
+    const desktop = new Set(["F-001", "F-002", "F-005", "F-007"]);
+    const ios = new Set(["F-001", "F-003", "F-004", "F-006"]);
+    expect(parityProblems(rows, desktop, ios)).toEqual([
+      "F-002: marked done, but no iOS check names it",
+      "F-003: marked done, but no desktop check names it",
+      "F-005: marked done, but no iOS check names it",
+      "F-006: marked done, but no desktop check names it",
+    ]);
+    expect(isIosCheck("/repo/apps/mobile/simulator/pairing.test.ts")).toBe(true);
+    expect(isIosCheck("apps\\mobile\\test\\host.test.ts")).toBe(true);
+    expect(isIosCheck("/repo/apps/desktop/test/a.test.ts")).toBe(false);
+    expect(
+      vitestChecks(
+        JSON.stringify([
+          { name: "F-001: a", file: "/r/apps/mobile/test/a.test.ts" },
+          { name: "F-002: b", file: "/r/packages/core/test/b.test.ts" },
+        ]),
+        isIosCheck,
+      ),
+    ).toEqual([["F-001: a"]]);
+  });
+
   it("fails a done row without a check, a check for no row, and an unknown status", () => {
     const rows = [
       { id: "F-001", platform: "both", status: "desktop done" },
@@ -173,7 +250,11 @@ describe("the parity table does not count a check that never runs", () => {
   });
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  function problemsFor(name: string, vitestBody: string, playwrightBody: string): string[] {
+  async function problemsFor(
+    name: string,
+    vitestBody: string,
+    playwrightBody: string,
+  ): Promise<string[]> {
     const folder = join(dir, name);
     mkdirSync(folder);
     writeFileSync(
@@ -192,8 +273,10 @@ describe("the parity table does not count a check that never runs", () => {
       join(folder, "a.spec.ts"),
       `import { test } from "@playwright/test";\ntest("F-001: runs", () => {});\n${playwrightBody}\n`,
     );
-    const vitest = listVitest(ROOT, folder);
-    const playwright = listPlaywright(ROOT, join(folder, "playwright.config.mjs"));
+    const [vitest, playwright] = await Promise.all([
+      listVitest(ROOT, folder),
+      listPlaywright(ROOT, join(folder, "playwright.config.mjs")),
+    ]);
     // The check that runs is seen by both runners, so the listing works.
     expect(checkIds(vitest)).toEqual(["F-001"]);
     expect(checkIds(playwright)).toEqual(["F-001"]);
@@ -204,9 +287,9 @@ describe("the parity table does not count a check that never runs", () => {
 
   it(
     "a skipped, fixme or todo check",
-    () => {
+    async () => {
       expect(
-        problemsFor(
+        await problemsFor(
           "skipped",
           [
             'test.skip("F-004: no proof", () => {});',
@@ -226,26 +309,26 @@ describe("the parity table does not count a check that never runs", () => {
 
   it(
     "a check that is never reached",
-    () => {
+    async () => {
       const body = [
         "// eslint-disable-next-line no-constant-condition",
         'if (false) test("F-004: no proof", () => {});',
         'function never() { test("F-004: no proof", () => {}); }',
         "void never;",
       ].join("\n");
-      expect(problemsFor("unreachable", body, body)).toEqual(FAILS);
+      expect(await problemsFor("unreachable", body, body)).toEqual(FAILS);
     },
     LISTING,
   );
 
   it(
     "a check that is commented out",
-    () => {
+    async () => {
       const body = [
         '// test("F-004: no proof", () => {});',
         '/* test("F-004: no proof", () => {}); */',
       ].join("\n");
-      expect(problemsFor("commented", body, body)).toEqual(FAILS);
+      expect(await problemsFor("commented", body, body)).toEqual(FAILS);
     },
     LISTING,
   );

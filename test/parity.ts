@@ -2,6 +2,12 @@
 // check names rows by starting its title, or the title of a group it is in,
 // with their ids, for example `test("F-013 F-015: ...")`.
 //
+// A row is done on the platforms its platform cell names. A check under
+// `apps/mobile/` (the iOS app's unit tests and its Simulator checks) is an iOS
+// check; every other check is a desktop check. So a `both` row is `done` only
+// when a desktop check and an iOS check both name it, an `iOS` row needs an iOS
+// check, and `desktop done` and a `desktop` row need a desktop check.
+//
 // Only checks that will run count. The test runners themselves say which those
 // are: Vitest collects each test file by running it, and Playwright loads each
 // spec, so a check in a comment or behind code that never runs is never
@@ -12,9 +18,12 @@
 // may not call `skip`, `fixme`, `todo` or `only` on its test or describe
 // objects in any form. If a check cannot run somewhere, its row is not done.
 
-import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export const STATUSES = ["todo", "done", "desktop done", "gap"] as const;
 
@@ -35,9 +44,22 @@ export function parseTable(markdown: string): ParityRow[] {
     });
 }
 
-/** The checks in `vitest list --json --staticParse=false` output. Vitest leaves out skipped and todo tests. */
-export function vitestChecks(json: string): CheckPath[] {
-  return (JSON.parse(json) as { name: string }[]).map((test) => test.name.split(" > "));
+/** Whether a test file is one of the iOS app's checks. */
+export function isIosCheck(file: string): boolean {
+  return /(^|[\\/])apps[\\/]mobile[\\/]/.test(file);
+}
+
+/**
+ * The checks in `vitest list --json --staticParse=false` output. Vitest leaves out skipped and todo
+ * tests. `keep` chooses by test file, for the desktop's checks or the iOS app's.
+ */
+export function vitestChecks(
+  json: string,
+  keep: (file: string) => boolean = () => true,
+): CheckPath[] {
+  return (JSON.parse(json) as { name: string; file?: string }[])
+    .filter((test) => keep(test.file ?? ""))
+    .map((test) => test.name.split(" > "));
 }
 
 type PlaywrightSuite = {
@@ -75,30 +97,37 @@ export function checkIds(checks: CheckPath[]): string[] {
 }
 
 /** Run a runner's listing from `root`'s packages in `cwd`, outside the Vitest worker this is called from. */
-function list(root: string, cwd: string, bin: string, args: string[]): string {
+async function list(root: string, cwd: string, bin: string, args: string[]): Promise<string> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith("VITEST")),
   );
-  return execFileSync(join(root, "node_modules/.bin", bin), args, {
+  const { stdout } = await execFileAsync(join(root, "node_modules/.bin", bin), args, {
     cwd,
     env,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  return stdout;
 }
 
-/** The checks Vitest will run in `dir`, with the config found there. */
-export function listVitest(root: string, dir = root): CheckPath[] {
-  return vitestChecks(
-    list(root, dir, "vitest", ["list", "--json", "--staticParse=false", "--root", dir]),
-  );
+/** Raw JSON from Vitest's listing in `dir`, so one run can be split by file without re-collecting. */
+export function listVitestJson(root: string, dir = root): Promise<string> {
+  return list(root, dir, "vitest", ["list", "--json", "--staticParse=false", "--root", dir]);
+}
+
+/** The checks Vitest will run in `dir`, with the config found there; `keep` chooses by test file. */
+export async function listVitest(
+  root: string,
+  dir = root,
+  keep: (file: string) => boolean = () => true,
+): Promise<CheckPath[]> {
+  return vitestChecks(await listVitestJson(root, dir), keep);
 }
 
 /** The checks Playwright will run for a config. */
-export function listPlaywright(root: string, config: string): CheckPath[] {
+export async function listPlaywright(root: string, config: string): Promise<CheckPath[]> {
   return playwrightChecks(
-    list(root, root, "playwright", ["test", "--list", "--reporter=json", "-c", config]),
+    await list(root, root, "playwright", ["test", "--list", "--reporter=json", "-c", config]),
   );
 }
 
@@ -120,18 +149,33 @@ export function skipProblems(file: string, source: string): string[] {
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "out", ".run", "test-results", "baselines"]);
 
+/**
+ * Folders a build writes, which hold no test of ours: the iOS app's native
+ * project (`expo prebuild`, with its Pods) and its build output. A build can be
+ * writing them while the walk runs.
+ */
+const GENERATED = /(^|[\\/])apps[\\/]mobile[\\/](ios|android|build|\.expo)$/;
+
 /** The test files under `dir`: every `*.test.ts` and `*.spec.ts`. */
 export function testFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((entry) => {
-    if (SKIP_DIRS.has(entry)) return [];
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) return testFiles(path);
-    return /\.(test|spec)\.ts$/.test(entry) ? [path] : [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (SKIP_DIRS.has(entry.name)) return [];
+    const path = join(dir, entry.name);
+    if (GENERATED.test(path)) return [];
+    if (entry.isDirectory()) return testFiles(path);
+    return entry.isFile() && /\.(test|spec)\.ts$/.test(entry.name) ? [path] : [];
   });
 }
 
-/** Everything wrong with the table and the checks that name it. */
-export function parityProblems(rows: ParityRow[], named: Set<string>): string[] {
+/**
+ * Everything wrong with the table and the checks that name it: `desktop` are
+ * the ids the desktop's checks name, `ios` those the iOS app's checks name.
+ */
+export function parityProblems(
+  rows: ParityRow[],
+  desktop: Set<string>,
+  ios: Set<string> = new Set(),
+): string[] {
   const problems: string[] = [];
   const ids = new Set(rows.map((row) => row.id));
   for (const row of rows) {
@@ -141,11 +185,19 @@ export function parityProblems(rows: ParityRow[], named: Set<string>): string[] 
     if (row.status === "desktop done" && row.platform !== "both") {
       problems.push(`${row.id}: "desktop done" is only for rows whose platform is both`);
     }
-    if ((row.status === "done" || row.status === "desktop done") && !named.has(row.id)) {
+    if (row.status !== "done" && row.status !== "desktop done") continue;
+    if (!desktop.has(row.id) && !ios.has(row.id)) {
       problems.push(`${row.id}: marked ${row.status}, but no check that runs names it`);
+      continue;
     }
+    const needsDesktop = row.status === "desktop done" || row.platform !== "iOS";
+    const needsIos = row.status === "done" && row.platform !== "desktop";
+    if (needsDesktop && !desktop.has(row.id))
+      problems.push(`${row.id}: marked ${row.status}, but no desktop check names it`);
+    if (needsIos && !ios.has(row.id))
+      problems.push(`${row.id}: marked ${row.status}, but no iOS check names it`);
   }
-  for (const id of named)
+  for (const id of new Set([...desktop, ...ios]))
     if (!ids.has(id)) problems.push(`${id}: a check names it, but the table has no such row`);
   return problems;
 }

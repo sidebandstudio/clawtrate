@@ -1,0 +1,427 @@
+/* Effortless setup: the components docs/design/setup-effortless.md adds. Every
+   value is a token from tokens.css. */
+
+.se-muted {
+  color: var(--text-faint);
+}
+
+.se-center {
+  text-align: center;
+}
+
+.se-wide {
+  width: 100%;
+  justify-content: center;
+}
+
+/* The found card that leads the first screen. */
+.se-found {
+  margin: var(--space-6) 0 var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+}
+
+.se-found-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.se-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.se-found-sub {
+  margin: 4px 0 var(--space-4) 16px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.se-full-line {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* Another computer: three ways in, at one level. */
+.se-tabs {
+  display: flex;
+  gap: 4px;
+  margin: var(--space-3) 0 var(--space-4);
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+}
+
+.se-tab {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  text-align: center;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.se-tab[aria-selected="true"] {
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.setup .field + .field,
+.setup .b-note + .field {
+  margin-top: var(--space-3);
+}
+
+.setup .field + .b-note {
+  margin-top: var(--space-2);
+}
+
+.se-code {
+  font-family: var(--font-mono);
+  resize: none;
+}
+
+/* The scopes, in plain words, with their names. */
+.se-scopes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.se-scopes li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 7px 10px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.se-scopes li + li {
+  border-top: 1px solid var(--border);
+}
+
+.se-scopes code {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.se-scopes li[data-tone="warn"] span {
+  color: var(--warn);
+}
+
+[data-width="phone"] .se-scopes li {
+  flex-direction: column;
+  gap: 2px;
+}
+
+
+/* Waiting for the one approval. */
+.se-asked {
+  margin: var(--space-3) 0;
+}
+
+.se-ways {
+  margin: var(--space-3) 0;
+  padding-left: 20px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.se-means {
+  margin: var(--space-3) 0;
+  padding-left: 20px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.se-means li + li,
+.se-ways li + li {
+  margin-top: var(--space-2);
+}
+
+.se-ways b {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.se-ways .command {
+  margin-top: 6px;
+}
+
+.se-waiting {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+/* The approve prompt. */
+.se-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--bg-scrim);
+  overflow: auto;
+}
+
+.se-prompt {
+  width: min(480px, 100%);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+}
+
+.se-prompt h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+}
+
+.se-h3 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.se-who .facts {
+  margin: 0;
+}
+
+.se-codes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+.se-code-choice {
+  padding: 10px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  letter-spacing: 0.06em;
+  text-align: center;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.se-code-choice[aria-checked="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.se-prompt-buttons {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.se-prompt-buttons .button {
+  flex: 1;
+  justify-content: center;
+}
+
+[data-width="phone"] .se-scrim {
+  padding: 0;
+  place-items: end stretch;
+}
+
+[data-width="phone"] .se-prompt {
+  width: 100%;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+[data-width="phone"] .se-codes {
+  grid-template-columns: 1fr;
+}
+
+.se-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  transform: translateX(-50%);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow-pop);
+}
+
+/* Fix round 1: proof pending, the typed code, the fingerprint. */
+.se-dot[data-state="pending"] {
+  background: var(--text-faint);
+  box-shadow: none;
+}
+
+.se-dot[data-state="warn"] {
+  background: var(--warn);
+  box-shadow: none;
+}
+
+.se-checking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 0 16px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.se-found .b-note {
+  margin: 0 0 var(--space-3);
+}
+
+.se-full-line + .button {
+  margin-top: var(--space-3);
+}
+
+.se-full-line a {
+  color: inherit;
+}
+
+.se-device {
+  font-size: var(--text-base);
+}
+
+.se-gateway {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.se-code-entry {
+  margin-top: var(--space-4);
+}
+
+.se-code-input {
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.se-match {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
+
+.se-print code {
+  display: block;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* A real window as narrow as a phone. */
+@media (max-width: 500px) {
+  .se-scopes li {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .se-scrim {
+    padding: 0;
+    place-items: end stretch;
+  }
+
+  .se-prompt {
+    width: 100%;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  .se-codes {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Fix round 2: the code is compared in place; the input and decisions stay reachable. */
+.se-prompt {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+}
+
+.se-prompt-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-5) var(--space-2);
+}
+
+.se-prompt-foot {
+  flex: none;
+  padding: var(--space-2) var(--space-5) var(--space-5);
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.se-prompt-foot .se-code-entry {
+  margin-top: var(--space-2);
+}
+
+.se-code-state {
+  min-height: 1.4em;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+}
+
+.se-code-state[data-state="match"] {
+  color: var(--accent);
+}
+
+.se-code-state[data-state="wrong"] {
+  color: var(--danger);
+}
+
+.se-prompt-foot .se-prompt-buttons {
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 500px) {
+  .se-prompt {
+    max-height: 100dvh;
+  }
+}

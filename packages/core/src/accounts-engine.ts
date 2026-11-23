@@ -55,6 +55,7 @@ import {
   type StoredOrder,
 } from "./accounts.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 
 /** What the engine needs from the client. */
@@ -66,19 +67,50 @@ export type AccountsContext = {
   ): Promise<unknown>;
   get(): AccountsState;
   update(change: (accounts: AccountsState) => AccountsState): void;
-  /** The bots the client lists: ids, names, which is the default. */
-  bots(): Array<{ id: string; name: string; isDefault: boolean }>;
+  /** The bots the client lists: ids, names, which is the default, and their pictures. */
+  bots(): Array<{ id: string; name: string; isDefault: boolean; avatarUrl: string | null }>;
   connected(): boolean;
   /** The connection holds `operator.admin`. */
   admin(): boolean;
   /** Read the bot list again (`agents.list`). */
   refreshBots(): Promise<void>;
+  /** The connected gateway's identity (`gateway.identity.get`), or null when it names none. */
+  gateway(): Promise<string | null>;
+  /** The identity the connection has read so far, without asking: null until it is known. */
+  gatewayNow(): string | null;
   /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
   createMainTask(botId: string): Promise<void>;
   now(): number;
   randomId(): string;
   log(message: string): void;
 };
+
+/** One bot write, its optional gateway identity, and the reset count it began on. */
+type WriteMark = { gatewayId: string | null; resets: number; retired: boolean };
+
+/** A bot write retired because its gateway is no longer the one connected. */
+class WriteRetired extends Error {
+  /**
+   * A bot made before the write was cut off with no gateway saying who it is, and what of it is
+   * left: kept for that gateway's Finish, should it come back.
+   */
+  unfinished: { name: string; botId: string; missing: MissingStep[] } | null = null;
+  /**
+   * A Create whose answer was lost, cut off while it looked for the bot it may have made with no
+   * gateway saying who it is: kept as in doubt, with its list of bots from before, for that gateway.
+   */
+  doubtful = false;
+  /** No gateway said who it is, so the one asked may yet come back. */
+  readonly unknown: boolean;
+  constructor(unknown = false) {
+    super("The gateway changed before the bot was finished, so nothing more was sent.");
+    this.name = "WriteRetired";
+    this.unknown = unknown;
+  }
+}
+
+/** A creation's steps after the bot is made, in the order they are written: one string, not a collection kept. */
+const STEP_ORDER = "preference fallbacks listed task";
 
 /** A write needs admin; the access bar asks for it (bots.md section 2). */
 export class AdminNeededError extends Error {
@@ -90,7 +122,7 @@ export class AdminNeededError extends Error {
 
 export type CreateBotInput = {
   name: string;
-  /** A `data:image/png` picture of the chosen body and colour, or null. */
+  /** A `data:image/png` picture: the chosen creature with its choice inside (`avatar.ts`), or an uploaded one. */
   avatar: string | null;
   /** The account, or null for "Let the gateway choose". */
   account: string | null;
@@ -102,7 +134,7 @@ export type CreateBotInput = {
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** The longest picture New bot sends. */
-export const MAX_CREATE_AVATAR_CHARS = 32_768;
+export const MAX_CREATE_AVATAR_CHARS = MAX_PICTURE_CHARS;
 
 /** The most steps one sign-in is followed through before Clawtrate stops it. */
 export const MAX_SIGNIN_STEPS = 64;
@@ -128,6 +160,18 @@ export class AccountsEngine {
     intent: BindingIntent;
   } | null = null;
   private readonly ctx: AccountsContext;
+  /**
+   * How many times the engine has been reset. A bot write under way is bound to the gateway it
+   * was asked of and checks its own requests, recovery reads and changes to the state against
+   * it; a reset since it began retires it.
+   */
+  private resets = 0;
+  /** The bound write whose Create the state's creation and the slow timer belong to. */
+  private creating: WriteMark | null = null;
+  /** The gateway the state's creation was asked of: it is kept, and finished, only there. */
+  private creationGateway: string | null = null;
+  /** The partial creation a Finish has claimed while its gateway may still be identifying itself. */
+  private finishing: AccountsState["creation"] = null;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
@@ -855,13 +899,17 @@ export class AccountsEngine {
   }
 
   /** Record what Clawtrate set for a bot; the write's error, or null when it landed or isn't kept. */
-  private async recordIntent(botId: string, intent: BindingIntent): Promise<unknown> {
+  private async recordIntent(
+    botId: string,
+    intent: BindingIntent,
+    ctx: AccountsContext = this.ctx,
+  ): Promise<unknown> {
     // An id too long to be one Clawtrate keeps is not recorded.
     if (!prefBotId(botId) || (intent.mode === "account" && !prefProfileId(intent.account)))
       return null;
     this.remember(this.intents, botId, intent, MAX_ACCOUNTS);
     try {
-      await this.ctx.request("users.prefs.set", {
+      await ctx.request("users.prefs.set", {
         entries: { [`${INTENT_PREF_PREFIX}${botId}`]: intent },
       });
       return null;
@@ -990,24 +1038,28 @@ export class AccountsEngine {
    * One merge patch of the gateway's config (`config.patch`, admin), then the
    * gateway applying it: `config.get` reports the new revision as applied.
    */
-  private async patch(patch: RawRecord, replacePaths: string[] = []): Promise<void> {
-    const before = asRecord(await this.ctx.request("config.get", {}));
+  private async patch(
+    patch: RawRecord,
+    replacePaths: string[] = [],
+    ctx: AccountsContext = this.ctx,
+  ): Promise<void> {
+    const before = asRecord(await ctx.request("config.get", {}));
     const baseHash = typeof before?.hash === "string" ? before.hash : undefined;
-    await this.ctx.request("config.patch", {
+    await ctx.request("config.patch", {
       raw: JSON.stringify(patch),
       ...(baseHash ? { baseHash } : {}),
       ...(replacePaths.length > 0 ? { replacePaths } : {}),
     });
     // A gateway that reports no revisions has nothing to wait for.
     if (before?.configRevisionHash === undefined) return;
-    const started = this.ctx.now();
+    const started = ctx.now();
     // At most 20 seconds, and at most 100 reads whatever the clock says.
-    for (let reads = 0; reads < 100 && this.ctx.now() - started < 20_000; reads += 1) {
-      const now = asRecord(await this.ctx.request("config.get", {}));
+    for (let reads = 0; reads < 100 && ctx.now() - started < 20_000; reads += 1) {
+      const now = asRecord(await ctx.request("config.get", {}));
       const revised = now?.configRevisionHash !== before.configRevisionHash;
       if (revised && now?.appliedConfigHash === now?.configRevisionHash) return;
       // A patch that changed nothing leaves the revision as it was.
-      if (!revised && (this.ctx.now() - started > 3_000 || reads >= 15)) return;
+      if (!revised && (ctx.now() - started > 3_000 || reads >= 15)) return;
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
     }
   }
@@ -1108,9 +1160,118 @@ export class AccountsEngine {
    * sent again: the bot list is read first for the one it may have made, and
    * only a bot that was not there before the first Create can be that one.
    */
-  async createBot(input: CreateBotInput): Promise<CreatedBot> {
+  /**
+   * Run a bot write bound to one gateway: what it sends, reads back and publishes goes only to a
+   * connection whose identity is that gateway's, read and matched positively each time, as
+   * across a reconnect to the same gateway. Another gateway, an unknown identity, or a reset,
+   * retires it: nothing more is sent or published.
+   */
+  private async boundTo<T>(
+    gatewayId: string | undefined,
+    run: (ctx: AccountsContext, mark: WriteMark) => Promise<T>,
+  ): Promise<T> {
+    const base = this.ctx;
+    // This write's own mark and context: another write, refused or not, never touches them.
+    const mark: WriteMark = { gatewayId: gatewayId ?? null, resets: this.resets, retired: false };
+    const live = () => !mark.retired && this.resets === mark.resets;
+    const check = async () => {
+      if (!live()) throw new WriteRetired();
+      // In-host callers can omit the identity. Their writes still end on reset.
+      if (mark.gatewayId === null) return;
+      const here = await base.gateway();
+      if (!live() || here === null || here !== mark.gatewayId) {
+        const unknown = live() && here === null;
+        mark.retired = true;
+        throw new WriteRetired(unknown);
+      }
+    };
+    const ctx: AccountsContext = {
+      ...base,
+      request: async (method, params, options) => {
+        await check();
+        return base.request(method, params, options);
+      },
+      refreshBots: async () => {
+        await check();
+        return base.refreshBots();
+      },
+      createMainTask: async (botId) => {
+        await check();
+        return base.createMainTask(botId);
+      },
+      update: (change) => {
+        if (live() && (mark.gatewayId === null || base.gatewayNow() === mark.gatewayId))
+          base.update(change);
+      },
+    };
+    try {
+      const result = await run(ctx, mark);
+      if (!live()) throw new WriteRetired();
+      return result;
+    } catch (error) {
+      if (error instanceof WriteRetired || !live()) {
+        // Its Create, if still the one under way, ends with it: the gateway now connected can
+        // be asked for a bot. A Create begun since is another write's, and is left alone.
+        if (this.creating === mark) {
+          this.creating = null;
+          if (this.slowTimer) clearTimeout(this.slowTimer);
+          this.slowTimer = null;
+          // A bot made on a gateway that has only gone quiet is kept, with what is left, for its
+          // Finish once it says who it is again (`onGateway`); another gateway, or a reset, drops it.
+          const left = error instanceof WriteRetired ? error.unfinished : null;
+          const doubtful = error instanceof WriteRetired && error.doubtful;
+          base.update((a) =>
+            a.creation?.status === "creating" || a.creation?.status === "checking"
+              ? {
+                  ...a,
+                  // In doubt, it is kept as a Create to try again: that looks for the bot first,
+                  // against the bots there before the first Create, and never makes a second.
+                  creation: doubtful
+                    ? {
+                        ...a.creation,
+                        status: "failed",
+                        slow: false,
+                        uncertain: true,
+                        error: this.scrub(
+                          `The connection to the gateway was lost before Clawtrate could tell whether ${a.creation.name} was made. Create again looks for it first.`,
+                        ),
+                      }
+                    : left
+                      ? {
+                          name: left.name,
+                          status: "partial",
+                          slow: false,
+                          botId: left.botId,
+                          error: this.scrub(
+                            `${left.name} was created, but the connection to its gateway was lost before it was finished.`,
+                          ),
+                          missing: left.missing,
+                          uncertain: false,
+                        }
+                      : null,
+                }
+              : a,
+          );
+        }
+        throw new Error(
+          "The gateway changed before the bot was finished, so nothing more was sent.",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+
+  async createBot(input: CreateBotInput, gatewayId?: string): Promise<CreatedBot> {
+    return this.boundTo(gatewayId, (ctx, mark) => this.create(ctx, input, mark));
+  }
+
+  private async create(
+    ctx: AccountsContext,
+    input: CreateBotInput,
+    mark: WriteMark,
+  ): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
-    const { ctx } = this;
     const name = input.name.trim() || "New bot";
     const previous = ctx.get().creation;
     if (previous?.status === "creating" || previous?.status === "checking")
@@ -1120,12 +1281,11 @@ export class AccountsEngine {
     const ref: ModelRef = { provider: input.provider, model: input.model, account: input.account };
     if (input.account && accountProvider(input.account) !== input.provider)
       throw new Error("That account belongs to another provider.");
-    const avatar =
-      input.avatar &&
-      input.avatar.startsWith("data:image/png;base64,") &&
-      input.avatar.length <= MAX_CREATE_AVATAR_CHARS
-        ? input.avatar
-        : null;
+    // An explicit picture must be one the gateway can keep and Clawtrate can read back;
+    // null leaves the bot to the Clawling its id gives.
+    if (input.avatar !== null && !isKeepablePicture(input.avatar))
+      throw new Error("That picture can't be kept.");
+    const avatar = input.avatar;
     // The bots there before: kept from the first Create of this name while its answer is in doubt.
     const retrying =
       previous?.status === "failed" && previous.uncertain && previous.name === name && this.planned
@@ -1140,6 +1300,8 @@ export class AccountsEngine {
       effort: input.effort,
       intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
     };
+    this.creating = mark;
+    this.creationGateway = mark.gatewayId;
     ctx.update((a) => ({
       ...a,
       creation: {
@@ -1160,9 +1322,16 @@ export class AccountsEngine {
           : a,
       );
     }, SLOW_CREATE_MS);
+    const assertCreating = () => {
+      if (this.creating !== mark) throw new WriteRetired();
+    };
+    const failed = (error: unknown, uncertain: boolean): never => {
+      assertCreating();
+      return this.creationFailed(ctx, error, uncertain);
+    };
     let botId: string | null = null;
     // After an answer that settled nothing, the bot may exist: look before asking again.
-    if (retrying) botId = await this.findMade(name);
+    if (retrying) botId = await this.findMade(ctx, name, mark);
     if (!botId) {
       try {
         const answer = asRecord(
@@ -1176,15 +1345,45 @@ export class AccountsEngine {
       } catch (error) {
         // Only a refusal that establishes nothing was written ends here. Anything else (no
         // answer, a dropped connection, "saved but not applied") may have made the bot.
-        if (isCertainRefusal(error)) return this.creationFailed(error, false);
-        botId = await this.findMade(name);
-        if (!botId) return this.creationFailed(error, true);
+        if (isCertainRefusal(error)) return failed(error, false);
+        botId = await this.findMade(ctx, name, mark);
+        if (!botId) return failed(error, true);
       }
     }
-    if (!botId)
-      return this.creationFailed(new Error("The gateway did not say which bot it made."), true);
+    if (!botId) return failed(new Error("The gateway did not say which bot it made."), true);
+    assertCreating();
     this.planned = { ...this.planned, botId };
-    return this.complete(name, botId, ["preference", "fallbacks", "listed", "task"]);
+    return this.complete(ctx, name, botId, ["preference", "fallbacks", "listed", "task"], mark);
+  }
+
+  /**
+   * Change a bot's picture (bots.md section 8), in this order: check access
+   * and the picture, `agents.update` with it, the bot list read again, and a
+   * comparison. `confirmed` is whether that list shows the picture sent.
+   */
+  async setBotPicture(
+    botId: string,
+    avatar: string,
+    gatewayId?: string,
+  ): Promise<{ confirmed: boolean }> {
+    return this.boundTo(gatewayId, (ctx) => this.writePicture(ctx, botId, avatar));
+  }
+
+  private async writePicture(
+    ctx: AccountsContext,
+    botId: string,
+    avatar: string,
+  ): Promise<{ confirmed: boolean }> {
+    this.requireAdmin("Changing a bot's picture");
+    if (!isKeepablePicture(avatar)) throw new Error("That picture can't be kept.");
+    await ctx.request("agents.update", { agentId: botId, avatar });
+    // The gateway took the picture. A list that can't be read now leaves it unconfirmed, not unsaved.
+    try {
+      await ctx.refreshBots();
+    } catch {
+      return { confirmed: false };
+    }
+    return { confirmed: ctx.bots().find((bot) => bot.id === botId)?.avatarUrl === avatar };
   }
 
   /**
@@ -1193,9 +1392,17 @@ export class AccountsEngine {
    * effort, the bot list read back showing it, the first task. What does not
    * land is reported, and finished by the bot's id.
    */
-  private async complete(name: string, botId: string, steps: MissingStep[]): Promise<CreatedBot> {
-    const { ctx } = this;
+  private async complete(
+    ctx: AccountsContext,
+    name: string,
+    botId: string,
+    steps: MissingStep[],
+    mark: WriteMark,
+  ): Promise<CreatedBot> {
     const plan = this.planned?.botId === botId ? this.planned : null;
+    // What this write records of the bot's fallback list counts only while it owns the creation:
+    // after a reset, or once a newer Create owns it, a late answer leaves the record alone.
+    const owns = () => this.creating === mark;
     const missing: MissingStep[] = [];
     const errors: string[] = [];
     const failed = (step: MissingStep, words: string, error?: unknown) => {
@@ -1204,23 +1411,43 @@ export class AccountsEngine {
       errors.push(`${words}${why}`);
       this.log(`${botId}: ${words}${why}`);
     };
+    // Cut off with no gateway saying who it is: the bot is made, and this step, those after it
+    // and those that failed before are what its Finish will write.
+    const cut = (error: WriteRetired, step: MissingStep) => {
+      if (error.unknown)
+        error.unfinished = {
+          name,
+          botId,
+          missing: [
+            ...missing,
+            ...steps.filter((s) => STEP_ORDER.indexOf(s) >= STEP_ORDER.indexOf(step)),
+          ],
+        };
+      return error;
+    };
     if (steps.includes("preference") && plan) {
-      const error = await this.recordIntent(botId, plan.intent);
+      const error = await this.recordIntent(botId, plan.intent, ctx);
+      if (error instanceof WriteRetired) throw cut(error, "preference");
       if (error !== null)
         failed("preference", "Clawtrate's record of its account was not saved", error);
     }
     if (steps.includes("fallbacks")) {
       try {
-        if (plan) await this.writeModel(botId, plan.ref, plan.effort, false);
+        if (plan) await this.writeModel(botId, plan.ref, plan.effort, false, ctx, owns);
         else
-          await this.patch({ agents: { entries: { [botId]: { model: { fallbacks: [] } } } } }, [
-            `agents.entries.${botId}.model.fallbacks`,
-          ]);
-        this.unwritten.delete(botId);
+          await this.patch(
+            { agents: { entries: { [botId]: { model: { fallbacks: [] } } } } },
+            [`agents.entries.${botId}.model.fallbacks`],
+            ctx,
+          );
+        if (owns()) this.unwritten.delete(botId);
       } catch (error) {
-        this.unwritten.add(botId);
-        if (this.unwritten.size > MAX_ACCOUNTS)
-          this.unwritten.delete(this.unwritten.values().next().value!);
+        if (error instanceof WriteRetired) throw cut(error, "fallbacks");
+        if (owns()) {
+          this.unwritten.add(botId);
+          if (this.unwritten.size > MAX_ACCOUNTS)
+            this.unwritten.delete(this.unwritten.values().next().value!);
+        }
         failed(
           "fallbacks",
           plan?.effort
@@ -1238,6 +1465,7 @@ export class AccountsEngine {
         await ctx.refreshBots();
         shown = ctx.bots().some((bot) => bot.id === botId);
       } catch (error) {
+        if (error instanceof WriteRetired) throw cut(error, "listed");
         readError = error;
       }
       if (!shown)
@@ -1253,22 +1481,38 @@ export class AccountsEngine {
       try {
         await ctx.createMainTask(botId);
       } catch (error) {
+        if (error instanceof WriteRetired) throw cut(error, "task");
         failed("task", "its first task was not made", error);
       }
     }
-    return this.settleCreation(name, botId, missing, errors);
+    return this.settleCreation(ctx, name, botId, missing, errors, mark);
   }
 
   /** The creation's end: created, or partial with what it lacks. */
   private async settleCreation(
+    ctx: AccountsContext,
     name: string,
     botId: string,
     missing: MissingStep[],
     errors: string[],
+    mark: WriteMark,
   ): Promise<CreatedBot> {
-    if (this.slowTimer) clearTimeout(this.slowTimer);
-    this.slowTimer = null;
-    this.ctx.update((a) => ({
+    // The timer is the Create's that owns the creation: one retired by a reset, settling late,
+    // leaves the timer of a Create begun since.
+    if (this.creating === mark) {
+      if (this.slowTimer) clearTimeout(this.slowTimer);
+      this.slowTimer = null;
+    }
+    // Settled while the connection hasn't said which gateway it is: the result is kept, for the
+    // gateway it was asked of (another saying who it is drops it), so the Create is never left
+    // "creating" and its Finish is there once that gateway says who it is.
+    const unidentified =
+      this.creating === mark &&
+      !mark.retired &&
+      mark.resets === this.resets &&
+      mark.gatewayId !== null &&
+      this.ctx.gatewayNow() === null;
+    (unidentified ? this.ctx : ctx).update((a) => ({
       ...a,
       creation: {
         name,
@@ -1290,10 +1534,13 @@ export class AccountsEngine {
   /**
    * The bot a create may have made: once connected, read the list and find a
    * bot of that name that was not there before the first Create of it. Never
-   * one that was: without what was there before, nothing is found.
+   * one that was. Only a successful read without a match returns null.
    */
-  private async findMade(name: string): Promise<string | null> {
-    const { ctx } = this;
+  private async findMade(
+    ctx: AccountsContext,
+    name: string,
+    mark: WriteMark,
+  ): Promise<string | null> {
     ctx.update((a) => (a.creation ? { ...a, creation: { ...a.creation, status: "checking" } } : a));
     const before = new Set(this.before);
     // Until a read of the list succeeds, within the deadline: an answer lost to a dropped
@@ -1303,13 +1550,26 @@ export class AccountsEngine {
         try {
           await ctx.refreshBots();
           return ctx.bots().find((bot) => bot.name === name && !before.has(bot.id))?.id ?? null;
-        } catch {
+        } catch (error) {
+          // Retired: bound to a gateway no longer connected, so nothing more is read for it.
+          if (error instanceof WriteRetired) {
+            error.doubtful = error.unknown;
+            throw error;
+          }
           // Not read: try again once the connection is back.
         }
       }
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
     }
-    return null;
+    // No list was read. Keep the original Create in doubt, including while its gateway is
+    // unidentified. A reset, a different gateway, or a newer Create has replaced the owner.
+    if (this.creating !== mark) throw new WriteRetired();
+    const target = ctx.gatewayNow() === null ? this.ctx : ctx;
+    return this.creationFailed(
+      target,
+      new Error("The gateway's bot list could not be read."),
+      true,
+    );
   }
 
   /**
@@ -1317,22 +1577,50 @@ export class AccountsEngine {
    * (the record of its account, its model with the empty fallback list and
    * effort, the bot list showing it, the first task), never create it again.
    */
-  async finishBot(botId: string): Promise<CreatedBot> {
-    this.requireAdmin("Creating a bot");
-    const creation = this.ctx.get().creation;
-    if (!creation || creation.status !== "partial" || creation.botId !== botId)
-      throw new Error("That bot has nothing left to finish.");
-    this.ctx.update((a) =>
-      a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
+  async finishBot(botId: string, gatewayId?: string): Promise<CreatedBot> {
+    // Bound to the gateway it was asked of, or else the creation's: never finished on another.
+    return this.boundTo(gatewayId ?? this.creationGateway ?? undefined, (ctx, mark) =>
+      this.finish(ctx, botId, mark),
     );
-    return this.complete(creation.name, botId, creation.missing);
   }
 
-  private creationFailed(error: unknown, uncertain: boolean): never {
+  private async finish(ctx: AccountsContext, botId: string, mark: WriteMark): Promise<CreatedBot> {
+    this.requireAdmin("Creating a bot");
+    const creation = ctx.get().creation;
+    if (!creation || creation.status !== "partial" || creation.botId !== botId)
+      throw new Error("That bot has nothing left to finish.");
+    if (this.finishing === creation) throw new Error("That bot is already being finished.");
+    this.finishing = creation;
+    this.creating = mark;
+    try {
+      ctx.update((a) =>
+        a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
+      );
+      return await this.complete(ctx, creation.name, botId, creation.missing, mark);
+    } finally {
+      if (this.finishing === creation) this.finishing = null;
+    }
+  }
+
+  /**
+   * A connection said which gateway it is. A creation asked of another gateway is that
+   * gateway's alone: it is not shown, kept or finished here. The same gateway back keeps it.
+   */
+  onGateway(gatewayId: string): void {
+    if (this.creationGateway === null || this.creationGateway === gatewayId) return;
+    this.creationGateway = null;
+    this.creating = null;
+    this.finishing = null;
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
-    const name = this.ctx.get().creation?.name ?? "the bot";
-    this.ctx.update((a) => ({
+    this.ctx.update((a) => (a.creation ? { ...a, creation: null } : a));
+  }
+
+  private creationFailed(ctx: AccountsContext, error: unknown, uncertain: boolean): never {
+    if (this.slowTimer) clearTimeout(this.slowTimer);
+    this.slowTimer = null;
+    const name = ctx.get().creation?.name ?? "the bot";
+    ctx.update((a) => ({
       ...a,
       creation: a.creation
         ? {
@@ -1341,7 +1629,7 @@ export class AccountsEngine {
             slow: false,
             uncertain,
             error: uncertain
-              ? `The gateway's answer did not say whether ${name} was made (${errorText(error)}), and Clawtrate found no new bot of that name. Create again looks for it first.`
+              ? `The gateway's answer did not say whether ${name} was made (${errorText(error)}). Create again looks for it first.`
               : errorText(error),
           }
         : null,
@@ -1368,14 +1656,18 @@ export class AccountsEngine {
     ref: ModelRef,
     effort: string | null,
     creating: boolean,
+    ctx: AccountsContext = this.ctx,
+    owns: () => boolean = () => true,
   ): Promise<void> {
     const entry: RawRecord = { model: { primary: formatModelRef(ref), fallbacks: [] } };
     if (effort) entry.thinkingDefault = effort;
     try {
-      await this.patch({ agents: { entries: { [botId]: entry } } }, [
-        `agents.entries.${botId}.model.fallbacks`,
-      ]);
-      this.unwritten.delete(botId);
+      await this.patch(
+        { agents: { entries: { [botId]: entry } } },
+        [`agents.entries.${botId}.model.fallbacks`],
+        ctx,
+      );
+      if (owns()) this.unwritten.delete(botId);
     } catch (error) {
       if (!creating) throw error;
       // The bot exists; its Account page offers the write again (bots.md section 3).
@@ -1536,6 +1828,11 @@ export class AccountsEngine {
 
   /** Another gateway: nothing read from this one is kept. */
   reset(): void {
+    // A write under way belongs to the gateway it was asked of: retired, it sends nothing more.
+    this.resets += 1;
+    this.creating = null;
+    this.creationGateway = null;
+    this.finishing = null;
     this.onClose();
     this.kinds.clear();
     this.intents.clear();

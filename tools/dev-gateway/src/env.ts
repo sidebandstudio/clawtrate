@@ -37,6 +37,7 @@ export const GATEWAY_PORT = DEFAULT_GATEWAY_PORT;
 export const GATEWAY_URL = `ws://127.0.0.1:${GATEWAY_PORT}`;
 export const PROVIDER_PORT = DEFAULT_PROVIDER_PORT;
 export const PROVIDER_ID = "scripted";
+export const IOS_STREAM_HOLD_FILE = "ios-stream-hold";
 export const MODEL_ID = "dev-1";
 export const MODEL_REF = `${PROVIDER_ID}/${MODEL_ID}`;
 

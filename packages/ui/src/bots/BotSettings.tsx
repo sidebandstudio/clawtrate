@@ -215,6 +215,9 @@ export function BotSettings({
           nameOf={nameOf}
           connection={connection}
           info={info}
+          // The grant is detected here, where a reconnect's new scopes and connect time don't
+          // remount the detector, not inside the page that this key does remount.
+          granted={granted}
           announce={announce}
           onBack={() => go("main", "[data-bs='runs-on']")}
         />
