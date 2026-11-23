@@ -1,0 +1,36 @@
+- region "Otto wants to run a command. Needs approval.":
+  - heading "Otto wants to run a command" [level=3]
+  - text: Needs approval
+  - paragraph:
+    - text: Run
+    - code: mv /srv/media/transcode-cache /srv/scratch/transcode-cache
+    - text: on media-box.
+  - list:
+    - listitem: This can't be undone
+  - group: Show full request
+  - group "Always allow":
+    - term: Command
+    - definition:
+      - code: mv /srv/media/transcode-cache /srv/scratch/transcode-cache
+    - term: Arguments
+    - definition:
+      - list "Arguments":
+        - listitem:
+          - code: mv
+        - listitem:
+          - code: /srv/media/transcode-cache
+        - listitem:
+          - code: /srv/scratch/transcode-cache
+    - term: Folder
+    - definition:
+      - code: /srv/media
+    - term: Runs on
+    - definition: media-box
+    - term: Bot
+    - definition: Otto
+    - paragraph: The gateway will add this to media-box's allowlist, so Otto is not asked again for commands it matches. The gateway decides what that covers; it can be wider than this exact command.
+    - button "Allow and save"
+    - button "Back"
+    - button "Deny"
+  - paragraph: Expires in 28 minutes; the command is not run if it does.
+  - button "Raw"

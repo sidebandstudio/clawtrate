@@ -2,8 +2,8 @@
 // (docs/design/setup.md §3 to §7) matches its approved baseline, in light and
 // dark, at 1440 px and the phone; the first screen, a found gateway and
 // Connect's steps at 1100 and 800 px too.
-import { expect, test } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
+import { test } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
 const STATES = [
   "first",

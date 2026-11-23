@@ -1,0 +1,12 @@
+- group:
+  - text: Messaged Marlow Recipient failed
+  - list:
+    - listitem:
+      - text: Otto sent
+      - time: 5:38 PM
+      - text: "Write a two-line entry for the house log: the weekly backup finished, 41 GB across three machines."
+    - listitem:
+      - text: Marlow
+      - paragraph: Marlow received it, and its run for this message then failed.
+  - button "Open this message in Marlow's task": Open in Marlow
+  - button "Raw"

@@ -1,6 +1,6 @@
 import type { ClawtrateState } from "../packages/core/src/index.ts";
-import { expect, test } from "@playwright/test";
-import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { test } from "@playwright/test";
+import { contextFor, expect, NOW, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
 for (const size of SIZES.filter((size) => size.name === "1440" || size.phone)) {
   test.describe(size.name, () => {
