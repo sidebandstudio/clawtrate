@@ -458,6 +458,26 @@ describe("F-552: a bot that takes a name", () => {
     client.stop();
   });
 
+  it("F-552: on a gateway that names no identity, Rename sends nothing, through the guard every bot write uses", async () => {
+    const { gateway, takeName } = namingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({});
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    expect(client.state.botNames![0]!.gatewayId).toBeNull();
+    await expect(client.acceptBotName("new-bot", "Johnny", null)).rejects.toThrow(
+      /hasn't said which gateway it is, so nothing was sent/,
+    );
+    expect(gateway.calls("agents.update")).toEqual([]);
+    client.stop();
+  });
+
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
     expect(plainName("<b>Jo</b>\u0000\u0007hn\nny\r\n\u2028 *x*")).toBe("<b>Jo</b> hn ny *x*");
     expect(plainName(" \n\t\u0000 ")).toBeNull();
