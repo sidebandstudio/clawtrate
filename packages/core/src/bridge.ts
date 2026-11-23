@@ -16,7 +16,7 @@ import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts"
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
 import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
-import type { ModelList } from "./accounts.ts";
+import { modelIdProblem, type ModelList } from "./accounts.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
@@ -760,6 +760,12 @@ function sessionKey(value: unknown): string {
   return value;
 }
 
+/** A model id under the one rule the typed field uses too (`modelIdProblem`). */
+function modelId(value: unknown): string {
+  if (typeof value !== "string" || modelIdProblem(value) !== null) throw new Error("invalid model");
+  return value;
+}
+
 function id(value: unknown, what: string): string {
   if (
     typeof value !== "string" ||
@@ -1264,7 +1270,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : profileId(command.account),
         provider: providerId(command.provider),
-        model: id(command.model, "model"),
+        model: modelId(command.model),
         effort:
           command.effort === null || command.effort === undefined
             ? null
@@ -1287,7 +1293,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : profileId(command.account),
         provider: providerId(command.provider),
-        model: id(command.model, "model"),
+        model: modelId(command.model),
         effort:
           command.effort === null || command.effort === undefined
             ? null
@@ -1297,7 +1303,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "setBotModel",
         botId: botId(command.botId),
-        model: id(command.model, "model"),
+        model: modelId(command.model),
         effort:
           command.effort === null || command.effort === undefined
             ? null

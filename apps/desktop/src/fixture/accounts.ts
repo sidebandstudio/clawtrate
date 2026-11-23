@@ -23,14 +23,16 @@
 //   admin=grant               a request for admin access is approved after a moment, or on
 //                             release if a test holds answers
 //   defacct=1                 the gateway's default model names an account (openai:work)
-//   catalog=slow|fail|unsupported|big|latepicker|pickercut|partial|trimmed
+//   catalog=slow|fail|unsupported|big|latepicker|pickercut|partial|trimmed|xaimore
 //                             how "View more" and the picker load (bots.md section 9): the full
 //                             list held until releaseCatalog() (xAI's then also lists gpt-5.5),
 //                             failing once, refused, longer than kept, the picker held until
-//                             releasePicker(), the picker cut with more OpenAI models listed, or
+//                             releasePicker(), the picker cut with more OpenAI models listed,
 //                             a first full list the gateway answers while still finding models,
-//                             or one cut short to rows the picker has, with 70 more left out
+//                             one cut short to rows the picker has, with 70 more left out,
+//                             or xAI's full list with grok-4.8, which its picker lacks
 //   model=<id>                the open bot's model
+//   effort=none               the open bot keeps no effort
 
 import {
   ADMIN_SCOPES,
@@ -80,6 +82,8 @@ export type AccountParams = {
   catalog: string | null;
   /** The open bot's model. */
   model: string | null;
+  /** The open bot keeps no effort. */
+  noEffort: boolean;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -116,6 +120,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
         : null,
     catalog: params.get("catalog"),
     model: params.get("model"),
+    noEffort: params.get("effort") === "none",
   };
 }
 
@@ -137,6 +142,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   finish: null,
   catalog: null,
   model: null,
+  noEffort: false,
 };
 
 const MINUTE = 60_000;
@@ -429,7 +435,9 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     ? {
         ...state,
         bindings: state.bindings.map((b) =>
-          b.botId === (params.bot ?? "otto") ? { ...b, model } : b,
+          b.botId === (params.bot ?? "otto")
+            ? { ...b, model, ...(params.noEffort ? { effort: null } : {}) }
+            : b,
         ),
       }
     : state;
@@ -448,6 +456,12 @@ function fullList(picker: CatalogModel[], provider: string, params: AccountParam
   // A late xAI list that also lists the OpenAI model a bot has: it must not replace a choice.
   if (provider === "xai" && params.catalog === "slow")
     return [...picker, { ...picker[0]!, id: "gpt-5.5" }];
+  // xAI's full list with a model only it has, with its own levels.
+  if (provider === "xai" && params.catalog === "xaimore")
+    return [
+      ...picker,
+      { ...picker[0]!, id: "grok-4.8", levels: ["low", "medium", "high"], defaultLevel: "medium" },
+    ];
   if (provider !== "openai") return picker;
   const extra = (id: string, available: boolean, levels: string[]): CatalogModel => ({
     provider,
