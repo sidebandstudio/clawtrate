@@ -721,4 +721,67 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("a setup for B saves B, though another client's hello cleared A's shared token while B paired", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
+    });
+    const gateway = setupGateway();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+    try {
+      await client.start({ resume: "disconnected" });
+      const hold = holdRead(storage, tokenKey(URL_B), () => gateway.connects.length > 0);
+      await client.connectWithSetupCode(setupCode);
+      await until(hold.waiting);
+      await other.start();
+      await until(() => saved(storage)?.token === null);
+      hold.release();
+      await until(() => client.state.connection.status === "connected");
+      await until(() => saved(storage)?.url === URL_B);
+      other.stop();
+      client.stop();
+      const restarted = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+      try {
+        await restarted.start({ resume: "disconnected" });
+        expect(restarted.state.connection.gatewayUrl).toBe(URL_B);
+      } finally {
+        restarted.stop();
+      }
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("a setup for B saves B, though another client went Back from its unsaved setup while B paired", async () => {
+    const storage = memoryStorage();
+    const gateway = setupGateway();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    // The other client's setup is for C, which waits for pairing: a second socket for B would
+    // stop this one's pairing.
+    const waitsAtC = pairingAtB();
+    const refuse = waitsAtC.connectReply;
+    waitsAtC.connectReply = (params) => refuse(params, URL_B);
+    const other = new ClawtrateClient(testHost(waitsAtC, storage), FAST);
+    try {
+      await client.start();
+      const hold = holdRead(storage, tokenKey(URL_B), () => gateway.connects.length > 0);
+      await client.connectWithSetupCode(setupCode);
+      await until(hold.waiting);
+      await other.start({ resume: false });
+      const selection = other.nextSelection();
+      await other.connectWithSetupCode({ ...setupCode, url: URL_C });
+      await until(() => other.state.connection.status === "pairing");
+      expect(saved(storage)).toBeNull();
+      await other.disconnect(URL_C, selection);
+      hold.release();
+      await until(() => client.state.connection.status === "connected");
+      await until(() => saved(storage) !== null);
+      expect(saved(storage)).toEqual({ url: URL_B, token: null });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });

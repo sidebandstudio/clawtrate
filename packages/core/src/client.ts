@@ -644,6 +644,11 @@ type ConnectionWrites = {
   grants: Map<string, { full: boolean; held: number } | null>;
   /** Bumped by every write or removal of the saved settings record, by any client on the store. */
   settingsRevision: number;
+  /**
+   * The gateway a client on the store last chose, by a Connect, a setup's save or a Reconnect
+   * that saved it over another, and the settings revision of that write.
+   */
+  chosen: { url: string; revision: number } | null;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
 
@@ -1497,6 +1502,7 @@ export class ClawtrateClient {
       rotations: new Map(),
       grants: new Map(),
       settingsRevision: 0,
+      chosen: null,
     };
     connectionWrites.set(host.storage, this.writes);
     this.options = options;
@@ -1520,6 +1526,12 @@ export class ClawtrateClient {
     this.settings = settings;
   }
 
+  /** Saved as the gateway this client chose: a setup chosen before it for another gateway steps aside. */
+  private async saveChoice(settings: ConnectionSettings): Promise<void> {
+    await this.saveSettings(settings);
+    this.writes.chosen = { url: settings.url, revision: this.writes.settingsRevision };
+  }
+
   /** The saved record alone; this client's settings stay as they are. */
   private async writeRecord(record: ConnectionSettings): Promise<void> {
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(record));
@@ -1541,15 +1553,17 @@ export class ClawtrateClient {
   }
 
   /**
-   * Whether a setup for `url` may save it: the record is this client's, or no client changed it
-   * since the person chose this gateway. A record changed since is a later choice, and stays.
-   * Decided without reading the store, so nothing runs between a save's check that its socket is
-   * live and its write.
+   * Whether a setup for `url` may save it: no client on this store chose another gateway since
+   * the person chose this one. Other writes, such as a token clear, a suspension or a Back that
+   * forgot a gateway, are no choice, and the setup still saves. Decided without reading the
+   * store, so nothing runs between a save's check that its socket is live and its write.
    */
   private setupMaySave(url: string): boolean {
     const chosen = this.setupChosen;
+    const latest = this.writes.chosen;
     return (
-      this.recordSeen() || (chosen?.url === url && chosen.revision === this.writes.settingsRevision)
+      chosen?.url === url &&
+      (latest === null || latest.revision <= chosen.revision || latest.url === url)
     );
   }
 
@@ -1628,7 +1642,7 @@ export class ClawtrateClient {
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       const token = options.token?.trim() || null;
       const switched = this.settings?.url !== url;
-      await this.saveSettings({ url, token });
+      await this.saveChoice({ url, token });
       // The selection changes only once this choice was valid and saved: a refused one leaves
       // the connection that stays open its own, and its attempt as it was.
       this.selectionApplied = selection;
@@ -6662,7 +6676,7 @@ export class ClawtrateClient {
             const current = this.settings;
             if (!live() || generation !== this.generation || current?.url !== settings.url) return;
             if (!this.setupMaySave(settings.url)) return;
-            await this.saveSettings(current);
+            await this.saveChoice(current);
           });
           return;
         }
@@ -6679,7 +6693,7 @@ export class ClawtrateClient {
               return;
             }
             if (!this.setupMaySave(settings.url)) return;
-            await this.saveSettings(current);
+            await this.saveChoice(current);
             return;
           }
           if (!current.token) return;
