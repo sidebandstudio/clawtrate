@@ -187,8 +187,9 @@ public static class UpdateSignature {
       at = (next + 3) & ~3;
     }
   }
-  // The ProductVersion of every version resource in the file, through the held stream. Null
-  // unless they all say the same, or if the file is not one Windows could read them from.
+  // The ProductVersion that every version resource in the file gives, read through the held
+  // stream. Null when there is none, when two differ, or when the file is not one Windows could
+  // read them from.
   static string Version(FileStream file) {
     try {
       long pe = U32(Read(file, 0x3c, 4), 0);
