@@ -73,7 +73,9 @@ async function touchScreen(page: Page) {
     await send("touchStart");
     return {
       move: (dx: number, dy: number) => (at(dx, dy), send("touchMove")),
-      lift: () => (down.delete(id), send("touchEnd")),
+      // A touchEnd carries no points and lifts them all; one finger of several lifts by moving
+      // the others, which leaves it out.
+      lift: () => (down.delete(id), send(down.size > 0 ? "touchMove" : "touchEnd")),
     };
   };
 }
@@ -751,7 +753,10 @@ test.describe("message actions on a phone", () => {
     await expect(turn.locator(".msg > .bubble").last()).toHaveCSS("user-select", "none");
     await expect(page.locator('[data-testid="message-actions"][data-open="true"]')).toHaveCount(0);
     await second.lift();
+    // The first finger is still down, and still keeps its message's text unselectable.
+    await expect(turn.locator(".msg > .bubble").last()).toHaveCSS("user-select", "none");
     await first.lift();
+    await expect(turn.locator(".msg > .bubble").last()).toHaveCSS("user-select", "auto");
   });
 
   test("F-066: a mouse moving over a held message leaves the touch and hold to the finger", async ({
