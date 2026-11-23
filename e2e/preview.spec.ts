@@ -2717,9 +2717,9 @@ test("F-468: a real question holds a message typed while it is pending, and answ
 });
 
 // Most checks here read the action cards themselves, so they run with "Show commands" on
-// (conversation.md, 7.11); the F-528 check runs on the default, with it off.
+// (conversation.md, 7.11); the F-528 and F-551 checks run on the default, with it off.
 test.beforeEach(async ({ page }, info) => {
-  if (!info.title.startsWith("F-528"))
+  if (!info.title.startsWith("F-528") && !info.title.startsWith("F-551"))
     await page.addInitScript(() => localStorage.setItem("clawtrate.commands", "show"));
 });
 
@@ -2751,6 +2751,48 @@ test("F-528 F-529 F-530: by default a real run shows no card: the status line na
     "6",
   );
   await expect(run.locator(".run-actions")).toContainText("Read 5 files · 6 reads");
+});
+
+test("F-551: by default a real run shows no thinking and no failed action, which its run line counts, the same after a reload; Show thinking in Settings → Advanced brings the thinking back", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { title } = await ownTaskOf(page, "pip", "Pip", "Think, then look for notes");
+  await composer(page).fill("Look for my old notes. #think #tool-fail");
+  await page.keyboard.press("Enter");
+  const transcript = page.getByTestId("transcript");
+  const reply = "That file does not exist, so the step failed. I will carry on without it.";
+  // The run is its words and one line: no reasoning, and the failed action is in the line.
+  const quiet = async () => {
+    await expect(transcript.getByText(reply, { exact: true })).toBeVisible({ timeout: 30_000 });
+    const run = transcript.getByTestId("run-line").last();
+    await expect(run.locator(":scope > summary")).toHaveAccessibleName(
+      /^Worked( for \d+s)? · 1 action · 1 failed$/,
+    );
+    await expect(transcript.locator("[data-thought]")).toHaveCount(0);
+    await expect(transcript.locator("details.card.action:not(.run-line details)")).toHaveCount(0);
+    await run.locator(":scope > summary").click();
+    await expect(
+      run.locator('.run-actions details.card.action[data-status="failed"]'),
+    ).toBeVisible();
+  };
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  await quiet();
+  // From the gateway's history, the same.
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Pip", title);
+  await quiet();
+  // The switch brings the reasoning back at once, as a Thought line in the conversation.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
+  const toggle = settings.getByRole("switch", { name: "Show thinking" });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await expect(transcript.locator("details.thought").first()).toBeVisible();
 });
 
 /** The action cards' and folds' lines in a transcript, in order. */

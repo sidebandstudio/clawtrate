@@ -245,7 +245,7 @@ Two plugin cards can be pending at once. OpenClaw 2026.10.6 accepted an answer t
 
 ### What a refused call looks like
 
-A refused call never runs. In the transcript it is the action card's Not run outcome (`conversation.md` §7.3), shown as failed so it stays in view, and its opened view says what decided it, from what was reported at the time:
+A refused call never runs. In the transcript it is the action card's Not run outcome (`conversation.md` §7.3), shown as failed (with "Show commands" off it is in the run line, which counts it, `conversation.md` §7.11), and its opened view says what decided it, from what was reported at the time:
 
 | Refused by                                                       | The card                               | "Decided by" line                                                                                                                                                                        | What the gateway reported (Raw)                                                  |
 | ---------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |

@@ -32,6 +32,7 @@ import {
   type TaskActivity,
   type Transcript,
   hasUnsettledWork,
+  gatewayStamp,
   NOT_OPEN_IN_VIEW,
 } from "@clawtrate/core";
 import {
@@ -591,7 +592,7 @@ export function createFixtureBridge(
   if (state.bots.length > 0)
     state = {
       ...state,
-      checkIns: fixtureCheckIns(now, checkInParams, state.connection.gatewayId),
+      checkIns: fixtureCheckIns(now, checkInParams, gatewayStamp(state.connection)),
     };
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
@@ -650,8 +651,15 @@ export function createFixtureBridge(
     const snapshot = pageState(state);
     for (const listener of listeners) listener(snapshot);
   };
+  // The host's target (`ConnectionState.target`), as the host keeps it: raised when the person
+  // points it at a gateway anew (Connect, Disconnect, setup's connect, a new pairing), kept across
+  // an ordinary reconnect, and carried into every state set here, from `idle()`, `pairing()` and
+  // `loaded()` too, so a stamp taken before such a change no longer matches.
+  let target = state.connection.target;
   const set = (next: ClawtrateState) => {
-    state = next;
+    // A state that already carries a higher target (a test's own) raises the counter with it.
+    target = Math.max(target, next.connection.target);
+    state = next.connection.target === target ? next : withConnection(next, { target });
     publish();
   };
   const computer =
@@ -810,6 +818,14 @@ export function createFixtureBridge(
       return computer.machine(command.key, command.probe);
     }
     if (
+      command.type === "connect" ||
+      command.type === "connectDevGateway" ||
+      command.type === "disconnect" ||
+      command.type === "suspend" ||
+      command.type === "setupConnect"
+    )
+      target += 1;
+    if (
       setupCommand(
         command,
         () => state,
@@ -841,6 +857,8 @@ export function createFixtureBridge(
           pairingChecks += 1;
           if (pairingChecks === 1) set(withConnection(state, { retryAt: Date.now() + 5000 }));
           else {
+            // Paired afresh: a new pairing, so a new target.
+            target += 1;
             const loadedNow = loaded(Date.now());
             const next = search.ids
               ? { ...loadedNow, transcripts: withMessageIds(loadedNow.transcripts) }
@@ -854,6 +872,7 @@ export function createFixtureBridge(
         const code = state.connection.error?.code ?? "";
         if (code.startsWith("PAIRING_")) {
           // Trying again sends a new pairing request.
+          target += 1;
           set(withConnection(idle(), { status: "connecting", gatewayUrl: GATEWAY_URL }));
           setTimeout(() => set(pairing()), 400);
           return;

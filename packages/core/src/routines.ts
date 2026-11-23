@@ -18,7 +18,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { cutText } from "./bounds.ts";
 import { asRecord, mapHistory, type RawRecord } from "./mapping.ts";
-import type { TranscriptItem } from "./types.ts";
+import type { GatewayStamp, TranscriptItem } from "./types.ts";
 
 /** Routines kept from `cron.list`; past it they are counted in `omitted`. */
 export const MAX_ROUTINES = 200;
@@ -456,6 +456,8 @@ export type RoutinesContext = {
   identity(expected?: string | null): string | null;
   /** The viewer that asked has gone away (`client.withdraw`). */
   withdrawn(owner: object): boolean;
+  /** The host's target now (`ConnectionState.target`). */
+  target(): number;
 };
 
 /** What the editor writes, and what it compares with a fresh read before writing. */
@@ -479,7 +481,7 @@ export type RoutineWrite =
    * Nothing was sent: this connection has no admin access, no connection, no
    * confirmed gateway identity yet, or the viewer that asked has gone away.
    */
-  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" | "changed" }
   | { status: "refused"; error: string }
   /** Sent, with no answer that settles it: it may or may not have landed. */
   | { status: "unknown"; error: string }
@@ -529,13 +531,13 @@ export function savedAs(routine: Routine, text: string, sent: SentRoutine): Rout
 export type RoutineRunNow =
   | { status: "started"; runId: string | null }
   | { status: "already-running" }
-  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" | "changed" }
   | { status: "refused"; error: string }
   | { status: "unknown"; error: string };
 
 export type RoutineRemove =
   | { status: "removed" }
-  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" | "changed" }
   | { status: "refused"; error: string }
   | { status: "unknown"; error: string };
 
@@ -915,15 +917,18 @@ export class RoutinesEngine {
    */
   private blocked(
     owner: object | null = null,
-    gateway: string | null | undefined = undefined,
-  ): "admin" | "offline" | "gateway" | null {
+    stamp: GatewayStamp | undefined = undefined,
+  ): "admin" | "offline" | "gateway" | "changed" | null {
     if (!this.ctx.connected()) return "offline";
+    // A draft is stamped where it was opened: once the host is pointed at a
+    // gateway anew, another gateway can be there whatever its identity says.
+    if (stamp !== undefined && stamp.target !== this.ctx.target()) return "changed";
     const identity = this.ctx.identity();
     if (identity === null) return "gateway";
     // A draft names the gateway it was opened on; a write without one, or for
     // another, is refused: the routine is at one address, and another gateway
     // can be there in its place by now.
-    if (gateway !== undefined && identity !== gateway) return "gateway";
+    if (stamp !== undefined && identity !== stamp.gatewayId) return "gateway";
     if (owner !== null && this.ctx.withdrawn(owner)) return "offline";
     return this.ctx.admin() ? null : "admin";
   }
@@ -971,9 +976,9 @@ export class RoutinesEngine {
     input: NewRoutine,
     key: string,
     owner: object | null = null,
-    gateway?: string | null,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
-    const blocked = this.blocked(owner, gateway);
+    const blocked = this.blocked(owner, stamp);
     if (blocked) return { status: "not-sent", reason: blocked };
     if (input.target !== "isolated")
       return { status: "refused", error: "New routines run in an isolated conversation." };
@@ -1014,8 +1019,8 @@ export class RoutinesEngine {
   }
 
   /** One routine as the gateway has it now, or null when it has none by that id. Reads only. */
-  async readOne(id: string, gateway?: string | null): Promise<Routine | null> {
-    return (await this.onGateway(gateway, () => this.readRevised(id)))?.routine ?? null;
+  async readOne(id: string, stamp?: GatewayStamp): Promise<Routine | null> {
+    return (await this.onGateway(stamp, () => this.readRevised(id)))?.routine ?? null;
   }
 
   /**
@@ -1024,11 +1029,14 @@ export class RoutinesEngine {
    * about that write. One that names no confirmed gateway confirms nothing:
    * null is not an identity.
    */
-  private async onGateway<T>(gateway: string | null | undefined, read: () => Promise<T>) {
+  private async onGateway<T>(stamp: GatewayStamp | undefined, read: () => Promise<T>) {
     const epoch = this.epoch;
     const elsewhere = () =>
-      gateway !== undefined &&
-      (gateway === null || epoch !== this.epoch || this.ctx.identity() !== gateway);
+      stamp !== undefined &&
+      (stamp.gatewayId === null ||
+        epoch !== this.epoch ||
+        stamp.target !== this.ctx.target() ||
+        this.ctx.identity() !== stamp.gatewayId);
     if (elsewhere()) throw new Error(UNCONFIRMED);
     const value = await read();
     if (elsewhere()) throw new Error(UNCONFIRMED);
@@ -1065,9 +1073,9 @@ export class RoutinesEngine {
   async checkCreate(
     key: string,
     input: RoutineFields,
-    gateway: string | null,
+    stamp: GatewayStamp,
   ): Promise<RoutineSaveCheck> {
-    const job = await this.onGateway(gateway, () => this.findByKey(key));
+    const job = await this.onGateway(stamp, () => this.findByKey(key));
     const routine = parseRoutine(job);
     if (!routine) return { status: "missing" };
     return savedAs(routine, instructionOf(asRecord(asRecord(job)?.payload) ?? {}), { input });
@@ -1077,9 +1085,9 @@ export class RoutinesEngine {
   async checkUpdate(
     id: string,
     sent: Extract<SentRoutine, { original: RoutineFields }>,
-    gateway: string | null,
+    stamp: GatewayStamp,
   ): Promise<RoutineSaveCheck> {
-    const read = await this.onGateway(gateway, () => this.readRevised(id));
+    const read = await this.onGateway(stamp, () => this.readRevised(id));
     return read ? savedAs(read.routine, read.text, sent) : { status: "missing" };
   }
 
@@ -1106,9 +1114,9 @@ export class RoutinesEngine {
     edit: RoutineFields,
     expected: RoutineRevision,
     owner: object | null = null,
-    gateway?: string | null,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
-    let blocked = this.blocked(owner, gateway);
+    let blocked = this.blocked(owner, stamp);
     if (blocked) return { status: "not-sent", reason: blocked };
     if (this.updates.size >= MAX_ROUTINE_UPDATES)
       return { status: "refused", error: "Too many routine changes are in flight." };
@@ -1143,7 +1151,7 @@ export class RoutinesEngine {
       if (changedFields(original, fields).includes("schedule") && !patch.schedule)
         return { status: "refused", error: "Clawtrate can't write this schedule." };
       if (Object.keys(patch).length === 0) return { status: "saved", routine: current };
-      blocked = this.blocked(owner, gateway);
+      blocked = this.blocked(owner, stamp);
       if (blocked) return { status: "not-sent", reason: blocked };
       if (epoch !== this.epoch) return { status: "not-sent", reason: "offline" };
       try {

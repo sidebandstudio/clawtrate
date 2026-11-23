@@ -15,6 +15,7 @@ import {
   cannotKeep,
   CHECKIN_BOT_DELETED,
   MAX_CHECKIN_PROMPT_CHARS,
+  sameStamp,
   type Bot,
   type CheckInsState,
   type CheckInRead,
@@ -81,9 +82,9 @@ export function useCheckInsSection({
 
   const jobOf = (botId: string) => checkIns?.jobs.find((job) => job.botId === botId);
   const editingBot = bots.find((bot) => bot.id === draft?.botId);
-  // A draft belongs to the gateway it was made on, by identity; no other one shows it.
+  // A draft belongs to where it was read, the gateway and the host's target; no other shows it.
   const draftHere =
-    draft !== null && connected && draft.gatewayId === checkIns?.gatewayId && editingBot;
+    draft !== null && connected && sameStamp(draft.stamp, checkIns?.stamp) && editingBot;
 
   const edit = (bot: Bot) => {
     const next = checkIns && openDraft(checkIns, bot.id);
@@ -158,7 +159,7 @@ export function useCheckInsSection({
                       className="button"
                       data-size="sm"
                       aria-label={`Change ${bot.name}'s check-ins`}
-                      disabled={checkIns.gatewayId === null}
+                      disabled={checkIns.stamp?.gatewayId == null}
                       onClick={() => edit(bot)}
                     >
                       Change
@@ -302,7 +303,7 @@ function CheckInsDialog({
     setChecking(true);
     void refresh()
       .then((fresh) => {
-        if (fresh?.gatewayId === draft.gatewayId)
+        if (fresh && sameStamp(fresh.stamp, draft.stamp))
           change((current) =>
             current.saveId === save.id ? { ...rebase(current, fresh), rebased: save.id } : current,
           );

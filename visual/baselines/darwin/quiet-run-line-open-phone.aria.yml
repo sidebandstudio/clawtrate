@@ -9,7 +9,6 @@
     - paragraph: Look through memory, make two sketches and tidy the backup folder.
     - toolbar "Message actions":
       - button "More"
-    - group: Searched memory 1 time couldn't search memory for "loft insulation" 1 unavailable · 1 partial
     - paragraph: Starting the sketches.
     - toolbar "Message actions":
       - button "More"
@@ -19,6 +18,7 @@
     - group: "Commands · 3 calls 1 failed: couldn't run a command Waiting for approval"
     - group:
       - text: Worked 8 actions 1 failed 1 unavailable
+      - group: Searched memory 1 time couldn't search memory for "loft insulation" 1 unavailable · 1 partial
       - group: Image generation · 2 calls "A small house in…", "The same house at…" 1 started
       - paragraph:
         - text: scripted/dev-1 · effort not reported run-1

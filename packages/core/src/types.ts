@@ -79,6 +79,12 @@ export type ConnectionState = {
    * does not give it.
    */
   gatewayId: string | null;
+  /**
+   * The host's target: raised whenever the host is pointed at a gateway anew (a Connect, a
+   * Disconnect, a switch of saved gateway, a new pairing), kept across a reconnect to the same
+   * one. With `gatewayId` it is what a screen read is stamped with (`GatewayStamp`).
+   */
+  target: number;
   serverVersion: string | null;
   protocol: number | null;
   /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
@@ -117,6 +123,26 @@ export type ConnectionState = {
    */
   sendLimits: SendLimits | null;
 };
+
+/**
+ * Where a screen's values were read: the gateway's identity and the host's target then. A write
+ * that must reach that same gateway carries it back, and the host sends nothing unless both
+ * still hold (`ClawtrateClient.requireSameGateway`).
+ */
+export type GatewayStamp = { gatewayId: string | null; target: number };
+
+/** Whether two stamps name the same gateway on the same target: an unknown identity never does. */
+export const sameStamp = (a: GatewayStamp | null | undefined, b: GatewayStamp | null | undefined) =>
+  a != null &&
+  b != null &&
+  a.gatewayId !== null &&
+  a.gatewayId === b.gatewayId &&
+  a.target === b.target;
+
+/** The stamp of what is read on the connection as it is now. */
+export const gatewayStamp = (
+  connection: Pick<ConnectionState, "gatewayId" | "target">,
+): GatewayStamp => ({ gatewayId: connection.gatewayId, target: connection.target });
 
 /** What one message may carry (`ConnectionState.sendLimits`). Sizes in bytes. */
 export type SendLimits = {
@@ -512,6 +538,7 @@ export const initialConnectionState: ConnectionState = {
   status: "idle",
   gatewayUrl: null,
   gatewayId: null,
+  target: 0,
   serverVersion: null,
   protocol: null,
   scopes: [],
