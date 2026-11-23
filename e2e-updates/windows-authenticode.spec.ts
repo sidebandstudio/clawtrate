@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -19,7 +20,12 @@ import { join } from "node:path";
 import { inspectUpdateFile } from "../apps/desktop/src/main/inspect-update-file.ts";
 import { runUpdatePowerShell } from "../apps/desktop/src/main/private-update-directory.ts";
 import type { VerifiedArtifact } from "../apps/desktop/src/main/update/install.ts";
-import { inspectSource, windowsInstaller } from "../apps/desktop/src/main/windows-install.ts";
+import {
+  inspectSource,
+  inspectWithPowerShell,
+  windowsInstaller,
+  windowsRefusal,
+} from "../apps/desktop/src/main/windows-install.ts";
 
 const windows = process.platform === "win32";
 const files = process.env.CLAWTRATE_AUTHENTICODE_FILES;
@@ -31,18 +37,21 @@ async function windowsSays(script: string, path: string) {
   return stdout.trim();
 }
 
-/** The facts the helper's version reader gives for a file, or the error it refuses it with, and
- * how many milliseconds the reading took. */
-async function readVersions(path: string) {
+/** The facts the helper's version reader gives for a file it holds, or the error it refuses it
+ * with, and how many milliseconds the reading took. The reader expects the file's own SHA-512
+ * unless given another. */
+async function readVersions(path: string, sha512?: string) {
   const script = `
 $ErrorActionPreference='Stop'
 Add-Type -TypeDefinition @'
 ${inspectSource}
 '@
 $file = [IO.File]::OpenRead($env:CLAWTRATE_CHECKED_FILE)
+$sha512 = [Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash($file))
+if ($env:CLAWTRATE_EXPECTED_SHA512) { $sha512 = $env:CLAWTRATE_EXPECTED_SHA512 }
 $clock = [Diagnostics.Stopwatch]::StartNew()
 try {
-  [UpdateVersions]::new($file).Read()
+  [UpdateVersions]::Read($env:CLAWTRATE_CHECKED_FILE, $file, $sha512)
 } catch {
   $cause = $_.Exception
   while ($cause.InnerException) { $cause = $cause.InnerException }
@@ -52,12 +61,13 @@ try {
 }
 "took $($clock.ElapsedMilliseconds)"
 `;
-  const lines = (await windowsSays(script, path)).split(/\r?\n/);
+  const values = { CLAWTRATE_CHECKED_FILE: path, CLAWTRATE_EXPECTED_SHA512: sha512 ?? "" };
+  const lines = (await runUpdatePowerShell(script, values, 60000)).stdout.trim().split(/\r?\n/);
   const took = Number(/^took (\d+)$/.exec(lines.pop() ?? "")?.[1]);
   return { lines, took };
 }
 
-// A Portable Executable file with only what the version reader reads: the headers, one section
+// A Portable Executable file with only what a version lookup reads: the headers, one section
 // at RVA 0x1000 and a resource table in it.
 const RVA = 0x1000;
 const DIRECTORY = 0x80000000;
@@ -204,6 +214,17 @@ function changedAfterSigning(bytes: Buffer) {
   return changed;
 }
 
+/** A copy of bytes with each UTF-16 occurrence of text written over with that many of digit,
+ * and how many there were. */
+function rewritten(bytes: Buffer, text: string, digit: string) {
+  const copy = Buffer.from(bytes);
+  const from = Buffer.from(text, "utf16le");
+  let count = 0;
+  for (let at = copy.indexOf(from); at >= 0; at = copy.indexOf(from, at + 1), count++)
+    Buffer.from(digit.repeat(text.length), "utf16le").copy(copy, at);
+  return { bytes: copy, count };
+}
+
 /** The same executable without its signature: no certificate table, and no bytes after it. */
 function withoutSignature(bytes: Buffer) {
   const header = bytes.readUInt32LE(0x3c) + 24;
@@ -267,40 +288,47 @@ if (windows)
       );
     });
 
-    test("F-231: reads an installer's own version, not one from a .mui file beside it", async () => {
-      // cmd.exe's strings are in a .mui file, and the version lookup looks for one beside a copy too.
-      const path = place("setup.exe", readFileSync(join(system, "cmd.exe")));
+    test("F-231: reads an installer's own version, not one from a .mui file beside it or Windows' own", async () => {
+      // cmd.exe is language-neutral: Windows' version lookup takes its version from a .mui file
+      // in a language folder beside it, and System32 holds one. Here it is outside the system
+      // folders, under its own name. Through the version reader alone: Windows vouches for
+      // cmd.exe only through a catalog, so the whole check never gets as far as its version.
+      const bytes = readFileSync(join(system, "cmd.exe"));
+      const path = place("cmd.exe", bytes);
       const lookup = `[Diagnostics.FileVersionInfo]::GetVersionInfo($env:CLAWTRATE_CHECKED_FILE).ProductVersion`;
-      // Through the version reader alone: Windows vouches for cmd.exe only through a catalog, so
-      // the whole check never gets as far as its version.
       const read = async () => {
         const { lines } = await readVersions(path);
         expect(lines[0]).toBe("versions 1");
         return Buffer.from(lines[1]!.split(" ")[2]!, "base64").toString("utf8");
       };
+      // The file's own version, written over with 8s, tells its own strings from a .mui file's.
       const own = await read();
       expect(own).toMatch(/^\d+\.\d+/);
-      // A copy of cmd.exe's .mui file, with its version rewritten.
+      const eights = rewritten(bytes, own, "8");
+      expect(eights.count).toBeGreaterThan(0);
+      writeFileSync(path, eights.bytes);
+      // A copy of System32's .mui file beside it, its version written over with 9s.
       const muiPath = join(system, "en-US", "cmd.exe.mui");
       const text = await windowsSays(lookup, muiPath);
-      const rewritten = "9".repeat(text.length);
-      const mui = readFileSync(muiPath);
-      const from = Buffer.from(text, "utf16le");
-      for (let at = mui.indexOf(from); at >= 0; at = mui.indexOf(from, at + 1))
-        Buffer.from(rewritten, "utf16le").copy(mui, at);
+      const nines = rewritten(readFileSync(muiPath), text, "9");
+      expect(nines.count).toBeGreaterThan(0);
       mkdirSync(join(dir, "en-US"));
-      writeFileSync(join(dir, "en-US", "setup.exe.mui"), mui);
-      // Windows' version lookup now takes the copy's version from the .mui file. The check does not.
-      expect(await windowsSays(lookup, path)).toBe(rewritten);
-      expect(await read()).toBe(own);
+      writeFileSync(join(dir, "en-US", "cmd.exe.mui"), nines.bytes);
+      // Windows' version lookup takes the version from the .mui file beside the file.
+      expect(await windowsSays(lookup, path)).toBe("9".repeat(text.length));
+      // The reader takes the file's own, from neither that .mui file nor System32's, and leaves
+      // no copy behind.
+      expect(await read()).toBe("8".repeat(own.length));
+      expect(readdirSync(dir).sort()).toEqual(["cmd.exe", "en-US"]);
     });
 
-    test("F-231: never reads the version resources of a download whose signature fails", async () => {
-      // Without the order and the limits, reading this file would take minutes.
-      const path = place("setup.exe", portable(loopingTree(4000)));
-      expect(await windowsInstaller(running).inspect(await proof(path, version))).toBe(
-        "windows-signature",
-      );
+    test("F-231: never copies or reads the version of a download whose signature fails", async () => {
+      // An unsigned file with a version resource the reader would read.
+      const file = await proof(place("setup.exe", portable(versionTree(release))), "1.2.0");
+      const output = await inspectWithPowerShell(file, running, new AbortController().signal);
+      expect(output.trimEnd().split(/\r?\n/).at(-1)).toBe("versions unread");
+      expect(windowsRefusal(output, file)).toBe("windows-signature");
+      expect(readdirSync(dir)).toEqual(["setup.exe"]);
     });
 
     test("F-231: refuses another publisher's signed executable", async () => {
@@ -356,6 +384,13 @@ if (windows)
       expect(lines).toEqual(["versions 1", `resource 1.2.0.7 ${base64("1.2.0")} - -`]);
     });
 
+    test("F-231: refuses a copy without the held file's SHA-512 after the reading, and removes it", async () => {
+      const path = place("setup.exe", portable(versionTree(release)));
+      const { lines } = await readVersions(path, "A".repeat(86) + "==");
+      expect(lines).toEqual(["refused InvalidDataException"]);
+      expect(readdirSync(dir)).toEqual(["setup.exe"]);
+    });
+
     const key = Buffer.from(release);
     // VS_VERSION_INFO's length now ends inside its key.
     key.writeUInt16LE(16, 0);
@@ -363,14 +398,24 @@ if (windows)
     // 65535 named entries and 65535 numbered ones.
     const crowded = Buffer.alloc(16);
     crowded.writeUInt32LE(0xffffffff, 12);
-    const crafted: [string, Buffer][] = [
+    // Windows finds one version resource by its number and language, and reads the length the
+    // resource gives itself. So a table that leads to one resource many times, a data entry
+    // over 64 KiB and 17 resources give the one release it finds. The rest give no version, or
+    // fail, which the whole check refuses.
+    const found = ["versions 1", `resource 1.2.0.0 ${base64("1.2.0")}`];
+    const crafted: [string, Buffer, string[]][] = [
       [
-        "a resource table that reaches one directory and one data entry many times",
+        "reads one release from a resource table that reaches one directory and one data entry many times",
         loopingTree(4000),
+        found,
       ],
-      ["a type directory that leads back to the root", directory([DIRECTORY | 0], 16)],
       [
-        "a directory where a language's data entry should be",
+        "finds no version in a type directory that leads back to the root",
+        directory([DIRECTORY | 0], 16),
+        ["versions 0"],
+      ],
+      [
+        "finds no version where a directory stands for a language's data entry",
         Buffer.concat([
           directory([DIRECTORY | 24], 16),
           directory([DIRECTORY | 48]),
@@ -379,12 +424,21 @@ if (windows)
           dataEntry(112, release.length),
           release,
         ]),
+        ["versions 0"],
       ],
-      ["a version resource longer than 64 KiB", versionTree(huge)],
-      ["a directory claiming more entries than the limit", crowded],
-      ["a key that runs past its node", versionTree(key)],
+      ["reads the release's own length from a data entry over 64 KiB", versionTree(huge), found],
       [
-        "17 version resources",
+        "finds no version in a directory claiming more entries than it holds",
+        crowded,
+        ["versions 0"],
+      ],
+      [
+        "fails on a version resource whose length ends inside its key",
+        versionTree(key),
+        ["refused IOException"],
+      ],
+      [
+        "reads one release from 17 version resources",
         Buffer.concat([
           directory([DIRECTORY | 24], 16),
           directory([DIRECTORY | 48]),
@@ -397,12 +451,13 @@ if (windows)
           ),
           release,
         ]),
+        found,
       ],
     ];
-    for (const [name, tree] of crafted)
-      test(`F-231: refuses ${name} at once`, async () => {
+    for (const [name, tree, expected] of crafted)
+      test(`F-231: ${name}, at once`, async () => {
         const { lines, took } = await readVersions(place("setup.exe", portable(tree)));
-        expect(lines).toEqual(["refused InvalidDataException"]);
+        expect(lines).toEqual(expected);
         expect(took).toBeLessThan(2000);
       });
   });

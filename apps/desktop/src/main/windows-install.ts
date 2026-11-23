@@ -8,187 +8,129 @@ const PENDING_TRIAL = "windows-install-pending-trial";
 /** The C# behind the check. `UpdateSignature.Inspect` reads, in one run, the running app's
  * signatures and then the installer's under one handle that denies writes and deletion. NTFS
  * also refuses to rename the file or any folder above it while that handle is open, so the
- * hash, the signatures and the version all come from the same bytes. WinVerifyTrust checks one
- * embedded signature at a time, picked by its index, shows no prompt, skips revocation and
- * downloads nothing: the chain is built from certificates already on this machine and in the
- * signature. Only when the bytes are the ones the engine verified and the installer has the
- * running app's publisher does `UpdateVersions` read the file's own version resources, through
- * the handle: the version API opens the file again by path and can take its strings from a
- * .mui file beside it. Each line is a fact; `windowsRefusal` decides.
- * e2e-updates/windows-authenticode.spec.ts compiles it too, to run the version reader on
- * crafted files. */
+ * hash, the signatures and the copy the version comes from all have the same bytes.
+ * WinVerifyTrust checks one embedded signature at a time, picked by its index, shows no prompt,
+ * skips revocation and downloads nothing: the chain is built from certificates already on this
+ * machine and in the signature. Only when the bytes are the ones the engine verified and the
+ * installer has the running app's publisher does `UpdateVersions` ask Windows for the version.
+ * Each line is a fact; `windowsRefusal` decides.
+ * e2e-updates/windows-authenticode.spec.ts compiles it too, to run the version reader alone. */
 export const inspectSource = `
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
-// The version resources of one file, read through a stream its caller holds. A crafted file
-// cannot make it allocate much, loop or run long: it reads at most 1 MiB in all, looks at no
-// more than 4096 directory entries and 16 version resources of up to 64 KiB each, reaches each
-// directory and data entry once, and keeps every read inside the structure that declares it.
-// Past a limit, or anything malformed, is InvalidDataException.
-public sealed class UpdateVersions {
-  const int MostSections = 96, MostEntries = 4096, MostResources = 16, MostResource = 65536;
-  readonly FileStream file;
-  readonly Dictionary<uint, bool> seen = new Dictionary<uint, bool>();
-  long left = 1 << 20;
-  int entries = MostEntries;
-  byte[] sections;
-  uint tree, treeSize;
-  public UpdateVersions(FileStream file) { this.file = file; }
+// The version Windows itself reads from a held file. Windows' version lookup opens the file
+// again by path, and takes the strings, or the whole version, from a .mui file in a language
+// folder beside it when there is one. So it reads a copy of the held bytes, alone in a new
+// folder this run makes and protects as private-update-directory.ts protects an update folder,
+// and the copy must still have the held file's size and SHA-512 afterwards.
+public static class UpdateVersions {
+  // FILE_VER_GET_LOCALISED, which reads what .NET's FileVersionInfo reads, a .mui file's
+  // version included when there is one.
+  const uint Localised = 1;
+  [DllImport("version", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern uint GetFileVersionInfoSizeExW(uint flags, string path, out uint handle);
+  [DllImport("version", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern bool GetFileVersionInfoExW(uint flags, string path, uint handle, uint size, IntPtr data);
+  [DllImport("version", CharSet=CharSet.Unicode)]
+  static extern bool VerQueryValueW(IntPtr block, string path, out IntPtr value, out uint size);
   static uint U32(byte[] bytes, int at) { return BitConverter.ToUInt32(bytes, at); }
   static int U16(byte[] bytes, int at) { return BitConverter.ToUInt16(bytes, at); }
-  byte[] Bytes(long at, long count) {
-    if (at < 0 || count < 0 || count > left || at > file.Length - count) throw new InvalidDataException();
-    left -= count;
+  // The value at a path in Windows' copy, or null. It must lie inside that copy.
+  static byte[] Value(IntPtr data, uint size, string path, bool text) {
+    IntPtr at;
+    uint length;
+    if (!VerQueryValueW(data, path, out at, out length)) return null;
+    long offset = at.ToInt64() - data.ToInt64(), count = text ? 2L * length : length;
+    if (offset < 0 || offset > size || count > size - offset) throw new InvalidDataException();
     var bytes = new byte[count];
-    file.Seek(at, SeekOrigin.Begin);
-    for (int done = 0; done < count; ) {
-      int read = file.Read(bytes, done, (int)count - done);
-      if (read <= 0) throw new IOException();
-      done += read;
-    }
+    Marshal.Copy(at, bytes, 0, (int)count);
     return bytes;
   }
-  // Bytes at an RVA, all inside one section's raw data.
-  byte[] Mapped(uint rva, uint size) {
-    for (int at = 0; at < sections.Length; at += 40) {
-      uint start = U32(sections, at + 12), raw = U32(sections, at + 16);
-      if (rva >= start && rva - start < raw && size <= raw - (rva - start))
-        return Bytes(U32(sections, at + 20) + (long)(rva - start), size);
+  // "versions 0" for a file without a version resource. Otherwise "versions 1" and the resource
+  // Windows picks: its fixed product version, then the ProductVersion of each translation it
+  // lists, "-" for one without.
+  static string[] Versions(string path) {
+    uint unused, size = GetFileVersionInfoSizeExW(Localised, path, out unused);
+    if (size == 0) {
+      int error = Marshal.GetLastWin32Error();
+      // ERROR_RESOURCE_DATA_NOT_FOUND to ERROR_RESOURCE_LANG_NOT_FOUND.
+      if (error >= 1812 && error <= 1815) return new[] { "versions 0" };
+      throw new IOException("GetFileVersionInfoSizeExW failed", error);
     }
-    throw new InvalidDataException();
-  }
-  // Bytes of the resource tree, inside the size its data directory gives.
-  byte[] Tree(uint at, uint size) {
-    if (at > treeSize || size > treeSize - at) throw new InvalidDataException();
-    return Mapped(tree + at, size);
-  }
-  void Visit(uint at) {
-    if (seen.ContainsKey(at)) throw new InvalidDataException();
-    seen.Add(at, true);
-  }
-  // The targets of an IMAGE_RESOURCE_DIRECTORY's entries: all of them, or the one numbered id.
-  // The high bit marks another directory, which every level but the last holds.
-  List<uint> Entries(uint at, long id, bool directories) {
-    Visit(at);
-    var head = Tree(at, 16);
-    int named = U16(head, 12), count = named + U16(head, 14);
-    if (count > entries) throw new InvalidDataException();
-    entries -= count;
-    var list = Tree(at + 16, (uint)(8 * count));
-    var found = new List<uint>();
-    for (int i = 0; i < count; i++) {
-      if (id >= 0 && (i < named || U32(list, 8 * i) != id)) continue;
-      uint target = U32(list, 8 * i + 4);
-      if (((target & 0x80000000) != 0) != directories) throw new InvalidDataException();
-      found.Add(target & 0x7fffffff);
-    }
-    return found;
-  }
-  struct Node { public string key; public int value, valueEnd, children, end; }
-  // A version resource is a tree of nodes: a length, a value's length, a type (1 for text), a
-  // key, the value and then the children, each part on a four-byte boundary and inside its
-  // parent.
-  static List<Node> Nodes(byte[] block, int at, int end) {
-    var nodes = new List<Node>();
-    // Padding can follow the last node.
-    while (end - at >= 6 && U16(block, at) != 0) {
-      var node = new Node();
-      int length = U16(block, at), key = at + 6, keyEnd = key;
-      if (length < 6 || length > end - at) throw new InvalidDataException();
-      node.end = at + length;
-      for (; ; keyEnd += 2) {
-        if (keyEnd + 2 > node.end) throw new InvalidDataException();
-        if (U16(block, keyEnd) == 0) break;
+    // Windows sizes its copy from the resource's own 16-bit length, so it stays small.
+    IntPtr data = Marshal.AllocHGlobal((int)size);
+    try {
+      if (!GetFileVersionInfoExW(Localised, path, 0, size, data))
+        throw new IOException("GetFileVersionInfoExW failed", Marshal.GetLastWin32Error());
+      string product = "-";
+      var info = Value(data, size, "\\\\", false);
+      if (info != null && info.Length >= 52 && U32(info, 0) == 0xfeef04bd) {
+        uint high = U32(info, 16), low = U32(info, 20);
+        product = (high >> 16) + "." + (high & 0xffff) + "." + (low >> 16) + "." + (low & 0xffff);
       }
-      node.key = Encoding.Unicode.GetString(block, key, keyEnd - key);
-      node.value = Math.Min((keyEnd + 5) & ~3, node.end);
-      node.valueEnd = node.value + U16(block, at + 2) * (U16(block, at + 4) == 1 ? 2 : 1);
-      if (node.valueEnd > node.end) throw new InvalidDataException();
-      node.children = (node.valueEnd + 3) & ~3;
-      nodes.Add(node);
-      at = (node.end + 3) & ~3;
-    }
-    return nodes;
-  }
-  // One version resource: its fixed product version, then the ProductVersion string of each
-  // string table, "-" for a table without one, and "-" for each translation it lists without a
-  // table.
-  static string Resource(byte[] block) {
-    var roots = Nodes(block, 0, block.Length);
-    if (roots.Count != 1 || roots[0].key != "VS_VERSION_INFO") throw new InvalidDataException();
-    var root = roots[0];
-    string product = "-";
-    if (root.valueEnd - root.value == 52 && U32(block, root.value) == 0xfeef04bd) {
-      uint high = U32(block, root.value + 16), low = U32(block, root.value + 20);
-      product = (high >> 16) + "." + (high & 0xffff) + "." + (low >> 16) + "." + (low & 0xffff);
-    }
-    var tables = new List<string>();
-    var versions = new Dictionary<string, string>();
-    var translations = new List<string>();
-    foreach (var part in Nodes(block, root.children, root.end)) {
-      if (part.key == "StringFileInfo") {
-        foreach (var table in Nodes(block, part.children, part.end)) {
-          string version = null;
-          foreach (var text in Nodes(block, table.children, table.end)) {
-            if (text.key != "ProductVersion") continue;
-            if (version != null) throw new InvalidDataException();
-            version = Encoding.Unicode.GetString(block, text.value, text.valueEnd - text.value).TrimEnd('\\0');
-          }
-          string key = table.key.ToLowerInvariant();
-          if (versions.ContainsKey(key)) throw new InvalidDataException();
-          versions.Add(key, version == "" ? null : version);
-          tables.Add(key);
-        }
-      } else if (part.key == "VarFileInfo") {
-        foreach (var value in Nodes(block, part.children, part.end))
-          if (value.key == "Translation")
-            for (int at = value.value; at + 4 <= value.valueEnd; at += 4)
-              translations.Add(U16(block, at).ToString("x4") + U16(block, at + 2).ToString("x4"));
+      var line = new StringBuilder("resource " + product);
+      var translations = Value(data, size, "\\\\VarFileInfo\\\\Translation", false);
+      for (int at = 0; translations != null && at + 4 <= translations.Length; at += 4) {
+        string key = U16(translations, at).ToString("x4") + U16(translations, at + 2).ToString("x4");
+        var text = Value(data, size, "\\\\StringFileInfo\\\\" + key + "\\\\ProductVersion", true);
+        string version = text == null ? null : Encoding.Unicode.GetString(text).Split('\\0')[0];
+        line.Append(" ").Append(UpdateSignature.Encode(version == "" ? null : version));
       }
+      return new[] { "versions 1", line.ToString() };
+    } finally {
+      Marshal.FreeHGlobal(data);
     }
-    var line = new StringBuilder("resource " + product);
-    foreach (string key in tables) line.Append(" ").Append(UpdateSignature.Encode(versions[key]));
-    foreach (string key in translations) if (!versions.ContainsKey(key)) line.Append(" -");
-    return line.ToString();
   }
-  // "versions <count>", then a line for each version resource.
-  public string[] Read() {
-    long pe = U32(Bytes(0x3c, 4), 0);
-    var head = Bytes(pe, 24);
-    if (U32(head, 0) != 0x4550) throw new InvalidDataException();
-    int count = U16(head, 6), optionalSize = U16(head, 20);
-    if (count > MostSections) throw new InvalidDataException();
-    var optional = Bytes(pe + 24, optionalSize);
-    sections = Bytes(pe + 24 + optionalSize, 40 * count);
-    // The data directories follow their count; the third is the resource table.
-    int directories = optionalSize >= 2 && U16(optional, 0) == 0x20b ? 112 : 96;
-    if (optionalSize < directories) throw new InvalidDataException();
-    var lines = new List<string>();
-    if (U32(optional, directories - 4) >= 3) {
-      if (optionalSize < directories + 24) throw new InvalidDataException();
-      tree = U32(optional, directories + 16);
-      treeSize = U32(optional, directories + 20);
-      if (treeSize > uint.MaxValue - tree) throw new InvalidDataException();
-      // RT_VERSION is type 16. Each of its names and languages leads to a data entry: an RVA and a size.
-      if (treeSize > 0)
-        foreach (uint type in Entries(0, 16, true))
-          foreach (uint name in Entries(type, -1, true))
-            foreach (uint language in Entries(name, -1, false)) {
-              Visit(language);
-              var entry = Tree(language, 16);
-              uint rva = U32(entry, 0), size = U32(entry, 4);
-              if (lines.Count == MostResources || size > MostResource || rva < tree) throw new InvalidDataException();
-              lines.Add(Resource(Tree(rva - tree, size)));
-            }
+  // The folder and its DACL: owned by this user, inheriting nothing, and one rule giving this
+  // user full control. CreateDirectory returns a folder that already exists without applying
+  // the DACL, so the name is random and the DACL is read back.
+  static void MakePrivate(string folder) {
+    var user = WindowsIdentity.GetCurrent().User;
+    var acl = new DirectorySecurity();
+    acl.SetOwner(user);
+    acl.SetAccessRuleProtection(true, false);
+    acl.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+      InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+    var made = Directory.CreateDirectory(folder, acl);
+    var actual = made.GetAccessControl();
+    var rules = actual.GetAccessRules(true, true, typeof(SecurityIdentifier));
+    if (!actual.AreAccessRulesProtected || rules.Count != 1 || made.GetFileSystemInfos().Length != 0
+        || (made.Attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("Directory permissions refused");
+    var rule = (FileSystemAccessRule)rules[0];
+    if (!rule.IdentityReference.Equals(user) || rule.AccessControlType != AccessControlType.Allow
+        || rule.FileSystemRights != FileSystemRights.FullControl) throw new IOException("Directory permissions refused");
+  }
+  public static string[] Read(string path, FileStream held, string sha512) {
+    string folder = Path.Combine(Path.GetDirectoryName(path), ".inspect-" + Path.GetRandomFileName());
+    if (Directory.Exists(folder) || File.Exists(folder)) throw new IOException("Directory exists");
+    try {
+      MakePrivate(folder);
+      string copy = Path.Combine(folder, Path.GetFileName(path));
+      using (var output = new FileStream(copy, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+        held.Seek(0, SeekOrigin.Begin);
+        held.CopyTo(output);
+      }
+      // Held while Windows reads it, so nothing else can write it or move it.
+      using (var hold = new FileStream(copy, FileMode.Open, FileAccess.Read, FileShare.Read, 1)) {
+        var lines = Versions(copy);
+        string hash;
+        using (var sha = SHA512.Create()) hash = Convert.ToBase64String(sha.ComputeHash(hold));
+        if (hold.Length != held.Length || hash != sha512) throw new InvalidDataException();
+        return lines;
+      }
+    } finally {
+      // Removing the copy can't change the answer, and a copy left behind goes with the update
+      // folder, which is cleared at the next start and the next check.
+      try { Directory.Delete(folder, true); } catch (IOException) {} catch (UnauthorizedAccessException) {}
     }
-    lines.Insert(0, "versions " + lines.Count);
-    return lines.ToArray();
   }
 }
 public static class UpdateSignature {
@@ -346,9 +288,9 @@ public static class UpdateSignature {
         }
         lines.Add("file " + info.volume + "." + info.indexHigh + "." + info.indexLow + " " + file.Length + " " + hash);
         var installer = Signatures(lines, "installer", final.ToString(), file);
-        // Only the bytes the engine verified, signed by the running app's publisher, are parsed.
+        // Only the bytes the engine verified, signed by the running app's publisher, are copied.
         if (hash == sha512 && publisher != null && Publisher(installer) == publisher)
-          lines.AddRange(new UpdateVersions(file).Read());
+          lines.AddRange(UpdateVersions.Read(path, file, sha512));
         else
           lines.Add("versions unread");
       }
@@ -467,10 +409,10 @@ function sameRelease(product: string, version: string) {
  * What the helper's facts mean for this download. The installer must have the running app's
  * publisher: every SHA-256 signature on each file trusted by Windows, with a leaf certificate of
  * the same subject whose chain ends at the same root. A renewed certificate, or one from a new
- * intermediate under that root, passes; a different root or subject does not. Each of its
- * version resources must give the offer's version as the ProductVersion of every translation,
- * and the release's numbers as its fixed product version. Anything unexpected is
- * `inspection-failed`, never a pass.
+ * intermediate under that root, passes; a different root or subject does not. The version
+ * resource Windows reads must give the offer's version as the ProductVersion of every
+ * translation it lists, and the release's numbers as its fixed product version. Anything
+ * unexpected is `inspection-failed`, never a pass.
  */
 export function windowsRefusal(
   output: string,
