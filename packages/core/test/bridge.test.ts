@@ -296,6 +296,33 @@ describe("openSession", () => {
       client.stop();
     }
   });
+
+  it("F-105: a view opening a task while a failed read of it is still telling its listeners gets the task read", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    let opened = false;
+    const stop = client.store.subscribe(() => {
+      if (opened || client.state.transcripts[KEY]?.status !== "error") return;
+      // The failed read's own notification: the read has published but not yet ended.
+      opened = true;
+      gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false });
+      client.openSession(KEY);
+    });
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => opened);
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+    } finally {
+      stop();
+      first.dispose();
+      client.stop();
+    }
+  });
 });
 
 describe("reloadSession", () => {

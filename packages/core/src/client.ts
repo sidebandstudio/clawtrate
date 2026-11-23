@@ -1849,9 +1849,18 @@ export class ClawtrateClient {
       // unless a read already under way will settle it.
       const current = this.state.transcripts[key];
       if (current?.status !== "error") return;
-      if (this.loads.has(key))
-        this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
-      else this.reloadSession(key);
+      const load = this.loads.get(key);
+      if (!load) {
+        this.reloadSession(key);
+        return;
+      }
+      this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
+      // A read that published its failure while this view arrived (its listeners run before it
+      // ends) settles nothing more: still loading once it ends, the task is read again.
+      void load.done.then(() => {
+        if (this.openSessions.has(key) && this.state.transcripts[key]?.status === "loading")
+          this.reloadSession(key);
+      });
       return;
     }
     // A task closed with unsent work was kept: reopening shows the same queue.

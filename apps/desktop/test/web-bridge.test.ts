@@ -175,6 +175,8 @@ describe("a task the host refuses to open again after a reconnect", () => {
     });
     const refused: Array<[string, string]> = [];
     const stop = bridge.onReopenRefused?.((key, error) => refused.push([key, error]));
+    const statuses: string[] = [];
+    bridge.subscribe((state) => statuses.push(state.connection.status));
     await bridge.send({ type: "openSession", key: "agent:otto:task" });
     refusing.add("agent:otto:task");
     sockets[0]!.terminate();
@@ -184,9 +186,15 @@ describe("a task the host refuses to open again after a reconnect", () => {
 
     stop?.();
     refusing.clear();
+    const lostAt = statuses.length;
     sockets[1]!.terminate();
-    await until(() => sockets.length === 3 && sockets[2]!.readyState === WebSocket.OPEN);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The new socket's hello is the first state after the lost one's "reconnecting", and the
+    // bridge writes any reopen as it reads it; the host answers a later command after that.
+    await until(() => {
+      const lost = statuses.indexOf("reconnecting", lostAt);
+      return lost >= 0 && statuses.slice(lost + 1).some((status) => status !== "reconnecting");
+    });
+    await bridge.send({ type: "closeSession", key: "agent:otto:other" }).catch(() => undefined);
     expect(interest.get("agent:otto:task")).toBe(0);
     sockets[2]!.close();
   });
