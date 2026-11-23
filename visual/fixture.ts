@@ -293,7 +293,7 @@ export const STATE_SCENES: StateScene[] = [
   },
   { name: "narrated-week", query: "scene=main&bot=pip&task=agent:pip:week" },
   { name: "neutral-bubbles", query: `scene=main&${OTTO_DISK}&bubbles=neutral` },
-  { name: "context-unavailable", query: "scene=main&bot=marlow" },
+  { name: "context-not-reported", query: "scene=main&bot=marlow" },
   {
     name: "find",
     query: `scene=main&${OTTO_DISK}`,

@@ -41,6 +41,7 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
 
 type SessionRow = {
   key: string;
+  sessionId?: string;
   agentId?: string;
   updatedAt?: number | null;
   archived?: boolean;
@@ -118,11 +119,18 @@ async function openTask(page: Page, bot: string, task: string) {
  * repeated check never meets an earlier run's task.
  */
 async function gatewayTask(botId: string, label: string): Promise<{ key: string; title: string }> {
-  const suffix = randomBytes(4).toString("hex");
-  const title = `${label} ${suffix}`;
-  const key = `agent:${botId}:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${suffix}`;
+  const { key, title } = newTaskName(botId, label);
   await gatewayCall("sessions.create", { key, agentId: botId, label: title });
   return { key, title };
+}
+
+/** A unique key and title for a task a check makes. */
+function newTaskName(botId: string, label: string): { key: string; title: string } {
+  const suffix = randomBytes(4).toString("hex");
+  return {
+    title: `${label} ${suffix}`,
+    key: `agent:${botId}:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${suffix}`,
+  };
 }
 
 /** A run in a task, as the gateway's owner starts one; resolves when it has ended. */
@@ -175,6 +183,30 @@ async function ownTaskOf(
   label: string,
 ): Promise<{ key: string; title: string }> {
   const { key, title } = await gatewayTask(botId, label);
+  await openNewTask(page, bot, title);
+  return { key, title };
+}
+
+/**
+ * A new task of Otto's own, opened in the page, that the gateway no longer has once the check
+ * ends, however it ends: it is registered for removal before it is made.
+ */
+async function ownTaskRemovedAfter(page: Page, label: string): Promise<{ key: string }> {
+  const { key, title } = newTaskName("otto", label);
+  const made: MadeTask = { key, sessionId: null };
+  madeTasks.push(made);
+  const created = await gatewayCall<{ sessionId?: string }>("sessions.create", {
+    key,
+    agentId: "otto",
+    label: title,
+  });
+  made.sessionId = created.sessionId ?? null;
+  await openNewTask(page, "Otto", title);
+  return { key };
+}
+
+/** Open a task the gateway has just made, once the bot's list shows it. */
+async function openNewTask(page: Page, bot: string, title: string): Promise<void> {
   await expect(
     page.getByRole("list", { name: `${bot}'s tasks` }).or(page.getByTestId("bot-list")),
   ).not.toHaveCount(0);
@@ -198,7 +230,6 @@ async function ownTaskOf(
     .click();
   // A task with no message yet has no title heading ("Nothing here yet"); its title pill names it.
   await expect(page.getByRole("button", { name: `${bot}, ${title}. Show details.` })).toBeVisible();
-  return { key, title };
 }
 
 /** The id of the run the gateway has in flight in a task: the exact run a check acts on. */
@@ -224,9 +255,13 @@ async function inFlightRunId(key: string): Promise<string> {
 let checkStarted = 0;
 /** The preview hosts the running check started for itself, stopped when it ends. */
 let ownHosts: Array<() => Promise<void>> = [];
+/** Tasks the running check made that must be gone when it ends (`ownTaskRemovedAfter`). */
+type MadeTask = { key: string; sessionId: string | null };
+let madeTasks: MadeTask[] = [];
 test.beforeEach(() => {
   checkStarted = Date.now();
   ownHosts = [];
+  madeTasks = [];
 });
 // Playwright reads its fixtures from the first argument's pattern; this hook needs none.
 // eslint-disable-next-line no-empty-pattern
@@ -234,7 +269,44 @@ test.afterEach(async ({}, testInfo) => {
   test.setTimeout(testInfo.timeout + 120_000);
   for (const stop of ownHosts) await stop();
   if (testInfo.status !== testInfo.expectedStatus) await leaveIdle(gatewayCall, checkStarted);
+  for (const made of madeTasks) await removeTask(made);
 });
+
+/**
+ * Remove a task a check made: stop its run, archive it, delete it with its transcript, each
+ * step held to the session id it was made with, then wait until the gateway lists it nowhere,
+ * archived tasks included. Fails the check if the task is still there after 60 seconds.
+ */
+async function removeTask(made: MadeTask): Promise<void> {
+  const listed = async () =>
+    (
+      await gatewayCall<{ sessions: SessionRow[] }>("sessions.list", {
+        ...SESSION_LIST,
+        archived: "all",
+      })
+    ).sessions.find((s) => s.key === made.key);
+  const deadline = Date.now() + 60_000;
+  // A creation that failed before answering still has its unique key to find the row by.
+  const sessionId = made.sessionId ?? (await listed())?.sessionId ?? null;
+  if (sessionId) {
+    await gatewayCall("chat.abort", { sessionKey: made.key }).catch(() => {});
+    await gatewayCall("sessions.patch", {
+      key: made.key,
+      archived: true,
+      expectedSessionId: sessionId,
+    }).catch(() => {});
+    await gatewayCall("sessions.delete", {
+      key: made.key,
+      archivedOnly: true,
+      deleteTranscript: true,
+      expectedSessionId: sessionId,
+    });
+  }
+  while ((await listed()) !== undefined) {
+    if (Date.now() > deadline) throw new Error(`The gateway still lists ${made.key}.`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
 
 /**
  * A preview host of the running check's own, with no device and no pairing yet: a check that
@@ -578,6 +650,35 @@ test("F-059 F-063: a task's header shows the gateway's context use, and stamps s
     /^(Today|Yesterday) \d{1,2}:\d{2}\s[AP]M$/,
   ]);
   await expect(page.locator(".msg .bubble").first()).toHaveAttribute("title", /\d:\d\d/);
+});
+
+test("F-059: a new task shows no context line until the gateway reports a figure, then shows it", async ({
+  page,
+}) => {
+  await openShell(page);
+  // Removed when the check ends, so Otto keeps the six seeded tasks the later layout checks expect.
+  const { key } = await ownTaskRemovedAfter(page, "Context after the first reply");
+  const row = async () =>
+    (await gatewayCall<{ sessions: SessionRow[] }>("sessions.list", SESSION_LIST)).sessions.find(
+      (s) => s.key === key,
+    );
+  await composer(page).fill("How full is the backup disk? #slow 8");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // The first run is still going and the gateway's row for the task has no count yet: no line at all.
+  const running = await row();
+  expect(running, "the gateway lists the new task").toBeDefined();
+  expect(running!.totalTokens).toBeUndefined();
+  await expect(page.getByTestId("task-context")).toHaveCount(0);
+  await expect(page.getByText(/^Context:/)).toHaveCount(0);
+  // Once the run ends the gateway reports one, and the header shows exactly that.
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await row())?.totalTokens, { timeout: 30_000 }).toBeGreaterThan(0);
+  const reported = (await row())!;
+  await expect(page.getByTestId("task-context")).toHaveText(
+    `Context: ${reported.totalTokens!.toLocaleString("en-US")} of ${reported.contextTokens!.toLocaleString("en-US")} tokens`,
+  );
 });
 
 test("F-076: find matches a phrase from the gateway's reply across its bold text", async ({
