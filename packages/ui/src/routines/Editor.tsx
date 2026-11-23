@@ -81,7 +81,7 @@ type Save =
   | { status: "idle" }
   | { status: "saving" }
   | { status: "refused"; error: string }
-  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" | "changed" }
   /**
    * `sent` is what this save asked for, and `asked` how: a create by its draft's
    * key, or an edit from `original` held to `expected`. A check compares with both.
@@ -243,6 +243,9 @@ export function Editor({
   // With the fields it was edited from, so only what the person changed is restored.
   const [mine, setMine] = useState<{ draft: Draft; base: RoutineFields } | null>(null);
   const [gateway, setGateway] = useState(connection.gatewayId);
+  // The host's target as the editor opened: a Connect, Disconnect or switch since refuses a save.
+  const [openedTarget] = useState(connection.target);
+  const stamp = { gatewayId: gateway, target: openedTarget };
   // The hello that was current when the editor opened: a later one is another
   // connection, whose identity cannot be told from this draft's gateway's.
   const [openedAt] = useState(connection.connectedAt);
@@ -376,13 +379,13 @@ export function Editor({
             original,
             edit: fields,
             expected: { ...fieldsOf(against), updatedAt: against.updatedAt },
-            gateway,
+            stamp,
           })
         : bridge.invoke({
             type: "createRoutine",
             input: { ...fields, botId: draft.botId },
             key: key.current,
-            gateway,
+            stamp,
           });
     void request
       .then(settle, (error: unknown) => settle({ status: "unknown", error: errorText(error) }))
@@ -407,9 +410,9 @@ export function Editor({
               type: "checkRoutineCreate",
               key: asked.key,
               input: sent,
-              gateway,
+              stamp,
             })
-          : await bridge.invoke({ type: "checkRoutineUpdate", ...asked, edit: sent, gateway });
+          : await bridge.invoke({ type: "checkRoutineUpdate", ...asked, edit: sent, stamp });
       if (id !== attempt.current) return;
       if (found.status === "missing" && "key" in asked) return at({ status: "missing" });
       if (found.status === "missing") {
@@ -451,13 +454,21 @@ export function Editor({
         </p>
       </Note>,
     );
-  if (save.status === "not-sent" && (save.reason === "offline" || save.reason === "gateway"))
+  if (
+    save.status === "not-sent" &&
+    (save.reason === "offline" || save.reason === "gateway" || save.reason === "changed")
+  )
     notes.push(
       <Note tone="warn" key="offline" testId="editor-offline">
         <p role="alert">
           {save.reason === "offline" ? (
             <>
               <strong>Not saved.</strong> Clawtrate isn&apos;t connected to the gateway, so nothing
+              was sent.
+            </>
+          ) : save.reason === "changed" ? (
+            <>
+              <strong>Not saved.</strong> The connection changed since this was opened, so nothing
               was sent.
             </>
           ) : (
