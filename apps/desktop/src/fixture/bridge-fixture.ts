@@ -627,15 +627,32 @@ export function createFixtureBridge(
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
   let histories = state.transcripts;
   const listeners = new Set<(state: ClawtrateState) => void>();
+  // Tasks whose shared transcript is still kept (another view or unsettled work),
+  // but omitted from this page's view after a refused reopen.
+  const pageOmitted = new Set<string>();
+  const pageState = (source: ClawtrateState): ClawtrateState => {
+    if (pageOmitted.size === 0) return source;
+    let transcripts: ClawtrateState["transcripts"] | null = null;
+    for (const key of pageOmitted) {
+      if (!(key in source.transcripts)) continue;
+      transcripts ??= { ...source.transcripts };
+      delete transcripts[key];
+    }
+    return transcripts ? { ...source, transcripts } : source;
+  };
   let holdSnapshots = false;
   let snapshotPending = false;
-  const set = (next: ClawtrateState) => {
-    state = next;
+  const publish = () => {
     if (holdSnapshots) {
       snapshotPending = true;
       return;
     }
-    for (const listener of listeners) listener(state);
+    const snapshot = pageState(state);
+    for (const listener of listeners) listener(snapshot);
+  };
+  const set = (next: ClawtrateState) => {
+    state = next;
+    publish();
   };
   const computer =
     computerParams.mode !== null ? computerFixture(computerParams, now, () => state, set) : null;
@@ -653,6 +670,21 @@ export function createFixtureBridge(
   // The views holding each task, and every history read, as the engine counts them. As in
   // the bridge, a view holds a task once however often it opens it.
   const holds = new Map<string, Set<string>>();
+  const releaseHold = (key: string, view: string): boolean => {
+    const viewers = holds.get(key);
+    if (!viewers?.delete(view) || viewers.size > 0) return false;
+    holds.delete(key);
+    // As the engine: the last view to leave releases the task, unless it holds work.
+    const current = state.transcripts[key];
+    if (!current || hasUnsettledWork(current)) return false;
+    // The gateway keeps what was read; opening the task again reads it back.
+    if (current.status === "ready") histories = { ...histories, [key]: current };
+    pageOmitted.delete(key);
+    const transcripts = { ...state.transcripts };
+    delete transcripts[key];
+    set({ ...state, transcripts });
+    return true;
+  };
   const reopenRefusals = new Set<(key: string, error: string) => void>();
   const reads: string[] = [];
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
@@ -859,14 +891,22 @@ export function createFixtureBridge(
         const viewers = holds.get(key) ?? new Set<string>();
         if (command.type === "reloadSession" && !viewers.has(view))
           throw new Error(NOT_OPEN_IN_VIEW);
+        let restored = false;
         if (command.type === "openSession") {
           // A duplicate open from the same view is a no-op, as the real ViewerSession has it.
           if (viewers.has(view)) return;
           const held = viewers.size > 0;
           holds.set(key, viewers.add(view));
-          if (held && current && current.status !== "error") return;
+          restored = view === PAGE_VIEW && pageOmitted.delete(key);
+          if (held && current && current.status !== "error") {
+            if (restored) publish();
+            return;
+          }
         }
-        if (!history || history === current || (current && current.status !== "error")) return;
+        if (!history || history === current || (current && current.status !== "error")) {
+          if (restored) publish();
+          return;
+        }
         reads.push(key);
         const reading = { ...history, status: "loading" as const, error: null };
         set({ ...state, transcripts: { ...state.transcripts, [key]: reading } });
@@ -879,20 +919,7 @@ export function createFixtureBridge(
         return;
       }
       case "closeSession": {
-        const { key } = command;
-        const viewers = holds.get(key);
-        if (viewers?.delete(view) && viewers.size === 0) {
-          holds.delete(key);
-          // As the engine: the last view to leave releases the task, unless it holds work.
-          const current = state.transcripts[key];
-          if (current && !hasUnsettledWork(current)) {
-            // The gateway keeps what was read; opening the task again reads it back.
-            if (current.status === "ready") histories = { ...histories, [key]: current };
-            const transcripts = { ...state.transcripts };
-            delete transcripts[key];
-            set({ ...state, transcripts });
-          }
-        }
+        releaseHold(command.key, view);
         // Answered as a delayed answer, so a test can hold a close while the page moves on.
         return new Promise<void>((resolve) => deferred(resolve, 0));
       }
@@ -1101,7 +1128,7 @@ export function createFixtureBridge(
         : name === "connect-full" || name === "access-narrowed" || options.fullPairing
           ? { ...FIXTURE_INFO, fullControl: true }
           : FIXTURE_INFO,
-    getState: () => state,
+    getState: () => pageState(state),
     subscribe(listener) {
       listeners.add(listener);
       startSteps();
@@ -1133,14 +1160,10 @@ export function createFixtureBridge(
       return () => reopenRefusals.delete(listener);
     },
     refuseReopen(key, error) {
-      const viewers = holds.get(key);
-      if (viewers?.delete(PAGE_VIEW) && viewers.size === 0) holds.delete(key);
-      const current = state.transcripts[key];
-      // The gateway keeps what was read; opening the task again reads it back.
-      if (current?.status === "ready") histories = { ...histories, [key]: current };
-      const transcripts = { ...state.transcripts };
-      delete transcripts[key];
-      set({ ...state, transcripts });
+      if (!releaseHold(key, PAGE_VIEW) && key in state.transcripts) {
+        pageOmitted.add(key);
+        publish();
+      }
       for (const listener of reopenRefusals) listener(key, error);
     },
     badge: null,
@@ -1155,7 +1178,7 @@ export function createFixtureBridge(
       holdSnapshots = false;
       if (!snapshotPending) return;
       snapshotPending = false;
-      for (const listener of listeners) listener(state);
+      publish();
     },
     computerRefusals: () => computer?.refusals() ?? 0,
   };
