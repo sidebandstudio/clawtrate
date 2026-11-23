@@ -1576,6 +1576,7 @@ describe("the iOS app", () => {
         see({ id: "bot-name-pip", text: lit("Pip (avatar check)") }),
         see({ id: "bot-name-marlow", text: lit("Marlow (avatar check)") }),
       ]);
+      await shoot("avatars-choices");
       positions = await layout();
       read = screen(positions.get("home")![0]!.x2);
       // A cream foot and the shell. The marked PNG itself is a solid square.
@@ -1590,7 +1591,6 @@ describe("the iOS app", () => {
       const [x, y] = avatarBounds(positions, "marlow");
       expect(near(read(x + side / 2, y + side / 2), rgb(photoColor))).toBe(true);
       expect(near(read(x + 1, y + 1), rgb(LIGHT.bg))).toBe(true);
-      await shoot("avatars-choices");
 
       // While Pip works its Lantern conducts with its lure; with Reduce Motion
       // on it holds the pose still, the lure upright as at rest.
