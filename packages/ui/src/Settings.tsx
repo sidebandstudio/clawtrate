@@ -126,9 +126,12 @@ function PlainVoice({
     );
     return () => {
       live = false;
+      // What the gateway said before a drop or on another gateway is not what it says now.
+      setVoice(null);
     };
   }, [bridge, connected, gateway]);
-  const on = voice?.plugin === true && voice.plain;
+  // On only where bots are told: a gateway that keeps the hook from running tells none.
+  const on = voice?.plugin === true && voice.plain && voice.reachesBots;
   const toggle = () => {
     if (voice?.plugin !== true || saving) return;
     setSaving(true);
@@ -148,7 +151,9 @@ function PlainVoice({
     voice === null
       ? error
         ? null
-        : "Reading the gateway's setting."
+        : connected
+          ? "Reading the gateway's setting."
+          : "Shown once Clawtrate is connected to the gateway."
       : !voice.plugin
         ? "Needs Clawtrate's voice plugin on the gateway. Without it, bots write the way OpenClaw tells them to."
         : !voice.reachesBots
@@ -168,7 +173,7 @@ function PlainVoice({
             aria-labelledby="plain-voice-label"
             aria-describedby="plain-voice-note"
             data-testid="plain-voice"
-            disabled={voice?.plugin !== true || !canChange}
+            disabled={voice?.plugin !== true || !voice.reachesBots || !canChange}
             onClick={toggle}
           />
           <span aria-hidden="true">{voice?.plugin ? (on ? "On" : "Off") : ""}</span>

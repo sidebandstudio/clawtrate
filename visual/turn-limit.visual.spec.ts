@@ -2,6 +2,7 @@
 // its default, and that a change reaches the host. The engine's half is
 // packages/core/test/turn-limit.test.ts; the card it leads to is checked in
 // live.behaviour.visual.spec.ts.
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
@@ -15,6 +16,58 @@ async function openPane(page: Page, theme: "light" | "dark" = "light") {
   await expect(settings.getByRole("heading", { name: "Conversation", level: 3 })).toBeVisible();
   return settings;
 }
+
+type VoiceFixture = {
+  voiceReaches(reaches: boolean): void;
+  setState(change: (state: ClawtrateState) => ClawtrateState): void;
+};
+
+test.describe("the plain voice", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("F-519: a gateway that keeps the voice plugin's hook from running shows Plain voice off, and says how to allow it", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, "light");
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: VoiceFixture }).clawtrateFixture.voiceReaches(
+        false,
+      ),
+    );
+    await page.keyboard.press("ControlOrMeta+,");
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.getByRole("button", { name: "Conversation", exact: true }).click();
+    const toggle = settings.getByRole("switch", { name: "Plain voice" });
+    await expect(settings.getByTestId("plain-voice-note")).toContainText("allowConversationAccess");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(toggle).toBeDisabled();
+  });
+
+  test("F-519: after the connection drops, Plain voice shows nothing until the gateway answers again", async ({
+    page,
+  }) => {
+    const settings = await openPane(page);
+    const toggle = settings.getByRole("switch", { name: "Plain voice" });
+    const note = settings.getByTestId("plain-voice-note");
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: VoiceFixture }).clawtrateFixture.setState((s) => ({
+        ...s,
+        connection: { ...s.connection, status: "disconnected" },
+      })),
+    );
+    await expect(note).toHaveText("Shown once Clawtrate is connected to the gateway.");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(toggle).toBeDisabled();
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: VoiceFixture }).clawtrateFixture.setState((s) => ({
+        ...s,
+        connection: { ...s.connection, status: "connected" },
+      })),
+    );
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+});
 
 test.describe("the turn time limit", () => {
   test.use(contextFor(WIDE, "light"));
