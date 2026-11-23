@@ -264,8 +264,12 @@ int main(int argc, char **argv) {
     );
     try {
       await new Promise((done) => bare.stdout.once("data", done));
-      await new Promise((done) => setTimeout(done, 200));
-      expect(execFileSync(binary, [String(bare.pid)], { encoding: "utf8" })).toBe("list 0");
+      // It prints before it closes them: ask until the closing is done, not for a fixed time.
+      await expect
+        .poll(() => execFileSync(binary, [String(bare.pid)], { encoding: "utf8" }), {
+          timeout: 3_000,
+        })
+        .toBe("list 0");
     } finally {
       bare.kill("SIGKILL");
     }
