@@ -24,9 +24,13 @@ const sha256 = base64("2.16.840.1.101.3.4.2.1");
 const ours = `00000000 ${sha256} ${publisher} ${root}`;
 const oursSha1 = `00000000 ${sha1} ${publisher} ${root}`;
 
-/** `<name> <count>`, then each signature with its index, as the helper prints them. */
+/** `<name> <count>`, then each signature with its index and the index Windows says it verified,
+ * as the helper prints them. */
 function signed(name: string, ...signatures: string[]) {
-  return [`${name} ${signatures.length}`, ...signatures.map((line, i) => `signature ${i} ${line}`)];
+  return [
+    `${name} ${signatures.length}`,
+    ...signatures.map((line, i) => `signature ${i} ${i} ${line}`),
+  ];
 }
 
 /** `versions <count>`, then each version resource: its fixed product version and ProductVersions. */
@@ -58,9 +62,13 @@ it.each([
   ["lines out of order", facts().split("\r\n").reverse().join("\r\n")],
   [
     "a count with a missing signature",
-    facts({ installer: ["installer 2", `signature 0 ${ours}`] }),
+    facts({ installer: ["installer 2", `signature 0 0 ${ours}`] }),
   ],
-  ["signatures out of order", facts({ installer: ["installer 1", `signature 1 ${ours}`] })],
+  ["signatures out of order", facts({ installer: ["installer 1", `signature 1 1 ${ours}`] })],
+  [
+    "a verified index that is not a number",
+    facts({ installer: ["installer 1", `signature 0 - ${ours}`] }),
+  ],
   ["no signature lines at all", facts({ installer: ["installer 0"] })],
   [
     "a trust result that is not one",
@@ -103,6 +111,7 @@ it.each([
     "a trusted SHA-256 signature and one changed after signing",
     [ours, `80096010 ${sha256} ${publisher} ${root}`],
   ],
+  ["a second signature with no digest algorithm", [ours, `00000000 - ${publisher} ${root}`]],
 ])("F-231: refuses when the running app's signatures have %s", (_case, running) => {
   expect(windowsRefusal(facts({ running: signed("running", ...running) }), proof)).toBe(
     "running-signature-untrusted",
@@ -140,11 +149,29 @@ it.each([
     "the running app's SHA-256 signature and another SHA-256 one Windows does not trust",
     [ours, `800b0109 ${sha256} ${publisher} ${otherRoot}`],
   ],
+  // Every signature the file reports is read in full, or the file is refused.
+  [
+    "the running app's SHA-256 signature and one with no digest algorithm",
+    [ours, `00000000 - ${publisher} ${root}`],
+  ],
+  ["the running app's SHA-256 signature and one with no signer", [ours, `80096010 ${sha1} - -`]],
 ])("F-231: refuses an installer with %s", (_case, installer) => {
   expect(windowsRefusal(facts({ installer: signed("installer", ...installer) }), proof)).toBe(
     "windows-signature",
   );
 });
+
+it.each([
+  ["the running app's", "running", "running-signature-untrusted"],
+  ["an installer's", "installer", "windows-signature"],
+] as const)(
+  "F-231: refuses %s second signature when Windows says it verified another one",
+  (_case, name, refusal) => {
+    // Windows reports verifying the first signature when asked for the second.
+    const lines = [`${name} 2`, `signature 0 0 ${oursSha1}`, `signature 1 0 ${ours}`];
+    expect(windowsRefusal(facts({ [name]: lines }), proof)).toBe(refusal);
+  },
+);
 
 it.each([
   ["SHA-1 first and SHA-256 second, as electron-builder signs by default", [oursSha1, ours]],

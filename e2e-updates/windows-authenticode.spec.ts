@@ -518,4 +518,29 @@ if (windows && files)
     test("F-231: refuses an installer with only a SHA-1 signature from the running app's certificate", async () => {
       expect(await inspect("sha1.exe")).toBe("windows-signature");
     });
+
+    // Two SHA-256 signatures, the second appended with signtool's /as.
+    test("F-231: accepts an installer signed SHA-256 again with a renewal of the running app's certificate", async () => {
+      const path = join(dir, "resigned.exe");
+      copyFileSync(join(files!, "resigned.exe"), path);
+      const file = await proof(path, version);
+      const output = await inspectWithPowerShell(
+        file,
+        join(files!, "running.exe"),
+        new AbortController().signal,
+      );
+      // Two trusted SHA-256 signatures, each the one Windows says it verified.
+      const sha256 = base64("2.16.840.1.101.3.4.2.1");
+      expect(output).toMatch(
+        new RegExp(
+          `^installer 2\\r?\\nsignature 0 0 00000000 ${sha256} .*\\r?\\nsignature 1 1 00000000 ${sha256} `,
+          "m",
+        ),
+      );
+      expect(windowsRefusal(output, file)).toBeNull();
+    });
+
+    test("F-231: refuses an installer whose second SHA-256 signature is another trusted publisher's", async () => {
+      expect(await inspect("second-publisher.exe")).toBe("windows-publisher");
+    });
   });

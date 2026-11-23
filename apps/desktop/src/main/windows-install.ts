@@ -178,16 +178,17 @@ public static class UpdateSignature {
     return text == null ? "-" : Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
   }
   sealed class Signature {
-    public uint index;
+    public uint index, verified;
     public int result;
     public string digest, subject, root;
     public override string ToString() {
-      return "signature " + index + " " + result.ToString("x8") + " " + Encode(digest) + " " + Encode(subject) + " " + (root ?? "-");
+      return "signature " + index + " " + verified + " " + result.ToString("x8") + " " + Encode(digest) + " " + Encode(subject) + " " + (root ?? "-");
     }
   }
-  // One embedded signature, picked by its index: the trust result, the signer's digest
-  // algorithm, the leaf's subject and the SHA-256 of the chain's root certificate, all from
-  // that signature's own WinVerifyTrust state. The first also counts the ones after it.
+  // One embedded signature, picked by its index: the index Windows says it verified, the trust
+  // result, the signer's digest algorithm, the leaf's subject and the SHA-256 of the chain's
+  // root certificate, all from that signature's own WinVerifyTrust state. The first also counts
+  // the ones after it.
   static Signature Trust(string path, FileStream held, uint index, out uint secondary) {
     var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
     var file = new TrustFile();
@@ -199,6 +200,8 @@ public static class UpdateSignature {
     settings.index = index;
     // WSS_VERIFY_SPECIFIC, and with the first WSS_GET_SECONDARY_SIG_COUNT.
     settings.flags = index == 0 ? 3u : 1u;
+    // No index, until Windows says which one it verified.
+    settings.verified = uint.MaxValue;
     var data = new TrustData();
     data.size = (uint)Marshal.SizeOf(typeof(TrustData));
     data.ui = 2;
@@ -213,8 +216,9 @@ public static class UpdateSignature {
       if (held != null) held.Seek(0, SeekOrigin.Begin);
       int result = WinVerifyTrust(new IntPtr(-1), ref action, ref data);
       try {
-        secondary = ((Settings)Marshal.PtrToStructure(data.settings, typeof(Settings))).secondary;
-        var found = new Signature { index = index, result = result };
+        var after = (Settings)Marshal.PtrToStructure(data.settings, typeof(Settings));
+        secondary = after.secondary;
+        var found = new Signature { index = index, verified = after.verified, result = result };
         IntPtr provider = data.state == IntPtr.Zero ? IntPtr.Zero : WTHelperProvDataFromStateData(data.state);
         IntPtr signer = provider == IntPtr.Zero ? IntPtr.Zero : WTHelperGetProvSignerFromChain(provider, 0, false, 0);
         if (signer != IntPtr.Zero) {
@@ -256,14 +260,17 @@ public static class UpdateSignature {
     foreach (var signature in found) lines.Add(signature.ToString());
     return found;
   }
-  // The root and subject that every SHA-256 signature names, when there is one, Windows trusts
-  // each and they agree. windowsRefusal applies the same rule; here it keeps any file that rule
-  // refuses away from the version reader.
+  // The root and subject that every SHA-256 signature names, when every signature is the one
+  // asked for and has all its facts, there is a SHA-256 one, Windows trusts each and they agree.
+  // windowsRefusal applies the same rule; here it keeps any file that rule refuses away from the
+  // version reader.
   static string Publisher(List<Signature> signatures) {
     string found = null;
     foreach (var signature in signatures) {
+      if (signature.verified != signature.index || signature.digest == null
+          || string.IsNullOrEmpty(signature.subject) || signature.root == null) return null;
       if (signature.digest != "2.16.840.1.101.3.4.2.1") continue;
-      if (signature.result != 0 || string.IsNullOrEmpty(signature.subject) || signature.root == null) return null;
+      if (signature.result != 0) return null;
       string publisher = signature.root + " " + signature.subject;
       if (found != null && found != publisher) return null;
       found = publisher;
@@ -335,10 +342,18 @@ const NOT_SIGNED = "800b0100";
 // The signer's digest algorithm, as CMSG_SIGNER_INFO names it.
 const SHA256 = "2.16.840.1.101.3.4.2.1";
 const SIGNATURE =
-  /^signature (\d+) ([0-9a-f]{8}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]{43}=)$/;
+  /^signature (\d+) (\d+) ([0-9a-f]{8}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]{43}=)$/;
 const RESOURCE = /^resource (-|\d+\.\d+\.\d+\.\d+)((?: (?:-|[A-Za-z0-9+/]+={0,2}))*)$/;
 
-type Signature = { result: string; digest: string | null; subject: string; root: string };
+/** One embedded signature, with the index Windows says it verified for the index asked. */
+type Signature = {
+  index: string;
+  verified: string;
+  result: string;
+  digest: string | null;
+  subject: string;
+  root: string;
+};
 /** A version resource: its fixed product version, and the ProductVersion of each translation. */
 type Resource = { product: string; versions: (string | null)[] };
 
@@ -355,10 +370,12 @@ function takeSignatures(lines: string[], name: string): Signature[] | null {
     const line = SIGNATURE.exec(lines.shift() ?? "");
     if (line?.[1] !== String(index)) return null;
     signatures.push({
-      result: line[2]!,
-      digest: decode(line[3]!),
-      subject: line[4]!,
-      root: line[5]!,
+      index: String(index),
+      verified: line[2]!,
+      result: line[3]!,
+      digest: decode(line[4]!),
+      subject: line[5]!,
+      root: line[6]!,
     });
   }
   return signatures;
@@ -382,14 +399,18 @@ function takeVersions(lines: string[]): Resource[] | "unread" | null {
 }
 
 /**
- * The file's SHA-256 signatures, when it has one and Windows trusts each and each names a
- * signer. A signature with another digest, such as the SHA-1 one electron-builder puts first by
- * default, does not count. A build signed again later, with a renewed certificate, has two.
+ * The file's SHA-256 signatures, when it has one and Windows trusts each. Every signature the
+ * file reports must be the one Windows says it verified and name its digest algorithm, signer
+ * and root, so none goes unread. A signature with another digest, such as the SHA-1 one
+ * electron-builder puts first by default, does not count otherwise. A build signed again later,
+ * with a renewed certificate, has two SHA-256 signatures.
  */
 function sha256Signatures(signatures: Signature[]) {
+  const complete = signatures.every(
+    (one) => one.verified === one.index && one.digest && one.subject !== "-" && one.root !== "-",
+  );
   const found = signatures.filter((signature) => signature.digest === SHA256);
-  return found.length > 0 &&
-    found.every((one) => one.result === TRUSTED && one.subject !== "-" && one.root !== "-")
+  return complete && found.length > 0 && found.every((one) => one.result === TRUSTED)
     ? found
     : null;
 }
