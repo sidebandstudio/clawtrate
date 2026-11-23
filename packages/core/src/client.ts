@@ -1928,7 +1928,9 @@ export class ClawtrateClient {
       // client on this store may have saved another gateway, or forgotten this one, since.
       const saved = await this.savedSettings();
       if (saved?.url !== url || saved.token !== token) return;
-      await this.writeRecord({ ...saved, token: null });
+      // This client's settings take the record it wrote, a suspension another client saved
+      // with it, so Reconnect lifts that suspension.
+      await this.saveSettings({ ...saved, token: null });
     }).catch(() => this.log("warn", "Could not drop the gateway token from this device."));
   }
 

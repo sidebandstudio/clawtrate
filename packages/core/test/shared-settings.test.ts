@@ -829,4 +829,37 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("Reconnect lifts a suspension another client saved before this one's refused token was cleared", async () => {
+    const storage = memoryStorage({ connection: JSON.stringify({ url: URL_A, token: null }) });
+    const gateway = new FakeGateway();
+    const other = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+    let suspending: Promise<void> | null = null;
+    gateway.connectReply = () => {
+      // The other client's suspension is queued before this refusal's clean-up.
+      suspending ??= other.suspend();
+      return {
+        ok: false,
+        error: { code: "UNAUTHORIZED", message: "refused", details: { code: "AUTH_RATE_LIMITED" } },
+      };
+    };
+    const client = new ClawtrateClient(
+      { ...testHost(gateway, storage), credentialStatus: async () => "secure" },
+      FAST,
+    );
+    try {
+      await other.start({ resume: "disconnected" });
+      await client.start({ resume: false });
+      await client.connect({ url: URL_A, token: "typed-token" });
+      await until(() => client.state.connection.error?.code === "AUTH_RATE_LIMITED");
+      await suspending;
+      await until(() => saved(storage)?.token === null);
+      expect(saved(storage)).toMatchObject({ url: URL_A, suspended: true });
+      await client.retryNow();
+      expect(saved(storage)).toEqual({ url: URL_A, token: null, suspended: false });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });
