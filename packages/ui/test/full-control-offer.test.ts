@@ -42,7 +42,7 @@ const render = (element: ReactElement) =>
 beforeAll(() => vi.stubGlobal("document", { activeElement: null }));
 
 describe("the offer of full control", () => {
-  it("F-NEW1: names both choices under the consent line, Keep current access first and focused", () => {
+  it("F-549: names both choices under the consent line, Keep current access first and focused", () => {
     const html = render(
       createElement(FullControlOffer, { connection: offered, onClose: () => {} }),
     );
@@ -57,7 +57,7 @@ describe("the offer of full control", () => {
     expect(html).not.toContain("checked");
   });
 
-  it("F-NEW1: the request is the offer's only when it asks for the six, in their order", () => {
+  it("F-549: the request is the offer's only when it asks for the six, in their order", () => {
     expect(isFullRequest(waiting(FULL_SCOPES))).toBe(true);
     expect(isFullRequest(waiting([...FULL_SCOPES].reverse()))).toBe(false);
     expect(isFullRequest(waiting(["operator.write", "operator.approvals"]))).toBe(false);
@@ -65,7 +65,7 @@ describe("the offer of full control", () => {
 });
 
 describe("the offer in Settings, Gateway, Access", () => {
-  it("F-NEW1: puts the consent line directly above Give this device full control", () => {
+  it("F-549: puts the consent line directly above Give this device full control", () => {
     const html = render(
       createElement(FullControlAsk, { connection: { ...offered, fullOffer: "settings" } }),
     );
@@ -75,10 +75,16 @@ describe("the offer in Settings, Gateway, Access", () => {
     );
   });
 
-  it("F-NEW1: offers nothing more while its request waits, and offers it again beside a smaller one", () => {
+  it("F-549: offers nothing more while its request waits or is approved, and offers it again beside a smaller one", () => {
     expect(
       render(createElement(FullControlAsk, { connection: waiting(FULL_SCOPES) })),
     ).not.toContain("<button");
+    // Approved, before the next hello makes it a full pairing: still nothing to ask.
+    const approved = waiting(FULL_SCOPES);
+    approved.upgrade = { ...approved.upgrade, status: "approved" };
+    expect(render(createElement(FullControlAsk, { connection: approved }))).not.toContain(
+      "<button",
+    );
     expect(
       render(createElement(FullControlAsk, { connection: waiting(["operator.write"]) })),
     ).toContain("Give this device full control");

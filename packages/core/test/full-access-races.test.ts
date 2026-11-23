@@ -467,7 +467,7 @@ describe("full access under interleavings", () => {
     client.stop();
   });
 
-  it("F-NEW1: an approved full-control request saves the six it asked for as a full pairing, bound to secure storage", async () => {
+  it("F-549: an approved full-control request saves the six it asked for as a full pairing, bound to secure storage", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL, token: null }),
       [tokenKey(URL)]: readRecord("token-A"),
@@ -518,6 +518,63 @@ describe("full access under interleavings", () => {
     gateway.handlers["device.scopes.waitUpgrade"] = () => approval.promise;
     return { gateway, approval };
   };
+  it("an interactive approval that arrived as the offer's request replaced it saves its rotated token, with no approval shown or reconnect of its own", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: readRecord("token-A"),
+    });
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    void client.requestAccess().catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    // The approval's queued write reads the saved grant first; that read waits.
+    const release = deferred<void>();
+    let waiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      const value = await get(key);
+      if (!waiting && key === tokenKey(URL)) {
+        waiting = true;
+        await release.promise;
+      }
+      return value;
+    };
+    const writes = tokenWrites(storage);
+    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
+      .scopes;
+    approval.resolve({
+      status: "approved",
+      requestId: "up-2",
+      deviceToken: "token-U",
+      scopes: wanted,
+    });
+    await until(() => waiting);
+    // Meanwhile the person accepts the offer: its request, still waiting, replaces this one.
+    storage.get = get;
+    gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
+    await askFull(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length > 1);
+    const connects = gateway.connects.length;
+    release.resolve();
+    // The gateway retired token-A when it rotated: token-U is saved, as an ordinary grant.
+    await until(() => writes.some((write) => write.token === "token-U"));
+    expect(writes.find((write) => write.token === "token-U")).not.toHaveProperty("fullGrant");
+    await sleep(50);
+    // The replaced request neither reconnects nor shows its approval: the offer's request waits.
+    expect(gateway.connects.length).toBe(connects);
+    expect(client.state.connection.upgrade).toMatchObject({
+      status: "pending",
+      scopes: [...FULL_SCOPES],
+    });
+    client.stop();
+  });
+
   it("a smaller ask while full control waits doesn't replace that request", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL, token: null }),

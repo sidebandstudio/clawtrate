@@ -230,10 +230,12 @@ export function FullControlOffer({
  */
 export function FullControlAsk({ connection }: { connection: ConnectionState }) {
   const { ask, failure } = useAskFull(connection);
-  // While it waits, and once it ends, Settings' own pairing lines say where it stands.
+  // While it waits, and once approved until the next hello, Settings' own lines say where it stands.
   const waiting =
     isFullRequest(connection) &&
-    (connection.upgrade.status === "requesting" || connection.upgrade.status === "pending");
+    (connection.upgrade.status === "requesting" ||
+      connection.upgrade.status === "pending" ||
+      connection.upgrade.status === "approved");
   return (
     <div className="settings-full" data-testid="full-control-ask">
       {failure && (

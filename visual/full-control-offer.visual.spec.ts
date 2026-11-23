@@ -1,4 +1,4 @@
-// F-NEW1: a device paired read-only before full control is offered it once
+// F-549: a device paired read-only before full control is offered it once
 // (docs/design/setup-effortless.md §6): "Give this device full control" under the consent line,
 // or "Keep current access"; afterwards it lives in Settings, Gateway, Access. In light and dark,
 // at 1440 px and the phone; reached by keyboard and named for a screen reader.
@@ -30,7 +30,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
     test.describe(`${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
 
-      test("F-NEW1: the offer, and its place in Settings once answered", async ({ page }) => {
+      test("F-549: the offer, and its place in Settings once answered", async ({ page }) => {
         await openFixture(page, OFFER, theme);
         const offer = page.getByRole("dialog", { name: "Give this device full control" });
         await expect(offer).toBeVisible();
@@ -48,7 +48,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
   }
 }
 
-test("F-NEW1: the offer opens on Keep current access, keeps Tab inside, and Escape keeps current access once", async ({
+test("F-549: the offer opens on Keep current access, keeps Tab inside, and Escape keeps current access once", async ({
   page,
 }) => {
   await openFixture(page, OFFER, "dark");
@@ -86,7 +86,7 @@ test("F-NEW1: the offer opens on Keep current access, keeps Tab inside, and Esca
   expect((await sent(page)).filter((each) => each.type === "requestFullControl")).toEqual([]);
 });
 
-test("F-NEW1: Give this device full control sends one request, says it waits, then what was granted", async ({
+test("F-549: Give this device full control sends one request, says it waits, then what was granted", async ({
   page,
 }) => {
   await openFixture(page, OFFER, "dark");
@@ -132,7 +132,7 @@ test("F-NEW1: Give this device full control sends one request, says it waits, th
   expect(await sent(page)).toHaveLength(1);
 });
 
-test("F-NEW1: once answered, Settings keeps the offer under the consent line, and asks from there", async ({
+test("F-549: once answered, Settings keeps the offer under the consent line, and asks from there", async ({
   page,
 }) => {
   await openFixture(page, OFFER, "dark");
@@ -158,7 +158,7 @@ test("F-NEW1: once answered, Settings keeps the offer under the consent line, an
   ]);
 });
 
-test("F-NEW1: an offer answered in another window closes here, unasked", async ({ page }) => {
+test("F-549: an offer answered in another window closes here, unasked", async ({ page }) => {
   await openFixture(page, OFFER, "dark");
   const offer = page.getByRole("dialog", { name: "Give this device full control" });
   await expect(offer).toBeVisible();
@@ -176,7 +176,7 @@ test("F-NEW1: an offer answered in another window closes here, unasked", async (
   expect(await sent(page)).toEqual([]);
 });
 
-test("F-NEW1: a device without the offer sees neither the dialog nor its place in Settings", async ({
+test("F-549: a device without the offer sees neither the dialog nor its place in Settings", async ({
   page,
 }) => {
   await openFixture(page, `scene=access-narrowed&${OTTO_DISK}`, "dark");

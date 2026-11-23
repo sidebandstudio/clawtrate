@@ -2107,6 +2107,8 @@ export class ClawtrateClient {
       generation === this.generation &&
       this.state.connection.status === "connected" &&
       this.state.connection.fullOffer !== null &&
+      // A full pairing asks for nothing more, even before the next hello moves the offer away.
+      !this.holdsFullPairing() &&
       this.state.connection.gatewayUrl === binding.gatewayUrl &&
       this.state.connection.deviceId === binding.deviceId &&
       this.settings?.url === binding.gatewayUrl;
@@ -6144,7 +6146,8 @@ export class ClawtrateClient {
     if (generation !== this.generation) return;
     this.fullAccess = routed && secure;
     // The same device at another spelling of this address is the same pairing (§6): a protected
-    // address with no record of its own uses the one saved at another spelling of its endpoint.
+    // address with no record of its own uses the one saved at another wss:// spelling of its
+    // endpoint.
     // Only a protected address, whatever else may ask for the six: a token moves toward wss://.
     this.tokenAlias = null;
     const offerable = this.fullAccess && protectedGatewayUrl(settings.url);
@@ -8727,14 +8730,17 @@ export class ClawtrateClient {
   }
 
   /**
-   * Another spelling of this address's endpoint with this device's saved pairing, when the
-   * address has none of its own: the first found, in `endpointSpellings`'s order.
+   * Another protected spelling of this address's endpoint with this device's saved pairing, when
+   * the address has none of its own: the first found, in `endpointSpellings`'s order.
    */
   private async pairingSpelling(url: string, deviceId: string): Promise<string | null> {
     const key = (each: string) => `deviceToken:${encodeURIComponent(each)}:${deviceId}:operator`;
     if ((await this.host.storage.get(key(url))) !== null) return null;
     for (const each of endpointSpellings(url))
-      if ((await this.host.storage.get(key(each))) !== null) return each;
+      // Only a protected spelling: a pairing saved at ws:// sent its token unencrypted, and a
+      // full grant must never be kept where ws:// reads it.
+      if (protectedGatewayUrl(each) && (await this.host.storage.get(key(each))) !== null)
+        return each;
     return null;
   }
 

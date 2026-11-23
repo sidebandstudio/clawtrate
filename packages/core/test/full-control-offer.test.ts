@@ -104,7 +104,7 @@ async function afterRestart(storage: Storage) {
 }
 
 describe("the one-time offer of full control (F-500)", () => {
-  it("F-NEW1: a read pairing at a protected address is offered it; accepting sends one request for exactly the six, in order, and a grant makes it a full pairing", async () => {
+  it("F-549: a read pairing at a protected address is offered it; accepting sends one request for exactly the six, in order, and a grant makes it a full pairing", async () => {
     const storage = pairedAt();
     const { gateway, decide } = gatewayFor();
     const client = await connected(clientOn(gateway, storage));
@@ -138,7 +138,7 @@ describe("the one-time offer of full control (F-500)", () => {
     });
   });
 
-  it("F-NEW1: a narrower grant is kept as a full pairing, said, and nothing asks again, across a restart", async () => {
+  it("F-549: a narrower grant is kept as a full pairing, said, and nothing asks again, across a restart", async () => {
     const storage = pairedAt();
     const { gateway, decide } = gatewayFor();
     const client = await connected(clientOn(gateway, storage));
@@ -173,7 +173,31 @@ describe("the one-time offer of full control (F-500)", () => {
     });
   });
 
-  it("F-NEW1: a refusal keeps the pairing as it was, is saved, and leaves the offer in Settings only, across a restart", async () => {
+  it("F-549: no second request goes for a full pairing between its approval and the next hello", async () => {
+    const storage = pairedAt();
+    const { gateway, decide } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    await accept(client);
+    await until(() => client.state.connection.upgrade.status === "pending");
+    const set = storage.set.bind(storage);
+    let again: Promise<unknown> | null = null;
+    storage.set = async (key: string, value: string) => {
+      await set(key, value);
+      if (key === offerKey() && value.includes("narrower")) again ??= accept(client);
+    };
+    decide({
+      status: "approved",
+      deviceToken: "token-N",
+      scopes: ["operator.read", "operator.write"],
+    });
+    await until(() => again !== null);
+    await expect(again).rejects.toThrow();
+    await until(() => client.state.connection.fullPairing);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-549: a refusal keeps the pairing as it was, is saved, and leaves the offer in Settings only, across a restart", async () => {
     const storage = pairedAt();
     const { gateway, decide } = gatewayFor();
     const client = await connected(clientOn(gateway, storage));
@@ -195,7 +219,7 @@ describe("the one-time offer of full control (F-500)", () => {
     });
   });
 
-  it("F-NEW1: Keep current access is saved and asks nothing; the pairing is byte-identical, across a restart", async () => {
+  it("F-549: Keep current access is saved and asks nothing; the pairing is byte-identical, across a restart", async () => {
     const storage = pairedAt();
     const { gateway } = gatewayFor();
     const client = await connected(clientOn(gateway, storage));
@@ -221,7 +245,7 @@ describe("the one-time offer of full control (F-500)", () => {
     again.stop();
   });
 
-  it("F-NEW1: a pairing that never takes the offer is byte-identical, and nothing is written for it", async () => {
+  it("F-549: a pairing that never takes the offer is byte-identical, and nothing is written for it", async () => {
     const storage = pairedAt();
     const before = new Map(storage.data);
     const { gateway } = gatewayFor();
@@ -240,7 +264,7 @@ describe("the one-time offer of full control (F-500)", () => {
     ["a session-only host", URL, { secure: false }],
     ["a read-only host", URL, { readOnly: true }],
     ["a host without full access", URL, { fullAccess: false }],
-  ] as const)("F-NEW1: isn't offered on %s", async (_name, url, options) => {
+  ] as const)("F-549: isn't offered on %s", async (_name, url, options) => {
     const storage = pairedAt(url);
     const { gateway } = gatewayFor();
     const client = await connected(clientOn(gateway, storage, options));
@@ -251,7 +275,7 @@ describe("the one-time offer of full control (F-500)", () => {
     client.stop();
   });
 
-  it("F-NEW1: the offer is bound to the gateway and device it was shown for", async () => {
+  it("F-549: the offer is bound to the gateway and device it was shown for", async () => {
     const storage = pairedAt();
     const { gateway } = gatewayFor();
     const client = await connected(clientOn(gateway, storage));
@@ -266,10 +290,10 @@ describe("the one-time offer of full control (F-500)", () => {
     client.stop();
   });
 
-  it("F-NEW2: the same device at another spelling of its address is the same pairing, with its recorded answer", async () => {
-    // Paired read-only at ws:// with a port; dismissed there. Connect is now at wss://, in
-    // upper case, with a trailing dot.
-    const old = "ws://gateway.example:19983";
+  it("F-549: the same device at another spelling of its address is the same pairing, with its recorded answer", async () => {
+    // Paired read-only at wss://; dismissed there. Connect is now in upper case, with a
+    // trailing dot.
+    const old = "wss://gateway.example:19983";
     const storage = pairedAt(old);
     storage.data.set(offerKey(old), JSON.stringify({ answer: "dismissed" }));
     const { gateway } = gatewayFor();
@@ -287,7 +311,20 @@ describe("the one-time offer of full control (F-500)", () => {
     client.stop();
   });
 
-  it("F-NEW2: endpoints ignore the scheme, case, a trailing dot and a written default port", () => {
+  it("F-549: a wss:// address never takes up a pairing saved at ws://, so a full grant is never kept where ws:// reads it", async () => {
+    const plain = "ws://gateway.example:19988";
+    const storage = pairedAt(plain);
+    const { gateway } = gatewayFor();
+    const client = clientOn(gateway, storage);
+    await client.start();
+    await client.connect({ url: "wss://gateway.example:19988" });
+    await until(() => gateway.connects.length > 0);
+    expect((gateway.connects.at(-1) as ConnectParams).auth?.deviceToken).toBeUndefined();
+    expect(storage.data.get(tokenKey(plain))).toBe(readRecord);
+    client.stop();
+  });
+
+  it("F-549: endpoints ignore the scheme, case, a trailing dot and a written default port", () => {
     expect(gatewayEndpoint("wss://GW.example.:443")).toBe(gatewayEndpoint("ws://gw.example:443"));
     expect(gatewayEndpoint("wss://gw.example")).toBe("gw.example:443");
     expect(gatewayEndpoint("ws://gw.example")).toBe("gw.example:80");
@@ -300,7 +337,7 @@ describe("the one-time offer of full control (F-500)", () => {
     expect(endpointSpellings("wss://[2001:db8::5]:9000")).toEqual(["ws://[2001:db8::5]:9000"]);
   });
 
-  it("F-NEW2: an address with its own pairing keeps it, and a plain ws:// address never borrows one", async () => {
+  it("F-549: an address with its own pairing keeps it, and a plain ws:// address never borrows one", async () => {
     // Its own record wins over another spelling's.
     const storage = pairedAt();
     storage.data.set(
