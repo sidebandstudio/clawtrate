@@ -13,6 +13,7 @@ import { createBridgeSession } from "../src/bridge.ts";
 import { ClawtrateClient, SendTooLargeError } from "../src/client.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { SESSION } from "./client-harness.ts";
 
 let counter = 0;
 const store = (options: { maxTotalBytes?: number; now?: () => number } = {}) =>
@@ -108,6 +109,7 @@ describe("files through the bridge into chat.send (F-074, F-285)", () => {
     await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "see file",
       mode: "auto",
       attachmentIds: [small.id],
@@ -138,6 +140,7 @@ describe("files through the bridge into chat.send (F-074, F-285)", () => {
       viewer.apply({
         type: "sendMessage",
         key: KEY,
+        sessionId: SESSION,
         text: "",
         mode: "auto",
         attachmentIds: [a.id, b.id],
@@ -157,6 +160,7 @@ describe("files through the bridge into chat.send (F-074, F-285)", () => {
       viewer.apply({
         type: "sendMessage",
         key: KEY,
+        sessionId: SESSION,
         text: "x",
         mode: "auto",
         attachmentIds: ["a-1"],

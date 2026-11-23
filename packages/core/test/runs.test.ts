@@ -1000,7 +1000,7 @@ describe("outbox reconciliation (F-075, F-107)", () => {
       ],
     };
     activity = startLocalRun(activity, activity.outbox[0]!, 1_000);
-    activity = reconcileOutbox(activity, rows);
+    activity = reconcileOutbox(activity, rows, null);
     // m3's text is in history, but nothing ties that row to it: it stays to be retried or deleted.
     expect(activity.outbox.map((each) => each.id)).toEqual(["m3", "m5"]);
     expect(only(activity, "m1")).toMatchObject({ messageId: null, anchorItemId: "u1:1" });
@@ -1011,8 +1011,8 @@ describe("outbox reconciliation (F-075, F-107)", () => {
       ...emptyActivity,
       outbox: [message("m1", { status: "sent" })],
     };
-    const once = reconcileOutbox(activity, rows);
-    expect(reconcileOutbox(once, rows)).toBe(once);
+    const once = reconcileOutbox(activity, rows, null);
+    expect(reconcileOutbox(once, rows, null)).toBe(once);
     expect(once.outbox).toEqual([]);
   });
 });

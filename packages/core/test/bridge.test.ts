@@ -80,12 +80,15 @@ describe("parseBridgeCommand for the live conversation", () => {
     expect(parseBridgeCommand({ type: "requestAccess", scopes: ["operator.admin"] })).toEqual({
       type: "requestAccess",
     });
-    expect(parseBridgeCommand({ type: "sendMessage", key, text: "hi", mode: "steer" })).toEqual({
+    expect(
+      parseBridgeCommand({ type: "sendMessage", key, text: "hi", mode: "steer", sessionId: "s-1" }),
+    ).toEqual({
       type: "sendMessage",
       key,
       text: "hi",
       mode: "auto",
       attachmentIds: [],
+      sessionId: "s-1",
     });
     expect(
       parseBridgeCommand({
@@ -94,10 +97,11 @@ describe("parseBridgeCommand for the live conversation", () => {
         text: "",
         mode: "auto",
         attachmentIds: ["a-1"],
+        sessionId: "s-1",
       }),
     ).toMatchObject({ attachmentIds: ["a-1"] });
     expect(
-      parseBridgeCommand({ type: "sendMessage", key, text: "hi", mode: "queue" }),
+      parseBridgeCommand({ type: "sendMessage", key, text: "hi", mode: "queue", sessionId: "s-1" }),
     ).toMatchObject({
       mode: "queue",
     });
@@ -138,11 +142,24 @@ describe("parseBridgeCommand for the live conversation", () => {
   });
 
   it("rejects malformed conversation commands", () => {
-    expect(() => parseBridgeCommand({ type: "sendMessage", key, text: 5 })).toThrow("invalid text");
     expect(() =>
-      parseBridgeCommand({ type: "sendMessage", key, text: "x".repeat(32_001) }),
+      parseBridgeCommand({ type: "sendMessage", key, text: 5, sessionId: "s-1" }),
     ).toThrow("invalid text");
-    expect(() => parseBridgeCommand({ type: "sendMessage", key: "../x", text: "hi" })).toThrow();
+    expect(() =>
+      parseBridgeCommand({
+        type: "sendMessage",
+        key,
+        text: "x".repeat(32_001),
+        sessionId: "s-1",
+      }),
+    ).toThrow("invalid text");
+    expect(() =>
+      parseBridgeCommand({ type: "sendMessage", key: "../x", text: "hi", sessionId: "s-1" }),
+    ).toThrow();
+    // F-278: a send names the session its words were written for, or it is refused.
+    expect(() => parseBridgeCommand({ type: "sendMessage", key, text: "hi" })).toThrow(
+      "invalid session id",
+    );
     expect(() =>
       parseBridgeCommand({ type: "retryMessage", key, messageId: "a\u0000b" }),
     ).toThrow();
@@ -161,7 +178,13 @@ describe("parseBridgeCommand for the live conversation", () => {
       parseBridgeCommand({ type: "readStepRaw", key, stepId: "tool:call_123|fc_456" }),
     ).toMatchObject({ stepId: "tool:call_123|fc_456" });
     expect(() =>
-      parseBridgeCommand({ type: "sendMessage", key, text: "hi", attachmentIds: ["a\nb"] }),
+      parseBridgeCommand({
+        type: "sendMessage",
+        key,
+        text: "hi",
+        attachmentIds: ["a\nb"],
+        sessionId: "s-1",
+      }),
     ).toThrow("invalid attachments");
     expect(() =>
       parseBridgeCommand({
@@ -169,6 +192,7 @@ describe("parseBridgeCommand for the live conversation", () => {
         key,
         text: "hi",
         attachmentIds: Array.from({ length: 21 }, (_, i) => `a-${i}`),
+        sessionId: "s-1",
       }),
     ).toThrow("invalid attachments");
     expect(() =>

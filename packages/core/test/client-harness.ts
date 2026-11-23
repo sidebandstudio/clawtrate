@@ -9,6 +9,8 @@ import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "
 export const URL_A = "ws://127.0.0.1:19001";
 export const URL_B = "ws://127.0.0.1:19002";
 export const KEY = "agent:otto:disk-space";
+/** The session the fake gateway names for `KEY` when a test says nothing of it. */
+export const SESSION = `session:${KEY}`;
 export const FAST: ClientOptions = { reconnect: { initialMs: 20, maxMs: 40 } };
 
 type ConnectParams = { scopes: string[]; auth?: { deviceToken?: string } };
@@ -36,6 +38,8 @@ export async function openTask(
     storage?: KeyValueStore & { data: Map<string, string> };
     client?: ClientOptions;
     key?: string;
+    /** The host's clock, when a test needs every reading the same. */
+    now?: () => number;
   } = {},
 ) {
   const gateway = options.gateway ?? grantingGateway();
@@ -50,13 +54,24 @@ export async function openTask(
         heldScopes: held,
       }),
     });
-  const client = new ClawtrateClient(testHost(gateway, storage), { ...FAST, ...options.client });
+  const host = { ...testHost(gateway, storage), ...(options.now ? { now: options.now } : {}) };
+  const client = new ClawtrateClient(host, { ...FAST, ...options.client });
   await client.start();
   await until(() => client.state.discovery.status === "ready");
   const key = options.key ?? KEY;
   client.openSession(key);
   await until(() => client.state.transcripts[key]?.status === "ready");
   return { client, gateway, storage, transcript: () => client.state.transcripts[key]! };
+}
+
+/**
+ * The session the task shows now, as a viewer's draft is bound to it when its words are written:
+ * every send names one (F-278).
+ */
+export function asShown(client: ClawtrateClient, key = KEY): { sessionId: string } {
+  const sessionId = client.state.transcripts[key]?.sessionId;
+  if (!sessionId) throw new Error(`${key} shows no session yet.`);
+  return { sessionId };
 }
 
 export const agentEvent = (

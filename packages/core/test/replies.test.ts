@@ -2,13 +2,16 @@
 // every attempt, and history's references are the only thing that makes a row a reply.
 import { describe, expect, it } from "vitest";
 import { mapHistory } from "../src/mapping.ts";
-import { agentEvent, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, asShown } from "./client-harness.ts";
 import { until } from "./fake-gateway.ts";
 
 describe("replies", () => {
   it("F-067: Try again on a failed reply sends it again as a reply to the same message", async () => {
     const { client, gateway, transcript } = await openTask();
-    client.sendMessage(KEY, "Could you read the log another way?", { replyToId: "row-parent" });
+    client.sendMessage(KEY, "Could you read the log another way?", {
+      ...asShown(client),
+      replyToId: "row-parent",
+    });
     await until(() => transcript().outbox[0]?.status === "sent");
     const first = transcript().outbox[0]!;
     gateway.emit("agent", agentEvent(first.runId!, 1, "lifecycle", { phase: "start" }));

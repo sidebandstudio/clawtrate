@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { isActive } from "../src/runs.ts";
-import { agentEvent, KEY, openTask, questionRecord, sentTexts } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, questionRecord, sentTexts, asShown } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
 type Opened = Awaited<ReturnType<typeof openTask>>;
@@ -31,7 +31,7 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
   [
     "a successful run goes from running to completed, and nothing is left active",
     async (task) => {
-      task.client.sendMessage(KEY, "check the disk");
+      task.client.sendMessage(KEY, "check the disk", asShown(task.client));
       await until(() => task.gateway.calls("chat.send").length === 1);
       start(task, "run-1");
       await until(() => task.transcript().runs[0]?.state === "running");
@@ -55,7 +55,7 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
         expiresAtMs: Date.now() + 60_000,
       });
       await until(() => task.transcript().runs[0]?.state === "waiting");
-      task.client.sendMessage(KEY, "and look in /tmp too");
+      task.client.sendMessage(KEY, "and look in /tmp too", asShown(task.client));
       await until(() => task.gateway.calls("chat.send").length === 1);
       expect(queueModes(task)).toEqual(["steer"]);
       expect(task.transcript().runs[0]!.state).toBe("waiting");
@@ -68,8 +68,11 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
     "while a question is pending a typed message is held, in every mode, and nothing is sent",
     async (task) => {
       await asking(task);
-      task.client.sendMessage(KEY, "typed");
-      task.client.sendMessage(KEY, "queued with the modifier", { mode: "queue" });
+      task.client.sendMessage(KEY, "typed", asShown(task.client));
+      task.client.sendMessage(KEY, "queued with the modifier", {
+        ...asShown(task.client),
+        mode: "queue",
+      });
       expect(statuses(task)).toEqual([
         ["typed", "held"],
         ["queued with the modifier", "held"],
@@ -84,7 +87,7 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
     "one of two pending questions settled: the messages stay held",
     async (task) => {
       await asking(task, ["ask_1", "ask_2"]);
-      task.client.sendMessage(KEY, "wait for both");
+      task.client.sendMessage(KEY, "wait for both", asShown(task.client));
       resolved(task, "ask_1", "answered");
       await until(() => task.transcript().questions.some((q) => q.status === "answered"));
       await sleep(30);
@@ -97,9 +100,9 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
       `the last pending question ${how}: held messages are released in the order sent, as steers into the run, and one sent with Queue stays queued`,
       async (task) => {
         await asking(task);
-        task.client.sendMessage(KEY, "first");
-        task.client.sendMessage(KEY, "after the turn", { mode: "queue" });
-        task.client.sendMessage(KEY, "second");
+        task.client.sendMessage(KEY, "first", asShown(task.client));
+        task.client.sendMessage(KEY, "after the turn", { ...asShown(task.client), mode: "queue" });
+        task.client.sendMessage(KEY, "second", asShown(task.client));
         resolved(task, "ask_1", how);
         await until(() => sentTexts(task.gateway).length === 2);
         await sleep(30);
@@ -113,8 +116,8 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
     "the run ends by itself with messages held: they become queued and start in order, one run each",
     async (task) => {
       await asking(task);
-      task.client.sendMessage(KEY, "one");
-      task.client.sendMessage(KEY, "two");
+      task.client.sendMessage(KEY, "one", asShown(task.client));
+      task.client.sendMessage(KEY, "two", asShown(task.client));
       task.gateway.emit("agent", agentEvent("run-x", 3, "lifecycle", { phase: "end" }));
       await until(() => sentTexts(task.gateway).length === 1);
       expect(sentTexts(task.gateway)).toEqual(["one"]);
@@ -130,9 +133,9 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
     "Stop confirmed: held and queued messages stay Not sent, and nothing starts by itself",
     async (task) => {
       await asking(task);
-      task.client.sendMessage(KEY, "held");
+      task.client.sendMessage(KEY, "held", asShown(task.client));
       await task.client.stopRun(KEY, "run-x");
-      task.client.sendMessage(KEY, "sent while stopping");
+      task.client.sendMessage(KEY, "sent while stopping", asShown(task.client));
       task.gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 9, state: "aborted" });
       await until(() => task.transcript().outbox.every((m) => m.status === "not-sent"));
       await sleep(50);
@@ -146,12 +149,12 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
     async (task) => {
       const answer = deferred<unknown>();
       task.gateway.handlers["chat.send"] = () => answer.promise;
-      task.client.sendMessage(KEY, "first");
+      task.client.sendMessage(KEY, "first", asShown(task.client));
       await until(() => task.gateway.calls("chat.send").length === 1);
       const local = task.transcript().runs[0]!;
       // Stop before the gateway named the run, then a message behind it.
       await task.client.stopRun(KEY, local.id);
-      task.client.sendMessage(KEY, "behind the stop");
+      task.client.sendMessage(KEY, "behind the stop", asShown(task.client));
       // Accepted with no run named, and history shows nothing of it: how it ended is not known.
       answer.resolve({ status: "started" });
       await until(() => task.transcript().runs.some((run) => run.state === "stopped"));
@@ -170,7 +173,7 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
     "a reply typed in a thread while a question is pending is held, as any message, and keeps what it answers",
     async (task) => {
       await asking(task);
-      task.client.sendMessage(KEY, "about that", { replyToId: "row-1" });
+      task.client.sendMessage(KEY, "about that", { ...asShown(task.client), replyToId: "row-1" });
       expect(task.transcript().outbox[0]).toMatchObject({ status: "held", replyToId: "row-1" });
       await sleep(30);
       expect(task.gateway.calls("chat.send")).toEqual([]);
@@ -186,7 +189,7 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
         throw new Error("not now");
       };
       await asking(task);
-      task.client.sendMessage(KEY, "held");
+      task.client.sendMessage(KEY, "held", asShown(task.client));
       await task.client.stopRun(KEY, "run-x").catch(() => {});
       await until(() => task.transcript().runs[0]?.stopError != null);
       expect(task.transcript().runs[0]!.state).toBe("waiting");
@@ -215,7 +218,7 @@ describe("F-421: a message sent while the run is stopping", () => {
     start(task);
     await until(() => task.transcript().runs[0]?.state === "running");
     await task.client.stopRun(KEY, "run-x");
-    const id = task.client.sendMessage(KEY, "then do this");
+    const id = task.client.sendMessage(KEY, "then do this", asShown(task.client));
     expect(task.transcript().outbox[0]).toMatchObject({ id, status: "queued", mode: "queue" });
     task.gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 2, state: "aborted" });
     await until(() => task.transcript().outbox[0]?.status === "not-sent");
@@ -232,7 +235,10 @@ describe("F-421: a message sent while the run is stopping", () => {
     start(task);
     await until(() => task.transcript().runs[0]?.state === "running");
     await task.client.stopRun(KEY, "run-x");
-    const id = task.client.sendMessage(KEY, "then do this", { mode: "queue" });
+    const id = task.client.sendMessage(KEY, "then do this", {
+      ...asShown(task.client),
+      mode: "queue",
+    });
     task.gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 2, state: "aborted" });
     await until(() => task.transcript().outbox[0]?.status === "not-sent");
     // The person has started another run since.
@@ -253,8 +259,8 @@ describe("F-421: a message sent while the run is stopping", () => {
     start(task);
     await until(() => task.transcript().runs[0]?.state === "running");
     await task.client.stopRun(KEY, "run-x");
-    task.client.sendMessage(KEY, "first after");
-    task.client.sendMessage(KEY, "second after");
+    task.client.sendMessage(KEY, "first after", asShown(task.client));
+    task.client.sendMessage(KEY, "second after", asShown(task.client));
     expect(statuses(task)).toEqual([
       ["first after", "queued"],
       ["second after", "queued"],

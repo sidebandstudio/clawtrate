@@ -6,7 +6,14 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import type { OutgoingAttachment } from "../src/client.ts";
-import { agentEvent, grantingGateway, KEY, openTask, sentTexts } from "./client-harness.ts";
+import {
+  agentEvent,
+  grantingGateway,
+  KEY,
+  openTask,
+  sentTexts,
+  asShown,
+} from "./client-harness.ts";
 import { until } from "./fake-gateway.ts";
 
 const note: OutgoingAttachment = {
@@ -20,7 +27,10 @@ const note: OutgoingAttachment = {
 async function acceptedButUnmatched(attachments: OutgoingAttachment[] = []) {
   const gateway = grantingGateway();
   const opened = await openTask({ gateway });
-  const id = opened.client.sendMessage(KEY, "deploy it", { attachments });
+  const id = opened.client.sendMessage(KEY, "deploy it", {
+    ...asShown(opened.client),
+    attachments,
+  });
   await until(() => opened.transcript().outbox[0]?.status === "sent");
   // History persisted something, but nothing ties it to this message: no key, no seq.
   gateway.handlers["chat.history"] = () => ({
@@ -115,7 +125,7 @@ describe("an accepted message history does not hold (D3)", () => {
   it("an accepted message whose run is still going stays sent", async () => {
     const gateway = grantingGateway();
     const { client, transcript } = await openTask({ gateway });
-    client.sendMessage(KEY, "keep going");
+    client.sendMessage(KEY, "keep going", asShown(client));
     await until(() => transcript().outbox[0]?.status === "sent");
     gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: "run-1" } });
     gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));

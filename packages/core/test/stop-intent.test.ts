@@ -4,7 +4,7 @@
 
 import { describe, expect, it, onTestFinished } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
-import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, asShown } from "./client-harness.ts";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 describe("a Stop pressed before the gateway named the run, when the send's answer is missing", () => {
@@ -13,7 +13,7 @@ describe("a Stop pressed before the gateway named the run, when the send's answe
     gateway.handlers["chat.send"] = () => new Promise(() => {});
     gateway.handlers["chat.history"] = () => ({ messages: [] });
     const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 100 } });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, id);
     // The gateway took it after all: its history has the run in flight under the send's id.
@@ -40,7 +40,7 @@ describe("a Stop pressed before the gateway named the run, when the send's answe
     const answer = deferred<unknown>();
     gateway.handlers["chat.send"] = () => answer.promise;
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, id);
     gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
@@ -59,10 +59,10 @@ describe("a Stop pressed before the gateway named the run, when the send's answe
     gateway.handlers["chat.send"] = () => ((sends += 1) === 1 ? answer.promise : { runId: "next" });
     gateway.handlers["chat.history"] = () => ({ messages: [] });
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, id);
-    const later = client.sendMessage(KEY, "Then this");
+    const later = client.sendMessage(KEY, "Then this", asShown(client));
     gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
     answer.resolve({ status: "accepted" });
     await until(() => gateway.calls("chat.abort").length === 1);
@@ -87,7 +87,7 @@ describe("a Stop pressed before the gateway named the run, when the send's answe
     gateway.handlers["chat.send"] = () => new Promise(() => {});
     gateway.handlers["chat.history"] = () => ({ messages: [] });
     const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 100 } });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, id);
     await until(() => transcript().runs.find((run) => run.id === id)?.state === "stopped");
@@ -121,7 +121,7 @@ describe("a Computer Stop of a run the gateway has not named yet, when its task 
       answer.resolve({ runId: "never", status: "started" });
       client.stop();
     });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await stopThenClose(client);
     answer.resolve({ runId: id, status: "started" });
@@ -144,7 +144,7 @@ describe("a Computer Stop of a run the gateway has not named yet, when its task 
     });
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await viewer.apply({ type: "computerStopTask" });
     answer.resolve({ status: "accepted" });
@@ -166,7 +166,7 @@ describe("a Computer Stop of a run the gateway has not named yet, when its task 
     gateway.handlers["chat.history"] = () => ({ messages: [] });
     const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 100 } });
     onTestFinished(() => client.stop());
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await stopThenClose(client);
     gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
@@ -197,7 +197,7 @@ describe("a Computer Stop's first abort, while it waits for the run to be named"
       answer.resolve({ status: "accepted" });
       client.stop();
     });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     const viewer = await computerStop(client);
     gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }));
@@ -222,7 +222,7 @@ describe("a Computer Stop's first abort, while it waits for the run to be named"
       firstAbort.resolve({ aborted: true });
       client.stop();
     });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     const viewer = await computerStop(client);
     expect(pending(client)).toBe(1);
@@ -246,7 +246,7 @@ describe("a Computer Stop's first abort, while it waits for the run to be named"
     gateway.handlers["chat.send"] = () => answer.promise;
     const { client, transcript } = await openTask({ gateway });
     onTestFinished(() => client.stop());
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await computerStop(client);
     expect(pending(client)).toBe(1);
@@ -263,7 +263,10 @@ describe("a confirmed Stop's own follow-ups, while another run is active", () =>
     const { client, gateway, transcript } = await openTask();
     gateway.emit("agent", agentEvent("stopped-run", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs[0]?.state === "running");
-    const later = client.sendMessage(KEY, "Queued behind it", { mode: "queue" });
+    const later = client.sendMessage(KEY, "Queued behind it", {
+      ...asShown(client),
+      mode: "queue",
+    });
     await client.stopRun(KEY, "stopped-run");
     // Another device starts a run in the same task before the stop is confirmed.
     gateway.emit("agent", agentEvent("other-run", 1, "lifecycle", { phase: "start" }));
@@ -292,7 +295,7 @@ describe("a Stop through any number of disconnects, and an end only inferred", (
     gateway.handlers["chat.send"] = () => new Promise(() => {});
     gateway.handlers["chat.abort"] = () => new Promise(() => {});
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, id);
     gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
@@ -335,7 +338,7 @@ describe("a Stop through any number of disconnects, and an end only inferred", (
     const answer = deferred<unknown>();
     gateway.handlers["chat.send"] = () => answer.promise;
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, id);
     // Accepted with no run named, and history shows nothing of it: stopped, outcome unknown.

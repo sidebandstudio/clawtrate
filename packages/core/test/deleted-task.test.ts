@@ -6,14 +6,14 @@
 // message fails with the reason and keeps its words; nothing is sent again into whatever the key
 // holds now, unless the person sends it again to the task once it is live again.
 import { describe, expect, it } from "vitest";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { TaskArchivedError, TaskDeletedError, TaskResetError } from "../src/client.ts";
 import {
   TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
   TASK_RESET_ELSEWHERE,
 } from "../src/task-actions.ts";
-import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, asShown } from "./client-harness.ts";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 const MOVED = {
@@ -41,6 +41,8 @@ const DELETED_WHILE_STARTING = {
   code: "INVALID_REQUEST",
   message: `Session "${KEY}" was deleted while starting work. Retry.`,
 };
+
+const FILE = { fileName: "notes.txt", mimeType: "text/plain", type: "file", content: "aGk=" };
 
 /** Two rows of history, each with the gateway's own id. */
 const ROWS = [
@@ -105,14 +107,14 @@ describe("a task deleted elsewhere (F-278)", () => {
   it("names the session its history came from on a send, and not on a steer", async () => {
     const { client, gateway, transcript, sends } = await shown({ session: { sessionId: "s-1" } });
     expect(transcript().sessionId).toBe("s-1");
-    client.sendMessage(KEY, "first");
+    client.sendMessage(KEY, "first", asShown(client));
     await until(() => sends().length === 1);
     expect(sends()[0]).toMatchObject({ sessionId: "s-1", expectedLeafEntryId: null });
     // Its run is under way: the next message steers it, which the gateway does not guard.
     await until(() => transcript().runs.some((run) => run.bound && run.state === "running"));
     const started = transcript().runs.find((run) => run.bound)!.id;
     gateway.emit("agent", agentEvent(started, 1, "lifecycle", { phase: "start" }));
-    client.sendMessage(KEY, "steer");
+    client.sendMessage(KEY, "steer", asShown(client));
     await until(() => sends().length === 2);
     expect(sends()[1]).not.toHaveProperty("sessionId");
     expect(sends()[1]).not.toHaveProperty("expectedLeafEntryId");
@@ -124,7 +126,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(MOVED);
     };
-    const id = client.sendMessage(KEY, "Are you still there?");
+    const id = client.sendMessage(KEY, "Are you still there?", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     await sleep(50);
     expect(transcript().outbox[0]).toMatchObject({
@@ -143,7 +145,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(MOVED);
     };
-    client.sendMessage(KEY, "hello");
+    client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
     expect(sends()).toHaveLength(1);
@@ -162,7 +164,7 @@ describe("a task deleted elsewhere (F-278)", () => {
       if ((params as Send).expectedLeafEntryId === null) throw new GatewayError(MOVED);
       return { ok: true, aborted: false, runIds: [] };
     };
-    client.sendMessage(KEY, "/stop");
+    client.sendMessage(KEY, "/stop", asShown(client));
     await until(() => transcript().outbox[0]?.status === "handled");
     expect(sends()).toHaveLength(2);
     expect(sends()[1]).toMatchObject({ sessionId: "s-1", expectedLeafEntryId: "row-2" });
@@ -180,7 +182,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(MOVED);
     };
-    client.sendMessage(KEY, "stop the photo sync tonight");
+    client.sendMessage(KEY, "stop the photo sync tonight", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     await sleep(50);
     expect(transcript().outbox[0]?.error).toBe(MOVED.message);
@@ -201,7 +203,7 @@ describe("a task deleted elsewhere (F-278)", () => {
       if ((params as Send).expectedLeafEntryId === null) throw new GatewayError(MOVED);
       return { ok: true, aborted: false, runIds: [] };
     };
-    client.sendMessage(KEY, "/stop\nthe photo sync can wait");
+    client.sendMessage(KEY, "/stop\nthe photo sync can wait", asShown(client));
     await until(() => transcript().outbox[0]?.status === "handled");
     expect(sends()).toHaveLength(2);
     expect(sends()[1]).toMatchObject({ sessionId: "s-1", expectedLeafEntryId: "row-2" });
@@ -220,7 +222,7 @@ describe("a task deleted elsewhere (F-278)", () => {
       if ((params as Send).expectedLeafEntryId === null) throw new GatewayError(MOVED);
       return { ok: true, aborted: false, runIds: [] };
     };
-    client.sendMessage(KEY, "/stop");
+    client.sendMessage(KEY, "/stop", asShown(client));
     await until(() => transcript().outbox[0]?.status === "handled");
     expect(gateway.calls("chat.history").length).toBeGreaterThan(reads);
     expect(sends()).toHaveLength(2);
@@ -242,7 +244,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     gateway.handlers["sessions.describe"] = () => ({
       session: { sessionId: (described += 1) === 1 ? "s-1" : "s-2" },
     });
-    client.sendMessage(KEY, "/stop");
+    client.sendMessage(KEY, "/stop", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
     expect(sends()).toHaveLength(2);
@@ -258,7 +260,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     gateway.handlers["sessions.describe"] = () => {
       throw new GatewayError({ code: "UNAVAILABLE", message: "try later" });
     };
-    client.sendMessage(KEY, "hello");
+    client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toBe(MOVED.message);
     client.stop();
@@ -268,7 +270,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     const { client, history, transcript, sends } = await shown({ session: null });
     history.sessionId = undefined;
     const before = transcript().loadedAt;
-    client.sendMessage(KEY, "hello");
+    client.sendMessage(KEY, "hello", asShown(client));
     await until(() => sends().length === 1);
     expect(sends()[0]).toMatchObject({ sessionId: "s-1", expectedLeafEntryId: null });
     // The answer has history read again, and that read names no session.
@@ -282,7 +284,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(DELETED_WHILE_STARTING);
     };
-    const id = client.sendMessage(KEY, "Are you still there?");
+    const id = client.sendMessage(KEY, "Are you still there?", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     await sleep(50);
     expect(transcript().outbox[0]).toMatchObject({
@@ -299,7 +301,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError({ code: "INVALID_REQUEST", message: "budget exhausted" });
     };
-    client.sendMessage(KEY, "hello");
+    client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toBe("budget exhausted");
     expect(sends()).toHaveLength(1);
@@ -319,7 +321,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     };
     await sleep(5);
     gateway.dropAll();
-    client.sendMessage(KEY, "Still there?");
+    client.sendMessage(KEY, "Still there?", asShown(client));
     expect(transcript().outbox[0]?.mode).toBe("steer");
     await until(() => sends().length > 0);
     expect(sends()[0]).toMatchObject({
@@ -350,7 +352,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     };
     await sleep(5);
     gateway.dropAll();
-    const id = client.sendMessage(KEY, "Still there?");
+    const id = client.sendMessage(KEY, "Still there?", asShown(client));
     expect(transcript().outbox[0]?.mode).toBe("steer");
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toMatch(/^This task couldn't be read, so it wasn't sent/);
@@ -371,7 +373,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     });
     gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs.some((run) => run.state === "running"));
-    client.sendMessage(KEY, "Then send me a summary.", { mode: "queue" });
+    client.sendMessage(KEY, "Then send me a summary.", { ...asShown(client), mode: "queue" });
     expect(transcript().outbox[0]).toMatchObject({ status: "queued", sessionId: "s-1" });
     // The task is deleted and another made under its key; this read names it, and the run is gone.
     history.sessionId = "s-2";
@@ -409,6 +411,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     const viewer = createBridgeSession(client);
     await viewer.apply({ type: "openSession", key: KEY });
     client.sendMessage(KEY, "Check the disk.", {
+      ...asShown(client),
       attachments: [{ fileName: "df.txt", mimeType: "text/plain", type: "file", content: "aGk=" }],
       replyToId: "row-2",
     });
@@ -460,7 +463,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     await until(() => transcript().runs.some((run) => run.state === "running"));
     await sleep(5);
     gateway.dropAll();
-    client.sendMessage(KEY, "Skip the photos folder.");
+    client.sendMessage(KEY, "Skip the photos folder.", asShown(client));
     expect(transcript().outbox[0]).toMatchObject({ mode: "steer", sessionId: "s-1" });
     // Meanwhile the task is deleted and another made under its key.
     history.sessionId = "s-2";
@@ -494,7 +497,7 @@ describe("a task deleted elsewhere (F-278)", () => {
       if (heard === "the removal")
         gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
       await sleep(20);
-      client.sendMessage(KEY, "Skip the photos folder.");
+      client.sendMessage(KEY, "Skip the photos folder.", asShown(client));
       expect(transcript().outbox[0]).toMatchObject({ mode: "steer", sessionId: "s-1" });
       await until(() => transcript().outbox[0]?.status === "failed");
       expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
@@ -517,7 +520,7 @@ describe("a task deleted elsewhere (F-278)", () => {
       sessionId: "s-1",
       pendingInputs: { items: [{ id: "p-1", state: "queued" }], total: 1 },
     });
-    client.sendMessage(KEY, "Skip the photos folder.");
+    client.sendMessage(KEY, "Skip the photos folder.", asShown(client));
     await until(() => transcript().outbox[0]?.status === "queued");
     expect(transcript().outbox[0]?.mode).toBe("queue");
     expect(sends()).toHaveLength(0);
@@ -535,22 +538,24 @@ describe("a task deleted elsewhere (F-278)", () => {
 describe("a send before the task's session is known (F-278)", () => {
   it("names the session the task list gives, before its history is read", async () => {
     const { client, release, sends } = await opening({ sessionId: "s-1" }, { sessionId: "s-1" });
-    client.sendMessage(KEY, "first");
+    client.sendMessage(KEY, "first", asShown(client));
     await until(() => sends().length === 1);
     expect(sends()[0]).toMatchObject({ sessionId: "s-1", expectedLeafEntryId: null });
     release();
     client.stop();
   });
 
-  it("with none listed, it waits for the task's history, and names the session it reads", async () => {
-    const { client, release, transcript, sends } = await opening(null, { sessionId: "s-1" });
-    client.sendMessage(KEY, "first");
-    await sleep(50);
-    expect(sends()).toHaveLength(0);
-    expect(transcript().outbox[0]?.status).toBe("sending");
+  it("F-278: a send that names no session is refused by the engine and by the bridge, so a read that then names another session never decides where it goes", async () => {
+    const { client, release, transcript, sends } = await opening(null, { sessionId: "s-2" });
+    expect(() => client.sendMessage(KEY, "first", {} as never)).toThrow(/names no session/);
+    expect(() =>
+      parseBridgeCommand({ type: "sendMessage", key: KEY, text: "first", mode: "auto" }),
+    ).toThrow("invalid session id");
     release();
-    await until(() => sends().length === 1);
-    expect(sends()[0]).toMatchObject({ sessionId: "s-1", expectedLeafEntryId: null });
+    await until(() => transcript().sessionId === "s-2");
+    await sleep(50);
+    expect(transcript().outbox).toEqual([]);
+    expect(sends()).toHaveLength(0);
     client.stop();
   });
 
@@ -563,7 +568,7 @@ describe("a send before the task's session is known (F-278)", () => {
       if ((params as Send).sessionId) throw new GatewayError(MOVED);
       return { runId: "run-new", status: "started" };
     };
-    client.sendMessage(KEY, "first");
+    client.sendMessage(KEY, "first", asShown(client));
     release();
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]).toMatchObject({ text: "first", error: TASK_DELETED_ELSEWHERE });
@@ -572,17 +577,15 @@ describe("a send before the task's session is known (F-278)", () => {
     client.stop();
   });
 
-  it("F-278: a task opened from a link, never listed, and deleted before this client read it: the message is refused as deleted, its words kept, and nothing is sent", async () => {
+  it("F-278: a task opened from a link, never listed, and deleted before this client read it: the view shows no session, so nothing can be sent there", async () => {
     // A routine's shared-conversation link opens a key the task list does not hold.
     const { client, release, transcript, sends } = await opening(null, { sessionId: undefined });
-    client.sendMessage(KEY, "Is this still running?");
     release();
-    await until(() => transcript().outbox[0]?.status === "failed");
-    await sleep(50);
-    expect(transcript().outbox[0]).toMatchObject({
-      text: "Is this still running?",
-      error: TASK_DELETED_ELSEWHERE,
-    });
+    await until(() => transcript().status === "ready");
+    expect(transcript().sessionId).toBeUndefined();
+    expect(() => client.sendMessage(KEY, "Is this still running?", asShown(client))).toThrow(
+      /shows no session/,
+    );
     expect(sends()).toHaveLength(0);
     client.stop();
   });
@@ -627,7 +630,7 @@ describe("a send before the task's session is known (F-278)", () => {
       sessionId: "s-9",
     });
     const key = await client.createTask("otto", "first");
-    client.sendMessage(key, "second");
+    client.sendMessage(key, "second", asShown(client, key));
     await until(() => sends().length === 1);
     expect(sends()[0]).toMatchObject({ sessionKey: key, sessionId: "s-9" });
     client.stop();
@@ -671,7 +674,7 @@ describe("a task archived elsewhere (F-277)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(ARCHIVED);
     };
-    const id = client.sendMessage(KEY, "One more thing");
+    const id = client.sendMessage(KEY, "One more thing", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     await sleep(50);
     expect(transcript().outbox[0]).toMatchObject({
@@ -694,7 +697,7 @@ describe("a task archived elsewhere (F-277)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(ARCHIVED);
     };
-    client.sendMessage(KEY, "And this");
+    client.sendMessage(KEY, "And this", asShown(client));
     expect(transcript().outbox[0]?.mode).toBe("steer");
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toBe(TASK_ARCHIVED_ELSEWHERE);
@@ -715,7 +718,7 @@ describe("a task archived elsewhere (F-277)", () => {
       gateway.handlers["chat.send"] = () => {
         throw new GatewayError(ARCHIVED);
       };
-      client.sendMessage(KEY, "hello");
+      client.sendMessage(KEY, "hello", asShown(client));
       await until(() => transcript().outbox[0]?.status === "failed");
       expect(transcript().outbox[0]?.error).toBe(TASK_ARCHIVED_ELSEWHERE);
       client.stop();
@@ -729,7 +732,7 @@ describe("a task archived elsewhere (F-277)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError({ code: "INVALID_REQUEST", message: "budget exhausted" });
     };
-    client.sendMessage(KEY, "hello");
+    client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toBe("budget exhausted");
     client.stop();
@@ -747,7 +750,7 @@ describe("a task reset or restored elsewhere (F-278, F-277)", () => {
       if ((params as Send).sessionId !== "s-2") throw new GatewayError(MOVED);
       return { runId: "run-new", status: "started" };
     };
-    const id = client.sendMessage(KEY, "Where were we?");
+    const id = client.sendMessage(KEY, "Where were we?", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]).toMatchObject({ error: TASK_RESET_ELSEWHERE, resetTo: "s-2" });
     expect(new TaskResetError("s-2").message).toBe(TASK_RESET_ELSEWHERE);
@@ -771,7 +774,7 @@ describe("a task reset or restored elsewhere (F-278, F-277)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(MOVED);
     };
-    const id = client.sendMessage(KEY, "Where were we?");
+    const id = client.sendMessage(KEY, "Where were we?", asShown(client));
     await until(() => transcript().outbox[0]?.error === TASK_RESET_ELSEWHERE);
     // The session that followed is deleted too, and an unrelated task takes the key.
     history.sessionId = "s-3";
@@ -794,7 +797,7 @@ describe("a task reset or restored elsewhere (F-278, F-277)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(ARCHIVED);
     };
-    const id = client.sendMessage(KEY, "One more thing");
+    const id = client.sendMessage(KEY, "One more thing", asShown(client));
     await until(() => transcript().outbox[0]?.error === TASK_ARCHIVED_ELSEWHERE);
     expect(() => client.retryMessage(KEY, id, { sessionId: "s-2" })).toThrow(
       "That message goes only to the task it was written in.",
@@ -811,7 +814,7 @@ describe("a task reset or restored elsewhere (F-278, F-277)", () => {
       if (archived) throw new GatewayError(ARCHIVED);
       return { runId: "run-new", status: "started" };
     };
-    const id = client.sendMessage(KEY, "One more thing");
+    const id = client.sendMessage(KEY, "One more thing", asShown(client));
     await until(() => transcript().outbox[0]?.error === TASK_ARCHIVED_ELSEWHERE);
     archived = false;
     client.retryMessage(KEY, id, { sessionId: "s-1" });
@@ -825,7 +828,7 @@ describe("a task reset or restored elsewhere (F-278, F-277)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError(MOVED);
     };
-    const id = client.sendMessage(KEY, "hello");
+    const id = client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.error === TASK_DELETED_ELSEWHERE);
     expect(() => client.retryMessage(KEY, id, { sessionId: "s-2" })).toThrow(
       "That message goes only to the task it was written in.",
@@ -858,6 +861,7 @@ describe('"Start a new task with this message" (F-278, F-277)', () => {
       sessionId: `s-new-${made}`,
     });
     const id = client.sendMessage(KEY, "Are you still there?", {
+      ...asShown(client),
       ...(options.files ? { attachments: [FILE] } : {}),
       replyToId: "row-2",
     });
@@ -920,8 +924,8 @@ describe('"Start a new task with this message" (F-278, F-277)', () => {
       ok: true,
       key: `agent:otto:fresh-${(made += 1)}`,
     });
-    const first = client.sendMessage(KEY, "Same words");
-    const second = client.sendMessage(KEY, "Same words");
+    const first = client.sendMessage(KEY, "Same words", asShown(client));
+    const second = client.sendMessage(KEY, "Same words", asShown(client));
     await until(() => transcript().outbox.every((each) => each.error === TASK_DELETED_ELSEWHERE));
     const keys = await Promise.all([
       client.startTaskFromMessage(KEY, first),
@@ -943,7 +947,7 @@ describe('"Start a new task with this message" (F-278, F-277)', () => {
     };
     const created = deferred<unknown>();
     gateway.handlers["sessions.create"] = () => created.promise;
-    const id = client.sendMessage(KEY, "Are you still there?");
+    const id = client.sendMessage(KEY, "Are you still there?", asShown(client));
     await until(() => transcript().outbox[0]?.error === TASK_DELETED_ELSEWHERE);
     await expect(client.startTaskFromMessage(KEY, id)).rejects.toThrow();
     expect(client.state.creations[0]).toMatchObject({ status: "checking" });
@@ -964,7 +968,7 @@ describe('"Start a new task with this message" (F-278, F-277)', () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError({ code: "INVALID_REQUEST", message: "budget exhausted" });
     };
-    const id = client.sendMessage(KEY, "hello");
+    const id = client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     await expect(client.startTaskFromMessage(KEY, id)).rejects.toThrow(
       "That message can't start a new task.",
@@ -975,8 +979,6 @@ describe('"Start a new task with this message" (F-278, F-277)', () => {
 });
 
 describe("a task archived or deleted elsewhere while a message waits in its queue (F-277, F-278)", () => {
-  const FILE = { fileName: "notes.txt", mimeType: "text/plain", type: "file", content: "aGk=" };
-
   it.each([
     ["archived", { session: { archived: true } }, TASK_ARCHIVED_ELSEWHERE],
     ["deleted", { reason: "delete" }, TASK_DELETED_ELSEWHERE],
@@ -989,6 +991,7 @@ describe("a task archived or deleted elsewhere while a message waits in its queu
       gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
       await until(() => transcript().runs.some((run) => run.state === "running"));
       const id = client.sendMessage(KEY, "Then send me a summary.", {
+        ...asShown(client),
         mode: "queue",
         attachments: [FILE],
       });
@@ -1012,4 +1015,261 @@ describe("a task archived or deleted elsewhere while a message waits in its queu
       client.stop();
     },
   );
+});
+
+/**
+ * A task whose history came from `s-1` and a run, `run-a`, in flight there, read on this
+ * connection: what a steer may rely on. The gateway's row for the key is `now`.
+ */
+async function steering(
+  now: { session: { sessionId: string; previousSessionId?: string } | null },
+  options: { now?: () => number } = {},
+) {
+  const gateway = grantingGateway();
+  gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-1" });
+  gateway.handlers["sessions.describe"] = () => now;
+  const opened = await openTask({ gateway, ...options });
+  const reads = () => gateway.calls("chat.history").length;
+  gateway.emit("agent", agentEvent("run-a", 1, "lifecycle", { phase: "start" }));
+  await until(() => opened.transcript().runs.some((run) => run.state === "running"));
+  const before = reads();
+  gateway.emit("session.message", { sessionKey: KEY });
+  await until(() => reads() > before);
+  await sleep(20);
+  /** From now on history answers only once released, with `answer`. */
+  const hold = (answer: Record<string, unknown>) => {
+    const read = deferred<void>();
+    gateway.handlers["chat.history"] = async () => {
+      await read.promise;
+      return { messages: [], hasMore: false, ...answer };
+    };
+    return () => read.resolve();
+  };
+  return { ...opened, reads, hold, sends: () => gateway.calls("chat.send") as Send[] };
+}
+
+describe("a steer relies only on what this connection's latest read established, in its own session (F-278)", () => {
+  it("the list names another session while history still shows the first: no steer is sent, the task is read again, and the message is refused", async () => {
+    const { client, gateway, transcript, hold, sends } = await steering({
+      session: { sessionId: "s-2" },
+    });
+    const release = hold({ sessionId: "s-2" });
+    gateway.handlers["sessions.list"] = () => ({
+      sessions: [{ key: KEY, agentId: "otto", label: "Disk", sessionId: "s-2" }],
+      hasMore: false,
+    });
+    const lists = gateway.calls("sessions.list").length;
+    // A change with no row of its own: the list is read again, and names the task's new session.
+    gateway.emit("sessions.changed", {});
+    await until(() => gateway.calls("sessions.list").length > lists);
+    await sleep(20);
+    client.sendMessage(KEY, "Also check the logs.", { sessionId: "s-1" });
+    await sleep(50);
+    expect(sends()).toHaveLength(0);
+    release();
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
+    expect(sends()).toHaveLength(0);
+    client.stop();
+  });
+
+  it("a `chat` event of another run in the task after its read: that read no longer confirms a steer, and the task is read again first", async () => {
+    const { client, gateway, transcript, hold, sends } = await steering({
+      session: { sessionId: "s-2" },
+    });
+    const release = hold({ sessionId: "s-2" });
+    gateway.emit("chat", {
+      runId: "run-b",
+      sessionKey: KEY,
+      seq: 1,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "Starting over." }] },
+    });
+    await sleep(20);
+    client.sendMessage(KEY, "Also check the logs.", { sessionId: "s-1" });
+    await sleep(50);
+    expect(sends()).toHaveLength(0);
+    release();
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
+    expect(sends()).toHaveLength(0);
+    client.stop();
+  });
+
+  it("after a reconnect that reads the same clock as the last read, a steer waits for the new connection's read", async () => {
+    const { client, gateway, transcript, reads, hold, sends } = await steering(
+      { session: { sessionId: "s-2" } },
+      { now: () => 1_000 },
+    );
+    // The connection drops, and the task is replaced meanwhile. Its run's end was missed.
+    const release = hold({ sessionId: "s-2" });
+    const before = reads();
+    gateway.dropAll();
+    await until(() => reads() > before);
+    expect(transcript().runs.some((run) => run.state === "running")).toBe(true);
+    client.sendMessage(KEY, "Still there?", { sessionId: "s-1" });
+    await sleep(50);
+    expect(sends()).toHaveLength(0);
+    release();
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
+    expect(sends()).toHaveLength(0);
+    client.stop();
+  });
+
+  it("a run starting in another task while this task's read is out leaves that read able to confirm this task's steer", async () => {
+    const { client, gateway, reads, sends } = await steering({ session: { sessionId: "s-1" } });
+    const other = "agent:otto:other";
+    client.openSession(other);
+    await until(() => client.state.transcripts[other]?.status === "ready");
+    // The other task has a run in flight too, as its read shows.
+    gateway.emit("agent", agentEvent("run-o", 1, "lifecycle", { phase: "start" }, other));
+    let before = reads();
+    gateway.emit("session.message", { sessionKey: other });
+    await until(() => reads() > before);
+    await sleep(20);
+    const read = deferred<void>();
+    gateway.handlers["chat.history"] = async (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== KEY) return { messages: [] };
+      await read.promise;
+      return { messages: [], hasMore: false, sessionId: "s-1", inFlightRun: { runId: "run-a" } };
+    };
+    // News of this task drops what its read established: the steer reads it again first.
+    gateway.emit("agent", agentEvent("run-c", 1, "lifecycle", { phase: "start" }));
+    await sleep(20);
+    before = reads();
+    client.sendMessage(KEY, "Skip the photos folder.", { sessionId: "s-1" });
+    await until(() => reads() > before);
+    // Another run starts in the other task while this task's read is out.
+    gateway.emit("agent", agentEvent("run-o2", 1, "lifecycle", { phase: "start" }, other));
+    await sleep(20);
+    read.resolve();
+    await until(() => sends().length === 1);
+    expect(sends()[0]).toMatchObject({ queueMode: "steer" });
+    client.stop();
+  });
+
+  it("deleted while a steer waits for the task's read, and its run's end never comes: the task is read again, and the message is refused, not left waiting", async () => {
+    const { client, gateway, transcript, reads, sends } = await steering({ session: null });
+    const read = deferred<void>();
+    let deleted = false;
+    gateway.handlers["chat.history"] = async () => {
+      if (deleted) return { messages: [], hasMore: false, sessionId: undefined };
+      await read.promise;
+      return { messages: [], hasMore: false, sessionId: "s-1", inFlightRun: { runId: "run-a" } };
+    };
+    gateway.handlers["chat.send"] = (params) => {
+      if ((params as Send).sessionId) throw new GatewayError(MOVED);
+      return { runId: "run-new", status: "started" };
+    };
+    // News of the task first, so the steer reads it before it goes.
+    gateway.emit("agent", agentEvent("run-c", 1, "lifecycle", { phase: "start" }));
+    await sleep(20);
+    const before = reads();
+    client.sendMessage(KEY, "Still there?", { sessionId: "s-1" });
+    await until(() => reads() > before);
+    deleted = true;
+    gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
+    await sleep(20);
+    read.resolve();
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
+    expect(sends().every((send) => send.sessionId === "s-1")).toBe(true);
+    client.stop();
+  });
+});
+
+describe("history of another session settles nothing of a message bound to the first (F-278)", () => {
+  it("a row of the session that replaced the task, with the sequence number an accepted message had and no key of its own: the message and its file stay", async () => {
+    const { client, gateway, history, transcript } = await shown({
+      session: { sessionId: "s-2" },
+    });
+    gateway.handlers["chat.send"] = () => ({ runId: "run-a", status: "started", messageSeq: 7 });
+    const id = client.sendMessage(KEY, "Archive the logs.", {
+      sessionId: "s-1",
+      attachments: [FILE],
+    });
+    await until(() => transcript().outbox[0]?.status === "sent");
+    const bytes = client.retainedAttachmentBytes;
+    expect(bytes).toBeGreaterThan(0);
+    // The task is replaced elsewhere, and the new session's history has a row with that number.
+    history.sessionId = "s-2";
+    history.messages = [
+      { role: "user", content: "Something else.", __openclaw: { id: "row-b", seq: 7 } },
+    ];
+    gateway.emit("chat", { runId: "run-a", sessionKey: KEY, seq: 2, state: "final" });
+    await until(() => transcript().sessionId === "s-2");
+    expect(transcript().outbox[0]).toMatchObject({
+      id,
+      text: "Archive the logs.",
+      attachments: [{ fileName: "notes.txt" }],
+    });
+    expect(client.retainedAttachmentBytes).toBe(bytes);
+    client.stop();
+  });
+});
+
+describe("a task's run ended by its removal before the removal is heard (F-277, F-278, F-420)", () => {
+  it("deleted elsewhere: the message its run's end parked Not sent is refused as deleted, keeps its words and files, and can start a new task", async () => {
+    const { client, gateway, transcript, sends } = await shown({ session: null });
+    gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    const id = client.sendMessage(KEY, "Then send me a summary.", {
+      sessionId: "s-1",
+      mode: "queue",
+      attachments: [FILE],
+    });
+    const bytes = client.retainedAttachmentBytes;
+    // The gateway ends the run as it deletes the task, and that end arrives first.
+    gateway.emit("chat", {
+      runId: "run-on",
+      sessionKey: KEY,
+      seq: 2,
+      state: "aborted",
+      stopReason: "delete",
+    });
+    await until(() => transcript().outbox[0]?.status === "not-sent");
+    gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]).toMatchObject({
+      id,
+      error: TASK_DELETED_ELSEWHERE,
+      attachments: [{ fileName: "notes.txt" }],
+    });
+    expect(client.retainedAttachmentBytes).toBe(bytes);
+    expect(sends()).toHaveLength(0);
+    gateway.handlers["sessions.create"] = () => ({ ok: true, key: "agent:otto:fresh" });
+    await expect(client.startTaskFromMessage(KEY, id)).resolves.toBe("agent:otto:fresh");
+    client.stop();
+  });
+
+  it("archived elsewhere while this client's own archive checks the task, before it sends anything: the queued message keeps its words and files, refused as archived elsewhere", async () => {
+    const { client, gateway, transcript, sends } = await shown({ session: null });
+    gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    const id = client.sendMessage(KEY, "Then send me a summary.", {
+      sessionId: "s-1",
+      mode: "queue",
+      attachments: [FILE],
+    });
+    const bytes = client.retainedAttachmentBytes;
+    gateway.handlers["sessions.describe"] = () => {
+      gateway.emit("sessions.changed", {
+        sessionKey: KEY,
+        session: { sessionId: "s-1", archived: true },
+      });
+      return { session: { key: KEY, sessionId: "s-1", archived: true } };
+    };
+    await client.archiveTask(KEY);
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]).toMatchObject({
+      id,
+      error: TASK_ARCHIVED_ELSEWHERE,
+      attachments: [{ fileName: "notes.txt" }],
+    });
+    expect(client.retainedAttachmentBytes).toBe(bytes);
+    expect(sends()).toHaveLength(0);
+    client.stop();
+  });
 });

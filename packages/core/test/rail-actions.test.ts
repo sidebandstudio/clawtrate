@@ -7,7 +7,15 @@ import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
-import { agentEvent, FAST, grantingGateway, KEY, openTask, URL_A } from "./client-harness.ts";
+import {
+  agentEvent,
+  FAST,
+  grantingGateway,
+  KEY,
+  openTask,
+  URL_A,
+  asShown,
+} from "./client-harness.ts";
 import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const PIP_TASK = "agent:pip:dashboard:2cc23cbf-30e2-4416-837a-56d92c983588";
@@ -406,9 +414,9 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
       return { ok: true };
     };
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "Take your time");
+    const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
-    const later = client.sendMessage(KEY, "Then this", { mode: "queue" });
+    const later = client.sendMessage(KEY, "Then this", { ...asShown(client), mode: "queue" });
     const archived = client.archiveTask(KEY, { stop: true });
     await until(() => transcript().runs.find((run) => run.id === id)?.state === "stopping");
     await sleep(600);
@@ -426,6 +434,8 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
     ]);
     // Archived only once the engine's Stop had settled: the run stopped, its follow-up parked.
     expect(atArchive).toEqual({ run: "stopped", followUp: "not-sent" });
+    // The archive succeeded: the follow-up its own stop parked never runs, as confirmed (F-420).
+    expect(transcript().outbox.find((m) => m.id === later)?.status).toBe("cancelled");
     expect(gateway.calls("chat.send")).toHaveLength(1);
     client.stop();
   });

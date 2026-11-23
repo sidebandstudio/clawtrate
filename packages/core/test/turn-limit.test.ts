@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
-import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
+import { FAST, grantingGateway, KEY, URL_A, asShown } from "./client-harness.ts";
 import { GatewayError, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 function started(turnLimit: string | null) {
@@ -72,10 +72,10 @@ describe("the turn time limit (F-100)", () => {
     await until(() => client.state.discovery.status === "ready");
     client.openSession(KEY);
     await until(() => client.state.transcripts[KEY]?.status === "ready");
-    client.sendMessage(KEY, "Take your time");
+    client.sendMessage(KEY, "Take your time", asShown(client));
     const run = () => client.state.transcripts[KEY]!.runs[0];
     await until(() => run()?.bound === true && run()?.state === "running");
-    client.sendMessage(KEY, "Then this", { mode: "queue" });
+    client.sendMessage(KEY, "Then this", { ...asShown(client), mode: "queue" });
     await until(() => client.state.transcripts[KEY]!.outbox[1]?.status === "queued");
     advance(30_000);
     await client.setTurnLimit(1);
@@ -161,7 +161,7 @@ describe("the turn time limit (F-100)", () => {
     await until(() => client.state.discovery.status === "ready");
     client.openSession(KEY);
     await until(() => client.state.transcripts[KEY]?.status === "ready");
-    client.sendMessage(KEY, "Take your time");
+    client.sendMessage(KEY, "Take your time", asShown(client));
     const run = () => client.state.transcripts[KEY]!.runs[0];
     await until(() => run()?.bound === true && run()?.state === "running");
     void client.stopRun(KEY, run()!.id);

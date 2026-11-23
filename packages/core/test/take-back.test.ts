@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { AttachmentStore, MAX_PENDING_ATTACHMENTS } from "../src/attachments.ts";
 import { createBridgeSession } from "../src/bridge.ts";
-import { agentEvent, KEY, openTask, questionRecord, sentTexts } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, questionRecord, sentTexts, SESSION } from "./client-harness.ts";
 import { sleep, until } from "./fake-gateway.ts";
 
 let ids = 0;
@@ -36,6 +36,7 @@ describe("taking a message back to edit it (F-468)", () => {
     const { messageId } = await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "Keep the yearly ones too",
       mode: "auto",
       attachmentIds: [info.id],
@@ -69,6 +70,7 @@ describe("taking a message back to edit it (F-468)", () => {
     const { messageId } = await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "Already on its way",
       mode: "auto",
       attachmentIds: [],
@@ -99,6 +101,7 @@ describe("taking a message back is all or nothing (F-468)", () => {
     const { messageId } = await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "Keep the yearly ones too",
       mode: "auto",
       attachmentIds: infos.map((info) => info.id),
@@ -163,6 +166,7 @@ describe("sending a failed turn's message again (F-102)", () => {
     const first = await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "Read this log",
       mode: "auto",
       attachmentIds: [info.id],

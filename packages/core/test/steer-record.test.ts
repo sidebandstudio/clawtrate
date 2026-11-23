@@ -5,7 +5,7 @@
 // aborted and lifecycle end `aborted: true`, with no start, and never runs it.
 import { describe, expect, it } from "vitest";
 import { STEER_WITHDRAWAL_WAIT_MS, type ClientOptions } from "../src/client.ts";
-import { agentEvent, grantingGateway, KEY, openTask, URL_B } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, URL_B, asShown } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
 const RUN = "run-1";
@@ -37,7 +37,7 @@ async function steered(
   const task = await openTask({ gateway, client });
   gateway.emit("agent", agentEvent(RUN, 1, "lifecycle", { phase: "start" }));
   await until(() => task.transcript().runs[0]?.state === "running");
-  const id = task.client.sendMessage(KEY, "Only the notes folder.");
+  const id = task.client.sendMessage(KEY, "Only the notes folder.", asShown(task.client));
   await until(() => task.transcript().outbox[0]?.status === "sent");
   return { ...task, id };
 }
@@ -47,7 +47,7 @@ async function steeredUnanswered(withdraws: (id: string) => boolean = () => true
   const task = await steered(withdraws);
   const held = deferred<unknown>();
   task.gateway.handlers["chat.send"] = () => held.promise;
-  const id = task.client.sendMessage(KEY, "Skip the hidden files.");
+  const id = task.client.sendMessage(KEY, "Skip the hidden files.", asShown(task.client));
   // The gateway has the frame; its answer has not come.
   await until(() => task.transcript().outbox[1]?.leftAt != null);
   expect(task.transcript().outbox[1]!.status).toBe("sending");
@@ -130,7 +130,7 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
       aborted: true,
       runIds: [RUN, task.id],
     });
-    task.client.sendMessage(KEY, "/stop");
+    task.client.sendMessage(KEY, "/stop", asShown(task.client));
     await until(() => task.transcript().outbox[0]?.status === "not-sent");
     expect(task.transcript().outbox[0]!.steer).toBe("withdrawn");
     task.client.stop();
@@ -142,7 +142,7 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     task.gateway.emit("agent", agentEvent(task.id, 1, "lifecycle", { phase: "start" }));
     await until(() => run(task, task.id)?.state === "running");
     task.gateway.handlers["chat.send"] = () => ({ ok: true, aborted: true, runIds: [task.id] });
-    task.client.sendMessage(KEY, "/stop");
+    task.client.sendMessage(KEY, "/stop", asShown(task.client));
     await until(() => task.transcript().outbox[1]?.status === "handled");
     expect(task.transcript().outbox[0]).toMatchObject({ status: "sent", runId: RUN });
     expect(task.transcript().outbox[0]!.steer).toBeUndefined();
@@ -240,7 +240,7 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
         inFlightRun: { runId: RUN },
       });
       task.gateway.handlers["chat.send"] = () => new Promise(() => {});
-      const id = task.client.sendMessage(KEY, "Skip the hidden files.");
+      const id = task.client.sendMessage(KEY, "Skip the hidden files.", asShown(task.client));
       const message = () => task.transcript().outbox.find((each) => each.id === id);
       await until(() => message()?.status === "unknown");
       const abort = task.gateway.handlers["chat.abort"]!;
@@ -280,7 +280,7 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
       inFlightRun: { runId: RUN },
     });
     task.gateway.handlers["chat.send"] = () => new Promise(() => {});
-    const id = task.client.sendMessage(KEY, "Skip the hidden files.");
+    const id = task.client.sendMessage(KEY, "Skip the hidden files.", asShown(task.client));
     // Its send's answer never comes: whether the gateway took it is being checked.
     await until(() => ["checking", "unknown"].includes(task.transcript().outbox[1]?.status ?? ""));
     expect(task.transcript().outbox[1]!.runId).toBeNull();
@@ -304,7 +304,7 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     expect(task.transcript().steerAliases[task.id]).toBeUndefined();
     // So a stop that names it does not shelve a message the gateway ran.
     task.gateway.handlers["chat.send"] = () => ({ ok: true, aborted: true, runIds: [task.id] });
-    task.client.sendMessage(KEY, "/stop");
+    task.client.sendMessage(KEY, "/stop", asShown(task.client));
     await until(() => task.transcript().outbox[2]?.status === "handled");
     expect(task.transcript().outbox[1]).toMatchObject({ status: "sent" });
     expect(task.transcript().outbox[1]!.steer).toBeUndefined();

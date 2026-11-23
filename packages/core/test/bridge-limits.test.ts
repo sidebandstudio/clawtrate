@@ -22,7 +22,7 @@ import {
   BridgeFrameTooLargeError,
 } from "../src/remote-bridge.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
-import { agentEvent, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, asShown, SESSION } from "./client-harness.ts";
 import { deferred, FakeGateway, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
 
 /** A client stand-in that records what reaches it. */
@@ -90,7 +90,14 @@ describe("per-viewer bounds", () => {
     const other = createBridgeSession(client);
     await owner.apply({ type: "openSession", key: KEY });
     const commands: BridgeCommand[] = [
-      { type: "sendMessage", key: KEY, text: "hi", mode: "auto", attachmentIds: [] },
+      {
+        type: "sendMessage",
+        key: KEY,
+        sessionId: SESSION,
+        text: "hi",
+        mode: "auto",
+        attachmentIds: [],
+      },
       { type: "retryMessage", key: KEY, messageId: "m1" },
       { type: "deleteMessage", key: KEY, messageId: "m1" },
       { type: "cancelQueued", key: KEY, messageId: "m1" },
@@ -180,10 +187,10 @@ describe("client-wide bounds", () => {
     gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
     await until(() => client.state.transcripts[KEY]!.runs.length === 1);
     for (let i = 0; i < MAX_OUTBOX_PER_TASK; i += 1)
-      client.sendMessage(KEY, `m${i}`, { mode: "queue" });
-    expect(() => client.sendMessage(KEY, "one more", { mode: "queue" })).toThrow(
-      /waiting to be sent/,
-    );
+      client.sendMessage(KEY, `m${i}`, { ...asShown(client), mode: "queue" });
+    expect(() =>
+      client.sendMessage(KEY, "one more", { ...asShown(client), mode: "queue" }),
+    ).toThrow(/waiting to be sent/);
     client.stop();
   });
 });
@@ -195,6 +202,7 @@ describe("bridge frames", () => {
     command: {
       type: "sendMessage" as const,
       key: KEY,
+      sessionId: SESSION,
       text,
       mode: "auto" as const,
       attachmentIds: [],

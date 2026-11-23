@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { REQUEST_TIMEOUT_MS } from "../src/client.ts";
-import { grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { grantingGateway, KEY, openTask, asShown } from "./client-harness.ts";
 import { until } from "./fake-gateway.ts";
 
 describe("an acknowledgement without a run id", () => {
@@ -15,7 +15,7 @@ describe("an acknowledgement without a run id", () => {
     const gateway = grantingGateway();
     gateway.handlers["chat.send"] = () => ({ ok: true, aborted: false, runIds: [] });
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "/stop");
+    const id = client.sendMessage(KEY, "/stop", asShown(client));
     await until(() => transcript().outbox[0]?.status === "handled");
     expect(transcript().runs).toEqual([]);
     // History never holds a command: a read does not make it unconfirmed.
@@ -33,7 +33,7 @@ describe("an acknowledgement without a run id", () => {
     const gateway = grantingGateway();
     gateway.handlers["chat.send"] = () => ({ status: "accepted" });
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "hello");
+    const id = client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.status === "unconfirmed");
     expect(transcript().runs).toEqual([]);
     expect(transcript().outbox[0]!.runId).toBeNull();
@@ -55,7 +55,7 @@ describe("an acknowledgement without a run id", () => {
     const gateway = grantingGateway();
     gateway.handlers["chat.send"] = () => ({ status: "accepted" });
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "hello");
+    const id = client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.status === "unconfirmed");
     gateway.handlers["chat.history"] = () => ({
       messages: [
@@ -74,7 +74,7 @@ describe(`a send nobody answers fails at the request deadline (REQUEST_TIMEOUT_M
     let answer = false;
     gateway.handlers["chat.send"] = () => (answer ? { runId: "run-9" } : new Promise(() => {}));
     const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 150 } });
-    const id = client.sendMessage(KEY, "anyone there?");
+    const id = client.sendMessage(KEY, "anyone there?", asShown(client));
     await until(() => transcript().outbox[0]?.status === "checking");
     // Not refused by the gateway, so no "couldn't start" run: the optimistic run is gone.
     expect(transcript().runs).toEqual([]);

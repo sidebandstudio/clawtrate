@@ -584,19 +584,25 @@ export type SendOptions = {
   attachments?: OutgoingAttachment[];
   /** The gateway's id of the message this one replies to (F-067). */
   replyToId?: string;
-  /**
-   * The session of the task as the screen showed it when the person sent: the message goes there
-   * only, whatever the task's state names by the time it is sent. Without it, the session the
-   * task's state names now.
-   */
-  sessionId?: string;
-  /**
-   * Make the task when its key holds none, as a first message to a new key does. Only for a
-   * caller that means it: without it, a message to a task with no known session waits for a read
-   * of the task, and one the read finds gone is refused as deleted, its words kept (F-278).
-   */
-  newTask?: boolean;
-};
+} & (
+  | {
+      /**
+       * The session the message is bound to: the one the view showed when its words were written,
+       * which a draft keeps from its first word. It goes there only, whatever the key holds by the
+       * time it is sent, and is refused once the key holds another session or none (F-278).
+       */
+      sessionId: string;
+      newTask?: never;
+    }
+  | {
+      /**
+       * Make the task when its key holds none: a first message, sent without naming a session.
+       * Only for an engine caller that means it (F-097); a viewer's sends name their session.
+       */
+      newTask: true;
+      sessionId?: never;
+    }
+);
 
 /**
  * A send that would break a gateway ceiling. Checked before anything reaches
@@ -919,6 +925,17 @@ function approvalAccessOf(sources: Record<ApprovalKind, ApprovalSourceAccess>): 
   return "error";
 }
 
+/** One of this client's own archives or deletes while it is out (`ClawtrateClient.removing`). */
+type OwnRemoval = {
+  key: string;
+  /** The messages waiting in the task when it began. */
+  waiting: string[];
+  /** The session its archive or delete named, once that request left. */
+  sent: string | null;
+  /** An archive or delete of the task heard since that request left. */
+  heard: "archived" | "deleted" | null;
+};
+
 /** The gateway refused a send because the task it was for is no longer under its key. */
 export class TaskDeletedError extends Error {
   constructor() {
@@ -961,6 +978,9 @@ const ARCHIVED_REFUSAL = /^Session ".*" is archived\. Restore it before starting
  * reason of its own): `Session "<key>" was deleted while starting work. Retry.`
  */
 const DELETED_WHILE_STARTING = /^Session ".*" was deleted while starting work\. Retry\.$/s;
+
+/** A message bound to no session, and not meant to make its task: refused, never sent. */
+const UNBOUND_SEND = "This message names no session of its task, so it wasn't sent.";
 
 /** A request that never left this client: nothing happened. */
 export class NotSentError extends Error {
@@ -1061,6 +1081,11 @@ export class GatewayNotAllowedError extends Error {
 function sessionNamed(history: RawRecord | null): string | null {
   const id = history?.sessionId;
   return typeof id === "string" && id.length > 0 && id.length <= MAX_ID_CHARS ? id : null;
+}
+
+/** The run an id stands for in a task: through its steer and queue aliases, or itself. */
+function canonicalRun(activity: TaskActivity, runId: string): string {
+  return activity.steerAliases[runId] ?? activity.queueAliases[runId] ?? runId;
 }
 
 /**
@@ -1294,22 +1319,27 @@ export class ClawtrateClient {
   private readonly endChecking = new Set<string>();
   private readonly endChecked = new Map<string, string>();
   /**
-   * What this connection's latest read of a task's history showed, for a steer: the session it
-   * named and the run it had in flight. Whatever this client hears of the key since that the read
-   * did not show (a removal, another session, another run starting) drops it (`dropSteerCheck`).
+   * What the latest read of each followed task's history established: the connection it was read
+   * on (`epoch`, which changes with every hello and close), the session it named (null when none)
+   * and the run it had in flight (null when none, or when news of the task came while it was out).
+   * A steer relies on nothing else (`steerConfirmed`). News of the task that conflicts with it, a
+   * row naming another session, its removal or an event of another run, drops it before that news
+   * is published or used, and asks for a fresh read (`noteEvidence`).
    */
   private readonly steerChecks = new Map<
     string,
-    { generation: number; sessionId: string; runId: string }
+    { epoch: number; sessionId: string | null; runId: string | null }
   >();
-  /** Counts the drops, so a read that was out when one happened confirms nothing. */
-  private steerDrops = 0;
+  /** Each followed task's drops, so a read that was out when one happened confirms no run. */
+  private readonly steerDrops = new Map<string, number>();
   /**
-   * Followed tasks this client is archiving or deleting, by how many such requests of its own are
-   * out: their queued messages are cancelled, as the person confirmed (F-420). An archive or a
-   * delete this client hears of otherwise was made elsewhere.
+   * This client's own archives and deletes of followed tasks while each is out, at most
+   * `MAX_TRACKED_TASKS` (`removing`): its task, the messages waiting there when it began, the
+   * session its archive or delete named once that request left, and an archive or delete heard
+   * since. An archive or delete this client hears of otherwise was made elsewhere.
    */
-  private readonly ownRemovals = new Map<string, number>();
+  private readonly ownRemovals = new Map<number, OwnRemoval>();
+  private removals = 0;
   private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Runs of sessions no viewer has open, kept small, so a bot-to-bot card can
@@ -2036,6 +2066,7 @@ export class ClawtrateClient {
     this.incarnations.delete(key);
     this.endChecked.delete(key);
     this.steerChecks.delete(key);
+    this.steerDrops.delete(key);
     this.loads.delete(key);
     // Drop the chat stream baselines this task held.
     this.streams.retire(key);
@@ -2460,7 +2491,7 @@ export class ClawtrateClient {
    * so a retry is never delivered twice. Returns the message id. Throws
    * `SendTooLargeError` before anything is sent when it would break a ceiling.
    */
-  sendMessage(key: string, text: string, options: SendOptions = {}): string {
+  sendMessage(key: string, text: string, options: SendOptions): string {
     const transcript = this.state.transcripts[key];
     if (!transcript) throw new Error("Open the task before sending to it.");
     const body = text.trim();
@@ -2480,16 +2511,16 @@ export class ClawtrateClient {
       throw new SendTooLargeError(
         `${attachments.length} files; one message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE}.`,
       );
-    // Never cut or digested: a session id past the bound would name another session.
+    // Bound when its words were written, or meant to make its task: never decided here, from what
+    // the task's state names by now. Never cut or digested: a session id past the bound would name
+    // another session.
+    const sessionId = options.sessionId;
+    if (sessionId === undefined && options.newTask !== true) throw new Error(UNBOUND_SEND);
     if (
-      options.sessionId !== undefined &&
-      (typeof options.sessionId !== "string" ||
-        !options.sessionId ||
-        options.sessionId.length > MAX_ID_CHARS)
+      sessionId !== undefined &&
+      (typeof sessionId !== "string" || !sessionId || sessionId.length > MAX_ID_CHARS)
     )
       throw new Error("That task's session can't be named.");
-    // The task as the screen showed it, or else as the state names it now.
-    const sessionId = options.sessionId ?? transcript.sessionId;
     // As it will be sent, its reply reference included; checked again at delivery.
     this.checkSize(
       this.sendParams(
@@ -2833,12 +2864,15 @@ export class ClawtrateClient {
     const files = this.attachmentContent.get(messageId)?.files ?? [];
     if (message.attachments.length > 0 && files.length === 0)
       throw new Error("Its files are no longer held; attach them again.");
-    return this.sendMessage(key, message.text, {
+    const same = {
       attachments: [...files],
       ...(message.replyToId ? { replyToId: message.replyToId } : {}),
-      ...(message.sessionId ? { sessionId: message.sessionId } : {}),
-      ...(message.newTask ? { newTask: true } : {}),
-    });
+    };
+    // Bound as the first was; one bound to nothing is refused (`sendMessage`).
+    if (message.sessionId)
+      return this.sendMessage(key, message.text, { ...same, sessionId: message.sessionId });
+    if (message.newTask) return this.sendMessage(key, message.text, { ...same, newTask: true });
+    throw new Error(UNBOUND_SEND);
   }
 
   /**
@@ -3286,17 +3320,20 @@ export class ClawtrateClient {
     }
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
-    // A message goes only to the session it was written for. One written before the task's session
-    // was known waits for this connection's read of the task, and so does a steer, unless the
-    // latest read already showed its session and the run it joins: the gateway does not check a
-    // steer's session, and the run shown active may belong to a task made under the key since, or
-    // have ended unseen with its task. A run the read settles makes the steer a checked send below.
-    if (message.mode === "steer" || message.sessionId === undefined) {
-      if (
-        !this.readOnThisConnection(key) ||
-        (message.mode === "steer" && !this.steerConfirmed(key, message.sessionId))
-      )
-        await this.loadTranscript(key, false, null);
+    // A message goes only to the session it was bound to when it was written (`sendMessage`), which
+    // nothing learned later changes. Only a caller that means to make the task sends with none.
+    if (message.sessionId === undefined && !message.newTask) {
+      this.failDelivery(key, messageId, new Error(UNBOUND_SEND), true);
+      return;
+    }
+    // A steer goes only into the run the latest read on this connection had in flight, in the
+    // session the steer was written for (`steerConfirmed`): the gateway does not check a steer's
+    // session, and the run shown active may belong to a task made under the key since, or have
+    // ended unseen with its task. Otherwise the task is read first. A run the read settles makes
+    // the steer a checked send below; one it does not confirm makes it wait behind that run.
+    const bound = message.sessionId;
+    if (message.mode === "steer" && bound !== undefined) {
+      if (!this.steerConfirmed(key, bound)) await this.loadTranscript(key, false, null);
       message = this.outgoing(key, messageId);
       if (!message || (message.status !== "sending" && message.status !== "awaiting-access"))
         return;
@@ -3311,23 +3348,9 @@ export class ClawtrateClient {
         );
         return;
       }
-      const named = this.state.transcripts[key]?.sessionId;
-      if (message.sessionId === undefined) {
-        // It goes to the session the read names. A read that names none means the key holds no
-        // task: only a caller that meant to make one there sends it, as a first message to a new
-        // key; any other message, a task opened from a link included, is refused, its words kept.
-        if (named) {
-          this.updateActivity(key, (activity) =>
-            updateMessage(activity, messageId, { sessionId: named }),
-          );
-          message = this.outgoing(key, messageId)!;
-        } else if (!message.newTask) {
-          this.failDelivery(key, messageId, new TaskDeletedError(), true);
-          return;
-        }
-      } else if (message.mode === "steer" && message.sessionId !== named) {
+      if (bound !== this.state.transcripts[key]?.sessionId) {
         // The key holds another session now: the task the steer was written in was reset or is gone.
-        this.failDelivery(key, messageId, await this.sessionGone(key, message.sessionId), true);
+        this.failDelivery(key, messageId, await this.sessionGone(key, bound), true);
         return;
       }
     }
@@ -3617,32 +3640,53 @@ export class ClawtrateClient {
   }
 
   /**
-   * Whether a steer written for `sessionId` may go into the run the task shows active: this
-   * connection's latest read named that session and had that run in flight, and nothing heard of
-   * the key since has dropped it (`steerChecks`).
+   * Whether a steer written for `sessionId` may go into the run the task shows active: the latest
+   * read, on this connection, named that session and had that run in flight, and nothing heard of
+   * the task since has dropped it (`steerChecks`). This is the only check a steer passes.
    */
   private steerConfirmed(key: string, sessionId: string | undefined): boolean {
     const check = this.steerChecks.get(key);
-    const active = activeRun(this.state.transcripts[key] ?? emptyActivity);
+    const transcript = this.state.transcripts[key] ?? emptyActivity;
+    const active = activeRun(transcript);
     return (
-      check?.generation === this.generation &&
+      check?.epoch === this.epoch &&
+      check.runId !== null &&
       sessionId !== undefined &&
       check.sessionId === sessionId &&
-      active?.id === check.runId
+      active !== undefined &&
+      canonicalRun(transcript, active.id) === check.runId
     );
   }
 
-  /** Something the latest read of the task did not show: a steer waits for the next read. */
-  private dropSteerCheck(key: string): void {
-    this.steerDrops += 1;
+  /**
+   * News of a followed task, before it is published or used: the session a row names, the task's
+   * removal, or an event of a run. News the latest read did not show drops what that read
+   * established, for this task only, and asks for a fresh read, so a message waiting on it never
+   * waits for ever. Without a read on record, a row is weighed against the session the view shows.
+   */
+  private noteEvidence(
+    key: string,
+    news: { sessionId?: string | null; removed?: boolean; runId?: string },
+  ): void {
+    if (!this.tracked(key)) return;
+    const check = this.steerChecks.get(key);
+    const transcript = this.state.transcripts[key];
+    const known = check ? check.sessionId : (transcript?.sessionId ?? null);
+    const conflicts =
+      news.removed === true ||
+      (typeof news.sessionId === "string" && news.sessionId !== known) ||
+      (news.runId !== undefined &&
+        check?.runId != null &&
+        canonicalRun(transcript ?? emptyActivity, news.runId) !== check.runId);
+    if (!conflicts) return;
+    this.steerDrops.set(key, (this.steerDrops.get(key) ?? 0) + 1);
     this.steerChecks.delete(key);
+    this.scheduleHistory(key);
   }
 
-  /** Whether a read of the task's history succeeded on this connection. */
+  /** Whether a read of the task's history succeeded on this connection, and nothing has dropped it. */
   private readOnThisConnection(key: string): boolean {
-    const loadedAt = this.state.transcripts[key]?.loadedAt ?? null;
-    const connectedAt = this.state.connection.connectedAt;
-    return loadedAt !== null && connectedAt !== null && loadedAt >= connectedAt;
+    return this.steerChecks.get(key)?.epoch === this.epoch;
   }
 
   /**
@@ -6285,37 +6329,58 @@ export class ClawtrateClient {
   }
 
   /**
-   * The task was archived or deleted. By this client: its queued messages never run, as the person
-   * confirmed (F-420). Elsewhere: each stays with its words and files, refused as the gateway
-   * would refuse it, with the recovery of any message refused that way (F-277, F-278).
+   * The task was archived or deleted, of `session` when the event names one. By this client's own
+   * request, once it left for that session: its waiting messages are settled by its outcome
+   * (`removing`). Elsewhere, a removal heard before this client's own request left included: each
+   * waiting message stays with its words and files, refused as the gateway would refuse it, with
+   * the recovery of any message refused that way (F-277, F-278).
    */
-  private settleQueued(key: string, error: TaskDeletedError | TaskArchivedError): void {
-    if (this.ownRemovals.has(key)) {
-      this.cancelAllQueued(key);
-      return;
-    }
+  private settleQueued(key: string, how: "archived" | "deleted", session: string | null): void {
+    const own = [...this.ownRemovals.values()].find(
+      (removal) =>
+        removal.key === key &&
+        removal.sent !== null &&
+        (session === null || session === removal.sent),
+    );
+    if (own) own.heard = how;
+    else this.refuseWaiting(key, how);
+  }
+
+  /**
+   * Messages that wait in a task archived or deleted elsewhere, queued or parked Not sent by a stop
+   * (the gateway ends a task's run as it archives or deletes it, and that end can come first): each
+   * keeps its words and files, refused as the gateway would refuse it.
+   */
+  private refuseWaiting(key: string, how: "archived" | "deleted"): void {
+    const error = how === "deleted" ? new TaskDeletedError() : new TaskArchivedError();
     this.updateActivity(key, (activity, ctx) => {
       let next = activity;
-      for (const run of activity.runs) {
-        if (run.state !== "queued") continue;
+      for (const message of activity.outbox) {
+        if (message.status !== "queued" && message.status !== "not-sent") continue;
         next = updateMessage(
-          failRunStart(next, run.id, { message: error.message, kind: "not-started" }, ctx),
-          run.id,
-          { status: "failed", error: error.message },
+          message.status === "queued"
+            ? failRunStart(next, message.id, { message: error.message, kind: "not-started" }, ctx)
+            : next,
+          message.id,
+          { status: "failed", error: error.message, runId: null },
         );
       }
       return next;
     });
   }
 
-  /** The task was archived or deleted by this client: its queued messages never run (F-420). */
-  private cancelAllQueued(key: string): void {
+  /**
+   * This client's archive or delete of the task succeeded: the messages waiting when it began,
+   * queued or parked by its own stop, never run, as the person confirmed (F-420).
+   */
+  private cancelWaiting(key: string, ids: readonly string[]): void {
     this.updateActivity(key, (activity) => {
       let next = activity;
-      for (const run of activity.runs) {
-        if (run.state !== "queued") continue;
-        this.dropAttachments(run.id);
-        next = updateMessage(cancelQueuedRun(next, run.id, this.now()), run.id, {
+      for (const message of activity.outbox) {
+        if (!ids.includes(message.id)) continue;
+        if (message.status !== "queued" && message.status !== "not-sent") continue;
+        this.dropAttachments(message.id);
+        next = updateMessage(cancelQueuedRun(next, message.id, this.now()), message.id, {
           status: "cancelled",
         });
       }
@@ -7135,6 +7200,7 @@ export class ClawtrateClient {
     this.foreignReads.clear();
     this.endChecked.clear();
     this.steerChecks.clear();
+    this.steerDrops.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -7621,22 +7687,15 @@ export class ClawtrateClient {
   }
 
   private replaceRows(rows: Map<string, RawRecord>): void {
+    // A followed task's row naming another session than its read did is news before it shows: the
+    // task is read again, so the view shows that session before anything can be sent there. A read
+    // that named none, or another session, is not taken over by the list (F-278).
+    for (const key of Object.keys(this.state.transcripts))
+      this.noteEvidence(key, {
+        sessionId: sessionNamed(rows.get(capId(key, MAX_ID_CHARS)) ?? null),
+      });
     this.rows = rows;
     this.publishTasks();
-    this.rereadListed(Object.keys(this.state.transcripts));
-  }
-
-  /**
-   * Followed tasks whose row names a session their history has not: each is read again, so the
-   * view shows that session before anything can be sent there. A read that named none, or another
-   * session, is not taken over by the list (F-278).
-   */
-  private rereadListed(keys: Iterable<string>): void {
-    for (const key of keys) {
-      const listed = sessionNamed(this.rows.get(capId(key, MAX_ID_CHARS)) ?? null);
-      if (listed && this.tracked(key) && listed !== this.state.transcripts[key]?.sessionId)
-        this.scheduleHistory(key);
-    }
   }
 
   private publishTasks(): void {
@@ -7733,24 +7792,16 @@ export class ClawtrateClient {
       this.scheduleRefresh(generation);
       return;
     }
-    // The task removed, or its key holding a session other than the one known: a steer waits for
-    // the next read of the task.
-    const listed = sessionNamed(row);
-    if (
-      this.tracked(key) &&
-      (isSessionRemoval(payload) ||
-        (listed !== null &&
-          listed !==
-            (this.steerChecks.get(key)?.sessionId ?? this.state.transcripts[key]?.sessionId)))
-    )
-      this.dropSteerCheck(key);
+    // The task removed, or its key holding a session other than the one read: news before anything
+    // shows it, and the task is read again.
+    this.noteEvidence(key, { sessionId: sessionNamed(row), removed: isSessionRemoval(payload) });
     if (isSessionRemoval(payload)) {
-      this.settleQueued(key, new TaskDeletedError());
+      this.settleQueued(key, "deleted", sessionNamed(row));
       this.retireForeign(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
-    if (row.archived === true) this.settleQueued(key, new TaskArchivedError());
+    if (row.archived === true) this.settleQueued(key, "archived", sessionNamed(row));
     const cached = this.rows.get(key);
     if (!cached) {
       if (!isExcludedSessionKey(key) && !this.channelRowGivesWay(row))
@@ -7761,7 +7812,6 @@ export class ClawtrateClient {
     if (isTaskSession(merged)) this.rows.set(key, SESSION_ROW(merged));
     else this.rows.delete(key);
     this.publishTasks();
-    this.rereadListed([key]);
   }
 
   /**
@@ -7807,6 +7857,7 @@ export class ClawtrateClient {
     if (clientRunId && clientRunId !== runId) {
       this.updateActivity(key, (activity) => registerRunAlias(activity, runId, clientRunId));
     }
+    this.noteEvidence(key, { runId: clientRunId ?? runId });
     if (row.phase !== "end" && row.phase !== "error") return;
     const transcript = this.state.transcripts[key];
     const named = [runId, clientRunId].flatMap((id) => {
@@ -7932,8 +7983,9 @@ export class ClawtrateClient {
       generation !== this.generation ||
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation;
-    // A drop of the steer check while the read is out leaves the read unable to confirm a steer.
-    const drops = this.steerDrops;
+    // News of the task while the read is out leaves the read unable to confirm a run for a steer.
+    const drops = this.steerDrops.get(key) ?? 0;
+    const epoch = this.epoch;
     // Runs active when the read starts; one the gateway then no longer has has ended.
     const activeBefore = new Set(
       (this.state.transcripts[key]?.runs ?? [])
@@ -8010,9 +8062,12 @@ export class ClawtrateClient {
           ((run.state === "stopping" && !findRun(current, run.id)?.bound) ||
             (run.state === "stopped" && !run.outcomeKnown)),
       );
+      // The session this history came from: only messages bound to it can be settled by its rows.
+      const named = sessionNamed(history);
       const reconciled = reconcileOutbox(
         parkAfterStop(current, { ...current, runs }, this.now()),
         messages,
+        named,
       );
       // History holds these now: their files are no longer needed.
       for (const message of current.outbox) {
@@ -8021,7 +8076,6 @@ export class ClawtrateClient {
       }
       const activity = markUnconfirmed(reconciled);
       const items = mapHistory(messages);
-      const named = sessionNamed(history);
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
@@ -8041,10 +8095,13 @@ export class ClawtrateClient {
         loadedAt: this.now(),
       };
       this.retainTaskRaw(key, rebuilt);
-      // What a steer may join from now: the session this read named and the run it had in flight.
-      if (named && inFlightId && this.steerDrops === drops)
-        this.steerChecks.set(key, { generation, sessionId: named, runId: inFlightId });
-      else this.steerChecks.delete(key);
+      // What this read established, on the connection it was read on: the session it named, and
+      // the run it had in flight unless news of the task came while it was out.
+      this.steerChecks.set(key, {
+        epoch,
+        sessionId: named,
+        runId: (this.steerDrops.get(key) ?? 0) === drops ? inFlightId : null,
+      });
       this.setTranscript(key, () => withLive(rebuilt));
       // A read is news of its own: the runs it leaves active are asked again.
       this.endChecked.delete(key);
@@ -8099,6 +8156,8 @@ export class ClawtrateClient {
       this.updateForeign(key, (activity, ctx) => applyChatEvent(activity, payload, null, ctx));
       return;
     }
+    // An event of a run the latest read did not have in flight is news before it shows.
+    this.noteEvidence(key, { runId });
     // Only tasks this client follows keep a stream baseline: the text, never the message.
     const projected = this.streams.project(payload);
     const text = payload.state === "delta" ? projected : null;
@@ -8140,13 +8199,8 @@ export class ClawtrateClient {
       return;
     }
     const phase = asRecord(payload.data)?.phase;
-    // A run starting that the latest read did not show in flight: a steer waits for the next read.
-    if (
-      payload.stream === "lifecycle" &&
-      phase === "start" &&
-      payload.runId !== this.steerChecks.get(key)?.runId
-    )
-      this.dropSteerCheck(key);
+    // An event of a run the latest read did not have in flight is news before it shows.
+    this.noteEvidence(key, { runId: payload.runId });
     this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
@@ -8541,10 +8595,8 @@ export class ClawtrateClient {
     key: string,
     options: { stop?: boolean; owner?: object } = {},
   ): Promise<ArchiveResult> {
-    return this.removing(key, () =>
-      archiveTask(this.actionContext(options.owner ?? null), key, {
-        stop: options.stop === true,
-      }),
+    return this.removing(key, options.owner ?? null, (ctx) =>
+      archiveTask(ctx, key, { stop: options.stop === true }),
     );
   }
 
@@ -8553,24 +8605,55 @@ export class ClawtrateClient {
   }
 
   async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
-    await this.removing(key, () => deleteTask(this.actionContext(options.owner ?? null), key));
+    await this.removing(key, options.owner ?? null, (ctx) => deleteTask(ctx, key));
   }
 
   /**
-   * This client's own archive or delete of a followed task (`ownRemovals`): its events, before or
-   * after the answer, cancel the queued messages, and so does its success (F-420).
+   * This client's own archive or delete of a followed task (`ownRemovals`). The messages waiting in
+   * the task when it began are settled by its outcome: once it succeeded they never run, queued or
+   * parked by its own stop, as the person confirmed (F-420). Once it failed, an archive or delete
+   * heard meanwhile is settled as one made elsewhere. An archive or delete heard is its own only
+   * once its request left, and only of the session that request named. With `MAX_TRACKED_TASKS`
+   * already out, it goes as any other request, and what it causes is settled as made elsewhere.
    */
-  private async removing<T>(key: string, act: () => Promise<T>): Promise<T> {
-    if (!this.tracked(key)) return act();
-    this.ownRemovals.set(key, (this.ownRemovals.get(key) ?? 0) + 1);
+  private async removing<R>(
+    key: string,
+    owner: object | null,
+    act: (ctx: TaskActionContext) => Promise<R>,
+  ): Promise<R> {
+    const ctx = this.actionContext(owner);
+    if (!this.tracked(key) || this.ownRemovals.size >= MAX_TRACKED_TASKS) return act(ctx);
+    const id = (this.removals += 1);
+    const removal: OwnRemoval = {
+      key,
+      waiting: (this.state.transcripts[key]?.outbox ?? [])
+        .filter((message) => message.status === "queued" || message.status === "not-sent")
+        .map((message) => message.id),
+      sent: null,
+      heard: null,
+    };
+    this.ownRemovals.set(id, removal);
     try {
-      const result = await act();
-      this.cancelAllQueued(key);
+      const result = await act({
+        ...ctx,
+        request: (method, params) => {
+          // From here an archive or delete heard of the session it names is this request's own.
+          const expected = asRecord(params)?.expectedSessionId;
+          if (
+            (method === "sessions.patch" || method === "sessions.delete") &&
+            typeof expected === "string"
+          )
+            removal.sent = expected;
+          return ctx.request(method, params);
+        },
+      });
+      this.cancelWaiting(key, removal.waiting);
       return result;
+    } catch (error) {
+      if (removal.heard) this.refuseWaiting(key, removal.heard);
+      throw error;
     } finally {
-      const left = (this.ownRemovals.get(key) ?? 1) - 1;
-      if (left > 0) this.ownRemovals.set(key, left);
-      else this.ownRemovals.delete(key);
+      this.ownRemovals.delete(id);
     }
   }
 

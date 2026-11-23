@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { asShown } from "./client-harness.ts";
 
 const URL_A = "ws://127.0.0.1:19001";
 const KEY = "agent:otto:disk-space";
@@ -43,7 +44,7 @@ describe("a host pinned to the read tier", () => {
     await expect(client.requestAccess()).rejects.toThrow(/only reads/);
     client.openSession(KEY);
     await until(() => client.state.transcripts[KEY]?.status === "ready");
-    client.sendMessage(KEY, "Clear the cache.");
+    client.sendMessage(KEY, "Clear the cache.", asShown(client));
     await until(() => client.state.transcripts[KEY]!.outbox[0]?.status === "failed");
     expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
     expect(gateway.calls("chat.send")).toEqual([]);

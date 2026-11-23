@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, questionRecord, asShown } from "./client-harness.ts";
 import { deferred, FakeGateway, helloOk, sleep, until } from "./fake-gateway.ts";
 
 type ConnectParams = { scopes: string[]; auth?: { deviceToken?: string } };
@@ -65,7 +65,7 @@ async function withWork() {
 /** Start all four operations; each settles one way or the other. */
 function startAll(client: Awaited<ReturnType<typeof withWork>>["client"]) {
   // A question is pending: a plain message would be held. Steer is not wanted here, so queue it.
-  const messageId = client.sendMessage(KEY, "after this", { mode: "queue" });
+  const messageId = client.sendMessage(KEY, "after this", { ...asShown(client), mode: "queue" });
   const settled = (promise: Promise<unknown>) =>
     promise.then(
       () => "resolved",
@@ -132,7 +132,7 @@ describe("operations across a terminal connection failure (A3)", () => {
     gateway.connectReply = () => revoked;
     gateway.dropAll();
     await until(() => client.state.connection.status === "error");
-    const id = client.sendMessage(KEY, "hello");
+    const id = client.sendMessage(KEY, "hello", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().runs.every((run) => run.state !== "running")).toBe(true);
     expect(client.pendingAccessWaiters).toBe(0);

@@ -3,7 +3,14 @@
 // holds the steer as a queued turn of its own, which `chat.history` then reports as the run in
 // flight. Neither the steer's answer nor that history read, nor a reconnect's, ends the run.
 import { describe, expect, it } from "vitest";
-import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
+import {
+  agentEvent,
+  grantingGateway,
+  KEY,
+  openTask,
+  questionRecord,
+  asShown,
+} from "./client-harness.ts";
 import { sleep, until } from "./fake-gateway.ts";
 import {
   applyAgentEvent,
@@ -98,7 +105,7 @@ const run = (task: Awaited<ReturnType<typeof waitingOn>>) =>
 describe("a steered run that waits on you (F-468, F-096)", () => {
   it("F-468 F-096: a steer into a run waiting on an approval, then a reconnect: the run stays waiting with its approval pending", async () => {
     const task = await waitingOn("approval");
-    task.client.sendMessage(KEY, "Only the notes folder.");
+    task.client.sendMessage(KEY, "Only the notes folder.", asShown(task.client));
     await until(() => task.gateway.calls("chat.send").length === 1);
     task.steering.on = true;
     // The history read after the steer, as the gateway then answers it.
@@ -116,7 +123,7 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
 
   it("F-468: a steer into a run waiting on a question is held, and a reconnect does not end the run", async () => {
     const task = await waitingOn("question");
-    task.client.sendMessage(KEY, "Only the notes folder.");
+    task.client.sendMessage(KEY, "Only the notes folder.", asShown(task.client));
     expect(task.transcript().outbox[0]!.status).toBe("held");
     task.steering.on = true;
     await reconnected(task);
@@ -183,7 +190,7 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
     // The gateway still lists the question as pending: it stays pending, and a message is held.
     expect(task.transcript().questions[0]!.status).toBe("pending");
     expect(task.transcript().approvals[0]!.runEnded).toBe(false);
-    task.client.sendMessage(KEY, "About that");
+    task.client.sendMessage(KEY, "About that", asShown(task.client));
     await sleep(100);
     expect(task.transcript().outbox[0]!.status).toBe("held");
     expect(gateway.calls("chat.send")).toEqual([]);
@@ -218,7 +225,7 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
     }, 10_000);
     await sleep(200);
     expect(task.transcript().questions[0]!.status).toBe("pending");
-    const id = task.client.sendMessage(KEY, "About that");
+    const id = task.client.sendMessage(KEY, "About that", asShown(task.client));
     await sleep(100);
     // Held, and nothing shows as running for it: nothing has left.
     expect(task.transcript().outbox.find((each) => each.id === id)?.status).toBe("held");

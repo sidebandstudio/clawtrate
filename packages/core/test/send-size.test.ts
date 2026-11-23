@@ -8,7 +8,7 @@ import { SendTooLargeError } from "../src/client.ts";
 import { utf8Length } from "../src/encoding.ts";
 import { sendFrameBytes, sendRefusal } from "../src/send-size.ts";
 type ConnectParams = { scopes: string[] };
-import { grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { grantingGateway, KEY, openTask, asShown } from "./client-harness.ts";
 import { helloOk, until } from "./fake-gateway.ts";
 
 const base64 = (bytes: number) => "A".repeat(Math.ceil(bytes / 3) * 4);
@@ -31,6 +31,7 @@ describe("one size for a message (F-074, F-285)", () => {
     };
     const text = '/review "the plan" — ✓ ok\n\tthen ship';
     const id = client.sendMessage(KEY, text, {
+      ...asShown(client),
       replyToId: "row-9",
       attachments: [
         { type: "file", mimeType: "text/plain", fileName: 'notes "v2".txt', content: base64(1000) },
@@ -85,9 +86,9 @@ describe("one size for a message (F-074, F-285)", () => {
       fileName: `${n}.txt`,
       content: base64(3),
     }));
-    expect(() => client.sendMessage(KEY, "all of these", { attachments: many })).toThrow(
-      SendTooLargeError,
-    );
+    expect(() =>
+      client.sendMessage(KEY, "all of these", { ...asShown(client), attachments: many }),
+    ).toThrow(SendTooLargeError);
     expect(gateway.calls("chat.send")).toEqual([]);
     expect(transcript().outbox).toEqual([]);
     client.stop();
@@ -108,6 +109,7 @@ describe("one size for a message (F-074, F-285)", () => {
     gateway.dropAll();
     await until(() => client.state.connection.status !== "connected");
     client.sendMessage(KEY, "the report", {
+      ...asShown(client),
       attachments: [
         { type: "file", mimeType: "application/pdf", fileName: "r.pdf", content: base64(600_000) },
       ],

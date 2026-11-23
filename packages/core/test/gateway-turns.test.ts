@@ -6,7 +6,14 @@
 // development instance.
 
 import { describe, expect, it } from "vitest";
-import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
+import {
+  agentEvent,
+  grantingGateway,
+  KEY,
+  openTask,
+  questionRecord,
+  asShown,
+} from "./client-harness.ts";
 import { deferred, sleep, until, type FakeGateway } from "./fake-gateway.ts";
 import {
   MAX_QUEUE_ALIASES,
@@ -24,7 +31,7 @@ describe("a Stop pressed before the gateway has taken the send (F-097)", () => {
     const answer = deferred<unknown>();
     gateway.handlers["chat.send"] = () => answer.promise;
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "Take a while #slow 20");
+    const id = client.sendMessage(KEY, "Take a while #slow 20", asShown(client));
     await until(() => transcript().runs[0]?.state === "running");
     // Recorded: an abort that reaches the gateway before it has registered the send aborts
     // nothing ({aborted: false, runIds: []}), with or without the run's id, and the turn runs
@@ -60,7 +67,7 @@ describe("a Stop pressed before the gateway has taken the send (F-097)", () => {
     });
     gateway.handlers["chat.history"] = () => ({ messages: [] });
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "Never mind");
+    const id = client.sendMessage(KEY, "Never mind", asShown(client));
     await until(() => transcript().runs[0]?.state === "stopped");
     expect(transcript().runs[0]).toMatchObject({ id, bound: true, endedAt: 5_000 });
     expect(transcript().live).toBeNull();
@@ -183,7 +190,7 @@ describe("a turn the gateway wrote itself", () => {
     gateway.handlers["chat.send"] = () => ({ status: "accepted", messageSeq: 1 });
     gateway.handlers["chat.history"] = () => ({ messages: [] });
     const { client, transcript } = await openTask({ gateway });
-    client.sendMessage(KEY, "Is it done?");
+    client.sendMessage(KEY, "Is it done?", asShown(client));
     await until(() => transcript().outbox[0]?.status !== "sending");
     gateway.handlers["chat.history"] = () => ({ messages: [recovery] });
     gateway.emit("session.message", { sessionKey: KEY });
@@ -892,7 +899,7 @@ describe("a steer the gateway admits as a run of its own", () => {
     const { client, transcript } = await openTask({ gateway });
     gateway.emit("agent", agentEvent("base", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs[0]?.state === "running");
-    const id = client.sendMessage(KEY, "Only the photos, please.");
+    const id = client.sendMessage(KEY, "Only the photos, please.", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, "base");
     answer.resolve({ runId: id, status: "started" });
@@ -941,7 +948,7 @@ describe("a steer the gateway admits as a run of its own", () => {
     const { client, transcript } = await openTask({ gateway });
     gateway.emit("agent", agentEvent("base", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs[0]?.state === "running");
-    client.sendMessage(KEY, "And the documents too.");
+    client.sendMessage(KEY, "And the documents too.", asShown(client));
     await until(() => transcript().steerAliases["steer-ack"] === "base");
     gateway.emit("chat", { runId: "base", sessionKey: KEY, seq: 2, state: "final" });
     gateway.emit("chat", { runId: "steer-ack", sessionKey: KEY, seq: 1, state: "final" });
@@ -960,7 +967,7 @@ describe("a steer the gateway admits as a run of its own", () => {
     const { client, transcript } = await openTask({ gateway });
     gateway.emit("agent", agentEvent("base", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs[0]?.state === "running");
-    const own = client.sendMessage(KEY, "And the documents too.");
+    const own = client.sendMessage(KEY, "And the documents too.", asShown(client));
     await until(() => transcript().outbox[0]?.status === "sent");
     expect(transcript().steerAliases[own]).toBe("base");
     // Its start and text did not reach this client; its end did.
@@ -1044,7 +1051,7 @@ describe("a failed turn's request and Raw (F-301)", () => {
     const { client, gateway, transcript } = await openTask();
     const frames = () =>
       gateway.requests.filter((each) => each.method === "chat.send").map((each) => each.id);
-    const id = client.sendMessage(KEY, "check the disk");
+    const id = client.sendMessage(KEY, "check the disk", asShown(client));
     await until(() => frames().length === 1);
     await until(() => transcript().runs[0]?.bound === true);
     const event = {
@@ -1080,7 +1087,7 @@ describe("a failed turn's request and Raw (F-301)", () => {
     const { client, gateway, transcript } = await openTask();
     gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs[0]?.state === "running");
-    client.sendMessage(KEY, "and this");
+    client.sendMessage(KEY, "and this", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await sleep(20);
     expect(transcript().runs[0]!.requestId).toBeUndefined();

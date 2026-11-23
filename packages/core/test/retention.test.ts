@@ -24,7 +24,7 @@ import {
   type TaskActivity,
 } from "../src/runs.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
-import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, questionRecord, asShown } from "./client-harness.ts";
 import { GatewayError, deferred, sleep, until } from "./fake-gateway.ts";
 
 const refuse = () => {
@@ -43,11 +43,11 @@ describe("every message an outbox holds counts (A5, B2)", () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["chat.send"] = refuse;
     for (let i = 0; i < MAX_OUTBOX_PER_TASK; i += 1) {
-      client.sendMessage(KEY, `m${i}`);
+      client.sendMessage(KEY, `m${i}`, asShown(client));
       await until(() => transcript().outbox[i]?.status === "failed");
     }
     expect(transcript().outbox).toHaveLength(MAX_OUTBOX_PER_TASK);
-    expect(() => client.sendMessage(KEY, "one more")).toThrow(/already holds/);
+    expect(() => client.sendMessage(KEY, "one more", asShown(client))).toThrow(/already holds/);
     expect(transcript().outbox).toHaveLength(MAX_OUTBOX_PER_TASK);
     // A retry adds nothing, so it is never refused for room.
     const first = transcript().outbox[0]!.id;
@@ -56,7 +56,7 @@ describe("every message an outbox holds counts (A5, B2)", () => {
     await until(() => transcript().outbox[0]?.status === "failed");
     client.deleteMessage(KEY, first);
     expect(transcript().outbox).toHaveLength(MAX_OUTBOX_PER_TASK - 1);
-    client.sendMessage(KEY, "room again");
+    client.sendMessage(KEY, "room again", asShown(client));
     client.stop();
   });
 
@@ -65,10 +65,12 @@ describe("every message an outbox holds counts (A5, B2)", () => {
     gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs.length === 1);
     for (let i = 0; i < MAX_OUTBOX_PER_TASK; i += 1) {
-      const id = client.sendMessage(KEY, `q${i}`, { mode: "queue" });
+      const id = client.sendMessage(KEY, `q${i}`, { ...asShown(client), mode: "queue" });
       client.cancelQueued(KEY, id);
     }
-    expect(() => client.sendMessage(KEY, "one more", { mode: "queue" })).toThrow(/already holds/);
+    expect(() =>
+      client.sendMessage(KEY, "one more", { ...asShown(client), mode: "queue" }),
+    ).toThrow(/already holds/);
     client.stop();
   });
 });
@@ -82,19 +84,30 @@ describe(`file bytes kept for outgoing messages, within MAX_RETAINED_ATTACHMENT_
     // One such file per task: each task's own budget holds one.
     const keys = Array.from({ length: count + 1 }, (_, i) => `agent:otto:files${i}`);
     for (const key of keys) client.openSession(key);
+    // A view sends once it shows its task's session.
+    await until(() => keys.every((key) => client.state.transcripts[key]?.sessionId));
     for (let i = 0; i < count; i += 1) {
-      client.sendMessage(keys[i]!, `f${i}`, { attachments: [file(size, `f${i}.bin`)] });
+      client.sendMessage(keys[i]!, `f${i}`, {
+        ...asShown(client, keys[i]!),
+        attachments: [file(size, `f${i}.bin`)],
+      });
       await until(() => client.state.transcripts[keys[i]!]!.outbox[0]?.status === "failed");
     }
     expect(client.retainedAttachmentBytes).toBe(MAX_RETAINED_ATTACHMENT_BYTES);
-    expect(() => client.sendMessage(keys[count]!, "past", { attachments: [file(1)] })).toThrow(
-      /still waiting to go out/,
-    );
+    expect(() =>
+      client.sendMessage(keys[count]!, "past", {
+        ...asShown(client, keys[count]!),
+        attachments: [file(1)],
+      }),
+    ).toThrow(/still waiting to go out/);
     // A message without files is still accepted.
-    client.sendMessage(keys[count]!, "text only");
+    client.sendMessage(keys[count]!, "text only", asShown(client, keys[count]!));
     client.deleteMessage(keys[0]!, client.state.transcripts[keys[0]!]!.outbox[0]!.id);
     expect(client.retainedAttachmentBytes).toBe(MAX_RETAINED_ATTACHMENT_BYTES - size);
-    client.sendMessage(keys[0]!, "fits again", { attachments: [file(size)] });
+    client.sendMessage(keys[0]!, "fits again", {
+      ...asShown(client, keys[0]!),
+      attachments: [file(size)],
+    });
     client.stop();
   }, 30_000);
 
@@ -102,7 +115,10 @@ describe(`file bytes kept for outgoing messages, within MAX_RETAINED_ATTACHMENT_
     const { client, gateway, transcript } = await openTask();
     let refusing = true;
     gateway.handlers["chat.send"] = () => (refusing ? refuse() : { runId: "run-9" });
-    const id = client.sendMessage(KEY, "with a file", { attachments: [file(10, "a.txt")] });
+    const id = client.sendMessage(KEY, "with a file", {
+      ...asShown(client),
+      attachments: [file(10, "a.txt")],
+    });
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(client.retainedAttachmentBytes).toBe(10);
     refusing = false;
@@ -114,7 +130,11 @@ describe(`file bytes kept for outgoing messages, within MAX_RETAINED_ATTACHMENT_
 
     gateway.emit("agent", agentEvent("run-9", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs.some((run) => run.id === "run-9"));
-    const queued = client.sendMessage(KEY, "later", { mode: "queue", attachments: [file(7)] });
+    const queued = client.sendMessage(KEY, "later", {
+      ...asShown(client),
+      mode: "queue",
+      attachments: [file(7)],
+    });
     expect(client.retainedAttachmentBytes).toBe(17);
     client.cancelQueued(KEY, queued);
     expect(client.retainedAttachmentBytes).toBe(10);

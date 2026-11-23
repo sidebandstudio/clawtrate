@@ -28,7 +28,15 @@ import {
 } from "../src/owners.ts";
 import { APPROVAL, MAX_ID_CHARS, MAX_RUN_TEXT_CHARS, MAX_UNROUTED } from "../src/state-bounds.ts";
 import { createStore, MAX_STORE_LISTENERS } from "../src/store.ts";
-import { agentEvent, FAST, grantingGateway, KEY, openTask, URL_A } from "./client-harness.ts";
+import {
+  agentEvent,
+  FAST,
+  grantingGateway,
+  KEY,
+  openTask,
+  URL_A,
+  asShown,
+} from "./client-harness.ts";
 import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 type Found = { path: string; size: number | null; holder: string };
@@ -191,6 +199,7 @@ describe("the registry of what the host keeps", () => {
       );
       await viewer.apply({ type: "readApprovalText", key: KEY, approvalId: "cut" });
       client.sendMessage(KEY, "hello", {
+        ...asShown(client),
         attachments: [{ type: "file", mimeType: "text/plain", fileName: "a.txt", content: "aGk=" }],
       });
       const first = client.createTask("otto", "one").catch(() => {});
@@ -216,6 +225,35 @@ describe("the registry of what the host keeps", () => {
       viewer.dispose();
       client.stop();
     }
+  });
+
+  it("this client's own archives stay within their count, a task that leaves while its archive is out included", async () => {
+    const gateway = grantingGateway();
+    const patched = deferred<unknown>();
+    gateway.handlers["sessions.describe"] = (params) => ({
+      session: { key: (params as { key: string }).key, sessionId: "s-1" },
+    });
+    gateway.handlers["sessions.patch"] = () => patched.promise;
+    const { client } = await openTask({ gateway });
+    const keys = Array.from({ length: 7 }, (_, i) => `agent:otto:more-${i}`);
+    for (const key of keys) client.openSession(key);
+    await until(() => keys.every((key) => client.state.transcripts[key]?.status === "ready"));
+    // Eight archives out, each waiting for its answer, with a message queued behind a run.
+    gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+    await until(() => client.state.transcripts[KEY]!.runs.some((run) => run.state === "running"));
+    client.sendMessage(KEY, "later", { ...asShown(client), mode: "queue" });
+    const out = [KEY, ...keys].map((key) => client.archiveTask(key).catch(() => undefined));
+    await until(() => gateway.calls("sessions.patch").length === 8);
+    // One task leaves while its archive is out, and another is followed and archived.
+    client.closeSession(keys[0]!);
+    client.openSession("agent:otto:ninth");
+    await until(() => client.state.transcripts["agent:otto:ninth"]?.status === "ready");
+    out.push(client.archiveTask("agent:otto:ninth").catch(() => undefined));
+    await until(() => gateway.calls("sessions.patch").length === 9);
+    expectRegistered(client, CLIENT_OWNERS, CLIENT_NOT_WALKED);
+    patched.resolve({ ok: true });
+    await Promise.all(out);
+    client.stop();
   });
 
   it("names the waiting files' collections", () => {

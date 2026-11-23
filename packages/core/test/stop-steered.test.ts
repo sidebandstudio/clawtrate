@@ -5,7 +5,7 @@
 // gateway does: only an abort naming the waiting run ends it and settles its approval.
 import { describe, expect, it } from "vitest";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
-import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, asShown } from "./client-harness.ts";
 
 const RUN = "run-w";
 
@@ -127,7 +127,7 @@ async function stoppedRightly(task: Task, withdrawn = 0) {
 describe("Stop after a steer (F-097, F-169)", () => {
   it("F-097 F-169: Stop after a steer into a run waiting on an approval aborts that run, which the gateway ends and whose approval it settles", async () => {
     const task = await waiting();
-    const sent = task.client.sendMessage(KEY, "Only the notes folder.");
+    const sent = task.client.sendMessage(KEY, "Only the notes folder.", asShown(task.client));
     await until(() => task.gateway.calls("chat.history").length >= 2);
     await until(() => run(task, sent) !== undefined);
     await stopNewest(task);
@@ -137,8 +137,8 @@ describe("Stop after a steer (F-097, F-169)", () => {
 
   it("F-097 F-169: after two steers, Stop still aborts the waiting run", async () => {
     const task = await waiting();
-    task.client.sendMessage(KEY, "Only the notes folder.");
-    task.client.sendMessage(KEY, "And skip the logs.");
+    task.client.sendMessage(KEY, "Only the notes folder.", asShown(task.client));
+    task.client.sendMessage(KEY, "And skip the logs.", asShown(task.client));
     await until(() => task.gateway.calls("chat.send").length === 2);
     await sleep(100);
     await stopNewest(task);
@@ -157,7 +157,7 @@ describe("Stop after a steer (F-097, F-169)", () => {
       task.gateway.emit("session.message", { sessionKey: KEY });
       return answer.promise.then(() => reply);
     };
-    const sent = task.client.sendMessage(KEY, "Only the notes folder.");
+    const sent = task.client.sendMessage(KEY, "Only the notes folder.", asShown(task.client));
     await until(() => run(task, sent) !== undefined);
     answer.resolve(undefined);
     await until(() => task.transcript().outbox[0]?.status === "sent");
@@ -171,7 +171,7 @@ describe("Stop after a steer (F-097, F-169)", () => {
     task.gateway.handlers["chat.send"] = () => {
       throw new GatewayError({ code: "INVALID_REQUEST", message: "not admitted" });
     };
-    task.client.sendMessage(KEY, "Only the notes folder.");
+    task.client.sendMessage(KEY, "Only the notes folder.", asShown(task.client));
     await until(() => task.transcript().outbox[0]?.status === "failed");
     await stopNewest(task);
     await stoppedRightly(task);

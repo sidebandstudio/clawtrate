@@ -137,10 +137,15 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // A task's `agent.wait` check in flight, and the ids of the active runs it last checked.
   endChecking: { max: T, each: ID, row: "bookkeeping" },
   endChecked: { max: T, each: ID + MAX_RUN_LIST * (ID + 1), row: "bookkeeping" },
-  // What a task's latest read showed for a steer: its key, session, in-flight run and connection.
+  // What a task's latest read established: its key, session, in-flight run and connection.
   steerChecks: { max: T, each: 3 * ID + N, row: "bookkeeping" },
-  // Followed tasks this client is archiving or deleting, and how many such requests are out.
-  ownRemovals: { max: T, each: ID + N, row: "bookkeeping" },
+  // How many times news of each followed task dropped what its read established.
+  steerDrops: { max: T, each: ID + N, row: "bookkeeping" },
+  // This client's archives and deletes while out, at most T: an id, the task, the session the
+  // request named, what was heard, and the ids of the messages waiting when it began.
+  ownRemovals: { max: T, each: N + 2 * ID + SHORT + MAX_OUTBOX * ID, row: "bookkeeping" },
+  // Counted in their removal's own size.
+  "ownRemovals.*.waiting": { max: MAX_OUTBOX, each: ID, row: null },
   // Computer Stops whose first abort waits for the gateway to name the run: task and run ids, and
   // the task's opening that asked (an empty object); gone once sent, settled or withdrawn.
   unsentStops: { max: T * MAX_RUN_LIST, each: 2 * ID + 1, row: "bookkeeping" },

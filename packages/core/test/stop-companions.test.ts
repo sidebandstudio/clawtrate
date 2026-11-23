@@ -4,7 +4,7 @@
 // list does not say which run started one (F-297).
 
 import { describe, expect, it } from "vitest";
-import { agentEvent, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, asShown } from "./client-harness.ts";
 import { GatewayError, sleep, until } from "./fake-gateway.ts";
 
 const PEER = "agent:marlow:main";
@@ -95,7 +95,7 @@ describe("Stop and what the run started (F-296, F-298)", () => {
     gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: ["run-r"] });
     messaged(gateway, [[PEER, "run-r"]]);
     await until(() => transcript().runs[0]?.steps.length === 1);
-    client.sendMessage(KEY, "/stop");
+    client.sendMessage(KEY, "/stop", asShown(client));
     await until(() => (transcript().runs[0]!.stoppedWith?.bots.length ?? 0) === 1);
     expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: PEER, runId: "run-r" }]);
     expect(transcript().runs[0]!.stopRequestedAt).not.toBeNull();

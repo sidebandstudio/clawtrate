@@ -112,6 +112,7 @@ describe("browser reconnect (F-104)", () => {
       text: "hi",
       mode: "auto",
       attachmentIds: [],
+      sessionId: "s-1",
     });
     expect(sent).toEqual({ messageId: "m-1" });
     sockets[1]!.close();

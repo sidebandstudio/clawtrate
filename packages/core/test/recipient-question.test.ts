@@ -3,7 +3,7 @@
 // so the sender's Messaged card can say so, and goes on once it is answered.
 // Only the run keeps the question's id; the question is not kept.
 import { describe, expect, it } from "vitest";
-import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, questionRecord, asShown } from "./client-harness.ts";
 import { until } from "./fake-gateway.ts";
 
 const PEER = "agent:marlow:main";
@@ -106,7 +106,7 @@ describe("a recipient's run that asks its own user", () => {
       expect(opened().runs.find((run) => run.id === "run-r")?.state).toBe("waiting");
       await until(() => opened().status === "ready" && list() !== undefined);
       expect(opened().runs.find((run) => run.id === "run-r")?.state).toBe("waiting");
-      client.sendMessage(PEER, "Keep this for after the answer.");
+      client.sendMessage(PEER, "Keep this for after the answer.", asShown(client, PEER));
       await new Promise<void>((resolve) => setTimeout(resolve, 30));
       expect(gateway.calls("chat.send")).toEqual([]);
       expect(opened().outbox[0]?.status).toBe("held");

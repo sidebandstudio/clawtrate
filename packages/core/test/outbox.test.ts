@@ -12,7 +12,15 @@ import {
   type OutgoingMessage,
   type TaskActivity,
 } from "../src/runs.ts";
-import { agentEvent, KEY, openTask, questionRecord, sentTexts } from "./client-harness.ts";
+import {
+  agentEvent,
+  KEY,
+  openTask,
+  questionRecord,
+  sentTexts,
+  asShown,
+  SESSION,
+} from "./client-harness.ts";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 function start(gateway: Parameters<typeof sentTexts>[0], runId = "run-x") {
@@ -26,7 +34,7 @@ describe("held messages (F-096, F-106)", () => {
     start(gateway);
     gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
     await until(() => transcript().runs[0]?.state === "waiting");
-    for (const text of ["one", "two", "three"]) client.sendMessage(KEY, text);
+    for (const text of ["one", "two", "three"]) client.sendMessage(KEY, text, asShown(client));
     expect(transcript().outbox.map((m) => m.status)).toEqual(["held", "held", "held"]);
     await client.dismissQuestion(KEY, "ask_1");
     await until(() => transcript().outbox.every((m) => m.status === "sent"));
@@ -46,7 +54,7 @@ describe("a message written while the connection is down (F-287)", () => {
     gateway.refuseConnections = true;
     gateway.dropAll();
     await until(() => client.state.connection.status !== "connected");
-    const id = client.sendMessage(KEY, "Written offline");
+    const id = client.sendMessage(KEY, "Written offline", asShown(client));
     await sleep(60);
     expect(transcript().outbox[0]).toMatchObject({ id, status: "awaiting-access" });
     expect(gateway.calls("chat.send")).toEqual([]);
@@ -72,7 +80,7 @@ describe("a pending question holds every outgoing message (F-468)", () => {
     start(gateway);
     gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
     await until(() => transcript().runs[0]?.state === "waiting");
-    const id = client.sendMessage(KEY, "after this turn", { mode: "queue" });
+    const id = client.sendMessage(KEY, "after this turn", { ...asShown(client), mode: "queue" });
     expect(transcript().outbox[0]).toMatchObject({ id, status: "held", mode: "queue" });
     expect(transcript().runs.filter((run) => run.state === "queued")).toEqual([]);
 
@@ -99,8 +107,8 @@ describe("a pending question holds every outgoing message (F-468)", () => {
     start(gateway);
     gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
     await until(() => transcript().runs[0]?.state === "waiting");
-    client.sendMessage(KEY, "one");
-    client.sendMessage(KEY, "two");
+    client.sendMessage(KEY, "one", asShown(client));
+    client.sendMessage(KEY, "two", asShown(client));
     expect(transcript().outbox.map((m) => m.status)).toEqual(["held", "held"]);
     gateway.emit("agent", agentEvent("run-x", 3, "lifecycle", { phase: "end" }));
     await until(() => sentTexts(gateway).length === 1);
@@ -132,8 +140,8 @@ describe("queued messages (F-421, F-420)", () => {
       });
       start(gateway);
       await until(() => transcript().runs.length === 1);
-      client.sendMessage(KEY, "a", { mode: "queue" });
-      client.sendMessage(KEY, "b", { mode: "queue" });
+      client.sendMessage(KEY, "a", { ...asShown(client), mode: "queue" });
+      client.sendMessage(KEY, "b", { ...asShown(client), mode: "queue" });
       gateway.emit("agent", agentEvent("run-x", 2, ending.stream, ending.data));
       await until(() => sentTexts(gateway).length === 1);
       expect(sentTexts(gateway)).toEqual(["a"]);
@@ -154,8 +162,8 @@ describe("queued messages (F-421, F-420)", () => {
     };
     start(gateway);
     await until(() => transcript().runs.length === 1);
-    client.sendMessage(KEY, "a", { mode: "queue" });
-    client.sendMessage(KEY, "b", { mode: "queue" });
+    client.sendMessage(KEY, "a", { ...asShown(client), mode: "queue" });
+    client.sendMessage(KEY, "b", { ...asShown(client), mode: "queue" });
     gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
     await until(() => sentTexts(gateway).length === 2);
     // Refused as it started: still a queued message, so the shelf says "Couldn't start".
@@ -175,7 +183,7 @@ describe("queued messages (F-421, F-420)", () => {
     };
     start(gateway);
     await until(() => transcript().runs.length === 1);
-    const id = client.sendMessage(KEY, "queued words", { mode: "queue" });
+    const id = client.sendMessage(KEY, "queued words", { ...asShown(client), mode: "queue" });
     gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
     await until(() => transcript().outbox[0]?.status === "failed");
     for (let attempt = 2; attempt <= 3; attempt += 1) {
@@ -207,6 +215,7 @@ describe("queued messages (F-421, F-420)", () => {
     const first = await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "later",
       mode: "queue",
       attachmentIds: [],
@@ -214,6 +223,7 @@ describe("queued messages (F-421, F-420)", () => {
     const second = await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "now",
       mode: "queue",
       attachmentIds: [],
@@ -225,6 +235,7 @@ describe("queued messages (F-421, F-420)", () => {
     const third = await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "third",
       mode: "queue",
       attachmentIds: [],
@@ -248,7 +259,7 @@ describe("queued messages (F-421, F-420)", () => {
     const { client, gateway, transcript } = await openTask();
     start(gateway);
     await until(() => transcript().runs.length === 1);
-    client.sendMessage(KEY, "later", { mode: "queue" });
+    client.sendMessage(KEY, "later", { ...asShown(client), mode: "queue" });
     gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-1" } });
     gateway.handlers["sessions.patch"] = () => ({ ok: true });
     gateway.handlers["sessions.delete"] = () => {
@@ -268,10 +279,10 @@ describe("after a confirmed Stop nothing starts by itself (F-468)", () => {
     start(gateway);
     gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
     await until(() => transcript().runs[0]?.state === "waiting");
-    const held = client.sendMessage(KEY, "held one");
+    const held = client.sendMessage(KEY, "held one", asShown(client));
     expect(transcript().outbox[0]!.status).toBe("held");
     await client.stopRun(KEY, "run-x");
-    const queued = client.sendMessage(KEY, "queued one");
+    const queued = client.sendMessage(KEY, "queued one", asShown(client));
     expect(transcript().outbox[1]!.status).toBe("queued");
     gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 9, state: "aborted" });
     await until(() => transcript().outbox.every((m) => m.status === "not-sent"));
@@ -295,8 +306,8 @@ describe("after a confirmed Stop nothing starts by itself (F-468)", () => {
     start(gateway);
     gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
     await until(() => transcript().runs[0]?.state === "waiting");
-    client.sendMessage(KEY, "one");
-    client.sendMessage(KEY, "two");
+    client.sendMessage(KEY, "one", asShown(client));
+    client.sendMessage(KEY, "two", asShown(client));
     // Dismissing releases both as steers; "one" goes out, "two" waits behind it.
     await client.dismissQuestion(KEY, "ask_1");
     await until(() => sentTexts(gateway).length === 1);
@@ -323,7 +334,7 @@ describe("after a confirmed Stop nothing starts by itself (F-468)", () => {
     gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: false, runIds: [] });
     start(gateway);
     await until(() => transcript().runs.length === 1);
-    client.sendMessage(KEY, "after it", { mode: "queue" });
+    client.sendMessage(KEY, "after it", { ...asShown(client), mode: "queue" });
     await client.stopRun(KEY, "run-x");
     gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end", aborted: false }));
     await until(() => sentTexts(gateway).length === 1);
@@ -337,7 +348,7 @@ describe("closing a task keeps the user's unsent words (F-073, F-421)", () => {
     const { client, gateway } = await openTask();
     start(gateway);
     await until(() => client.state.transcripts[KEY]!.runs.length === 1);
-    client.sendMessage(KEY, "after this", { mode: "queue" });
+    client.sendMessage(KEY, "after this", { ...asShown(client), mode: "queue" });
     client.closeSession(KEY);
     client.openSession(KEY);
     await until(() => client.state.transcripts[KEY]?.status === "ready");
@@ -354,7 +365,7 @@ describe("closing a task keeps the user's unsent words (F-073, F-421)", () => {
     const { client, gateway } = await openTask();
     start(gateway);
     await until(() => client.state.transcripts[KEY]!.runs.length === 1);
-    client.sendMessage(KEY, "after this", { mode: "queue" });
+    client.sendMessage(KEY, "after this", { ...asShown(client), mode: "queue" });
     client.closeSession(KEY);
     gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
     await until(() => sentTexts(gateway).length === 1);
@@ -366,7 +377,7 @@ describe("closing a task keeps the user's unsent words (F-073, F-421)", () => {
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError({ code: "INVALID_REQUEST", message: "no" });
     };
-    const id = client.sendMessage(KEY, "important");
+    const id = client.sendMessage(KEY, "important", asShown(client));
     await until(() => client.state.transcripts[KEY]!.outbox[0]?.status === "failed");
     client.closeSession(KEY);
     client.openSession(KEY);
@@ -389,7 +400,7 @@ describe("a failed Stop restores what was pending (F-097, F-292)", () => {
     start(gateway);
     gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
     await until(() => transcript().runs[0]?.state === "waiting");
-    client.sendMessage(KEY, "held one");
+    client.sendMessage(KEY, "held one", asShown(client));
     await client.stopRun(KEY, "run-x");
     expect(transcript().runs[0]).toMatchObject({ state: "waiting", stopError: "try again" });
     expect(transcript().runs[0]!.pendingCards.map((card) => card.id)).toEqual(["ask_1"]);
@@ -403,7 +414,7 @@ describe("a failed Stop restores what was pending (F-097, F-292)", () => {
     const { client, gateway, transcript } = await openTask();
     const reply = deferred<unknown>();
     gateway.handlers["chat.send"] = () => reply.promise;
-    const id = client.sendMessage(KEY, "go");
+    const id = client.sendMessage(KEY, "go", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, id);
     // An abort before the gateway has registered the send stops nothing; none is sent yet.
@@ -475,7 +486,7 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
       },
       { role: "user", content: "hi", timestamp: 3_100, __openclaw: { id: "u3", seq: 3 } },
     ];
-    const next = reconcileOutbox(activity, rows);
+    const next = reconcileOutbox(activity, rows, null);
     expect(next.outbox.map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
     expect(next.runs[0]!.anchorItemId).toBeNull();
   });
@@ -501,7 +512,7 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
         __openclaw: { id: "u4", seq: 5, idempotencyKey: "someone-else" },
       },
     ];
-    expect(reconcileOutbox(activity, rows).outbox.map((m) => m.id)).toEqual(["m4"]);
+    expect(reconcileOutbox(activity, rows, null).outbox.map((m) => m.id)).toEqual(["m4"]);
   });
 
   it("matches the row the gateway keeps under the send's key with :user after it", () => {
@@ -546,7 +557,7 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
         },
       },
     ];
-    expect(reconcileOutbox(activity, rows).outbox.map((m) => m.id)).toEqual([
+    expect(reconcileOutbox(activity, rows, null).outbox.map((m) => m.id)).toEqual([
       "4600bfb2-0000-4000-8000-000000000003",
     ]);
   });
@@ -570,7 +581,7 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
         __openclaw: { id: "u2", seq: 2, idempotencyKey: "joined-run:user" },
       },
     ];
-    expect(reconcileOutbox(activity, rows).outbox.map((m) => m.id)).toEqual(["steer-1"]);
+    expect(reconcileOutbox(activity, rows, null).outbox.map((m) => m.id)).toEqual(["steer-1"]);
   });
 
   it("F-075 F-107: matches the user row the gateway keys as the send's key with :user appended", () => {
@@ -584,9 +595,9 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
       // Any other suffix is another key.
       { role: "user", content: "hi", __openclaw: { id: "u3", seq: 8, idempotencyKey: "m3:other" } },
     ];
-    const next = reconcileOutbox(activity, rows);
+    const next = reconcileOutbox(activity, rows, null);
     expect(next.outbox).toEqual([]);
-    const third = reconcileOutbox({ ...emptyActivity, outbox: [message("m3")] }, rows);
+    const third = reconcileOutbox({ ...emptyActivity, outbox: [message("m3")] }, rows, null);
     expect(third.outbox.map((m) => m.id)).toEqual(["m3"]);
   });
 });

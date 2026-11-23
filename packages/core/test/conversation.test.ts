@@ -17,6 +17,7 @@ import {
   tokenKey,
   until,
 } from "./fake-gateway.ts";
+import { asShown, SESSION } from "./client-harness.ts";
 
 const URL_A = "ws://127.0.0.1:19001";
 const KEY = "agent:otto:disk-space";
@@ -184,7 +185,7 @@ describe("scope step-up (B1, F-002)", () => {
     gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
     const { client, transcript } = await openTask({ gateway, held: READ_SCOPES });
 
-    const id = client.sendMessage(KEY, "Clear the cache.");
+    const id = client.sendMessage(KEY, "Clear the cache.", asShown(client));
     expect(transcript().outbox[0]).toMatchObject({
       id,
       status: "awaiting-access",
@@ -228,7 +229,7 @@ describe("scope step-up (B1, F-002)", () => {
 describe("sending (F-075, F-081, F-106)", () => {
   it("shows the message at once, sends it with its idempotency key and reconciles it with history", async () => {
     const { client, gateway, transcript } = await openTask();
-    const id = client.sendMessage(KEY, "  Clear it.  ");
+    const id = client.sendMessage(KEY, "  Clear it.  ", asShown(client));
     // Pending at once, with a running run and a live line, before the gateway answers.
     expect(transcript().outbox).toMatchObject([
       { id, text: "Clear it.", status: "sending", mode: "new" },
@@ -311,7 +312,7 @@ describe("sending (F-075, F-081, F-106)", () => {
       if (refuse) throw new GatewayError({ code: "INVALID_REQUEST", message: "budget exhausted" });
       return { runId: "run-ok", status: "started" };
     };
-    const id = client.sendMessage(KEY, "First");
+    const id = client.sendMessage(KEY, "First", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]!.error).toBe("budget exhausted");
     expect(transcript().runs[0]).toMatchObject({
@@ -330,7 +331,7 @@ describe("sending (F-075, F-081, F-106)", () => {
     expect(transcript().runs.map((run) => [run.id, run.state])).toEqual([["run-ok", "running"]]);
 
     refuse = true;
-    const second = client.sendMessage(KEY, "Second");
+    const second = client.sendMessage(KEY, "Second", asShown(client));
     await until(() => transcript().outbox.find((m) => m.id === second)?.status === "failed");
     client.deleteMessage(KEY, second);
     expect(transcript().outbox.map((m) => m.id)).toEqual([id]);
@@ -341,7 +342,7 @@ describe("sending (F-075, F-081, F-106)", () => {
   it("F-075: a send whose answer never came stays unknown through the reconnect and history, is never called accepted, and is retried only on request", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["chat.send"] = () => new Promise(() => {});
-    const id = client.sendMessage(KEY, "Lost in transit");
+    const id = client.sendMessage(KEY, "Lost in transit", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
     // The connection drops before any answer: whether the frame reached the gateway is not known.
     gateway.dropAll();
@@ -374,10 +375,12 @@ describe("sending (F-075, F-081, F-106)", () => {
       fileName: "big.png",
       content: "A".repeat(Math.ceil((6_291_457 * 4) / 3) + 4),
     };
-    expect(() => client.sendMessage(KEY, "look", { attachments: [image] })).toThrow(
-      SendTooLargeError,
+    expect(() =>
+      client.sendMessage(KEY, "look", { ...asShown(client), attachments: [image] }),
+    ).toThrow(SendTooLargeError);
+    expect(() => client.sendMessage(KEY, "x".repeat(5_000), asShown(client))).toThrow(
+      /at most 4000/,
     );
-    expect(() => client.sendMessage(KEY, "x".repeat(5_000))).toThrow(/at most 4000/);
     expect(transcript().outbox).toEqual([]);
     expect(gateway.calls("chat.send")).toEqual([]);
     client.stop();
@@ -409,12 +412,12 @@ describe("sending (F-075, F-081, F-106)", () => {
       content: "A".repeat(Math.ceil((bytes * 4) / 3)),
     });
     // Under Clawtrate's own 20 MiB, over the gateway's 1,000,000 bytes: refused before the socket.
-    expect(() => client.sendMessage(KEY, "here", { attachments: [file(1_000_003)] })).toThrow(
-      /up to 1000000 bytes/,
-    );
+    expect(() =>
+      client.sendMessage(KEY, "here", { ...asShown(client), attachments: [file(1_000_003)] }),
+    ).toThrow(/up to 1000000 bytes/);
     expect(gateway.calls("chat.send")).toEqual([]);
     expect(transcript().outbox).toEqual([]);
-    client.sendMessage(KEY, "here", { attachments: [file(999_000)] });
+    client.sendMessage(KEY, "here", { ...asShown(client), attachments: [file(999_000)] });
     await until(() => gateway.calls("chat.send").length === 1);
     client.stop();
   });
@@ -434,7 +437,7 @@ describe("sending (F-075, F-081, F-106)", () => {
 describe("a run's start as the gateway reports it (F-081)", () => {
   it("is unknown for a run this client started until the gateway's lifecycle start, then that start", async () => {
     const { client, gateway, transcript } = await openTask();
-    client.sendMessage(KEY, "Count the files");
+    client.sendMessage(KEY, "Count the files", asShown(client));
     await until(() => transcript().runs[0]?.bound === true);
     const run = transcript().runs[0]!;
     // The client's own send time is not the gateway's word.
@@ -456,7 +459,7 @@ describe("steering and questions (F-096, F-292, F-468)", () => {
     gateway.handlers["chat.send"] = () => ({ runId: "steer-run", status: "started" });
     startRun(gateway);
     await until(() => transcript().runs.length === 1);
-    const id = client.sendMessage(KEY, "Also check /var");
+    const id = client.sendMessage(KEY, "Also check /var", asShown(client));
     await until(() => transcript().outbox[0]?.status === "sent");
     expect(gateway.calls("chat.send")[0]).toMatchObject({ queueMode: "steer", idempotencyKey: id });
     expect(transcript().outbox[0]).toMatchObject({ mode: "steer", runId: "run-x" });
@@ -473,7 +476,7 @@ describe("steering and questions (F-096, F-292, F-468)", () => {
     gateway.emit("question.requested", question("ask_1", "run-x"));
     await until(() => transcript().runs[0]?.state === "waiting");
 
-    const id = client.sendMessage(KEY, "Never mind, just do it");
+    const id = client.sendMessage(KEY, "Never mind, just do it", asShown(client));
     expect(transcript().outbox[0]).toMatchObject({ id, status: "held", mode: "steer" });
     await sleep(30);
     expect(gateway.calls("chat.send")).toEqual([]);
@@ -494,7 +497,7 @@ describe("steering and questions (F-096, F-292, F-468)", () => {
     gateway.emit("question.requested", question("ask_9", "run-x"));
     await until(() => transcript().runs[0]?.state === "waiting");
 
-    const id = client.sendMessage(KEY, "Hold this one");
+    const id = client.sendMessage(KEY, "Hold this one", asShown(client));
     expect(transcript().outbox[0]).toMatchObject({ id, status: "held" });
     client.cancelQueued(KEY, id);
     expect(transcript().outbox[0]).toMatchObject({ id, status: "cancelled" });
@@ -562,7 +565,7 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
     expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-x" }]);
     expect(transcript().runs[0]!.state).toBe("stopping");
 
-    const id = client.sendMessage(KEY, "Then do this instead");
+    const id = client.sendMessage(KEY, "Then do this instead", asShown(client));
     expect(transcript().outbox[0]).toMatchObject({ id, status: "queued", mode: "queue" });
     expect(transcript().runs.map((run) => run.state)).toEqual(["stopping", "queued"]);
     await sleep(20);
@@ -611,7 +614,7 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
       const { client, gateway, transcript } = await openTask();
       startRun(gateway);
       await until(() => transcript().runs.length === 1);
-      client.sendMessage(KEY, "later", { mode: "queue" });
+      client.sendMessage(KEY, "later", { ...asShown(client), mode: "queue" });
       const archived = () =>
         gateway.emit("sessions.changed", { sessionKey: KEY, session: { archived: true } });
       gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-1" } });
@@ -632,7 +635,7 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
 
   it("stops a run this client started at the turn limit, aborting it by its id (F-100)", async () => {
     const { client, gateway, transcript } = await openTask({ turnLimitMs: 60 });
-    client.sendMessage(KEY, "Take your time");
+    client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => transcript().runs[0]?.state === "stopping", 2_000);
     expect(transcript().runs[0]!.turnLimit).toBe(0);
     await until(() => gateway.calls("chat.abort").length === 1);
@@ -719,12 +722,20 @@ describe("bridge commands for the live conversation", () => {
     const { client } = await openTask({ gateway });
     const viewer = createBridgeSession(client);
     await expect(
-      viewer.apply({ type: "sendMessage", key: KEY, text: "hi", mode: "auto", attachmentIds: [] }),
+      viewer.apply({
+        type: "sendMessage",
+        key: KEY,
+        sessionId: SESSION,
+        text: "hi",
+        mode: "auto",
+        attachmentIds: [],
+      }),
     ).rejects.toThrow(/not open in this view/);
     await viewer.apply({ type: "openSession", key: KEY });
     const sent = await viewer.apply({
       type: "sendMessage",
       key: KEY,
+      sessionId: SESSION,
       text: "hi",
       mode: "auto",
       attachmentIds: [],

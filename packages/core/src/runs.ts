@@ -3560,9 +3560,15 @@ function gatewayAuthored(message: RawRecord): boolean {
  * when the row carries no contradicting key. Text is never evidence: a message
  * no identifier ties to a row stays visible, to be retried or deleted, rather
  * than being retired by a look-alike. Matched messages leave the outbox, and
- * their runs anchor to the row.
+ * their runs anchor to the row. Only history from the session a message is
+ * bound to (`sessionId`, the session the history names) can settle it: a row
+ * of another session, whatever its key or sequence number, never does (F-278).
  */
-export function reconcileOutbox(activity: TaskActivity, messages: unknown): TaskActivity {
+export function reconcileOutbox(
+  activity: TaskActivity,
+  messages: unknown,
+  sessionId: string | null,
+): TaskActivity {
   const rows = (Array.isArray(messages) ? messages : [])
     .map((entry, index) => ({ message: asRecord(entry), index }))
     .filter(
@@ -3582,6 +3588,7 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
     ) {
       return true;
     }
+    if (outgoing.sessionId !== undefined && outgoing.sessionId !== sessionId) return true;
     const byKey = rows.find(
       (row) => !used.has(row.index) && namesOutgoing(rowIdempotencyKey(row.message), outgoing),
     );

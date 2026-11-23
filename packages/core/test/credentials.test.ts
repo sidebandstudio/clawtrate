@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { FAST, KEY, openTask, URL_A, URL_B } from "./client-harness.ts";
+import { FAST, KEY, openTask, URL_A, URL_B, asShown } from "./client-harness.ts";
 import {
   deferred,
   FakeGateway,
@@ -154,7 +154,7 @@ describe("losing access is represented and recoverable (B1)", () => {
     };
     gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
     gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
-    const id = client.sendMessage(KEY, "hi");
+    const id = client.sendMessage(KEY, "hi", asShown(client));
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(client.state.connection.scopes).not.toContain("operator.write");
     expect(client.state.connection.canWrite).toBe(false);
@@ -201,7 +201,7 @@ describe("losing access is represented and recoverable (B1)", () => {
       canAnswer: false,
       canApprove: false,
     });
-    client.sendMessage(KEY, "while reconnecting");
+    client.sendMessage(KEY, "while reconnecting", asShown(client));
     await until(() => client.state.connection.status === "error", 3_000);
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().runs.every((run) => run.state !== "running")).toBe(true);
