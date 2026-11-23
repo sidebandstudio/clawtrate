@@ -2118,6 +2118,8 @@ export class ClawtrateClient {
     if (!(await this.answerOffer("asked")))
       throw new Error("Clawtrate couldn't save this choice. Try again.");
     if (!offered()) throw new Error("The connection changed. Try again from Settings.");
+    // Another accept (a double click, another window) got here first: its request stands.
+    if (this.scopeUpgrade && this.upgradeTier === "full") return;
     this.scopeUpgrade?.cancelScopeUpgrade();
     this.scopeUpgrade = null;
     this.upgradeTier = "full";

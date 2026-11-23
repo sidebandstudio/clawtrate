@@ -202,6 +202,16 @@ describe("the one-time offer of full control (F-500)", () => {
     client.stop();
   });
 
+  it("F-549: two accepts at once, a double click or two windows, send one request", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    await Promise.all([accept(client), accept(client)]);
+    await until(() => client.state.connection.upgrade.status === "pending");
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    client.stop();
+  });
+
   it("F-549: a refusal keeps the pairing as it was, is saved, and leaves the offer in Settings only, across a restart", async () => {
     const storage = pairedAt();
     const { gateway, decide } = gatewayFor();
