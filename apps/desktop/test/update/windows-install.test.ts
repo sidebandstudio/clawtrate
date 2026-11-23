@@ -29,14 +29,20 @@ function signed(name: string, ...signatures: string[]) {
   return [`${name} ${signatures.length}`, ...signatures.map((line, i) => `signature ${i} ${line}`)];
 }
 
+/** `versions <count>`, then each version resource: its fixed product version and ProductVersions. */
+function resources(...lines: string[]) {
+  return [`versions ${lines.length}`, ...lines.map((line) => `resource ${line}`)];
+}
+const offered = `1.2.0.0 ${base64(proof.version)}`;
+
 function facts(
-  change: { running?: string[]; file?: string; installer?: string[]; version?: string } = {},
+  change: { running?: string[]; file?: string; installer?: string[]; versions?: string[] } = {},
 ) {
   return [
     ...(change.running ?? signed("running", ours)),
     change.file ?? `file ${proof.identity} ${proof.size} ${proof.sha512}`,
     ...(change.installer ?? signed("installer", ours)),
-    change.version ?? `version ${base64(proof.version)}`,
+    ...(change.versions ?? resources(offered)),
     "",
   ].join("\r\n");
 }
@@ -68,6 +74,11 @@ it.each([
     "a root that is not a digest",
     facts({ installer: signed("installer", `00000000 ${sha256} ${publisher} root`) }),
   ],
+  ["a count with a missing resource", facts({ versions: ["versions 2", `resource ${offered}`] })],
+  ["a fixed version that is not one", facts({ versions: resources(`1.2.0 ${base64("1.2.0")}`) })],
+  ["a version that is not encoded", facts({ versions: resources("1.2.0.0 1.2.0") })],
+  // The helper leaves them unread only when the checks before them fail.
+  ["version resources left unread", facts({ versions: ["versions unread"] })],
 ])("F-231: never treats %s as a pass", (_case, output) => {
   expect(windowsRefusal(output, proof)).toBe("inspection-failed");
 });
@@ -173,11 +184,35 @@ it.each([
 });
 
 it.each([
-  ["another version", `version ${base64("1.2.1")}`],
-  ["a beta of the same release", `version ${base64("1.2.0-beta.20261120.1")}`],
-  ["no version", "version -"],
-])("F-231: refuses an installer with %s", (_case, version) => {
-  expect(windowsRefusal(facts({ version }), proof)).toBe("installer-version");
+  ["no version resource", resources()],
+  ["another version", resources(`1.2.1.0 ${base64("1.2.1")}`)],
+  ["a beta of the same release", resources(`1.2.0.0 ${base64("1.2.0-beta.20261120.1")}`)],
+  ["a version resource without ProductVersion", resources("1.2.0.0")],
+  ["one translation without ProductVersion", resources(`1.2.0.0 ${base64(proof.version)} -`)],
+  ["one translation with another ProductVersion", resources(`${offered} ${base64("1.2.1")}`)],
+  ["a second version resource without ProductVersion", resources(offered, "1.2.0.0 -")],
+  ["a second version resource with another one", resources(offered, `1.2.1.0 ${base64("1.2.1")}`)],
+  ["another fixed major version", resources(`2.2.0.0 ${base64(proof.version)}`)],
+  ["another fixed minor version", resources(`1.3.0.0 ${base64(proof.version)}`)],
+  ["another fixed patch version", resources(`1.2.1.0 ${base64(proof.version)}`)],
+  ["no fixed version", resources(`- ${base64(proof.version)}`)],
+])("F-231: refuses an installer with %s", (_case, versions) => {
+  expect(windowsRefusal(facts({ versions }), proof)).toBe("installer-version");
+});
+
+it.each([
+  ["a build number in its fixed version", resources(`1.2.0.42 ${base64(proof.version)}`)],
+  ["two translations that agree", resources(`${offered} ${base64(proof.version)}`)],
+  ["two version resources that agree", resources(offered, offered)],
+])("F-231: accepts an installer with %s", (_case, versions) => {
+  expect(windowsRefusal(facts({ versions }), proof)).toBeNull();
+});
+
+it("F-231: a beta's installer gives the beta version as its ProductVersion, and the release's numbers", () => {
+  const beta = { ...proof, version: "1.2.0-beta.20261120.1" };
+  const versions = (product: string) => resources(`1.2.0.0 ${base64(product)}`);
+  expect(windowsRefusal(facts({ versions: versions(beta.version) }), beta)).toBeNull();
+  expect(windowsRefusal(facts({ versions: versions("1.2.0") }), beta)).toBe("installer-version");
 });
 
 it("F-231: a signed Windows build still withholds Download and Restart until the trial", () => {

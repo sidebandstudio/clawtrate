@@ -1,6 +1,7 @@
 // Real Authenticode signatures, read by the helper the Windows installer uses. The checks
 // exist only on Windows. The first group signs nothing: it uses executables the machine already
-// has, Node's own, another publisher's and Windows' own. The second exists only when
+// has, Node's own, another publisher's and Windows' own. The second runs the helper's version
+// reader alone on files made here, with crafted resource tables. The third exists only when
 // CLAWTRATE_AUTHENTICODE_FILES names the files CI's windows job signs with certificates it makes
 // for the run.
 import { expect, test } from "@playwright/test";
@@ -18,10 +19,7 @@ import { join } from "node:path";
 import { inspectUpdateFile } from "../apps/desktop/src/main/inspect-update-file.ts";
 import { runUpdatePowerShell } from "../apps/desktop/src/main/private-update-directory.ts";
 import type { VerifiedArtifact } from "../apps/desktop/src/main/update/install.ts";
-import {
-  inspectWithPowerShell,
-  windowsInstaller,
-} from "../apps/desktop/src/main/windows-install.ts";
+import { inspectSource, windowsInstaller } from "../apps/desktop/src/main/windows-install.ts";
 
 const windows = process.platform === "win32";
 const files = process.env.CLAWTRATE_AUTHENTICODE_FILES;
@@ -31,6 +29,155 @@ const system = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
 async function windowsSays(script: string, path: string) {
   const { stdout } = await runUpdatePowerShell(script, { CLAWTRATE_CHECKED_FILE: path }, 60000);
   return stdout.trim();
+}
+
+/** The facts the helper's version reader gives for a file, or the error it refuses it with, and
+ * how many milliseconds the reading took. */
+async function readVersions(path: string) {
+  const script = `
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+${inspectSource}
+'@
+$file = [IO.File]::OpenRead($env:CLAWTRATE_CHECKED_FILE)
+$clock = [Diagnostics.Stopwatch]::StartNew()
+try {
+  [UpdateVersions]::new($file).Read()
+} catch {
+  $cause = $_.Exception
+  while ($cause.InnerException) { $cause = $cause.InnerException }
+  "refused $($cause.GetType().Name)"
+} finally {
+  $file.Dispose()
+}
+"took $($clock.ElapsedMilliseconds)"
+`;
+  const lines = (await windowsSays(script, path)).split(/\r?\n/);
+  const took = Number(/^took (\d+)$/.exec(lines.pop() ?? "")?.[1]);
+  return { lines, took };
+}
+
+// A Portable Executable file with only what the version reader reads: the headers, one section
+// at RVA 0x1000 and a resource table in it.
+const RVA = 0x1000;
+const DIRECTORY = 0x80000000;
+
+function portable(tree: Buffer) {
+  const file = Buffer.alloc(0x200 + tree.length);
+  file.write("MZ", 0, "latin1");
+  file.writeUInt32LE(0x40, 0x3c);
+  file.writeUInt32LE(0x4550, 0x40);
+  file.writeUInt16LE(0x8664, 0x44);
+  // One section, after an optional header of 240 bytes: PE32+ with 16 data directories, the
+  // third of them the resource table.
+  file.writeUInt16LE(1, 0x46);
+  file.writeUInt16LE(240, 0x54);
+  file.writeUInt16LE(0x20b, 0x58);
+  file.writeUInt32LE(16, 0x58 + 108);
+  file.writeUInt32LE(RVA, 0x58 + 128);
+  file.writeUInt32LE(tree.length, 0x58 + 132);
+  const section = 0x58 + 240;
+  file.write(".rsrc", section, "latin1");
+  file.writeUInt32LE(tree.length, section + 8);
+  file.writeUInt32LE(RVA, section + 12);
+  file.writeUInt32LE(tree.length, section + 16);
+  file.writeUInt32LE(0x200, section + 20);
+  tree.copy(file, 0x200);
+  return file;
+}
+
+/** A resource directory whose entries all have the number id and point at these targets. */
+function directory(targets: number[], id = 1) {
+  const bytes = Buffer.alloc(16 + 8 * targets.length);
+  bytes.writeUInt16LE(targets.length, 14);
+  targets.forEach((target, i) => {
+    bytes.writeUInt32LE(id, 16 + 8 * i);
+    bytes.writeUInt32LE(target >>> 0, 20 + 8 * i);
+  });
+  return bytes;
+}
+
+function dataEntry(at: number, size: number) {
+  const bytes = Buffer.alloc(16);
+  bytes.writeUInt32LE(RVA + at, 0);
+  bytes.writeUInt32LE(size, 4);
+  return bytes;
+}
+
+const pad = (bytes: Buffer) => Buffer.concat([bytes, Buffer.alloc(-bytes.length & 3)]);
+const base64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
+
+/** A version resource node: its length, its value's length, its type, its key, its value and its
+ * children, each part on a four-byte boundary. */
+function node(key: string, value: Buffer | string, ...children: Buffer[]) {
+  const text = typeof value === "string";
+  const data = text ? Buffer.from(value + "\0", "utf16le") : value;
+  const head = pad(Buffer.concat([Buffer.alloc(6), Buffer.from(key + "\0", "utf16le")]));
+  const bytes = Buffer.concat([head, pad(data), ...children.map(pad)]);
+  bytes.writeUInt16LE(bytes.length, 0);
+  bytes.writeUInt16LE(text ? data.length / 2 : data.length, 2);
+  bytes.writeUInt16LE(text ? 1 : 0, 4);
+  return bytes;
+}
+
+/** VS_VERSION_INFO with a fixed product version, string tables that each may have a
+ * ProductVersion, and a list of translations as language and code page. */
+function versionResource(
+  product: [number, number, number, number],
+  tables: [key: string, version: string | null][],
+  translations: [language: number, codePage: number][],
+) {
+  const fixed = Buffer.alloc(52);
+  fixed.writeUInt32LE(0xfeef04bd, 0);
+  fixed.writeUInt32LE(((product[0] << 16) | product[1]) >>> 0, 16);
+  fixed.writeUInt32LE(((product[2] << 16) | product[3]) >>> 0, 20);
+  const strings = tables.map(([key, version]) =>
+    node(
+      key,
+      Buffer.alloc(0),
+      node("ProductName", "Clawtrate"),
+      ...(version === null ? [] : [node("ProductVersion", version)]),
+    ),
+  );
+  const list = Buffer.alloc(4 * translations.length);
+  translations.forEach(([language, codePage], i) => {
+    list.writeUInt16LE(language, 4 * i);
+    list.writeUInt16LE(codePage, 4 * i + 2);
+  });
+  return node(
+    "VS_VERSION_INFO",
+    fixed,
+    node("StringFileInfo", Buffer.alloc(0), ...strings),
+    node("VarFileInfo", Buffer.alloc(0), node("Translation", list)),
+  );
+}
+
+const release = versionResource([1, 2, 0, 0], [["040904b0", "1.2.0"]], [[0x409, 1200]]);
+
+/** A resource table with one version resource: the root, type 16's directory, name 1's
+ * directory, language 0x409's data entry and then the resource. */
+function versionTree(resource: Buffer, size = resource.length) {
+  return Buffer.concat([
+    directory([DIRECTORY | 24], 16),
+    directory([DIRECTORY | 48]),
+    directory([72], 0x409),
+    dataEntry(88, size),
+    resource,
+  ]);
+}
+
+/** Every name of type 16 leads to one directory, and every language there to one data entry,
+ * so a reader without limits parses the same resource count × count times. */
+function loopingTree(count: number) {
+  const names = 24 + 16 + 8 * count,
+    entry = names + 16 + 8 * count;
+  return Buffer.concat([
+    directory([DIRECTORY | 24], 16),
+    directory(Array<number>(count).fill(DIRECTORY | names)),
+    directory(Array<number>(count).fill(entry)),
+    dataEntry(entry + 16, release.length),
+    release,
+  ]);
 }
 
 let dir = "";
@@ -124,14 +271,12 @@ if (windows)
       // cmd.exe's strings are in a .mui file, and the version lookup looks for one beside a copy too.
       const path = place("setup.exe", readFileSync(join(system, "cmd.exe")));
       const lookup = `[Diagnostics.FileVersionInfo]::GetVersionInfo($env:CLAWTRATE_CHECKED_FILE).ProductVersion`;
+      // Through the version reader alone: Windows vouches for cmd.exe only through a catalog, so
+      // the whole check never gets as far as its version.
       const read = async () => {
-        const output = await inspectWithPowerShell(
-          await proof(path, version),
-          running,
-          new AbortController().signal,
-        );
-        const line = output.split(/\r?\n/).find((fact) => fact.startsWith("version "));
-        return line && Buffer.from(line.slice("version ".length), "base64").toString("utf8");
+        const { lines } = await readVersions(path);
+        expect(lines[0]).toBe("versions 1");
+        return Buffer.from(lines[1]!.split(" ")[2]!, "base64").toString("utf8");
       };
       const own = await read();
       expect(own).toMatch(/^\d+\.\d+/);
@@ -148,6 +293,14 @@ if (windows)
       // Windows' version lookup now takes the copy's version from the .mui file. The check does not.
       expect(await windowsSays(lookup, path)).toBe(rewritten);
       expect(await read()).toBe(own);
+    });
+
+    test("F-231: never reads the version resources of a download whose signature fails", async () => {
+      // Without the order and the limits, reading this file would take minutes.
+      const path = place("setup.exe", portable(loopingTree(4000)));
+      expect(await windowsInstaller(running).inspect(await proof(path, version))).toBe(
+        "windows-signature",
+      );
     });
 
     test("F-231: refuses another publisher's signed executable", async () => {
@@ -181,6 +334,77 @@ if (windows)
         "artifact-changed",
       );
     });
+  });
+
+if (windows)
+  test.describe("the version reader, on crafted files", () => {
+    test("F-231: gives the ProductVersion of every string table and translation", async () => {
+      const resource = versionResource(
+        [1, 2, 0, 7],
+        [
+          ["040904b0", "1.2.0"],
+          ["040704B0", null],
+        ],
+        [
+          [0x409, 1200],
+          [0x407, 1200],
+          [0xc0a, 1200],
+        ],
+      );
+      const { lines } = await readVersions(place("setup.exe", portable(versionTree(resource))));
+      // The German table has none, and the Spanish translation has no table.
+      expect(lines).toEqual(["versions 1", `resource 1.2.0.7 ${base64("1.2.0")} - -`]);
+    });
+
+    const key = Buffer.from(release);
+    // VS_VERSION_INFO's length now ends inside its key.
+    key.writeUInt16LE(16, 0);
+    const huge = Buffer.concat([release, Buffer.alloc(0x100000)]);
+    // 65535 named entries and 65535 numbered ones.
+    const crowded = Buffer.alloc(16);
+    crowded.writeUInt32LE(0xffffffff, 12);
+    const crafted: [string, Buffer][] = [
+      [
+        "a resource table that reaches one directory and one data entry many times",
+        loopingTree(4000),
+      ],
+      ["a type directory that leads back to the root", directory([DIRECTORY | 0], 16)],
+      [
+        "a directory where a language's data entry should be",
+        Buffer.concat([
+          directory([DIRECTORY | 24], 16),
+          directory([DIRECTORY | 48]),
+          directory([DIRECTORY | 72], 0x409),
+          directory([96], 0x409),
+          dataEntry(112, release.length),
+          release,
+        ]),
+      ],
+      ["a version resource longer than 64 KiB", versionTree(huge)],
+      ["a directory claiming more entries than the limit", crowded],
+      ["a key that runs past its node", versionTree(key)],
+      [
+        "17 version resources",
+        Buffer.concat([
+          directory([DIRECTORY | 24], 16),
+          directory([DIRECTORY | 48]),
+          directory(
+            Array.from({ length: 17 }, (_, i) => 48 + 16 + 8 * 17 + 16 * i),
+            0x409,
+          ),
+          ...Array.from({ length: 17 }, () =>
+            dataEntry(48 + 16 + 8 * 17 + 16 * 17, release.length),
+          ),
+          release,
+        ]),
+      ],
+    ];
+    for (const [name, tree] of crafted)
+      test(`F-231: refuses ${name} at once`, async () => {
+        const { lines, took } = await readVersions(place("setup.exe", portable(tree)));
+        expect(lines).toEqual(["refused InvalidDataException"]);
+        expect(took).toBeLessThan(2000);
+      });
   });
 
 if (windows && files)
