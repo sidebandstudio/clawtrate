@@ -1,10 +1,16 @@
 // The shared avatar spec (avatar.ts; visual-language.md section 5).
 import { describe, expect, it } from "vitest";
 import {
+  AVATAR_CHOICE_VERSION,
   AVATAR_COLOR_NAMES,
   AVATAR_COLORS,
+  AVATAR_FACEWEAR,
   AVATAR_FAMILIES,
+  AVATAR_HEADWEAR,
   AVATAR_MOTIONS,
+  AVATAR_NECKWEAR,
+  AVATAR_PNG_KEYWORD,
+  AVATAR_PNG_KEYWORD_V2,
   AVATAR_PARTS,
   AVATAR_STATES,
   avatarFor,
@@ -25,6 +31,7 @@ import {
   type AvatarShape,
 } from "../src/avatar.ts";
 import { sceneReach } from "./avatar-bounds.ts";
+import { readPicture as readPicture300 } from "./avatar-reader-300.ts";
 
 /** Every choice there is: each family with every combination of its parts, in every colour. */
 function everyChoice(): AvatarChoice[] {
@@ -786,5 +793,272 @@ describe("the PNG rules the reader enforces (fix round 2)", () => {
       readPicture(pictureWithChoice(roomy, { family: "shellfolk", shell: "dome", color: "green" })!)
         .kind,
     ).toBe("creature");
+  });
+});
+
+// Version 2: what a Claw wears (docs/design/avatar-studio.md, section 5).
+
+const LANTERN: AvatarChoice = {
+  family: "lantern",
+  body: "bell",
+  lure: "wave",
+  eyes: "one",
+  color: "lime",
+};
+const V2 =
+  "v=2&family=lantern&body=bell&lure=wave&eyes=one&color=lime&head=crown&face=shades&neck=bowtie&trim=sky";
+const V2_BASE = "v=2&family=shellfolk&shell=dome&color=green";
+
+describe("the choice's version 2 text form", () => {
+  it("writes a Claw wearing nothing as version 1, unchanged, and one wearing anything as version 2 with its trim", () => {
+    expect(AVATAR_CHOICE_VERSION).toBe(2);
+    expect(encodeAvatarChoice(LANTERN)).toBe(
+      "v=1&family=lantern&body=bell&lure=wave&eyes=one&color=lime",
+    );
+    expect(encodeAvatarChoice({ ...LANTERN, trim: "sky" })).toBe(encodeAvatarChoice(LANTERN));
+    expect(
+      encodeAvatarChoice({
+        ...LANTERN,
+        neck: "bowtie",
+        face: "shades",
+        head: "crown",
+        trim: "sky",
+      }),
+    ).toBe(V2);
+    // Without a trim it writes the default one, never the body's colour.
+    expect(encodeAvatarChoice({ ...LANTERN, head: "beret" })).toBe(
+      "v=2&family=lantern&body=bell&lure=wave&eyes=one&color=lime&head=beret&trim=violet",
+    );
+    // A crown alone is gold whatever the trim, so it always writes the default one.
+    expect(encodeAvatarChoice({ ...LANTERN, head: "crown", trim: "sky" })).toBe(
+      "v=2&family=lantern&body=bell&lure=wave&eyes=one&color=lime&head=crown&trim=violet",
+    );
+  });
+
+  it("round-trips every choice in every outfit, the longest in 123 bytes", () => {
+    let longest = 0;
+    const problems: string[] = [];
+    for (const base of everyChoice())
+      for (const head of [undefined, ...AVATAR_HEADWEAR])
+        for (const face of [undefined, ...AVATAR_FACEWEAR])
+          for (const neck of [undefined, ...AVATAR_NECKWEAR]) {
+            if (!head && !face && !neck) continue;
+            const choice = {
+              ...base,
+              ...(head && { head }),
+              ...(face && { face }),
+              ...(neck && { neck }),
+            };
+            const text = encodeAvatarChoice(choice as AvatarChoice);
+            longest = Math.max(longest, text.length);
+            const back = decodeAvatarChoice(text);
+            if (!text.startsWith("v=2&") || !back?.trim || encodeAvatarChoice(back) !== text)
+              problems.push(text);
+            if (
+              JSON.stringify({ ...back, trim: undefined }) !==
+              JSON.stringify({ ...choice, trim: undefined })
+            )
+              problems.push(`${text}: ${JSON.stringify(back)}`);
+          }
+    expect(problems).toEqual([]);
+    // The longest takes a trim in its body's own colour; a default trim never is.
+    const widest = encodeAvatarChoice({
+      family: "clawling",
+      body: "round",
+      eyes: "splayed",
+      claws: "fiddler",
+      color: "orchid",
+      head: "headphones",
+      face: "glasses",
+      neck: "bowtie",
+      trim: "orchid",
+    });
+    expect([longest, widest.length]).toEqual([122, 123]);
+    expect(decodeAvatarChoice(widest)?.trim).toBe("orchid");
+  });
+
+  it("reads version 2 only by its exact grammar", () => {
+    expect(decodeAvatarChoice(`${V2_BASE}&head=beret&trim=pink`)).toEqual({
+      family: "shellfolk",
+      shell: "dome",
+      color: "green",
+      head: "beret",
+      trim: "pink",
+    });
+    for (const text of [
+      `${V2_BASE}&trim=pink`, // nothing worn
+      `${V2_BASE}&head=beret`, // no trim
+      `${V2_BASE}&head=beret&head=beanie&trim=pink`, // a repeat
+      `${V2_BASE}&head=beret&trim=pink&trim=pink`,
+      `${V2_BASE}&face=glasses&head=beret&trim=pink`, // out of order
+      "v=2&family=shellfolk&color=green&shell=dome&head=beret&trim=pink",
+      `${V2_BASE}&head=beret&hat=beret&trim=pink`, // an extra key
+      `${V2_BASE}&head=beret&trim=pink&__proto__=x`,
+      `${V2_BASE}&head=&trim=pink`, // empty
+      `${V2_BASE}&head=none&trim=pink`,
+      `${V2_BASE}&head=null&trim=pink`,
+      `${V2_BASE}&head=beret&trim=red`, // outside the palette
+      `${V2_BASE}&head=Beret&trim=pink`, // other case
+      `${V2_BASE}&head=beret &trim=pink`, // whitespace
+      `${V2_BASE}&head=beret&trim=pink\n`,
+      `${V2_BASE}&head=ber%65t&trim=pink`, // an escape
+      `${V2_BASE}&head=béret&trim=pink`, // not ASCII
+      `${V2_BASE}&neck=tie&trim=pink`,
+      `${V2_BASE}&head=glasses&trim=pink`, // the wrong slot
+      `${V2_BASE}&head=crown&trim=pink`, // a crown alone takes only the default trim
+      "v=3&family=shellfolk&shell=dome&color=green&head=beret&trim=pink", // a version it doesn't know
+      `${V2_BASE}&head=beret&trim=pink`.padEnd(201, "x"),
+    ])
+      expect(decodeAvatarChoice(text), text).toBeNull();
+    expect(decodeAvatarChoice(`${V2_BASE}&head=crown&trim=violet`)).not.toBeNull();
+    // Version 1 keeps #300's rules: nothing worn, nothing else.
+    expect(decodeAvatarChoice("v=1&family=shellfolk&shell=dome&color=green&head=beret")).toBeNull();
+    expect(
+      decodeAvatarChoice("v=1&family=shellfolk&shell=dome&color=green&head=beret&trim=pink"),
+    ).toBeNull();
+  });
+
+  it("takes accessories from untrusted input only as own fields from their lists, with something worn", () => {
+    const base = { family: "shellfolk", shell: "dome", color: "green" };
+    expect(parseAvatarChoice({ ...base, face: "glasses" })).toEqual({ ...base, face: "glasses" });
+    expect(parseAvatarChoice({ ...base, neck: "bowtie", trim: "sky" })).toEqual({
+      ...base,
+      neck: "bowtie",
+      trim: "sky",
+    });
+    for (const input of [
+      { ...base, trim: "sky" }, // a lone trim
+      { ...base, head: "none" },
+      { ...base, head: null },
+      { ...base, head: "glasses" },
+      { ...base, face: "monocle" },
+      { ...base, head: "beret", trim: "red" },
+      { ...base, head: "beret", trim: null },
+      { ...base, head: ["beret"] },
+      { ...base, head: "beret", hat: "beret" },
+    ])
+      expect(parseAvatarChoice(input), JSON.stringify(input)).toBeNull();
+    const inherited = Object.assign(Object.create({ head: "beret" }) as object, base);
+    expect(parseAvatarChoice(inherited)).toBeNull();
+    expect(
+      parseAvatarChoice(
+        JSON.parse(
+          '{"family":"shellfolk","shell":"dome","color":"green","__proto__":"x","head":"beret"}',
+        ),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("the two keywords in a picture", () => {
+  const worn: AvatarChoice = {
+    ...LANTERN,
+    head: "crown",
+    face: "shades",
+    neck: "bowtie",
+    trim: "sky",
+  };
+  const tags = (url: string) => chunks(url).flatMap((c, i) => (c.type === "tEXt" ? [i] : []));
+  const v1 = text(CHOICE);
+  const v2 = text(`${V2_BASE}&head=beret&trim=pink`, AVATAR_PNG_KEYWORD_V2);
+
+  it("F-521: writes nothing worn under the first keyword, byte for byte as before, which older builds read", () => {
+    const kept = pictureWithChoice(png(), LANTERN)!;
+    const bytes = bytesOf(kept);
+    const expected = [...ascii(AVATAR_PNG_KEYWORD), 0, ...ascii(encodeAvatarChoice(LANTERN))];
+    const at = 8 + 25; // after the signature and IHDR
+    expect(bytes.slice(at + 8, at + 8 + expected.length)).toEqual(expected);
+    expect(readPicture300(kept)).toEqual({ kind: "creature", choice: LANTERN });
+    expect(readPicture(kept)).toEqual({ kind: "creature", choice: LANTERN });
+  });
+
+  it("F-521: writes what is worn under the second keyword, which older builds show as a plain picture", () => {
+    const kept = pictureWithChoice(png(), worn)!;
+    expect(chunks(kept).map((c) => c.type)).toEqual(["IHDR", "tEXt", "IDAT", "IEND"]);
+    expect(chunks(kept).every((c) => c.ok)).toBe(true);
+    const bytes = bytesOf(kept);
+    expect(String.fromCharCode(...bytes.slice(41, 41 + AVATAR_PNG_KEYWORD_V2.length + 1))).toBe(
+      `${AVATAR_PNG_KEYWORD_V2}\0`,
+    );
+    expect(readPicture(kept)).toEqual({ kind: "creature", choice: worn });
+    expect(avatarFor({ id: "otto", avatarUrl: kept })).toEqual({
+      kind: "creature",
+      choice: worn,
+      chosen: true,
+    });
+    // An older Clawtrate sees no tag it knows, and shows the still picture rather than an invalid one.
+    expect(readPicture300(kept)).toEqual({ kind: "plain" });
+    // Every client reads both in place: a picture written before still reads the same.
+    const old = build(withAfterHeader(text(CHOICE)));
+    expect(readPicture(old)).toEqual(readPicture300(old));
+  });
+
+  it("never writes a tag its own reader refuses", () => {
+    const shellfolk = { family: "shellfolk", shell: "dome", color: "green" };
+    expect(pictureWithChoice(png(), { ...shellfolk, head: null } as never)).toBeNull();
+    expect(pictureWithChoice(png(), { ...shellfolk, head: "fedora" } as never)).toBeNull();
+  });
+
+  it("keeps one tag: writing either kind replaces the other, and a broken version 2 tag", () => {
+    const once = pictureWithChoice(png(), worn)!;
+    const back = pictureWithChoice(once, LANTERN)!;
+    expect(tags(back)).toHaveLength(1);
+    expect(readPicture(back)).toEqual({ kind: "creature", choice: LANTERN });
+    expect(tags(pictureWithChoice(back, worn)!)).toHaveLength(1);
+    const broken = build(withAfterHeader({ type: "tEXt", data: ascii(AVATAR_PNG_KEYWORD_V2) }));
+    const fixed = pictureWithChoice(broken, worn)!;
+    expect(tags(fixed)).toHaveLength(1);
+    expect(readPicture(fixed)).toEqual({ kind: "creature", choice: worn });
+  });
+
+  it("refuses two tags, version 2 text under the first keyword, version 1 under the second, and a broken tag", () => {
+    const invalid = { kind: "invalid" };
+    expect(readPicture(build(withAfterHeader(v1, v2)))).toEqual(invalid);
+    expect(readPicture(build(withAfterHeader(v2, v2)))).toEqual(invalid);
+    expect(readPicture(build(withAfterHeader(v2)))).toMatchObject({ kind: "creature" });
+    const v2UnderOld = build(withAfterHeader(text(`${V2_BASE}&head=beret&trim=pink`)));
+    expect(readPicture(v2UnderOld)).toEqual(invalid);
+    expect(readPicture300(v2UnderOld)).toEqual(invalid);
+    expect(readPicture(build(withAfterHeader(text(CHOICE, AVATAR_PNG_KEYWORD_V2))))).toEqual(
+      invalid,
+    );
+    // The second keyword with no separator at all is broken, alone or beside a valid tag.
+    for (const data of [
+      ascii(AVATAR_PNG_KEYWORD_V2),
+      ascii(`${AVATAR_PNG_KEYWORD_V2}v=2&head=beret`),
+    ]) {
+      expect(readPicture(build(withAfterHeader({ type: "tEXt", data })))).toEqual(invalid);
+      expect(readPicture(build(withAfterHeader({ type: "tEXt", data }, v1)))).toEqual(invalid);
+      // #300 passes over it, as it always has.
+      expect(readPicture300(build(withAfterHeader({ type: "tEXt", data }, v1)))).toMatchObject({
+        kind: "creature",
+      });
+    }
+    // Other keywords that merely start the same are someone else's text.
+    expect(readPicture(build(withAfterHeader(text("x", `${AVATAR_PNG_KEYWORD_V2}x`))))).toEqual({
+      kind: "plain",
+    });
+    expect(
+      readPicture(build(withAfterHeader(text("x", `${AVATAR_PNG_KEYWORD_V2}x`), v2))),
+    ).toMatchObject({ kind: "creature" });
+  });
+
+  it("keeps #300's limits for version 2: 200 bytes of text, its checksum, nothing after the end, 128 chunks", () => {
+    const long = `${V2_BASE}&head=beret&trim=pink`;
+    expect(
+      readPicture(build(withAfterHeader(text(long.padEnd(201, "x"), AVATAR_PNG_KEYWORD_V2)))),
+    ).toEqual({ kind: "invalid" });
+    expect(readPicture(build(withAfterHeader({ ...v2, crc: 0 })))).toEqual({ kind: "invalid" });
+    expect(readPicture(build(withAfterHeader(v2), [0]))).toEqual({ kind: "invalid" });
+    expect(readPicture(build(withAfterHeader({ type: "tEXt", data: [...v2.data, 0xe9] })))).toEqual(
+      { kind: "invalid" },
+    );
+    const [ihdr, idat, iend] = baseChunks() as [RawChunk, RawChunk, RawChunk];
+    const full = build([ihdr, ...new Array(125).fill({ type: "teXt", data: [] }), idat, iend]);
+    expect(pictureWithChoice(full, worn)).toBeNull();
+    // Not canonical base64: the same bytes with a pad bit set in the last character.
+    const good = pictureWithChoice(png(), worn)!;
+    expect(good.endsWith("I=")).toBe(true);
+    expect(readPicture(`${good.slice(0, -2)}J=`)).toEqual({ kind: "invalid" });
   });
 });
