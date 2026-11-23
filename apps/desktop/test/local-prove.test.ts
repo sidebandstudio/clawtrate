@@ -209,6 +209,72 @@ int main(int argc, char **argv) {
     );
   });
 
+  it("refuses a holder whose start differs from the one the scan recorded", async () => {
+    // A test build records every start a microsecond late: (f) must refuse the PID it then sees.
+    const skewed = join(scratch, "helper-skewed");
+    execFileSync("/usr/bin/xcrun", [...localGatewayBuild(skewed), "-DPROVE_START_SKEW=1"]);
+    const { localPort, end } = await connection(port);
+    const at = home();
+    const files = held(at).map((file) => openSync(file, "r"));
+    try {
+      expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("module"));
+      expect(await proveLocalGateway(options(at, localPort, { helper: skewed }))).toEqual(
+        refused("holder"),
+      );
+    } finally {
+      for (const fd of files) closeSync(fd);
+      end();
+    }
+  });
+
+  it("takes a process with no descriptors as an empty list, whatever errno said before", async () => {
+    // A stale errno from an earlier lookup (here EPERM) once made a successful empty list read
+    // as a failure, and the scan refused a healthy gateway as `denied`.
+    const source = join(scratch, "descriptors.c");
+    const binary = join(scratch, "descriptors");
+    writeFileSync(
+      source,
+      `#define main helper_main
+#include "local-gateway.c"
+#undef main
+int main(int argc, char **argv) {
+  (void)argc;
+  int count = -1;
+  errno = EPERM;
+  struct proc_fdinfo *fds = descriptors((pid_t)atoi(argv[1]), &count);
+  printf("%s %d", fds ? "list" : "none", count);
+  free(fds);
+  return 0;
+}`,
+    );
+    execFileSync("/usr/bin/xcrun", [
+      "clang",
+      "-Wno-unused-function",
+      "-I",
+      join(import.meta.dirname, "../packaging/mac"),
+      source,
+      "-o",
+      binary,
+    ]);
+    // A process of the test's own that has closed every descriptor.
+    const bare = spawn(
+      "/usr/bin/perl",
+      ["-MPOSIX", "-e", "$| = 1; print qq(ready\n); POSIX::close($_) for 0..1023; sleep 60"],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    try {
+      await new Promise((done) => bare.stdout.once("data", done));
+      await new Promise((done) => setTimeout(done, 200));
+      expect(execFileSync(binary, [String(bare.pid)], { encoding: "utf8" })).toBe("list 0");
+    } finally {
+      bare.kill("SIGKILL");
+    }
+    // A process that is gone is still no list.
+    const gone = spawn("/usr/bin/true");
+    await new Promise((done) => gone.once("exit", done));
+    expect(execFileSync(binary, [String(gone.pid)], { encoding: "utf8" })).toBe("none 0");
+  });
+
   it("finds no holder for a connection that isn't there", async () => {
     // A port of this run's that no connection uses, as the far end of nothing.
     const spare = createServer();
@@ -332,8 +398,17 @@ describe.skipIf(platform !== "darwin")(
       startTime: 1795410457,
       ...more,
     });
+    // A stand-in is a Node process, which can take longer than the proof's 2 s to start on a busy
+    // machine: its answer is what these check, so it gets all the time the test has.
+    const STAND_IN_DEADLINE_MS = 50_000;
     const prove = (path: string, output: Buffer | string, more: Partial<ProveOptions> = {}) =>
-      proveLocalGateway(options(path, port + 1, { helper: fake(output), ...more }));
+      proveLocalGateway(
+        options(path, port + 1, {
+          helper: fake(output),
+          deadlineMs: STAND_IN_DEADLINE_MS,
+          ...more,
+        }),
+      );
 
     it("passes a holder whose facts match the pins and the lock that names it", async () => {
       const at = path();
@@ -400,16 +475,19 @@ describe.skipIf(platform !== "darwin")(
         expect(await prove(at, output), String(output).slice(0, 40)).toEqual(refused("helper"));
       // A failed exit, however good its answer, a helper that never answers, and none.
       const failing = fake(answer({ lock: named(at) }), 1);
-      expect(await proveLocalGateway(options(at, port + 1, { helper: failing }))).toEqual(
-        refused("helper"),
-      );
+      expect(
+        await proveLocalGateway(
+          options(at, port + 1, { helper: failing, deadlineMs: STAND_IN_DEADLINE_MS }),
+        ),
+      ).toEqual(refused("helper"));
+      // Past its deadline a helper's answer, a good one, is never waited for.
       const slow = join(scratch, "slow");
-      writeFileSync(slow, "#!/bin/sh\nexec sleep 5\n", { mode: 0o700 });
-      const started = Date.now();
+      writeFileSync(slow, '#!/usr/bin/perl\nsleep 30; print "refused module\\n";\n', {
+        mode: 0o700,
+      });
       expect(
         await proveLocalGateway(options(at, port + 1, { helper: slow, deadlineMs: 300 })),
       ).toEqual(refused("helper"));
-      expect(Date.now() - started).toBeLessThan(2_000);
       expect(await proveLocalGateway(options(at, port + 1, { helper: null }))).toEqual(
         refused("helper"),
       );

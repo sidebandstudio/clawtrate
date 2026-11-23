@@ -60,6 +60,18 @@ export type ProvedSockets = {
   verify: (signal: AbortSignal) => Promise<boolean>;
 };
 
+/**
+ * A close code this WebSocket sends: 1000, or one of 3000 to 4999. undici's
+ * spec WebSocket throws on any other, before it closes or fires `close`, and
+ * the protocol client closes with 1008 (a challenge that never came, a connect
+ * that failed); such a code goes as 4000 + its last three digits, so the
+ * socket still closes and its `close` still starts the client's recovery.
+ */
+export function sendableCloseCode(code: number | undefined): number | undefined {
+  if (code === undefined || code === 1000 || (code >= 3000 && code <= 4999)) return code;
+  return 4000 + (Math.abs(Math.trunc(code)) % 1000);
+}
+
 /** One WebSocket's socket: dialled once, and set only once its proof passed. */
 type Slot = { dialled: boolean; socket: Socket | null };
 
@@ -113,6 +125,8 @@ export function provedSockets(port: number, prove: ProveSocket): ProvedSockets {
       const agent = new Agent({ connections: 1, connect: connectFor(slot) });
       const socket = new WebSocket(url, { dispatcher: agent });
       socket.addEventListener("close", () => void agent.destroy().catch(() => {}));
+      const close = socket.close.bind(socket);
+      socket.close = (code?: number, reason?: string) => close(sendableCloseCode(code), reason);
       return socket as unknown as WebSocketLike;
     },
     async verify(signal) {

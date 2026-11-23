@@ -684,6 +684,32 @@ describe.skipIf(!BIN || !mac)(
       }
     });
 
+    it("refuses the gateway when its start, looked at last, isn't the one the scan saw", async () => {
+      // A test build checks the start a microsecond late at the end of (f), as if the gateway's
+      // PID had gone to another process while (f) looked at it: every fact before passes.
+      const late = join(scratch, "helper-late");
+      execFileSync("/usr/bin/xcrun", [...localGatewayBuild(late), "-DPROVE_LATE_SKEW=1"]);
+      const socket = connect({ host: "127.0.0.1", port: gateway.port });
+      await new Promise<void>((done) => socket.once("connect", () => done()));
+      try {
+        const options = {
+          home: gateway.home,
+          folder: FOLDER,
+          port: gateway.port,
+          localPort: socket.localPort!,
+          platform,
+          sandboxed: true,
+        };
+        expect(await proveLocalGateway({ ...options, helper })).toEqual({ proved: true });
+        expect(await proveLocalGateway({ ...options, helper: late })).toEqual({
+          proved: false,
+          why: "holder",
+        });
+      } finally {
+        socket.destroy();
+      }
+    });
+
     it("F-492: a same-account forwarding proxy gets no upgrade and no credential", async () => {
       const port = await freePort();
       const proxy = await standIn(port, gateway.port);

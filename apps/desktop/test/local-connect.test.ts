@@ -10,7 +10,7 @@ import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { deferred, until } from "../../../packages/core/test/fake-gateway.ts";
-import { localConnectFor, provedSockets } from "../src/setup/local-connect.ts";
+import { localConnectFor, provedSockets, sendableCloseCode } from "../src/setup/local-connect.ts";
 
 const servers: { close(): void }[] = [];
 afterEach(() => {
@@ -82,6 +82,35 @@ describe("local connect's connector", () => {
     expect(await attempt(sockets.createWebSocket, url)).toBe("open");
     expect(proved).toHaveLength(2);
     expect(server.peers).toEqual(proved);
+  });
+
+  it("closes with a code its WebSocket would refuse, and still says it closed", async () => {
+    // The protocol client closes with 1008 when no challenge comes; undici's WebSocket throws on
+    // it, before any close. It goes as a code the socket accepts; 1000 goes as it is.
+    const codes: number[] = [];
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    server.on("connection", (socket) => socket.on("close", (code) => codes.push(code)));
+    await new Promise((done) => server.on("listening", done));
+    servers.push(server);
+    const port = (server.address() as { port: number }).port;
+    const sockets = provedSockets(port, async () => true);
+    for (const [code, sent] of [
+      [1008, 4008],
+      [1000, 1000],
+      [4000, 4000],
+    ] as const) {
+      const socket = sockets.createWebSocket(`ws://127.0.0.1:${port}`);
+      await new Promise<void>((done) => (socket.onopen = () => done()));
+      const closed = new Promise<void>((done) => (socket.onclose = () => done()));
+      expect(() => socket.close(code, "connect challenge timeout"), String(code)).not.toThrow();
+      await closed;
+      await until(() => codes.length > 0);
+      expect(codes.splice(0), String(code)).toEqual([sent]);
+    }
+    expect([999, 1001, 1015, 2999, 5000].map(sendableCloseCode)).toEqual([
+      4999, 4001, 4015, 4999, 4000,
+    ]);
+    expect(sendableCloseCode(undefined)).toBe(undefined);
   });
 
   it("proves the latest socket again before its credential, and nothing once it is closed", async () => {
@@ -191,55 +220,75 @@ describe("local connect's connector", () => {
 
 const ROOT = join(import.meta.dirname, "../../..");
 
+/** Every place a file names local connect's option or its builder, as `<path> <kind> <text>`. */
+function localConnectUses(path: string, text: string): string[] {
+  const found: string[] = [];
+  if (!text.includes("localConnect")) return found;
+  const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+  const unquoted = (node: ts.Node) => node.getText(source).replace(/^["']|["']$/g, "");
+  const visit = (node: ts.Node) => {
+    const say = (kind: string) =>
+      found.push(`${path} ${kind} ${node.getText(source).replace(/\s+/g, " ")}`);
+    const name = (node as { name?: ts.Node }).name;
+    if (
+      (ts.isPropertyAssignment(node) ||
+        ts.isShorthandPropertyAssignment(node) ||
+        ts.isPropertyDeclaration(node) ||
+        ts.isPropertySignature(node) ||
+        ts.isBindingElement(node) ||
+        ts.isVariableDeclaration(node) ||
+        ts.isParameter(node)) &&
+      name !== undefined &&
+      /^localConnect/.test(unquoted(name))
+    )
+      say(ts.SyntaxKind[node.kind]!);
+    else if (ts.isStringLiteralLike(node) && node.text.includes("localConnect")) say("string");
+    else if (ts.isPropertyAccessExpression(node) && node.name.text === "localConnect") say("read");
+    else if (
+      (ts.isElementAccessExpression(node) || ts.isComputedPropertyName(node)) &&
+      node.getText(source).includes("localConnect")
+    )
+      say("computed");
+    else if (ts.isCallExpression(node) && node.expression.getText(source) === "localConnectFor")
+      say("call");
+    // The builder taken under another name, through a namespace or by a destructured rename,
+    // is reported where it is taken.
+    else if (
+      (ts.isImportSpecifier(node) &&
+        (node.propertyName ?? node.name).getText(source) === "localConnectFor") ||
+      (ts.isPropertyAccessExpression(node) && node.name.text === "localConnectFor") ||
+      (ts.isBindingElement(node) &&
+        node.propertyName !== undefined &&
+        /^localConnect/.test(unquoted(node.propertyName)))
+    )
+      say("builder");
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+it("the check finds the builder however a host takes it", () => {
+  for (const [text, kind] of [
+    ['import { localConnectFor as build } from "./local-connect.ts";', "builder"],
+    ['import * as lc from "./local-connect.ts"; lc.localConnectFor;', "builder"],
+    ['import * as lc from "./local-connect.ts"; const { localConnectFor: build } = lc;', "builder"],
+    ['const { "localConnectFor": build } = lc;', "builder"],
+    ["const { localConnect: on } = options;", "builder"],
+    ["new SetupController({ ...{ localConnect: undefined } });", "PropertyAssignment"],
+  ] as const)
+    expect(localConnectUses("host.ts", text).join("\n"), text).toContain(`host.ts ${kind} `);
+});
+
 it("no shipped host turns local connect on", () => {
   const shipped = ["apps/desktop/src", "packages/core/src", "packages/ui/src"].flatMap((dir) =>
     (readdirSync(join(ROOT, dir), { recursive: true }) as string[])
       .filter((path) => /\.tsx?$/.test(path) && !path.split(sep).includes("node_modules"))
       .map((path) => join(ROOT, dir, path)),
   );
-  const found: string[] = [];
-  for (const file of shipped) {
-    const text = readFileSync(file, "utf8");
-    if (!text.includes("localConnect")) continue;
-    const path = relative(ROOT, file).split(sep).join("/");
-    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-    const visit = (node: ts.Node) => {
-      const say = (kind: string) =>
-        found.push(`${path} ${kind} ${node.getText(source).replace(/\s+/g, " ")}`);
-      const name = (node as { name?: ts.Node }).name;
-      if (
-        (ts.isPropertyAssignment(node) ||
-          ts.isShorthandPropertyAssignment(node) ||
-          ts.isPropertyDeclaration(node) ||
-          ts.isPropertySignature(node) ||
-          ts.isBindingElement(node) ||
-          ts.isVariableDeclaration(node) ||
-          ts.isParameter(node)) &&
-        name !== undefined &&
-        /^localConnect/.test(name.getText(source).replace(/^["']|["']$/g, ""))
-      )
-        say(ts.SyntaxKind[node.kind]!);
-      else if (ts.isStringLiteralLike(node) && node.text.includes("localConnect")) say("string");
-      else if (ts.isPropertyAccessExpression(node) && node.name.text === "localConnect")
-        say("read");
-      else if (
-        (ts.isElementAccessExpression(node) || ts.isComputedPropertyName(node)) &&
-        node.getText(source).includes("localConnect")
-      )
-        say("computed");
-      else if (ts.isCallExpression(node) && node.expression.getText(source) === "localConnectFor")
-        say("call");
-      // The builder taken under another name, or through a namespace, is reported where it is taken.
-      else if (
-        (ts.isImportSpecifier(node) &&
-          (node.propertyName ?? node.name).getText(source) === "localConnectFor") ||
-        (ts.isPropertyAccessExpression(node) && node.name.text === "localConnectFor")
-      )
-        say("builder");
-      ts.forEachChild(node, visit);
-    };
-    visit(source);
-  }
+  const found = shipped.flatMap((file) =>
+    localConnectUses(relative(ROOT, file).split(sep).join("/"), readFileSync(file, "utf8")),
+  );
   // The option's declaration and its one read; nothing sets it, or calls the builder.
   expect(found.sort()).toEqual([
     "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect;",
