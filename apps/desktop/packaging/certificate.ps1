@@ -33,6 +33,9 @@ public static class ClawtrateCertificate {
     static extern bool CertGetCertificateContextProperty(IntPtr context, uint property, IntPtr data, ref uint size);
 
     [DllImport("crypt32.dll", ExactSpelling = true)]
+    static extern bool CertFreeCertificateContext(IntPtr context);
+
+    [DllImport("crypt32.dll", ExactSpelling = true)]
     static extern bool CertCloseStore(IntPtr store, uint flags);
 
     // PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP
@@ -52,14 +55,20 @@ public static class ClawtrateCertificate {
             try {
                 var keyed = new List<string>();
                 IntPtr context = IntPtr.Zero;
-                while ((context = CertEnumCertificatesInStore(store, context)) != IntPtr.Zero) {
-                    uint size = 0;
-                    // CERT_KEY_PROV_INFO_PROP_ID, CERT_KEY_CONTEXT_PROP_ID or CERT_NCRYPT_KEY_HANDLE_PROP_ID.
-                    if (CertGetCertificateContextProperty(context, 2, IntPtr.Zero, ref size) ||
-                        CertGetCertificateContextProperty(context, 5, IntPtr.Zero, ref size) ||
-                        CertGetCertificateContextProperty(context, 78, IntPtr.Zero, ref size)) {
-                        keyed.Add(new X509Certificate2(context).Thumbprint);
+                try {
+                    while ((context = CertEnumCertificatesInStore(store, context)) != IntPtr.Zero) {
+                        uint size = 0;
+                        // CERT_KEY_PROV_INFO_PROP_ID, CERT_KEY_CONTEXT_PROP_ID or CERT_NCRYPT_KEY_HANDLE_PROP_ID.
+                        if (CertGetCertificateContextProperty(context, 2, IntPtr.Zero, ref size) ||
+                            CertGetCertificateContextProperty(context, 5, IntPtr.Zero, ref size) ||
+                            CertGetCertificateContextProperty(context, 78, IntPtr.Zero, ref size)) {
+                            // The wrapper holds its own copy of the context until it is disposed.
+                            using (var certificate = new X509Certificate2(context)) keyed.Add(certificate.Thumbprint);
+                        }
                     }
+                } finally {
+                    // Each call frees the context before it, so only a throw leaves one to free.
+                    if (context != IntPtr.Zero) CertFreeCertificateContext(context);
                 }
                 return keyed.ToArray();
             } finally {

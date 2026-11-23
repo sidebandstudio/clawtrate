@@ -259,6 +259,10 @@ describe("signing", () => {
     // The file's own signatures, never a catalog's, each one checked by its index.
     expect(script).toContain("data.dwUnionChoice = 1;");
     expect(script).toContain("settings.dwFlags = index == 0 ? 3u : 1u;");
+    // Each certificate wrapper is disposed, and the state is closed whatever happens.
+    expect(script.match(/new X509Certificate2\(/g)).toHaveLength(1);
+    expect(script).toContain("using (var certificate = new X509Certificate2(context))");
+    expect(script).toMatch(/\} finally \{\s+if \(data\.hWVTStateData != IntPtr\.Zero\)/);
   });
 
   describe("the certificate a signed Windows build must carry", () => {
@@ -407,6 +411,12 @@ describe("signing", () => {
         /X509Store|Cert:|CertOpenStore|X509KeyStorageFlags[.\]]|\.Import\(|\$env:/,
       );
       expect(script).toContain("[Console]::In.ReadToEnd()");
+      // Each certificate wrapper is disposed, and a throw mid-enumeration frees its context.
+      expect(script.match(/new X509Certificate2\(/g)).toHaveLength(1);
+      expect(script).toContain("using (var certificate = new X509Certificate2(context))");
+      expect(script).toMatch(
+        /\} finally \{\s+\/\/ .*\s+if \(context != IntPtr\.Zero\) CertFreeCertificateContext\(context\);/,
+      );
     });
   });
 

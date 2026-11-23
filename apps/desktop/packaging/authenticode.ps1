@@ -140,8 +140,12 @@ public static class ClawtrateAuthenticode {
                 }
                 // CRYPT_PROVIDER_CERT is a DWORD, then the certificate's context. Index 0 is the leaf.
                 IntPtr leaf = WTHelperGetProvCertFromChain(found, 0);
+                // The state data owns this context, and closing it below frees it. The wrapper
+                // holds its own copy until it is disposed.
                 IntPtr context = leaf == IntPtr.Zero ? IntPtr.Zero : Marshal.ReadIntPtr(leaf, IntPtr.Size);
-                if (context != IntPtr.Zero) signer = new X509Certificate2(context).Thumbprint;
+                if (context != IntPtr.Zero) {
+                    using (var certificate = new X509Certificate2(context)) signer = certificate.Thumbprint;
+                }
             }
             return index + " " + result.ToString("x8") + " " + digest + " " + signer;
         } finally {
