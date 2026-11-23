@@ -1607,9 +1607,9 @@ export class ClawtrateClient {
     }));
     if (options.resume === false) return;
     // Startup needs to open the socket without waiting for another client's credential write.
-    // A write that lands while this reads leaves the revision this client saw behind it.
-    const revision = this.writes.settingsRevision;
+    // The revision is taken with the record it read: a write that lands during the read is in it.
     const settings = await this.savedSettings();
+    const revision = this.writes.settingsRevision;
     if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
       return;
     this.settings = settings;

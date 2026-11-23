@@ -862,4 +862,29 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("setup's Back forgets gateway A, which this client resumed after another client saved it during startup", async () => {
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(pairingAtB(), storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+    try {
+      const hold = holdRead(storage, "connection");
+      const starting = client.start();
+      await until(hold.waiting);
+      await other.start({ resume: false });
+      await other.connect({ url: URL_A });
+      hold.release();
+      await starting;
+      await until(() => client.state.connection.status === "connected");
+      expect(client.state.connection.gatewayUrl).toBe(URL_A);
+      const selection = client.nextSelection();
+      await client.connectWithSetupCode(setupCode);
+      await until(() => client.state.connection.status === "pairing");
+      await client.disconnect(URL_B, selection);
+      expect(saved(storage)).toBeNull();
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });
