@@ -9,7 +9,7 @@
 //
 // With CLAWTRATE_MACHINE_SHOTS=<folder outside the repository>, it also saves
 // screenshots of what it checked there, at 1440 light and dark and 390 light.
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,18 +72,27 @@ async function shots(page: Page, name: string): Promise<void> {
 async function open(browser: Browser, readOnly: boolean): Promise<Host> {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-machines-"));
   const started = startHost(INSTANCE, STATIC, data, { readOnly });
-  started.gated.release();
-  const url = await started.url;
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await context.newPage();
-  await page.goto(url);
-  await page.getByRole("button", { name: "Use the development gateway" }).click();
-  await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
-    timeout: 20_000,
-  });
-  await approve();
-  await expect(page.getByTestId("bot").first()).toBeVisible({ timeout: 30_000 });
-  return { child: started.host, url, data, page };
+  let context: BrowserContext | null = null;
+  try {
+    started.gated.release();
+    const url = await started.url;
+    context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    await page.goto(url);
+    await page.getByRole("button", { name: "Use the development gateway" }).click();
+    await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
+      timeout: 20_000,
+    });
+    await approve();
+    await expect(page.getByTestId("bot").first()).toBeVisible({ timeout: 30_000 });
+    return { child: started.host, url, data, page };
+  } catch (error) {
+    // Not yet a Host that afterAll knows of: released here, each step on its own.
+    await context?.close().catch(() => {});
+    await stopChild(started.host).catch(() => {});
+    rmSync(data, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /** Otto's "Where Otto runs" page, in the Work pane's Settings tab. */
@@ -149,43 +158,52 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-  // Put back Otto's settings: its command placement, its deny list and its workspace. Only
-  // what beforeAll recorded is put back; a failure here is reported after everything is closed.
-  let restoreError: unknown = null;
-  if (admin && ottoTools) {
-    try {
-      const cfg = await admin.request<{ hash: string }>("config.get", {}).catch(() => null);
+  // Put back Otto's settings: its command placement and deny list, and its workspace, each on its
+  // own. Only what beforeAll recorded is put back; failures are reported after everything is closed.
+  const restores: Array<() => Promise<void>> = [];
+  if (admin && ottoTools)
+    restores.push(async () => {
+      const cfg = await admin.request<{ hash: string }>("config.get", {});
       const exec = (ottoTools.exec ?? {}) as Json;
       const deny = ottoTools.deny as string[] | undefined;
-      if (cfg)
-        await admin.request("config.patch", {
-          raw: JSON.stringify({
-            agents: {
-              entries: {
-                otto: {
-                  tools: {
-                    exec: { ...exec, host: exec.host ?? null, node: exec.node ?? null },
-                    deny: deny ?? null,
-                  },
+      await admin.request("config.patch", {
+        raw: JSON.stringify({
+          agents: {
+            entries: {
+              otto: {
+                tools: {
+                  exec: { ...exec, host: exec.host ?? null, node: exec.node ?? null },
+                  deny: deny ?? null,
                 },
               },
             },
-          }),
-          baseHash: cfg.hash,
-          // The list is replaced, or removed when Otto had none: either way its path is named.
-          replacePaths: ["agents.entries.otto.tools.deny"],
-        });
+          },
+        }),
+        baseHash: cfg.hash,
+        // The list is replaced, or removed when Otto had none: either way its path is named.
+        replacePaths: ["agents.entries.otto.tools.deny"],
+      });
       const back = (entry(await config(), "otto").tools ?? {}) as Json;
       expect(back.exec ?? null, "Otto's command placement put back").toEqual(
         ottoTools.exec ?? null,
       );
       expect(back.deny ?? null, "Otto's deny list put back").toEqual(ottoTools.deny ?? null);
-      if (ottoWorkspace)
-        await admin
-          .request("agents.update", { agentId: "otto", workspace: ottoWorkspace })
-          .catch(() => {});
+    });
+  if (admin && ottoWorkspace)
+    restores.push(async () => {
+      await admin.request("agents.update", { agentId: "otto", workspace: ottoWorkspace });
+      const agents = await admin.request<{ agents: Json[] }>("agents.list", {});
+      expect(
+        agents.agents.find((agent) => agent.id === "otto")?.workspace,
+        "Otto's workspace put back",
+      ).toBe(ottoWorkspace);
+    });
+  const restoreErrors: unknown[] = [];
+  for (const restore of restores) {
+    try {
+      await restore();
     } catch (error) {
-      restoreError = error;
+      restoreErrors.push(error);
     }
   }
   // Each resource is released on its own, so one failure leaves none of the others behind.
@@ -205,7 +223,8 @@ test.afterAll(async () => {
       console.warn(`machines cleanup: ${String(error)}`);
     }
   }
-  if (restoreError) throw restoreError;
+  if (restoreErrors.length === 1) throw restoreErrors[0];
+  if (restoreErrors.length > 1) throw new AggregateError(restoreErrors, "machines restore failed");
 });
 
 test("F-046 F-047: below admin every place shows, nothing can change, and the bar asks for admin only when the person asks", async () => {
@@ -275,28 +294,38 @@ test("F-046: admin asked for explicitly sets Otto's commands to media-box; it is
   await expect(bar).toContainText("Waiting for the gateway's owner.", { timeout: 15_000 });
   await approve();
   await expect(page.getByTestId("runs-on-machine")).toBeEnabled({ timeout: 30_000 });
+  const unsaved = await admin.request<{ hash: string }>("config.get", {});
   await page.getByTestId("runs-on-machine").click();
   await page.getByRole("menuitemradio", { name: "media-box · Connected" }).click();
   const announcer = page.getByTestId("work-announcer");
-  await expect(announcer).toHaveText(
-    new RegExp(
-      `^Saved(?: and applied|\\. The gateway doesn't report it applied yet)\\. ${OTTO}'s command machine setting: media-box$`,
-    ),
-    { timeout: 30_000 },
-  );
+  // Read once: what is checked below is the announcement that matched.
+  let said = "";
+  await expect
+    .poll(async () => (said = (await announcer.textContent()) ?? ""), { timeout: 30_000 })
+    .toMatch(
+      new RegExp(
+        `^Saved(?: and applied|\\. The gateway doesn't report it applied yet)\\. ${OTTO}'s command machine setting: media-box$`,
+      ),
+    );
   // On the gateway: Otto's own entry names the machine by its id, and "applied" is said
   // only when the gateway reports the saved revision active.
   const read = await admin.request<{
+    hash: string;
     config: Json;
-    configRevisionHash: string;
-    appliedConfigHash: string;
+    configRevisionHash?: string;
+    appliedConfigHash?: string;
   }>("config.get", {});
   expect((entry(read.config, "otto").tools as Json).exec).toMatchObject({
     host: "node",
     node: nodeId,
   });
-  if ((await announcer.textContent())!.startsWith("Saved and applied"))
+  if (said.startsWith("Saved and applied")) {
+    // Nothing else writes during the check, so the revision now stored is the one the save's
+    // receipt named (core's unit checks pin the receipt rule itself).
+    expect(read.hash, "the revision the save made").not.toBe(unsaved.hash);
+    expect(read.configRevisionHash, "the revision the gateway reports").toEqual(expect.any(String));
     expect(read.appliedConfigHash).toBe(read.configRevisionHash);
+  }
   // media-box declares no system.run: the page says so, and nothing about what follows.
   await expect(page.getByTestId("runs-on-no-run")).toHaveText(
     "media-box doesn't list system.run among its commands.",
@@ -441,6 +470,21 @@ test("F-156: admin sets media-box's defaults to Ask every time; the file reads b
   const before = await admin.request<{ hash: string; file: Json }>("exec.approvals.node.get", {
     nodeId,
   });
+  try {
+    await defaultsChecks(before.hash);
+  } finally {
+    // Put the file back as it was, over whatever revision the checks left.
+    const now = await admin.request<{ hash: string }>("exec.approvals.node.get", { nodeId });
+    await admin.request("exec.approvals.node.set", {
+      nodeId,
+      baseHash: now.hash,
+      file: { ...before.file, socket: undefined },
+    });
+  }
+});
+
+/** The defaults checks, over the file as it was at `was`; the test puts the file back after. */
+async function defaultsChecks(was: string) {
   const page = writer.page;
   const settings = await machines(page);
   await expect(page.locator('[data-machine="media-box"]').first()).toContainText(
@@ -454,7 +498,7 @@ test("F-156: admin sets media-box's defaults to Ask every time; the file reads b
   const after = await admin.request<{ hash: string; file: Json }>("exec.approvals.node.get", {
     nodeId,
   });
-  expect(after.hash).not.toBe(before.hash);
+  expect(after.hash).not.toBe(was);
   expect((after.file.defaults as Json) ?? {}).toMatchObject({
     security: "allowlist",
     ask: "always",
@@ -480,14 +524,8 @@ test("F-156: admin sets media-box's defaults to Ask every time; the file reads b
   expect((await admin.request<{ hash: string }>("exec.approvals.node.get", { nodeId })).hash).toBe(
     changed.hash,
   );
-  // Put the file back as it was.
-  await admin.request("exec.approvals.node.set", {
-    nodeId,
-    baseHash: changed.hash,
-    file: { ...before.file, socket: undefined },
-  });
   await page.keyboard.press("Escape");
-});
+}
 
 test("F-157: machines and paired devices as last seen; with admin, a machine and a device are renamed and an offline device removed, each read back from the whole listing", async () => {
   test.setTimeout(120_000);
@@ -512,12 +550,16 @@ test("F-157: machines and paired devices as last seen; with admin, a machine and
     .click();
   await settings.getByRole("textbox", { name: "New name for media-box" }).fill("media-shelf");
   await page.keyboard.press("Enter");
-  await expect(settings.getByTestId("b-announcer")).toHaveText("Renamed", { timeout: 20_000 });
-  expect(
-    (await admin.request<{ nodes: Json[] }>("node.list", {})).nodes.find((n) => n.nodeId === nodeId)
-      ?.displayName,
-  ).toBe("media-shelf");
-  await admin.request("node.rename", { nodeId, displayName: "media-box" });
+  try {
+    await expect(settings.getByTestId("b-announcer")).toHaveText("Renamed", { timeout: 20_000 });
+    expect(
+      (await admin.request<{ nodes: Json[] }>("node.list", {})).nodes.find(
+        (n) => n.nodeId === nodeId,
+      )?.displayName,
+    ).toBe("media-shelf");
+  } finally {
+    await admin.request("node.rename", { nodeId, displayName: "media-box" });
+  }
   // Rename the offline device, then remove it after the confirmation.
   const row = list.locator("div", { hasText: "Clawtrate old laptop" }).last();
   await row.getByRole("button", { name: "Rename" }).click();
