@@ -2,8 +2,17 @@ import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { MAX_OUTBOX_PER_TASK, MAX_TRACKED_TASKS } from "../packages/core/src/client.ts";
 import { MAX_NAME_CHARS } from "../packages/core/src/state-bounds.ts";
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
-import { expect, test } from "@playwright/test";
-import { contextFor, openFixture, settle, showList, SIZES, OTTO_DISK, THEMES } from "./fixture.ts";
+import { test } from "@playwright/test";
+import {
+  contextFor,
+  expect,
+  openFixture,
+  settle,
+  showList,
+  SIZES,
+  OTTO_DISK,
+  THEMES,
+} from "./fixture.ts";
 
 for (const size of SIZES.filter((s) => s.name === "1440" || s.phone)) {
   test.describe(size.name, () => {

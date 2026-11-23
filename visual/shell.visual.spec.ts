@@ -1,8 +1,8 @@
 // F-471: the connect, pairing and main views (Work pane closed and open) match
 // the approved baselines in light and dark, at 1440, 1100 and 800 px wide and
 // at phone width.
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 type View = { name: string; query: string; ready: (page: Page) => Promise<void> };
 
