@@ -273,7 +273,9 @@ describe("full access under interleavings", () => {
       if (key === "connection") throw new Error("disk full");
       return set(key, value);
     };
-    await expect(client.connect({ url: "wss://gateway.example:19961", token: "other" })).rejects.toThrow();
+    await expect(
+      client.connect({ url: "wss://gateway.example:19961", token: "other" }),
+    ).rejects.toThrow();
     storage.set = set;
     const before = gateway.connects.length;
     await until(() => gateway.connects.length >= before + 2);

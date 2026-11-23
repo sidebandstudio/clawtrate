@@ -29,7 +29,7 @@ function form(info: HostInfo, url: string): string {
 }
 
 describe("the consent line on the address form", () => {
-  it("a host that pairs with full control shows it directly above Connect for a secure address", () => {
+  it("F-519: a host that pairs with full control shows it directly above Connect for a secure address", () => {
     const html = form({ ...base, fullControl: true }, "wss://gateway.example");
     expect(CONSENT_LINE).toBe(
       "Full control lets Clawtrate change gateway settings, approve devices and, when the gateway allows it, open a terminal on the computer running OpenClaw.",
@@ -85,7 +85,7 @@ describe("what a full pairing granted less is missing", () => {
     expect(notGranted(connected(six, true))).toEqual([]);
   });
 
-  it("each scope it lacks, in plain words and in order", () => {
+  it("F-519: each scope it lacks, in plain words and in order", () => {
     expect(notGranted(connected(["operator.read"], true))).toEqual([
       "sending and stopping",
       "deciding approvals",
