@@ -189,6 +189,11 @@ export type Task = {
    * row), as the gateway names it. Absent when the task records none.
    */
   effort?: string;
+  /**
+   * The external channel the chat came in through (`discord`, `telegram`, …), as the
+   * gateway names it; absent for Clawtrate's own tasks and a bot's main task (`channels.ts`).
+   */
+  channel?: string;
   /** Paths of fields cut to their bound. */
   cut?: string[];
 };
@@ -395,6 +400,11 @@ export type ClawtrateState = {
    * aborts it (F-100). Clawtrate's own wall-clock limit, kept by the host; 50 by default.
    */
   turnLimitMinutes?: number;
+  /**
+   * "Show external channel chats": whether `tasksByBot` lists chats that came in
+   * through Discord, Telegram and other channels. Off by default, kept by the host.
+   */
+  showChannelChats?: boolean;
   /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
