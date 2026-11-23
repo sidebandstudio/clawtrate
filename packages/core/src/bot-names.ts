@@ -28,6 +28,8 @@ export const MAX_NAME_CARDS = 32;
 export const MAX_NAME_ERROR_CHARS = 512;
 
 const PLACEHOLDERS = new Set(["not set yet", "pick something you like"]);
+/** A picture `agents.update` copied into IDENTITY.md from the config (R38). */
+const PICTURE_LINE = /^- Avatar: data:[^\n]*(\n|$)/gm;
 
 /**
  * The name an IDENTITY.md gives, read as the gateway reads it: the last line labelled `Name`,
@@ -122,6 +124,8 @@ export class BotNames {
     const release = this.ctx.takeRead();
     if (!release) return;
     const epoch = this.epoch;
+    // The gateway this read is for: a card drawn from it is for that gateway only.
+    const gatewayId = this.ctx.gatewayId();
     this.reading.add(botId);
     try {
       const answer = asRecord(
@@ -130,7 +134,9 @@ export class BotNames {
         )?.file,
       );
       if (epoch !== this.epoch) return;
-      const content = typeof answer?.content === "string" ? answer.content : null;
+      // A picture copied in isn't counted: Rename takes it out again.
+      const content =
+        typeof answer?.content === "string" ? answer.content.replace(PICTURE_LINE, "") : null;
       if (content === null) return;
       if (content.length > MAX_IDENTITY_CHARS) {
         // Read once, then left alone on this connection: a file this long isn't one to rename from.
@@ -143,16 +149,23 @@ export class BotNames {
       const name = raw === null ? null : plainName(raw);
       const declined = name !== null && (await this.declined(botId, name));
       // A card being renamed stays until its Rename settles; a read from before a reset counts for nothing.
-      if (epoch !== this.epoch || this.proposals.get(botId)?.status === "renaming") return;
+      if (
+        epoch !== this.epoch ||
+        this.ctx.gatewayId() !== gatewayId ||
+        this.proposals.get(botId)?.status === "renaming"
+      )
+        return;
       const now = this.ctx.bots().find((each) => each.id === botId);
-      if (!now || name === null || name === now.name || declined) return this.drop(botId);
+      // A name the bot already has, longer than a card's, is not a new one cut short.
+      if (!now || name === null || name === now.name || name === plainName(now.name) || declined)
+        return this.drop(botId);
       const open = this.proposals.get(botId);
       if (!open && this.proposals.size >= MAX_NAME_CARDS) return;
       this.proposals.set(botId, {
         botId,
         name,
         from: now.name,
-        gatewayId: this.ctx.gatewayId(),
+        gatewayId,
         status: "open",
         error: null,
       });
@@ -241,7 +254,7 @@ export class BotNames {
       const hash =
         typeof file?.hash === "string" && /^[a-f0-9]{64}$/i.test(file.hash) ? file.hash : null;
       if (content === null || hash === null) return;
-      const kept = content.replace(/^- Avatar: data:[^\n]*(\n|$)/gm, "");
+      const kept = content.replace(PICTURE_LINE, "");
       if (kept === content) return;
       await this.ctx.request("agents.files.set", {
         agentId: botId,

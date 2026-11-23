@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { identityFile } from "../src/accounts-engine.ts";
 import {
+  BotNames,
   identityName,
   MAX_BOT_NAME_CHARS,
   MAX_IDENTITY_CHARS,
@@ -16,6 +17,7 @@ import {
   plainName,
 } from "../src/bot-names.ts";
 import { MAX_BOTS } from "../src/state-bounds.ts";
+import type { Bot, NameProposal } from "../src/types.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { agentEvent, openTask, URL_A, URL_B, grantingGateway } from "./client-harness.ts";
 import { deferred, GatewayError, memoryStorage, sleep, tokenKey, until } from "./fake-gateway.ts";
@@ -476,6 +478,111 @@ describe("F-552: a bot that takes a name", () => {
     );
     expect(gateway.calls("agents.update")).toEqual([]);
     client.stop();
+  });
+
+  it("F-552: a bot whose name is longer than a card's gets no card proposing that name cut short", async () => {
+    const long = "Quartermaster of the Northern Supply Routes 2026";
+    expect(Array.from(long).length).toBeGreaterThan(MAX_BOT_NAME_CHARS);
+    const { gateway, bot } = namingGateway(() => `# IDENTITY.md\n\n- **Name:** ${long}\n`);
+    bot.name = long;
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    endRun(gateway);
+    await until(() => reads(gateway) === 1);
+    await sleep(30);
+    expect(client.state.botNames ?? []).toEqual([]);
+    client.stop();
+  });
+
+  it("F-552: when taking the picture out loses its race, the rename stands and the next name still gets a card", async () => {
+    const { gateway, bot, takeName } = namingGateway((name) => identityFile(name, true), {
+      picture: true,
+    });
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // The file changes between the read after the rename and the write held to it.
+    const get = gateway.handlers["agents.files.get"]!;
+    let race = false;
+    gateway.handlers["agents.files.get"] = (params) => {
+      const answer = get(params);
+      if (race) {
+        race = false;
+        bot.file += "\nA line the bot wrote meanwhile.\n";
+      }
+      return answer;
+    };
+    const update = gateway.handlers["agents.update"]!;
+    gateway.handlers["agents.update"] = (params) => {
+      race = true;
+      return update(params);
+    };
+    await client.acceptBotName("new-bot", "Johnny", "gw-a");
+    expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("Johnny");
+    expect(bot.file).toMatch(/^- Avatar: data:/m);
+    expect(bot.file.length).toBeGreaterThan(MAX_IDENTITY_CHARS);
+    // The copied picture isn't counted: the bot's next name gets its card, whose Rename retries.
+    takeName("Max");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    expect(client.state.botNames![0]).toMatchObject({ name: "Max", from: "Johnny" });
+    gateway.handlers["agents.update"] = update;
+    await client.acceptBotName("new-bot", "Max", "gw-a");
+    expect(bot.file).not.toMatch(/^- Avatar:/m);
+    client.stop();
+  });
+
+  it("F-552: a read during which the connection came to answer as another gateway shows no card", async () => {
+    let gateway: string | null = "gw-a";
+    const held = deferred<void>();
+    const published: NameProposal[][] = [];
+    const bots: Bot[] = [
+      {
+        id: "new-bot",
+        name: "New bot",
+        emoji: null,
+        avatarUrl: null,
+        theme: null,
+        model: null,
+        isDefault: false,
+      },
+    ];
+    const names = new BotNames({
+      request: async () => {
+        await held.promise;
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+      bots: () => bots,
+      canRename: () => true,
+      gateway: () => gateway,
+      gatewayId: () => gateway,
+      sameGateway: async () => {},
+      storage: memoryStorage(),
+      takeRead: () => () => {},
+      refreshBots: async () => {},
+      missingScope: () => false,
+      publish: (each) => published.push(each),
+      log: () => {},
+    });
+    const read = names.afterRun("new-bot");
+    // The same address now answers as another gateway, with a bot of the same id.
+    gateway = "gw-b";
+    held.resolve();
+    await read;
+    expect(published).toEqual([]);
+    // The next read is that gateway's, and its card says so.
+    await names.afterRun("new-bot");
+    expect(published.at(-1)).toMatchObject([{ name: "Johnny", gatewayId: "gw-b" }]);
   });
 
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
