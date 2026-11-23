@@ -271,13 +271,24 @@ export function Shell({
   }, [unread, onUnreadCount]);
   useEffect(() => () => onUnreadCount?.(0), [onUnreadCount]);
 
-  // Keep exactly the selected task's transcript open on the host.
+  // Keep exactly the selected task's transcript open on the host. A refused open
+  // (every task slot taken, say) leaves this view without the task, and says why.
   const taskKey = task?.key ?? null;
+  const [refusedOpen, setRefusedOpen] = useState<{ key: string; error: string } | null>(null);
+  const open = useCallback(
+    (key: string) =>
+      void send({ type: "openSession", key }).then(
+        () => setRefusedOpen((now) => (now?.key === key ? null : now)),
+        (error: unknown) =>
+          setRefusedOpen({ key, error: error instanceof Error ? error.message : String(error) }),
+      ),
+    [send],
+  );
   useEffect(() => {
     if (!taskKey) return;
-    void send({ type: "openSession", key: taskKey });
+    open(taskKey);
     return () => void send({ type: "closeSession", key: taskKey });
-  }, [taskKey, send]);
+  }, [taskKey, send, open]);
 
   // Opening a task reads it on the gateway too (F-022), and so do new replies while it
   // is open and leaving it. The engine makes that read only while the connection
@@ -657,10 +668,14 @@ export function Shell({
       : connectionStrip;
   const catchingUp =
     phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
-  // Reading again keeps every hold: closing and opening would not read while another view holds the task.
+  // Reading again keeps every hold: closing and opening would not read while another view holds
+  // the task. A view whose open was refused holds nothing, so it asks to open the task again.
+  const openRefused = refusedOpen !== null && refusedOpen.key === taskKey;
   const reload = useCallback(() => {
-    if (taskKey) void send({ type: "reloadSession", key: taskKey });
-  }, [taskKey, send]);
+    if (!taskKey) return;
+    if (openRefused) open(taskKey);
+    else void send({ type: "reloadSession", key: taskKey });
+  }, [taskKey, openRefused, open, send]);
 
   return (
     <div
@@ -724,6 +739,7 @@ export function Shell({
                 taskCount={selection.tasks.length}
                 discovery={state.discovery}
                 transcript={transcript}
+                openError={openRefused ? refusedOpen.error : null}
                 panelOpen={panelOpen}
                 onTogglePanel={togglePanel}
                 onOpenPanel={() => setPanel(true)}

@@ -617,6 +617,55 @@ test.describe("a failed history", () => {
     await expect.poll(() => holds(page)).toBe(0);
   });
 
+  test("F-105: Try again opens a task whose open was refused once a slot frees up, and reads it once", async ({
+    page,
+  }) => {
+    const key = "agent:otto:backup-check";
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    // Every task slot is taken, and this task's history isn't loaded.
+    await page.evaluate((key) => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      const send = fixture.send;
+      fixture.send = async (command) => {
+        if (command.type === "openSession" && command.key === key)
+          throw new Error("At most 8 tasks can be open at once.");
+        return send(command);
+      };
+      (fixture as Fixture & { restore(): void }).restore = () => void (fixture.send = send);
+      fixture.setState((s) => {
+        const transcripts = { ...s.transcripts };
+        delete transcripts[key];
+        return { ...s, transcripts };
+      });
+    }, key);
+    await page.getByRole("list", { name: "Otto's tasks" }).getByText("Weekly backup check").click();
+    await expect(page.getByText("Could not load this conversation")).toBeVisible();
+    await expect(page.getByText("At most 8 tasks can be open at once.")).toBeVisible();
+
+    // A slot frees up.
+    await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateFixture: Fixture & { restore(): void } }
+      ).clawtrateFixture.restore(),
+    );
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    const read = await page.evaluate(
+      (key) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.reads.filter(
+          (each) => each === key,
+        ).length,
+      key,
+    );
+    expect(read).toBe(1);
+    expect(
+      await page.evaluate(
+        (key) => (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.holds(key),
+        key,
+      ),
+    ).toBe(1);
+  });
+
   test("F-105: Try again on a refresh that failed reads the task again and keeps what was shown until then", async ({
     page,
   }) => {
