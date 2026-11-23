@@ -25,6 +25,7 @@ import {
   type SidebarPrefs,
 } from "./sidebar.ts";
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
+import { MAX_MESSAGE_LINE_CHARS } from "./state-bounds.ts";
 import type { ClawtrateState, GatewayStamp, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
 import type { SetupHost, SetupOffer } from "./setup.ts";
@@ -98,8 +99,11 @@ export type BridgeCommand =
   | { type: "retry" }
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string }
-  /** Read a task this viewer holds again, as the retry of a failed history read. */
-  | { type: "reloadSession"; key: string }
+  /**
+   * Read a task this viewer holds again, as the retry of a failed history read.
+   * With `failed`, the host reads only if the task is still in `error` with that error.
+   */
+  | { type: "reloadSession"; key: string; failed?: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
@@ -1370,8 +1374,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "openSession":
     case "closeSession":
-    case "reloadSession":
       return { type: command.type, key: sessionKey(command.key) };
+    case "reloadSession":
+      return {
+        type: "reloadSession",
+        key: sessionKey(command.key),
+        ...(command.failed === undefined
+          ? {}
+          : { failed: shortText(command.failed, MAX_MESSAGE_LINE_CHARS, "error") }),
+      };
     case "listTaskFiles":
       return { type: "listTaskFiles", key: sessionKey(command.key) };
     case "readTaskFile":
@@ -1793,7 +1804,7 @@ class ViewerSession implements BridgeSession {
       }
       case "reloadSession":
         if (!this.open.has(command.key)) throw new Error(NOT_OPEN_IN_VIEW);
-        return client.reloadSession(command.key);
+        return client.reloadSession(command.key, command.failed);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
       case "refreshRoutines":

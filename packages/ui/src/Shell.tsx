@@ -2,8 +2,10 @@ import {
   isActive,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
+  type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
+  type Transcript,
 } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
@@ -32,6 +34,19 @@ import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/Routin
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
 import { SearchPalette, type SearchTarget } from "./search/SearchPalette.tsx";
 import type { SettingsSection } from "./Settings.tsx";
+
+/**
+ * Command for Try again on an open task: carries the failure text this view is retrying so the
+ * host ignores a stale click once the history has recovered or moved to another failure.
+ */
+export function reloadCommand(
+  key: string,
+  transcript: Transcript | undefined,
+): Extract<BridgeCommand, { type: "reloadSession" }> {
+  return transcript?.status === "error" && transcript.error !== null
+    ? { type: "reloadSession", key, failed: transcript.error }
+    : { type: "reloadSession", key };
+}
 
 /** True on a Mac, where ⌘ is the command key; elsewhere Ctrl stands for it. */
 const isMac = () => /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? "");
@@ -744,7 +759,7 @@ export function Shell({
     const attempt = { key, snapshot, inFlight: true };
     reloading.current = attempt;
     let keepUntilSnapshot = false;
-    send({ type: "reloadSession", key })
+    send(reloadCommand(key, snapshot))
       .then(
         () => {
           if (snapshot !== undefined && transcriptRef.current === snapshot)

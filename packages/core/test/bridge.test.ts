@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession, MAX_OPAQUE_ID_CHARS, parseBridgeCommand } from "../src/bridge.ts";
+import { MAX_MESSAGE_LINE_CHARS } from "../src/state-bounds.ts";
 import type { ClawtrateClient } from "../src/client.ts";
 import { KEY, openTask } from "./client-harness.ts";
 import { deferred, GatewayError, until } from "./fake-gateway.ts";
@@ -15,6 +16,21 @@ describe("parseBridgeCommand", () => {
       type: "openSession",
       key: "agent:otto:disk-space",
     });
+    expect(parseBridgeCommand({ type: "reloadSession", key: "agent:otto:disk-space" })).toEqual({
+      type: "reloadSession",
+      key: "agent:otto:disk-space",
+    });
+    expect(
+      parseBridgeCommand({
+        type: "reloadSession",
+        key: "agent:otto:disk-space",
+        failed: "history unavailable",
+      }),
+    ).toEqual({
+      type: "reloadSession",
+      key: "agent:otto:disk-space",
+      failed: "history unavailable",
+    });
     expect(parseBridgeCommand({ type: "retry", extra: 1 })).toEqual({ type: "retry" });
   });
 
@@ -24,6 +40,16 @@ describe("parseBridgeCommand", () => {
     expect(() => parseBridgeCommand({ type: "connect", url: 4 })).toThrow("invalid url");
     expect(() => parseBridgeCommand({ type: "openSession", key: "../../etc" })).toThrow();
     expect(() => parseBridgeCommand({ type: "connect", url: "ws://x", token: {} })).toThrow();
+    expect(() =>
+      parseBridgeCommand({ type: "reloadSession", key: "agent:otto:disk-space", failed: 4 }),
+    ).toThrow("invalid error");
+    expect(() =>
+      parseBridgeCommand({
+        type: "reloadSession",
+        key: "agent:otto:disk-space",
+        failed: "x".repeat(MAX_MESSAGE_LINE_CHARS + 1),
+      }),
+    ).toThrow("invalid error");
   });
 });
 
@@ -557,6 +583,55 @@ describe("reloadSession", () => {
       await client.historyReadsSettled(KEY);
       expect(gateway.calls("chat.history")).toHaveLength(before + 1);
       expect(client.state.transcripts[KEY]?.status).toBe("ready");
+    } finally {
+      first.dispose();
+      client.stop();
+    }
+  });
+
+  it("F-105: a retry carrying a stale error does not read again after the task recovered", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+      const failed = client.state.transcripts[KEY]!.error!;
+
+      // First retry succeeds and brings the transcript back to ready.
+      gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false });
+      const before = gateway.calls("chat.history").length;
+      await first.apply({ type: "reloadSession", key: KEY, failed });
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+
+      // Any further read fails and would overwrite the good history with an error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      // A stale snapshot lets the view click Try again with the old error.
+      await first.apply({ type: "reloadSession", key: KEY, failed });
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+
+      // Without `failed`, a reload still reads unconditionally; if that fails with a different error,
+      // a retry carrying the earlier error is also ignored.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.error === "gateway restarting");
+      const afterSecondFailure = gateway.calls("chat.history").length;
+      await first.apply({ type: "reloadSession", key: KEY, failed });
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(afterSecondFailure);
+      expect(client.state.transcripts[KEY]?.error).toBe("gateway restarting");
     } finally {
       first.dispose();
       client.stop();

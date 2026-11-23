@@ -908,8 +908,14 @@ export function createFixtureBridge(
         const history = histories[key];
         const current = state.transcripts[key];
         const viewers = holds.get(key) ?? new Set<string>();
-        if (command.type === "reloadSession" && !viewers.has(view))
-          throw new Error(NOT_OPEN_IN_VIEW);
+        if (command.type === "reloadSession") {
+          if (!viewers.has(view)) throw new Error(NOT_OPEN_IN_VIEW);
+          if (
+            command.failed !== undefined &&
+            (current?.status !== "error" || current.error !== command.failed)
+          )
+            return;
+        }
         let restored = false;
         if (command.type === "openSession") {
           // A duplicate open from the same view is a no-op, as the real ViewerSession has it.

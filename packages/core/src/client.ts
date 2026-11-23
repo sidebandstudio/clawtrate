@@ -1995,9 +1995,10 @@ export class ClawtrateClient {
    * failed read. Closing and opening again would not read while another viewer
    * holds the task, since only the first open reads.
    */
-  reloadSession(key: string): void {
+  reloadSession(key: string, failed?: string): void {
     if (!this.openSessions.has(key)) throw new Error("That task isn't open.");
     const current = this.state.transcripts[key];
+    if (failed !== undefined && (current?.status !== "error" || current.error !== failed)) return;
     const load = this.loads.get(key);
     if (load) {
       // A read already under way settles this task; coalescing avoids queuing a second read
