@@ -8,7 +8,7 @@ import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useCommand } from "./bridge.tsx";
+import { useBridge, useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import {
@@ -283,26 +283,31 @@ export function Shell({
   const taskKey = task?.key ?? null;
   const [refusals, setRefusals] = useState<ReadonlyMap<string, string>>(() => new Map());
   const opens = useRef({ count: 0, latest: new Map<string, number>() });
+  const setRefusal = useCallback((key: string, error: string | null) => {
+    setRefusals((now) => {
+      if ((now.get(key) ?? null) === error) return now;
+      const next = new Map(now);
+      if (error === null) next.delete(key);
+      else next.set(key, error);
+      return next;
+    });
+  }, []);
   const open = useCallback(
     (key: string) => {
       const asked = (opens.current.count += 1);
       opens.current.latest.set(key, asked);
       const settle = (error: string | null) => {
         if (opens.current.latest.get(key) !== asked) return;
-        setRefusals((now) => {
-          if ((now.get(key) ?? null) === error) return now;
-          const next = new Map(now);
-          if (error === null) next.delete(key);
-          else next.set(key, error);
-          return next;
-        });
+        // Settled: any answer still to come is to an earlier open, and is ignored without it.
+        opens.current.latest.delete(key);
+        setRefusal(key, error);
       };
       void send({ type: "openSession", key }).then(
         () => settle(null),
         (error: unknown) => settle(error instanceof Error ? error.message : String(error)),
       );
     },
-    [send],
+    [send, setRefusal],
   );
   const shown = useRef<string | null>(null);
   useEffect(() => {
@@ -314,6 +319,17 @@ export function Shell({
       void send({ type: "closeSession", key: taskKey });
     };
   }, [taskKey, send, open]);
+  // The web bridge opens this view's tasks again after it reconnects to the host. One the host
+  // refuses then is no longer held here, and the task shown says why, as for a refused open,
+  // unless an open of it the Shell asked for since is still to answer.
+  const bridge = useBridge();
+  useEffect(
+    () =>
+      bridge.onReopenRefused?.((key, error) => {
+        if (shown.current === key && !opens.current.latest.has(key)) setRefusal(key, error);
+      }),
+    [bridge, setRefusal],
+  );
 
   // Opening a task reads it on the gateway too (F-022), and so do new replies while it
   // is open and leaving it. The engine makes that read only while the connection

@@ -609,6 +609,12 @@ export type ClawtrateBridge = {
    * save dialog). Absent where the host has none: a browser downloads instead.
    */
   save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /**
+   * Hear of a task this view had open that the host refused to open again after the
+   * bridge reconnected on its own: the view no longer holds it, and `error` says why.
+   * Absent where a bridge never reopens tasks itself (the desktop's IPC).
+   */
+  onReopenRefused?(listener: (key: string, error: string) => void): () => void;
 };
 
 /**

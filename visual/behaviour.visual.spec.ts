@@ -553,6 +553,8 @@ test.describe("a failed history", () => {
   type Fixture = {
     setState(change: (state: ClawtrateState) => ClawtrateState): void;
     send(command: Command): Promise<unknown>;
+    sendFrom(view: string, command: Command): Promise<unknown>;
+    refuseReopen(key: string, error: string): void;
     hold(): void;
     release(): void;
     reads: string[];
@@ -578,7 +580,10 @@ test.describe("a failed history", () => {
   const otherView = (page: Page, type: "openSession" | "closeSession") =>
     page.evaluate(
       ([type, key]) =>
-        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.send({ type, key }),
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.sendFrom("other", {
+          type,
+          key,
+        }),
       [type, KEY] as const,
     );
   /**
@@ -695,7 +700,7 @@ test.describe("a failed history", () => {
   }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
     await refuse(page, [
-      { type: "openSession", key: BACKUP, error: SLOTS, afterMs: 1500 },
+      { type: "openSession", key: BACKUP, error: SLOTS, held: true },
       { type: "openSession", key: CERT, error: SLOTS },
     ]);
     await unload(page, [BACKUP, CERT]);
@@ -704,7 +709,8 @@ test.describe("a failed history", () => {
     await expect(page.locator(".title-pill-task")).toHaveText("Certificate renewal warning");
     await expect(page.getByText(SLOTS)).toBeVisible();
     // The task left behind is refused after the open one.
-    await page.waitForTimeout(2000);
+    await answer(page);
+    await settle(page);
     await expect(page.getByText(SLOTS)).toBeVisible();
     await page.getByRole("button", { name: "Try again" }).click();
     await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
@@ -721,10 +727,15 @@ test.describe("a failed history", () => {
     // Another view holds the task; the host dropped this view's hold, as after a reconnect
     // whose reopen it refused, so it refuses this view's reread.
     await otherView(page, "openSession");
-    await otherView(page, "closeSession");
-    await refuse(page, [
-      { type: "reloadSession", key: KEY, error: "That task isn't open in this view." },
-    ]);
+    await page.evaluate(
+      (key) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.send({
+          type: "closeSession",
+          key,
+        }),
+      KEY,
+    );
+    expect(await holds(page)).toBe(1);
     await fail(page, false);
     const before = await reads(page);
 
@@ -733,6 +744,31 @@ test.describe("a failed history", () => {
     expect(await reads(page)).toBe(before + 1);
     expect(await holds(page)).toBe(2);
     expect(errors).toEqual([]);
+  });
+
+  test("F-105: a task the host refuses to open again after a reconnect says why and offers Try again", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    const before = await reads(page);
+    await page.evaluate(
+      ([key, error]) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.refuseReopen(
+          key,
+          error,
+        ),
+      [KEY, SLOTS] as const,
+    );
+    await expect(page.getByText("Could not load this conversation")).toBeVisible();
+    await expect(page.getByText(SLOTS)).toBeVisible();
+    expect(await holds(page)).toBe(0);
+
+    // A slot has freed up: Try again, refused as a reread, opens the task again.
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    expect(await reads(page)).toBe(before + 1);
+    expect(await holds(page)).toBe(1);
   });
 
   test("F-105: a refusal of Try again that comes after the task was left doesn't open it again", async ({

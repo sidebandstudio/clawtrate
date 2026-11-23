@@ -43,7 +43,7 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   /** The host answered with a refusal (not a lost socket). */
-  refused?: () => void;
+  refused?: (error: string) => void;
 };
 
 export type RemoteBridgeOptions = {
@@ -62,6 +62,7 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
   const pending = new Map<string, Pending>();
   // The tasks this viewer has open. The host forgets them with the socket; they are restored after each hello.
   const wanted = new Set<string>();
+  const reopenRefusals = new Set<(key: string, error: string) => void>();
   const now = options.now ?? (() => Date.now());
   let state: ClawtrateState | null = null;
   let socket: WebSocketLike | null = null;
@@ -99,12 +100,19 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
           info = message.info;
           emit(message.state);
           // A new socket is a new viewer to the host: open this viewer's tasks again.
-          // One the host refuses now is not asked for again.
+          // One the host refuses now is not asked for again, and the view is told why.
           if (!first)
             for (const key of wanted)
               write(
                 { type: "openSession", key },
-                { resolve: () => {}, reject: () => {}, refused: () => wanted.delete(key) },
+                {
+                  resolve: () => {},
+                  reject: () => {},
+                  refused: (error) => {
+                    wanted.delete(key);
+                    for (const listener of reopenRefusals) listener(key, error);
+                  },
+                },
               );
           if (first) resolveBridge(bridge(message.info));
         } else if (message.type === "state") {
@@ -114,7 +122,7 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
           pending.delete(message.id);
           if (message.ok) waiter?.resolve(message.value);
           else {
-            waiter?.refused?.();
+            waiter?.refused?.(message.error);
             waiter?.reject(new Error(message.error));
           }
         }
@@ -181,6 +189,10 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
       },
       invoke: (command) => call(command) as Promise<BridgeResultFor<typeof command>>,
       attach: (file) => options.attach(file),
+      onReopenRefused(listener) {
+        reopenRefusals.add(listener);
+        return () => reopenRefusals.delete(listener);
+      },
     });
 
     open();

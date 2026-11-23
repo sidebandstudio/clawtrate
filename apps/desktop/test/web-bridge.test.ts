@@ -46,12 +46,17 @@ async function host(
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Clawtrate</title>");
   const state = createStore(initialState);
   const interest = new Map<string, number>();
+  // Tasks the client refuses to open, as with every task slot taken.
+  const refusing = new Set<string>();
   const client = {
     store: state,
     get state() {
       return state.get();
     },
-    openSession: (key: string) => interest.set(key, (interest.get(key) ?? 0) + 1),
+    openSession: (key: string) => {
+      if (refusing.has(key)) throw new Error("At most 8 tasks can be open at once.");
+      interest.set(key, (interest.get(key) ?? 0) + 1);
+    },
     closeSession: (key: string) => interest.set(key, (interest.get(key) ?? 1) - 1),
     sendMessage: () => "m-1",
     withdraw: () => {},
@@ -72,7 +77,7 @@ async function host(
   hosts.push(started);
   await new Promise((resolve) => started.server.once("listening", resolve));
   const base = `http://127.0.0.1:${(started.server.address() as AddressInfo).port}`;
-  return { base, interest, store: state };
+  return { base, interest, refusing, store: state };
 }
 
 const until = async (check: () => boolean, ms = 3_000) => {
@@ -149,6 +154,41 @@ describe("the tasks a browser asks to have open again", () => {
     // The accepted ones are open again; the refused one was never asked for again.
     expect(interest.get(keys.at(-1)!)).toBeUndefined();
     sockets[1]!.close();
+  });
+});
+
+describe("a task the host refuses to open again after a reconnect", () => {
+  it("F-105: is told to the view with the host's reason, and not asked for again", async () => {
+    const { base, interest, refusing } = await host();
+    const sockets: WebSocket[] = [];
+    const bridge = await createRemoteBridge({
+      open: () => {
+        const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
+          headers: { cookie: `${ACCESS_COOKIE}=${TOKEN}`, origin: base },
+        });
+        sockets.push(socket);
+        return socket as unknown as WebSocketLike;
+      },
+      attach: async () => {
+        throw new Error("unused");
+      },
+    });
+    const refused: Array<[string, string]> = [];
+    const stop = bridge.onReopenRefused?.((key, error) => refused.push([key, error]));
+    await bridge.send({ type: "openSession", key: "agent:otto:task" });
+    refusing.add("agent:otto:task");
+    sockets[0]!.terminate();
+    await until(() => refused.length > 0);
+    expect(refused).toEqual([["agent:otto:task", "At most 8 tasks can be open at once."]]);
+    expect(interest.get("agent:otto:task")).toBe(0);
+
+    stop?.();
+    refusing.clear();
+    sockets[1]!.terminate();
+    await until(() => sockets.length === 3 && sockets[2]!.readyState === WebSocket.OPEN);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(interest.get("agent:otto:task")).toBe(0);
+    sockets[2]!.close();
   });
 });
 
