@@ -1861,8 +1861,10 @@ export class ClawtrateClient {
         });
       }
       if (stops !== this.stops) return;
-      // Counted once it opens: one whose open failed leaves startup to open the saved gateway.
+      // Counted once it opens: one whose open failed, or was stopped, leaves startup to open the
+      // saved gateway.
       await this.open();
+      if (stops !== this.stops) return;
       this.connectionCommands += 1;
     });
     if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
@@ -1985,6 +1987,8 @@ export class ClawtrateClient {
     this.stops += 1;
     // A command waiting for startup's read no longer holds other clients' writes.
     for (const restoring of this.startReads) restoring.release({ failed: false });
+    this.startReads.clear();
+    this.restoring = null;
     for (const stop of this.stopWaiters) stop();
     this.close();
   }

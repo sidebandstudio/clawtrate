@@ -726,6 +726,52 @@ describe("connecting", () => {
       }
     });
 
+    it("F-387: a Retry stopped while it opens doesn't stop the next startup from resuming", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      // The Retry's device-token read is held, then the next startup's saved-gateway read.
+      const token = deferred<void>();
+      const read = deferred<void>();
+      let holdToken = true;
+      let holdRead = false;
+      let tokenWaiting = false;
+      let readWaiting = false;
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (holdToken && key === tokenKey(URL)) {
+          holdToken = false;
+          tokenWaiting = true;
+          await token.promise;
+        }
+        if (holdRead && key === "connection") {
+          holdRead = false;
+          readWaiting = true;
+          await read.promise;
+        }
+        return get(key);
+      };
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        await client.start({ resume: "disconnected" });
+        const retrying = client.retryNow().catch(() => undefined);
+        await until(() => tokenWaiting);
+        client.stop();
+        holdRead = true;
+        const restarting = client.start();
+        await until(() => readWaiting);
+        // The old Retry finishes first, on the stopped generation.
+        token.resolve();
+        await retrying;
+        read.resolve();
+        await restarting;
+        await until(() => gateway.sockets.length === 1);
+      } finally {
+        token.resolve();
+        read.resolve();
+        client.stop();
+      }
+    });
+
     it("F-387: a Retry whose open fails leaves startup to open the saved gateway", async () => {
       const { storage, reading, release } = pausedRead();
       // The device token's first read fails, so the Retry's open fails before any socket.
