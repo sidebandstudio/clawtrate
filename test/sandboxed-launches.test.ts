@@ -54,8 +54,13 @@ describe("the packaged app's launches", () => {
     expect(source.indexOf("preferencesForgetter(domain)")).toBeGreaterThan(
       source.indexOf("async function macSetup("),
     );
-    for (const file of readdirSync(join(ROOT, "e2e-packaged"))) {
-      const text = readFileSync(join(ROOT, "e2e-packaged", file), "utf8");
+    // Every file at any depth, the real update check's folder too.
+    for (const entry of readdirSync(join(ROOT, "e2e-packaged"), {
+      recursive: true,
+      withFileTypes: true,
+    }).filter((each) => each.isFile())) {
+      const file = entry.name;
+      const text = readFileSync(join(entry.parentPath, file), "utf8");
       const uses = (text.match(/"defaults"|Library\/Preferences/g) ?? []).length;
       expect(uses, file).toBe(file === "global-setup.ts" ? 2 : 0);
     }
