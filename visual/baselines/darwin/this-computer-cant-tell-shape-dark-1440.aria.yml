@@ -1,0 +1,8 @@
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Clawtrate couldn't tell what is on this computer" [level=3]
+  - paragraph: Clawtrate couldn't read the OpenClaw result.
+  - button "Use Advanced"
+  - button "Look again"
+  - paragraph: On this computer

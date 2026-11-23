@@ -1,0 +1,77 @@
+- main "Routines":
+  - button "Back to routines"
+  - heading "Morning digest" [level=1]
+  - paragraph: Marlow
+  - button "Run now"
+  - button "More"
+  - status: Runs weekdays at 8:00 AM, New York.
+  - heading "Instruction" [level=3]
+  - paragraph: Summarise the notes I added yesterday, and list anything I need to answer today. Keep it to three lines.
+  - heading "When to run" [level=3]
+  - term: Schedule
+  - definition: Weekdays at 8:00 AM
+  - term: Time zone
+  - definition: New York America/New_York
+  - term: Next run
+  - definition: Tomorrow, Tue Nov 17, 8:00 AM New York time
+  - term: Runs in
+  - definition: A new conversation each time
+  - term: Results
+  - definition: Kept with the run
+  - term: Triggers
+  - definition: Its schedule only. This gateway's webhooks start a bot directly, not a routine.
+  - region "Runs":
+    - heading "Runs" [level=3]
+    - list "Runs":
+      - listitem:
+        - button "today 8:00 AM, Succeeded · 2.6 s · 200 tokens": Today 8:00 AM Succeeded · 2.6 s · 200 tokens
+      - listitem:
+        - button "yesterday 4:40 AM, started by hand, Succeeded · 3.1 s · 214 tokens": Yesterday 4:40 AM · started by hand Succeeded · 3.1 s · 214 tokens
+      - listitem:
+        - 'button "Nov 14 8:00 AM, Failed: Channel is required (no configured channels detected)."': "Nov 14 8:00 AM Failed: Channel is required (no configured channels detected)."
+      - listitem:
+        - button "Nov 13 8:00 AM, Skipped": Nov 13 8:00 AM Skipped
+      - listitem:
+        - button "Nov 12 8:00 AM, Succeeded · 2.6 s · 200 tokens": Nov 12 8:00 AM Succeeded · 2.6 s · 200 tokens
+      - listitem:
+        - button "Nov 11 8:00 AM, Succeeded · 2.6 s · 200 tokens": Nov 11 8:00 AM Succeeded · 2.6 s · 200 tokens
+    - paragraph: Clawtrate shows the 20 runs that finished most recently. By default the gateway keeps 7 days of runs, and each run's conversation for 24 hours; it can be set to keep them longer.
+  - status
+  - dialog "Edit routine":
+    - heading "Edit routine" [level=2]
+    - button "Close"
+    - alert:
+      - strong: This routine was changed elsewhere
+      - text: while you were editing.
+    - button "Show the new version"
+    - button "Save mine anyway"
+    - group:
+      - text: Bot
+      - paragraph: Marlow. To run it on another bot, make a new routine.
+      - text: Name
+      - textbox "Name": Morning digest, short
+      - text: Instruction
+      - textbox "Instruction":
+        - /placeholder: "What should Marlow do each time? For example: Summarise yesterday's notes and list anything I need to answer."
+        - text: Summarise the notes I added yesterday, and list anything I need to answer today.
+      - text: When
+      - radiogroup "When":
+        - listitem:
+          - radio "Every day"
+        - listitem:
+          - radio "Weekdays" [checked]
+        - listitem:
+          - radio "Some days of the week"
+        - listitem:
+          - radio "Every few hours or minutes"
+        - listitem:
+          - radio "Once"
+      - text: At
+      - textbox "At": 08:00
+      - text: Time zone
+      - combobox "Time zone":
+        - option "Auto-detect (New York)"
+      - paragraph: "Runs weekdays at 8:00 AM, New York time. Next: Tue Nov 17, 8:00 AM, then Wed Nov 18, Thu Nov 19."
+      - group: More
+    - button "Cancel"
+- status
