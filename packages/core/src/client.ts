@@ -6570,11 +6570,11 @@ export class ClawtrateClient {
           if (!paired || !live()) return;
           try {
             // Read at the moment of the write: another client on this store may have saved a
-            // different gateway, forgotten this one or changed its record since. Only the token
-            // goes, from the record as it is now.
+            // different gateway, forgotten this one or changed its record since. Only this
+            // hello's secret goes, from the record as it is now.
             const saved = await this.savedSettings();
             if (saved?.url !== settings.url || !live()) return;
-            if (saved.token !== null) {
+            if (saved.token === current.token) {
               await this.writeRecord({ ...saved, token: null });
             }
             this.settings = { ...current, token: null };

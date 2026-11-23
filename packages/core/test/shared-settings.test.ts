@@ -632,6 +632,36 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     }
   });
 
+  it("clearing A's shared token keeps the newer token another client saved for A meanwhile", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
+      [tokenKey(URL_A)]: readToken("token-A"),
+    });
+    let replied = false;
+    const gateway = pairingGateway("token-A", () => {
+      replied = true;
+    });
+    const hold = holdRead(storage, tokenKey(URL_A), () => replied);
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const other = new ClawtrateClient(testHost(closed, storage), FAST);
+    try {
+      await client.start();
+      await until(hold.waiting);
+      await other.start({ resume: false });
+      await other.connect({ url: URL_A, token: "bootstrap-2" });
+      hold.release();
+      await until(() => client.state.connection.status === "connected");
+      await sleep(30);
+      expect(saved(storage)).toEqual({ url: URL_A, token: "bootstrap-2" });
+    } finally {
+      hold.release();
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("Reconnect after another client saved B leaves out the shared token cleared before the suspend", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
