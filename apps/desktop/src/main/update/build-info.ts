@@ -2,6 +2,7 @@
 import { DesktopUpdateService, type UpdateServiceOptions } from "./service.ts";
 
 import { macInstaller } from "../mac-install.ts";
+import { windowsInstaller } from "../windows-install.ts";
 import type { UpdateInstaller } from "./install.ts";
 import type { UpdateInstallRefusal } from "@clawtrate/core";
 
@@ -15,12 +16,13 @@ function buildInstaller(platform: string, arch: string, packaged: boolean): Upda
       return macInstaller(arch);
     unavailable = "build-not-signed";
   } else if (platform === "win32" && arch === "x64") {
-    unavailable =
+    if (
       packaged &&
       typeof __CLAWTRATE_SIGNED_WINDOWS__ !== "undefined" &&
       __CLAWTRATE_SIGNED_WINDOWS__
-        ? "windows-install-pending-trial"
-        : "build-not-signed";
+    )
+      return windowsInstaller();
+    unavailable = "build-not-signed";
   }
   return { unavailable, inspect: async () => unavailable, launch: async () => unavailable };
 }

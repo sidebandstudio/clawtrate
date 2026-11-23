@@ -908,6 +908,8 @@ it.each([
   "mac-archive",
   "mac-designated-requirement",
   "installer-version",
+  "windows-signature",
+  "windows-publisher",
 ] as const)(
   "matching bytes alone cannot offer Restart when inspection reports %s",
   async (reason) => {

@@ -248,6 +248,11 @@ const restartFailures = [
   ["mac-archive", "The downloaded archive can't be used for this update."],
   ["mac-bundle-identifier", "The downloaded Mac app has a different app identifier."],
   ["mac-architecture", "The downloaded Mac app is for a different processor."],
+  ["windows-signature", "Windows couldn't verify the downloaded installer's signature."],
+  [
+    "windows-publisher",
+    "The downloaded installer is signed by a different publisher than this app.",
+  ],
   ["attempt-not-saved", "Couldn't save the restart attempt on this device."],
   ["installer-failed", "Couldn't hand the update to the installer."],
 ] as const;

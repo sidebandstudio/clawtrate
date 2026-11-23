@@ -777,6 +777,8 @@ test.describe("installer refusals", () => {
       "mac-archive",
       "mac-bundle-identifier",
       "mac-architecture",
+      "windows-signature",
+      "windows-publisher",
     ] as const;
     const requests: string[] = [];
     for (const reason of reasons) {

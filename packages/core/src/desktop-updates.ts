@@ -33,7 +33,9 @@ export type UpdateInstallRefusal =
   | "installer-version"
   | "mac-archive"
   | "mac-bundle-identifier"
-  | "mac-architecture";
+  | "mac-architecture"
+  | "windows-signature"
+  | "windows-publisher";
 
 export type UpdateInstallCapability =
   | { kind: "unavailable-in-this-build"; reason: UpdateInstallRefusal }
