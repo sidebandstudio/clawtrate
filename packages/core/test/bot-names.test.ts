@@ -10,9 +10,11 @@ import {
   identityName,
   MAX_BOT_NAME_CHARS,
   MAX_IDENTITY_CHARS,
+  MAX_NAME_CARDS,
   NAME_DECLINES_KEY,
   plainName,
 } from "../src/bot-names.ts";
+import { MAX_BOTS } from "../src/state-bounds.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { agentEvent, openTask, URL_A, grantingGateway } from "./client-harness.ts";
 import { GatewayError, memoryStorage, sleep, tokenKey, until } from "./fake-gateway.ts";
@@ -282,6 +284,8 @@ describe("F-552: a bot that takes a name", () => {
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
     expect(plainName("<b>Jo</b>\u0000\u0007hn\nny\r\n\u2028 *x*")).toBe("<b>Jo</b> hn ny *x*");
     expect(plainName(" \n\t\u0000 ")).toBeNull();
+    // As many cards as the state lists bots.
+    expect(MAX_NAME_CARDS).toBe(MAX_BOTS);
     expect(plainName("J".repeat(10_000))).toBe("J".repeat(MAX_BOT_NAME_CHARS));
     // A cut never splits a character in two.
     expect(plainName("🦀".repeat(50))).toBe("🦀".repeat(MAX_BOT_NAME_CHARS));

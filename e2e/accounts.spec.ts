@@ -422,6 +422,53 @@ test("F-520: a bot made in New bot starts as itself: no first-run sequence, its 
   await admin.request("agents.delete", { agentId: made.agentId, deleteFiles: true });
 });
 
+test("F-552: a bot made in New bot with no name takes one in the chat, and is renamed once the person confirms it", async () => {
+  test.setTimeout(240_000);
+  await page.keyboard.press("ControlOrMeta+n");
+  const create = dialog("New bot");
+  await expect(create.getByRole("textbox", { name: "Name" })).toBeFocused();
+  await create.getByRole("button", { name: "Next" }).click();
+  const account = dialog("Account");
+  await account.getByRole("radio", { name: /^Let the gateway choose/ }).click();
+  await account.getByRole("button", { name: "Create" }).click();
+  await expect(account).toHaveCount(0, { timeout: 30_000 });
+  const identity = async () =>
+    ((entry(await config(), "new-bot")!.identity ?? {}) as Json).name as string | undefined;
+  expect(await identity()).toBe("New bot");
+  await expect(botRow("New bot")).toHaveAttribute("aria-current", "true", { timeout: 20_000 });
+
+  const field = page.getByTestId("composer-input");
+  await expect(field).toBeVisible({ timeout: 20_000 });
+  const card = page.getByRole("region", { name: "A new name for New bot" });
+  const ran = async (count: number) =>
+    expect
+      .poll(async () => (await requestsFor("agent:new-bot:main")).length, { timeout: 60_000 })
+      .toBeGreaterThanOrEqual(count);
+  await field.fill("can i name u");
+  await field.press("Enter");
+  await ran(1);
+  // The scripted model makes the bot's own edit; what is asserted is the file, the card and the config.
+  await field.fill("#take-name Johnny");
+  await field.press("Enter");
+  await expect(card).toContainText("New bot would like to be called “Johnny”", { timeout: 60_000 });
+  expect((await workspaceFile("new-bot", "IDENTITY.md")).content).toMatch(
+    /^- \*\*Name:\*\* Johnny$/m,
+  );
+  // The edit alone renamed nothing.
+  expect(await identity()).toBe("New bot");
+  await expect(page.locator(".title-pill-name")).toHaveText("New bot");
+
+  await card.getByRole("button", { name: "Rename" }).click();
+  await expect(card).toHaveCount(0, { timeout: 30_000 });
+  expect(await identity()).toBe("Johnny");
+  const file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
+  expect(file).toMatch(/^- Name: Johnny$/m);
+  expect(file).not.toMatch(/New bot/);
+  await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
+  await expect(botRow("Johnny")).toBeVisible();
+  await shots("bot-name-renamed");
+});
+
 /** Open Settings on Accounts, and the connect component. */
 async function connectFromSettings() {
   await page.keyboard.press("ControlOrMeta+,");

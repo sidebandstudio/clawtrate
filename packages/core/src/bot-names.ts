@@ -22,8 +22,10 @@ export const MAX_IDENTITY_CHARS = 16_384;
 /** Not now, per gateway and bot: the latest kept, oldest dropped. */
 export const MAX_NAME_DECLINES = 64;
 export const NAME_DECLINES_KEY = "clawtrate.bot-name-declines";
-/** Bots whose IDENTITY.md Clawtrate did not write, skipped until the next connection. */
-const MAX_SKIPPED = 256;
+/** Cards, and bots skipped, at most: one per bot the state lists (`MAX_BOTS`). */
+export const MAX_NAME_CARDS = 32;
+/** What a card says of a Rename that didn't land, at most. */
+export const MAX_NAME_ERROR_CHARS = 512;
 /**
  * Words every IDENTITY.md New bot wrote carries (`identityFile`): the mark of a bot made in
  * Clawtrate, whose file a rename may write. A bot whose file lacks them gets no read again.
@@ -125,7 +127,7 @@ export class BotNames {
       if (content === null || content.length > MAX_IDENTITY_CHARS) return;
       if (!content.includes(MADE_IN_CLAWTRATE)) {
         this.skipped.add(botId);
-        if (this.skipped.size > MAX_SKIPPED) this.skipped.delete(this.skipped.values().next().value!);
+        if (this.skipped.size > MAX_NAME_CARDS) this.skipped.delete(this.skipped.values().next().value!);
         return this.drop(botId);
       }
       const raw = identityName(content);
@@ -136,6 +138,7 @@ export class BotNames {
       if (epoch !== this.epoch) return;
       const open = this.proposals.get(botId);
       if (open?.status === "renaming") return;
+      if (!open && this.proposals.size >= MAX_NAME_CARDS) return;
       this.proposals.set(botId, { botId, name, from: now.name, status: "open", error: null });
       this.publish();
     } catch (error) {
@@ -175,7 +178,7 @@ export class BotNames {
         status: "failed",
         error: this.ctx.missingScope(error)
           ? "The gateway refused: renaming a bot needs admin access."
-          : errorText(error),
+          : errorText(error).slice(0, MAX_NAME_ERROR_CHARS),
       });
       throw error;
     }
