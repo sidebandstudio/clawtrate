@@ -296,6 +296,11 @@ try {
       assert.equal((await call<Json>(op, "status")).plugin, PLUGIN);
       const narrowed = await call<{ managers: Json[] }>(op, "managers.set", { bots: [second] });
       assert.deepEqual(await managersOf(), narrowed.managers);
+      // The grant kept is the second bot's own incarnation, not merely one grant.
+      assert.deepEqual(
+        narrowed.managers,
+        set.managers.filter((m) => m.id === second),
+      );
       assert.equal(narrowed.managers.length, 1);
       assert.equal(await outcome(call(op, "managers.set", { bots: ["nobody"] })), "bot");
       const writer = await openOperator(
