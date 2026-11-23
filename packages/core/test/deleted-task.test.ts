@@ -706,8 +706,8 @@ describe("a task reset or restored elsewhere (F-278, F-277)", () => {
     };
     const id = client.sendMessage(KEY, "Where were we?");
     await until(() => transcript().outbox[0]?.status === "failed");
-    expect(transcript().outbox[0]?.error).toBe(TASK_RESET_ELSEWHERE);
-    expect(new TaskResetError().message).toBe(TASK_RESET_ELSEWHERE);
+    expect(transcript().outbox[0]).toMatchObject({ error: TASK_RESET_ELSEWHERE, resetTo: "s-2" });
+    expect(new TaskResetError("s-2").message).toBe(TASK_RESET_ELSEWHERE);
     // The task is live: the screen moves to the session it holds now.
     await until(() => transcript().sessionId === "s-2");
     expect(sends()).toHaveLength(1);
@@ -717,6 +717,47 @@ describe("a task reset or restored elsewhere (F-278, F-277)", () => {
     expect(sends()).toHaveLength(2);
     expect(sends()[1]).toMatchObject({ sessionId: "s-2", expectedLeafEntryId: null });
     expect(sends()[1]!.idempotencyKey).toBe(sends()[0]!.idempotencyKey);
+    client.stop();
+  });
+
+  it("reset, then the session that followed deleted and another made under the key: Resend goes to the session the refusal named, and to no other", async () => {
+    const { client, gateway, history, transcript, sends } = await shown({
+      session: { sessionId: "s-2", previousSessionId: "s-1" },
+    });
+    history.sessionId = "s-2";
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError(MOVED);
+    };
+    const id = client.sendMessage(KEY, "Where were we?");
+    await until(() => transcript().outbox[0]?.error === TASK_RESET_ELSEWHERE);
+    // The session that followed is deleted too, and an unrelated task takes the key.
+    history.sessionId = "s-3";
+    client.reloadSession(KEY);
+    await until(() => transcript().sessionId === "s-3");
+    expect(() => client.retryMessage(KEY, id, { sessionId: "s-3" })).toThrow(
+      "That message goes only to the task it was written in.",
+    );
+    expect(transcript().outbox[0]).toMatchObject({ sessionId: "s-1", status: "failed" });
+    // To the session the refusal named, by the person's choice: still checked there.
+    client.retryMessage(KEY, id, { sessionId: "s-2" });
+    await until(() => sends().length === 2);
+    expect(sends()[1]).toMatchObject({ sessionId: "s-2", expectedLeafEntryId: null });
+    expect(sends().map((send) => send.sessionId)).not.toContain("s-3");
+    client.stop();
+  });
+
+  it("archived, then another session under the key: Resend goes only to the session it was written for", async () => {
+    const { client, gateway, transcript, sends } = await shown({ session: { sessionId: "s-1" } });
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError(ARCHIVED);
+    };
+    const id = client.sendMessage(KEY, "One more thing");
+    await until(() => transcript().outbox[0]?.error === TASK_ARCHIVED_ELSEWHERE);
+    expect(() => client.retryMessage(KEY, id, { sessionId: "s-2" })).toThrow(
+      "That message goes only to the task it was written in.",
+    );
+    expect(transcript().outbox[0]).toMatchObject({ sessionId: "s-1", status: "failed" });
+    expect(sends()).toHaveLength(1);
     client.stop();
   });
 

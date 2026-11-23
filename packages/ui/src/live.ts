@@ -307,8 +307,9 @@ export { refusedElsewhere };
  * Where Resend sends a message refused because its task was archived or reset elsewhere, once the
  * gateway shows the task live again: listed, so not archived, and its history naming the session
  * the screen shows. Restored, that is the session the message was written for; reset, the one
- * that followed it. It goes there only by the person's choice, and is checked there as any send
- * is. Null for a deleted task, and while the task is not live again.
+ * the refusal named as the one that followed it (`resetTo`), and no other the key holds since. It
+ * goes there only by the person's choice, and is checked there as any send is. Null for a deleted
+ * task, and while the task is not live again.
  */
 export function resendSession(
   message: OutgoingMessage,
@@ -318,7 +319,7 @@ export function resendSession(
   const shown = transcript?.sessionId;
   if (!listed || !shown || message.status !== "failed") return null;
   if (message.error === TASK_ARCHIVED_ELSEWHERE) return shown === message.sessionId ? shown : null;
-  if (message.error === TASK_RESET_ELSEWHERE) return shown !== message.sessionId ? shown : null;
+  if (message.error === TASK_RESET_ELSEWHERE) return shown === message.resetTo ? shown : null;
   return null;
 }
 

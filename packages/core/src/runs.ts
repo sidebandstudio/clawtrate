@@ -652,6 +652,11 @@ export type OutgoingMessage = {
   /** The task "Start a new task with this message" started with its words; its files stay here. */
   startedTask?: string;
   /**
+   * Refused because its task was reset elsewhere: the session that followed, as the gateway's row
+   * named it then. Resend goes to that session only (F-278).
+   */
+  resetTo?: string;
+  /**
    * Where the gateway put a steer, by its own record; its acknowledgement says neither
    * (docs/research/steer-stop.md). `joined`: the bare `chat` final under the steer's own id
    * came while the run it was sent into went on. `withdrawn`: a Stop's `chat.abort` with that

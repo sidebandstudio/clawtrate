@@ -918,9 +918,12 @@ export class TaskArchivedError extends Error {
  * followed the one the message was written for.
  */
 export class TaskResetError extends Error {
-  constructor() {
+  /** The session that followed, as the gateway's row named it. */
+  readonly successor: string;
+  constructor(successor: string) {
     super(TASK_RESET_ELSEWHERE);
     this.name = "TaskResetError";
+    this.successor = successor;
   }
 }
 
@@ -2618,7 +2621,9 @@ export class ClawtrateClient {
    *
    * `sessionId` is the Resend of a message refused because its task was archived or reset
    * elsewhere, once the task is live again: the session the screen shows now, which the message
-   * goes to from then on, by the person's choice. It is still checked there, as any send is.
+   * goes to from then on, by the person's choice. It must be the one the refusal established: the
+   * session it was written for after an archive, the one the reset refusal named after a reset
+   * (`resetTo`), never another the key holds since. It is still checked there, as any send is.
    */
   retryMessage(key: string, messageId: string, options: { sessionId?: string } = {}): void {
     const message = this.outgoing(key, messageId);
@@ -2631,15 +2636,19 @@ export class ClawtrateClient {
     )
       return;
     if (options.sessionId !== undefined) {
-      if (
-        message.status !== "failed" ||
-        (message.error !== TASK_ARCHIVED_ELSEWHERE && message.error !== TASK_RESET_ELSEWHERE)
-      )
+      const established =
+        message.status !== "failed"
+          ? undefined
+          : message.error === TASK_ARCHIVED_ELSEWHERE
+            ? message.sessionId
+            : message.error === TASK_RESET_ELSEWHERE
+              ? message.resetTo
+              : undefined;
+      if (established === undefined || options.sessionId !== established)
         throw new Error("That message goes only to the task it was written in.");
-      if (!options.sessionId || options.sessionId.length > MAX_ID_CHARS)
-        throw new Error("That task's session can't be named.");
-      const sessionId = options.sessionId;
-      this.updateActivity(key, (activity) => updateMessage(activity, messageId, { sessionId }));
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { sessionId: established }),
+      );
     }
     // The gateway keeps a withdrawn steer's id as aborted and answers a send under it with that
     // abort: it goes again under a new key, in its place on the shelf, with its files.
@@ -3527,7 +3536,7 @@ export class ClawtrateClient {
    * what the key holds now (`row`, else read here) names it as its `previousSessionId`, the prior
    * session under the same key, when the task was reset; anything else, no session included, means
    * the task was deleted. After a reset the task is read again, so the screen shows the session the
-   * key holds now.
+   * key holds now, and the refusal keeps that session: Resend goes to it and to no other.
    */
   private async sessionGone(
     key: string,
@@ -3542,13 +3551,10 @@ export class ClawtrateClient {
         current = null;
       }
     }
-    if (
-      typeof current?.sessionId === "string" &&
-      current.sessionId !== sessionId &&
-      current.previousSessionId === sessionId
-    ) {
+    const successor = sessionNamed(current ?? null);
+    if (successor && successor !== sessionId && current?.previousSessionId === sessionId) {
       this.scheduleHistory(key);
-      return new TaskResetError();
+      return new TaskResetError(successor);
     }
     return new TaskDeletedError();
   }
@@ -3609,6 +3615,8 @@ export class ClawtrateClient {
       let next = updateMessage(activity, messageId, {
         status: "failed",
         error: errorMessage(error),
+        // Refused as reset elsewhere: the session that followed, the only one Resend goes to.
+        ...(error instanceof TaskResetError ? { resetTo: error.successor } : {}),
       });
       if (message.mode !== "steer" && findRun(next, messageId)) {
         next = definitive

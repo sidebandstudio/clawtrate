@@ -127,13 +127,18 @@ describe("F-277 F-278: a message refused because its task is gone elsewhere", ()
     expect(bubble(message, { listed: true, sessionId: "s-2" })).not.toContain("Resend");
   });
 
-  it("reset: once the screen shows the session that followed, it offers Resend to that one", () => {
-    const message = refused({ sessionId: "s-1", error: TASK_RESET_ELSEWHERE });
+  it("reset: once the screen shows the session the refusal named as the one that followed, it offers Resend to that one, and to no other", () => {
+    const message = refused({ sessionId: "s-1", error: TASK_RESET_ELSEWHERE, resetTo: "s-2" });
     const html = bubble(message, { listed: true, sessionId: "s-2" });
     expect(html).toContain("Not sent. This task was reset elsewhere.");
     expect(html).toContain(">Resend<");
     // Before the history of the session that followed arrives, there is nothing to send it to.
     expect(bubble(message, { listed: true, sessionId: "s-1" })).not.toContain("Resend");
+    // That one deleted too, and an unrelated task under the key: not the one that followed.
+    expect(bubble(message, { listed: true, sessionId: "s-3" })).not.toContain("Resend");
+    expect(shelf({ ...message, mode: "queue" }, { listed: true, sessionId: "s-3" })).not.toContain(
+      "Try again",
+    );
   });
 
   it("deleted: never Resend, even with a task listed under the key again", () => {

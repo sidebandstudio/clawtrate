@@ -433,6 +433,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   sessionId: ID,
   newTask: FLAG,
   startedTask: ID,
+  resetTo: ID,
   steer: ENUM,
 });
 const questionOption = object<QuestionOption>()({
