@@ -260,6 +260,11 @@ public static class UpdateSignature {
     foreach (var signature in found) lines.Add(signature.ToString());
     return found;
   }
+  // Whether Windows verified the signature asked for. It names the index it verified for each
+  // signature after the first, and none for the first.
+  static bool Asked(Signature signature) {
+    return signature.verified == signature.index || (signature.index == 0 && signature.verified == uint.MaxValue);
+  }
   // The root and subject that every SHA-256 signature names, when every signature is the one
   // asked for and has all its facts, there is a SHA-256 one, Windows trusts each and they agree.
   // windowsRefusal applies the same rule; here it keeps any file that rule refuses away from the
@@ -267,7 +272,7 @@ public static class UpdateSignature {
   static string Publisher(List<Signature> signatures) {
     string found = null;
     foreach (var signature in signatures) {
-      if (signature.verified != signature.index || signature.digest == null
+      if (!Asked(signature) || signature.digest == null
           || string.IsNullOrEmpty(signature.subject) || signature.root == null) return null;
       if (signature.digest != "2.16.840.1.101.3.4.2.1") continue;
       if (signature.result != 0) return null;
@@ -341,6 +346,8 @@ const TRUSTED = "00000000";
 const NOT_SIGNED = "800b0100";
 // The signer's digest algorithm, as CMSG_SIGNER_INFO names it.
 const SHA256 = "2.16.840.1.101.3.4.2.1";
+// The verified index the helper starts each call with, which Windows leaves for the first.
+const NO_INDEX = "4294967295";
 const SIGNATURE =
   /^signature (\d+) (\d+) ([0-9a-f]{8}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]{43}=)$/;
 const RESOURCE = /^resource (-|\d+\.\d+\.\d+\.\d+)((?: (?:-|[A-Za-z0-9+/]+={0,2}))*)$/;
@@ -399,15 +406,27 @@ function takeVersions(lines: string[]): Resource[] | "unread" | null {
 }
 
 /**
+ * Whether Windows verified the signature asked for. It names the index it verified for each
+ * signature after the first, and leaves the field as the helper set it, at no index, for the
+ * first.
+ */
+function asked(signature: Signature) {
+  return (
+    signature.verified === signature.index ||
+    (signature.index === "0" && signature.verified === NO_INDEX)
+  );
+}
+
+/**
  * The file's SHA-256 signatures, when it has one and Windows trusts each. Every signature the
- * file reports must be the one Windows says it verified and name its digest algorithm, signer
- * and root, so none goes unread. A signature with another digest, such as the SHA-1 one
+ * file reports must be the one asked for and name its digest algorithm, signer and root, so
+ * none goes unread. A signature with another digest, such as the SHA-1 one
  * electron-builder puts first by default, does not count otherwise. A build signed again later,
  * with a renewed certificate, has two SHA-256 signatures.
  */
 function sha256Signatures(signatures: Signature[]) {
   const complete = signatures.every(
-    (one) => one.verified === one.index && one.digest && one.subject !== "-" && one.root !== "-",
+    (one) => asked(one) && one.digest && one.subject !== "-" && one.root !== "-",
   );
   const found = signatures.filter((signature) => signature.digest === SHA256);
   return complete && found.length > 0 && found.every((one) => one.result === TRUSTED)

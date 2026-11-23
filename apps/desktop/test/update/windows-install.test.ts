@@ -24,12 +24,15 @@ const sha256 = base64("2.16.840.1.101.3.4.2.1");
 const ours = `00000000 ${sha256} ${publisher} ${root}`;
 const oursSha1 = `00000000 ${sha1} ${publisher} ${root}`;
 
+// The verified index the helper starts with, which Windows leaves as it is for the first signature.
+const NO_INDEX = 4294967295;
+
 /** `<name> <count>`, then each signature with its index and the index Windows says it verified,
- * as the helper prints them. */
+ * none for the first, as the helper prints them. */
 function signed(name: string, ...signatures: string[]) {
   return [
     `${name} ${signatures.length}`,
-    ...signatures.map((line, i) => `signature ${i} ${i} ${line}`),
+    ...signatures.map((line, i) => `signature ${i} ${i === 0 ? NO_INDEX : i} ${line}`),
   ];
 }
 
@@ -165,13 +168,26 @@ it.each([
   ["the running app's", "running", "running-signature-untrusted"],
   ["an installer's", "installer", "windows-signature"],
 ] as const)(
-  "F-231: refuses %s second signature when Windows says it verified another one",
+  "F-231: refuses %s signatures when Windows verified another one than the one asked for",
   (_case, name, refusal) => {
-    // Windows reports verifying the first signature when asked for the second.
-    const lines = [`${name} 2`, `signature 0 0 ${oursSha1}`, `signature 1 0 ${ours}`];
-    expect(windowsRefusal(facts({ [name]: lines }), proof)).toBe(refusal);
+    for (const lines of [
+      // Windows says it verified the first signature when asked for the second,
+      [`signature 0 ${NO_INDEX} ${oursSha1}`, `signature 1 0 ${ours}`],
+      // names no index for the second,
+      [`signature 0 ${NO_INDEX} ${oursSha1}`, `signature 1 ${NO_INDEX} ${ours}`],
+      // or names the second when asked for the first.
+      [`signature 0 1 ${ours}`],
+    ])
+      expect(windowsRefusal(facts({ [name]: [`${name} ${lines.length}`, ...lines] }), proof)).toBe(
+        refusal,
+      );
   },
 );
+
+it("F-231: accepts a first signature that Windows names as index 0", () => {
+  const installer = ["installer 1", `signature 0 0 ${ours}`];
+  expect(windowsRefusal(facts({ installer }), proof)).toBeNull();
+});
 
 it.each([
   ["SHA-1 first and SHA-256 second, as electron-builder signs by default", [oursSha1, ours]],
