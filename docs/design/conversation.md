@@ -276,6 +276,10 @@ A caption is a 12 px line under a bubble, on the bubble's side:
 
 A message that has not been sent is never drawn in your colour and never dimmed: white on a dimmed accent falls to 2.7:1.
 
+**Your files.** The files you sent show under your bubble, on its side, in the order you sent them (F-557). A picture of a type the conversation draws (PNG, JPEG, GIF or WebP, at most 5 MB) is a preview, from the copy this app sent: at once, and for as long as the task stays open. The gateway gives no copy back (`docs/research/gateway-capabilities.md`, row 19), so after the task was closed, or on another device, the picture is a line with its name and size: "Picture sent with this message. The gateway doesn't give it back to show here." Any other file is its name and size. A message that is only files still shows, with no empty bubble. Your words stay exactly as you wrote them.
+
+**A picture opened larger.** A preview, yours or a bot's, is a button named by the picture's text alternative. A click or Enter opens it over the whole app, as large as the window allows in its own proportions, on a backdrop of `--bg` at 96%. The view is a dialog named by the same text, with a Close button at its top right; Escape, Close or a click on the backdrop closes it, focus stays on Close while it is open and returns to the preview after. Arrows between pictures, a download button and video are not built yet (F-117).
+
 ## 7. What a bot did: action cards
 
 With "Show commands" on (7.11), the conversation reads at the level of what a bot did (`AGENTS.md`, F-488). Every action a bot takes is a card in the transcript, at the moment it happened: one line with a verb, what it acted on, and its state. A person follows a run by reading those lines between the bot's own bubbles, without opening anything. Reasoning stays out of sight until it is opened, and the raw call is one step further, behind each card.

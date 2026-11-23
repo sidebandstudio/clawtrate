@@ -38,8 +38,8 @@ function render(files: SentAttachment[], messageKey: string | null): HTMLLikeRes
 }
 type HTMLLikeResult = { html: string; kinds: string[] };
 
-describe("#451: your files on your message", () => {
-  it("#451: a picture this app may hold is asked for; a file, one over 5 MB and a type not drawn are named with their size, in order", () => {
+describe("F-557: your files on your message", () => {
+  it("F-557: a picture this app may hold is asked for; a file, one over 5 MB and a type not drawn are named with their size, in order", () => {
     const { html, kinds } = render([shot, notes, large, drawing], "m1:user");
     expect(kinds).toEqual(["sent-picture:loading", "sent-file", "sent-file", "sent-file"]);
     expect(html.indexOf("notes.txt")).toBeLessThan(html.indexOf("large.png"));
@@ -48,7 +48,7 @@ describe("#451: your files on your message", () => {
     expect(html).not.toContain("<img");
   });
 
-  it("#451: with no copy to ask for, a picture says plainly that it was sent and isn't shown", () => {
+  it("F-557: with no copy to ask for, a picture says plainly that it was sent and isn't shown", () => {
     const { html, kinds } = render([shot], null);
     expect(kinds).toEqual(["sent-picture:not-kept"]);
     expect(html).toContain("shot.png");
@@ -57,7 +57,7 @@ describe("#451: your files on your message", () => {
     );
   });
 
-  it("#451: a message without files draws nothing for them", () => {
+  it("F-557: a message without files draws nothing for them", () => {
     expect(render([], "m1:user").html).toBe("");
   });
 });

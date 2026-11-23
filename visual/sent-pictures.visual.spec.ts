@@ -39,7 +39,7 @@ for (const size of [WIDE, PHONE]) {
     test.describe(`sent pictures ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
 
-      test("#451: your message with a picture, a file and a picture from elsewhere matches its baseline", async ({
+      test("F-557: your message with a picture, a file and a picture from elsewhere matches its baseline", async ({
         page,
       }) => {
         await open(page, "pictures-sent", theme);
@@ -65,7 +65,7 @@ for (const size of [WIDE, PHONE]) {
 test.describe("sent pictures behaviour", () => {
   test.use(contextFor(WIDE, "dark"));
 
-  test("#451: your picture is drawn from the app's own copy, a file is its name and size, and a picture this app doesn't hold says so; your words stay as written", async ({
+  test("F-557: your picture is drawn from the app's own copy, a file is its name and size, and a picture this app doesn't hold says so; your words stay as written", async ({
     page,
   }) => {
     const media: string[] = [];

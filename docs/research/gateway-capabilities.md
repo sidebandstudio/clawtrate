@@ -1899,6 +1899,23 @@ Live and source agree on these ceilings:
   225-257). The "active model does not accept image inputs" rejection
   applies only to entrypoints that disallow inline images without forced
   offload.
+- **What history keeps of a person's files (live, #451).** Sent from
+  Clawtrate's web client to a development gateway, a person's row in
+  `chat.history`, and the same row in the live `session.message` event, has
+  its text as a plain string and each file as an entry of
+  `__openclaw.media`, in the order sent: `{url: "media://inbound/<name>---<uuid>.<ext>",
+  contentType, kind: "image" | "document", fileName, sizeBytes}`, with
+  `mediaImageLayout.slots` naming the pictures (`offloaded` for the
+  text-only scripted model). There is no `image` block and no
+  `artifactId`; `artifacts.list` for the task is empty; and no method or
+  HTTP route serves a `media://inbound` reference (the only media route is
+  `/api/chat/media/outgoing/…`, for a bot's managed media). The gateway's
+  own Control UI shows only the file name from the reference. From source,
+  a model that accepts pictures makes the slot `inline` and can put `image`
+  blocks on the row, whose data the history projection removes (`omitted`,
+  a byte count); still no artifact id (`chat-send-user-turn`,
+  `user-turn-transcript.message`, `chat-display-projection.core`). So a
+  person's picture can be shown only from the sending app's own copy.
 
 ### 20. Side panel and per-bot controls
 

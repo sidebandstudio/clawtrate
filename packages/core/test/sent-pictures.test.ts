@@ -66,8 +66,8 @@ async function task() {
   return { ...opened, confirm, history: () => history };
 }
 
-describe("#451: what history says a person's message carried", () => {
-  it("#451: each file the gateway names is on the message, in order, by name, type and size, with the text exactly as written and no reference", () => {
+describe("F-557: what history says a person's message carried", () => {
+  it("F-557: each file the gateway names is on the message, in order, by name, type and size, with the text exactly as written and no reference", () => {
     const [one, file, two] = [
       mapHistory([sentRow("m1", "can u add this to my calendar?", [SHOT])])[0]!,
       mapHistory([sentRow("m2", "here are my notes", [NOTES])])[0]!,
@@ -85,7 +85,7 @@ describe("#451: what history says a person's message carried", () => {
     expect(JSON.stringify([one, file, two])).not.toContain("media://");
   });
 
-  it("#451: a message that is only a picture still shows, with no empty bubble", () => {
+  it("F-557: a message that is only a picture still shows, with no empty bubble", () => {
     const items = mapHistory([sentRow("m4", "", [SECOND])]);
     expect(items).toHaveLength(1);
     expect(items[0]!.blocks).toEqual([]);
@@ -95,8 +95,8 @@ describe("#451: what history says a person's message carried", () => {
   });
 });
 
-describe("#451: a picture you sent, from this app's own copy", () => {
-  it("#451: shows at once from the copy sent, and still after history holds the message and is read again", async () => {
+describe("F-557: a picture you sent, from this app's own copy", () => {
+  it("F-557: shows at once from the copy sent, and still after history holds the message and is read again", async () => {
     const { client, gateway, confirm, history } = await task();
     const id = client.sendMessage(KEY, "can u add this to my calendar?", {
       attachments: [picture(RED, "shot.png")],
@@ -123,7 +123,7 @@ describe("#451: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("#451: another device has no copy, says so, and asks the gateway for nothing", async () => {
+  it("F-557: another device has no copy, says so, and asks the gateway for nothing", async () => {
     const { client, gateway } = await task();
     const row = sentRow("sent-elsewhere", "can u add this to my calendar?", [SHOT]);
     gateway.handlers["chat.history"] = () => ({ messages: [row] });
@@ -136,7 +136,7 @@ describe("#451: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("#451: two pictures keep their order, and a file that isn't a picture isn't kept", async () => {
+  it("F-557: two pictures keep their order, and a file that isn't a picture isn't kept", async () => {
     const { client, confirm } = await task();
     const id = client.sendMessage(KEY, "two pictures", {
       attachments: [picture(RED, "first.png"), textFile, picture(BLUE, "second.png")],
@@ -152,7 +152,7 @@ describe("#451: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("#451: a picture over 5 MB, a type not drawn, and bytes that aren't their type's are refused and not kept", async () => {
+  it("F-557: a picture over 5 MB, a type not drawn, and bytes that aren't their type's are refused and not kept", async () => {
     const { client, confirm } = await task();
     const large = new Uint8Array(MAX_PICTURE_BYTES + 1);
     large.set(RED.subarray(0, 8));
@@ -179,7 +179,7 @@ describe("#451: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("#451: a viewer that left is given nothing", async () => {
+  it("F-557: a viewer that left is given nothing", async () => {
     const { client } = await task();
     const id = client.sendMessage(KEY, "look", { attachments: [picture(RED, "shot.png")] });
     const viewer = {};
@@ -188,7 +188,7 @@ describe("#451: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("#451: kept pictures go when the task closes, and give way to files still to be sent", async () => {
+  it("F-557: kept pictures go when the task closes, and give way to files still to be sent", async () => {
     const { client, gateway, confirm } = await task();
     const id = client.sendMessage(KEY, "look", { attachments: [picture(RED, "shot.png")] });
     await confirm([sentRow(id, "look", [SHOT])]);
@@ -204,7 +204,7 @@ describe("#451: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it(`#451: at most ${MAX_SENT_PICTURE_MESSAGES} messages' pictures are kept, the oldest giving way, and none once the task is closed`, async () => {
+  it(`F-557: at most ${MAX_SENT_PICTURE_MESSAGES} messages' pictures are kept, the oldest giving way, and none once the task is closed`, async () => {
     const { client, confirm } = await task();
     const rows: unknown[] = [];
     const ids: string[] = [];

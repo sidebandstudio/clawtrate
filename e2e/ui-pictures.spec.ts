@@ -5,11 +5,16 @@
 // through the download the gateway issued. The file runs after
 // preview.spec.ts, whose checks read Otto's task list as the seed left it.
 import { expect, test, type Page } from "@playwright/test";
+import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { solidPng } from "../packages/core/test/sent-attachments-rows.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { IMAGE_PROMPT } from "../tools/dev-gateway/src/scenarios.ts";
 import { scriptedPicture } from "../tools/dev-gateway/src/scripted-images.ts";
-import { devGateway, listInstances } from "./global-setup.ts";
+import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 
@@ -118,4 +123,106 @@ test("F-535: a picture the bot makes with image_generate shows in the conversati
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(390);
   await page.emulateMedia({ colorScheme: null });
+});
+
+// A picture a person attaches (#451), sent through the composer of a host of this test's own,
+// with interactive access. The gateway keeps the file only as a `media://inbound` reference that
+// nothing serves, so the preview is the app's own copy while the task stays open; once the page
+// is reloaded the host has let the task go, and the message says plainly what was sent.
+test.describe("F-557: a picture you attach", () => {
+  const OWN_TASK = "Your picture from the end-to-end run";
+  const OWN_KEY = "agent:pip:e2e-own-picture";
+  const WORDS = "can u add this to my calendar?";
+  const MINE = "Your picture: shot.png";
+  const own: { child: ChildProcess; data: string }[] = [];
+
+  test.afterAll(async () => {
+    for (const host of own.splice(0)) {
+      await stopChild(host.child).catch(() => host.child.kill("SIGKILL"));
+      rmSync(host.data, { recursive: true, force: true });
+    }
+  });
+
+  test("F-557 F-117: the picture shows on your message at once and after history holds it, opens larger, and after a reload says it was sent", async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    await gatewayCall("sessions.create", { key: OWN_KEY, agentId: "pip", label: OWN_TASK });
+    const data = mkdtempSync(join(tmpdir(), "clawtrate-own-picture-"));
+    const started = startHost(INSTANCE, process.env.CLAWTRATE_E2E_STATIC!, data);
+    own.push({ child: started.host, data });
+    started.gated.release();
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    await page.goto(await started.url);
+    await page.getByRole("button", { name: "Use the development gateway" }).click();
+    await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect
+      .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+      .toMatch(/^Approved /m);
+    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+    await openTask(page, "Pip", OWN_TASK);
+    const bar = page.getByRole("region", { name: "Access" });
+    await bar.getByRole("button", { name: "Request access" }).click();
+    await expect
+      .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+      .toMatch(/^Approved /m);
+    await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
+
+    const shot = solidPng(48, 32, [220, 40, 40]);
+    await page
+      .locator('.composer input[type="file"]')
+      .setInputFiles([{ name: "shot.png", mimeType: "image/png", buffer: shot }]);
+    await expect(page.locator(".attachments .chip:not([aria-busy=true])")).toHaveCount(1);
+    await page.getByTestId("composer-input").fill(WORDS);
+    await page.getByTestId("composer-input").press("Enter");
+
+    const mine = page.getByRole("img", { name: MINE });
+    await expect(mine).toBeVisible({ timeout: 20_000 });
+    expect(await mine.getAttribute("src")).toBe(`data:image/png;base64,${shot.toString("base64")}`);
+    // The gateway's history holds the message with the file named, and no picture of it.
+    await expect
+      .poll(
+        async () => {
+          const history = await gatewayCall<{ messages: Array<Record<string, unknown>> }>(
+            "chat.history",
+            { sessionKey: OWN_KEY, limit: 20 },
+          );
+          const row = history.messages.find((message) => message.role === "user");
+          const media = (row?.__openclaw as { media?: Array<{ fileName?: string }> })?.media;
+          return row ? [row.content, media?.map((each) => each.fileName)] : null;
+        },
+        { timeout: 60_000 },
+      )
+      .toEqual([WORDS, ["shot.png"]]);
+    // History holds it now: the message is history's row, and its picture still shows.
+    await expect(page.getByTestId("outgoing")).toHaveCount(0, { timeout: 30_000 });
+    const turn = page.getByTestId("transcript-turn").filter({ hasText: WORDS });
+    await expect(turn.getByRole("img", { name: MINE })).toBeVisible();
+    await expect(turn.locator(".bubble")).toHaveText(WORDS);
+
+    // Larger, and back.
+    await turn.getByRole("button", { name: MINE }).click();
+    const viewer = page.getByRole("dialog", { name: MINE });
+    await expect(viewer.getByRole("img", { name: MINE })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(viewer).toHaveCount(0);
+    await expect(turn.getByRole("button", { name: MINE })).toBeFocused();
+
+    // A reload lets the task go, and its copy with it: the message says what was sent.
+    await page.reload();
+    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+    await openTask(page, "Pip", OWN_TASK);
+    const again = page.getByTestId("transcript-turn").filter({ hasText: WORDS });
+    await expect(again.getByTestId("sent-picture")).toHaveAttribute("data-state", "not-kept", {
+      timeout: 20_000,
+    });
+    await expect(again.getByTestId("sent-picture")).toContainText(
+      "shot.pngPicture sent with this message. The gateway doesn't give it back to show here.",
+    );
+    await context.close();
+    await gatewayCall("sessions.delete", { key: OWN_KEY, deleteTranscript: true }).catch(() => {});
+  });
 });
