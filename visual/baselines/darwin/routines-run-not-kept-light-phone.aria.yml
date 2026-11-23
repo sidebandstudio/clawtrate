@@ -1,0 +1,14 @@
+- main "Routines":
+  - button "Back to Nightly backup check, all runs"
+  - heading "Nightly backup check" [level=1]
+  - paragraph: Otto · Yesterday 3:30 AM
+  - paragraph:
+    - strong: Clawtrate can't show this run's conversation.
+    - text: The gateway returned none for it. By default it keeps a run's conversation for 24 hours, so an older one may have been removed.
+  - paragraph: "What the run returned: Three notes from yesterday. The draft for Sam is ready to send."
+  - text: This run has finished. A run can't be answered; to change what it does, edit the routine. Succeeded · 2.6 s · 200 tokens scripted/dev-1 · 120 in, 80 out tokens
+  - region "Access":
+    - text: Read-only. Creating and changing routines needs admin access.
+    - button "Request admin access"
+  - status
+- status

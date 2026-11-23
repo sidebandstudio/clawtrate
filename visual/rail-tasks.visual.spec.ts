@@ -2,8 +2,8 @@
 // themes: the task menu, rename in place, the Archived group, the delete and
 // Stop and archive confirmations, pins and sections, unread, the waiting rows,
 // the "+" menu and Re-pair in Settings.
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, showList, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, showList, SIZES, THEMES } from "./fixture.ts";
 
 const OTTO = "bot=otto&task=agent:otto:disk-space";
 

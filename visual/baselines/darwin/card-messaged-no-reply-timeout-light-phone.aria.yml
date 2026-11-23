@@ -1,0 +1,12 @@
+- group:
+  - text: Messaged Marlow No reply yet
+  - list:
+    - listitem:
+      - text: Otto sent
+      - time: 5:38 PM
+      - text: "Write a two-line entry for the house log: the weekly backup finished, 41 GB across three machines."
+    - listitem:
+      - text: Marlow
+      - paragraph: The message was sent, and no reply came in time. A reply that names this message appears here; any other arrives as a message from Marlow.
+  - button "Open this message in Marlow's task": Open in Marlow
+  - button "Raw"

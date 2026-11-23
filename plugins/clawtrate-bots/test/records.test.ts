@@ -326,7 +326,8 @@ describe("the records", () => {
     await expect(records.persist("one-more", { i: 512 })).resolves.toBeTypeOf("string");
     // At most 16 rows decoded per page, so at most 16 MiB of JSON at the store's 1 MiB per value.
     expect(Math.max(...limits)).toBe(16);
-  });
+    // 1,500 store calls through the stand-in; on a loaded machine that takes longer than 5 s.
+  }, 60_000);
 
   it("reopening Records over the same stores: before publication nothing was admitted, after it the entry is there once", async () => {
     const [store, versions] = [memoryStore(), memoryStore()];
