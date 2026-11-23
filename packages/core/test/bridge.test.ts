@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession, MAX_OPAQUE_ID_CHARS, parseBridgeCommand } from "../src/bridge.ts";
 import type { ClawtrateClient } from "../src/client.ts";
 import { KEY, openTask } from "./client-harness.ts";
@@ -432,6 +432,51 @@ describe("openSession", () => {
       expect(client.state.transcripts[KEY]?.status).toBe("ready");
     } finally {
       stop?.();
+      client.stop();
+    }
+  });
+
+  it("F-105: a released history loop with queued work starts no read for a reopened task", async () => {
+    const { client, gateway } = await openTask();
+    try {
+      // A refresh is pending on the open task.
+      const refresh = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => refresh.promise;
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+
+      // Another event queues trailing work (`again`) on the pending read entry.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        gateway.emit("session.message", { sessionKey: KEY });
+        vi.advanceTimersByTime(150);
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // The last view closes the task (releasing its loads entry) and reopens it.
+      client.closeSession(KEY);
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+      const reopen = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => reopen.promise;
+      client.openSession(KEY);
+      await until(() => gateway.calls("chat.history").length === before + 2);
+
+      // Any stray read from the abandoned loop fails and would put the reopened task in error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      reopen.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      await client.historyReadsSettled(KEY);
+
+      refresh.resolve({ messages: [], hasMore: false });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 2);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+    } finally {
       client.stop();
     }
   });

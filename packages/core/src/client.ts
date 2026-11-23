@@ -7580,6 +7580,9 @@ export class ClawtrateClient {
       };
       while (next) {
         await this.readTranscript(key, next.subscribe, next.resync);
+        // If `releaseTask` dropped this entry while the read was in flight, stop instead of
+        // running queued work under a reopened task's new incarnation.
+        if (this.loads.get(key) !== entry) break;
         next = entry.again;
         entry.again = null;
       }
