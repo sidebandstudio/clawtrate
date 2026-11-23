@@ -558,8 +558,8 @@ test.describe("a failed history", () => {
     reads: string[];
     holds(key: string): number;
   };
-  type Refusal = { type: string; key: string; error: string; afterMs?: number };
-  type Refusing = Fixture & { refusals: Refusal[] };
+  type Refusal = { type: string; key: string; error: string; afterMs?: number; held?: boolean };
+  type Refusing = Fixture & { refusals: Refusal[]; held: Array<() => void> };
 
   const holds = (page: Page, key = KEY) =>
     page.evaluate(
@@ -582,14 +582,16 @@ test.describe("a failed history", () => {
       [type, KEY] as const,
     );
   /**
-   * The host refuses each of these commands once, after `afterMs` if given, as it refuses
-   * an open with every task slot taken or a reread from a view that no longer holds the task.
+   * The host refuses each of these commands once, after `afterMs` if given or once `answer` is
+   * called if `held`, as it refuses an open with every task slot taken or a reread from a view
+   * that no longer holds the task.
    */
   const refuse = (page: Page, refusals: Refusal[]) =>
     page.evaluate((refusals) => {
       const fixture = (window as unknown as { clawtrateFixture: Refusing }).clawtrateFixture;
       if (!fixture.refusals) {
         fixture.refusals = [];
+        fixture.held = [];
         const send = fixture.send.bind(fixture);
         fixture.send = async (command) => {
           const at = fixture.refusals.findIndex(
@@ -597,13 +599,22 @@ test.describe("a failed history", () => {
           );
           if (at < 0) return send(command);
           const [refusal] = fixture.refusals.splice(at, 1);
-          if (refusal!.afterMs)
+          if (refusal!.held) await new Promise<void>((resolve) => fixture.held.push(resolve));
+          else if (refusal!.afterMs)
             await new Promise((resolve) => setTimeout(resolve, refusal!.afterMs));
           throw new Error(refusal!.error);
         };
       }
       fixture.refusals.push(...refusals);
     }, refusals);
+  /** Send every held refusal. */
+  const answer = (page: Page) =>
+    page.evaluate(() => {
+      for (const send of (
+        window as unknown as { clawtrateFixture: Refusing }
+      ).clawtrateFixture.held.splice(0))
+        send();
+    });
   /** Drop a task's loaded history, as the engine has none for a task nobody holds. */
   const unload = (page: Page, keys: string[]) =>
     page.evaluate(
@@ -734,7 +745,7 @@ test.describe("a failed history", () => {
         type: "reloadSession",
         key: KEY,
         error: "That task isn't open in this view.",
-        afterMs: 1500,
+        held: true,
       },
     ]);
     await fail(page, false);
@@ -742,7 +753,7 @@ test.describe("a failed history", () => {
     await otto(page, "Weekly backup check");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Weekly backup check");
     await expect.poll(() => holds(page)).toBe(0);
-    await page.waitForTimeout(2000);
+    await answer(page);
     expect(await holds(page)).toBe(0);
   });
 

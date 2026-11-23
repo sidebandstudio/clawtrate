@@ -46,6 +46,7 @@ type Fixture = {
   send(command: { type: string; key?: string }): Promise<void>;
   getState(): ClawtrateState;
   holds(key: string): number;
+  answerReread?: () => void;
 };
 
 /** Hold the fixture's delayed answers and drop a task's loaded history, so opening it reads it again. */
@@ -382,22 +383,26 @@ test("F-033: Try again on a history that failed opens the message once the histo
   await expect(page.locator(".turn[data-search-focus]")).toBeFocused();
 });
 
-/** The host refuses the next reread of `key` after `afterMs`, as from a view that no longer holds it. */
-const refuseReread = (page: Page, key: string, afterMs: number) =>
-  page.evaluate(
-    ([key, afterMs]) => {
-      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
-      const send = fixture.send;
-      fixture.send = async (command) => {
-        if (command.type === "reloadSession" && command.key === key) {
-          fixture.send = send;
-          await new Promise((resolve) => setTimeout(resolve, afterMs));
-          throw new Error("That task isn't open in this view.");
-        }
-        return send(command);
-      };
-    },
-    [key, afterMs] as const,
+/**
+ * The host refuses the next reread of `key`, as from a view that no longer holds it, once
+ * `answerReread` is called.
+ */
+const refuseReread = (page: Page, key: string) =>
+  page.evaluate((key) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const send = fixture.send;
+    fixture.send = async (command) => {
+      if (command.type === "reloadSession" && command.key === key) {
+        fixture.send = send;
+        await new Promise<void>((resolve) => (fixture.answerReread = resolve));
+        throw new Error("That task isn't open in this view.");
+      }
+      return send(command);
+    };
+  }, key);
+const answerReread = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.answerReread?.(),
   );
 const holds = (page: Page, key: string) =>
   page.evaluate(
@@ -415,7 +420,7 @@ test("F-033: Try again in a view the host no longer counts opens the message onc
   await fail(page, key);
   await user.click();
   await expect(user).toContainText("Couldn't load this conversation");
-  await refuseReread(page, key, 1000);
+  await refuseReread(page, key);
   await options(page, "messages")
     .filter({ hasText: /^Try again$/ })
     .click();
@@ -430,6 +435,17 @@ test("F-033: Try again in a view the host no longer counts opens the message onc
       }),
     key,
   );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (key) =>
+          (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.getState()
+            .transcripts[key]?.status,
+        key,
+      ),
+    )
+    .toBe("ready");
+  await answerReread(page);
   await expect(palette(page)).toHaveCount(0);
   await expect(page.locator(".turn[data-search-focus]")).toBeFocused();
 });
@@ -444,7 +460,7 @@ test("F-033: a refusal of Try again that comes after search closed opens nothing
   await fail(page, key);
   await user.click();
   await expect(user).toContainText("Couldn't load this conversation");
-  await refuseReread(page, key, 1000);
+  await refuseReread(page, key);
   await options(page, "messages")
     .filter({ hasText: /^Try again$/ })
     .click();
@@ -453,7 +469,7 @@ test("F-033: a refusal of Try again that comes after search closed opens nothing
   await expect(palette(page)).toHaveCount(0);
   // Only the shell holds the task.
   expect(await holds(page, key)).toBe(1);
-  await page.waitForTimeout(1500);
+  await answerReread(page);
   expect(await holds(page, key)).toBe(1);
 });
 
