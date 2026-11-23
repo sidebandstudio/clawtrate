@@ -1,0 +1,34 @@
+- region "Conversation":
+  - button "Back to bots"
+  - button "New bot, Main. Show details.": New bot
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Main" [level=1]
+    - paragraph: "Context: unavailable"
+    - text: Today 5:35 PM
+    - paragraph: can i name u
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Yes. What would you like to call me?
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Johnny
+    - toolbar "Message actions":
+      - button "More"
+    - group: Read IDENTITY.md 7 lines
+    - group: Edited IDENTITY.md +1 −1
+    - paragraph: Johnny it is. Saved, so I'll remember.
+    - toolbar "Message actions":
+      - button "More"
+    - group: Worked 2 actions
+    - status
+  - region "A new name for New bot":
+    - paragraph: New bot would like to be called “Johnny”
+    - paragraph: It wrote this name for itself. Rename saves it on the gateway, where Clawtrate reads it.
+    - button "Rename"
+    - button "Not now"
+  - region "Access":
+    - text: Read-only. You can follow New bot's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

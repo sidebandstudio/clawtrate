@@ -64,6 +64,7 @@ import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } fro
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 import { isPictureScene, PICTURE_SCENES, pictureAnswers, pictureScene } from "./pictures.ts";
+import { BOT_NAME_SCENES, botNameCommand, botNameScene, isBotNameScene } from "./bot-name.ts";
 import {
   computerFixture,
   FIXTURE_VIEWER,
@@ -124,6 +125,7 @@ export const SCENES = [
   ...RAIL_SCENES,
   ...ACTION_SCENES,
   ...PICTURE_SCENES,
+  ...BOT_NAME_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -444,6 +446,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
       if (isPictureScene(name)) return { initial: pictureScene(base, now), steps: [] };
+      if (isBotNameScene(name)) return { initial: botNameScene(name, base, now), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
 }
@@ -711,6 +714,15 @@ export function createFixtureBridge(
     if (rail) {
       sent.push(command);
       return rail;
+    }
+    const named = botNameCommand(
+      command,
+      () => state,
+      (next) => set(next),
+    );
+    if (named) {
+      sent.push(command);
+      return named;
     }
     const live = liveCommand(command, () => state, setAnswer, files, deferred);
     sent.push(command);
