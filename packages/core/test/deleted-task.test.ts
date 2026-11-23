@@ -930,3 +930,43 @@ describe('"Start a new task with this message" (F-278, F-277)', () => {
     client.stop();
   });
 });
+
+describe("a task archived or deleted elsewhere while a message waits in its queue (F-277, F-278)", () => {
+  const FILE = { fileName: "notes.txt", mimeType: "text/plain", type: "file", content: "aGk=" };
+
+  it.each([
+    ["archived", { session: { archived: true } }, TASK_ARCHIVED_ELSEWHERE],
+    ["deleted", { reason: "delete" }, TASK_DELETED_ELSEWHERE],
+  ] as const)(
+    "%s elsewhere, its event first: the message stays with its words and files, refused as such, and can start a new task",
+    async (_, event, error) => {
+      const { client, gateway, transcript, sends } = await shown({
+        session: { sessionId: "s-1" },
+      });
+      gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.state === "running"));
+      const id = client.sendMessage(KEY, "Then send me a summary.", {
+        mode: "queue",
+        attachments: [FILE],
+      });
+      const bytes = client.retainedAttachmentBytes;
+      gateway.emit("sessions.changed", { sessionKey: KEY, ...event });
+      await until(() => transcript().outbox[0]?.status === "failed");
+      expect(transcript().outbox[0]).toMatchObject({
+        id,
+        mode: "queue",
+        error,
+        sessionId: "s-1",
+        attachments: [{ fileName: "notes.txt" }],
+      });
+      expect(client.retainedAttachmentBytes).toBe(bytes);
+      // The run ends with the task: nothing is sent.
+      gateway.emit("agent", agentEvent("run-on", 2, "lifecycle", { phase: "end" }));
+      await sleep(50);
+      expect(sends()).toHaveLength(0);
+      gateway.handlers["sessions.create"] = () => ({ ok: true, key: "agent:otto:fresh" });
+      await expect(client.startTaskFromMessage(KEY, id)).resolves.toBe("agent:otto:fresh");
+      client.stop();
+    },
+  );
+});

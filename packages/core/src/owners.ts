@@ -139,6 +139,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   endChecked: { max: T, each: ID + MAX_RUN_LIST * (ID + 1), row: "bookkeeping" },
   // What a task's latest read showed for a steer: its key, session, in-flight run and connection.
   steerChecks: { max: T, each: 3 * ID + N, row: "bookkeeping" },
+  // Followed tasks this client is archiving or deleting, and how many such requests are out.
+  ownRemovals: { max: T, each: ID + N, row: "bookkeeping" },
   // Computer Stops whose first abort waits for the gateway to name the run: task and run ids, and
   // the task's opening that asked (an empty object); gone once sent, settled or withdrawn.
   unsentStops: { max: T * MAX_RUN_LIST, each: 2 * ID + 1, row: "bookkeeping" },

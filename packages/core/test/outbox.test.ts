@@ -244,12 +244,18 @@ describe("queued messages (F-421, F-420)", () => {
     client.stop();
   });
 
-  it("cancels queued messages when the task is deleted", async () => {
+  it("cancels queued messages when this client deletes the task", async () => {
     const { client, gateway, transcript } = await openTask();
     start(gateway);
     await until(() => transcript().runs.length === 1);
     client.sendMessage(KEY, "later", { mode: "queue" });
-    gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
+    gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-1" } });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    gateway.handlers["sessions.delete"] = () => {
+      gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
+      return { ok: true };
+    };
+    await client.deleteTask(KEY);
     await until(() => transcript().outbox[0]?.status === "cancelled");
     client.stop();
   });

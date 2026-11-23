@@ -1278,6 +1278,12 @@ export class ClawtrateClient {
   >();
   /** Counts the drops, so a read that was out when one happened confirms nothing. */
   private steerDrops = 0;
+  /**
+   * Followed tasks this client is archiving or deleting, by how many such requests of its own are
+   * out: their queued messages are cancelled, as the person confirmed (F-420). An archive or a
+   * delete this client hears of otherwise was made elsewhere.
+   */
+  private readonly ownRemovals = new Map<string, number>();
   private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Runs of sessions no viewer has open, kept small, so a bot-to-bot card can
@@ -6229,7 +6235,31 @@ export class ClawtrateClient {
     }
   }
 
-  /** The task was archived or deleted: its queued messages never run (F-420). */
+  /**
+   * The task was archived or deleted. By this client: its queued messages never run, as the person
+   * confirmed (F-420). Elsewhere: each stays with its words and files, refused as the gateway
+   * would refuse it, with the recovery of any message refused that way (F-277, F-278).
+   */
+  private settleQueued(key: string, error: TaskDeletedError | TaskArchivedError): void {
+    if (this.ownRemovals.has(key)) {
+      this.cancelAllQueued(key);
+      return;
+    }
+    this.updateActivity(key, (activity, ctx) => {
+      let next = activity;
+      for (const run of activity.runs) {
+        if (run.state !== "queued") continue;
+        next = updateMessage(
+          failRunStart(next, run.id, { message: error.message, kind: "not-started" }, ctx),
+          run.id,
+          { status: "failed", error: error.message },
+        );
+      }
+      return next;
+    });
+  }
+
+  /** The task was archived or deleted by this client: its queued messages never run (F-420). */
   private cancelAllQueued(key: string): void {
     this.updateActivity(key, (activity) => {
       let next = activity;
@@ -7619,12 +7649,12 @@ export class ClawtrateClient {
     )
       this.dropSteerCheck(key);
     if (isSessionRemoval(payload)) {
-      this.cancelAllQueued(key);
+      this.settleQueued(key, new TaskDeletedError());
       this.retireForeign(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
-    if (row.archived === true) this.cancelAllQueued(key);
+    if (row.archived === true) this.settleQueued(key, new TaskArchivedError());
     const cached = this.rows.get(key);
     if (!cached) {
       if (!isExcludedSessionKey(key)) this.scheduleRefresh(generation);
@@ -8413,9 +8443,11 @@ export class ClawtrateClient {
     key: string,
     options: { stop?: boolean; owner?: object } = {},
   ): Promise<ArchiveResult> {
-    return archiveTask(this.actionContext(options.owner ?? null), key, {
-      stop: options.stop === true,
-    });
+    return this.removing(key, () =>
+      archiveTask(this.actionContext(options.owner ?? null), key, {
+        stop: options.stop === true,
+      }),
+    );
   }
 
   async restoreTask(key: string, options: { owner?: object } = {}): Promise<void> {
@@ -8423,7 +8455,25 @@ export class ClawtrateClient {
   }
 
   async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
-    await deleteTask(this.actionContext(options.owner ?? null), key);
+    await this.removing(key, () => deleteTask(this.actionContext(options.owner ?? null), key));
+  }
+
+  /**
+   * This client's own archive or delete of a followed task (`ownRemovals`): its events, before or
+   * after the answer, cancel the queued messages, and so does its success (F-420).
+   */
+  private async removing<T>(key: string, act: () => Promise<T>): Promise<T> {
+    if (!this.tracked(key)) return act();
+    this.ownRemovals.set(key, (this.ownRemovals.get(key) ?? 0) + 1);
+    try {
+      const result = await act();
+      this.cancelAllQueued(key);
+      return result;
+    } finally {
+      const left = (this.ownRemovals.get(key) ?? 1) - 1;
+      if (left > 0) this.ownRemovals.set(key, left);
+      else this.ownRemovals.delete(key);
+    }
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */

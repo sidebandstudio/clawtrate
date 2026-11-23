@@ -605,19 +605,30 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
     client.stop();
   });
 
-  it("cancels queued messages when the task is archived (F-420)", async () => {
-    const { client, gateway, transcript } = await openTask();
-    startRun(gateway);
-    await until(() => transcript().runs.length === 1);
-    client.sendMessage(KEY, "later", { mode: "queue" });
-    gateway.emit("sessions.changed", { sessionKey: KEY, session: { archived: true } });
-    await until(() => transcript().outbox[0]?.status === "cancelled");
-    expect(transcript().runs[1]!.state).toBe("cancelled");
-    gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 2, state: "final" });
-    await sleep(30);
-    expect(gateway.calls("chat.send")).toEqual([]);
-    client.stop();
-  });
+  it.each(["before", "after"])(
+    "cancels queued messages when this client archives the task, its event %s the answer (F-420)",
+    async (order) => {
+      const { client, gateway, transcript } = await openTask();
+      startRun(gateway);
+      await until(() => transcript().runs.length === 1);
+      client.sendMessage(KEY, "later", { mode: "queue" });
+      const archived = () =>
+        gateway.emit("sessions.changed", { sessionKey: KEY, session: { archived: true } });
+      gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-1" } });
+      gateway.handlers["sessions.patch"] = () => {
+        if (order === "before") archived();
+        return { ok: true };
+      };
+      await client.archiveTask(KEY);
+      if (order === "after") archived();
+      await until(() => transcript().outbox[0]?.status === "cancelled");
+      expect(transcript().runs[1]!.state).toBe("cancelled");
+      gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 2, state: "final" });
+      await sleep(30);
+      expect(gateway.calls("chat.send")).toEqual([]);
+      client.stop();
+    },
+  );
 
   it("stops a run this client started at the turn limit, aborting it by its id (F-100)", async () => {
     const { client, gateway, transcript } = await openTask({ turnLimitMs: 60 });
