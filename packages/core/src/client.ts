@@ -1851,11 +1851,12 @@ export class ClawtrateClient {
       if (this.settings.suspended) {
         const saved = await this.readSavedSettings(stops);
         if (!this.settings || stops !== this.stops) return;
-        if (saved?.url === this.settings.url) {
-          await this.saveSettings({ ...saved, suspended: false });
-        } else {
-          this.settings = { ...this.settings, suspended: false };
-        }
+        // Retry is the person's latest choice, as Connect is: the gateway on screen is saved,
+        // starting from its stored record when that is still this gateway's.
+        await this.saveSettings({
+          ...(saved?.url === this.settings.url ? saved : this.settings),
+          suspended: false,
+        });
       }
       this.connectionCommands += 1;
       if (stops === this.stops) await this.open();

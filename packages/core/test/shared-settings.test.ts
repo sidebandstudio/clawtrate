@@ -317,4 +317,23 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       }
     });
   });
+
+  it("F-387: Retry after another client chose B saves this client's gateway, the person's latest choice", async () => {
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-B"), storage), FAST);
+    try {
+      await client.start({ resume: false });
+      await client.connect({ url: URL_A });
+      await until(() => client.state.connection.status === "connected");
+      await client.suspend();
+      await other.start({ resume: false });
+      await other.connect({ url: URL_B });
+      await client.retryNow();
+      expect(saved(storage)).toMatchObject({ url: URL_A, suspended: false });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });
