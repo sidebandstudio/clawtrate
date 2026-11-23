@@ -463,6 +463,7 @@ async function main(): Promise<void> {
         window.webContents.send("clawtrate:update:changed", snapshot);
     },
   });
+  app.on("will-quit", () => updates.quitting());
   app.on("quit", () => updates.shutdown());
   ipcMain.handle("clawtrate:update:restart", (_event, id: unknown) => updates.restart(id));
   ipcMain.handle("clawtrate:update:get", () => updates.get());
