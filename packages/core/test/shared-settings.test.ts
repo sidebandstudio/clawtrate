@@ -784,4 +784,28 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("Reconnect after another client cleared A's shared token and chose B, before this one's suspend, leaves the token out", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
+    });
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("issued-A"), storage), FAST);
+    try {
+      await client.start();
+      // The other client pairs, which drops the shared token, and then chooses B.
+      await other.start();
+      await until(() => other.state.connection.status === "connected");
+      await until(() => saved(storage)?.token === null);
+      await other.connect({ url: URL_B });
+      await client.suspend();
+      await client.retryNow();
+      expect(saved(storage)).toEqual({ url: URL_A, token: null, suspended: false });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });

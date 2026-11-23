@@ -1832,11 +1832,21 @@ export class ClawtrateClient {
         return this.generation;
       }
       if (this.settings.suspended) {
-        // Reconnect is the person's latest choice, as Connect is; a record of this gateway another
-        // client changed since keeps what it changed.
+        // Reconnect is the person's latest choice, as Connect is. A record of this gateway keeps
+        // what is in it now: another client, or the store itself, may have changed its token.
         const saved = await this.savedSettings();
-        const changed = !this.recordSeen() && saved?.url === this.settings.url ? saved : null;
-        await this.saveSettings({ ...(changed ?? this.settings), suspended: false });
+        if (saved?.url === this.settings.url) {
+          await this.saveSettings({ ...saved, suspended: false });
+        } else if (this.recordSeen()) {
+          await this.saveChoice({ ...this.settings, suspended: false });
+        } else {
+          // Another client saved another gateway or forgot this one since. This client's token
+          // was never read back from the record, and may be one cleared since: it stays out of
+          // the record, and only this attempt uses it.
+          const { token } = this.settings;
+          await this.saveChoice({ ...this.settings, token: null, suspended: false });
+          this.settings = { ...this.settings, token };
+        }
       }
       if (stops === this.stops) await this.open();
       return null;
@@ -1855,19 +1865,20 @@ export class ClawtrateClient {
       const url = this.settings.url;
       const typed = this.typedTokenEnds(url) ? this.settings.token : null;
       const saved = await this.savedSettings();
-      if (this.recordSeen()) {
-        await this.saveSettings({
-          ...this.settings,
-          suspended: true,
-          ...(typed ? { token: null } : {}),
-        });
-      } else if (saved?.url === url) {
-        // Another client changed this gateway's record since: only the suspension and the typed
-        // token, if it is still the one saved, change.
+      if (saved?.url === url) {
+        // From the record as it is now: another client, or the store itself, may have changed
+        // its token since. Only the suspension and the typed token, if it is still the one
+        // saved, change.
         await this.saveSettings({
           ...saved,
           suspended: true,
           ...(typed && saved.token === typed ? { token: null } : {}),
+        });
+      } else if (this.recordSeen()) {
+        await this.saveSettings({
+          ...this.settings,
+          suspended: true,
+          ...(typed ? { token: null } : {}),
         });
       } else {
         // Another client saved another gateway or forgot this one since, and a restart opens what
