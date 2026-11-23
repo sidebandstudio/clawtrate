@@ -4,7 +4,7 @@
 // `wizard.next`, `wizard.cancel`) with every ending scripted per session.
 // The credentials are made-up development strings.
 
-import { createHash } from "node:crypto";
+import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
 import { ADMIN_SCOPES } from "../src/scopes.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 import { ClawtrateClient } from "../src/client.ts";
@@ -67,7 +67,7 @@ export const CHOICES = {
 export const IDENTITY_TEMPLATE =
   "# IDENTITY.md - Who Am I?\n\n_Fill this in during your first conversation. Make it yours._\n";
 
-const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+const sha256 = (text: string) => sha256Hex(utf8Bytes(text));
 
 export class AccountsGateway {
   readonly gateway = new FakeGateway();

@@ -4,7 +4,7 @@
 // through each ending, the read after a sign-in, the bounds, and a typed key
 // leaving no trace.
 
-import { createHash } from "node:crypto";
+import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
 import { describe, expect, it, vi } from "vitest";
 import {
   ACCOUNTS,
@@ -801,7 +801,7 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     model: "dev-1",
     effort: null,
   } as const;
-  const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+  const sha256 = (text: string) => sha256Hex(utf8Bytes(text));
   const sent = (fake: AccountsGateway) =>
     (fake.gateway as unknown as { requests: Array<{ method: string }> }).requests.map(
       (each) => each.method,
