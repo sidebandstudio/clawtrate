@@ -962,7 +962,7 @@ describe("the two keywords in a picture", () => {
   const v1 = text(CHOICE);
   const v2 = text(`${V2_BASE}&head=beret&trim=pink`, AVATAR_PNG_KEYWORD_V2);
 
-  it("F-519: writes nothing worn under the first keyword, byte for byte as before, which older builds read", () => {
+  it("F-521: writes nothing worn under the first keyword, byte for byte as before, which older builds read", () => {
     const kept = pictureWithChoice(png(), LANTERN)!;
     const bytes = bytesOf(kept);
     const expected = [...ascii(AVATAR_PNG_KEYWORD), 0, ...ascii(encodeAvatarChoice(LANTERN))];
@@ -972,7 +972,7 @@ describe("the two keywords in a picture", () => {
     expect(readPicture(kept)).toEqual({ kind: "creature", choice: LANTERN });
   });
 
-  it("F-519: writes what is worn under the second keyword, which older builds show as a plain picture", () => {
+  it("F-521: writes what is worn under the second keyword, which older builds show as a plain picture", () => {
     const kept = pictureWithChoice(png(), worn)!;
     expect(chunks(kept).map((c) => c.type)).toEqual(["IHDR", "tEXt", "IDAT", "IEND"]);
     expect(chunks(kept).every((c) => c.ok)).toBe(true);
