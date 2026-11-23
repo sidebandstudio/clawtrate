@@ -1084,6 +1084,8 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
       from: "1.0.0",
       track: "stable",
       running: version === "invalid" ? null : version,
+      // This run never reached will-quit after the handoff.
+      ...(kind !== "target-running" && { quit: "not-finished" }),
     });
     expect(existsSync(updates)).toBe(false);
   }
@@ -1666,4 +1668,75 @@ it("carries a copy the installer couldn't remove with the install it offers", as
     cleanup,
   });
   service.shutdown();
+});
+
+it("records a quit that finished after a handoff, and the next start tells it from one that didn't", async () => {
+  const handOff = async (quit: boolean) => {
+    rmSync(join(dir.path, "preferences.json.quit"), { force: true });
+    const installer: UpdateInstaller = {
+      unavailable: null,
+      completesOnQuit: true,
+      inspect: async () => null,
+      launch: async (_file, _signal, handed) => {
+        handed();
+        return null;
+      },
+    };
+    const service = await start({ installer });
+    const id = await offer(service);
+    await service.download(id);
+    expect((await service.restart(id)).snapshot.state.kind).toBe("handed-to-system");
+    // The app is asked to quit at the handoff; will-quit comes 23 s later.
+    if (quit) service.quitting(Date.now() + 23_000);
+    service.shutdown();
+  };
+  await handOff(true);
+  expect((await start()).get().lastAttempt).toMatchObject({
+    kind: "old-version-running",
+    quit: "finished",
+    quitMs: expect.any(Number),
+  });
+  expect((await start()).get().lastAttempt?.quitMs).toBeGreaterThanOrEqual(23_000);
+  await handOff(false);
+  expect((await start()).get().lastAttempt).toMatchObject({
+    kind: "old-version-running",
+    quit: "not-finished",
+  });
+  expect((await start()).get().lastAttempt).not.toHaveProperty("quitMs");
+  // An update that took says nothing about the quit.
+  expect((await start({ version: "1.1.0" })).get().lastAttempt).toEqual({
+    kind: "target-running",
+    target: "1.1.0",
+    from: "1.0.0",
+    track: "stable",
+    running: "1.1.0",
+  });
+});
+
+it("says nothing about a quit for an attempt written by a build that didn't record quits", async () => {
+  await store().set(
+    "attempt",
+    JSON.stringify({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      time: "2026-11-23T00:00:00.000Z",
+      phase: "handoff",
+    }),
+  );
+  expect((await start()).get().lastAttempt).toEqual({
+    kind: "old-version-running",
+    target: "1.1.0",
+    from: "1.0.0",
+    track: "stable",
+    running: "1.0.0",
+  });
+});
+
+it("a quit with no handoff in this run records nothing", async () => {
+  const markQuit = vi.fn();
+  const service = await start({ store: { ...store(), markQuit } });
+  service.quitting();
+  service.shutdown();
+  expect(markQuit).not.toHaveBeenCalled();
 });

@@ -118,13 +118,22 @@ export function handoffLocked(state: DesktopUpdateState) {
   );
 }
 
+/** Whether the app that handed the update off finished quitting, when it recorded that. */
+function quitLine(attempt: NonNullable<DesktopUpdateSnapshot["lastAttempt"]>) {
+  if (attempt.quit === "not-finished")
+    return " The app didn't finish quitting for the update, and macOS installs it only after that.";
+  if (attempt.quit === "finished")
+    return ` The app quit for the update after ${Math.max(1, Math.round((attempt.quitMs ?? 0) / 1000))} s, but macOS didn't install it.`;
+  return "";
+}
+
 export function attemptLine(attempt: DesktopUpdateSnapshot["lastAttempt"]) {
   if (!attempt) return null;
   if (attempt.running) {
     if (attempt.kind === "target-running") return `Clawtrate ${attempt.running} is running.`;
     if (attempt.kind === "old-version-running")
-      return `Clawtrate ${attempt.running} is running, not ${attempt.target}. Check for updates to try again.`;
-    return `Clawtrate ${attempt.running} is running. Clawtrate couldn't confirm that it restarted into ${attempt.target}.`;
+      return `Clawtrate ${attempt.running} is running, not ${attempt.target}.${quitLine(attempt)} Check for updates to try again.`;
+    return `Clawtrate ${attempt.running} is running. Clawtrate couldn't confirm that it restarted into ${attempt.target}.${quitLine(attempt)}`;
   }
   return "Clawtrate couldn't read the running version.";
 }

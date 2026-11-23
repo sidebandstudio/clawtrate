@@ -99,6 +99,13 @@ export interface UpdateAttemptOutcome {
   track: UpdateTrack;
   from: string;
   running: string | null;
+  /**
+   * When the update did not take, and the build that handed it off records its quit: whether
+   * that app finished quitting (`quitMs` after it asked to) or was stopped first. macOS installs
+   * a staged update only once the app has quit.
+   */
+  quit?: "finished" | "not-finished";
+  quitMs?: number;
 }
 
 export type DesktopUpdateState =

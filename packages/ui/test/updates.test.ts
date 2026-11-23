@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { Updates, showUpdateFooter } from "../src/Updates.tsx";
 import {
+  attemptLine,
   cleanupLine,
   inspectionFailureDetails,
   inspectionFailureLine,
@@ -490,3 +491,29 @@ it("F-231: says when the check left a copy it couldn't remove, and that it tries
     render(verified, { install: { kind: "restart-available", offerId: "shown" } }).html,
   ).not.toContain("couldn't remove");
 });
+
+it.each([
+  [
+    { quit: "not-finished" },
+    "Clawtrate 1.0.0 is running, not 1.1.0. The app didn't finish quitting for the update, and macOS installs it only after that. Check for updates to try again.",
+  ],
+  [
+    { quit: "finished", quitMs: 23_400 },
+    "Clawtrate 1.0.0 is running, not 1.1.0. The app quit for the update after 23 s, but macOS didn't install it. Check for updates to try again.",
+  ],
+  [{}, "Clawtrate 1.0.0 is running, not 1.1.0. Check for updates to try again."],
+] as const)(
+  "F-231: after an update that didn't take, says whether the app finished quitting %#",
+  (quit, line) => {
+    expect(
+      attemptLine({
+        kind: "old-version-running",
+        target: "1.1.0",
+        from: "1.0.0",
+        track: "stable",
+        running: "1.0.0",
+        ...quit,
+      }),
+    ).toBe(line);
+  },
+);

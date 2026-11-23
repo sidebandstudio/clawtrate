@@ -8,6 +8,26 @@ interface Attempt {
   track: UpdateTrack;
   time: string;
   phase: "handoff";
+  /** The build that wrote it records its own quit (`UpdateQuit`). */
+  marksQuit?: true;
+}
+
+/** Written as the app quits after handing an update off: which attempt, and how long it took. */
+export interface UpdateQuit {
+  attempt: string;
+  ms: number;
+}
+
+export function readQuit(value: unknown): UpdateQuit | null {
+  if (!value || typeof value !== "object" || !("attempt" in value) || !("ms" in value)) return null;
+  const { attempt, ms } = value;
+  return typeof attempt === "string" &&
+    attempt.length <= 64 &&
+    typeof ms === "number" &&
+    Number.isSafeInteger(ms) &&
+    ms >= 0
+    ? { attempt, ms }
+    : null;
 }
 
 export function readAttempt(value: unknown): Attempt {
@@ -39,23 +59,26 @@ export function readAttempt(value: unknown): Attempt {
     track: versionTrack(target),
     time,
     phase: "handoff",
+    ...("marksQuit" in value && value.marksQuit === true && { marksQuit: true as const }),
   };
 }
 
 export function attemptOutcome(
-  { target, from, track }: Attempt,
+  { target, from, track, time, marksQuit }: Attempt,
   running: string | null,
+  quit: UpdateQuit | null = null,
 ): UpdateAttemptOutcome {
-  return {
-    kind:
-      running === target
-        ? "target-running"
-        : running === from
-          ? "old-version-running"
-          : "unconfirmed",
-    target,
-    from,
-    track,
-    running,
-  };
+  const kind =
+    running === target
+      ? "target-running"
+      : running === from
+        ? "old-version-running"
+        : "unconfirmed";
+  const quitRecord =
+    kind === "target-running" || !marksQuit
+      ? {}
+      : quit?.attempt === time
+        ? { quit: "finished" as const, quitMs: quit.ms }
+        : { quit: "not-finished" as const };
+  return { kind, target, from, track, running, ...quitRecord };
 }
