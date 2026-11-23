@@ -576,6 +576,8 @@ The shell stays mounted with its cached content when the connection drops. One c
 
 Tapping a bot opens its task list, tapping a task opens its chat, Back returns to the task list, and Back again returns to Home. This holds for every bot, whatever its number of tasks. The narrow desktop window keeps the single unfolding list described above, because there the rail and its tasks are one pane.
 
+**iPhone Duo.** Folded, the outer display shows the three screens as above. Unfolded, the inner display shows two panes from the same route: the list (Home, or the bot's task list once a bot is open) and the chat. With the fold upright, each fills its side of the fold; with the fold across the screen, the list is a column of 280 to 360 points and a hairline divides it from the chat. With no task open, the chat pane says "No chat open". The open task's row has the selected background. Back in the chat closes it, and Back in the list returns to Home. Folding shows the open chat alone, with Back to the bot's tasks.
+
 ## 13. Accessibility
 
 **Contrast**, measured against every surface each colour is used on, with translucent fills composited over their real parents:

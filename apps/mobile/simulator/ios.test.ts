@@ -47,6 +47,7 @@ import {
   deadPort,
   devGateway,
   devices,
+  displays,
   echoingGateway,
   env,
   gatewayCall,
@@ -56,6 +57,7 @@ import {
   launch,
   layout,
   lit,
+  measuredWindows,
   moves,
   near,
   notSee,
@@ -529,6 +531,56 @@ describe("the iOS app", () => {
     const paired = (await devices()).paired.find((d) => d.deviceId === deviceId);
     expect(paired?.scopes).toEqual(["operator.read"]);
   });
+
+  // Registered only when `pnpm mobile:check` runs on an iPhone Duo (CLAWTRATE_IOS_DEVICE_TYPE),
+  // never on the run's usual iPhone; see docs/development/ios.md.
+  if (process.env.CLAWTRATE_IOS_FORM === "duo") {
+    it("on iPhone Duo folded, the outer display keeps the phone's layout: Home, a bot's tasks and a task's chat each fill the screen, one at a time, and Back goes from the chat to the bot's tasks and on to Home", async () => {
+      // Folded: the outer display is the one in use, and the inner one is off.
+      const [outer, inner] = displays().sort((a, b) => a.width * a.height - b.width * b.height);
+      expect(outer?.active).toBe(true);
+      expect(inner?.active).toBe(false);
+      expect(inner?.on).toBe(false);
+      // The app found the hinge, and only ever measured the outer display's compact window.
+      const seen = measuredWindows(Math.ceil((Date.now() - started) / 1000) + 30);
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.at(-1)).toMatchObject({ hinge: true, sizeClass: "compact" });
+      expect(seen.every((w) => w.sizeClass === "compact")).toBe(true);
+      const width = seen.at(-1)!.width;
+      expect(Math.abs(width - outer!.width)).toBeLessThanOrEqual(1);
+      /** The element spans the whole window, as on any iPhone. */
+      const fills = async (id: string) => {
+        const box = (await layout()).get(id)?.[0];
+        expect(box, id).toBeDefined();
+        expect(box!.x1, id).toBeLessThanOrEqual(1);
+        expect(Math.abs(box!.x2 - width), id).toBeLessThanOrEqual(1);
+      };
+      await steps("duo-folded-home", [waitFor({ id: "home" }, 30_000), notSee({ id: "no-chat" })]);
+      await fills("home");
+      await shoot("duo-folded-home");
+      await steps("duo-folded-bot", [
+        tap({ id: "bot-otto" }),
+        waitFor({ id: "bot-tasks-otto" }, 20_000),
+        notSee({ id: "no-chat" }),
+      ]);
+      await fills("bot-tasks-otto");
+      await shoot("duo-folded-bot-tasks");
+      await steps("duo-folded-chat", [
+        tap({ id: `task-${lit("agent:otto:disk-space")}` }),
+        waitFor({ id: "turn-bot" }, 60_000),
+        notSee({ id: "bot-tasks-otto" }),
+        see({ id: "back", text: "Back to Otto's tasks" }),
+      ]);
+      await fills("transcript");
+      await shoot("duo-folded-chat");
+      await steps("duo-folded-back", [
+        tap({ id: "back", text: "Back to Otto's tasks" }),
+        waitFor({ id: "bot-tasks-otto" }, 20_000),
+        tap({ id: "back", text: "Back to bots" }),
+        waitFor({ id: "home" }, 20_000),
+      ]);
+    });
+  }
 
   it("on iPhone, the app switcher shows the privacy cover after leaving Home", async () => {
     // The app switcher's picture of the app is the cover: the background and the mark.

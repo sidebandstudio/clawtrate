@@ -813,6 +813,69 @@ export function appLog(sinceSeconds: number): string {
   return result.stdout;
 }
 
+/** One of the device's built-in displays, as CoreDevice reports it, in points. */
+export type Display = { name: string; active: boolean; on: boolean; width: number; height: number };
+
+/**
+ * The device's built-in displays and which one is in use. iPhone Duo has two:
+ * folded, the outer one is active and the inner one is off.
+ */
+export function displays(): Display[] {
+  mkdirSync(OUTPUT, { recursive: true });
+  const file = join(OUTPUT, "displays.json");
+  // The JSON output is devicectl's stable one; its text output is not.
+  const result = spawnSync(
+    "xcrun",
+    ["devicectl", "device", "info", "displays", "--device", env.device, "--quiet", "--json-output", file],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) throw new Error(`devicectl device info displays: ${result.stderr}`);
+  const report = JSON.parse(readFileSync(file, "utf8")) as {
+    result: {
+      displays: Array<{
+        name: string;
+        active: boolean;
+        backlightState: string;
+        nativeSize: [number, number];
+        pointScale: number;
+        type: Record<string, unknown>;
+      }>;
+    };
+  };
+  return report.result.displays
+    .filter((d) => "integrated" in d.type)
+    .map((d) => ({
+      name: d.name,
+      active: d.active,
+      on: d.backlightState !== "off",
+      width: d.nativeSize[0] / d.pointScale,
+      height: d.nativeSize[1] / d.pointScale,
+    }));
+}
+
+/** What the app measured of its window (modules/clawtrate-layout logs each change), oldest first. */
+export type MeasuredWindow = {
+  width: number;
+  height: number;
+  hinge: boolean;
+  sizeClass: "compact" | "regular";
+  bar: "none" | "left" | "right";
+  regions: number;
+};
+
+export function measuredWindows(sinceSeconds: number): MeasuredWindow[] {
+  const pattern =
+    /window (\d+)x(\d+) hinge=(true|false) sizeClass=(compact|regular) bar=(none|left|right) regions=(\d+)/g;
+  return [...appLog(sinceSeconds).matchAll(pattern)].map((m) => ({
+    width: Number(m[1]),
+    height: Number(m[2]),
+    hinge: m[3] === "true",
+    sizeClass: m[4] as MeasuredWindow["sizeClass"],
+    bar: m[5] as MeasuredWindow["bar"],
+    regions: Number(m[6]),
+  }));
+}
+
 /** A loopback port nothing listens on. */
 export async function deadPort(): Promise<number> {
   const server = createServer();
