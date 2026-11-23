@@ -86,6 +86,16 @@ function isMetadataHeader(line: string): boolean {
   );
 }
 
+/** Whether `text` ends inside a code span: a backtick run no equal run has closed yet (CommonMark). */
+function inCodeSpan(text: string): boolean {
+  let open: string | null = null;
+  for (const [run] of text.matchAll(/`+/g)) {
+    if (open === null) open = run;
+    else if (run === open) open = null;
+  }
+  return open !== null;
+}
+
 /**
  * Text of a channel turn without what the gateway wrote around the person's
  * words: a leading timestamp or `[Discord …]` envelope, `⟦openclaw:ctx⟧` and
@@ -129,9 +139,9 @@ export function stripChannelMetadata(text: string): string {
       // (`projectSessionDisplayMessage`, `flattenMarkdown`): what is left of a block is its
       // `<Label>: ⟦openclaw:ctx⟧` header, and the closing context block runs to the end.
       // Only where the gateway puts them, never inside inline code: a label has no backtick,
-      // and a closing block after an odd number of backticks is in a code span the person wrote.
+      // and a closing block inside a code span the person opened is theirs.
       .replace(/(?:^|\s+)Context: ⟦openclaw:ctx⟧[^\n]*$/, (block, at: number, whole: string) =>
-        whole.slice(0, at).split("`").length % 2 === 1 ? "" : block,
+        inCodeSpan(whole.slice(0, at)) ? block : "",
       )
       .replace(/^(?:[^⟦\n`]{1,80}?: ⟦openclaw:ctx⟧\s*)+/, "")
       // A bracket followed by `(` is a markdown link the person wrote, never an envelope.
