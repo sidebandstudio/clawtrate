@@ -3605,7 +3605,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     name: "a bot takes a name in its own file",
     covers: ["#take-name"],
     run: async (h) => {
-      const view = await h.run("plain", await h.session("marlow", "take-name"), "#take-name Johnny");
+      const view = await h.run(
+        "plain",
+        await h.session("marlow", "take-name"),
+        "#take-name Johnny",
+      );
       same(
         [view.terminal.state, view.finalText()],
         ["final", "Johnny it is. Saved, so I'll remember."],

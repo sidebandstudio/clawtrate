@@ -32,7 +32,8 @@ for (const size of [WIDE, PHONE]) {
   for (const theme of THEMES) {
     test.describe(`bot name ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
-      const scenes = size === WIDE && theme === "dark" ? ["bot-name", "bot-name-read-only"] : ["bot-name"];
+      const scenes =
+        size === WIDE && theme === "dark" ? ["bot-name", "bot-name-read-only"] : ["bot-name"];
       for (const scene of scenes) {
         test(`F-552: ${scene} matches its baseline`, async ({ page }) => {
           await open(page, scene, theme);
@@ -61,9 +62,7 @@ test.describe("bot name behaviour", () => {
       await page.keyboard.press("Shift+Tab");
     await expect(rename).toBeFocused();
     await page.keyboard.press("Enter");
-    expect(await sent(page)).toEqual([
-      { type: "acceptBotName", botId: "new-bot", name: "Johnny" },
-    ]);
+    expect(await sent(page)).toEqual([{ type: "acceptBotName", botId: "new-bot", name: "Johnny" }]);
     await expect(card(page)).toHaveCount(0);
     await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
     await expect(

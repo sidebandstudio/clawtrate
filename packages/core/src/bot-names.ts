@@ -50,7 +50,10 @@ export function identityName(content: string): string | null {
       .slice(colon + 1)
       .replace(/^[*_`\s]+|[*_`\s]+$/g, "")
       .trim();
-    const bare = value.replace(/^\((.*)\)$/, "$1").trim().toLowerCase();
+    const bare = value
+      .replace(/^\((.*)\)$/, "$1")
+      .trim()
+      .toLowerCase();
     if (value && !PLACEHOLDERS.has(bare)) found = value;
   }
   return found;
@@ -119,15 +122,17 @@ export class BotNames {
     this.reading.add(botId);
     try {
       const answer = asRecord(
-        asRecord(await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }))
-          ?.file,
+        asRecord(
+          await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }),
+        )?.file,
       );
       if (epoch !== this.epoch) return;
       const content = typeof answer?.content === "string" ? answer.content : null;
       if (content === null || content.length > MAX_IDENTITY_CHARS) return;
       if (!content.includes(MADE_IN_CLAWTRATE)) {
         this.skipped.add(botId);
-        if (this.skipped.size > MAX_NAME_CARDS) this.skipped.delete(this.skipped.values().next().value!);
+        if (this.skipped.size > MAX_NAME_CARDS)
+          this.skipped.delete(this.skipped.values().next().value!);
         return this.drop(botId);
       }
       const raw = identityName(content);

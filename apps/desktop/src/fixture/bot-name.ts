@@ -48,7 +48,9 @@ function rows(start: number) {
     { role: "user", content: "Johnny", timestamp: at(30), __openclaw: meta("n-3", null, 3) },
     {
       role: "assistant",
-      content: [{ type: "toolCall", id: "call_n_1", name: "read", arguments: { path: "IDENTITY.md" } }],
+      content: [
+        { type: "toolCall", id: "call_n_1", name: "read", arguments: { path: "IDENTITY.md" } },
+      ],
       timestamp: at(31),
       model: "scripted/dev-1",
       __openclaw: meta("n-4", run, 4),
@@ -99,7 +101,11 @@ function rows(start: number) {
   ];
 }
 
-export function botNameScene(name: BotNameScene, base: ClawtrateState, now: number): ClawtrateState {
+export function botNameScene(
+  name: BotNameScene,
+  base: ClawtrateState,
+  now: number,
+): ClawtrateState {
   const start = now - 5 * 60 * SECOND;
   const history = rows(start);
   const ctx: EngineContext = { sessionKey: NAMED_TASK, now, raw: new RawTable() };
@@ -174,7 +180,9 @@ export function botNameCommand(
   }
   set({
     ...state,
-    bots: state.bots.map((bot) => (bot.id === command.botId ? { ...bot, name: command.name } : bot)),
+    bots: state.bots.map((bot) =>
+      bot.id === command.botId ? { ...bot, name: command.name } : bot,
+    ),
     botNames,
   });
   return Promise.resolve();
