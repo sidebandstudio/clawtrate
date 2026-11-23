@@ -45,5 +45,25 @@ it("the shipped entry gets no Apply and dispatches only reads and its own config
   expect(undo.error!.details.reason).toBe("undo-unavailable");
   expect((await call("changes.list")).payload!.changes).toEqual([]);
   await call("managers.set", { bots: ["pip"] });
+  // An instruction change carries its base hash, so it is the request an Apply would take.
+  const grant = await call("relay.grants.set", {
+    scope: "suggest",
+    bots: "all",
+    includeFuture: true,
+    includeInstructions: true,
+  });
+  const p = (
+    await call("relay.propose", {
+      grant: grant.payload!.id,
+      generation: 1,
+      bot: "pip",
+      fields: { instructions: { agents: { text: "x", baseHash: null } } },
+    })
+  ).payload!;
+  const accepted = await call("proposals.accept", { id: p.proposalId, digest: p.digest });
+  expect(accepted.error?.details).toMatchObject({ reason: "apply-unavailable" });
+  expect((await call("proposals.get", { id: p.proposalId })).payload).toMatchObject({
+    state: "open",
+  });
   expect(new Set(dispatched)).toEqual(new Set(["agents.list", "config.get", "config.patch"]));
 });

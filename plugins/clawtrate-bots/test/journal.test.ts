@@ -110,6 +110,11 @@ describe("on OpenClaw 2026.10.6", () => {
     expect(lib.match(/options\.effects/g)).toHaveLength(1);
     // Options are read by name only, so no other name can carry an Apply in.
     expect(lib).not.toMatch(/\boptions\s*\[/);
+    // The SDK only as direct calls, and no module loaded at run time.
+    expect(lib).not.toMatch(/\bimport\s*\(|createRequire/);
+    expect(lib.match(/\bsdk(?![\w-])/g)).toHaveLength(
+      lib.match(/\bsdk\.dispatchGatewayMethod\(/g)!.length + 1,
+    );
     expect([...lib.matchAll(/\{([\w\s,]*)\}\s*=\s*options\b/g)].map((m) => m[1]!.trim())).toEqual([
       "sdk",
     ]);
@@ -369,7 +374,9 @@ describe("Apply and the journal", () => {
       if (step === "label") armed = true;
     };
     const answer = accept(host, p);
-    await next.reached;
+    // Without the check the worker never makes that read: it answers, and the assertions below say why.
+    await Promise.race([next.reached, answer]);
+    armed = false;
     await open().records.settleAbandoned();
     next.release();
     expect((await answer).payload).toMatchObject({ state: "partial" });
