@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Duplex } from "node:stream";
 import { MODEL_ID } from "./env.ts";
 import { ScriptedAccounts, type FailureStatus, type ScriptedFailure } from "./scripted-accounts.ts";
+import { IMAGES_PATH, imagesAnswer } from "./scripted-images.ts";
 import {
   messageText,
   gatewayTurnPrompt,
@@ -315,6 +316,19 @@ export function startFakeProvider(options: FakeProviderOptions) {
         }
         log(`web search ${JSON.stringify(query.slice(0, 80))}`);
         sendJson(res, 200, scriptedSearchResults(query));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === IMAGES_PATH) {
+        // The gateway's LiteLLM image provider, pointed here by `--with-images`.
+        let body: unknown = null;
+        try {
+          body = JSON.parse(await readBody(req));
+        } catch {
+          // an unreadable body still gets the picture
+        }
+        const answer = imagesAnswer(body, req.headers.authorization);
+        log(`image request: ${answer.status}`);
+        sendJson(res, answer.status, answer.body);
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {

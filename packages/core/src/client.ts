@@ -124,6 +124,7 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
+import { readChatPicture, type ChatPictureRead } from "./pictures.ts";
 import type {
   ApprovalInstructions,
   ClawtrateHost,
@@ -5492,6 +5493,20 @@ export class ClawtrateClient {
     return this.fileRead((ctx) => readCheckoutDiff(ctx, key, path), options);
   }
 
+  /** A picture the bot handed over in the task (`pictures.ts`), sharing the file reads' limit. */
+  readChatPicture(
+    key: string,
+    artifactId: string,
+    options: FileReadOptions = {},
+  ): Promise<ChatPictureRead> {
+    const gatewayUrl = this.state.connection.gatewayUrl ?? "";
+    return this.fileRead(
+      (ctx) =>
+        readChatPicture({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }, key, artifactId),
+      options,
+    );
+  }
+
   /** The next part of a file on its way to this viewer. */
   readFileChunk(id: string, index: number, owner: object = DIRECT_CALLER): { data: string } {
     return this.fileTransfers.chunk(owner, id, index);
@@ -7298,9 +7313,21 @@ export class ClawtrateClient {
    * out cannot prove membership from the payload, so the filtered list is
    * re-read instead of inserting it.
    */
+  /**
+   * A `sessions.changed` with `phase: "message"` for an open task: a message of it
+   * changed in place. The gateway writes a picture a turn hands over into its
+   * message after the turn ends, with no `session.message`, so history is read again.
+   */
+  private noteMessageChange(payload: unknown): void {
+    const row = asRecord(payload);
+    const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
+    if (row?.phase === "message" && key && this.tracked(key)) this.scheduleHistory(key);
+  }
+
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.discoveryRead) this.discoveryRead.sessionsChanged = true;
     this.noteRunChange(payload);
+    this.noteMessageChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
     // Rows are kept under the id cap.

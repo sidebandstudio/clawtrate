@@ -130,7 +130,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Outbox                                  | 16 × 64,696                                                                                                                            |       1,035,154 |
   | Questions                               | (4 pending + 4 settled) × 81,509                                                                                                       |         652,082 |
   | Approvals                               | (16 pending + 8 settled) × 88,109                                                                                                      |       2,114,642 |
-  | History page                            | 200 items × 6,113, plus 300 blocks × 4,172 shared by the page                                                                          |       2,474,702 |
+  | History page                            | 200 items × 6,127, plus 300 blocks × 4,172 and 16 pictures × 1,942 shared by the page                                                  |       2,508,574 |
   | Inter-session messages                  | 64 × 5,772                                                                                                                             |         369,474 |
   | Linked runs                             | 32 × (key 1,024 + 2,204)                                                                                                               |         103,362 |
   | Steer aliases                           | 16 × (key 1,024 + 1,024)                                                                                                               |          32,802 |
@@ -139,13 +139,13 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Tool inventory and workspace root       | `MAX_BUILTIN_TOOLS` (256) built-in and plugin tool names from `tools.effective`, and the bot's workspace root from `agents.files.list` |          33,571 |
   | Reactions                               | 200 messages shown × (key 1,024 + 12 emoji × 123), from `session.reactions.list` and `session.reaction`                                |         503,214 |
   | Streaming text, ids, error and the rest | streaming text 16,384, plus field names                                                                                                |          21,917 |
-  | Per task                                |                                                                                                                                        |      14,632,234 |
+  | Per task                                |                                                                                                                                        |      14,666,106 |
 
 - **The state**, and what one viewer is sent:
 
   | Part                               | Count × cap                                                                                                                  | JSON characters |
   | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------: |
-  | Transcripts                        | 8 followed tasks × 14,632,234, with their keys                                                                               |     117,066,082 |
+  | Transcripts                        | 8 followed tasks × 14,666,106, with their keys                                                                               |     117,337,058 |
   | Bots                               | 32 × 35,675                                                                                                                  |       1,141,634 |
   | Unrouted approvals                 | 16 × 88,109                                                                                                                  |       1,409,762 |
   | Task creations                     | 8 × 40,546                                                                                                                   |         324,378 |
@@ -187,6 +187,15 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Host                |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |     649,987,771 |
 
   In memory a JSON character is one or two bytes (a string is Latin-1 or UTF-16), and on a socket at most three (UTF-8). The table bounds string data, not the process: objects, map entries, encoding copies and garbage come on top of it, so it is not a memory ceiling; ordinary use is far below it. A history page is read whole, at most the gateway's `chat.history` ceiling (524,288 bytes in OpenClaw 2026.10.6), and mapped and bounded before it is kept. A socket error ends only that viewer, and releasing a viewer never throws into the socket's callbacks. Chat stream baselines are kept only for tasks the client follows: the reply text alone, for at most `MAX_STREAMS_PER_TASK` (2) runs per task, retired when the run ends (on the `chat` or the `agent` stream), leaves the transcript, or its task is resynced or released.
+
+## Pictures a bot hands over
+
+A picture a bot makes with `image_generate` arrives in a turn the gateway runs by itself after the bot's run: its run id is `image_generate:<task id>:ok:…`, where the task id is the one the bot's call result named. That turn's assistant message carries an `image` block with an `artifactId` (OpenClaw 2026.10.6, live on a development gateway with `--with-images`). What follows from it:
+
+- The picture is drawn under that turn, from the bytes the host read through `artifacts.download`, as [Addresses a gateway hands the client](#addresses-a-gateway-hands-the-client) allows (`packages/core/src/pictures.ts`). The block's own `url` and `openUrl` are not kept in the state.
+- Its text alternative is the description of the `image_generate` call whose task the turn's run id names, when that call is in the transcript. The gateway's `alt` is the file name it gave the picture, so it is not used.
+- The gateway can write the block into the message after the turn ends. It then sends `sessions.changed` with `phase: "message"` and no `session.message`, so the client reads an open task's history again on that event.
+- A picture is read each time its turn is drawn, within the file reads' gate (`MAX_FILE_READS`), and its bytes go to the viewer as a file transfer (`fileTransfers`). Nothing else of it is kept. The iPhone app does not draw pictures yet.
 
 ## The reading of an action
 
