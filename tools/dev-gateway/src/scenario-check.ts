@@ -41,6 +41,7 @@ import {
   type PlanContext,
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
+import { IMAGE_PROMPT } from "./scenarios.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
@@ -1048,6 +1049,10 @@ export const EXPECTED_EFFECTIVE_TOOLS = [
 const SCHEDULE_RESULT_SHAPE =
   "content text; details {id: string, owner: {…}, agentId: string, sessionKey: string, name: string, enabled: boolean, deleteAfterRun: boolean, createdAtMs: number, schedule: {…}, sessionTarget: string, wakeMode: string, payload: {…}, state: {…}, updatedAtMs: number, configRevision: string, nextRunAtMs: number, deliveryPreview: {…}}";
 const SCHEDULE_HISTORY_DETAILS = true;
+
+/** The check that runs only on an instance with the stand-in image provider. */
+export const IMAGE_CHECK = "a picture from the image tool";
+const IMAGE_CALL_TITLE = "Image Generation";
 
 export type ScenarioCheck = {
   name: string;
@@ -3373,6 +3378,92 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         askCall("#ask", "pip", { route: ["Lake loop"] }),
       ]);
       view.expectEnd("final", "Thanks. You answered:\n\n- route: Lake loop");
+    },
+  },
+  // Only on an instance started with `--with-images` (IMAGE_CHECK), never on the scenario instance.
+  {
+    name: IMAGE_CHECK,
+    covers: ["#image"],
+    run: async (h) => {
+      const key = await h.session("main", "image");
+      const view = await h.run("plain", key, "#image");
+      let task = "";
+      view.expectCalls([
+        {
+          name: "image_generate",
+          args: { prompt: IMAGE_PROMPT },
+          isError: false,
+          // Details are checked first: the task they name is the one the text names.
+          details: (details: JsonRecord | undefined, where: string) => {
+            same([details?.async, details?.status], [true, "started"], `${where} details`);
+            task = String(details?.taskId);
+            expect(/^tool:image_generate:[0-9a-f-]+$/.test(task), `${where} task: ${task}`);
+          },
+          content: (texts, where) =>
+            expect(
+              texts.length === 1 &&
+                texts[0]!.startsWith(`Background task started for image generation (${task}).`),
+              `${where}: ${texts.join(" | ")}`,
+            ),
+          title: IMAGE_CALL_TITLE,
+        },
+      ]);
+      view.expectEnd(
+        "final",
+        "I asked for the picture. It will arrive in this task when it is ready.",
+      );
+      // The gateway's own turn in the same task delivers the picture, named for the task.
+      const done = await h
+        .op("plain")
+        .waitFor(
+          "the gateway's turn that delivers the picture",
+          (e) =>
+            isChat("final")(e) &&
+            rec(e.payload).sessionKey === key &&
+            String(rec(e.payload).runId).startsWith(`image_generate:${task}:ok:`),
+          60_000,
+          view.from,
+        );
+      const delivered = new RunView(h.op("plain"), String(rec(done.payload).runId), key, view.from);
+      delivered.expectCalls([]);
+      delivered.expectEnd("final", null);
+      expect(
+        delivered.finalText().startsWith("Here is the picture you asked for."),
+        `the delivering turn's text: ${delivered.finalText()}`,
+      );
+      // The block can land after the turn's end: history is read until it is there.
+      let block: JsonRecord | undefined;
+      for (let attempt = 0; attempt < 40 && !block; attempt += 1) {
+        const history = await h
+          .op("plain")
+          .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key });
+        block = history.messages
+          .filter((m) => m.role === "assistant" && rec(m.__openclaw).runId === delivered.runId)
+          .flatMap((m) => (Array.isArray(m.content) ? (m.content as JsonRecord[]) : []))
+          .find((part) => part.type === "image");
+        if (!block) await sleep(500);
+      }
+      expect(block, "the delivering turn's message has an image block");
+      same(
+        [block.mimeType, block.width, block.height, typeof block.artifactId],
+        ["image/png", 256, 256, "string"],
+        "the image block",
+      );
+      const download = await h.op("plain").request<JsonRecord>("artifacts.download", {
+        sessionKey: key,
+        artifactId: block.artifactId,
+      });
+      expect(
+        new RegExp(
+          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/[0-9a-f-]+/full\\?mediaTicket=v1\\.[A-Za-z0-9._~-]+$`,
+        ).test(String(download.url)),
+        `the download's path: ${String(download.url)}`,
+      );
+      const expires = Date.parse(String(download.expiresAt));
+      expect(
+        expires > Date.now() && expires <= Date.now() + 300_000,
+        `the download's expiry: ${String(download.expiresAt)}`,
+      );
     },
   },
   {
