@@ -60,16 +60,15 @@ describe("a quit's deadline", () => {
   });
 
   it("fails an exit seen only after the deadline, though seen before the deadline's timer runs", async () => {
-    // Real timers: a synchronous poll that starts at 50 ms and blocks until 80 ms
-    // sees the exit while the 60 ms timer waits behind it.
-    const gone = () =>
-      new Promise<void>((resolve) =>
-        setTimeout(() => {
-          const until = performance.now() + 30;
-          while (performance.now() < until);
-          resolve();
-        }, 50),
-      );
+    // The deadline's timer is fake and never runs; the clock `quitWithin` reads is real.
+    // A synchronous poll that blocks past the deadline, then sees the exit, settles
+    // first, so only the time it settled at can fail it.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const gone = () => {
+      const until = performance.now() + 61;
+      while (performance.now() < until);
+      return Promise.resolve();
+    };
     expect(
       await quitWithin(
         () => undefined,
