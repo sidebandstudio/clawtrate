@@ -7214,6 +7214,17 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, tasksByBot }));
   }
 
+  /**
+   * Whether a channel chat the client does not hold would give way at once: the bot's own tasks
+   * alone fill `MAX_LISTED_TASKS`, so reading the list again could not keep it (`newestRows`).
+   */
+  private channelRowGivesWay(row: RawRecord): boolean {
+    if (externalChannelOf(row) === null || this.rows.size < MAX_LISTED_TASKS) return false;
+    let native = 0;
+    for (const held of this.rows.values()) if (externalChannelOf(held) === null) native += 1;
+    return native >= MAX_LISTED_TASKS;
+  }
+
   /** One refresh at a time; one asked for meanwhile runs once after it. */
   private async refreshSessions(generation: number): Promise<void> {
     if (this.refreshing) {
@@ -7272,7 +7283,8 @@ export class ClawtrateClient {
     if (row.archived === true) this.cancelAllQueued(key);
     const cached = this.rows.get(key);
     if (!cached) {
-      if (!isExcludedSessionKey(key)) this.scheduleRefresh(generation);
+      if (!isExcludedSessionKey(key) && !this.channelRowGivesWay(row))
+        this.scheduleRefresh(generation);
       return;
     }
     const merged = mergeSessionRow(cached, row);
@@ -8078,9 +8090,16 @@ export class ClawtrateClient {
     }
   }
 
-  /** Messages across bots, or one bot's (`sessions.search`). */
-  searchMessages(query: string, botId: string | null): Promise<MessageSearch> {
-    return this.search((request) => searchMessages(request, query, botId));
+  /**
+   * Messages across bots, or one bot's (`sessions.search`). A chat from an external channel is
+   * left out unless "Show external channel chats" is on, as the task list leaves it out (F-519).
+   */
+  async searchMessages(query: string, botId: string | null): Promise<MessageSearch> {
+    const found = await this.search((request) => searchMessages(request, query, botId));
+    if (this.showChannelChats) return found;
+    const hidden = (key: string) =>
+      externalChannelOf(this.rows.get(capId(key, MAX_ID_CHARS)) ?? { key }) !== null;
+    return { ...found, hits: found.hits.filter((hit) => !hidden(hit.sessionKey)) };
   }
 
   /** One page of routines matching the query (`cron.list`). */

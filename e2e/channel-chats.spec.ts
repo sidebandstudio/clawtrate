@@ -199,6 +199,9 @@ test("F-519: on a read-only connection, chats from Discord and Slack stay out of
   });
   await turn(key.slack, `Quick question ${STAMP}`, { id: "slack", to: "user:U0123" });
   await admin.request("sessions.patch", { key: key.discord, unread: true });
+  // Still off: the chats have arrived and nothing shows them.
+  await expect(tasks()).toHaveCount(2);
+  await expect(botRow().first().locator(".unread-dot")).toHaveCount(0);
   const listed = await rows(botId!);
   expect(listed.find((row) => row.key === key.discord)?.channel).toBe("discord");
   expect(listed.find((row) => row.key === key.main)).toMatchObject({
@@ -222,9 +225,12 @@ test("F-519: on a read-only connection, chats from Discord and Slack stay out of
   await expect(botRow().first().locator(".unread-dot")).toHaveCount(0);
   expect(await botNames()).toEqual(order);
 
-  // Kept by the host across a reload.
+  // The host's choice, not the page's: a reload shows what the host keeps.
+  await setShown(true);
   await page.reload();
   await railShowsBot();
   await unfold();
-  await expect(tasks()).toHaveCount(2, { timeout: 30_000 });
+  await expect(tasks()).toHaveCount(4, { timeout: 30_000 });
+  await setShown(false);
+  await expect(tasks()).toHaveCount(2);
 });

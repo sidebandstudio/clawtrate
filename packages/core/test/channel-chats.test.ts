@@ -203,6 +203,50 @@ describe("F-519: Show external channel chats", () => {
     client.stop();
   });
 
+  it("F-519: message search leaves out a hidden channel chat's messages, and shows them when on", async () => {
+    const { client, gateway } = await connected();
+    const hit = (sessionKey: string) => ({
+      sessionKey,
+      sessionId: "s",
+      messageId: `m-${sessionKey}`,
+      role: "user",
+      timestamp: 1,
+      snippet: "disk",
+    });
+    gateway.handlers["sessions.search"] = () => ({
+      results: [hit(DISCORD), hit(NATIVE), hit("agent:pip:slack:direct:u9")],
+    });
+    const keys = async () =>
+      (await client.searchMessages("disk", null)).hits.map((each) => each.sessionKey);
+    expect(await keys()).toEqual([NATIVE]);
+    await client.setShowChannelChats(true);
+    expect(await keys()).toEqual([DISCORD, NATIVE, "agent:pip:slack:direct:u9"]);
+    client.stop();
+  });
+
+  it("F-519: a change in a channel chat the cap could not keep does not read the whole list again", async () => {
+    const native = Array.from({ length: MAX_LISTED_TASKS }, (_, index) => ({
+      key: `agent:pip:dashboard:${String(index).padStart(8, "0")}-0000`,
+      agentId: "pip",
+      updatedAt: 1_000 + index,
+    }));
+    const { client, gateway } = await connected({}, native);
+    const reads = () => gateway.calls("sessions.list").length;
+    const before = reads();
+    gateway.emit("sessions.changed", {
+      sessionKey: "agent:pip:discord:channel:77",
+      agentId: "pip",
+      channel: "discord",
+      updatedAt: 99_999,
+    });
+    await sleep(400);
+    expect(reads()).toBe(before);
+    // A task of the bot's own still is.
+    gateway.emit("sessions.changed", { sessionKey: "agent:pip:dashboard:new-one", agentId: "pip" });
+    await until(() => reads() > before);
+    client.stop();
+  });
+
   it("F-519: the Archived group leaves channel chats out unless they are shown", async () => {
     const archived = rows().map((row) => ({ ...row, archived: true, sessionId: row.key }));
     const ctx = {

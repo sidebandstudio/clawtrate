@@ -96,8 +96,15 @@ export function stripChannelMetadata(text: string): string {
   if (!/⟦openclaw:ctx⟧|\(untrusted metadata\)|\[message_id:|^\[/m.test(text)) return text;
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const kept: string[] = [];
+  let fenced = false;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!.trim();
+    // A code block the person wrote is theirs, whatever it holds.
+    if (line.startsWith("```")) fenced = !fenced;
+    if (fenced || line.startsWith("```")) {
+      kept.push(lines[index]!);
+      continue;
+    }
     // Everything after the closing context block is the gateway's, never the person's.
     if (line === "Context: ⟦openclaw:ctx⟧") break;
     if (isMetadataHeader(line)) {
@@ -113,18 +120,21 @@ export function stripChannelMetadata(text: string): string {
     if (/^\[message_id:\s*[^\]]+\]$/i.test(line)) continue;
     kept.push(lines[index]!);
   }
-  return kept
-    .join("\n")
-    .trim()
-    .replace(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */, "")
-    .replace(/^\[([^\]]+)\]\s*/, (envelope, header: string) =>
-      /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(header) ||
-      /^(WebChat|WhatsApp|Telegram|Signal|Slack|Discord|Google Chat|iMessage|Teams|Matrix|Zalo) /.test(
-        header,
+  return (
+    kept
+      .join("\n")
+      .trim()
+      // A bracket followed by `(` is a markdown link the person wrote, never an envelope.
+      .replace(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\](?!\() */, "")
+      .replace(/^\[([^\]]+)\](?!\()\s*/, (envelope, header: string) =>
+        /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(header) ||
+        /^(WebChat|WhatsApp|Telegram|Signal|Slack|Discord|Google Chat|iMessage|Teams|Matrix|Zalo) /.test(
+          header,
+        )
+          ? ""
+          : envelope,
       )
-        ? ""
-        : envelope,
-    );
+  );
 }
 
 /** Titles the gateway makes from a channel's raw ids (`discord:g-1234567890`), which read as nothing to a person. */

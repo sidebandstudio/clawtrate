@@ -159,6 +159,21 @@ describe("F-519: what the gateway wrote around a channel turn is not shown as it
     );
   });
 
+  it("F-519: a preview that starts with a markdown link keeps it", () => {
+    expect(
+      plainPreview("[Discord Developer Portal](https://discord.com/developers) has the token."),
+    ).toBe(plainPreview("Discord Developer Portal has the token."));
+    expect(plainPreview("[Mon 2026-11-22 10:00](https://example.com/log) was slow")).toBe(
+      "Mon 2026-11-22 10:00 was slow",
+    );
+    expect(stripChannelMetadata("[Discord 2026-11-22 10:00] hello")).toBe("hello");
+  });
+
+  it("F-519: a code block the person wrote keeps everything in it", () => {
+    const code = ["Try this:", "```", "[message_id: 42]", "Context: ⟦openclaw:ctx⟧", "```", "ok"];
+    expect(stripChannelMetadata(code.join("\n"))).toBe(code.join("\n"));
+  });
+
   it("F-519: ordinary text, brackets and links included, is left as it is", () => {
     for (const text of ["[link](https://example.com) here", "[draft] notes", "Plain words"])
       expect(stripChannelMetadata(text)).toBe(text);
