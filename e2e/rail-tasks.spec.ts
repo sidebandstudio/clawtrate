@@ -730,6 +730,61 @@ test("F-277: a message sent in a task just archived elsewhere says the task was 
   expect(await describe(task.key)).toMatchObject({ archived: true, sessionId });
 });
 
+test("F-277: restored elsewhere after its archive refused a message, the task offers Resend, which sends the message to the same task", async () => {
+  const task = await ownTask("pip", "Pip", "Restored elsewhere");
+  const words = `Picking this up again ${STAMP}`;
+  const bridge = await holdBridge(page, task.key, words);
+  await unfold(page, "Pip");
+  await sendInTask(page, task.title, "Hello");
+  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
+  await expect(
+    page.getByTestId("transcript").first().getByRole("blockquote").getByText("Hello"),
+  ).toBeVisible();
+  const before = new Set((await listed("pip", "all")).map((row) => row.key));
+  const sessionId = (await describe(task.key))!.sessionId;
+  // Archived from outside the app, and the person sends before this page has heard of it.
+  bridge.holding = true;
+  await gatewayCall("sessions.patch", {
+    key: task.key,
+    archived: true,
+    expectedSessionId: sessionId,
+  });
+  await gateway.poll(async () => (await describe(task.key))?.archived ?? false).toBe(true);
+  await page.getByTestId("composer-input").fill(words);
+  await page.getByTestId("composer-input").press("Enter");
+  await gateway.poll(() => bridge.states.has("sent") || bridge.states.has("failed")).toBe(true);
+  expect([...bridge.states]).not.toContain("sent");
+  bridge.release();
+  const sent = page.getByTestId("outgoing").filter({ hasText: words });
+  await expect(sent).toContainText("Not sent. This task was archived elsewhere.");
+  await expect(sent.getByRole("button", { name: "Resend" })).toHaveCount(0);
+  // Restored from outside the app: the gateway lists it again, under the same session.
+  await gatewayCall("sessions.patch", {
+    key: task.key,
+    archived: false,
+    expectedSessionId: sessionId,
+  });
+  await gateway.poll(async () => (await describe(task.key))?.archived ?? true).toBe(false);
+  await expect(sent.getByRole("button", { name: "Resend" })).toBeVisible({ timeout: 20_000 });
+  await shot(page, "archived-elsewhere-restored");
+  // Nothing went anywhere while it waited for the person.
+  expect(
+    JSON.stringify(await gatewayCall("chat.history", { sessionKey: task.key, limit: 50 })),
+  ).not.toContain(words);
+  await sent.getByRole("button", { name: "Resend" }).click();
+  // It goes to the same task, under the same session, and to no other.
+  await gateway
+    .poll(async () =>
+      JSON.stringify(await gatewayCall("chat.history", { sessionKey: task.key, limit: 50 })),
+    )
+    .toContain(words);
+  expect(await describe(task.key)).toMatchObject({ archived: false, sessionId });
+  await expect(page.getByTestId("outgoing").filter({ hasText: "Not sent." })).toHaveCount(0);
+  expect(
+    (await listed("pip", "all")).map((row) => row.key).filter((key) => !before.has(key)),
+  ).toEqual([]);
+});
+
 test("F-277: Stop and archive stops a working task's run and archives it; restored, its history is as it was", async () => {
   const task = await ownTask("pip", "Pip", "Stop and archive me");
   await sendInTask(page, task.title, "Hello");
