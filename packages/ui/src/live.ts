@@ -304,6 +304,18 @@ export function couldNotStart(message: OutgoingMessage): boolean {
 export { refusedElsewhere };
 
 /**
+ * Why a message written here can't be sent yet, or null once the view shows the task's session,
+ * from its list row, its creation or its history: a message goes only to the session the screen
+ * shows, so until then the words stay where they were written (F-278).
+ */
+export function sendWaits(transcript: Transcript | undefined): string | null {
+  if (transcript?.sessionId) return null;
+  return transcript?.status === "ready"
+    ? "This task isn't on the gateway."
+    : "Sending waits until this task loads.";
+}
+
+/**
  * Where Resend sends a message refused because its task was archived or reset elsewhere, once the
  * gateway shows the task live again: listed, so not archived, and its history naming the session
  * the screen shows. Restored, that is the session the message was written for; reset, the one

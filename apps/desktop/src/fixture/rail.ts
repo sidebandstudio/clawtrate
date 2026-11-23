@@ -172,13 +172,15 @@ function initialArchive(now: number): Map<string, ArchivedTask[]> {
 }
 
 /** An empty task's transcript, as the engine keeps one it has just created. */
-function emptyTranscript(key: string, now: number) {
+function emptyTranscript(task: Task, now: number) {
   return {
     ...emptyActivity,
     linkedRuns: {},
     interSession: [],
     mcpTools: {},
-    sessionKey: key,
+    sessionKey: task.key,
+    // The session its row names, as the engine keeps it from the creation or the list.
+    ...(task.sessionId ? { sessionId: task.sessionId } : {}),
     status: "ready" as const,
     items: [],
     error: null,
@@ -237,7 +239,7 @@ export function railCommands(
           ...state.tasksByBot,
           [botId]: sorted([task, ...(state.tasksByBot[botId] ?? [])]),
         },
-        transcripts: { ...state.transcripts, [key]: emptyTranscript(key, Date.now()) },
+        transcripts: { ...state.transcripts, [key]: emptyTranscript(task, Date.now()) },
       });
       return { key };
     };
@@ -361,7 +363,7 @@ export function railCommands(
               },
               transcripts: {
                 ...state.transcripts,
-                [task.key]: emptyTranscript(task.key, Date.now()),
+                [task.key]: emptyTranscript(task, Date.now()),
               },
             });
           }

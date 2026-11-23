@@ -564,6 +564,26 @@ describe("a send before the task's session is known (F-278)", () => {
     client.stop();
   });
 
+  it("a task whose read named no session, then listed with one: its history is read again, and the view shows that session before anything is sent there", async () => {
+    const history: { sessionId: string | undefined } = { sessionId: undefined };
+    const { client, gateway, release, transcript, sends } = await opening(null, history);
+    release();
+    await until(() => transcript().status === "ready");
+    expect(transcript().sessionId).toBeUndefined();
+    // A task is made under the key elsewhere, and the list shows it with its session.
+    history.sessionId = "s-5";
+    gateway.handlers["sessions.list"] = () => ({
+      sessions: [{ key: KEY, agentId: "otto", label: "Disk", sessionId: "s-5" }],
+      hasMore: false,
+    });
+    gateway.emit("sessions.changed", { sessionKey: KEY, sessionId: "s-5", reason: "create" });
+    await until(() => transcript().sessionId === "s-5");
+    client.sendMessage(KEY, "Is this still running?", { sessionId: "s-5" });
+    await until(() => sends().length === 1);
+    expect(sends()[0]).toMatchObject({ sessionId: "s-5", expectedLeafEntryId: null });
+    client.stop();
+  });
+
   it("a caller that means to make the task (`newTask`): its first message to a key that holds none goes as any first message does", async () => {
     const { client, release, transcript, sends } = await opening(null, { sessionId: undefined });
     client.sendMessage(KEY, "first", { newTask: true });

@@ -716,6 +716,14 @@
   font-size: var(--text-sm);
 }
 
+/* Why Send waits while the task's session is not shown yet; the draft stays. */
+.composer-note {
+  margin: 0 0 6px;
+  padding: 0 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
 /* The access bar: the composer's place on the read tier. */
 .access-bar {
   padding: 6px 8px 6px 14px;

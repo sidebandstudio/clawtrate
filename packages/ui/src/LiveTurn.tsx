@@ -20,7 +20,7 @@ import { OpenTaskContext } from "./cards/context.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
-import { endingOf, refusedElsewhere, resendSession } from "./live.ts";
+import { endingOf, refusedElsewhere, resendSession, sendWaits } from "./live.ts";
 import { Markdown } from "./Markdown.tsx";
 
 /**
@@ -536,6 +536,12 @@ export function RunEnding({
                 // again as a reply to the same message.
                 const held = transcript.outbox.some((message) => message.id === run.messageId);
                 const parent = messageReplyOf(run, transcript);
+                // Words from history go only to a session the view shows.
+                const waits = held ? null : sendWaits(transcript);
+                if (waits) {
+                  setRetryError(waits);
+                  return;
+                }
                 const again = held
                   ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
                   : bridge.invoke({

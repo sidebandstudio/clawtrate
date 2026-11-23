@@ -28,7 +28,7 @@ import { useBridge } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { ArrowUpIcon, CloseIcon, MoreIcon, ReplyIcon, SmileIcon } from "./icons.tsx";
 import { ShelfRow } from "./Composer.tsx";
-import { currentRun, questionPending, shelfMessages } from "./live.ts";
+import { currentRun, questionPending, sendWaits, shelfMessages } from "./live.ts";
 import { OutgoingBubble } from "./LiveTurn.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
@@ -585,6 +585,12 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   const send = async () => {
     const body = text.trim();
     if (!body) return;
+    // Until the view shows the task's session the words stay in the field.
+    const waits = sendWaits(transcript);
+    if (waits) {
+      setError(waits);
+      return;
+    }
     setText("");
     setError(null);
     try {

@@ -7558,6 +7558,20 @@ export class ClawtrateClient {
   private replaceRows(rows: Map<string, RawRecord>): void {
     this.rows = rows;
     this.publishTasks();
+    this.rereadListed(Object.keys(this.state.transcripts));
+  }
+
+  /**
+   * Followed tasks whose row names a session their history has not: each is read again, so the
+   * view shows that session before anything can be sent there. A read that named none, or another
+   * session, is not taken over by the list (F-278).
+   */
+  private rereadListed(keys: Iterable<string>): void {
+    for (const key of keys) {
+      const listed = sessionNamed(this.rows.get(capId(key, MAX_ID_CHARS)) ?? null);
+      if (listed && this.tracked(key) && listed !== this.state.transcripts[key]?.sessionId)
+        this.scheduleHistory(key);
+    }
   }
 
   private publishTasks(): void {
@@ -7664,6 +7678,7 @@ export class ClawtrateClient {
     if (isTaskSession(merged)) this.rows.set(key, SESSION_ROW(merged));
     else this.rows.delete(key);
     this.publishTasks();
+    this.rereadListed([key]);
   }
 
   /**

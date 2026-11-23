@@ -31,6 +31,7 @@ import {
   questionPending,
   refusedElsewhere,
   sendName,
+  sendWaits,
   shelfMessages,
   type ComposerView,
   type SendMode,
@@ -296,6 +297,8 @@ export function Composer({
   const hasContent = text.trim().length > 0 || files.length > 0 || tokens.length > 0;
   const canSend = hasContent && !refused && !uploading;
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
+  // Until the view shows the task's session the draft stays here: only a new task takes it.
+  const waits = sendWaits(transcript);
 
   const stop = useCallback(
     (run: Run) => {
@@ -323,6 +326,10 @@ export function Composer({
             title: "This message is still in the composer.",
             reason: "Its files are still being added. Send it again when they finish.",
           });
+        return;
+      }
+      if (how !== "new-task" && waits) {
+        onNotice({ title: "This message is still in the composer.", reason: waits });
         return;
       }
       if (submitting.current) {
@@ -425,6 +432,7 @@ export function Composer({
       stop,
       runId,
       shownSession,
+      waits,
     ],
   );
 
@@ -928,6 +936,11 @@ export function Composer({
               {tooMuch && <p className="attachments-note">{refusalReason}</p>}
             </div>
           )}
+          {hasContent && waits && (
+            <p className="composer-note" role="status" data-testid="composer-waits">
+              {waits}
+            </p>
+          )}
           <div className="composer-row">
             <button
               type="button"
@@ -1009,9 +1022,9 @@ export function Composer({
               type="button"
               className="icon-button send-button"
               aria-label={sendName(view.mode)}
-              aria-description={refusalReason ?? undefined}
-              title={refusalReason ?? sendName(view.mode)}
-              disabled={!canSend}
+              aria-description={refusalReason ?? waits ?? undefined}
+              title={refusalReason ?? waits ?? sendName(view.mode)}
+              disabled={!canSend || waits !== null}
               data-testid="send"
               onClick={() => {
                 // The release that ends a long press is not a send.

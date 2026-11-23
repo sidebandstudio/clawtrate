@@ -585,6 +585,8 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
         interSession: [],
         mcpTools: {},
         sessionKey: key,
+        // The session its row names, as the engine's history read names it.
+        sessionId: `${bot.id}-${spec.slug}`,
         status: "ready",
         items,
         error: null,

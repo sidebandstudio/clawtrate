@@ -1168,6 +1168,8 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
     mcpTools: extra?.mcpTools ?? {},
     interSession,
     sessionKey: task,
+    // The session its row names, as the engine's history read names it.
+    sessionId: receiving ? CARD_TASKS.marlow.sessionId : CARD_TASKS.otto.sessionId,
     status: "ready",
     items,
     error: null,

@@ -1027,7 +1027,13 @@ export function liveCommand(
               ),
       }));
       const state = get();
-      const row = mapSessionRow({ key, agentId: "otto", label: refused.text, updatedAt: now });
+      const row = mapSessionRow({
+        key,
+        agentId: "otto",
+        sessionId: "otto-new-task",
+        label: refused.text,
+        updatedAt: now,
+      });
       const first: OutgoingMessage = {
         id: `${refused.id}-new`,
         text: refused.text,
@@ -1049,6 +1055,7 @@ export function liveCommand(
             ...emptyActivity,
             outbox: [first],
             sessionKey: key,
+            sessionId: "otto-new-task",
             status: "ready",
             items: [],
             error: null,
