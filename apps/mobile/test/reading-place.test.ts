@@ -49,6 +49,12 @@ describe("a chat's reading place", () => {
 
   it("is lost when its row is gone", () => {
     const place = readingPlace(NARROW, 310)!;
-    expect(offsetFor(place, WIDE.filter((row) => row.key !== "bot:2"), 1000)).toBeNull();
+    expect(
+      offsetFor(
+        place,
+        WIDE.filter((row) => row.key !== "bot:2"),
+        1000,
+      ),
+    ).toBeNull();
   });
 });

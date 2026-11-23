@@ -116,10 +116,7 @@ export function Settings({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <SafeAreaView
-        edges={["bottom", "left", "right"]}
-        style={{ flex: 1, backgroundColor: c.bg }}
-      >
+      <SafeAreaView edges={["bottom", "left", "right"]} style={{ flex: 1, backgroundColor: c.bg }}>
         <View
           style={{
             flexDirection: "row",

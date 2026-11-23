@@ -364,7 +364,7 @@ export function Chat({
     const y = offsetFor(place.current, laidOut(), content - view);
     if (y !== null) scroller.current?.scrollTo({ y, animated: false });
   };
-  const measured = (key: string) => (event: LayoutChangeEvent) => {
+  const measure = (key: string, event: LayoutChangeEvent) => {
     const { y, height } = event.nativeEvent.layout;
     boxes.current.set(key, { y, height });
     returnToPlace();
@@ -459,7 +459,7 @@ export function Chat({
             <View
               key={rowKey(row)}
               style={{ marginTop: changes ? 12 : 0 }}
-              onLayout={measured(rowKey(row))}
+              onLayout={(event) => measure(rowKey(row), event)}
             >
               <RowView row={row} />
             </View>
@@ -522,7 +522,7 @@ export function Chat({
             else returnToPlace();
           }}
         >
-          <View onLayout={measured(TASK_LINE)}>
+          <View onLayout={(event) => measure(TASK_LINE, event)}>
             <TaskLine task={task} />
           </View>
           {body}

@@ -826,7 +826,17 @@ export function displays(): Display[] {
   // The JSON output is devicectl's stable one; its text output is not.
   const result = spawnSync(
     "xcrun",
-    ["devicectl", "device", "info", "displays", "--device", env.device, "--quiet", "--json-output", file],
+    [
+      "devicectl",
+      "device",
+      "info",
+      "displays",
+      "--device",
+      env.device,
+      "--quiet",
+      "--json-output",
+      file,
+    ],
     { encoding: "utf8" },
   );
   if (result.status !== 0) throw new Error(`devicectl device info displays: ${result.stderr}`);
