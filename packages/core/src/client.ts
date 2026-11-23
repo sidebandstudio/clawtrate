@@ -124,7 +124,12 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
-import type { ApprovalInstructions, ClawtrateHost, WebSocketLike } from "./host.ts";
+import type {
+  ApprovalInstructions,
+  ClawtrateHost,
+  WebSocketFactory,
+  WebSocketLike,
+} from "./host.ts";
 import {
   asRecord,
   botIdFromSessionKey,
@@ -741,6 +746,11 @@ export type SetupEndpointCheck = {
    * consent is used and isn't asked again.
    */
   consent?: () => boolean;
+  /**
+   * The host's own sockets for this setup, in place of `createWebSocket`, for every socket
+   * of it, retries included: local connect's, each proved before a byte goes.
+   */
+  createSocket?: WebSocketFactory;
 };
 
 /**
@@ -751,12 +761,13 @@ export type SetupEndpointCheck = {
 export const SETUP_LISTENER_READS_MS = 10_000;
 
 function setupCheckFor(url: string, setup: SetupEndpointCheck) {
-  if (!setup.check && !setup.verify && !setup.consent) return null;
+  if (!setup.check && !setup.verify && !setup.consent && !setup.createSocket) return null;
   return {
     url,
     check: setup.check ?? (() => true),
     ...(setup.verify ? { verify: setup.verify } : {}),
     ...(setup.consent ? { consent: setup.consent } : {}),
+    ...(setup.createSocket ? { createSocket: setup.createSocket } : {}),
   };
 }
 
@@ -1061,6 +1072,8 @@ export class ClawtrateClient {
     verify?: (signal: AbortSignal) => Promise<boolean>;
     /** The dialog's consent, until the first hello: asked before the first credential frame. */
     consent?: () => boolean;
+    /** The host's own sockets for this setup (local connect's), in place of `createWebSocket`. */
+    createSocket?: WebSocketFactory;
   } | null = null;
   /**
    * A connection the host's setup opened, from its first socket through its
@@ -6052,14 +6065,16 @@ export class ClawtrateClient {
         let socket: WebSocketLike;
         endReads(current);
         current = null;
+        const check = this.setupCheck?.url === settings.url ? this.setupCheck : null;
         try {
-          socket = this.host.createWebSocket(settings.url);
+          socket = check?.createSocket
+            ? check.createSocket(settings.url)
+            : this.host.createWebSocket(settings.url);
         } catch (error) {
           // A setup socket that couldn't start is a terminal path: its code goes.
           if (this.isSetup(settings.url)) this.dropSetupCredentials();
           throw error;
         }
-        const check = this.setupCheck?.url === settings.url ? this.setupCheck : null;
         let end = () => {};
         const ended = new Promise<false>((resolve) => (end = () => resolve(false)));
         const mine: SocketReads = {

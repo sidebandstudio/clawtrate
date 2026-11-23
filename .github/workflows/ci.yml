@@ -74,6 +74,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      # Local connect's proof, through /proc here, against development gateways of the tests' own.
+      - run: OPENCLAW_BIN="$(npm prefix --global)/bin/openclaw" CLAWTRATE_LOCAL_GATEWAY=1 pnpm exec vitest run apps/desktop/test/local-prove.test.ts apps/desktop/test/setup-connect-boundaries.test.ts
 
   # The suite runs one test at a time against one gateway, so it is split by file across three
   # runners, each with a gateway of its own.
@@ -144,6 +146,38 @@ jobs:
       - run: pnpm exec vitest run apps/desktop/test/update/asar-trees.test.ts
         env:
           CLAWTRATE_ELECTRON_FS_TESTS: "1"
+      # Local connect's proof through the same helper, against development gateways of the tests'
+      # own, from the public registry.
+      - run: npm install --global openclaw@2026.10.6
+      # Another account's listener, for local connect's check (e): started only on a discarded
+      # GitHub-hosted runner, where sudo needs no password. It logs what it accepts and is sent;
+      # the test only connects to it and reads the log.
+      - if: runner.environment == 'github-hosted'
+        run: |
+          fixture=$(realpath "$(mktemp -d /tmp/clawtrate-other-account.XXXXXX)")
+          chmod 755 "$fixture"
+          cat > "$fixture/listener.pl" <<'EOF'
+          use IO::Socket::INET;
+          my ($port, $log) = @ARGV;
+          my $server = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $port, Listen => 16, ReuseAddr => 1) or die;
+          open(my $out, ">>", $log) or die;
+          $out->autoflush(1);
+          print $out "ready\n";
+          while (my $socket = $server->accept) {
+            print $out "accepted\n";
+            my $bytes = 0;
+            while (sysread($socket, my $data, 4096)) { $bytes += length $data; print $out "bytes $bytes\n"; }
+            close $socket;
+          }
+          EOF
+          chmod 644 "$fixture/listener.pl"
+          : > "$fixture/log"
+          chmod 666 "$fixture/log"
+          sudo -n -u nobody /usr/bin/perl "$fixture/listener.pl" 19417 "$fixture/log" > /dev/null 2>&1 &
+          for attempt in $(seq 1 50); do grep -q ready "$fixture/log" && break; sleep 0.2; done
+          grep -q ready "$fixture/log"
+          echo "CLAWTRATE_OTHER_ACCOUNT_LISTENER=19417:$fixture/log" >> "$GITHUB_ENV"
+      - run: OPENCLAW_BIN="$(npm prefix --global)/bin/openclaw" CLAWTRATE_LOCAL_GATEWAY=1 pnpm exec vitest run apps/desktop/test/local-prove.test.ts apps/desktop/test/local-connect.test.ts apps/desktop/test/setup-connect-boundaries.test.ts
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
       # What a failed or flaky check saw: the first attempt's actual and difference pictures,

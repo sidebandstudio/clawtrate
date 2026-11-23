@@ -14,7 +14,7 @@
 
 import { spawn } from "node:child_process";
 import { constants, lstatSync, realpathSync } from "node:fs";
-import { lstat, open, type FileHandle } from "node:fs/promises";
+import { lstat, open, stat, type FileHandle } from "node:fs/promises";
 import { isAbsolute, normalize, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
@@ -227,7 +227,7 @@ async function readProfile(
 }
 
 /** The open flags every step needs; a platform without one of them reads nothing. */
-function openFlags() {
+export function openFlags() {
   const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK, O_NOCTTY } = constants;
   if ([O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK, O_NOCTTY].some((flag) => typeof flag !== "number"))
     return null;
@@ -266,7 +266,11 @@ export async function openSettingsFile(options: {
           [checked ? "read-private" : "read", folder, file],
           options.deadlineMs,
         )
-      : await readThroughProc(held.handle, folder, file);
+      : await withDeadline(
+          readThroughProc(held.handle, folder, file),
+          options.deadlineMs ?? READ_DEADLINE_MS,
+          refused("failed"),
+        );
   } finally {
     await held.handle.close();
   }
@@ -316,23 +320,40 @@ export async function holdHome(
   }
 }
 
-/**
- * The helper's answer, or `helper` for a missing helper, a timeout, a failed
- * exit, or output that isn't exactly one of its two forms.
- */
-function readWithHelper(
+/** The helper's answer, or `helper` for any failure of `runHelper` or output of another form. */
+async function readWithHelper(
   helper: string,
   home: FileHandle,
   args: string[],
   deadlineMs = READ_DEADLINE_MS,
-) {
-  const failed = refused("helper");
-  return new Promise<Opened>((done) => {
+): Promise<Opened> {
+  const output = await runHelper(helper, home, args, HELPER_OUTPUT_LIMIT, deadlineMs);
+  if (!output) return refused("helper");
+  try {
+    return helperAnswer(output);
+  } finally {
+    output.fill(0);
+  }
+}
+
+/**
+ * Runs the native helper with the held home as fd 3, a fixed environment and
+ * no input: its whole output, or null for a missing helper, a timeout, a
+ * failed exit, or more than `limit` bytes.
+ */
+export function runHelper(
+  helper: string,
+  home: FileHandle,
+  args: string[],
+  limit: number,
+  deadlineMs = READ_DEADLINE_MS,
+): Promise<Buffer | null> {
+  return new Promise<Buffer | null>((done) => {
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
     let child: ReturnType<typeof spawn>;
-    const settle = (result: Opened) => {
+    const settle = (result: Buffer | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -342,27 +363,25 @@ function readWithHelper(
       done(result);
     };
     // Its own deadline: a descendant holding the pipe open can't delay the answer.
-    const timer = setTimeout(() => settle(failed), deadlineMs);
+    const timer = setTimeout(() => settle(null), deadlineMs);
     try {
       child = spawn(helper, args, {
         env: { PATH: "/usr/bin:/bin" },
         stdio: ["ignore", "pipe", "ignore", home.fd],
       });
     } catch {
-      settle(failed);
+      settle(null);
       return;
     }
     child.stdout!.on("data", (data: Buffer) => {
       size += data.length;
       chunks.push(data);
-      if (size > HELPER_OUTPUT_LIMIT) settle(failed);
+      if (size > limit) settle(null);
     });
-    child.on("error", () => settle(failed));
+    child.on("error", () => settle(null));
     child.once("close", (code, signal) => {
       if (settled) return;
-      const output = Buffer.concat(chunks);
-      settle(code === 0 && signal === null ? helperAnswer(output) : failed);
-      output.fill(0);
+      settle(code === 0 && signal === null ? Buffer.concat(chunks) : null);
     });
   });
 }
@@ -385,7 +404,7 @@ function helperAnswer(output: Buffer): Opened {
 }
 
 /** Why an open failed. A link opened as a folder fails as "not a folder", so it is told apart. */
-async function openFailure(error: unknown, path: string): Promise<Opened> {
+export async function openFailure(error: unknown, path: string): Promise<Opened> {
   const code = (error as NodeJS.ErrnoException).code;
   if (code === "ENOENT") return { kind: "refused", reason: "absent" };
   if (code === "ELOOP") return refused("link");
@@ -406,13 +425,18 @@ async function openFailure(error: unknown, path: string): Promise<Opened> {
  * file of exactly 0600 in a folder without group or other bits grants nothing
  * to another account.
  */
-export async function checkOpened(handle: FileHandle, folder: boolean): Promise<Opened | null> {
+export async function checkOpened(
+  handle: FileHandle,
+  folder: boolean,
+  /** The largest file read; 0 for a file that is only identified. */
+  limit = SETTINGS_LIMIT,
+): Promise<Opened | null> {
   const stat = await handle.stat();
   if (folder ? !stat.isDirectory() : !stat.isFile()) return refused("type");
   if (stat.uid !== process.geteuid?.()) return refused("owner");
   if (folder ? (stat.mode & 0o077) !== 0 : (stat.mode & 0o7777) !== 0o600) return refused("mode");
   if (!folder && stat.nlink !== 1) return refused("links");
-  if (!folder && stat.size > SETTINGS_LIMIT)
+  if (!folder && limit > 0 && stat.size > limit)
     return { kind: "refused", reason: "unreadable", why: "large" };
   return null;
 }
@@ -446,6 +470,25 @@ export async function preflight(path: string): Promise<Opened | null> {
   return entry.isFile() ? null : refused("type");
 }
 
+/** The answer, or `late` once the deadline passes: a file system call that hangs can't delay it. */
+export function withDeadline<T>(work: Promise<T>, deadlineMs: number, late: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const expired = new Promise<T>((done) => (timer = setTimeout(() => done(late), deadlineMs)));
+  return Promise.race([work.catch(() => late), expired]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Linux: whether /proc/self/fd/<fd> is the held folder itself, by device and
+ * inode. False when /proc is missing or masked, so that isn't read as absent.
+ */
+export async function procHolds(handle: FileHandle): Promise<boolean> {
+  const [held, seen] = await Promise.all([
+    handle.stat({ bigint: true }),
+    stat(`/proc/self/fd/${handle.fd}`, { bigint: true }).catch(() => null),
+  ]);
+  return seen !== null && sameFolder(held, seen);
+}
+
 /**
  * Linux: the profile folder is opened through /proc/self/fd/<home>, which
  * resolves to the held home, and the file through the held profile folder,
@@ -454,7 +497,7 @@ export async function preflight(path: string): Promise<Opened | null> {
  */
 async function readThroughProc(home: FileHandle, folder: string, file: string): Promise<Opened> {
   const flags = openFlags();
-  if (!flags) return refused("failed");
+  if (!flags || !(await procHolds(home))) return refused("failed");
   let dir: FileHandle | null = null;
   let handle: FileHandle | null = null;
   try {
