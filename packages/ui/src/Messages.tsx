@@ -209,6 +209,8 @@ export function MessageActions({
     };
     const open = () => {
       stop();
+      // The transcript can scroll before its scroll event comes: a message that moved opens nothing.
+      if (turn.getBoundingClientRect().top !== start.top) return;
       measure();
       setHeld(true);
     };
