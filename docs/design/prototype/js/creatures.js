@@ -977,7 +977,10 @@ function avatarFitKey(choice              )         {
  * What an equipped Claw's fit depends on: its parts, its hat and what is over
  * its eyes (`clawling/dome/pair/even/beret/none`). Colour and trim don't change
  * it, and nor does the bow tie: each outfit's fit is measured with it on, so
- * putting one on never moves or shrinks the Claw.
+ * putting one on never moves or shrinks a Claw that already wears something.
+ * On a Claw that wears nothing, a bow tie is its first accessory: the Claw
+ * takes its `none/none` outfit's fit, where that entry exists, in place of its
+ * bare one.
  */
 function avatarOutfitKey(choice              )         {
   return `${avatarFitKey(choice)}/${choice.head ?? "none"}/${choice.face ?? "none"}`;

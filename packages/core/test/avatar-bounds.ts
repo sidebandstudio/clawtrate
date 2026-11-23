@@ -281,7 +281,8 @@ function hulls(shape: AvatarShape): Map<number, Array<[number, number]>> {
   }
   const out = new Map<number, Array<[number, number]>>();
   for (const { m, opacity } of placements(shape)) {
-    if (opacity <= 0) continue;
+    // As in `scenePoints`: a shape's own opacity hides every pose of it, a group's included.
+    if (opacity * (shape.opacity ?? 1) <= 0) continue;
     const s = stretch(m);
     for (const [pad, points] of own)
       // Rounded up, so poses whose stretch differs only in its last digits share a hull.

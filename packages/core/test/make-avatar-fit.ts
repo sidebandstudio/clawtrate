@@ -82,7 +82,8 @@ function outfitFit(choice: AvatarChoice, fit: string, bareReach: number): string
   const circle = enclosing(outlines.flatMap((outline) => [...outline.values()].flat()));
   let k = Math.min(1, FIT_RADIUS / circle.r);
   const shift = (): [number, number] => [-k * (circle.x - 20), -k * (circle.y - 20)];
-  for (let r = reach(k, shift()); r > FIT_RADIUS; r = reach(k, shift())) {
+  // A reach that isn't a number stops the table here, never passes as inside the circle.
+  for (let r = reach(k, shift()); !Number.isFinite(r) || r > FIT_RADIUS; r = reach(k, shift())) {
     if (!Number.isFinite(r)) throw new Error(`${avatarOutfitKey(choice)}: the reach is ${r}`);
     k *= 0.995;
   }
