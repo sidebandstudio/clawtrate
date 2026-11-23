@@ -617,6 +617,80 @@ test.describe("message actions", () => {
     ]);
   });
 
+  test("F-278 F-277: a reply being written when its bot's last listed task leaves the list: the thread stays, with its words", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    const input = thread.getByTestId("thread-input");
+    await input.fill("Keep the last three backups.");
+    // Deleted or archived elsewhere, and the bot lists no other task.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({ ...state, tasksByBot: { ...state.tasksByBot, otto: [] } }));
+    });
+    await expect(page.locator(".conversation-header")).toContainText(
+      "Disk almost full on the media box",
+    );
+    await expect(input).toHaveValue("Keep the last three backups.");
+    await expect(thread.getByTestId("thread-waits")).toContainText(
+      "Not sent. This task was deleted or archived elsewhere while you wrote this message.",
+    );
+  });
+
+  test("F-278 F-277: a reply's new task the host refused, its task gone from the list: the words stay through the request and after, and the thread and task with them", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        refuse?: () => void;
+      };
+      const original = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "createTask"
+          ? new Promise((_, reject) => {
+              w.refuse = () => reject(new Error("The host refused it."));
+            })
+          : original(command);
+    });
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    const input = thread.getByTestId("thread-input");
+    await input.fill("Keep the last three backups.");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        tasksByBot: {
+          ...state.tasksByBot,
+          otto: (state.tasksByBot.otto ?? []).filter(
+            (task) => task.key !== "agent:otto:disk-space",
+          ),
+        },
+      }));
+    });
+    const title = "Disk almost full on the media box";
+    const note = thread.getByTestId("thread-waits");
+    await note.getByRole("button", { name: "Start a new task with this message" }).click();
+    await expect(input).toHaveValue("Keep the last three backups.");
+    await expect(page.locator(".conversation-header")).toContainText(title);
+    await page.evaluate(() => (window as unknown as { refuse: () => void }).refuse());
+    await expect(thread.locator(".thread-error")).toContainText("The host refused it.");
+    await expect(input).toHaveValue("Keep the last three backups.");
+    await expect(page.locator(".conversation-header")).toContainText(title);
+  });
+
   test("F-067: a reply refused after another thread was opened comes back to its own thread, not the one shown", async ({
     page,
   }) => {

@@ -769,19 +769,26 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
       restore(back, failure);
     }
   };
-  /** "Start a new task with this message", on a reply whose session is gone: its words only. */
+  /**
+   * "Start a new task with this message", on a reply whose session is gone: its words only. They
+   * stay in the thread until the host holds the new task: a refusal finds them where they were,
+   * and meanwhile they keep their task on screen should it have left the list.
+   */
   const startNew = async () => {
     const body = text.trim();
     const botId = botIdFromSessionKey(env.taskKey);
     if (!body || !botId) return;
-    const back = asBound(body);
-    change(messageId, () => ({ text: "", error: null }));
+    const id = messageId;
     try {
       const { key } = await bridge.invoke({ type: "createTask", botId, text: body, label: null });
       void bridge.send({ type: "closeSession", key });
+      change(id, (now) => (now.text.trim() === body ? { text: "", error: null } : now));
       env.announce("Started as a new task");
     } catch (failure) {
-      restore(back, failure);
+      change(id, (now) => ({
+        ...now,
+        error: failure instanceof Error ? failure.message : String(failure),
+      }));
     }
   };
   const line = (item: { role: string; text: string; author?: string }, key: string) => (

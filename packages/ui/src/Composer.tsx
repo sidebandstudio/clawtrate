@@ -452,6 +452,33 @@ export function Composer({
       const chips = tokens;
       // The chips go first, as their own text: the gateway runs a command or skill named so.
       const body = sentText(chips, words);
+      if (how === "new-task") {
+        // The words stay here until the host holds the new task: a refusal finds them where they
+        // were, and meanwhile they keep their task on screen should it have left the list.
+        try {
+          const { key } = await bridge.invoke({
+            type: "createTask",
+            botId: bot.id,
+            text: body,
+            label: null,
+          });
+          // The new task runs on its own; this viewer stays on this one.
+          void bridge.send({ type: "closeSession", key });
+          setDraft((current) => (current.text === words ? { text: "" } : current));
+          if (readDraft(draftKey).text === words) writeDraft(draftKey, { text: "" });
+          setTokens((current) => (current === chips ? [] : current));
+          setPicker(null);
+          onAnnounce("Started as a new task");
+        } catch (error) {
+          onNotice({
+            title: "Couldn't start a new task.",
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          submitting.current = false;
+        }
+        return;
+      }
       const taken = files;
       const attachmentIds = taken.flatMap((file) => (file.info ? [file.info.id] : []));
       const session = to;
@@ -465,18 +492,6 @@ export function Composer({
       setTokens([]);
       setPicker(null);
       try {
-        if (how === "new-task") {
-          const { key } = await bridge.invoke({
-            type: "createTask",
-            botId: bot.id,
-            text: body,
-            label: null,
-          });
-          // The new task runs on its own; this viewer stays on this one.
-          void bridge.send({ type: "closeSession", key });
-          onAnnounce("Started as a new task");
-          return;
-        }
         await bridge.invoke({
           type: "sendMessage",
           key: taskKey,
@@ -495,7 +510,7 @@ export function Composer({
         setFiles((current) => [...taken, ...current]);
         setTokens((current) => [...chips, ...current]);
         onNotice({
-          title: how === "new-task" ? "Couldn't start a new task." : "Couldn't send this message.",
+          title: "Couldn't send this message.",
           reason: error instanceof Error ? error.message : String(error),
         });
       } finally {
@@ -513,6 +528,7 @@ export function Composer({
       bridge,
       bot.id,
       taskKey,
+      draftKey,
       setDraft,
       onAnnounce,
       onNotice,

@@ -196,6 +196,55 @@ test.describe("sending", () => {
     await expect(page.locator(".conversation-header")).not.toContainText(title);
   });
 
+  test("F-278 F-277: a new task the host refused, for words whose task left the list: the words stay through the request and after, and the task with them", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        refuse?: () => void;
+      };
+      const original = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "createTask"
+          ? new Promise((_, reject) => {
+              w.refuse = () => reject(new Error("The host refused it."));
+            })
+          : original(command);
+    });
+    await field(page).fill("Clear the cache first.");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        tasksByBot: {
+          ...state.tasksByBot,
+          otto: (state.tasksByBot.otto ?? []).filter(
+            (task) => task.key !== "agent:otto:disk-space",
+          ),
+        },
+      }));
+    });
+    const title = "Disk almost full on the media box";
+    const note = page.getByTestId("composer-waits");
+    await note.getByRole("button", { name: "Start a new task with this message" }).click();
+    // While the request is out, the words and their task stay.
+    await expect(field(page)).toHaveValue("Clear the cache first.");
+    await expect(page.locator(".conversation-header")).toContainText(title);
+    await page.evaluate(() => (window as unknown as { refuse: () => void }).refuse());
+    await expect(page.getByText("Couldn't start a new task.")).toBeVisible();
+    await expect(field(page)).toHaveValue("Clear the cache first.");
+    await expect(page.locator(".conversation-header")).toContainText(title);
+    await expect(note).toContainText(
+      "Not sent. This task was deleted or archived elsewhere while you wrote this message.",
+    );
+  });
+
   test("F-278: words typed while the task loads keep the first session the view shows, and go there", async ({
     page,
   }) => {

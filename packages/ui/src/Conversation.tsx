@@ -1047,7 +1047,8 @@ export function Conversation({
       ) : (
         <EmptyState title="No bots to show" body="This gateway has no bots yet." />
       );
-  } else if (taskCount === 0) {
+  } else if (taskCount === 0 && !task) {
+    // A task that left the list stays on screen while it holds words or a message (`gone`).
     body = (
       <EmptyState
         bot={bot}
