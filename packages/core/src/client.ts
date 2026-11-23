@@ -1555,8 +1555,13 @@ export class ClawtrateClient {
     if (settings) await this.open();
   }
 
-  /** Connect to a gateway. A token is only needed until this device is paired. */
-  async connect(options: ConnectOptions): Promise<void> {
+  /**
+   * Connect to a gateway. A token is only needed until this device is paired. `setup` is for a
+   * host's own setup only: the address form passes none. With local connect's proved sockets
+   * and the person's consent it is the route a first pairing at this computer's gateway may ask
+   * for full access on (docs/design/setup-effortless.md §3).
+   */
+  async connect(options: ConnectOptions, setup: SetupEndpointCheck = {}): Promise<void> {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     const endsAtStart = this.eligibilityEnds;
@@ -1582,7 +1587,7 @@ export class ClawtrateClient {
       this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
-      this.setupCheck = null;
+      this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = null;
       this.pairingSeen = null;
       if (stops === this.stops) await this.open();
@@ -6027,10 +6032,17 @@ export class ClawtrateClient {
       return;
     }
 
-    // Full access goes only over a protected route (`protectedGatewayUrl`): elsewhere this
-    // device asks for read, as before, and a full pairing's token there asks for read too.
+    // Full access goes only over a protected route: a protected address (`protectedGatewayUrl`),
+    // or this computer's gateway through local connect's proved sockets (setup-effortless.md §3),
+    // where every socket of this connection, retries included, is local connect's, the person's
+    // consent holds now (asked here; it is spent at the first hello, so a later retry asks for
+    // read), and the pairing is by token: a loopback setup code still
+    // starts read-only (F-509). Elsewhere this device asks for read, as before, and a full
+    // pairing's token there asks for read too.
     const full = this.options.fullAccess === true && !this.options.readOnly;
-    const routed = full && protectedGatewayUrl(settings.url);
+    const local = this.setupCheck?.url === settings.url ? this.setupCheck : null;
+    const proved = !!local?.createSocket && local.consent?.() === true && !this.setupCode;
+    const routed = full && (protectedGatewayUrl(settings.url) || proved);
     const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
     this.fullAccess = routed && secure;

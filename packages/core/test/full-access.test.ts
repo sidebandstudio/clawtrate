@@ -239,6 +239,59 @@ describe("full access behind a flag", () => {
     });
   }
 
+  // §3's send gate: this computer's gateway through local connect's proved sockets. Every socket
+  // of the connection comes from that route, and the person's consent holds when it opens.
+  const LOOPBACK = "ws://127.0.0.1:19950";
+  const provedRoute = (gateway: FakeGateway, consent: () => boolean) => {
+    const made: string[] = [];
+    return {
+      made,
+      setup: {
+        createSocket: (url: string) => (made.push(url), gateway.createWebSocket(url)),
+        consent,
+      },
+    };
+  };
+
+  it("through local connect's proved sockets, with the person's consent, a first pairing at this computer's gateway asks for the six", async () => {
+    const gateway = grantingGateway();
+    const { client, storage } = fullClient(gateway);
+    const route = provedRoute(gateway, () => true);
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, route.setup);
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...FULL_SCOPES]);
+    expect(route.made).toEqual([LOOPBACK]);
+    const record = JSON.parse(storage.data.get(tokenKey(LOOPBACK)) ?? "null") as {
+      fullGrant?: boolean;
+    };
+    expect(record.fullGrant).toBe(true);
+    client.stop();
+  });
+
+  it("through the proved sockets without the person's consent, it asks for read alone", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway);
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, provedRoute(gateway, () => false).setup);
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("a loopback setup code still starts read-only, even through the proved sockets (F-509)", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway);
+    await client.start();
+    await client.connectWithSetupCode(
+      { url: LOOPBACK, bootstrapToken: CODE, expiresAtMs: Date.now() + 600_000 },
+      provedRoute(gateway, () => true).setup,
+    );
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
   it("a protected route is wss:// to an address that isn't loopback, in any spelling", () => {
     for (const url of [
       "wss://gateway.example",
