@@ -19,7 +19,7 @@ import {
 import { ENSEMBLE } from "../src/presentation/character.ts";
 import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
-import { stampTime } from "../../../packages/ui/src/format.ts";
+import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
 import { addressWords } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { decodePng } from "../../../tools/brand/src/png.ts";
@@ -581,8 +581,7 @@ describe("the iOS app", () => {
           }),
           see({ id: `bot-label-${agent.id}`, text: lit(agent.identity!.theme!) }),
           see({ id: `bot-preview-${agent.id}`, text: ".+" }),
-          // Today's activity, as "7:12 AM".
-          see({ id: `bot-time-${agent.id}`, text: "\\d{1,2}:\\d{2}.(AM|PM)" }),
+          see({ id: `bot-time-${agent.id}`, text: ".+" }),
         ];
       }),
       // In order of their latest activity, newest first.
@@ -596,12 +595,22 @@ describe("the iOS app", () => {
       see({ id: "settings-button", text: "Settings. Gateway connected." }),
       see({ id: "connection-dot-connected" }),
     ]);
-    // Each row's latest line is its newest task's.
+    // The app refreshes its display clock every 30 seconds. If the capture
+    // straddles midnight, the hierarchy can show either day's wording.
+    const earliestClock = Date.now() - 30_000;
     const positions = await layout();
+    const latestClock = Date.now();
+    // Each row's latest line and time are its newest task's.
     for (const agent of agents) {
       const newest = rows
         .filter((r) => r.agentId === agent.id)
         .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]!;
+      expect(newest.updatedAt).toBeTypeOf("number");
+      const expectedTimes = [earliestClock, latestClock].map((now) =>
+        rowTime(newest.updatedAt ?? null, now).replace(/\s+/g, " "),
+      );
+      const time = positions.get(`bot-time-${agent.id}`)?.[0]?.text.replace(/\s+/g, " ");
+      expect(expectedTimes, `latest activity for ${agent.id}`).toContain(time);
       const preview = positions.get(`bot-preview-${agent.id}`)?.[0]?.text ?? "";
       expect(preview.length).toBeGreaterThan(0);
       const lastLine =
