@@ -5,7 +5,15 @@
 // never authorises anything: the record and the temporary folders stay, and
 // the reason is reported.
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
@@ -82,11 +90,46 @@ export function readRecord(path: string): RunRecord | null {
   return null;
 }
 
-/** Records a newer build started on the run's data folder, so the run's cleanup stops it too. */
-export function recordSuccessor(path: string, successor: Proc): void {
+/**
+ * Present once the run's cleanup has started: no newer build may start after it.
+ * It outlives the record, since a test that read the record before the cleanup
+ * can save it again after the cleanup removed it. It names the run's runner, and
+ * a later run removes it once that runner, and so its tests, are proven gone.
+ */
+const closingPath = (path: string) => `${path}.closing`;
+
+/**
+ * Records a newer build started on the run's data folder, so the run's cleanup
+ * stops it too. The test that starts it runs in a worker and the cleanup in the
+ * runner, so each writes its mark before reading the other's
+ * (`successorAtCleanUp`): either this call sees that cleanup has started and
+ * throws, and the caller never releases the build, or the cleanup reads the
+ * build in the record and stops it.
+ */
+export function recordSuccessor(
+  path: string,
+  successor: Proc,
+  identify: Identify = processIdentity,
+): void {
   const record = readRecord(path);
   if (!record) throw new Error(`${path} is not a run record`);
   saveRecord(dirname(path), { ...record, successor });
+  // A later run removes the mark only once the runner is dead, so with no mark a live runner
+  // means the cleanup has yet to start and will read the build.
+  if (
+    existsSync(closingPath(path)) ||
+    processVerdict(record.runner.pid, record.runner.identity, identify).state === "dead"
+  )
+    throw new Error("the run's cleanup has started, so the newer build may not start");
+}
+
+/**
+ * Starts the run's cleanup for newer builds, then returns the one a test recorded, if any.
+ * The runner calls it with itself, so the mark names it even when the record is already gone.
+ */
+export function successorAtCleanUp(path: string, runner: Proc): Proc | undefined {
+  writeFileSync(closingPath(path), JSON.stringify(runner));
+  return readRecord(path)?.successor;
 }
 
 /** A temporary folder a run may have created: directly in the system temp folder, with our prefix. */
@@ -187,6 +230,23 @@ export function recoverDeadRuns(
     log(`Cleaning up interrupted end-to-end run ${record.run}`);
     const problems = cleanUp(dir, record, reset, identify);
     for (const problem of problems) log(problem);
+  }
+  forgetFinishedCleanUps(dir, identify);
+}
+
+/** Removes the cleanup marks of runs whose record is gone and whose runner is proven gone. */
+function forgetFinishedCleanUps(dir: string, identify: Identify): void {
+  for (const file of readdirSync(dir).filter((name) => /^[0-9a-f]{8}\.json\.closing$/.test(name))) {
+    const mark = join(dir, file);
+    if (existsSync(mark.slice(0, -".closing".length))) continue;
+    let runner: unknown;
+    try {
+      runner = JSON.parse(readFileSync(mark, "utf8"));
+    } catch {
+      continue;
+    }
+    if (isProc(runner) && processVerdict(runner.pid, runner.identity, identify).state === "dead")
+      rmSync(mark, { force: true });
   }
 }
 
