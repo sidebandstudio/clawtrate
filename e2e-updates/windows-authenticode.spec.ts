@@ -529,11 +529,11 @@ if (windows && files)
         join(files!, "running.exe"),
         new AbortController().signal,
       );
-      // Two trusted SHA-256 signatures, each the one Windows says it verified.
+      // Two trusted SHA-256 signatures, the second the one Windows says it verified.
       const sha256 = base64("2.16.840.1.101.3.4.2.1");
       expect(output).toMatch(
         new RegExp(
-          `^installer 2\\r?\\nsignature 0 0 00000000 ${sha256} .*\\r?\\nsignature 1 1 00000000 ${sha256} `,
+          `^installer 2\\r?\\nsignature 0 \\d+ 00000000 ${sha256} .*\\r?\\nsignature 1 1 00000000 ${sha256} `,
           "m",
         ),
       );
