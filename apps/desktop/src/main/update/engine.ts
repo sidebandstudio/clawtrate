@@ -13,7 +13,8 @@ import {
   write as writeFileChunk,
   writev as writeFileChunks,
 } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { mkdir, rename } from "node:fs/promises";
+import { rm } from "../update-tree-fs.ts";
 import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
