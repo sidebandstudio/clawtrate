@@ -185,5 +185,54 @@ describe("clients sharing a store keep each other's saved gateway", () => {
         client.stop();
       }
     });
+
+    it("F-457: stopping while a startup Suspend rechecks the saved gateway frees the shared queue", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL_A, token: null }) });
+      const firstRead = deferred<void>();
+      const firstGate = deferred<void>();
+      const rechecking = deferred<void>();
+      const recheckGate = deferred<void>();
+      const get = storage.get;
+      let reads = 0;
+      storage.get = async (key) => {
+        if (key !== "connection") return get(key);
+        reads += 1;
+        if (reads === 1) {
+          firstRead.resolve();
+          await firstGate.promise;
+        } else if (reads === 2) {
+          rechecking.resolve();
+          await recheckGate.promise;
+        }
+        return get(key);
+      };
+      const gatewayA = pairingGateway("token-A");
+      const client = new ClawtrateClient(testHost(gatewayA, storage), FAST);
+      const other = new ClawtrateClient(testHost(pairingGateway("token-B"), storage), FAST);
+      try {
+        const starting = client.start();
+        await firstRead.promise;
+        const suspending = client.suspend();
+        firstGate.resolve();
+        await rechecking.promise;
+        client.stop();
+        await other.start({ resume: false });
+        const connecting = other.connect({ url: URL_B });
+        let settled = false;
+        const all = Promise.all([starting, suspending, connecting]).then(() => (settled = true));
+        await until(() => settled, 1_000);
+        await all;
+        expect(saved(storage)).toEqual({ url: URL_B, token: null });
+        recheckGate.resolve();
+        await sleep(50);
+        expect(saved(storage)).toEqual({ url: URL_B, token: null });
+        expect(gatewayA.sockets).toHaveLength(0);
+      } finally {
+        firstGate.resolve();
+        recheckGate.resolve();
+        other.stop();
+        client.stop();
+      }
+    });
   });
 });

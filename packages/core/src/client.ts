@@ -1268,6 +1268,8 @@ export class ClawtrateClient {
   private readonly writes: ConnectionWrites;
   /** A host stop cancels socket opens requested before it, including ones still saving settings. */
   private stops = 0;
+  /** Settled on `stop()` so queued commands abandon a stalled read instead of holding the queue. */
+  private stopSignal: { promise: Promise<void>; resolve: () => void } | null = null;
   /** The current attempt reached hello. */
   private attemptGreeted = false;
   /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
@@ -1513,6 +1515,21 @@ export class ClawtrateClient {
   async savedSettings(): Promise<ConnectionSettings | null> {
     const raw = await this.host.storage.get(SETTINGS_KEY);
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
+  }
+
+  /** Read the saved gateway, or abandon the read if `stop()` runs first. */
+  private async readSavedSettings(stops: number): Promise<ConnectionSettings | null> {
+    if (stops !== this.stops) return null;
+    if (!this.stopSignal) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((r) => (resolve = r));
+      this.stopSignal = { promise, resolve };
+    }
+    const outcome = await Promise.race([
+      this.savedSettings().then((settings) => ({ stopped: false as const, settings })),
+      this.stopSignal.promise.then(() => ({ stopped: true as const })),
+    ]);
+    return outcome.stopped ? null : outcome.settings;
   }
 
   /** Written first: settings the host could not save are never the ones in use. */
@@ -1783,7 +1800,7 @@ export class ClawtrateClient {
       // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
       // and stays the selection it was. Another client on this store may have saved a different
       // gateway since this one was chosen; that record is the other client's and stays.
-      const saved = await this.savedSettings();
+      const saved = await this.readSavedSettings(stops);
       if (!this.settings || stops !== this.stops) return;
       if (saved?.url === this.settings.url) {
         await this.host.storage.delete(SETTINGS_KEY);
@@ -1844,7 +1861,7 @@ export class ClawtrateClient {
       const typed = this.typedTokenEnds(url);
       const next = { ...this.settings, suspended: true, ...(typed ? { token: null } : {}) };
       // Read at startup, the record may be another client's by now: that one stays as it is.
-      const saved = restoring ? await this.savedSettings() : null;
+      const saved = restoring ? await this.readSavedSettings(stops) : null;
       if (!this.settings || stops !== this.stops) return;
       const kept = !restoring || JSON.stringify(saved) === JSON.stringify(this.settings);
       if (kept) await this.saveSettings(next);
@@ -1941,6 +1958,9 @@ export class ClawtrateClient {
     this.stops += 1;
     // A command waiting for startup's read no longer holds other clients' writes.
     this.restoring?.release();
+    const signal = this.stopSignal;
+    this.stopSignal = null;
+    signal?.resolve();
     this.close();
   }
 
