@@ -170,9 +170,23 @@ describe("the Keychain through safeStorage", () => {
     expect(client).toContain(
       "const routed = full && (protectedGatewayUrl(settings.url) || proved);",
     );
-    expect(client).toContain("const create = check?.createSocket ?? provedSocket;");
+    // Every socket is the setup's own factory, with its last proof, retries on it included, or
+    // the route the gateway was saved with; the gate reads exactly that, and nothing looser.
     expect(client).toContain(
-      "return this.setupCheck?.url === url && !!this.setupCheck.createSocket;",
+      "? { createSocket: this.setupCheck.createSocket, prove: this.setupCheck.prove }",
+    );
+    expect(client).toContain(
+      "const create = own?.createSocket ?? (fromRoute ? fromRoute.createSocket : undefined);",
+    );
+    expect(client).toContain(
+      [
+        "  private socketsProved(url: string): boolean {",
+        "    const check = this.setupCheck?.url === url ? this.setupCheck : null;",
+        "    // The setup's own factory, when it has one, makes every socket: its last proof decides.",
+        "    if (check?.createSocket) return !!check.prove;",
+        "    return this.savedRoute?.url === url && !!this.savedRoute.sockets;",
+        "  }",
+      ].join("\n"),
     );
     expect(client).toContain("return consent?.() === true;");
     // The main process sets it only in the branch that gives the host the Keychain box.
