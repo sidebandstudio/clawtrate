@@ -428,30 +428,35 @@ describe("the iOS app", () => {
     expect(first.scopes).toEqual(["operator.read"]);
     deviceId = first.deviceId!;
     const command = `pnpm dev-gateway approve --instance ${env.instance}`;
+    // From the top down; on a screen shorter than the list (iPhone Duo folded) the
+    // steps scroll to what they look at, and on an iPhone nothing needs to scroll.
     await steps("pairing", [
       waitFor({ id: "pairing" }, 90_000),
       see(lit(CONNECT_WORDS.approveTitle)),
       see({ id: "mark", text: PRODUCT_NAME }),
       see({ id: "approve-command", text: lit(command) }),
       notSee(".*openclaw devices approve.*"),
-      see({ id: "setup-step-0", text: lit(`Connected to ${hostOf(gateway)}`) }),
-      see({ id: "setup-step-1", text: `${lit(CONNECT_WORDS.waiting)}.*` }),
-      see({ id: "setup-step-2", text: "Load bots" }),
-      see({ id: "scope-operator.read", text: lit("Read bots, tasks and conversations") }),
+      tap({ id: "copy-command" }),
+      waitFor({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }, 30_000),
+      scrollTo({ id: "setup-step-0", text: lit(`Connected to ${hostOf(gateway)}`) }, "DOWN"),
+      scrollTo({ id: "setup-step-1", text: `${lit(CONNECT_WORDS.waiting)}.*` }, "DOWN"),
+      scrollTo({ id: "setup-step-2", text: "Load bots" }, "DOWN"),
+      scrollTo(
+        { id: "scope-operator.read", text: lit("Read bots, tasks and conversations") },
+        "DOWN",
+      ),
       notSee({ id: "scope-operator.write" }),
       notSee({ id: "scope-operator.approvals" }),
       notSee({ id: "scope-operator.questions" }),
       notSee({ id: "scope-operator.admin" }),
       // The gateway's echo is what this device signed: nothing to point out.
       notSee({ id: "scopes-differ" }),
-      tap({ id: "copy-command" }),
-      waitFor({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }, 30_000),
-      waitFor(
+      scrollTo(
         {
           id: "connect-foot",
           text: `Request ${first.requestId!.slice(0, 8)} · this device ${deviceId.slice(0, 8)} · .*`,
         },
-        30_000,
+        "DOWN",
       ),
     ]);
     expect(pasteboard()).toBe(command);
@@ -1893,8 +1898,9 @@ function anotherGateway(): Step[] {
   return [
     {
       runFlow: {
-        when: { visible: { id: "use-another" } },
-        commands: [tap({ id: "use-another" })],
+        // On the step list it is under the error, below the foot of a short screen.
+        when: { visible: { id: "setup" } },
+        commands: [scrollTo({ id: "use-another" }, "DOWN"), tap({ id: "use-another" })],
       },
     },
   ];
