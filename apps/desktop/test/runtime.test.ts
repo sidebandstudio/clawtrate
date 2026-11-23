@@ -308,7 +308,27 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
   });
 
   it("an automatic retry after the proof is lost opens nothing, with the desktop and the token-free wiring", async () => {
+    // The sockets the client itself opens, counted where it opens them: the listener's port is
+    // in the development instances' shared range, so another process on this machine may connect
+    // to it too, and the listener's own count can't tell those apart.
+    const Builtin = globalThis.WebSocket;
+    const opened: string[] = [];
+    globalThis.WebSocket = class extends Builtin {
+      constructor(url: string | URL, protocols?: ConstructorParameters<typeof Builtin>[1]) {
+        super(url, protocols);
+        opened.push(String(url));
+      }
+    };
+    try {
+      await retryOpensNothing(opened);
+    } finally {
+      globalThis.WebSocket = Builtin;
+    }
+  }, 30_000);
+
+  async function retryOpensNothing(opened: string[]) {
     for (const mode of ["desktop", "token-free"] as const) {
+      opened.length = 0;
       // A listener on the instance's port that is not (or no longer) its gateway.
       let port = NAMED_PORT_RANGE.last + 1 - NAMED_PORT_BLOCK;
       while (!(await portFree(port))) port -= NAMED_PORT_BLOCK;
@@ -342,11 +362,11 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
       runtime.client.store.subscribe((state) => {
         if (state.connection.retryAt !== null) scheduled += 1;
       });
-      await until(() => sockets.length === 1);
+      await until(() => opened.length === 1 && sockets.length > 0);
       // The gateway process is gone; the protocol's own retry must ask again.
       childFor(proven.gateway.pid).kill("SIGTERM");
       await new Promise((resolve) => childFor(proven.gateway.pid).once("exit", resolve));
-      sockets[0]!.terminate();
+      for (const socket of sockets) socket.terminate();
       // The retry is scheduled, asks for the proof again, is refused, and leaves none waiting.
       await until(
         () =>
@@ -356,11 +376,11 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
           runtime.client.state.connection.retryAt === null,
         20_000,
       );
-      expect(sockets.length, mode).toBe(1);
+      expect(opened, mode).toEqual([proven.url]);
       runtime.client.stop();
       await new Promise((resolve) => listener.close(resolve));
     }
-  }, 30_000);
+  }
 
   it("does not start token-free without a proven development gateway", async () => {
     await expect(
