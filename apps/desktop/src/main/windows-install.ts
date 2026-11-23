@@ -29,8 +29,8 @@ using Microsoft.Win32.SafeHandles;
 // The version Windows itself reads from a held file. Windows' version lookup opens the file
 // again by path, and takes the strings, or the whole version, from a .mui file in a language
 // folder beside it when there is one. So it reads a copy of the held bytes, alone in a new
-// folder this run makes and protects as private-update-directory.ts protects an update folder,
-// and the copy must still have the held file's size and SHA-512 afterwards.
+// folder this run makes and protects as private-update-directory.ts protects an update folder.
+// The copy must have the held file's size and SHA-512 before Windows reads it and afterwards.
 public static class UpdateVersions {
   // FILE_VER_GET_LOCALISED, which reads what .NET's FileVersionInfo reads, a .mui file's
   // version included when there is one.
@@ -41,6 +41,10 @@ public static class UpdateVersions {
   static extern bool GetFileVersionInfoExW(uint flags, string path, uint handle, uint size, IntPtr data);
   [DllImport("version", CharSet=CharSet.Unicode)]
   static extern bool VerQueryValueW(IntPtr block, string path, out IntPtr value, out uint size);
+  [StructLayout(LayoutKind.Sequential)]
+  struct Security { public int size; public IntPtr descriptor; public bool inherit; }
+  [DllImport("kernel32", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern bool CreateDirectoryW(string path, ref Security security);
   static uint U32(byte[] bytes, int at) { return BitConverter.ToUInt32(bytes, at); }
   static int U16(byte[] bytes, int at) { return BitConverter.ToUInt16(bytes, at); }
   // The value at a path in Windows' copy, or null. It must lie inside that copy.
@@ -89,9 +93,8 @@ public static class UpdateVersions {
       Marshal.FreeHGlobal(data);
     }
   }
-  // The folder and its DACL: owned by this user, inheriting nothing, and one rule giving this
-  // user full control. CreateDirectory returns a folder that already exists without applying
-  // the DACL, so the name is random and the DACL is read back.
+  // Makes the folder, failing if anything is there already, with its DACL: owned by this user,
+  // inheriting nothing, and one rule giving this user full control.
   static void MakePrivate(string folder) {
     var user = WindowsIdentity.GetCurrent().User;
     var acl = new DirectorySecurity();
@@ -99,7 +102,18 @@ public static class UpdateVersions {
     acl.SetAccessRuleProtection(true, false);
     acl.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
       InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-    var made = Directory.CreateDirectory(folder, acl);
+    var descriptor = GCHandle.Alloc(acl.GetSecurityDescriptorBinaryForm(), GCHandleType.Pinned);
+    try {
+      var security = new Security { size = Marshal.SizeOf(typeof(Security)), descriptor = descriptor.AddrOfPinnedObject() };
+      if (!CreateDirectoryW(folder, ref security)) throw new IOException("CreateDirectoryW failed", Marshal.GetLastWin32Error());
+    } finally {
+      descriptor.Free();
+    }
+  }
+  // The DACL as read back, and nothing in the folder.
+  static void CheckPrivate(string folder) {
+    var user = WindowsIdentity.GetCurrent().User;
+    var made = new DirectoryInfo(folder);
     var actual = made.GetAccessControl();
     var rules = actual.GetAccessRules(true, true, typeof(SecurityIdentifier));
     if (!actual.AreAccessRulesProtected || rules.Count != 1 || made.GetFileSystemInfos().Length != 0
@@ -108,11 +122,19 @@ public static class UpdateVersions {
     if (!rule.IdentityReference.Equals(user) || rule.AccessControlType != AccessControlType.Allow
         || rule.FileSystemRights != FileSystemRights.FullControl) throw new IOException("Directory permissions refused");
   }
-  public static string[] Read(string path, FileStream held, string sha512) {
-    string folder = Path.Combine(Path.GetDirectoryName(path), ".inspect-" + Path.GetRandomFileName());
-    if (Directory.Exists(folder) || File.Exists(folder)) throw new IOException("Directory exists");
+  // The copy must have the held file's size and SHA-512.
+  static void Check(FileStream copy, long length, string sha512) {
+    copy.Seek(0, SeekOrigin.Begin);
+    string hash;
+    using (var sha = SHA512.Create()) hash = Convert.ToBase64String(sha.ComputeHash(copy));
+    if (copy.Length != length || hash != sha512) throw new InvalidDataException();
+  }
+  public static string[] Read(string path, FileStream held, string sha512, string folder) {
+    bool made = false;
     try {
       MakePrivate(folder);
+      made = true;
+      CheckPrivate(folder);
       string copy = Path.Combine(folder, Path.GetFileName(path));
       using (var output = new FileStream(copy, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
         held.Seek(0, SeekOrigin.Begin);
@@ -120,16 +142,15 @@ public static class UpdateVersions {
       }
       // Held while Windows reads it, so nothing else can write it or move it.
       using (var hold = new FileStream(copy, FileMode.Open, FileAccess.Read, FileShare.Read, 1)) {
+        Check(hold, held.Length, sha512);
         var lines = Versions(copy);
-        string hash;
-        using (var sha = SHA512.Create()) hash = Convert.ToBase64String(sha.ComputeHash(hold));
-        if (hold.Length != held.Length || hash != sha512) throw new InvalidDataException();
+        Check(hold, held.Length, sha512);
         return lines;
       }
     } finally {
-      // Removing the copy can't change the answer, and a copy left behind goes with the update
-      // folder, which is cleared at the next start and the next check.
-      try { Directory.Delete(folder, true); } catch (IOException) {} catch (UnauthorizedAccessException) {}
+      // Only a folder this run made. Removing the copy can't change the answer, and a copy left
+      // behind goes with the update folder, which is cleared at the next start and the next check.
+      if (made) try { Directory.Delete(folder, true); } catch (IOException) {} catch (UnauthorizedAccessException) {}
     }
   }
 }
@@ -301,10 +322,12 @@ public static class UpdateSignature {
         lines.Add("file " + info.volume + "." + info.indexHigh + "." + info.indexLow + " " + file.Length + " " + hash);
         var installer = Signatures(lines, "installer", final.ToString(), file);
         // Only the bytes the engine verified, signed by the running app's publisher, are copied.
-        if (hash == sha512 && publisher != null && Publisher(installer) == publisher)
-          lines.AddRange(UpdateVersions.Read(path, file, sha512));
-        else
+        if (hash == sha512 && publisher != null && Publisher(installer) == publisher) {
+          string folder = Path.Combine(Path.GetDirectoryName(path), ".inspect-" + Path.GetRandomFileName());
+          lines.AddRange(UpdateVersions.Read(path, file, sha512, folder));
+        } else {
           lines.Add("versions unread");
+        }
       }
     }
     return lines.ToArray();

@@ -39,8 +39,9 @@ async function windowsSays(script: string, path: string) {
 
 /** The facts the helper's version reader gives for a file it holds, or the error it refuses it
  * with, and how many milliseconds the reading took. The reader expects the file's own SHA-512
- * unless given another. */
-async function readVersions(path: string, sha512?: string) {
+ * unless given another, and makes a new folder with a random name beside the file unless given
+ * one. */
+async function readVersions(path: string, given: { sha512?: string; folder?: string } = {}) {
   const script = `
 $ErrorActionPreference='Stop'
 Add-Type -TypeDefinition @'
@@ -49,9 +50,11 @@ ${inspectSource}
 $file = [IO.File]::OpenRead($env:CLAWTRATE_CHECKED_FILE)
 $sha512 = [Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash($file))
 if ($env:CLAWTRATE_EXPECTED_SHA512) { $sha512 = $env:CLAWTRATE_EXPECTED_SHA512 }
+$folder = $env:CLAWTRATE_INSPECT_FOLDER
+if (-not $folder) { $folder = Join-Path (Split-Path $env:CLAWTRATE_CHECKED_FILE) ('.inspect-' + [IO.Path]::GetRandomFileName()) }
 $clock = [Diagnostics.Stopwatch]::StartNew()
 try {
-  [UpdateVersions]::Read($env:CLAWTRATE_CHECKED_FILE, $file, $sha512)
+  [UpdateVersions]::Read($env:CLAWTRATE_CHECKED_FILE, $file, $sha512, $folder)
 } catch {
   $cause = $_.Exception
   while ($cause.InnerException) { $cause = $cause.InnerException }
@@ -61,7 +64,11 @@ try {
 }
 "took $($clock.ElapsedMilliseconds)"
 `;
-  const values = { CLAWTRATE_CHECKED_FILE: path, CLAWTRATE_EXPECTED_SHA512: sha512 ?? "" };
+  const values = {
+    CLAWTRATE_CHECKED_FILE: path,
+    CLAWTRATE_EXPECTED_SHA512: given.sha512 ?? "",
+    CLAWTRATE_INSPECT_FOLDER: given.folder ?? "",
+  };
   const lines = (await runUpdatePowerShell(script, values, 60000)).stdout.trim().split(/\r?\n/);
   const took = Number(/^took (\d+)$/.exec(lines.pop() ?? "")?.[1]);
   return { lines, took };
@@ -384,9 +391,9 @@ if (windows)
       expect(lines).toEqual(["versions 1", `resource 1.2.0.7 ${base64("1.2.0")} - -`]);
     });
 
-    test("F-231: refuses a copy without the held file's SHA-512 after the reading, and removes it", async () => {
+    test("F-231: refuses a copy without the held file's SHA-512, and removes it", async () => {
       const path = place("setup.exe", portable(versionTree(release)));
-      const { lines } = await readVersions(path, "A".repeat(86) + "==");
+      const { lines } = await readVersions(path, { sha512: "A".repeat(86) + "==" });
       expect(lines).toEqual(["refused InvalidDataException"]);
       expect(readdirSync(dir)).toEqual(["setup.exe"]);
     });
@@ -394,6 +401,25 @@ if (windows)
     const key = Buffer.from(release);
     // VS_VERSION_INFO's length now ends inside its key.
     key.writeUInt16LE(16, 0);
+
+    test("F-231: checks the copy's SHA-512 before Windows reads it", async () => {
+      // Windows' version lookup fails on this file, so a check made only after it never runs.
+      const path = place("setup.exe", portable(versionTree(key)));
+      expect((await readVersions(path)).lines).toEqual(["refused IOException"]);
+      const { lines } = await readVersions(path, { sha512: "A".repeat(86) + "==" });
+      expect(lines).toEqual(["refused InvalidDataException"]);
+    });
+
+    test("F-231: refuses a folder for the copy that is already there, and leaves it", async () => {
+      const path = place("setup.exe", portable(versionTree(release)));
+      const folder = join(dir, ".inspect-taken");
+      mkdirSync(folder);
+      writeFileSync(join(folder, "kept"), "");
+      const { lines } = await readVersions(path, { folder });
+      expect(lines).toEqual(["refused IOException"]);
+      expect(readdirSync(folder)).toEqual(["kept"]);
+    });
+
     const huge = Buffer.concat([release, Buffer.alloc(0x100000)]);
     // 65535 named entries and 65535 numbered ones.
     const crowded = Buffer.alloc(16);
