@@ -6579,9 +6579,11 @@ export class ClawtrateClient {
             const saved = await this.savedSettings();
             if (saved?.url !== settings.url || !live()) return;
             if (saved.token === current.token) {
+              // This client's settings take the record it wrote, with what another client
+              // changed in it, a suspension for one, so Reconnect lifts that suspension.
               await this.writeRecord({ ...saved, token: null });
-            }
-            this.settings = { ...current, token: null };
+              this.settings = { ...saved, token: null };
+            } else this.settings = { ...current, token: null };
           } catch {
             // The settings keep the secret, so the next hello tries again; this one goes on.
             this.log("warn", "Could not remove the shared gateway token from this device.");

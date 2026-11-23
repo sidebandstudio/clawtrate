@@ -662,6 +662,42 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     }
   });
 
+  it("Reconnect lifts a suspension another client saved while this one's hello cleared the shared token", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
+      [tokenKey(URL_A)]: readToken("token-A"),
+    });
+    let replied = false;
+    const gateway = pairingGateway("token-A", () => {
+      replied = true;
+    });
+    const hold = holdRead(storage, tokenKey(URL_A), () => replied);
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const other = new ClawtrateClient(testHost(closed, storage), FAST);
+    try {
+      await client.start();
+      await until(hold.waiting);
+      await other.start();
+      await other.suspend();
+      hold.release();
+      await until(() => saved(storage)?.token === null);
+      expect(saved(storage)).toMatchObject({ url: URL_A, suspended: true });
+      // The connection drops and stays down until the person's Reconnect.
+      gateway.refuseConnections = true;
+      gateway.dropAll();
+      await until(() => client.state.connection.status !== "connected");
+      gateway.refuseConnections = false;
+      await client.retryNow();
+      expect(saved(storage)).toMatchObject({ url: URL_A, suspended: false });
+    } finally {
+      hold.release();
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("Reconnect after another client saved B leaves out the shared token cleared before the suspend", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
