@@ -140,6 +140,8 @@ export function createBots(api, options = {}) {
   async function mayWrite(body) {
     if (body.source?.kind !== "bot") return true;
     const proposer = { id: body.source.bot, createdAt: body.source.createdAt };
+    // A bot's request for itself needs no grant, so it never waits on a config read.
+    if (mayPropose([], proposer, body.bot)) return true;
     return mayPropose(managersIn((await config()).config), proposer, body.bot);
   }
 

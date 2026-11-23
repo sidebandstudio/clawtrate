@@ -426,6 +426,48 @@ describe("Apply and the journal", () => {
     }
   });
 
+  it("a lost answer whose read-back fails too settles unknown, with nothing observed, at once and in recovery", async () => {
+    const { host, gateway } = applying({ label: "Old" });
+    const p = await seed(host);
+    gateway.faults.lose.add("label");
+    gateway.faults.read = () => {
+      throw new Error("the read failed");
+    };
+    expect((await accept(host, p)).payload).toMatchObject({
+      state: "unknown",
+      outcome: { label: "unknown" },
+    });
+    const settled = await entryOf(host, p.id);
+    expect(settled).toMatchObject({ state: "unknown", reserved: 0 });
+    expect(settled).not.toHaveProperty("observed");
+
+    const crashed = applying({ label: "Old" });
+    const q = await seed(crashed.host);
+    let reached = () => {};
+    const writing = new Promise<void>((resolve) => (reached = resolve));
+    crashed.gateway.faults.before = () => (reached(), never());
+    void accept(crashed.host, q);
+    await writing;
+    crashed.gateway.faults.before = () => {};
+    crashed.gateway.faults.read = () => {
+      throw new Error("the read failed");
+    };
+    const restarted = crashed.open();
+    await restarted.start();
+    const recovered = await entryOf(restarted, q.id);
+    expect(recovered).toMatchObject({ state: "unknown", reserved: 0 });
+    expect(recovered).not.toHaveProperty("observed");
+  });
+
+  it("a bot's request for itself is written without reading the config", async () => {
+    const { host, gateway } = applying({ label: "Old" });
+    const p = await seed(host);
+    const before = host.dispatched.length;
+    expect((await accept(host, p)).payload).toMatchObject({ state: "accepted" });
+    expect(host.dispatched.slice(before)).not.toContain("config.get");
+    expect(gateway.writes).toEqual([{ bot: "pip", step: "label", value: "Helper" }]);
+  });
+
   it("a bot's request for another bot stops before a write once the proposer's manager grant is gone: before the first field, or after it", async () => {
     for (const removed of ["before", "after the label"]) {
       const { open, gateway } = applying();

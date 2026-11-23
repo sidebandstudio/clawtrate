@@ -374,7 +374,9 @@ export function settleClaim(ledger, kind, id, attempt, { outcome, observed }, no
             ? "unknown"
             : "stale";
   Object.assign(entry, { state, settledAt: now, reserved: 0, outcome: result });
-  if (observed && Object.keys(observed).length) entry.observed = observed;
+  // A read that failed shows nothing, and the store takes only JSON.
+  const seen = Object.entries(observed ?? {}).filter(([, value]) => value !== undefined);
+  if (seen.length) entry.observed = Object.fromEntries(seen);
   return { state, outcome: result };
 }
 
