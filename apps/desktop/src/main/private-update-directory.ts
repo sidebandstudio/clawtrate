@@ -105,6 +105,15 @@ async function makePrivateDirectory(path: string): Promise<void> {
   await runUpdatePowerShell(script, { CLAWTRATE_PRIVATE_DIRECTORY: path }, 15000);
 }
 
+/**
+ * Windows PowerShell started under PowerShell 7 inherits a module path that finds PowerShell 7's
+ * own modules first, and cannot load them. Without the variable it builds its own path.
+ */
+export function updatePowerShellEnv(env: NodeJS.ProcessEnv, values: Record<string, string>) {
+  const kept = Object.entries(env).filter(([name]) => name.toUpperCase() !== "PSMODULEPATH");
+  return { ...Object.fromEntries(kept), ...values };
+}
+
 export function runUpdatePowerShell(
   script: string,
   values: Record<string, string>,
@@ -122,7 +131,7 @@ export function runUpdatePowerShell(
     shell,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
     {
-      env: { ...process.env, ...values },
+      env: updatePowerShellEnv(process.env, values),
       ...(signal && { signal }),
       windowsHide: true,
       timeout,

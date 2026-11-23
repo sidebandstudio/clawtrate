@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import {
   checkWindowsDirectorySpelling,
   runUpdatePowerShell,
+  updatePowerShellEnv,
 } from "../../src/main/private-update-directory.ts";
 
 it("accepts a Windows short directory name only when every differing entry identifies the same directory", async () => {
@@ -69,6 +70,7 @@ it("starts the Windows folder helper from SystemRoot with the host environment a
   const signal = new AbortController().signal;
   vi.stubEnv("SystemRoot", root);
   vi.stubEnv("CLAWTRATE_TEST_ENV", "inherited");
+  vi.stubEnv("PSModulePath", "C:\\PowerShell7Fixture\\Modules");
   const values = { CLAWTRATE_PRIVATE_DIRECTORY: "fixture-directory" };
   execFile.mockImplementation((_file, _args, _options, done) => done(null, ""));
   try {
@@ -76,10 +78,26 @@ it("starts the Windows folder helper from SystemRoot with the host environment a
     expect(execFile).toHaveBeenCalledExactlyOnceWith(
       join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "fixture command"],
-      { env: { ...process.env, ...values }, timeout: 15000, windowsHide: true, signal },
+      {
+        env: expect.objectContaining({ CLAWTRATE_TEST_ENV: "inherited", ...values }),
+        timeout: 15000,
+        windowsHide: true,
+        signal,
+      },
       expect.any(Function),
     );
+    const { env } = execFile.mock.calls[0]![2] as { env: Record<string, string> };
+    expect(Object.keys(env).filter((name) => /^psmodulepath$/i.test(name))).toEqual([]);
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+it("starts Windows PowerShell without an inherited module path, whatever its case", () => {
+  expect(
+    updatePowerShellEnv(
+      { PSModulePath: "a", psmodulepath: "b", PsModulePath: "c", Path: "C:\\Fixture" },
+      { CLAWTRATE_UPDATE_FILE: "file" },
+    ),
+  ).toEqual({ Path: "C:\\Fixture", CLAWTRATE_UPDATE_FILE: "file" });
 });
