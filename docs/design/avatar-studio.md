@@ -2,7 +2,7 @@
 
 Issue #302. This turns the picture picker of `bots.md` section 3 into a studio where a person builds a bot's Claw with a large live preview: family, parts, colour and accessories, a "Surprise me", and a Custom row for their own pictures and for Claws described in words. In New bot the Claw follows the name as it is typed. A bot can also propose its own picture from chat.
 
-It builds on #293 and draft PR #300: the shared spec in `packages/core/src/avatar.ts`, the renderer in `packages/ui/src/Avatar.tsx` and the picker in `packages/ui/src/bots/AvatarPicker.tsx`. It names every field it adds to that spec. The conversational tools of path (c), and the gateway route Describe needs, come from #292's self-management plugin.
+It builds on #293 and on #300 as merged (`043501bb`): the shared spec in `packages/core/src/avatar.ts`, the renderer in `packages/ui/src/Avatar.tsx` and the picker in `packages/ui/src/bots/AvatarPicker.tsx`. It names every field it adds to that spec. The conversational tools of path (c), and the gateway route Describe needs, come from #292's self-management plugin.
 
 The prototype is `prototype/avatar-studio.html`: New bot through Account and Create, Edit picture through Save, building with accessories, Surprise me, the Custom row, a simulated Describe a Claw, the chat proposal, and a board of every family wearing accessories in each state at each size inside the app's Presence ring. Dark is the default; light is shown too. `prototype/tools/checks/avatar-studio.mjs` checks it.
 
@@ -129,8 +129,6 @@ The stage, the name and the tabs never scroll away, so the preview is always in 
 
 **The ideas' actions** ("Use this", "Try again", "Change the words") are their own row between the panel and the foot, outside the panel's scrolling, so they stay whole and in reach on a phone with the panel at any position, including with the keyboard up. The check hit-tests a 44 px target on every control at 390 × 844 and 390 × 520, with the panel scrolled to its top and its bottom.
 
-Screenshots: `studio-new-1440-dark.png`, `-1440-light.png`, `-390-dark.png`, `-390-light.png` and the rest in the review folder (the report lists them).
-
 ## 4. Accessories as spec data
 
 Everything in this section is data in `packages/core/src/avatar.ts`, on the same 40-unit grid, and is drawn by the same renderer. `prototype/js/accessories.js` holds the same data.
@@ -164,7 +162,7 @@ _The prototype_: `creatures.js` is generated from `avatar.ts`, and a test fails 
 | `AVATAR_TRIM_DEFAULT`                                | The accessories' colour when `trim` is absent, per body colour: green→violet, blue→yellow, orchid→sky, violet→lime, yellow→blue, pink→sky, sky→pink, lime→violet |
 | `AVATAR_GOLD`                                        | The crown's colour: the palette's yellow `#f6bd3b`, whatever the trim, with a rim of `shade(gold, 0.3)`                                                          |
 | `HEAD_SOCKETS`, `NECK_SOCKETS`, `LANTERN_HEADPHONES` | The socket tables below                                                                                                                                          |
-| `AVATAR_FIT_INSET`                                   | The equipped scene's inset per family, parts, hat and eyewear (below), generated from the builders' whole outline and checked by a test                          |
+| `AVATAR_FIT_INSET`                                   | The equipped scene's `fit` and `shift` per family, parts, hat and eyewear (below), generated beside #300's `AVATAR_FIT` and checked by a test                    |
 | `"tip"` in `AvatarMotionName` and `AVATAR_MOTIONS`   | A hat's lift on the done hop                                                                                                                                     |
 | `AVATAR_PNG_KEYWORD_V2`                              | `"clawtrate-avatar-v2"` (section 5)                                                                                                                              |
 | `avatarNameChoice(name)`                             | The name's Claw (section 2)                                                                                                                                      |
@@ -217,14 +215,17 @@ The band is a cubic from cup to cup. Both handles sit at the height that puts it
 
 ### Fit
 
-The saved picture is cropped to a circle by other apps, and the Presence ring sits just outside the avatar while working. The rules, measured on the whole drawn outline (body, claws, lure and accessories) of every base creature with every hat and eyewear and the bow tie:
+The saved picture is cropped to a circle by other apps, and the Presence ring sits just outside the avatar while working.
 
-- **Still poses**, every state: accessories stay within 19.6 units of the centre (the 40-unit circle less a pixel at 128 px), and the silhouette reaches no further than 20 units or the bare creature already does.
-- **Working, at its motions' peaks**: accessories stay inside the Presence ring's inner edge, and the silhouette no further than the ring or the bare creature. The ring is read from the app's own Presence CSS at the sizes it is drawn (18, 22, 32, 40, 44, 56 and 64 px); its tightest inner edge is 21.56 units, at 64 px.
-- **Other states, at their peaks** (sway, lean, hop and the hat's tip): accessories within 22.4 units. No ring is drawn then.
-- **The inset.** Where an outfit would break a rule, the whole equipped scene is drawn smaller about its feet (20, 36), by the largest factor that meets them all, in 0.01 steps. It is one factor for the outfit in every state, so the Claw doesn't change size between states. It depends on the family, the parts, the hat and the eyewear; colour and the bow tie don't change it. Today 294 outfits are inset, the smallest factor is 0.83 (a dome Shellfolk in headphones), and Lanterns need none. In the product `AVATAR_FIT_INSET` is generated from the builders the same way, and a test fails when a builder change makes it stale. In the prototype `tools/make-fit-inset.mjs` writes `js/fit-inset.js` from `js/fit-measure.js`, and the check regenerates it and fails on any difference.
+**What #300 settled.** Every bare creature already fits the crop circle. `AvatarScene` carries a `fit` and a `shift` for each creature, the same in every state: the renderer draws it with `translate(dx dy) translate(20 20) scale(fit) translate(-20 -20)`, so it shrinks about the grid's centre (20, 20) and then moves to the circle's middle. The values are `AVATAR_FIT`, keyed by `avatarFitKey` (the family and parts, not the colour), written by `packages/core/test/make-avatar-fit.ts`. They put every part, in every pose its states and motions reach, within 19.5 units of the centre (`FIT_RADIUS`, a little inside the radius-20 circle for antialiasing), and `avatar.test.ts` fails when a creature leaves the circle.
+
+The equipped scene follows the same rule, with the accessories added to the outline. The rules, measured on the whole drawn outline (body, claws, lure and accessories) of every base creature with every hat and eyewear and the bow tie:
+
+- **Every pose**, still poses and every motion's peaks (sway, lean, hop, the working bob and the hat's tip): the whole silhouette, accessories included, stays within #300's 19.5 units of the centre. That also keeps it inside the Presence ring while working: the ring is read from the app's own Presence CSS at the sizes it is drawn (18, 22, 32, 40, 44, 56 and 64 px), and its tightest inner edge is 21.56 units, at 64 px.
+- **Before #300.** The first rounds of this design allowed more: accessories within 19.6 units in still poses, inside the ring at working's peaks, and within 22.4 units at other peaks, with the silhouette compared against the bare creature. #300 holds every pose of the bare creature within 19.5 units, so the equipped scene takes that rule.
+- **The equipped fit.** Where an outfit would break a rule, the equipped scene gets its own `fit` and `shift` in place of the bare creature's, computed by #300's method over the outline with the accessories: the largest scale about the centre that meets every rule, and the shift that centres it. It is one fit for the outfit in every state, so the Claw doesn't change size or place between states. It depends on the family, the parts, the hat and the eyewear; colour and the bow tie don't change it, so its key is `avatarFitKey` plus the hat and the eyewear. In the product `AVATAR_FIT_INSET` holds these entries, written by `make-avatar-fit.ts` beside `AVATAR_FIT`, and a test fails when a builder change makes either stale. An outfit with no entry uses its bare creature's fit.
+- **The prototype's stand-in.** The prototype was built before #300's fit landed: it draws the bare creature without `fit` and `shift`, and insets an outfit about its feet (20, 36). Measured that way, 294 outfits are inset, the smallest factor is 0.83 (a dome Shellfolk in headphones), and Lanterns need none. Those figures describe the stand-in, not the product. `tools/make-fit-inset.mjs` writes `js/fit-inset.js` from `js/fit-measure.js`, and the check regenerates it and fails on any difference. Build step 2 measures the equipped fit on top of #300's.
 - **The saved still's mask.** No outfit's 128 px still has more pixels outside the circle than its bare creature has.
-- **Bare art.** 40 of the 84 bare creatures (Shellfolk shells, mostly) already reach a little past the circle in the saved still. That is #293's art and is being fixed in #300. The rules above compare against the bare creature, so an accessory adds no overflow either way.
 - **Presence motion.** In the product a creature's Presence moves only by the creature's own motion, with the ring and the badge. The older characters' whole-SVG sway, bob, lean and slump don't apply to creatures; the board leaves them out.
 
 The board shows every family wearing things in each state at 18, 22, 32, 56, 120 and 152 px inside the app's real Presence wrapper, with the working ring and the waiting and blocked badges, and the saved still beside each row. `?peak=1` holds every motion at its peak. Its rows include the extremes: the tallest Clawling (tall, splayed, big claws) in a party hat, sunglasses and bow tie; a one-eyed Clawling in a beanie; the turret Shellfolk in a party hat; a bell Lantern with the wave lure and a crown.
@@ -276,7 +277,7 @@ The choice is kept as it is today: a 128 px PNG of the still pose, sent as the b
 | Nothing worn  | `clawtrate-avatar`    | Version 1, byte for byte as #300 writes it |
 | Anything worn | `clawtrate-avatar-v2` | Version 2, the grammar below               |
 
-Why a new keyword: #300's strict reader at `59aeea0a` treats a `clawtrate-avatar` chunk it cannot parse as an invalid picture and draws the bot's id Clawling instead. A version 2 text under the old keyword would make every older Clawtrate replace a hat-wearing Claw with a different creature. Under a keyword it doesn't know, #300's reader sees a plain picture and shows the PNG, accessories included, still. Standard PNG consumers ignore the ancillary text and decode the pixels. Any future format a strict version 2 reader cannot parse takes another new keyword.
+Why a new keyword: #300's strict reader, as merged (`readPicture` in `avatar.ts`), treats a `clawtrate-avatar` chunk it cannot parse as an invalid picture and draws the bot's id Clawling instead. A version 2 text under the old keyword would make every older Clawtrate replace a hat-wearing Claw with a different creature. Under a keyword it doesn't know, #300's reader sees a plain picture and shows the PNG, accessories included, still. Standard PNG consumers ignore the ancillary text and decode the pixels. Any future format a strict version 2 reader cannot parse takes another new keyword.
 
 ### The version 2 grammar
 
@@ -317,7 +318,7 @@ At least one of head, face and neck. The longest text is 123 bytes.
 - **Duplicate recognized tags, both keywords together, or a tag that doesn't parse**: the strict invalid-picture path, as #300 does (the bot's id Clawling).
 - **A broken version 2 tag**: a `tEXt` chunk that starts with `clawtrate-avatar-v2` and has no separator at all is malformed, so the picture is invalid, alone or beside a valid tag. The version 1 keyword keeps #300's reading, where such a chunk is ignored.
 - Refused in version 2: duplicate or extra keys, empty values, `none`, `null`, whitespace, escapes, other case, non-ASCII bytes, out-of-order fields, a missing `trim`, and nothing worn.
-- Kept from #300: canonical base64, the 200-byte text limit, 128 chunks, 32,768 characters, CRCs, the header rules, IEND last with nothing after it.
+- Kept from #300: canonical base64, the 200-byte text limit, 128 chunks, 32,768 characters (`MAX_PICTURE_CHARS`), CRCs, the header rules with sides of at most 8,192 px, IEND last with nothing after it. #300 recognizes its tag only by the exact keyword bytes followed by the NUL separator, so a `clawtrate-avatar-v2` chunk is never read as version 1.
 
 ### Compatibility
 
@@ -356,6 +357,10 @@ The person writes a description. The bot's model turns it into spec fields throu
 4. **Use this** puts the idea's fields into the build and adds the Claw (not the words) to the Custom row. The person can then change anything in the other tabs. Nothing is saved until Next or Save.
 5. **Failure**: a danger note says "**Couldn't make a Claw from that.** <Bot>'s reply didn't name parts the studio has, twice. Nothing changed.", with "Try again" and "Change the words". Other reasons use the same note: "<Bot> didn't answer in 45 seconds.", "The connection dropped.", "<Bot>'s model refused." and "<Bot>'s account couldn't run it (<the account notice of bots.md §13>)."
 6. **Unavailable**: on a gateway without the route, the Describe tile is disabled and the panel says: "**Describe a Claw isn't available on this gateway.** It needs a way to send your words to the model with no tools, and this gateway doesn't offer one yet."
+
+### Gated off on OpenClaw 2026.10.6
+
+Per #292's design (`main-bot-onboarding.md` §9, "Describe: gated on 2026.10.6"), **Describe stays unavailable on every route on 2026.10.6.** The plugin can show a route, but the gateway can't make a completion refuse a different route before inference. `clawtrate-bots.status` reports `describe: { available: false, reason: "route-binding" }`, and the studio shows step 6's "Describe a Claw isn't available on this gateway." Everything below is the design for when the gateway lets a caller require the exact prepared route.
 
 ### Where it runs: a tool-free route
 
@@ -403,7 +408,7 @@ AS-28 tests each of these.
 
 ### What OpenClaw 2026.10.6 offers
 
-This was read from the installed package and the pinned protocol schema. No gateway was run. The report gives file paths and line numbers.
+This was read from the installed package and the pinned protocol schema. No gateway was run.
 
 - **The tool**: `image_generate`, a core agent tool. It exists only when the gateway has an image model (`agents.defaults.mediaModels.image`, a provider key, or an OpenAI ChatGPT/Codex sign-in). Providers include OpenAI, Google Gemini, OpenRouter, fal, DeepInfra, LiteLLM, Microsoft Foundry, MiniMax, xAI, Vydra and ComfyUI; these are examples, and the route actually used is the gateway's.
 - **Calling it from a client.** `operator.write` is the right minimum for the WebSocket `tools.invoke` method (`core-method-policy-DkntKRY_.mjs`). `tools-invoke-shared-ytTKyozQ.mjs` defaults to `main`, resolves the HTTP tool surface, then checks session authority, tool policy and approval hooks. `image_generate` is absent from the default HTTP deny list, but a catalog entry is not execution permission, and the development gateway's fixture denies it explicitly.
@@ -423,6 +428,8 @@ A read-only capability check can use `operator.read`. Creating any side session 
 ## 9. Path (c): a bot proposes its own picture in chat
 
 For example, "Make an avatar for yourself based on something you know about me." The bot uses #292's self-management tools.
+
+**Gated off on OpenClaw 2026.10.6.** Per #292's design (`main-bot-onboarding.md` §6 and §9), a picture can't be applied from a proposal on 2026.10.6, for the same reason as a name: there is no conditional picture write. The card offers only **Open in studio**, and the studio's Save is the person's own edit of the draft they see. "Use it", its Undo and the shared commit below wait until the gateway has a conditional write.
 
 ### The tool contract
 
@@ -518,11 +525,9 @@ The app consumes the same spec through `react-native-svg`, so nothing here is dr
 
 ## 14. For builders
 
-**When.** Implementation starts after Beta 1, once Ali has signed off this design. The development-gateway probes below are part of the schedule, not extra to it.
+**When.** Implementation starts after Beta 1, once the product owner has signed off this design. The development-gateway probes below are part of the schedule, not extra to it.
 
 ### Order
-
-The report has an estimate for each step.
 
 1. **Probes** (development gateway, about half a day each): the Describe route's isolation (an empty tool surface, provider-native tools included; no workspace, memory, history or hooks; visibility to a second client; cancellation and cleanup); whether #292's plugin already has proposal records and a commit; and, separately and later, the raster result of section 8.
 2. **Spec, renderer and the picture together**: the lists, sockets, shapes, fit inset and `tip` in `avatar.ts`; accessories inside the three scene builders; the two keywords' writer and reader; `avatarNameChoice`; `fine` at 18 px; accessories in `avatars.html`. PNG reading, writing and rendering ship in one change, or version 2 writing stays switched off until the renderer and the fit tests land. `pnpm brand:creatures` regenerates the prototype's copy, and `accessories.js` and `avatar-picture.js` then go.
@@ -538,11 +543,11 @@ The report has an estimate for each step.
 - **Interoperability**: a version 1 and a version 2 picture written by the new build, read by #300's strict reader (version 1 draws, version 2 shows as a picture) and by the new build; uploads read in place.
 - **iOS**: the app consumes the spec, the sockets and the name's Claw, and draws the same Claws; Reduce Motion holds still poses; VoiceOver reads the preview, the groups and the name's line.
 - **Desktop**: VoiceOver (macOS) and NVDA read the same; the system and app Reduce Motion settings both hold.
-- Parity rows: F-035, F-037 and F-270 are checked through the normal create, edit and upload entry points; F-269 stays open with its disabled copy; F-518 (the name's Claw), F-519 (Describe), F-520 (chat confirmation) and F-521 (interoperability) get their own checks.
+- Parity rows: F-035, F-037 and F-270 are checked through the normal create, edit and upload entry points; F-269 stays open with its disabled copy; F-519 (the name's Claw), F-520 (Describe), F-521 (chat confirmation) and F-522 (interoperability) get their own checks.
 
 ### Tests that fail without each behaviour
 
-- The spec: an accessory at each socket in each family and state; none on a hiding Shellfolk's critter; the fit inset keeps every still pose in the circle and every peak inside the ring; bow ties clear every mouth; rims never cross; a Lantern's hat clears its lure; glasses and bridges marked `fine`; every accessory colour outside the guard; the version 2 grammar accepts its form and refuses every case in section 5; version 1 bytes unchanged when nothing is worn; #300's reader shows a version 2 picture as plain; the name's Claw is stable for a name and its case, space and NFC variants.
+- The spec: an accessory at each socket in each family and state; none on a hiding Shellfolk's critter; the equipped fit keeps every pose, still and at its motions' peaks, within 19.5 units; bow ties clear every mouth; rims never cross; a Lantern's hat clears its lure; glasses and bridges marked `fine`; every accessory colour outside the guard; the version 2 grammar accepts its form and refuses every case in section 5; version 1 bytes unchanged when nothing is worn; #300's reader shows a version 2 picture as plain; the name's Claw is stable for a name and its case, space and NFC variants.
 - The studio: the name's Claw while typing, with debounce and no flicker; a manual pick stops it; Match my name; Edit never derives; Create sends exactly the Claw shown and reads it back; each tab's groups and their keys; the beat present with motion and absent without; Surprise never repeats and Undo restores the whole draft; Save disabled until something changes and while anything is pending; focus trap, return and redraw; 44 px targets on a phone.
 - Describe: against the scripted model, a valid reply gives ideas and saves nothing; a prose-wrapped reply leads to one retry and then ideas; two refusals lead to the failure note; silence leads to the 45 s failure and the cancel method; nothing reaches the bot's sessions; the route line names the provider and model.
 - The card: Use it commits once and reads back; Not now writes nothing; below admin it shows the access bar; expired, superseded and changed elsewhere each show their words; an accept on one device shows on another.
