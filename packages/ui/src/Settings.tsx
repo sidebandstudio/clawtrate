@@ -14,7 +14,7 @@ import {
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
@@ -28,10 +28,27 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
+import { notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
+import { useShowCommands } from "./preferences.ts";
 import { useForget } from "./forget.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
+
+// The width below which a section replaces the list instead of sitting beside it (bots.css).
+const NARROW = "(max-width: 687px)";
+
+function onNarrowChange(listener: () => void): () => void {
+  const query = globalThis.matchMedia?.(NARROW);
+  query?.addEventListener("change", listener);
+  return () => query?.removeEventListener("change", listener);
+}
+
+const isNarrow = () => globalThis.matchMedia?.(NARROW).matches ?? false;
+
+function useNarrow(): boolean {
+  return useSyncExternalStore(onNarrowChange, isNarrow, () => false);
+}
 
 /** The connection's state, as the Gateway pane names it. */
 export function gatewayState(connection: ConnectionState): string {
@@ -80,17 +97,66 @@ type Section = SettingsSection;
 export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["gateway", "Gateway", "The gateway, its address and this device"],
   ["accounts", "Accounts", "Provider accounts the bots run on"],
-  ["conversation", "Conversation", "How long a bot's turn may run"],
+  ["conversation", "Conversation", "Showing commands, and how long a bot's turn may run"],
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
   ["checkins", "Check-ins", "When each bot checks in on its own"],
   ["updates", "Updates", "Clawtrate's own updates"],
 ];
 
-/** How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100). */
+/**
+ * "Show commands", off by default (conversation.md, 7.11): on, each action is
+ * its own card in the conversation with the raw call behind it, and the
+ * Computer tab lists command lines. Kept on this device, like the theme.
+ */
+function ShowCommands({ announce }: { announce: (text: string) => void }) {
+  const [shown, setShown] = useShowCommands();
+  return (
+    <div className="b-field show-commands">
+      <span className="show-commands-row">
+        <span id="show-commands-label">Show commands</span>
+        <button
+          type="button"
+          className="b-switch"
+          role="switch"
+          aria-checked={shown}
+          aria-labelledby="show-commands-label"
+          aria-describedby="show-commands-note"
+          data-testid="show-commands"
+          onClick={() => {
+            setShown(!shown);
+            announce(shown ? "Commands hidden" : "Commands shown");
+          }}
+        />
+      </span>
+      <p className="b-hint" id="show-commands-note">
+        Off, a conversation shows what a bot says and thinks, and after each turn one line that
+        opens to what it did. On, each action is its own card with its command or call, here and in
+        the Computer tab.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100).
+ * Whether chats from Discord, Telegram and other channels are listed; off by default (F-519).
+ */
 function ConversationPane({ announce }: { announce: (text: string) => void }) {
   const send = useCommand();
-  const minutes = useClawtrateState().turnLimitMinutes ?? 50;
+  const state = useClawtrateState();
+  const minutes = state.turnLimitMinutes ?? 50;
+  const showChannelChats = state.showChannelChats === true;
+  const [channelError, setChannelError] = useState<string | null>(null);
+  const toggleChannelChats = () => {
+    const on = !showChannelChats;
+    setChannelError(null);
+    void send({ type: "setShowChannelChats", on }).then(
+      () => announce(on ? "Channel chats shown" : "Channel chats hidden"),
+      (failure: unknown) =>
+        setChannelError(failure instanceof Error ? failure.message : String(failure)),
+    );
+  };
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const commit = () => {
@@ -110,6 +176,7 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
   };
   return (
     <>
+      <ShowCommands announce={announce} />
       <label className="b-field">
         <span>Turn time limit</span>
         <span className="turn-limit-field">
@@ -141,6 +208,31 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
       {error && (
         <div className="form-error" role="alert">
           {error}
+        </div>
+      )}
+      <div className="b-field channel-chats-field">
+        <span id="channel-chats-label">Show external channel chats</span>
+        <button
+          type="button"
+          className="b-switch"
+          role="switch"
+          aria-checked={showChannelChats}
+          aria-labelledby="channel-chats-label"
+          aria-describedby="channel-chats-note"
+          data-testid="channel-chats"
+          onClick={toggleChannelChats}
+        />
+      </div>
+      <p className="b-hint" id="channel-chats-note">
+        Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp,
+        Signal or another channel stay out of the task list, its previews and its unread marks. A
+        bot's main conversation always shows. If the gateway sends a channel's direct messages to
+        it, which it does unless its <code>session.dmScope</code> setting gives each channel
+        conversation its own session, those messages still appear there.
+      </p>
+      {channelError && (
+        <div className="form-error" role="alert">
+          {channelError}
         </div>
       )}
     </>
@@ -211,6 +303,8 @@ export function Settings({
   );
   // On a phone the list comes first; a section replaces it.
   const [pane, setPane] = useState<"nav" | "section">(initialSection ? "section" : "nav");
+  const narrow = useNarrow();
+  const sectionShown = pane === "section" || !narrow;
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
@@ -239,7 +333,14 @@ export function Settings({
     connection.status === "connected" &&
     INTERACTIVE_SCOPES.every((scope) => scopeSatisfied(connection.scopes, scope));
   const rePairing = upgrade.status === "requesting" || upgrade.status === "pending";
-  const canRePair = !info.readOnly && connection.status === "connected" && !holdsAll && !rePairing;
+  // A full pairing's grant is the gateway's limit: nothing asks for more (setup-effortless.md §2).
+  const canRePair =
+    !info.readOnly &&
+    connection.status === "connected" &&
+    !holdsAll &&
+    !rePairing &&
+    !connection.fullPairing;
+  const missing = notGranted(connection);
   const rePairProblem =
     upgrade.status === "rejected"
       ? "The gateway's owner rejected the new pairing. This device keeps its earlier access."
@@ -318,7 +419,14 @@ export function Settings({
     announce,
     toNav,
   });
-  const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
+  const usageSection = useUsageSection({
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+    shown: sectionShown,
+  });
   const machinesSection = useMachinesSection({
     active: section === "machines",
     connection,
@@ -366,6 +474,14 @@ export function Settings({
               : "None while not connected"}
           </dd>
         </div>
+        {connection.status === "connected" && connection.fullPairing && (
+          <div>
+            <dt>Access</dt>
+            <dd data-testid="gateway-access">
+              {missing.length === 0 ? "Full control" : "Less than full control"}
+            </dd>
+          </div>
+        )}
         {connection.serverVersion && (
           <div>
             <dt>Gateway</dt>
@@ -376,6 +492,11 @@ export function Settings({
           </div>
         )}
       </dl>
+      {missing.length > 0 && (
+        <p className="settings-note" data-testid="narrower-grant">
+          {`OpenClaw granted less than full control. Not granted: ${missing.join(", ")}. This device keeps what was granted.`}
+        </p>
+      )}
       {problem && (
         <div className="form-error" role="alert" data-testid="gateway-problem">
           <strong>{problem.title}</strong>
@@ -446,13 +567,15 @@ export function Settings({
         <p className="settings-note">
           {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
           disconnected.{" "}
-          {connection.canAdmin
-            ? "This device holds admin access, which it asked for to change bots and accounts."
-            : holdsAll
-              ? "This device can send, stop and answer."
-              : info.readOnly
-                ? "This device asks for read access only."
-                : "This device reads. Re-pair to ask for sending, stopping and answering."}
+          {connection.fullPairing
+            ? ""
+            : connection.canAdmin
+              ? "This device holds admin access, which it asked for to change bots and accounts."
+              : holdsAll
+                ? "This device can send, stop and answer."
+                : info.readOnly
+                  ? "This device asks for read access only."
+                  : "This device reads. Re-pair to ask for sending, stopping and answering."}
         </p>
       )}
     </>

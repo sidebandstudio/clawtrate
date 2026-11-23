@@ -16,7 +16,7 @@ import {
   until,
 } from "../../../packages/core/test/fake-gateway.ts";
 
-const URL_A = "ws://127.0.0.1:19001";
+const URL_A = "wss://gateway.example:19001";
 const FAST = { reconnect: { initialMs: 20, maxMs: 40 }, fullAccess: true };
 const dirs: string[] = [];
 afterEach(() => {

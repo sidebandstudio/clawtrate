@@ -1,0 +1,40 @@
+- 'region "Otto asks: How long should I keep the cache in /srv/scratch before deleting it?"':
+  - heading "Otto has 3 questions" [level=3]
+  - button "Dismiss Otto's questions"
+  - heading "1 of 3 How long should I keep the cache in /srv/scratch before deleting it?" [level=4]
+  - radiogroup "How long should I keep the cache in /srv/scratch before deleting it?":
+    - listitem:
+      - radio "A week Delete it next Monday"
+    - listitem:
+      - radio "A month"
+    - listitem:
+      - radio "Until I say so Keep it and remind me"
+    - listitem:
+      - radio "Delete it now"
+  - text: Type your own answer to question 1
+  - textbox "Type your own answer to question 1":
+    - /placeholder: Type your own answer
+  - heading "2 of 3 Which machines should the weekly check cover?" [level=4]
+  - paragraph: Choose all that apply.
+  - group "Which machines should the weekly check cover?":
+    - listitem:
+      - checkbox "media-box"
+    - listitem:
+      - checkbox "garage-pi"
+    - listitem:
+      - checkbox "attic-nas"
+  - text: Type your own answer to question 2
+  - textbox "Type your own answer to question 2":
+    - /placeholder: Type your own answer
+  - heading "3 of 3 When should it run?" [level=4]
+  - radiogroup "When should it run?":
+    - listitem:
+      - radio "Sunday night"
+    - listitem:
+      - radio "Monday morning"
+  - text: Type your own answer to question 3
+  - textbox "Type your own answer to question 3":
+    - /placeholder: Type your own answer
+  - button "Send answers" [disabled]
+  - text: 0 of 3 answered
+  - button "Raw"

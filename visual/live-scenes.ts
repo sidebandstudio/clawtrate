@@ -88,6 +88,11 @@ export const LIVE_VIEWS: Array<{
     ready: (page) => expect(page.getByTestId("status-line")).toContainText("Thinking"),
   },
   {
+    scene: "run-reasoning",
+    rows: "F-529",
+    ready: (page) => expect(page.getByTestId("status-thought")).toContainText("transcode cache"),
+  },
+  {
     scene: "run-working",
     rows: "F-082 F-086",
     ready: (page) => expect(page.getByTestId("status-line")).toContainText("Reading"),

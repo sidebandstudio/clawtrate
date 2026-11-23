@@ -1,0 +1,20 @@
+- dialog "Settings":
+  - region "Updates":
+    - button "Close settings"
+    - button "Back to settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - term: Version
+    - definition:
+      - text: Clawtrate 0.1.0
+      - paragraph: This copy is a Stable build.
+    - radiogroup "Update track":
+      - text: Update track
+      - radio "Stable" [checked] [disabled]
+      - text: Stable
+      - radio "Beta" [disabled]
+      - text: Beta
+    - group "Update status":
+      - term: Updates
+      - definition: Preparing Clawtrate 0.2.0 for restart…
+    - status: Preparing Clawtrate 0.2.0 for restart…

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, openSync, closeSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { arch } from "node:os";
 import { join, resolve } from "node:path";
@@ -277,6 +277,44 @@ const refused: [string, (dir: string) => Buffer][] = [
   ["an empty file", () => Buffer.alloc(0)],
 ];
 
+// The check preflight() names for each refused archive.
+const refusedFor: Record<string, string> = {
+  "an oversized directory": "a central directory over 8 MiB",
+  "more than 32,768 records": "more than 32,768 entries",
+  "a record count that doesn't match the walk":
+    "an entry count that doesn't match the central directory",
+  "a directory size that doesn't match the walk":
+    "a central directory that doesn't end at its end record",
+  "a directory entry that isn't a record": "a central directory entry that isn't a record",
+  "a record that runs into the end record":
+    "a central directory record that runs into the end record",
+  "a ZIP64 archive from zip -fz": "a ZIP64 locator",
+  "a ZIP64 locator just before the end record": "a ZIP64 locator",
+  "a ZIP64 compressed size in a record": "a ZIP64 size in the central directory",
+  "a ZIP64 uncompressed size in a record": "a ZIP64 size in the central directory",
+  "a ZIP64 compressed size in a local header": "a ZIP64 size in a local header",
+  "a ZIP64 uncompressed size in a local header": "a ZIP64 size in a local header",
+  "a comment from zip -z":
+    "the last 22 bytes aren't an end record (a comment or trailing bytes, or not a ZIP)",
+  "an end record without its signature":
+    "the last 22 bytes aren't an end record (a comment or trailing bytes, or not a ZIP)",
+  "a comment length in the end record": "an archive comment",
+  "a second disk": "more than one disk",
+  "a directory on a second disk": "more than one disk",
+  "fewer records on this disk than in all": "more than one disk",
+  "a record on a second disk": "an entry on another disk",
+  "an LZMA entry in the central header": "a compression method other than Store or Deflate",
+  "an LZMA entry in only the local header": "a compression method other than Store or Deflate",
+  "a local offset that isn't a local header":
+    "a local header offset that doesn't point at a local header",
+  "a local offset past the end of the file":
+    "a local header offset that doesn't point at a local header",
+  "a local header inside the directory":
+    "a local header offset that doesn't point at a local header",
+  "an empty file":
+    "the last 22 bytes aren't an end record (a comment or trailing bytes, or not a ZIP)",
+};
+
 function runWith(file: string, args: string[], archive: string, cwd: string): string {
   const fd = openSync(archive, "r");
   try {
@@ -331,6 +369,17 @@ describe.skipIf(process.platform !== "darwin")("Mac update inspection helper", (
       runWith(helper, args, archive, dir.path),
     );
   });
+  it("names the failed step on standard error, and keeps one result line on standard output", () => {
+    // /bin/sh as the parent: Apple-signed, so the Developer ID requirement fails at a named step.
+    const ran = spawnSync(
+      "/bin/sh",
+      ["-c", '"$0" --running-signature dev.clawtrate.desktop; exit $?', helper],
+      { encoding: "utf8" },
+    );
+    expect(ran.status).toBe(0);
+    expect(ran.stdout).toBe("running-signature-untrusted\n");
+    expect(ran.stderr).toMatch(/^parent-[a-z-]+ -?\d+\n$/);
+  });
   // The archive check runs before inspect() reads the running signature.
   it.each(refused.filter(([name]) => /LZMA entry in only|zip -fz|empty file/.test(name)))(
     "refuses %s before it classifies anything",
@@ -358,7 +407,7 @@ describe.skipIf(process.platform !== "darwin")("Mac archive preflight", () => {
 int main(int argc, char **argv) {
   @autoreleasepool {
     if (argc == 2) {
-      if (strcmp(argv[1], "preflight") == 0) puts(preflight(3) ? "ok" : "mac-archive");
+      if (strcmp(argv[1], "preflight") == 0) puts(preflight(3) ?: "ok");
       else if (strcmp(argv[1], "adhoc") == 0) puts(signatureKind(0, @{(__bridge NSString *)kSecCodeInfoFlags:@(kSecCodeSignatureAdhoc), (__bridge NSString *)kSecCodeInfoIdentifier:@"fixture"}));
       else puts(signatureKind(0, @{}));
       return 0;
@@ -368,7 +417,7 @@ int main(int argc, char **argv) {
       puts(unpackWithBudget(3,root,atoi(argv[3])) ? "ok" : "mac-archive");
       return 0;
     }
-    if (!preflight(3) || !unpack(3,root)) {puts("mac-archive"); return 0;}
+    if (preflight(3) || !unpack(3,root)) {puts("mac-archive"); return 0;}
     NSURL *url=[NSURL fileURLWithPath:[@(argv[1]) stringByAppendingPathComponent:@"Clawtrate.app"]];
     puts(bundleFacts(url,@"dev.clawtrate.desktop",@(argv[2]),@(argv[3])) ?: "ok");
     return 0;
@@ -441,7 +490,7 @@ int main(int argc, char **argv) {
     expect(preflight(name, build(dir.path))).toBe("ok");
   });
   it.each(refused)("refuses %s", (name, build) => {
-    expect(preflight(name, build(dir.path))).toBe("mac-archive");
+    expect(preflight(name, build(dir.path))).toBe(refusedFor[name]);
   });
   it("rejects an archive whose implicit directories exceed the scratch entry limit", () => {
     const input = join(dir.path, "budget"),

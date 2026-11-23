@@ -1,0 +1,31 @@
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:10 PM
+    - paragraph: Look through memory, make two sketches and tidy the backup folder.
+    - toolbar "Message actions":
+      - button "More"
+    - group: Searched memory 1 time couldn't search memory for "loft insulation" 1 unavailable · 1 partial
+    - paragraph: Starting the sketches.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Now the backup folder.
+    - toolbar "Message actions":
+      - button "More"
+    - group: "Commands · 3 calls 1 failed: couldn't run a command Waiting for approval"
+    - group:
+      - text: Worked 8 actions 1 failed 1 unavailable
+      - group: Image generation · 2 calls "A small house in…", "The same house at…" 1 started
+      - paragraph:
+        - text: scripted/dev-1 · effort not reported run-1
+        - button "Copy run id"
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

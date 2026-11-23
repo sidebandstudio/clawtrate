@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { contextFor, openFixture, settle, showList, SIZES, THEMES } from "./fixture.ts";
+import { test } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, showList, SIZES, THEMES } from "./fixture.ts";
 
 const states = [
   "not-checked",

@@ -56,6 +56,9 @@ importers:
       react-dom:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
+      undici:
+        specifier: 7.30.2
+        version: 7.30.2
       ws:
         specifier: 8.22.2
         version: 8.22.2
@@ -8812,8 +8815,7 @@ snapshots:
 
   undici@6.29.1: {}
 
-  undici@7.30.2:
-    optional: true
+  undici@7.30.2: {}
 
   unicode-canonical-property-names-ecmascript@2.0.1: {}
 

@@ -287,6 +287,13 @@ describe("the gateway's figures", () => {
         { provider: "xai", displayName: "xAI", windows: [], error: "Timeout" },
       ],
     });
+    // A window with no label or reset is kept, named "Limit", with no reset time.
+    expect(
+      parseLimits({
+        updatedAt: 1,
+        providers: [{ provider: "openai", windows: [{ usedPercent: 55 }] }],
+      }).providers[0]!.windows,
+    ).toEqual([{ label: "Limit", usedPercent: 55, resetAt: null }]);
     // The development gateway's answer: a time and no providers.
     expect(parseLimits({ updatedAt: 5, providers: [] }).providers).toEqual([]);
     // An answer without the list says nothing about providers: it is a failed read.

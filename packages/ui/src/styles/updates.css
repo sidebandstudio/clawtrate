@@ -36,6 +36,24 @@
 .updates-section .b-note p {
   margin: 0;
 }
+.update-failure {
+  margin-block-start: 8px;
+}
+.update-failure .b-actions {
+  margin-block-start: 8px;
+}
+.update-failure-record {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .update-result progress {
   display: block;
   margin-top: 6px;

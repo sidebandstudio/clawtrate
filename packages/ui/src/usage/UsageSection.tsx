@@ -9,6 +9,7 @@ import {
   type Budget,
   type ConnectionState,
   type HostInfo,
+  type LimitWindow,
   type BudgetRoutine,
   MAX_BOTS,
   type UsagePeriod,
@@ -17,15 +18,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { ChevronIcon } from "../icons.tsx";
 import { BudgetForm, type BudgetTarget } from "./Budget.tsx";
-import {
-  Bars,
-  Meter,
-  PeriodChoice,
-  ShownOnly,
-  stillCounted,
-  useNow,
-  useUsageReport,
-} from "./parts.tsx";
+import { Bars, PeriodChoice, ShownOnly, stillCounted, useNow, useUsageReport } from "./parts.tsx";
 import {
   asOf,
   botBars,
@@ -34,6 +27,7 @@ import {
   figureLine,
   full,
   kindWord,
+  meterTone,
   PARTIAL_COUNT,
   refreshFailed,
   reportWindow,
@@ -46,6 +40,47 @@ import "./usage.css";
 
 const day = (at: number) =>
   new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+/**
+ * One provider limit: the share used and the reset first, in larger type over a
+ * thicker bar; which provider and window, and the gateway's time, quieter above.
+ */
+function Limit({
+  provider,
+  window,
+  updatedAt,
+}: {
+  provider: string;
+  window: LimitWindow;
+  updatedAt: number | null;
+}) {
+  // The share as shown; its colour follows the shown number, so "80% used" is always amber.
+  const percent = Math.round(window.usedPercent);
+  return (
+    <div className="c-limit" data-tone={meterTone(percent, 100)} data-testid="limit">
+      <div className="c-limit-which">
+        {provider} · {window.label}
+        {updatedAt !== null ? ` · ${asOf(updatedAt)}` : ""}
+      </div>
+      <div className="c-limit-figures">
+        <span className="c-limit-share">{percent}% used</span>
+        {window.resetAt ? (
+          <span className="c-limit-reset">resets {day(window.resetAt)}</span>
+        ) : null}
+      </div>
+      <div
+        className="c-meter-bar"
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.min(window.usedPercent, 100)}
+        aria-label={`${provider}'s ${window.label} limit: ${percent}% used${updatedAt !== null ? `, ${asOf(updatedAt)}` : ""}`}
+      >
+        <span style={{ width: `${Math.min(100, window.usedPercent)}%` }} />
+      </div>
+    </div>
+  );
+}
 
 /** The limits providers report: each window with its percentage, its reset and the gateway's time. */
 function Limits() {
@@ -63,7 +98,6 @@ function Limits() {
         Couldn't read the providers' limits from the gateway.
       </p>
     );
-  const at = limits.updatedAt === null ? "" : ` · ${asOf(limits.updatedAt)}`;
   const reporting = limits.providers.filter((each) => each.windows.length > 0);
   const silent = limits.providers.filter((each) => each.windows.length === 0);
   return (
@@ -74,19 +108,14 @@ function Limits() {
         </p>
       )}
       {reporting.flatMap((provider) =>
-        provider.windows.map((window) => {
-          const words = `${provider.displayName} · ${window.label} · ${Math.round(window.usedPercent)}% used${window.resetAt ? ` · resets ${day(window.resetAt)}` : ""}${at}`;
-          return (
-            <Meter
-              key={`${provider.provider}:${window.label}`}
-              used={window.usedPercent}
-              limit={100}
-              words={words}
-              right=""
-              label={`${provider.displayName}'s ${window.label} limit: ${Math.round(window.usedPercent)}% used${limits.updatedAt ? `, ${asOf(limits.updatedAt)}` : ""}`}
-            />
-          );
-        }),
+        provider.windows.map((window) => (
+          <Limit
+            key={`${provider.provider}:${window.label}`}
+            provider={provider.displayName}
+            window={window}
+            updatedAt={limits.updatedAt}
+          />
+        )),
       )}
       {silent.length > 0 && (
         <p className="b-hint">
@@ -336,11 +365,11 @@ function Budgets({
   );
 }
 
-/** Usage by bot and by source, for a period. */
-function ByBot({ bots }: { bots: readonly Bot[] }) {
+/** Usage by bot and by source, for a period. `shown`: whether the pane is in view. */
+function ByBot({ bots, shown }: { bots: readonly Bot[]; shown: boolean }) {
   const left = botsLeftOut(useClawtrateState().cut);
   const [period, setPeriod] = useState<UsagePeriod>("week");
-  const report = useUsageReport(null, period, true, true);
+  const report = useUsageReport(null, period, true, shown);
   const r = report.report;
   return (
     <>
@@ -409,18 +438,24 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
   );
 }
 
-/** The Usage section of Settings, in the frame the other sections use. */
+/**
+ * The Usage section of Settings, in the frame the other sections use. `shown`
+ * is false while the settings list covers it, on a narrow layout: it then asks
+ * the gateway for nothing.
+ */
 export function useUsageSection({
   bots,
   info,
   announce,
   toNav,
+  shown,
 }: {
   bots: readonly Bot[];
   connection: ConnectionState;
   info: HostInfo;
   announce: (text: string) => void;
   toNav: ReactNode;
+  shown: boolean;
 }): { title: string; back: ReactNode; body: ReactNode; foot: ReactNode } {
   const body = (
     <div className="c-usage" data-testid="usage-section">
@@ -430,7 +465,7 @@ export function useUsageSection({
       <Limits />
       <h4 className="b-group">Budgets</h4>
       <Budgets bots={bots} canSet={!info.readOnly} announce={announce} />
-      <ByBot bots={bots} />
+      <ByBot bots={bots} shown={shown} />
     </div>
   );
   return { title: "Usage", back: toNav, body, foot: null };

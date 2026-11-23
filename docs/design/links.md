@@ -1,8 +1,6 @@
 # Links into a bot’s chat
 
-A Clawtrate link opens a bot’s chat and puts editable text in its composer. The
-reference app opens a bot’s chat with unsent text
-([research, section 14](../research/grok-bot-flows.md#14-ios-specifics)). This design covers
+A Clawtrate link opens a bot’s chat and puts editable text in its composer, unsent. This design covers
 F-248. Try the states from [Links into a bot’s chat](prototype/links.html) in the
 prototype gallery.
 

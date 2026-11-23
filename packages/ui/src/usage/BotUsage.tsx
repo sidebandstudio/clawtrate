@@ -333,12 +333,18 @@ export function BotSettingsWithUsage(props: BotSettingsProps & { task: Task | nu
     if (request && request.seq === shown) settleUsageRequest(request);
   }, [request, shown]);
   const open = page !== null && page.botId === props.bot.id;
+  // Back focuses the Usage row or, when Usage opened over another of the tab's pages (Account,
+  // say), that page's heading. Other bots' tabs stay mounted out of view, so only a shown one counts.
   const back = () => {
     setPage(null);
+    const shown = (selector: string) =>
+      [...document.querySelectorAll<HTMLElement>(selector)].find(
+        (each) => each.getClientRects().length > 0,
+      );
     requestAnimationFrame(() =>
-      document
-        .querySelector<HTMLElement>('#panel-settings [data-bs="usage"], [data-testid="usage-row"]')
-        ?.focus(),
+      (
+        shown('[data-testid="usage-row"]') ?? shown('[data-testid="bot-settings"] [data-bs-focus]')
+      )?.focus(),
     );
   };
   // Opening the page puts focus on its title, or on the budget form's field when it opens with it.

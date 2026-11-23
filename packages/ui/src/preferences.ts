@@ -2,7 +2,7 @@
 // can be missing or throw (private windows, blocked site data), and the app must
 // work without it.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 export function readPreference(key: string): string | null {
   try {
@@ -71,6 +71,37 @@ export function useBubbles(): [BubbleChoice, (choice: BubbleChoice) => void] {
     setChoice(next);
   }, []);
   return [choice, choose];
+}
+
+// "Show commands" (conversation.md, 7.11): off by default. One value for the whole window, so
+// Settings, the conversation and the Computer tab change together.
+const commandListeners = new Set<() => void>();
+let commandsShown: boolean | null = null;
+
+function readCommandsShown(): boolean {
+  if (commandsShown === null) {
+    const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get("commands");
+    commandsShown = (fromUrl ?? readPreference("commands")) === "show";
+  }
+  return commandsShown;
+}
+
+/**
+ * Whether raw commands and calls are shown: the action cards in the
+ * conversation, command lines and the Raw view. `?commands=show` overrides
+ * the stored choice.
+ */
+export function useShowCommands(): [boolean, (shown: boolean) => void] {
+  const shown = useSyncExternalStore((listener) => {
+    commandListeners.add(listener);
+    return () => commandListeners.delete(listener);
+  }, readCommandsShown);
+  const choose = useCallback((next: boolean) => {
+    writePreference("commands", next ? "show" : null);
+    commandsShown = next;
+    for (const listener of commandListeners) listener();
+  }, []);
+  return [shown, choose];
 }
 
 /** A set of ids kept as a JSON array in a preference. */

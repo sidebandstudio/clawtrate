@@ -1,4 +1,5 @@
 import {
+  isActive,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
   type ClawtrateState,
@@ -19,6 +20,7 @@ import {
 } from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
+import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { ShortcutList } from "./Shortcuts.tsx";
@@ -570,6 +572,16 @@ export function Shell({
 
   // The way between a step and its file (work-pane.md, section 10).
   const runs = transcript?.runs;
+  // Without commands shown, a running turn's steps join the chat when it ends (conversation.md, 7.11).
+  const [commandsShown] = useShowCommands();
+  const notInChat = useCallback(
+    (callId: string) =>
+      !commandsShown &&
+      runs?.some((run) => isActive(run.state) && run.steps.some((s) => s.toolCallId === callId))
+        ? "This step shows in the chat when the turn ends."
+        : "This step isn't in the chat: it is not loaded here, or not kept.",
+    [commandsShown, runs],
+  );
   const showInChat = useCallback(
     (stepId: string, from: { path: string }) => {
       const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
@@ -577,11 +589,7 @@ export function Shell({
         const found = taskKey !== null && revealStep(taskKey, callId);
         setChatNote("");
         requestAnimationFrame(() =>
-          setChatNote(
-            found
-              ? "Showing the step in the chat"
-              : "This step isn't in the chat: it is not loaded here, or not kept.",
-          ),
+          setChatNote(found ? "Showing the step in the chat" : notInChat(callId)),
         );
         if (found) setBackTo({ path: from.path, stepId });
       };
@@ -592,7 +600,7 @@ export function Shell({
         requestAnimationFrame(() => requestAnimationFrame(reveal));
       } else reveal();
     },
-    [drawerOpen, setPanel, taskKey],
+    [drawerOpen, setPanel, taskKey, notInChat],
   );
   // From the Computer tab: a step shown in the chat, and the question card (work-pane.md, section 18).
   const showStep = useCallback(
@@ -605,11 +613,7 @@ export function Shell({
         if (!found && fromDrawer) focusOpener();
         setChatNote("");
         requestAnimationFrame(() =>
-          setChatNote(
-            found
-              ? "Showing the step in the chat"
-              : "This step isn't in the chat: it is not loaded here, or not kept.",
-          ),
+          setChatNote(found ? "Showing the step in the chat" : notInChat(callId)),
         );
       };
       if (drawerOpen) {
@@ -618,7 +622,7 @@ export function Shell({
         requestAnimationFrame(() => requestAnimationFrame(reveal));
       } else reveal();
     },
-    [drawerOpen, setPanel, taskKey],
+    [drawerOpen, setPanel, taskKey, notInChat],
   );
   /** Bring a question's card into view and focus it: that question's own, when it is named. */
   const showQuestion = useCallback(
@@ -844,7 +848,9 @@ export function Shell({
             onShowStep={showStep}
             onShowQuestion={showQuestion}
             onRequestAccess={
-              info.readOnly ? null : () => void send({ type: "requestAccess" }).catch(() => {})
+              info.readOnly || state.connection.fullPairing
+                ? null
+                : () => void send({ type: "requestAccess" }).catch(() => {})
             }
             onOpenMachines={() => onOpenSettings("machines")}
             drawer={drawerOpen}

@@ -3,9 +3,9 @@
 // themes, and the cards behave as the design says. The scenes are written in
 // the gateway's own shapes and go through the engine
 // (apps/desktop/src/fixture/actions.ts).
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { test, type Locator, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 import {
   markReadingLine,
   readingLineSamples,
@@ -15,8 +15,9 @@ import {
   watchReadingLine,
 } from "./reading-line.ts";
 
+// These checks are the cards themselves: they open with "Show commands" on (conversation.md, 7.11).
 const open = (page: Page, scene: string, theme: "light" | "dark" = "light", extra = "") =>
-  openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed${extra}`, theme);
+  openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed&commands=show${extra}`, theme);
 
 // Deliver the scene's second read after the test has observed the single card.
 const releaseSecondRead = (page: Page) =>
@@ -710,7 +711,7 @@ test.describe("action cards", () => {
       ["messaged-started", "messaged-card", "Messaging Marlow"],
       ["t3-started", "t3-card", "Messaging T3 Code"],
     ] as const) {
-      await openFixture(page, `scene=${scene}`, "light");
+      await openFixture(page, `scene=${scene}&commands=show`, "light");
       const status = page.getByTestId("status-line");
       await expect(status.getByTestId("status-phrase")).toHaveText(words);
       const card = page.getByTestId(testId);
@@ -726,7 +727,7 @@ test.describe("action cards", () => {
   test("F-423: the Thought line of reasoning that led to a Messaged card's call is inside that card, not left in the conversation", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-started", "light");
+    await openFixture(page, "scene=messaged-started&commands=show", "light");
     const card = page.getByTestId("messaged-card");
     await expect(card).toHaveCount(1);
     // Reasoning before the send, as the engine records it: a reasoning step before the call.
