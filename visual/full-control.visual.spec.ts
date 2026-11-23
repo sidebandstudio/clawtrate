@@ -2,9 +2,9 @@
 // Connect for a secure address, with "What this means" (docs/design/setup-effortless.md §2),
 // and a full pairing the gateway granted less says so and asks for nothing (§2, §8). In light
 // and dark, at 1440 px and the phone; reached by keyboard and named for a screen reader.
-import { expect, test } from "@playwright/test";
+import { test } from "@playwright/test";
 import { COMPUTER } from "./computer-helpers.ts";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const CONSENT =
   "Full control lets Clawtrate change gateway settings, approve devices and, when the gateway allows it, open a terminal on the computer running OpenClaw.";
