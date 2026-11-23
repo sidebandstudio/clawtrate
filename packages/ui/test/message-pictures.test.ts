@@ -109,6 +109,34 @@ describe("F-535: a picture sent with the message tool is drawn with its message"
     expect(drawn(list).flatMap(([, pictures]) => pictures)).toEqual(["trail-map.png"]);
   });
 
+  it("each picture under its own message, when two messages of one turn carry one each", () => {
+    const [user, call, delivered, result] = rows([SUN]);
+    const item = mapHistory([
+      user,
+      call,
+      delivered,
+      result,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "And the map." }, MAP],
+        model: "delivery-mirror",
+        __openclaw: { id: "delivered-2", runId: "run-1" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "That is the route." }],
+        __openclaw: { id: "closing", runId: "run-1" },
+      },
+    ]).at(-1)!;
+    const list = entries(item);
+    placePictures(item, list);
+    expect(drawn(list)).toEqual([
+      ["Here is the trail map.", ["sun.png"]],
+      ["And the map.", ["trail-map.png"]],
+      ["That is the route.", []],
+    ]);
+  });
+
   it("a picture whose message draws no bubble stays for the turn to draw", () => {
     const item = mapHistory(rows([])).at(-1)!;
     item.pictures = [
