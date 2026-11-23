@@ -55,13 +55,11 @@
     - paragraph: The media box has been slow all evening. Can you check whether something is wrong?
     - toolbar "Message actions":
       - button "More"
-    - group: Thought
-    - group: "Couldn't read syslog Permission denied: /var/log/syslog is outside the workspace. Failed"
     - paragraph: Nothing alarming that I can see from here. The system log is outside my workspace, so I could not read it. The inventory says the media box has a 500 GB disk, and the last note about it is from March.
     - button "1 reply"
     - toolbar "Message actions":
       - button "More"
-    - group: 1 action
+    - group: 2 actions · 1 failed
     - paragraph: Keep an eye on it and tell me if the disk fills up.
     - toolbar "Message actions":
       - button "More"
@@ -77,7 +75,6 @@
     - paragraph: The media box says the disk is 94% full. What is eating the space?
     - toolbar "Message actions":
       - button "More"
-    - group: Thought
     - heading "Found" [level=3]
     - paragraph: "The usual suspects on a media box, largest first:"
     - list:
@@ -133,7 +130,7 @@
       - img "🎉 1 reaction"
     - toolbar "Message actions":
       - button "More"
-    - group: 2 actions
+    - group: 2 actions · 1 unknown
     - 'button "Replying to Otto: Nothing alarming that I can see from here. The system log is outside my workspace…. Open the thread"': "Otto: Nothing alarming that I can see from here. The system log is outside my workspace…"
     - paragraph: Could you read the system log another way?
     - toolbar "Message actions":

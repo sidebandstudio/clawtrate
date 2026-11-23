@@ -17,6 +17,7 @@ import {
   defaultAvatar,
   firstChoice,
   pictureWithChoice,
+  plainPreview,
   type AvatarChoice,
 } from "@clawtrate/core";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
@@ -31,7 +32,7 @@ import { ENSEMBLE } from "../src/presentation/ensemble.ts";
 import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
 import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
-import { addressWords } from "../src/presentation/gateway-state.ts";
+import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { decodePng, encodePng } from "../../../tools/brand/src/png.ts";
 import { REDACTED } from "../src/host/secrets.ts";
@@ -60,6 +61,7 @@ import {
   notSee,
   openSystemSettings,
   openclaw,
+  operator,
   relay,
   pasteboard,
   protocolFiveGateway,
@@ -82,6 +84,7 @@ import {
   until,
   waitFor,
   waitGone,
+  workspaceFor,
   type Step,
 } from "./harness.ts";
 
@@ -1095,6 +1098,189 @@ describe("the iOS app", () => {
       // Whatever happened, the checks after this one see the usual size.
       textSize("large");
     }
+  });
+
+  it("F-519: on iPhone, on a read-only connection, chats from Discord and Slack stay out of Home and the bot's task list until Settings, Conversation shows them, at once and without reconnecting; the main conversation stays, and the choice is kept when the app opens again", async () => {
+    // A bot of the check's own, given chats as Discord and Slack would, as the desktop's
+    // check does: an admin `chat.send` may name the channel a turn came from, and with
+    // `deliver: false` nothing is sent anywhere. The main task gets a Telegram turn too,
+    // so its channel sticks, as with the gateway's default `dmScope: "main"`.
+    const admin = await operator("Clawtrate channel chats check", [
+      "operator.read",
+      "operator.write",
+      "operator.admin",
+    ]);
+    const stamp = Date.now().toString(36);
+    const name = `Courier${stamp}`;
+    let created: string | null = null;
+    onTestFinished(async () => {
+      if (created)
+        await admin
+          .request("agents.delete", { agentId: created, deleteFiles: true })
+          .catch(() => {});
+      await admin.close();
+    });
+    const bot = (
+      await admin.request<{ agentId: string }>("agents.create", {
+        name,
+        workspace: workspaceFor(name.toLowerCase()),
+        model: "scripted/dev-1",
+      })
+    ).agentId;
+    created = bot;
+    const key = {
+      main: `agent:${bot}:main`,
+      native: `agent:${bot}:ios-native`,
+      discord: `agent:${bot}:discord:channel:1234567890`,
+      slack: `agent:${bot}:slack:direct:u0123`,
+    };
+    type Row = {
+      key: string;
+      updatedAt?: number;
+      lastMessagePreview?: string;
+      channel?: string;
+      isMain?: boolean;
+      hasActiveRun?: boolean;
+    };
+    const rows = async () =>
+      (
+        await admin.request<{ sessions?: Row[] }>("sessions.list", {
+          agentId: bot,
+          limit: 50,
+          includeLastMessage: true,
+        })
+      ).sessions ?? [];
+    /** A turn in a task, from a channel when one is named, and the end of its run. */
+    const turn = async (sessionKey: string, text: string, channel?: { id: string; to: string }) => {
+      await admin.send(sessionKey, text, {
+        deliver: false,
+        ...(channel ? { originatingChannel: channel.id, originatingTo: channel.to } : {}),
+      });
+      await until(
+        `the turn in ${sessionKey} to end`,
+        async () => {
+          const row = (await rows()).find((each) => each.key === sessionKey);
+          return Boolean(row?.lastMessagePreview) && row?.hasActiveRun !== true;
+        },
+        180_000,
+      );
+    };
+    // Oldest first: the main task, the bot's own task, then the two channel chats.
+    await turn(key.main, `Hello from Telegram ${stamp}`, { id: "telegram", to: "telegram:555000" });
+    await turn(key.native, `A note of its own ${stamp}`);
+    await turn(key.discord, `Status in the server ${stamp}`, {
+      id: "discord",
+      to: "channel:1234567890",
+    });
+    await turn(key.slack, `Quick question ${stamp}`, { id: "slack", to: "user:U0123" });
+    // Only the Discord chat is unread, so an unread mark can only come from it.
+    for (const each of [key.main, key.native, key.slack])
+      await admin.request("sessions.patch", { key: each, unread: false });
+    await admin.request("sessions.patch", { key: key.discord, unread: true });
+    const listed = await rows();
+    expect(listed.find((row) => row.key === key.discord)?.channel).toBe("discord");
+    expect(listed.find((row) => row.key === key.slack)?.channel).toBe("slack");
+    expect(listed.find((row) => row.key === key.main)).toMatchObject({
+      isMain: true,
+      channel: "telegram",
+    });
+    /** Home's line for the bot: the preview of the newest of these tasks. */
+    const previewOf = (keys: string[]) => {
+      const newest = listed
+        .filter((row) => keys.includes(row.key))
+        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+      return plainPreview(newest?.lastMessagePreview ?? null)!;
+    };
+    const own = previewOf([key.main, key.native]);
+    const all = previewOf(Object.values(key));
+    expect(all).not.toBe(own);
+    const { agents } = await admin.request<{
+      agents: Array<{ id: string; identity?: { theme?: string } }>;
+    }>("agents.list", {});
+    const theme = agents.find((agent) => agent.id === bot)?.identity?.theme;
+    /** The bot's row on Home, as it is spoken. */
+    const spoken = (count: number, unread: boolean) =>
+      `${lit(name)}, ${count} tasks${unread ? ", unread" : ""}${theme ? `, ${lit(theme)}` : ""}`;
+    const task = (sessionKey: string) => ({ id: `task-${lit(sessionKey)}` });
+
+    const hidden: Step[] = [
+      waitFor({ id: `bot-${bot}`, text: spoken(2, false) }, 60_000),
+      see({ id: `bot-preview-${bot}`, text: lit(own) }),
+      tap({ id: `bot-${bot}` }),
+      waitFor({ id: `bot-tasks-${bot}` }, 20_000),
+      waitFor({ ...task(key.main), text: "Main.*" }),
+      see(task(key.native)),
+      notSee(task(key.discord)),
+      notSee(task(key.slack)),
+      tap({ id: "back", text: "Back to bots" }),
+      waitFor({ id: "home" }, 20_000),
+    ];
+    const shown: Step[] = [
+      waitFor({ id: `bot-${bot}`, text: spoken(4, true) }, 60_000),
+      see({ id: `bot-preview-${bot}`, text: lit(all) }),
+      tap({ id: `bot-${bot}` }),
+      waitFor({ id: `bot-tasks-${bot}` }, 20_000),
+      waitFor({ ...task(key.discord), text: "Discord chat.*" }),
+      see(task(key.slack)),
+      see({ ...task(key.main), text: "Main.*" }),
+      see(task(key.native)),
+      tap({ id: "back", text: "Back to bots" }),
+      waitFor({ id: "home" }, 20_000),
+    ];
+    /** Open Settings, see the switch as it is, and change it when `to` is given. */
+    const settings = (on: boolean, to?: boolean): Step[] => [
+      tap({ id: "settings-button" }),
+      waitFor({ id: "settings" }, 20_000),
+      scrollTo({ id: "licenses-open" }, "DOWN"),
+      see({ id: "settings-conversation", text: lit(SETTINGS_WORDS.conversation) }),
+      see({ id: "channel-chats", text: lit(SETTINGS_WORDS.channelChats), checked: on }),
+      see({ id: "channel-chats-note", text: `${lit("Off by default.")} .*` }),
+      see({
+        id: "channel-chats-note",
+        text: `.*${lit("A bot's main conversation always shows.")}.*`,
+      }),
+      ...(to === undefined || to === on
+        ? []
+        : [
+            tap({ id: "channel-chats" }),
+            waitFor({ id: "channel-chats", checked: to }, 20_000),
+            notSee({ id: "channel-chats-error" }),
+          ]),
+      tap({ id: "settings-close" }),
+      waitFor({ id: "home" }, 20_000),
+    ];
+
+    // Opened again, the app reads the bots, this one among them. Off by default: the chats
+    // have arrived and nothing shows them, and the main task stays.
+    launch({ devGateway: gateway });
+    await steps("channel-chats-hidden", [waitFor({ id: "home" }, 60_000), ...hidden]);
+    await steps("channel-chats-settings", [
+      tap({ id: "settings-button" }),
+      waitFor({ id: "settings" }, 20_000),
+      scrollTo({ id: "licenses-open" }, "DOWN"),
+      see({ id: "channel-chats", checked: false }),
+    ]);
+    await shoot("settings-channel-chats");
+    await steps("channel-chats-settings-close", [
+      tap({ id: "settings-close" }),
+      waitFor({ id: "home" }, 20_000),
+    ]);
+
+    // Shown, then hidden again: from the rows the app already holds, with no new connection.
+    const connections = proxy.connections;
+    await steps("channel-chats-show", [...settings(false, true), ...shown]);
+    await steps("channel-chats-hide", [...settings(true, false), ...hidden]);
+    expect(proxy.connections).toBe(connections);
+
+    // The choice is this device's, kept for the next launch.
+    await steps("channel-chats-show-again", [...settings(false, true), ...shown]);
+    launch({ devGateway: gateway });
+    await steps("channel-chats-kept", [
+      waitFor({ id: "home" }, 60_000),
+      ...shown,
+      ...settings(true, false),
+      ...hidden,
+    ]);
   });
 
   it("on iPhone, Settings shows the gateway, this device and the read scope it holds, and the fonts' licenses; a reinstall offers the old gateway as a choice; Disconnect keeps the pairing until Reconnect, and Use another gateway forgets the gateway but keeps the device", async () => {

@@ -5,7 +5,8 @@
 // take their call's place in the column, an approval follows the call it
 // names, and a question card takes its `ask_user` call's place. With "Show
 // commands" off (7.11) the action cards leave the conversation for the run
-// line's list, and the reasoning that led to them stays at their place.
+// line's list, and the reasoning that led to them stays at their place. With
+// "Show thinking" off, no reasoning is drawn.
 
 import {
   actionWords,
@@ -59,7 +60,7 @@ import { fullDate } from "../format.ts";
 import { Markdown } from "../Markdown.tsx";
 import { MessageUnit } from "../Messages.tsx";
 import { Pictures } from "../Pictures.tsx";
-import { useShowCommands } from "../preferences.ts";
+import { useShowCommands, useShowThinking } from "../preferences.ts";
 import {
   ActionEnvContext,
   ActionGroup,
@@ -479,8 +480,9 @@ export function markRepeats(lists: FeedEntry<FeedRef>[][], ctx: ReadingContext) 
  * stretch between the bot's words, and leaves the cards so it is not drawn
  * twice. In a run still going, reasoning with nothing after it yet is the
  * status line's (section 5), not a line. An action that waits for the person
- * or went wrong (`staysInView`) keeps its card in the conversation, a fold
- * with such a member keeps the whole fold, and neither is in the run line's list.
+ * (`staysInView`) keeps its card in the conversation, a fold with such a
+ * member keeps the whole fold, and neither is in the run line's list. An
+ * action that went wrong takes the same path as any other.
  */
 export function quietFeed(
   groups: Groups,
@@ -496,7 +498,7 @@ export function quietFeed(
     shown.push({ type: "thought", key: thought.id, thought, place });
     pending = [];
   };
-  // An action that waits for the person, or went wrong, stays in view as its card (7.11).
+  // An action that waits for the person stays in view as its card (7.11).
   const inView = (call: ActionCall) => staysInView(lineOf(call, ctx).outcome);
   for (const group of groups) {
     if (
@@ -521,6 +523,53 @@ export function quietFeed(
   }
   flush("end");
   return { shown, hidden };
+}
+
+/**
+ * What one record draws in the conversation (`shown`) and what goes to its run
+ * line's list (`hidden`), by the two switches of 7.11. With both on, the
+ * record's groups are drawn as they are, except that in a run still going the
+ * reasoning with nothing after it yet is the status line's (section 5), not a
+ * line, as without commands shown.
+ */
+export function viewGroups(
+  groups: Groups,
+  view: { commands: boolean; thinking: boolean; live: boolean },
+  ctx: ReadingContext = {},
+): { shown: Groups; hidden: Groups } {
+  const thought = view.thinking ? groups : withoutThinking(groups);
+  if (view.commands)
+    return {
+      shown: view.live
+        ? thought.filter((g) => !(g.type === "thought" && g.place === "end"))
+        : thought,
+      hidden: [],
+    };
+  return quietFeed(thought, view.live, ctx);
+}
+
+/**
+ * Without "Show thinking" (7.11): no "Thought" line, and no reasoning inside a
+ * card, a fold or a line of actions.
+ */
+function withoutThinking(groups: Groups): Groups {
+  return groups.flatMap((group): Groups => {
+    switch (group.type) {
+      case "thought":
+        return [];
+      case "action":
+      case "card":
+        return [{ ...group, thought: null }];
+      case "fold":
+        return [{ ...group, members: group.members.map((m) => ({ ...m, thought: null })) }];
+      case "break":
+        return group.ref.t === "actions"
+          ? [{ ...group, ref: { t: "actions", groups: withoutThinking(group.ref.groups) } }]
+          : [group];
+      default:
+        return [group];
+    }
+  });
 }
 
 /**
@@ -554,6 +603,8 @@ export function ActionScope({
   // Commands and raw calls only when the person chose to see them (7.11).
   const [commandsShown] = useShowCommands();
   const quiet = !commandsShown;
+  // Reasoning only when the person chose to see it (7.11).
+  const [thinkingShown] = useShowThinking();
   const ctx = useMemo(
     () => ({
       ...given,
@@ -692,10 +743,13 @@ export function ActionScope({
     const hidden = new Map<string, { groups: Groups; revision: number }>();
     // Without commands shown, each run's cards go to its run line, in order (7.11).
     const keep = (runId: string | undefined, groups: Groups, revision: number): Groups => {
-      if (!quiet) return groups;
       const live =
         runId !== undefined && engineRuns.some((r) => r.id === runId && !isTerminal(r.state));
-      const { shown, hidden: cards } = quietFeed(groups, live, ctx);
+      const { shown, hidden: cards } = viewGroups(
+        groups,
+        { commands: !quiet, thinking: thinkingShown, live },
+        ctx,
+      );
       if (!cards.length) return shown;
       if (!runId) {
         // History with no run has no run line: its cards stay behind a line of their own.
@@ -723,7 +777,7 @@ export function ActionScope({
         revision: each.revision,
       });
     return { items, runs, accounts, hidden } satisfies Feeds;
-  }, [transcript, engineRuns, selected, handover, placement, ctx, quiet]);
+  }, [transcript, engineRuns, selected, handover, placement, ctx, quiet, thinkingShown]);
 
   const placed = useMemo(() => {
     const keys = new Set<string>();
@@ -752,7 +806,7 @@ export function ActionScope({
     };
   }, [taskKey, transcript.runs, transcript.sessionKey, ctx, rawState, lost, readOnly, effort]);
 
-  useKeepFocus();
+  useKeepFocus(env.stepOf);
   // Cards drawn with the feed's first drawing are not arrivals; later ones are.
   const drawn = useRef(false);
   useEffect(() => {
@@ -772,9 +826,11 @@ export function ActionScope({
  * When the control that held focus is replaced (a card becoming a fold, a
  * fold splitting), focus moves to the same control in what replaced it, or
  * to the replacement's line (section 2, Input). Controls are found by their
- * call and their own name, never by position.
+ * call and their own name, never by position. A card that left the
+ * conversation for its run's list (7.11) gives focus to its run line, or,
+ * while the run works and has none, to the transcript.
  */
-function useKeepFocus() {
+function useKeepFocus(stepOf: ActionEnv["stepOf"]) {
   const last = useRef<{ element: HTMLElement; call: string; control: string } | null>(null);
   useEffect(() => {
     const onFocus = (event: FocusEvent) => {
@@ -802,7 +858,20 @@ function useKeepFocus() {
     const holder =
       document.querySelector<HTMLElement>(`[data-call="${CSS.escape(held.call)}"]`) ??
       document.querySelector<HTMLElement>(`[data-first="${CSS.escape(held.call)}"]`);
-    if (!holder) return;
+    const closedLine = holder?.closest<HTMLElement>("details.run-line:not([open])");
+    if (!holder || closedLine) {
+      const runId = stepOf(held.call)?.runId;
+      const line =
+        closedLine ??
+        (runId
+          ? document.querySelector<HTMLElement>(`details.run-line[data-run="${CSS.escape(runId)}"]`)
+          : null);
+      const fallback =
+        line?.querySelector<HTMLElement>(":scope > summary") ??
+        document.querySelector<HTMLElement>('[data-testid="transcript"]');
+      fallback?.focus({ preventScroll: true });
+      return;
+    }
     const target =
       holder.querySelector<HTMLElement>(
         held.control === ":scope > summary" ? ":scope > summary" : held.control,
@@ -902,7 +971,7 @@ function GroupView({
           );
         case "actions":
           return (
-            <ActionsLine id={group.key} count={callsOf(ref.groups).length}>
+            <ActionsLine id={group.key} calls={callsOf(ref.groups)}>
               <Groups groups={ref.groups} revision={revision} reply={reply} />
             </ActionsLine>
           );
@@ -986,7 +1055,7 @@ export function RunLine({ run }: { run: Run }) {
   ) : null;
   if (!line)
     return list && isTerminal(run.state) ? (
-      <ActionsLine id={`run:${run.id}`} count={callsOf(hidden!.groups).length}>
+      <ActionsLine id={`run:${run.id}`} calls={callsOf(hidden!.groups)}>
         {list}
       </ActionsLine>
     ) : null;

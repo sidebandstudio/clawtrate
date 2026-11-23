@@ -161,7 +161,20 @@ describe("the Keychain through safeStorage", () => {
     expect(client).toContain(
       "const full = this.options.fullAccess === true && !this.options.readOnly;",
     );
-    expect(client).toContain("const routed = full && protectedGatewayUrl(settings.url);");
+    // A protected address, or this computer's gateway when every socket of the connection is
+    // proved, for a plain connect's token; a first pairing there needs the person's consent
+    // (setup-effortless.md §3).
+    expect(client).toContain(
+      "const proved = !this.setupIntent && !this.setupCode && this.socketsProved(settings.url);",
+    );
+    expect(client).toContain(
+      "const routed = full && (protectedGatewayUrl(settings.url) || proved);",
+    );
+    expect(client).toContain("const create = check?.createSocket ?? provedSocket;");
+    expect(client).toContain(
+      "return this.setupCheck?.url === url && !!this.setupCheck.createSocket;",
+    );
+    expect(client).toContain("return consent?.() === true;");
     // The main process sets it only in the branch that gives the host the Keychain box.
     const main = readFileSync(join(ROOT, "apps/desktop/src/main/index.ts"), "utf8");
     expect(main).toMatch(

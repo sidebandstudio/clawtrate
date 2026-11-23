@@ -43,7 +43,7 @@ import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
-import { useShowCommands } from "./preferences.ts";
+import { useShowCommands, useShowThinking } from "./preferences.ts";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -105,11 +105,13 @@ export function echoesError(item: TranscriptItem, run: Run): boolean {
   return error !== "" && plain(itemText(item)) === error;
 }
 
-/** Under the task's name: how much of the model's context the task uses. */
+/** Under the task's name: how much of the model's context the task uses, once the gateway reports it. */
 function TaskContext({ task }: { task: Task }) {
+  const words = contextWords(task.context);
+  if (!words) return null;
   return (
     <p className="task-context" data-testid="task-context">
-      {contextWords(task.context)}
+      {words}
     </p>
   );
 }
@@ -264,12 +266,15 @@ function TranscriptView({
     }),
     [task.key, transcript, bot.name, liveOptions.interactive, liveOptions.connected, onAnnounce],
   );
-  // Without commands shown, the status line says the kind of work and what the bot thinks (7.11).
+  // Without commands shown, the status line says the kind of work; with thinking shown, what the
+  // bot thinks shows under it (7.11).
   const [commandsShown] = useShowCommands();
+  const [thinkingShown] = useShowThinking();
   const live = buildLive(bot, task, transcript, {
     ...liveOptions,
     reading,
     quiet: !commandsShown,
+    thinking: thinkingShown,
   });
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
@@ -575,6 +580,8 @@ type LiveOptions = {
   reading?: ReadingContext;
   /** "Show commands" is off (7.11). */
   quiet?: boolean;
+  /** "Show thinking" is on (7.11). */
+  thinking?: boolean;
   connected: boolean;
   interactive: boolean;
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */

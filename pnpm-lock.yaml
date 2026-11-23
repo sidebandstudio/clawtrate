@@ -236,7 +236,11 @@ importers:
         specifier: 8.3.8
         version: 8.3.8(@types/node@26.6.6)(jiti@2.7.0)(terser@5.51.2)
 
-  tools/brand: {}
+  tools/brand:
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.65.1
+        version: 1.65.1
 
   tools/dev-gateway:
     dependencies:

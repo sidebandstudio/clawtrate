@@ -8,6 +8,7 @@
     - button "Machines"
     - button "Check-ins"
     - button "Updates"
+    - button "Advanced"
   - region "Updates":
     - button "Close settings"
     - heading "Updates" [level=3]
