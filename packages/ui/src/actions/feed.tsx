@@ -34,6 +34,7 @@ import {
   type Step,
   type Transcript,
   type TranscriptItem,
+  type ChatPicture,
 } from "@clawtrate/core";
 import {
   createContext,
@@ -57,6 +58,7 @@ import {
 import { fullDate } from "../format.ts";
 import { Markdown } from "../Markdown.tsx";
 import { MessageUnit } from "../Messages.tsx";
+import { Pictures } from "../Pictures.tsx";
 import { useShowCommands } from "../preferences.ts";
 import {
   ActionEnvContext,
@@ -70,7 +72,14 @@ import {
 
 /** What a non-action entry of a record is. */
 export type FeedRef =
-  | { t: "text"; text: string; title?: string | undefined; messageId?: string | undefined }
+  | {
+      t: "text";
+      text: string;
+      title?: string | undefined;
+      messageId?: string | undefined;
+      /** The pictures the message of this bubble carried, drawn under it (F-535). */
+      pictures?: ChatPicture[];
+    }
   | { t: "preamble"; preamble: Preamble }
   | { t: "reply"; run: Run }
   | { t: "card"; ref: CardRef }
@@ -82,8 +91,8 @@ export type FeedRef =
 type Groups = FeedGroup<FeedRef>[];
 
 type Feeds = {
-  /** The groups of each assistant history item, by item id. */
-  items: Map<string, { groups: Groups; revision: number }>;
+  /** The groups of each assistant history item, by item id, and the pictures drawn with a bubble. */
+  items: Map<string, { groups: Groups; revision: number; placed: ReadonlySet<string> }>;
   /** The groups of each run drawn from the engine, by run id. */
   runs: Map<string, { groups: Groups; revision: number }>;
   /** Each run's account of what is drawn (`retentionAccount`), and its drawn calls the engine holds. */
@@ -234,6 +243,36 @@ class Tally {
         );
     }
   }
+}
+
+/**
+ * Each picture of an item goes under the last bubble of the message that carried
+ * it, so a picture a bot sent with its message tool shows with that message, not
+ * after what the bot did next (F-535). Returns the pictures placed; the rest stay
+ * under the turn.
+ */
+export function placePictures(
+  item: TranscriptItem,
+  entries: FeedEntry<FeedRef>[],
+): ReadonlySet<string> {
+  const placed = new Set<string>();
+  for (const picture of item.pictures ?? []) {
+    if (!picture.messageId) continue;
+    const at = entries.findLastIndex(
+      (entry) =>
+        entry.type === "bubble" &&
+        entry.ref.t === "text" &&
+        entry.ref.messageId === picture.messageId,
+    );
+    const entry = entries[at];
+    if (entry?.type !== "bubble" || entry.ref.t !== "text") continue;
+    entries[at] = {
+      ...entry,
+      ref: { ...entry.ref, pictures: [...(entry.ref.pictures ?? []), picture] },
+    };
+    placed.add(picture.artifactId);
+  }
+  return placed;
 }
 
 /** An assistant history item's record. */
@@ -588,7 +627,12 @@ export function ActionScope({
     );
     const drawnOf = new Map<string, Set<string>>();
     const tally = new Tally();
-    const built: Array<{ id: string; entries: FeedEntry<FeedRef>[]; revision: number }> = [];
+    const built: Array<{
+      id: string;
+      entries: FeedEntry<FeedRef>[];
+      revision: number;
+      placed: ReadonlySet<string>;
+    }> = [];
     for (const item of transcript.items) {
       if (item.role !== "assistant") continue;
       const run = runOf.get(item.id);
@@ -602,7 +646,8 @@ export function ActionScope({
           ? engineRecord(run, inRows, drawn, lastItem.get(run.id) === item.id, tally)
           : null;
       const entries = itemEntries(item, run, index, skip, cards, tally, fromEngine, record);
-      built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0 });
+      const placed = placePictures(item, entries);
+      built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0, placed });
     }
     const builtRuns: Array<{ id: string; entries: FeedEntry<FeedRef>[]; revision: number }> = [];
     for (const run of engineRuns) {
@@ -639,7 +684,10 @@ export function ActionScope({
     for (const each of built) listOf(runOf.get(each.id)?.id, each.entries);
     for (const each of builtRuns) listOf(each.id, each.entries);
     for (const lists of listsOf.values()) markRepeats(lists, ctx);
-    const items = new Map<string, { groups: Groups; revision: number }>();
+    const items = new Map<
+      string,
+      { groups: Groups; revision: number; placed: ReadonlySet<string> }
+    >();
     const runs = new Map<string, { groups: Groups; revision: number }>();
     const hidden = new Map<string, { groups: Groups; revision: number }>();
     // Without commands shown, each run's cards go to its run line, in order (7.11).
@@ -667,6 +715,7 @@ export function ActionScope({
       items.set(each.id, {
         groups: keep(runOf.get(each.id)?.id, groupFeed(each.entries, ctx), each.revision),
         revision: each.revision,
+        placed: each.placed,
       });
     for (const each of builtRuns)
       runs.set(each.id, {
@@ -834,6 +883,7 @@ function GroupView({
               <Bubble title={ref.title}>
                 <Markdown text={ref.text} />
               </Bubble>
+              {ref.pictures && <BubblePictures pictures={ref.pictures} />}
             </MessageUnit>
           );
         case "preamble":
@@ -887,6 +937,18 @@ function Groups({
       ))}
     </>
   );
+}
+
+function BubblePictures({ pictures }: { pictures: ChatPicture[] }) {
+  const env = useContext(ActionEnvContext);
+  return env ? <Pictures taskKey={env.taskKey} pictures={pictures} /> : null;
+}
+
+/** The pictures of an item that no bubble of it draws: under the turn, in their order. */
+export function TurnPictures({ taskKey, item }: { taskKey: string; item: TranscriptItem }) {
+  const placed = useFeeds().items.get(item.id)?.placed;
+  const rest = (item.pictures ?? []).filter((picture) => !placed?.has(picture.artifactId));
+  return <Pictures taskKey={taskKey} pictures={rest} />;
 }
 
 /** An assistant history item's bubbles, cards and Thought lines. */

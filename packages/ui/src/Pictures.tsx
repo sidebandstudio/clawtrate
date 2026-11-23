@@ -3,7 +3,7 @@
 // it, and only the bytes that come back are shown, as a data: address. Nothing
 // else in the message, such as the address it names, is ever loaded.
 
-import { toBase64, type ChatPicture, type TranscriptItem } from "@clawtrate/core";
+import { toBase64, type ChatPicture } from "@clawtrate/core";
 import { useEffect, useState } from "react";
 import { useBridge } from "./bridge.tsx";
 import { collectBytes } from "./work/content.ts";
@@ -81,9 +81,8 @@ function Picture({ taskKey, picture }: { taskKey: string; picture: ChatPicture }
   );
 }
 
-/** Every picture of a bot's turn, in the order its messages gave them. */
-export function Pictures({ taskKey, item }: { taskKey: string; item: TranscriptItem }) {
-  const pictures = item.pictures ?? [];
+/** Pictures of a bot's turn, in the order its messages gave them. */
+export function Pictures({ taskKey, pictures }: { taskKey: string; pictures: ChatPicture[] }) {
   if (pictures.length === 0) return null;
   return (
     <div className="pictures">
