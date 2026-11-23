@@ -1587,38 +1587,44 @@ export class ClawtrateClient {
     let settings: ConnectionSettings | null;
     let failure: unknown;
     try {
-      const identity = await this.loadIdentity();
-      if (stops !== this.stops) return;
-      this.setConnection({ deviceId: identity.deviceId });
-      // A turn limit the person chose earlier, unless the host was given one.
-      if (this.options.turnLimitMs === undefined) {
-        const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
-        if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
+      try {
+        const identity = await this.loadIdentity();
+        if (stops !== this.stops) return;
+        this.setConnection({ deviceId: identity.deviceId });
+        // A turn limit the person chose earlier, unless the host was given one.
+        if (this.options.turnLimitMs === undefined) {
+          const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
+          if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
+        }
+        this.showChannelChats =
+          (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
+        this.store.update((state) => ({
+          ...state,
+          turnLimitMinutes: this.turnLimitMs / 60_000,
+          showChannelChats: this.showChannelChats,
+        }));
+        if (options.resume === false) return;
+        // Startup needs to open the socket without waiting for another client's credential write.
+        settings = await this.savedSettings();
+        if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
+          return;
+        this.settings = settings;
+      } catch (error) {
+        failure = error;
+        throw error;
+      } finally {
+        release(failure);
       }
-      this.showChannelChats =
-        (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
-      this.store.update((state) => ({
-        ...state,
-        turnLimitMinutes: this.turnLimitMs / 60_000,
-        showChannelChats: this.showChannelChats,
-      }));
-      if (options.resume === false) return;
-      // Startup needs to open the socket without waiting for another client's credential write.
-      settings = await this.savedSettings();
-      if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
-        return;
-      this.settings = settings;
-    } catch (error) {
-      failure = error;
-      throw error;
+      // Publish before clearing `restoring` so commands sent from this notification wait ahead of resume.
+      if (restoring.commands.length > 0 && settings) {
+        this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
+      }
     } finally {
       if (this.restoring === restoring) this.restoring = null;
-      release(failure);
     }
-    // A Disconnect, Suspend or Retry sent during the read decides what happens to the gateway,
-    // which shows as closed until it does. One that was refused leaves it to startup.
+    // A Disconnect, Suspend or Retry sent during the read (or its notification) decides what
+    // happens to the gateway. One that was refused leaves it to startup.
     if (restoring.commands.length > 0) {
-      if (settings) this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       await Promise.allSettled(restoring.commands);
       if (stops !== this.stops || selection !== this.selectionApplied) return;
     }

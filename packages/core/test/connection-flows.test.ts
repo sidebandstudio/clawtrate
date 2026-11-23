@@ -648,6 +648,58 @@ describe("connecting", () => {
       },
     );
 
+    it("F-457: a Disconnect sent from the restored-gateway notification stays ahead of startup's resume", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      const firstRead = deferred<void>();
+      const firstGate = deferred<void>();
+      const secondRead = deferred<void>();
+      const secondGate = deferred<void>();
+      const get = storage.get;
+      let reads = 0;
+      storage.get = async (key) => {
+        if (key !== "connection") return get(key);
+        reads += 1;
+        if (reads === 1) {
+          firstRead.resolve();
+          await firstGate.promise;
+        } else if (reads === 2) {
+          secondRead.resolve();
+          await secondGate.promise;
+        }
+        return get(key);
+      };
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      let forgetting: Promise<void> | null = null;
+      const unsubscribe = client.store.subscribe(({ connection }) => {
+        if (forgetting || connection.status !== "disconnected" || connection.gatewayUrl !== URL)
+          return;
+        unsubscribe();
+        forgetting = client.disconnect(URL);
+      });
+      try {
+        const starting = client.start();
+        await firstRead.promise;
+        const refused = client.disconnect(OTHER_URL);
+        firstGate.resolve();
+        await expect(refused).rejects.toThrow(GatewayChangedError);
+        await secondRead.promise;
+        await sleep(50);
+        expect(gateway.sockets, "startup waits for the queued Disconnect of A").toHaveLength(0);
+        secondGate.resolve();
+        await Promise.all([starting, forgetting]);
+        await sleep(50);
+        expect(gateway.sockets).toHaveLength(0);
+        expect(savedSettings(storage)).toBeNull();
+        expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+      } finally {
+        unsubscribe();
+        firstGate.resolve();
+        secondGate.resolve();
+        client.stop();
+      }
+    });
+
     it("F-387: Retry opens the saved gateway offered as a choice", async () => {
       const { storage, reading, release } = pausedRead();
       const gateway = new FakeGateway();
