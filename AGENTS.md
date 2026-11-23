@@ -12,6 +12,8 @@ This file is for the coding agents and the people who change Clawtrate. Claude C
 
 Every commit, pull request title and body, and issue is published the moment it is pushed. Never put any of these in them: secrets or tokens, private hostnames or IP addresses, usernames or home-directory paths, email addresses, personal data, the names or conversations of anyone's real bots, or third-party images and copied assets. Read the diff, the title and the body for these before every push.
 
+Public text describes Clawtrate on its own terms. It never describes a feature as matching, copying or improving on another product, whether that product is named or not. Naming what Clawtrate works with, such as OpenClaw, model providers and T3 Code, is fine.
+
 ### The user's gateway is theirs
 
 Clawtrate is a client, and the agent runtime is the user's OpenClaw gateway. Nothing in this repository may put that gateway at risk. First pairings request read access by default. Ask once for the six standard operator scopes (read, write, approvals, questions, admin and pairing) only when the person starts an eligible first pairing and the host allows writes, reports secure credential storage and has full-access pairing enabled. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway. Clawtrate starts the gateway's own sign-in and never reads, stores or copies them.
@@ -26,13 +28,15 @@ A screen shows what the gateway confirmed and no more. Where the gateway lacks s
 
 ### Our own identity
 
-The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixed. Saying what Clawtrate works with, including naming OpenClaw, is fine, and so is matching layout and interaction patterns. Never use OpenClaw's, Grok's or xAI's logos, icons or copied assets. The logo is `assets/brand/logo.png`. App icons, the favicon and the interface's accent color all come from that one file, so it can be swapped in one place.
+The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixed. Saying what Clawtrate works with, including naming OpenClaw, is fine, and so is using common layout and interaction patterns. Never use OpenClaw's or any other product's logos, icons or copied assets. The logo is `assets/brand/logo.png`. App icons, the favicon and the interface's accent color all come from that one file, so it can be swapped in one place.
 
 ## What we are building
 
-- The bar is the full user flow of Grok Bot, xAI's personal agent app, plus the controls its users say they lack. Those controls are per-bot model and reasoning effort, per-bot tool permissions and approval rules, an editable memory viewer, a choice of which machine a bot works on, and the raw tool calls behind every card.
-- Two things go beyond Grok Bot. Each bot runs on a provider account the user chooses when creating it. Subscription sign-ins come first, and API keys are a secondary option. And a bot can work with T3 Code: start a thread there, follow up and read the result. This integration is optional. It is a switch in settings, off by default, and nothing else depends on it. Its connection belongs to the gateway, so the client never connects to T3 Code itself.
-- The conversation reads at the level of what a bot did. Each action shows as a plain-words card, in one family with the "Messaged &lt;bot&gt;" and "Messaged T3 Code" cards, that a person can follow without opening anything. Reasoning text stays folded away behind it, and the raw call is one step further. Grok Bot's handling of this is the model.
+- A bots-first interface for the user's own gateway: bots in a sidebar, tasks under each bot, and the bot's work beside the conversation.
+- Fine-grained control over each bot: its model and reasoning effort, its tool permissions and approval rules, an editable memory viewer, and the machine it works on.
+- Each bot runs on a provider account the user chooses when creating it. Subscription sign-ins come first, and API keys are a secondary option.
+- The conversation reads at the level of what a bot did. Each action shows as a plain-words card, in one family with the "Messaged &lt;bot&gt;" and "Messaged T3 Code" cards, that a person can follow without opening anything. Reasoning text stays folded away behind it, and the raw call behind every card is one step further.
+- An optional T3 Code integration: a bot can start a thread there, follow up and read the result. It is a switch in settings, off by default, and nothing else depends on it. Its connection belongs to the gateway, so the client never connects to T3 Code itself.
 
 ## A small glossary
 
@@ -47,7 +51,7 @@ The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixe
 - **Development gateway** is a throwaway OpenClaw gateway started by `pnpm dev-gateway`, with a scripted model. One checkout can run several, each an **instance**.
 - **Scripted model** is the stand-in model provider in `tools/dev-gateway`. Directives such as `#steps` make it play a scenario.
 - **Fixture mode** is the real interface fed fixed sample data, with no gateway. The visual tests run against it.
-- **Row** is one behavior in `docs/parity.md`, with its id.
+- **Row** is one behavior in `docs/parity.md`, the behavior checklist, with its id.
 
 ## The three ways to hurt yourself
 
