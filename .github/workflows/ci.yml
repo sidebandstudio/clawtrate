@@ -137,6 +137,9 @@ jobs:
           echo "CLAWTRATE_OWNER_FIXTURE_HOME=$fixture/fixture-home" >> "$GITHUB_ENV"
       # The settings reader's macOS helper, built with packaging's flags.
       - run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts
+      # Electron's install script is declined (pnpm-workspace.yaml); requiring the package fetches its binary.
+      - run: node -e "require('electron')"
+        working-directory: apps/desktop
       # The update folders under Electron's own fs, which reads app.asar as a folder (#383).
       - run: pnpm exec vitest run apps/desktop/test/update/asar-trees.test.ts
         env:
