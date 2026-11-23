@@ -1,4 +1,4 @@
-// A picture a bot handed over in a task, read for the conversation (F-519).
+// A picture a bot handed over in a task, read for the conversation (F-535).
 //
 // The gateway puts an `image` block with an `artifactId` on the bot's message
 // (for `image_generate`, on the message of the turn it starts by itself when

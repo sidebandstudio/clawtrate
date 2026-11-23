@@ -1,4 +1,4 @@
-// A picture a bot made, in the conversation (F-519). The history is written in
+// A picture a bot made, in the conversation (F-535). The history is written in
 // the gateway's own shapes, as a development gateway with the stand-in image
 // provider recorded them: the bot's `image_generate` call starts a background
 // task, and the gateway's own turn in the same task carries the picture as an

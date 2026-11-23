@@ -1,4 +1,4 @@
-// A picture a bot made, in the conversation (F-519): what history gives it, how
+// A picture a bot made, in the conversation (F-535): what history gives it, how
 // its bytes are read, and what is never fetched. The rows and the download's
 // answer are as a development gateway with the stand-in image provider
 // recorded them (OpenClaw 2026.10.6).
@@ -106,8 +106,8 @@ function context(answer: unknown, reply: () => HttpResponseLike) {
 
 const png = () => response(200, { "content-type": "image/png" }, [PNG.slice(0, 5), PNG.slice(5)]);
 
-describe("F-519: a picture in history", () => {
-  it("F-519: the gateway's image block is the turn's picture, with the description of the call whose task it completes, and no address", () => {
+describe("F-535: a picture in history", () => {
+  it("F-535: the gateway's image block is the turn's picture, with the description of the call whose task it completes, and no address", () => {
     const items = mapHistory(rows());
     const turn = items.at(-1)!;
     expect(turn.pictures).toEqual([
@@ -126,7 +126,7 @@ describe("F-519: a picture in history", () => {
     expect(items[1]!.pictures).toBeUndefined();
   });
 
-  it("F-519: a turn whose message is only the picture still shows it", () => {
+  it("F-535: a turn whose message is only the picture still shows it", () => {
     const only = rows();
     only[3]!.content = [imageBlock];
     expect(
@@ -136,7 +136,7 @@ describe("F-519: a picture in history", () => {
     ).toEqual([ARTIFACT]);
   });
 
-  it("F-519: an image block the gateway holds no artifact for is not a picture, and a turn of another run names no description", () => {
+  it("F-535: an image block the gateway holds no artifact for is not a picture, and a turn of another run names no description", () => {
     const { artifactId: _, ...bare } = imageBlock;
     expect(mapHistory(rows(bare)).at(-1)!.pictures).toBeUndefined();
     const other = rows();
@@ -145,8 +145,8 @@ describe("F-519: a picture in history", () => {
   });
 });
 
-describe("F-519: reading a picture", () => {
-  it("F-519: only the download the gateway issued for this task is fetched, from its origin, without cookies or redirects, and its bytes reach the viewer whole", async () => {
+describe("F-535: reading a picture", () => {
+  it("F-535: only the download the gateway issued for this task is fetched, from its origin, without cookies or redirects, and its bytes reach the viewer whole", async () => {
     const { ctx, fetched, asked } = context({ url: ISSUED, expiresAt: LATER }, png);
     const read = await readChatPicture(ctx, KEY, ARTIFACT);
     expect(asked).toEqual([
@@ -167,7 +167,7 @@ describe("F-519: reading a picture", () => {
     });
   });
 
-  it("F-519: an address the message names, another task's download, a ticket out of form, an expired or missing expiry, and another origin are never fetched", async () => {
+  it("F-535: an address the message names, another task's download, a ticket out of form, an expired or missing expiry, and another origin are never fetched", async () => {
     const other = ISSUED.replace(encodeURIComponent(KEY), encodeURIComponent("agent:main:other"));
     for (const answer of [
       { url: imageBlock.url, expiresAt: LATER },
@@ -188,7 +188,7 @@ describe("F-519: reading a picture", () => {
     }
   });
 
-  it("F-519: a type other than a picture's, bytes that don't start as their type's, and a picture over Clawtrate's limit are refused", async () => {
+  it("F-535: a type other than a picture's, bytes that don't start as their type's, and a picture over Clawtrate's limit are refused", async () => {
     const answer = { url: ISSUED, expiresAt: LATER };
     const svg = context(answer, () =>
       response(200, { "content-type": "image/svg+xml" }, [ascii("<svg/>")]),
@@ -227,7 +227,7 @@ describe("F-519: reading a picture", () => {
     });
   });
 
-  it("F-519: JPEG, GIF and WebP are shown when their bytes start as their type's, and not otherwise", async () => {
+  it("F-535: JPEG, GIF and WebP are shown when their bytes start as their type's, and not otherwise", async () => {
     const answer = { url: ISSUED, expiresAt: LATER };
     const cases: Array<[string, number[], boolean]> = [
       ["image/jpeg", [0xff, 0xd8, 0xff, 0xe0], true],
@@ -247,7 +247,7 @@ describe("F-519: reading a picture", () => {
     }
   });
 
-  it("F-519: a refused redirect and an unreachable gateway each say so in a fixed sentence that names no address", async () => {
+  it("F-535: a refused redirect and an unreachable gateway each say so in a fixed sentence that names no address", async () => {
     const answer = { url: ISSUED, expiresAt: LATER };
     const redirect = context(answer, () => {
       throw new TypeError("fetch failed", { cause: new Error("unexpected redirect") });
@@ -265,7 +265,7 @@ describe("F-519: reading a picture", () => {
     });
   });
 
-  it("F-519: a picture that arrives when every transfer's place is taken says so, not that the gateway was unreachable", async () => {
+  it("F-535: a picture that arrives when every transfer's place is taken says so, not that the gateway was unreachable", async () => {
     const { ctx } = context({ url: ISSUED, expiresAt: LATER }, png);
     for (let held = 0; held < 4; held += 1) ctx.transfers.start({}, PNG, 1);
     expect(await readChatPicture({ ...ctx, maxChars: 1 }, KEY, ARTIFACT)).toEqual({
@@ -274,7 +274,7 @@ describe("F-519: reading a picture", () => {
     });
   });
 
-  it("F-519: a host that can't fetch fetches nothing, and says so", async () => {
+  it("F-535: a host that can't fetch fetches nothing, and says so", async () => {
     const { ctx, asked } = context({ url: ISSUED, expiresAt: LATER }, png);
     expect(await readChatPicture({ ...ctx, fetch: null }, KEY, ARTIFACT)).toEqual({
       status: "failed",
@@ -284,7 +284,7 @@ describe("F-519: reading a picture", () => {
   });
 });
 
-describe("F-519: the client", () => {
+describe("F-535: the client", () => {
   async function open(fetch: HttpFetch) {
     const gateway = grantingGateway();
     let history = rows().slice(0, 3);
@@ -309,7 +309,7 @@ describe("F-519: the client", () => {
     return { client, gateway, setHistory: (next: unknown[]) => (history = next as never) };
   }
 
-  it("F-519: a message the gateway changes in place is read again, so the picture it adds after the turn shows", async () => {
+  it("F-535: a message the gateway changes in place is read again, so the picture it adds after the turn shows", async () => {
     const { client, gateway, setHistory } = await open(async () => png());
     expect(client.state.transcripts[KEY]!.items.some((item) => item.pictures)).toBe(false);
     setHistory(rows());
@@ -318,7 +318,7 @@ describe("F-519: the client", () => {
     client.stop();
   });
 
-  it("F-519: more pictures than the file reads' places wait their turn and all show", async () => {
+  it("F-535: more pictures than the file reads' places wait their turn and all show", async () => {
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
     const { client } = await open(async () => {
@@ -331,7 +331,7 @@ describe("F-519: the client", () => {
     client.stop();
   });
 
-  it("F-519: pictures that each need a transfer wait for one of the transfers' places too, and all show", async () => {
+  it("F-535: pictures that each need a transfer wait for one of the transfers' places too, and all show", async () => {
     const { client } = await open(async () => png());
     // Three-byte parts: each picture is a transfer its viewer reads part by part.
     const reads = Array.from({ length: 6 }, () =>
@@ -350,7 +350,7 @@ describe("F-519: the client", () => {
     client.stop();
   });
 
-  it("F-519: a picture that waited through a switch to another gateway isn't read there", async () => {
+  it("F-535: a picture that waited through a switch to another gateway isn't read there", async () => {
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
     const { client, gateway } = await open(async () => {
@@ -375,7 +375,7 @@ describe("F-519: the client", () => {
     client.stop();
   });
 
-  it("F-519: a picture whose viewer went away while it was read leaves no transfer behind", async () => {
+  it("F-535: a picture whose viewer went away while it was read leaves no transfer behind", async () => {
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
     const { client } = await open(async () => {
@@ -393,7 +393,7 @@ describe("F-519: the client", () => {
     client.stop();
   });
 
-  it("F-519: the picture is read through the host's fetch at the gateway's origin", async () => {
+  it("F-535: the picture is read through the host's fetch at the gateway's origin", async () => {
     const urls: string[] = [];
     const { client } = await open(async (url) => {
       urls.push(url);

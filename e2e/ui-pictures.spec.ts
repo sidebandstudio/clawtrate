@@ -1,4 +1,4 @@
-// A picture a bot makes with image_generate, in the conversation (F-519), on
+// A picture a bot makes with image_generate, in the conversation (F-535), on
 // this run's own development gateway, started with the stand-in image provider
 // (`--with-images`). The bot's run asks for the picture, the gateway delivers
 // it in a turn of its own, and the page draws the bytes the host fetched
@@ -60,7 +60,7 @@ test.describe.configure({ mode: "serial" });
 const TASK = "A picture from the end-to-end run";
 const ALT = `Picture made from the description: ${IMAGE_PROMPT}`;
 
-test("F-519: a picture the bot makes with image_generate shows in the conversation, as the bytes the gateway made", async ({
+test("F-535: a picture the bot makes with image_generate shows in the conversation, as the bytes the gateway made", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

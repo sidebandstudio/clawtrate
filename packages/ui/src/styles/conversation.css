@@ -1558,7 +1558,7 @@ button.reaction {
   margin-top: 22px;
 }
 
-/* A picture the bot handed over, under its turn (F-519): at most its own size, never wider than a
+/* A picture the bot handed over, under its turn (F-535): at most its own size, never wider than a
    bubble, its place kept while it loads. */
 .pictures {
   display: flex;

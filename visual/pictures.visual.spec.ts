@@ -1,4 +1,4 @@
-// A picture a bot made, in the conversation (F-519): it matches its baseline at
+// A picture a bot made, in the conversation (F-535): it matches its baseline at
 // 1440 and phone width in both themes, loaded and failed, and it is drawn only
 // from what the host read through the gateway's download. The scene is written
 // in the gateway's own shapes (apps/desktop/src/fixture/pictures.ts); the live
@@ -26,7 +26,7 @@ for (const size of [WIDE, PHONE]) {
       test.use(contextFor(size, theme));
       const scenes = size === WIDE ? ["pictures", "pictures-failed"] : ["pictures"];
       for (const scene of scenes) {
-        test(`F-519: ${scene} matches its baseline`, async ({ page }) => {
+        test(`F-535: ${scene} matches its baseline`, async ({ page }) => {
           await open(page, scene, theme);
           await expect(picture(page)).toHaveAttribute(
             "data-state",
@@ -52,7 +52,7 @@ for (const size of [WIDE, PHONE]) {
 test.describe("pictures behaviour", () => {
   test.use(contextFor(WIDE, "dark"));
 
-  test("F-519: the picture is drawn under the gateway's turn from the host's read, with its description as its text, and the address its message names is never loaded", async ({
+  test("F-535: the picture is drawn under the gateway's turn from the host's read, with its description as its text, and the address its message names is never loaded", async ({
     page,
   }) => {
     const media: string[] = [];
@@ -84,7 +84,7 @@ test.describe("pictures behaviour", () => {
     ).toHaveCount(0);
   });
 
-  test("F-519: a picture that can't be loaded says why, and Try again shows it", async ({
+  test("F-535: a picture that can't be loaded says why, and Try again shows it", async ({
     page,
   }) => {
     await open(page, "pictures-failed", "dark");

@@ -1,4 +1,4 @@
-// The pictures a bot handed over, under its turn (F-519). Each is read through
+// The pictures a bot handed over, under its turn (F-535). Each is read through
 // the host when it is drawn (`readChatPicture`): the gateway issues a download for
 // it, and only the bytes that come back are shown, as a data: address. Nothing
 // else in the message, such as the address it names, is ever loaded.
