@@ -13,13 +13,15 @@ type Json = Record<string, unknown>;
 export function memoryStore({ maxEntries = Infinity } = {}) {
   const rows = new Map<string, Row>();
   let rev = 0;
-  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  // Microtask yield: concurrent callers still interleave at every await without libuv loop stalls under load.
+  const tick = () => Promise.resolve();
   const read = (key: string) => (rows.has(key) ? JSON.parse(rows.get(key)!.json) : undefined);
   // The real store refuses a value that isn't JSON, such as one holding undefined.
   const json = (value: unknown): string => {
     const walk = (v: unknown): void => {
       if (v === undefined) throw new Error("plugin state value must be JSON-serializable");
-      if (v && typeof v === "object") Object.values(v).forEach(walk);
+      if (v && typeof v === "object")
+        for (const k in v as Json) if (Object.hasOwn(v, k)) walk((v as Json)[k]);
     };
     walk(value);
     return JSON.stringify(value);
