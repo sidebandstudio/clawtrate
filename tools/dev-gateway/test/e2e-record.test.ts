@@ -172,6 +172,38 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     expect(readRecord(path)?.successor).toEqual(late);
   });
 
+  it("still refuses a newer build whose test read the record before a cleanup that has since finished", () => {
+    const run = aRun(liveProcess());
+    const path = recordPath(run.records, run.record.run);
+    // The worker has read the record; the runner's cleanup then runs to the end.
+    expect(successorAtCleanUp(path)).toBeUndefined();
+    expect(cleanUp(run.records, run.record, run.reset)).toEqual([]);
+    expect(existsSync(path)).toBe(false);
+    // The worker's save puts the record it read back, and its check must still see the cleanup.
+    saveRecord(run.records, run.record);
+    expect(() => recordSuccessor(path, liveProcess())).toThrow(/cleanup has started/);
+  });
+
+  it("removes a finished run's cleanup mark once its runner is proven gone, and keeps a live runner's", () => {
+    const records = own(tempDir("clawtrate-records-"));
+    for (const [run, runner] of [
+      ["0000000a", deadProcess()],
+      ["0000000b", liveProcess()],
+    ] as const) {
+      const record: RunRecord = { run, runner, instances: [], host: null, dirs: [] };
+      saveRecord(records, record);
+      successorAtCleanUp(recordPath(records, run));
+      expect(cleanUp(records, record, () => undefined)).toEqual([]);
+    }
+    recoverDeadRuns(
+      records,
+      () => undefined,
+      () => undefined,
+    );
+    expect(existsSync(`${recordPath(records, "0000000a")}.closing`)).toBe(false);
+    expect(existsSync(`${recordPath(records, "0000000b")}.closing`)).toBe(true);
+  });
+
   it("gives the run's cleanup the newer build a test recorded before it started", () => {
     const run = aRun(liveProcess());
     const path = recordPath(run.records, run.record.run);
@@ -181,7 +213,6 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     const problems = cleanUp(run.records, { ...run.record, successor }, run.reset);
     expect(problems).toEqual([]);
     expect(processState(successor.pid, successor.identity, processIdentity)).toBe("dead");
-    expect(existsSync(`${path}.closing`)).toBe(false);
   });
 
   it("keeps the folders while the newer build has not exited, and says which process it is", async () => {

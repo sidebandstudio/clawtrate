@@ -90,7 +90,12 @@ export function readRecord(path: string): RunRecord | null {
   return null;
 }
 
-/** Present once the run's cleanup has started: no newer build may start after it. */
+/**
+ * Present once the run's cleanup has started: no newer build may start after it.
+ * It outlives the record, since a test that read the record before the cleanup
+ * can save it again after the cleanup removed it. It names the run's runner, and
+ * a later run removes it once that runner, and so its tests, are proven gone.
+ */
 const closingPath = (path: string) => `${path}.closing`;
 
 /**
@@ -111,7 +116,8 @@ export function recordSuccessor(path: string, successor: Proc): void {
 
 /** Starts the run's cleanup for newer builds, then returns the one a test recorded, if any. */
 export function successorAtCleanUp(path: string): Proc | undefined {
-  writeFileSync(closingPath(path), "");
+  const record = readRecord(path);
+  writeFileSync(closingPath(path), JSON.stringify(record?.runner ?? null));
   return readRecord(path)?.successor;
 }
 
@@ -175,10 +181,7 @@ export function cleanUp(
       problems.push(`reset ${name}: ${String(error)}`);
     }
   }
-  if (problems.length === 0) {
-    rmSync(recordPath(dir, record.run), { force: true });
-    rmSync(closingPath(recordPath(dir, record.run)), { force: true });
-  }
+  if (problems.length === 0) rmSync(recordPath(dir, record.run), { force: true });
   return problems;
 }
 
@@ -216,6 +219,23 @@ export function recoverDeadRuns(
     log(`Cleaning up interrupted end-to-end run ${record.run}`);
     const problems = cleanUp(dir, record, reset, identify);
     for (const problem of problems) log(problem);
+  }
+  forgetFinishedCleanUps(dir, identify);
+}
+
+/** Removes the cleanup marks of runs whose record is gone and whose runner is proven gone. */
+function forgetFinishedCleanUps(dir: string, identify: Identify): void {
+  for (const file of readdirSync(dir).filter((name) => /^[0-9a-f]{8}\.json\.closing$/.test(name))) {
+    const mark = join(dir, file);
+    if (existsSync(mark.slice(0, -".closing".length))) continue;
+    let runner: unknown;
+    try {
+      runner = JSON.parse(readFileSync(mark, "utf8"));
+    } catch {
+      continue;
+    }
+    if (isProc(runner) && processVerdict(runner.pid, runner.identity, identify).state === "dead")
+      rmSync(mark, { force: true });
   }
 }
 
