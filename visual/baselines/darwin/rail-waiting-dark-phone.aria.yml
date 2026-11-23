@@ -1,0 +1,52 @@
+- navigation "Bots":
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations Rotating logs on rack-2
+      - button "More for Otto"
+      - list "Otto's tasks":
+        - listitem:
+          - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
+          - button "More for Rotate the logs on every machine in the rack before the disks fill up again"
+        - listitem:
+          - button "Disk almost full on the media box"
+          - button "More for Disk almost full on the media box"
+        - listitem:
+          - button "Weekly backup check, unread": Weekly backup check
+          - button "More for Weekly backup check"
+        - listitem:
+          - button "Show all 14"
+        - listitem:
+          - button "New task"
+        - listitem:
+          - button "Archived"
+    - listitem:
+      - button "Marlow, waiting for you, 1 task, editing":
+        - text: Marlow editing
+        - time: 5:34 PM
+        - text: "Waiting for you: approve a command"
+      - button "More for Marlow"
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research, primary bot":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
+      - button "More for Juniper"
+    - listitem:
+      - button "Pip, waiting for you, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 5:28 PM
+        - text: "Waiting for you: a question"
+      - button "More for Pip"
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
+      - button "More for Quartermaster of the Family Calendar and Errands"
+  - status
+- status

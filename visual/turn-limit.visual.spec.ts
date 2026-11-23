@@ -2,8 +2,8 @@
 // its default, and that a change reaches the host. The engine's half is
 // packages/core/test/turn-limit.test.ts; the card it leads to is checked in
 // live.behaviour.visual.spec.ts.
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 

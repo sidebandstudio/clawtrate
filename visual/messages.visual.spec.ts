@@ -2,8 +2,8 @@
 // more beside it, reactions as badges under it, and a thread assembled around
 // a message and its replies (parity F-066, F-067, F-283). The gateway's half
 // is proven in e2e/preview.spec.ts.
-import { expect, test, type Locator, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Locator, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;

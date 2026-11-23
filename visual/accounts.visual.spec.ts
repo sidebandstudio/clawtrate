@@ -3,8 +3,8 @@
 // each sign-in kind's stages and endings, Settings → Accounts, and a bot's
 // Account page in each state. The fixture's accounts are made up
 // (apps/desktop/src/fixture/accounts.ts).
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 type Scene = { name: string; query: string; ready: (page: Page) => Promise<void> };
 

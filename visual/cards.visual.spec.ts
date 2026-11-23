@@ -1,8 +1,8 @@
 // Every state of every card (conversation.md sections 10 to 13) matches its
 // approved baseline in light and dark, at desktop width and at phone width.
 // Each scene is built from the engine's own state (apps/desktop/src/fixture/cards.ts).
-import { expect, test, type Locator, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Locator, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
 const CARD =
   '[data-testid="approval-card"], [data-testid="question-card"], [data-testid="messaged-card"], ' +

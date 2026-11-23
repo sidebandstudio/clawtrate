@@ -3,8 +3,8 @@
 // lists, an opened text file, markdown, a picture, a file over the limit with
 // its reason, one no reader sends, the comparison, loading and failure, and
 // the tab bar where its tabs scroll.
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 import { FILES, filesPanel, listed, openRow } from "./files-helpers.ts";
 
 type Scene = { name: string; query: string; ready: (page: Page) => Promise<void> };

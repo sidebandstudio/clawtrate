@@ -3,8 +3,8 @@
 // at phone width: a bot's Usage row and page in each state, the budget form,
 // Settings → Usage, and the budget's line and notes in the conversation. The
 // fixture's figures are made up (apps/desktop/src/fixture/usage.ts).
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 type Scene = { name: string; query: string; ready: (page: Page) => Promise<void> };
 

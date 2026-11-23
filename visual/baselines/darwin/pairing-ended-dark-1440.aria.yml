@@ -1,0 +1,17 @@
+- main:
+  - heading "Clawtrate" [level=1]
+  - paragraph: Your OpenClaw agents, orchestrated.
+  - region "Connect to your gateway":
+    - heading "Connect to your gateway" [level=2]
+    - text: Gateway address
+    - textbox "Gateway address": ws://127.0.0.1:18789
+    - text: Gateway token, for pairing
+    - textbox "Gateway token, for pairing"
+    - alert:
+      - strong: The pairing request is no longer pending
+      - text: It was rejected, or it expired before anyone approved it; the gateway does not say which. Try again to send a new request, then approve it on the gateway. PAIRING_ENDED
+      - button "Try again"
+    - button "Connect a gateway"
+    - button "Use the development gateway"
+    - paragraph: Clawtrate works with an OpenClaw gateway you already run. It asks for read access only.
+  - paragraph: This device a41c9e02 · Web preview 0.1.0

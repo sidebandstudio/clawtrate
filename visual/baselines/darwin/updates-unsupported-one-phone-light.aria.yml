@@ -1,0 +1,15 @@
+- dialog "Settings":
+  - region "Updates":
+    - button "Close settings"
+    - button "Back to settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - paragraph: Clawtrate can't install updates on this system.
+    - term: Version
+    - definition:
+      - text: Clawtrate 0.1.0
+      - paragraph: This copy is a Stable build.
+    - group "Update status":
+      - term: Updates
+      - definition: This build can't check for updates on this system.
+    - status: This build can't check for updates on this system. Clawtrate can't install updates on this system.
