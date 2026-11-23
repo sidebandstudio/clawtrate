@@ -1983,6 +1983,12 @@ const seat = ({ x, y, scale, tilt = 0 }      , layer             )              
   layer,
 });
 
+/** A Lantern's headphone band, its own copy of the cups' centres, as `seat` makes a socket. */
+const headband = (
+  { left, right, apex }                                             ,
+  layer             ,
+) => ({ left: [left[0], left[1]]         , right: [right[0], right[1]]         , apex, layer });
+
 /** The eyes' sockets, left to right: each ring as large as the room between the two eyes allows. */
 function eyeSockets(at         , large         , scale        )                    {
   const k = large ? 3.7 / 3.1 : 1;
@@ -2757,7 +2763,7 @@ function lanternScene(
     Object.assign(hatSeat, { x: hatSeat.x - 2.4, y: hatSeat.y + 3.2, tilt: hatSeat.tilt - 30 });
   const sockets                = {
     head: hatSeat,
-    band: { ...LANTERN_HEADPHONES[choice.body], layer: "after-body" },
+    band: headband(LANTERN_HEADPHONES[choice.body], "after-body"),
     eyes: eyeSockets(
       spots.map(({ at }) => at),
       single,

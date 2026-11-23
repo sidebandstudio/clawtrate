@@ -248,6 +248,11 @@ describe("accessories at their sockets, in every family and state", () => {
       band("idle").right[0] - band("idle").left[0],
     );
     expect(scene(lantern, "waiting").sockets.band).toEqual(scene(lantern, "idle").sockets.band);
+    // Each scene has its own copy of a Lantern's cups: changing one changes no other scene.
+    const cups = scene(lantern, "idle").sockets.band!;
+    const before = { ...cups, left: [...cups.left], right: [...cups.right] };
+    cups.left[0] += 5;
+    expect(scene(lantern, "idle").sockets.band).toEqual(before);
   });
 
   it("keeps the bow tie below every mouth, rims apart, and a Lantern's hat clear of its drooped lure", () => {
