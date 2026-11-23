@@ -127,7 +127,7 @@ try {
   let grantId = "";
   // Both orders of a revocation and a call are pinned in the unit tests; here they race for real.
   await check(
-    "F-537: a grant used, revoked mid-call, refused after, withdrawn on every device, an old generation refused",
+    "F-547: a grant used, revoked mid-call, refused after, withdrawn on every device, an old generation refused",
     async () => {
       const g = await grantFor(op);
       const first = await propose(op, g, bot, "label");
@@ -199,7 +199,7 @@ try {
   );
 
   await check(
-    "F-537: a grant updated to generation 2; a helper still on generation 1 is refused",
+    "F-547: a grant updated to generation 2; a helper still on generation 1 is refused",
     async () => {
       const g = await call<{ id: string; generation: number }>(op, "relay.grants.set", {
         scope: "suggest",
@@ -235,7 +235,7 @@ try {
   );
 
   await check(
-    "F-536: two proposals racing for the last slot of one source (20), then of the gateway (200): one admitted, one refused, the count at the limit",
+    "F-546: two proposals racing for the last slot of one source (20), then of the gateway (200): one admitted, one refused, the count at the limit",
     async () => {
       const grants = await Promise.all(Array.from({ length: 11 }, () => grantFor(op)));
       let next = 0;
@@ -263,7 +263,7 @@ try {
   );
 
   await check(
-    "F-536: with Apply disabled, the journal stays empty and Undo is refused; the gateway received no writes to bot settings",
+    "F-546: with Apply disabled, the journal stays empty and Undo is refused; the gateway received no writes to bot settings",
     async () => {
       assert.deepEqual((await call<{ changes: Json[] }>(op, "changes.list")).changes, []);
       assert.equal(
@@ -275,7 +275,7 @@ try {
   );
 
   await check(
-    "F-535: managers.set writes the manager grants by incarnation to the plugin's own config and reads them back; removal, an unknown bot and a write-only device",
+    "F-545: managers.set writes the manager grants by incarnation to the plugin's own config and reads them back; removal, an unknown bot and a write-only device",
     async () => {
       const managersOf = async () => {
         const { config } = await op.request<{ config: Json }>("config.get", {});

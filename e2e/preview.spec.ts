@@ -133,6 +133,35 @@ function newTaskName(botId: string, label: string): { key: string; title: string
   };
 }
 
+/**
+ * Remove a task a check made on the gateway, so a run it left failed or stopped does not
+ * stay in its bot's rail state for a later check (the bot's row reports the most urgent of
+ * all its tasks, and a failed one outranks a later routine run's "working"). Stops any run,
+ * archives, then deletes it with its transcript; a task already gone is left alone.
+ */
+async function removeGatewayTask(key: string): Promise<void> {
+  const row = await gatewayCall<{ session: SessionRow & { sessionId?: string } }>(
+    "sessions.describe",
+    { key },
+  )
+    .then((result) => result.session)
+    .catch(() => null);
+  if (!row?.sessionId) return;
+  await gatewayCall("chat.abort", { sessionKey: key }).catch(() => {});
+  if (!row.archived)
+    await gatewayCall("sessions.patch", {
+      key,
+      archived: true,
+      expectedSessionId: row.sessionId,
+    }).catch(() => {});
+  await gatewayCall("sessions.delete", {
+    key,
+    archivedOnly: true,
+    deleteTranscript: true,
+    expectedSessionId: row.sessionId,
+  }).catch(() => {});
+}
+
 /** A run in a task, as the gateway's owner starts one; resolves when it has ended. */
 async function runOnGateway(botId: string, key: string, message: string): Promise<void> {
   await openclaw([
@@ -1674,6 +1703,9 @@ test("F-301: a turn the gateway fails offers Copy request ID, which copies the i
   await card.getByRole("button", { name: "Copy request ID" }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+  // This is the only check that leaves a bot with a failed run; remove its task so Otto's
+  // rail state does not stay "failed" for a later file's check (F-024 in routines.spec.ts).
+  await removeGatewayTask(key);
 });
 
 test("F-066 F-283 F-067: on a real turn of a progress bubble and a final one, each bubble's actions name its own row: a reaction is set and taken back on the gateway, and a reply sent from its thread names it", async ({
