@@ -1553,11 +1553,24 @@ it.skipIf(process.platform === "win32")(
     });
     try {
       const inspect = vi.fn(async () => null);
-      const service = await start({ installer: macInstaller("arm64", inspect) });
+      const service = await start({
+        installer: macInstaller("arm64", inspect, undefined, undefined, "macOS 99.1"),
+      });
       const id = await offer(service);
       expect((await service.download(id)).snapshot).toMatchObject({
         state: { kind: "verified", offerId: id },
-        install: { kind: "unavailable-in-this-build", reason: "inspection-failed" },
+        install: {
+          kind: "unavailable-in-this-build",
+          reason: "inspection-failed",
+          failure: {
+            stage: "hold-archive",
+            errorCode: "ENOSPC",
+            exitCode: null,
+            signal: null,
+            output: null,
+            system: "macOS 99.1",
+          },
+        },
       });
       expect(full).toHaveBeenCalled();
       expect(inspect).not.toHaveBeenCalled();
@@ -1575,3 +1588,64 @@ it.skipIf(process.platform === "win32")(
     }
   },
 );
+
+it("a Restart whose inspection fails carries the installer's record of why", async () => {
+  const failure = {
+    stage: "running-signature",
+    exitCode: 0,
+    signal: null,
+    output: "reported",
+    helperStep: "parent-code -67065",
+    errorCode: null,
+    durationMs: 12,
+    system: "macOS 99.1",
+  } as const;
+  const inspect = vi
+    .fn<UpdateInstaller["inspect"]>()
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce("inspection-failed");
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspectionFailure: failure,
+    inspect,
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "restart-available",
+    offerId: id,
+    completesOnQuit: true,
+  });
+  expect((await service.restart(id)).snapshot).toMatchObject({
+    state: { kind: "handoff-failed", reason: "inspection-failed", failure },
+    install: { kind: "unavailable-in-this-build", reason: "inspection-failed", failure },
+  });
+  service.shutdown();
+});
+
+it("records no failure with a refusal other than inspection-failed", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    inspectionFailure: {
+      stage: "archive",
+      exitCode: 1,
+      signal: null,
+      output: "empty",
+      helperStep: null,
+      errorCode: null,
+      durationMs: 1,
+      system: "macOS 99.1",
+    },
+    inspect: async () => "mac-archive",
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "unavailable-in-this-build",
+    reason: "mac-archive",
+  });
+  service.shutdown();
+});

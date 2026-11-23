@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { lstat, writeFile } from "node:fs/promises";
+import { chmod, lstat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { holdMacArchive } from "../../src/main/mac-archive.ts";
@@ -182,7 +182,7 @@ it("a flagged ad hoc bundle reports build-not-signed before opening the archive 
   const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), kill: vi.fn() });
   vi.mocked(spawn).mockImplementationOnce((...args) => {
     expect(args[1]).toEqual(["--running-signature", "dev.clawtrate.desktop"]);
-    expect(args[2]).toMatchObject({ stdio: ["ignore", "pipe", "ignore"] });
+    expect(args[2]).toMatchObject({ stdio: ["ignore", "pipe", "pipe"] });
     queueMicrotask(() => {
       child.stdout.end("build-not-signed\n");
       child.emit("close", 0);
@@ -237,5 +237,167 @@ it.skipIf(process.platform === "win32")(
       if (old) Object.defineProperty(process, "resourcesPath", old);
       else Reflect.deleteProperty(process, "resourcesPath");
     }
+  },
+);
+
+type Helper = { out?: string; err?: string; code?: number | null; signal?: string; error?: string };
+
+/** A helper process that writes `out` and `err`, then ends as described. */
+function helper({ out = "", err = "", code = 0, signal, error }: Helper) {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(),
+    pid: error ? undefined : 4242,
+  });
+  queueMicrotask(() => {
+    if (error) child.emit("error", Object.assign(Error("spawn failed"), { code: error }));
+    child.stderr.end(err);
+    child.stdout.end(out);
+    setImmediate(() => child.emit("close", code, signal ?? null));
+  });
+  return child as unknown as ReturnType<typeof spawn>;
+}
+
+async function withHelpers(runs: Helper[], body: () => Promise<void>) {
+  const old = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+  Object.defineProperty(process, "resourcesPath", {
+    value: "/fixture/Contents/Resources",
+    configurable: true,
+  });
+  for (const run of runs) vi.mocked(spawn).mockImplementationOnce(() => helper(run));
+  try {
+    await body();
+  } finally {
+    vi.mocked(spawn).mockReset();
+    if (old) Object.defineProperty(process, "resourcesPath", old);
+    else Reflect.deleteProperty(process, "resourcesPath");
+  }
+}
+
+const recorded = { system: "macOS 99.1", durationMs: expect.any(Number) };
+
+it.skipIf(process.platform === "win32").each([
+  [
+    "no line ending",
+    { out: "ok" },
+    { exitCode: 0, signal: null, output: "no-line-ending", helperStep: null, errorCode: null },
+  ],
+  [
+    "no output and a failed exit",
+    { code: 1 },
+    { exitCode: 1, signal: null, output: "empty", helperStep: null, errorCode: null },
+  ],
+  [
+    "a signal",
+    { code: null, signal: "SIGKILL" },
+    { exitCode: null, signal: "SIGKILL", output: "empty", helperStep: null, errorCode: null },
+  ],
+  [
+    "an answer over 128 bytes",
+    { out: "x".repeat(200) + "\n" },
+    { exitCode: 0, output: "too-long", helperStep: null, errorCode: null },
+  ],
+  ["an answer no result names", { out: "maybe\n" }, { exitCode: 0, output: "unrecognized" }],
+  ["a result refused for its exit", { out: "ok\n", code: 3 }, { exitCode: 3, output: "complete" }],
+  [
+    "inspection-failed with the helper's step",
+    { out: "inspection-failed\n", err: "parent-code -67065\n/private/secret\n" },
+    { exitCode: 0, output: "reported", helperStep: "parent-code -67065" },
+  ],
+] as const)("records the signature-only call's failure from %s", async (_, run, failure) => {
+  await withHelpers([run], async () => {
+    const file = await candidate();
+    const installer = macInstaller("arm64", undefined, undefined, undefined, "macOS 99.1");
+    expect(await installer.inspect(file)).toBe("inspection-failed");
+    expect(installer.inspectionFailure).toEqual({
+      stage: "running-signature",
+      signal: null,
+      helperStep: null,
+      errorCode: null,
+      ...recorded,
+      ...failure,
+    });
+  });
+});
+
+it.skipIf(process.platform === "win32")(
+  "records a helper that never started, by its error code",
+  async () => {
+    await withHelpers([{ error: "ENOENT", code: -2 }], async () => {
+      const installer = macInstaller("arm64", undefined, undefined, undefined, "macOS 99.1");
+      expect(await installer.inspect(await candidate())).toBe("inspection-failed");
+      expect(installer.inspectionFailure).toEqual({
+        stage: "start-helper",
+        exitCode: null,
+        signal: null,
+        output: null,
+        helperStep: null,
+        errorCode: "ENOENT",
+        ...recorded,
+      });
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "records the full call's failure as the archive stage, and a later pass clears it",
+  async () => {
+    await withHelpers(
+      [{ out: "ok\n" }, { code: 1, err: "unpack 0\n" }, { out: "ok\n" }, { out: "ok\n" }],
+      async () => {
+        const installer = macInstaller("arm64", undefined, undefined, undefined, "macOS 99.1");
+        const file = await candidate();
+        expect(await installer.inspect(file)).toBe("inspection-failed");
+        expect(installer.inspectionFailure).toEqual({
+          stage: "archive",
+          exitCode: 1,
+          signal: null,
+          output: "empty",
+          helperStep: "unpack 0",
+          errorCode: null,
+          ...recorded,
+        });
+        expect(await installer.inspect({ ...file, offerId: "two" })).toBeNull();
+        expect(installer.inspectionFailure).toBeNull();
+        installer.retire?.();
+      },
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "records a download it could not hold, by its error code",
+  async () => {
+    const file = await candidate();
+    await chmod(file.path, 0);
+    const installer = macInstaller("arm64", async () => null, undefined, undefined, "macOS 99.1");
+    expect(await installer.inspect(file)).toBe("inspection-failed");
+    expect(installer.inspectionFailure).toEqual({
+      stage: "hold-archive",
+      exitCode: null,
+      signal: null,
+      output: null,
+      helperStep: null,
+      errorCode: "EACCES",
+      ...recorded,
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "records a full call that could not run, by its error code",
+  async () => {
+    const installer = macInstaller(
+      "arm64",
+      async () => {
+        throw Object.assign(Error("no space"), { code: "ENOSPC" });
+      },
+      undefined,
+      undefined,
+      "macOS 99.1",
+    );
+    expect(await installer.inspect(await candidate())).toBe("inspection-failed");
+    expect(installer.inspectionFailure).toMatchObject({ stage: "archive", errorCode: "ENOSPC" });
   },
 );

@@ -6,6 +6,7 @@ import type {
   DesktopUpdateFailure,
   KeyValueStore,
   UpdateTrack,
+  UpdateInspectionFailure,
   UpdateInstallRefusal,
 } from "@clawtrate/core";
 import { randomUUID } from "node:crypto";
@@ -172,7 +173,11 @@ export class DesktopUpdateService {
       state.reason !== "installer-failed" &&
       state.reason !== "mac-updater-refused"
     )
-      install = { kind: "unavailable-in-this-build", reason: state.reason };
+      install = {
+        kind: "unavailable-in-this-build",
+        reason: state.reason,
+        ...(state.failure && { failure: state.failure }),
+      };
     this.pendingInstall = null;
     if (install.kind === "restart-available" && !this.fileWatch?.current()) {
       this.retireFile();
@@ -185,6 +190,12 @@ export class DesktopUpdateService {
     } catch {
       // A closing renderer cannot interrupt hashing or change a transfer result.
     }
+  }
+
+  /** The installer's record of why an inspection failed, for that refusal only. */
+  private failureFor(reason: string): { failure?: UpdateInspectionFailure } {
+    const failure = reason === "inspection-failed" && this.options.installer?.inspectionFailure;
+    return failure ? { failure } : {};
   }
 
   private get restarting() {
@@ -470,7 +481,7 @@ export class DesktopUpdateService {
             }
             if (reason) this.retireFile();
             install = reason
-              ? { kind: "unavailable-in-this-build", reason }
+              ? { kind: "unavailable-in-this-build", reason, ...this.failureFor(reason) }
               : {
                   kind: "restart-available",
                   offerId: id,
@@ -514,7 +525,7 @@ export class DesktopUpdateService {
         UpdateInstallRefusal | "attempt-not-saved" | "installer-failed" | "mac-updater-refused",
     ) => {
       this.retireFile();
-      this.publish({ kind: "handoff-failed", version, reason });
+      this.publish({ kind: "handoff-failed", version, reason, ...this.failureFor(reason) });
       return this.reply("accepted");
     };
     this.publish({ kind: "preparing", version, offerId: id });

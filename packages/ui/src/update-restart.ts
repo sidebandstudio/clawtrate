@@ -1,4 +1,9 @@
-import type { ClawtrateState, DesktopUpdateSnapshot, DesktopUpdateState } from "@clawtrate/core";
+import type {
+  ClawtrateState,
+  DesktopUpdateSnapshot,
+  DesktopUpdateState,
+  UpdateInspectionFailure,
+} from "@clawtrate/core";
 
 type Reason = Extract<DesktopUpdateState, { kind: "handoff-failed" }>["reason"];
 const reasons: Record<Exclude<Reason, "no-verified-download">, string> = {
@@ -24,6 +29,56 @@ export function refusalLine(reason: Reason) {
   return Object.hasOwn(reasons, reason)
     ? reasons[reason]
     : "This update can't be installed from here.";
+}
+
+/** The recorded reason an inspection failed, when the snapshot carries one. */
+export function inspectionFailure(s: DesktopUpdateSnapshot): UpdateInspectionFailure | null {
+  return (s.install.kind === "unavailable-in-this-build" && s.install.failure) || null;
+}
+
+const helperAnswers: Record<NonNullable<UpdateInspectionFailure["output"]>, string> = {
+  empty: "it gave no answer",
+  "no-line-ending": "its answer was cut off",
+  "too-long": "its answer was too long",
+  unrecognized: "it gave an answer Clawtrate doesn't know",
+  reported: "it couldn't read a signature",
+  complete: "it answered but didn't finish cleanly",
+};
+
+/** One plain sentence: where the inspection stopped and how. */
+export function inspectionFailureLine(f: UpdateInspectionFailure): string {
+  const code = f.errorCode ? ` (${f.errorCode})` : "";
+  if (f.stage === "hold-archive")
+    return `It stopped while keeping a private copy of the download${code}.`;
+  if (f.stage === "start-helper") return `The update checker didn't start${code}.`;
+  const what = f.stage === "running-signature" ? "this app's signature" : "the downloaded app";
+  const how = f.signal
+    ? `macOS stopped it with ${f.signal}`
+    : f.exitCode !== null && f.exitCode !== 0
+      ? `it exited with code ${f.exitCode}`
+      : f.output
+        ? helperAnswers[f.output]
+        : `it was stopped${code}`;
+  return `The update checker stopped while checking ${what}: ${how}.`;
+}
+
+/** The full record, for "Copy details": codes and counts only. */
+export function inspectionFailureDetails(
+  f: UpdateInspectionFailure,
+  runningVersion: string | null,
+): string {
+  return [
+    "Clawtrate update inspection failed",
+    `Version: ${runningVersion ?? "unknown"}`,
+    `System: ${f.system}`,
+    `Stage: ${f.stage}`,
+    `Exit code: ${f.exitCode ?? "none"}`,
+    `Signal: ${f.signal ?? "none"}`,
+    `Output: ${f.output ?? "none"}`,
+    `Helper step: ${f.helperStep ?? "none"}`,
+    `Error code: ${f.errorCode ?? "none"}`,
+    `Duration: ${f.durationMs} ms`,
+  ].join("\n");
 }
 
 export function downloadBlocked(install: DesktopUpdateSnapshot["install"]) {

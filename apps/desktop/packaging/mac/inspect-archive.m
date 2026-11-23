@@ -200,6 +200,12 @@ static const char *signatureKind(OSStatus status, NSDictionary *information) {
     return NULL;
 }
 
+// Names the step that failed, and its status, on the error output, for the app's record of
+// why an inspection failed. The one result line on standard output is unchanged.
+static void failedStep(const char *name, long status) {
+    fprintf(stderr, "%s %ld\n", name, status);
+}
+
 static const char *inspect(NSString *scratch, NSString *identifier, NSString *version, NSString *arch) {
     SecCSFlags flags = kSecCSStrictValidate | kSecCSCheckAllArchitectures |
                        kSecCSCheckNestedCode | kSecCSNoNetworkAccess;
@@ -211,32 +217,52 @@ static const char *inspect(NSString *scratch, NSString *identifier, NSString *ve
         @"anchor apple generic and identifier \"%@\" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
          " and certificate 1[field.1.2.840.113635.100.6.2.6] exists", identifier];
     CFDictionaryRef information = NULL;
+    const char *call = "parent-code";
     OSStatus status = SecCodeCopyGuestWithAttributes(NULL, (__bridge CFDictionaryRef)attrs, 0, &host);
-    if (!status) status = SecCodeCopyStaticCode(host, 0, &running);
-    if (!status) status = SecCodeCopySigningInformation(running, kSecCSDefaultFlags, &information);
+    if (!status) call = "parent-static-code", status = SecCodeCopyStaticCode(host, 0, &running);
+    if (!status)
+        call = "parent-signing-information",
+        status = SecCodeCopySigningInformation(running, kSecCSDefaultFlags, &information);
+    if (status) failedStep(call, status);
     const char *result = signatureKind(status, (__bridge NSDictionary *)information);
     if (result) goto done;
     result = "running-signature-untrusted";
-    if (SecRequirementCreateWithString((__bridge CFStringRef)policy, 0, &developer) ||
-        SecCodeCheckValidity(host, kSecCSNoNetworkAccess, developer) ||
-        SecStaticCodeCheckValidity(running, flags, developer) ||
-        SecCodeCopyDesignatedRequirement(running, 0, &designated)) goto done;
+    call = "requirement";
+    status = SecRequirementCreateWithString((__bridge CFStringRef)policy, 0, &developer);
+    if (!status) call = "parent-validity", status = SecCodeCheckValidity(host, kSecCSNoNetworkAccess, developer);
+    if (!status) call = "parent-static-validity", status = SecStaticCodeCheckValidity(running, flags, developer);
+    if (!status) call = "parent-designated-requirement", status = SecCodeCopyDesignatedRequirement(running, 0, &designated);
+    if (status) {
+        failedStep(call, status);
+        goto done;
+    }
     if (!scratch) { result = "ok"; goto done; }
     result = "mac-archive";
     {
         int root = open(scratch.fileSystemRepresentation, O_NOFOLLOW | O_DIRECTORY | O_RDONLY);
-        if (root < 0) goto done;
+        if (root < 0) {
+            failedStep("scratch", errno);
+            goto done;
+        }
         BOOL ok = unpack(3, root);
         close(root);
-        if (!ok) goto done;
+        if (!ok) {
+            failedStep("unpack", 0);
+            goto done;
+        }
     }
     {
         NSURL *url = [NSURL fileURLWithPath:[scratch stringByAppendingPathComponent:@"Clawtrate.app"]];
         result = bundleFacts(url, identifier, version, arch);
         if (result) goto done;
         result = "mac-designated-requirement";
-        if (SecStaticCodeCreateWithPath((__bridge CFURLRef)url, 0, &candidate) ||
-            SecStaticCodeCheckValidity(candidate, flags, designated)) goto done;
+        call = "candidate-code";
+        status = SecStaticCodeCreateWithPath((__bridge CFURLRef)url, 0, &candidate);
+        if (!status) call = "candidate-validity", status = SecStaticCodeCheckValidity(candidate, flags, designated);
+        if (status) {
+            failedStep(call, status);
+            goto done;
+        }
         result = "ok";
     }
 done:

@@ -1,7 +1,8 @@
-import type { UpdateInstallRefusal } from "@clawtrate/core";
+import type { UpdateInspectionFailure, UpdateInstallRefusal } from "@clawtrate/core";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
+import { release } from "node:os";
 import { createServer } from "node:http";
 import { join, dirname } from "node:path";
 import { Readable } from "node:stream";
@@ -12,70 +13,146 @@ import { ChangedMacArchive, holdMacArchive, type HeldMacArchive } from "./mac-ar
 import type { UpdateInstaller } from "./update/install.ts";
 import { rm } from "./update-tree-fs.ts";
 
+type HelperFailure = Omit<UpdateInspectionFailure, "stage" | "system">;
+type HelperResult = { reason: UpdateInstallRefusal | null; failure: HelperFailure | null };
+type RecordFailure = (stage: UpdateInspectionFailure["stage"], failure: HelperFailure) => void;
+
+const RESULTS = new Set<string>([
+  "ok",
+  "build-not-signed",
+  "running-signature-untrusted",
+  "mac-archive",
+  "mac-bundle-identifier",
+  "mac-architecture",
+  "installer-version",
+  "mac-designated-requirement",
+]);
+
+/** A system error's code, such as ENOENT, or its class name; never its message. */
+export function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code)) return code;
+  return error instanceof Error && /^[A-Za-z]{1,32}$/.test(error.name) ? error.name : "unknown";
+}
+
+/** The operating system and its version, as the diagnostic records it. */
+export function systemVersion(): string {
+  const version = (process as { getSystemVersion?: () => string }).getSystemVersion?.();
+  return version ? "macOS " + version : process.platform + " " + release();
+}
+
+/** The helper names the failed step on its error output: letters, digits and a few marks. */
+function helperStep(text: string): string | null {
+  const step = (text.split("\n")[0] ?? "")
+    .replace(/[^A-Za-z0-9 ._:-]/g, "")
+    .slice(0, 80)
+    .trim();
+  return step || null;
+}
+
 async function runInspector(
   args: string[],
   signal: AbortSignal,
   archive?: HeldMacArchive,
-): Promise<UpdateInstallRefusal | null> {
+): Promise<HelperResult> {
   signal.throwIfAborted();
-  const reason = await new Promise<string>((resolve) => {
-    const child = spawn(
-      join(process.resourcesPath, "..", "Helpers", "ClawtrateUpdateInspection"),
-      args,
-      {
-        env: { PATH: "/usr/bin:/bin" },
-        stdio: ["ignore", "pipe", "ignore", ...(archive ? [archive.file.fd] : [])],
-        signal,
-        timeout: 120000,
-        killSignal: "SIGKILL",
-      },
-    );
-    let output = "";
-    let failed = false;
+  const started = performance.now();
+  let output = "";
+  let errors = "";
+  let tooLong = false;
+  let failed = false;
+  let ran = false;
+  let code: number | null = null;
+  let killed: string | null = null;
+  let error: string | null = null;
+  await new Promise<void>((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(
+        join(process.resourcesPath, "..", "Helpers", "ClawtrateUpdateInspection"),
+        args,
+        {
+          env: { PATH: "/usr/bin:/bin" },
+          stdio: ["ignore", "pipe", "pipe", ...(archive ? [archive.file.fd] : [])],
+          signal,
+          timeout: 120000,
+          killSignal: "SIGKILL",
+        },
+      );
+    } catch (thrown) {
+      failed = true;
+      error = errorCode(thrown);
+      resolve();
+      return;
+    }
+    ran = child.pid !== undefined;
     child.stdout!.on("data", (data: Buffer) => {
       if (failed) return;
       if (output.length + data.length > 128) {
-        failed = true;
+        failed = tooLong = true;
         child.kill("SIGKILL");
       } else output += data.toString("utf8");
     });
-    // An abort emits error before the inherited descriptors close.
-    child.on("error", () => {
-      failed = true;
+    // Only the first 256 bytes are kept; the rest is drained so the helper never blocks on it.
+    child.stderr?.on("data", (data: Buffer) => {
+      if (errors.length < 256) errors += data.toString("utf8", 0, 256 - errors.length);
     });
-    child.once("close", (code) =>
-      resolve(
-        !failed && !signal.aborted && code === 0 && output.endsWith("\n")
-          ? output.slice(0, -1)
-          : "inspection-failed",
-      ),
-    );
+    // An abort emits error before the inherited descriptors close.
+    child.on("error", (thrown) => {
+      failed = true;
+      error ??= errorCode(thrown);
+    });
+    child.once("close", (exit, sig) => {
+      code = exit;
+      killed = sig;
+      resolve();
+    });
   });
-  switch (reason) {
-    case "ok":
-      return null;
-    case "build-not-signed":
-    case "running-signature-untrusted":
-    case "mac-archive":
-    case "mac-bundle-identifier":
-    case "mac-architecture":
-    case "installer-version":
-    case "mac-designated-requirement":
-      return reason;
-    default:
-      return "inspection-failed";
-  }
+  const complete = !failed && !signal.aborted && code === 0 && output.endsWith("\n");
+  const line = output.endsWith("\n") ? output.slice(0, -1) : null;
+  if (complete && line !== null && RESULTS.has(line))
+    return { reason: line === "ok" ? null : (line as UpdateInstallRefusal), failure: null };
+  return {
+    reason: "inspection-failed",
+    failure: {
+      exitCode: code !== null && code >= 0 ? code : null,
+      signal: killed,
+      output: !ran
+        ? null
+        : tooLong
+          ? "too-long"
+          : output === ""
+            ? "empty"
+            : line === null
+              ? "no-line-ending"
+              : line === "inspection-failed"
+                ? "reported"
+                : RESULTS.has(line)
+                  ? "complete"
+                  : "unrecognized",
+      helperStep: helperStep(errors),
+      errorCode: error,
+      durationMs: Math.round(performance.now() - started),
+    },
+  };
 }
 
 async function inspectBundle(
   archive: HeldMacArchive,
   arch: string,
   signal: AbortSignal,
+  record?: RecordFailure,
 ): Promise<UpdateInstallRefusal | null> {
   signal.throwIfAborted();
   const scratch = await mkdtemp(join(dirname(archive.proof.path), ".inspect-"));
   try {
-    return await runInspector([scratch, APP_ID, archive.proof.version, arch], signal, archive);
+    const { reason, failure } = await runInspector(
+      [scratch, APP_ID, archive.proof.version, arch],
+      signal,
+      archive,
+    );
+    if (failure) record?.("archive", failure);
+    return reason;
   } finally {
     // The checked copy holds the candidate's app.asar. Removing it can't change the
     // inspection's answer: a copy left behind goes with the update folder, which is cleared
@@ -219,19 +296,27 @@ export function macInstaller(
   inspect?: typeof inspectBundle,
   stage = stageWithElectron,
   deadlineMs = 120000,
+  system = systemVersion(),
 ): UpdateInstaller {
   let kept: HeldMacArchive | undefined;
   let inspection: AbortController | undefined;
   let unsigned = false;
+  let failure: UpdateInspectionFailure | null = null;
   function retire() {
     inspection?.abort();
     inspection = undefined;
     if (kept) void kept.file.close().catch(() => {});
     kept = undefined;
   }
+  const record: RecordFailure = (stage, helper) => {
+    failure = { stage, ...helper, system };
+  };
   return {
     get unavailable() {
       return unsigned ? ("build-not-signed" as const) : null;
+    },
+    get inspectionFailure() {
+      return failure;
     },
     completesOnQuit: true,
     retire,
@@ -239,26 +324,55 @@ export function macInstaller(
       if (kept?.proof.offerId === file.offerId && kept.proof.identity === file.identity)
         return null;
       retire();
+      failure = null;
       inspection = new AbortController();
       const { signal } = inspection;
       if (!inspect) {
         // The signature-only invocation receives neither a descriptor nor a scratch path.
-        const refusal = await runInspector(["--running-signature", APP_ID], signal);
+        const { reason, failure: helper } = await runInspector(
+          ["--running-signature", APP_ID],
+          signal,
+        );
         if (signal.aborted) return "artifact-changed";
-        if (refusal === "build-not-signed") unsigned = true;
-        if (refusal) return refusal;
+        if (reason === "build-not-signed") unsigned = true;
+        if (helper) record(helper.output === null ? "start-helper" : "running-signature", helper);
+        if (reason) return reason;
       }
       let held: HeldMacArchive;
+      const holding = performance.now();
       try {
         held = await holdMacArchive(file, signal);
       } catch (error) {
-        return error instanceof ChangedMacArchive ? "artifact-changed" : "inspection-failed";
+        if (error instanceof ChangedMacArchive) return "artifact-changed";
+        record("hold-archive", {
+          exitCode: null,
+          signal: null,
+          output: null,
+          helperStep: null,
+          errorCode: errorCode(error),
+          durationMs: Math.round(performance.now() - holding),
+        });
+        return "inspection-failed";
       }
+      const inspecting = performance.now();
       try {
-        const reason = await (inspect ?? inspectBundle)(held, arch, signal);
+        const reason = await (inspect ?? inspectBundle)(held, arch, signal, (stage, helper) =>
+          record(helper.output === null ? "start-helper" : stage, helper),
+        );
         if (reason || signal.aborted) return reason ?? "artifact-changed";
         kept = held;
         return null;
+      } catch (error) {
+        // The scratch folder could not be made, or the call was stopped.
+        record("archive", {
+          exitCode: null,
+          signal: null,
+          output: null,
+          helperStep: null,
+          errorCode: errorCode(error),
+          durationMs: Math.round(performance.now() - inspecting),
+        });
+        return "inspection-failed";
       } finally {
         if (kept !== held) await held.file.close();
       }
@@ -285,10 +399,4 @@ export function macInstaller(
       }
     },
   };
-}
-
-/** A system error's code, such as ENOENT, never its message. */
-function errorCode(error: unknown): string {
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? code : "unknown";
 }

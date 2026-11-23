@@ -188,6 +188,19 @@ The first release with secure storage moves each data folder's device key and to
 
 The tests and the unsigned launch check show the release files, the redirect rule and that a newer build opens the same data folder, device key and saved connection. Two consecutive Developer ID beta builds are needed to show that Squirrel.Mac accepts the successor's designated requirement and hands the app over, and that the person's pairing and tasks are there after the real restart. That is the owner's trial.
 
+### Check that the previous release updates in place
+
+The `real-update` job in [ci.yml](../../.github/workflows/ci.yml) runs a real signed release through a whole update on GitHub-hosted Macs that are discarded afterwards: macOS 15, the newest generally available image and the newest preview image. It installs a published release into `/Applications` as `install.sh` does, opens it through Launch Services with its own data folder, and drives Settings → Updates over the Chrome DevTools protocol ([check.ts](../../e2e-packaged/real-update/check.ts)): check, download, inspection, Restart to Update. It passes only when the system updater replaces the bundle with the offered version and that copy's signature is valid. Never run `check.ts` on a person's Mac: the app writes to the login keychain and replaces itself.
+
+```sh
+gh workflow run ci.yml --ref main -f real_update=true \
+  -f real_update_previous=<the release before> -f real_update_expect=<the release just published>
+```
+
+What it proves: that the previous Developer ID release, as the update helper's parent, accepts the offered build and that Squirrel.Mac installs it, on each image. Each image's artifact holds `result.json` (every snapshot, and why an inspection failed), the running app's signature as the helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), the unified log and any crash report.
+
+What it can't: the app reads only the update source compiled into it, over HTTPS checked against the roots bundled with it, so a released build can be offered only what the live Beta feed offers. The check therefore runs right after `--publish`, not before it. A failure there means the release must not stay on the feed: withdraw it (above). A preview image is not the newest macOS a person may run, and a hosted Mac is not a person's: if the check passes and a person's Mac still fails, Settings → Updates shows why the inspection failed, and "Copy details" gives the record to put in the issue.
+
 ### The owner's signed trial
 
 **Mac, Apple silicon and Intel.** On each architecture use two consecutive Developer ID-signed, notarized builds and their exact ZIPs on an isolated feed. Inspect the designated requirement and full version in each signed bundle. Test both allowed track transitions. Try an unsigned or ad hoc app, another signer, an unsafe or different archive, another architecture, another product and an older or unrelated same-identity release. Observe ShipIt state during Check, Download and an ordinary quit before Restart. None should stage an update. After confirmed Restart, record loopback requests, ATS and proxy behavior, listener closure, OS security-service traffic and the order of staging. Exercise quit during stage, helper error and retry, canceled authorization and supported writable and protected installation locations. Complete a restart and check data preservation. Independently compare intended and installed bundle identities. Confirm that Clawtrate reports only the version it actually reads after relaunch.
