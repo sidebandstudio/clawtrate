@@ -10,6 +10,7 @@ import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { deferred, until } from "../../../packages/core/test/fake-gateway.ts";
+import { provedWhile } from "../src/setup/controller.ts";
 import {
   localConnectFor,
   provedRouteFor,
@@ -226,6 +227,31 @@ describe("local connect's connector", () => {
       expect(routes(url, ".openclaw"), url).toBeNull();
   });
 
+  it("proves a setup socket last for its attempt alone: a Back during the proof sends nothing", async () => {
+    let attempt = 1;
+    let asked = 0;
+    const prove = provedWhile(
+      () => attempt === 1,
+      async () => {
+        asked += 1;
+        // Back, while the proof runs: the attempt is no longer the current one when it passes.
+        attempt += 1;
+        return true;
+      },
+    );
+    expect(await prove(new AbortController().signal)).toBe(false);
+    expect(asked).toBe(1);
+    // An attempt that is over isn't proved at all.
+    expect(await prove(new AbortController().signal)).toBe(false);
+    expect(asked).toBe(1);
+    attempt = 1;
+    const fine = provedWhile(
+      () => attempt === 1,
+      async () => true,
+    );
+    expect(await fine(new AbortController().signal)).toBe(true);
+  });
+
   it("takes its home rule from mustSandbox", () => {
     const where = { home: "/nowhere", helper: null, platform: "darwin" as const };
     const none = () => false;
@@ -307,7 +333,12 @@ it("the check finds the builder however a host takes it", () => {
 });
 
 it("no shipped host turns local connect on", () => {
-  const shipped = ["apps/desktop/src", "packages/core/src", "packages/ui/src"].flatMap((dir) =>
+  const shipped = [
+    "apps/desktop/src",
+    "apps/mobile/src",
+    "packages/core/src",
+    "packages/ui/src",
+  ].flatMap((dir) =>
     (readdirSync(join(ROOT, dir), { recursive: true }) as string[])
       .filter((path) => /\.tsx?$/.test(path) && !path.split(sep).includes("node_modules"))
       .map((path) => join(ROOT, dir, path)),

@@ -227,15 +227,16 @@ static int loopback(const struct in_sockinfo *ini, int local) {
 
 /**
  * A process's descriptors, possibly none; NULL only when it is gone or can't
- * be read, with errno set. libproc answers 0 bytes both for a failure, which
- * sets errno, and for a process with no descriptors, which leaves it alone:
- * errno is cleared first so a stale one is never taken for a failure.
+ * be read, with errno set. The size query always answers with room to spare
+ * (the kernel adds slack to its count), so 0 there is a failure. The fill
+ * answers 0 bytes both for a failure, which sets errno, and for a process with
+ * no descriptors, which leaves it alone: errno is cleared before it, so a
+ * stale one is never taken for a failure.
  */
 static struct proc_fdinfo *descriptors(pid_t pid, int *count) {
     *count = 0;
-    errno = 0;
     int size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
-    if (size < 0 || (size == 0 && errno != 0)) return NULL;
+    if (size <= 0) return NULL;
     size += 32 * (int)sizeof(struct proc_fdinfo);
     struct proc_fdinfo *fds = malloc((size_t)size);
     if (!fds) return NULL;

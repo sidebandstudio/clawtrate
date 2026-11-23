@@ -89,6 +89,17 @@ export function pairConfirmation(
   };
 }
 
+/**
+ * The connector's last proof of a socket, for an attempt that is still the current one after
+ * the proof as well as before it: a Back while it ran (up to the proof's 2 s) sends nothing.
+ */
+export function provedWhile(
+  current: () => boolean,
+  verify: (signal: AbortSignal) => Promise<boolean>,
+): (signal: AbortSignal) => Promise<boolean> {
+  return async (signal) => current() && (await verify(signal)) && !signal.aborted && current();
+}
+
 export class SetupController implements SetupHost {
   private readonly options: SetupControllerOptions;
   private state: SetupState = initialSetupState;
@@ -451,8 +462,7 @@ export class SetupController implements SetupHost {
     const proved = local
       ? {
           createSocket: local.sockets.createWebSocket,
-          prove: async (signal: AbortSignal) =>
-            attempt === this.attempt && (await local.sockets.verify(signal)),
+          prove: provedWhile(() => attempt === this.attempt, local.sockets.verify),
           route: local.folder,
         }
       : {};

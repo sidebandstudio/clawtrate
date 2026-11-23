@@ -632,6 +632,11 @@ type Plan = GatewayBrowserDeviceAuthPlan;
  */
 type StoredDeviceToken = {
   token: string;
+  /**
+   * The proved route (`ConnectionSettings.route`) this token was saved over: it goes only on a
+   * socket of that route, proved again last, never on a typed address's.
+   */
+  route?: string;
   grantedScopes: string[];
   heldScopes: string[];
   /** This client asked for admin itself and the gateway granted it: connect asks for it again. */
@@ -6124,7 +6129,7 @@ export class ClawtrateClient {
     // A gateway set up through local connect: every socket of this connection is the host's
     // proved one, once setup's own sockets end; false when the host can't prove it.
     const route =
-      settings.route === undefined
+      typeof settings.route !== "string"
         ? null
         : (this.options.localConnect?.(settings.url, settings.route) ?? false);
     const endReads = (reads: SocketReads | null) => {
@@ -6264,6 +6269,23 @@ export class ClawtrateClient {
         rotationsAtPlan = this.writes.rotations.get(key) ?? 0;
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         stillCurrent();
+        // A token saved over a proved route goes only on a socket of that route, proved again
+        // last (local connect): never on a typed address's, or once the settings lost the route.
+        const offRoute = (held: StoredDeviceToken | null) =>
+          held?.route !== undefined && (settings.route !== held.route || !mine?.prove);
+        if (offRoute(token)) {
+          this.close();
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            error: {
+              code: "LOCAL_UNVERIFIED",
+              message: `Clawtrate couldn't verify what is listening at ${hostOf(settings.url)}.`,
+              hint: null,
+            },
+          });
+          throw new Error("this device's token goes only through the route it was saved over");
+        }
         if (token && !this.writes.grants.has(key)) this.writes.grants.set(key, grantBits(token));
         // A saved token this attempt used is gone: lost, so no full pairing replaces it by itself.
         if (token) this.planHadToken = true;
@@ -6375,7 +6397,7 @@ export class ClawtrateClient {
           }
           if (
             plan.selectedAuth.usingStoredDeviceToken &&
-            saved?.token.trim() !== plan.selectedAuth.storedToken
+            (saved?.token.trim() !== plan.selectedAuth.storedToken || offRoute(saved))
           )
             throw new Error("the saved device token changed");
           // The signed scopes against what the saved record holds now: a grant narrowed or a
@@ -8592,6 +8614,7 @@ export class ClawtrateClient {
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
     if (typeof parsed.token !== "string") return null;
     if (!includeRejected && this.writes.rejected.get(key)?.has(parsed.token.trim())) return null;
+    const route = typeof parsed.route === "string" ? { route: parsed.route } : {};
     if (parsed.fullGrant === true) {
       const held = Array.isArray(parsed.heldScopes)
         ? FULL_SCOPES.filter((scope) => parsed.heldScopes!.includes(scope))
@@ -8601,9 +8624,11 @@ export class ClawtrateClient {
         grantedScopes: Array.isArray(parsed.grantedScopes) ? [...parsed.grantedScopes] : held,
         heldScopes: held,
         fullGrant: true,
+        ...route,
       };
     }
     return {
+      ...route,
       token: parsed.token,
       // Earlier builds stored the grant as `scopes`.
       grantedScopes: parsed.grantedScopes ?? parsed.scopes ?? [],
@@ -8626,7 +8651,12 @@ export class ClawtrateClient {
     record: StoredDeviceToken,
   ): Promise<void> {
     const key = this.tokenKey(url, deviceId, role);
-    await this.host.storage.set(key, JSON.stringify(record));
+    // Saved over a proved route, a token keeps that route, and goes on no other socket.
+    const route = record.route ?? (this.settings?.url === url ? this.settings.route : undefined);
+    await this.host.storage.set(
+      key,
+      JSON.stringify(route === undefined ? record : { ...record, route }),
+    );
     this.writes.grants.set(key, grantBits(record));
   }
 

@@ -688,6 +688,43 @@ async function refusedThrough(gateway: DevGateway, port: number, token: string) 
   return refused;
 }
 
+/**
+ * A client after a restart, its gateway saved as local connect saves it: with its route and the
+ * settings file's token. Its every socket comes from that route, proved when dialled and again
+ * before its token; `counts` says how many of each.
+ */
+async function routedClient(gateway: DevGateway, token: string) {
+  const routes = provedRouteFor({ home: gateway.home, helper, platform, sandboxed: true });
+  const counts = { dials: 0, proofs: 0 };
+  const host = createNodeHost({
+    dataDir: mkdtempSync(join(scratch, "app-")),
+    client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
+  });
+  const url = `ws://127.0.0.1:${gateway.port}`;
+  await host.storage.set("connection", JSON.stringify({ url, token, route: FOLDER }));
+  const client = new ClawtrateClient(
+    {
+      ...host,
+      createWebSocket: () => {
+        throw new Error("a socket that isn't proved");
+      },
+      secureCredentials: async () => true,
+    },
+    {
+      reconnect: { initialMs: 50, maxMs: 200 },
+      fullAccess: true,
+      localConnect: (at, route) => {
+        const sockets = routes(at, route)!;
+        return {
+          createSocket: (to) => (counts.dials++, sockets.createSocket(to)),
+          verify: async (signal) => (counts.proofs++, sockets.verify(signal)),
+        };
+      },
+    },
+  );
+  return { client, counts };
+}
+
 describe.skipIf(!BIN || !mac)(
   "F-492 on a development gateway: local connect's send gate",
   { timeout: 300_000 },
@@ -823,42 +860,11 @@ describe.skipIf(!BIN || !mac)(
     });
 
     it("after a restart, connects a gateway saved with its route on a socket proved when dialled and again before its token", async () => {
-      const local: LocalConnect = { home: gateway.home, helper, platform, sandboxed: true };
-      const routes = provedRouteFor(local);
-      let dials = 0;
-      let proofs = 0;
-      const host = createNodeHost({
-        dataDir: mkdtempSync(join(scratch, "app-")),
-        client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
-      });
-      const url = `ws://127.0.0.1:${gateway.port}`;
-      // As a gateway set up through local connect is saved, with the settings file's token.
-      await host.storage.set("connection", JSON.stringify({ url, token, route: FOLDER }));
-      const client = new ClawtrateClient(
-        {
-          ...host,
-          createWebSocket: () => {
-            throw new Error("a socket that isn't proved");
-          },
-          secureCredentials: async () => true,
-        },
-        {
-          reconnect: { initialMs: 50, maxMs: 200 },
-          fullAccess: true,
-          localConnect: (at, route) => {
-            const sockets = routes(at, route)!;
-            return {
-              createSocket: (to) => (dials++, sockets.createSocket(to)),
-              verify: async (signal) => (proofs++, sockets.verify(signal)),
-            };
-          },
-        },
-      );
+      const { client, counts } = await routedClient(gateway, token);
       try {
         await client.start();
         await until(() => client.state.connection.status === "connected", 60_000);
-        expect(dials).toBe(1);
-        expect(proofs).toBe(1);
+        expect(counts).toEqual({ dials: 1, proofs: 1 });
       } finally {
         client.stop();
       }

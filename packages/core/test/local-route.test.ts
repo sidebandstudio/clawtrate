@@ -159,6 +159,8 @@ describe("a gateway set up through local connect", () => {
     await until(
       () => JSON.parse((storage.data.get("connection") ?? "{}") as string).route === ROUTE,
     );
+    // Its device token is saved with the route too, and goes on no other socket.
+    expect(JSON.parse(storage.data.get(tokenKey(URL))!).route).toBe(ROUTE);
     // Setup is over: a reconnect goes through the route, proved again before its frame.
     events.length = 0;
     gateway.dropAll();
@@ -206,6 +208,72 @@ describe("a gateway set up through local connect", () => {
       expect(quiet.sockets).toHaveLength(0);
       stopped.stop();
     }
+  });
+
+  for (const how of [
+    "a typed connect",
+    "Disconnect, then a typed connect",
+    "a record that lost its route",
+    "a setup on the route's sockets with no last proof",
+  ] as const)
+    it(`F-492: never sends a token saved over the route after ${how}`, async () => {
+      const gateway = readGateway();
+      const storage = memoryStorage({
+        connection: JSON.stringify({
+          url: URL,
+          token: null,
+          ...(how === "a record that lost its route" ? {} : { route: ROUTE }),
+        }),
+        [tokenKey(URL)]: JSON.stringify({ ...JSON.parse(SAVED), route: ROUTE }),
+      });
+      const { host: app, plain } = host(gateway, storage);
+      const later = route(gateway, () => true);
+      const client = new ClawtrateClient(app, { ...FAST, localConnect: () => later.sockets });
+      if (how === "a record that lost its route") await client.start();
+      else if (how === "a setup on the route's sockets with no last proof") {
+        await client.start({ resume: false });
+        await client.connectForSetup(URL, {
+          createSocket: later.sockets.createSocket,
+          route: ROUTE,
+        });
+      } else {
+        await client.start({ resume: how === "a typed connect" ? false : true });
+        if (how !== "a typed connect") {
+          await until(() => client.state.connection.status === "connected");
+          await client.disconnect();
+        }
+        await client.connect({ url: URL, token: "typed" });
+      }
+      await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED");
+      await sleep(100);
+      // The route's own connection, before Disconnect, is the only frame there is.
+      expect(gateway.connects).toHaveLength(how === "Disconnect, then a typed connect" ? 1 : 0);
+      expect(later.made.length + plain.length).toBeGreaterThan(0);
+      client.stop();
+    });
+
+  it("F-492: never sends a token that gained a route before the plan's last read", async () => {
+    const gateway = readGateway();
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: SAVED,
+    });
+    let reads = 0;
+    const get = storage.get;
+    // The plan reads the token, the lifecycle reads it, then the plan reads it once more last:
+    // by then another connection on this store saved it over the route.
+    storage.get = async (key) => {
+      if (key === tokenKey(URL) && gateway.sockets.length > 0 && ++reads >= 3)
+        return JSON.stringify({ ...JSON.parse(SAVED), route: ROUTE });
+      return get(key);
+    };
+    const { host: app } = host(gateway, storage);
+    const client = new ClawtrateClient(app, FAST);
+    await client.start();
+    await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED");
+    await sleep(100);
+    expect(gateway.connects).toHaveLength(0);
+    client.stop();
   });
 
   it("is an ordinary gateway again once the person connects to it by its address", async () => {
