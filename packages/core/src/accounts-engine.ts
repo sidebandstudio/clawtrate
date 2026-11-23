@@ -110,7 +110,7 @@ class WriteRetired extends Error {
 }
 
 /** A creation's steps after the bot is made, in the order they are written: one string, not a collection kept. */
-const STEP_ORDER = "preference fallbacks listed task";
+const STEP_ORDER = "identity preference fallbacks listed task";
 
 /** A write needs admin; the access bar asks for it (bots.md section 2). */
 export class AdminNeededError extends Error {
@@ -158,6 +158,8 @@ export class AccountsEngine {
     ref: ModelRef;
     effort: string | null;
     intent: BindingIntent;
+    /** A picture was chosen in New bot, and the gateway keeps it with the bot. */
+    picture: boolean;
   } | null = null;
   private readonly ctx: AccountsContext;
   /**
@@ -1299,6 +1301,7 @@ export class AccountsEngine {
       ref,
       effort: input.effort,
       intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
+      picture: avatar !== null,
     };
     this.creating = mark;
     this.creationGateway = mark.gatewayId;
@@ -1353,7 +1356,13 @@ export class AccountsEngine {
     if (!botId) return failed(new Error("The gateway did not say which bot it made."), true);
     assertCreating();
     this.planned = { ...this.planned, botId };
-    return this.complete(ctx, name, botId, ["preference", "fallbacks", "listed", "task"], mark);
+    return this.complete(
+      ctx,
+      name,
+      botId,
+      ["identity", "preference", "fallbacks", "listed", "task"],
+      mark,
+    );
   }
 
   /**
@@ -1387,10 +1396,11 @@ export class AccountsEngine {
   }
 
   /**
-   * Write what the plan of a Create still lacks for `botId`, in order: the
-   * record of what Clawtrate set, the model with its empty fallback list and
-   * effort, the bot list read back showing it, the first task. What does not
-   * land is reported, and finished by the bot's id.
+   * Write what the plan of a Create still lacks for `botId`, in order: its name
+   * in its identity file, ending OpenClaw's first-run questions, the record of
+   * what Clawtrate set, the model with its empty fallback list and effort, the
+   * bot list read back showing it, the first task. What does not land is
+   * reported, and finished by the bot's id.
    */
   private async complete(
     ctx: AccountsContext,
@@ -1425,6 +1435,14 @@ export class AccountsEngine {
         };
       return error;
     };
+    if (steps.includes("identity")) {
+      try {
+        await this.endFirstRun(ctx, botId, name, plan?.picture ?? false);
+      } catch (error) {
+        if (error instanceof WriteRetired) throw cut(error, "identity");
+        failed("identity", "OpenClaw's first-run questions were not turned off", error);
+      }
+    }
     if (steps.includes("preference") && plan) {
       const error = await this.recordIntent(botId, plan.intent, ctx);
       if (error instanceof WriteRetired) throw cut(error, "preference");
@@ -1486,6 +1504,53 @@ export class AccountsEngine {
       }
     }
     return this.settleCreation(ctx, name, botId, missing, errors, mark);
+  }
+
+  /**
+   * End OpenClaw's first run for a bot Clawtrate named. A new workspace gets `BOOTSTRAP.md`, which
+   * has the bot ask what to call it, make itself a picture and save both over what was chosen
+   * here. The gateway has no method that removes it, and none that creates a bot without it and
+   * still seeds `AGENTS.md` and the other starting files. It ends it itself once `IDENTITY.md`
+   * differs from its template: before the next turn is put together, it records the first run
+   * as done and removes `BOOTSTRAP.md` (`docs/research/bot-self-management.md`, R35 to R37). So
+   * Clawtrate writes the name there, with `agents.files.set` held to the file it read. With no
+   * `BOOTSTRAP.md` there is no first run to end, and nothing is written.
+   *
+   * The picture stays in the bot's settings, where the gateway keeps it and where it takes
+   * precedence over the file; the file says it was chosen and is not a copy of it, which would
+   * be up to 32 KB in every turn.
+   */
+  private async endFirstRun(
+    ctx: AccountsContext,
+    botId: string,
+    name: string,
+    picture: boolean,
+  ): Promise<void> {
+    const read = async (file: string) => {
+      const answer = asRecord(
+        asRecord(await ctx.request("agents.files.get", { agentId: botId, name: file }))?.file,
+      );
+      if (!answer) throw new Error(`The gateway did not return ${file}.`);
+      return answer;
+    };
+    if ((await read("BOOTSTRAP.md")).missing === true) return;
+    const identity = await read("IDENTITY.md");
+    const held =
+      identity.missing === true
+        ? { expectedMissing: true }
+        : typeof identity.hash === "string" && /^[a-f0-9]{64}$/i.test(identity.hash)
+          ? { expectedHash: identity.hash }
+          : null;
+    if (!held) throw new Error("The gateway did not return IDENTITY.md's revision.");
+    const result = asRecord(
+      await ctx.request("agents.files.set", {
+        agentId: botId,
+        name: "IDENTITY.md",
+        content: identityFile(name, picture),
+        ...held,
+      }),
+    );
+    if (result?.ok !== true) throw new Error("The gateway did not confirm IDENTITY.md was saved.");
   }
 
   /** The creation's end: created, or partial with what it lacks. */
@@ -1881,3 +1946,29 @@ export function isCertainRefusal(error: unknown): boolean {
 
 /** A bot the gateway made, and what of its creation did not land. */
 export type CreatedBot = { botId: string; missing: MissingStep[] };
+
+/**
+ * The `IDENTITY.md` of a bot Clawtrate named: its name as a `- Name:` line, which the gateway
+ * reads, and words for the bot. A picture is named, never copied, in a line the gateway doesn't
+ * read as one.
+ */
+export function identityFile(name: string, picture: boolean): string {
+  const line = name.replace(/\s+/g, " ").trim();
+  return [
+    "# IDENTITY.md - Who Am I?",
+    "",
+    `- **Name:** ${line}`,
+    ...(picture
+      ? [
+          "- **Picture:** chosen in Clawtrate when you were made; the gateway keeps it with your settings.",
+        ]
+      : []),
+    "",
+    // No name here: the gateway's identity writers replace only the `- Name:` line, so a name
+    // repeated in prose would contradict a rename in every turn.
+    picture
+      ? "Your name and picture were chosen in Clawtrate when you were made. Keep both. Don't make or save another picture unless the person asks for one."
+      : "Your name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.",
+    "",
+  ].join("\n");
+}

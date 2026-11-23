@@ -157,11 +157,14 @@ If a picture the person chose can't be drawn when Create is pressed, nothing is 
 | Failed                    | A `--danger-soft` note above the button: "**Could not create the bot.** Please try again." The button is "Create" again; every choice is kept.                                          | (F-052)                                         |
 | Created                   | The dialog closes. The bot is added to the rail in the gateway's order and selected, with one empty task, "Main"; the conversation shows "Nothing here yet" and the composer has focus. |                                                 |
 
-**What Create writes.** One action from the person's point of view, two writes on the gateway, and a read-back (section 20, rows 2 and 3):
+**What Create writes.** One action from the person's point of view, three writes on the gateway, and a read-back (section 20, rows 2 and 3):
 
 1. `agents.create` with the bot's name, picture and model: `<provider>/<model>@<account id>` for a chosen account, or `<provider>/<model>` with no account for "Let the gateway choose" (section 4).
-2. The bot's model object with `fallbacks: []`, through `config.patch`. A bot with a model of its own and no fallbacks is already strict; the empty list makes it explicit.
-3. `agents.list`, to read the bot back.
+2. Its name in `IDENTITY.md`, through `agents.files.set` held to the file just read, when the new workspace has OpenClaw's first-run `BOOTSTRAP.md`. That file would have the bot ask what to call it, make itself a picture and save both over the ones chosen here. OpenClaw ends its first run itself once `IDENTITY.md` is no longer its template: before the bot's next turn it removes `BOOTSTRAP.md`, and `AGENTS.md` and the other starting files stay (`docs/research/bot-self-management.md`, R35 to R38). The picture stays in the bot's settings, where `agents.create` put it; the file names it and doesn't copy it. The Main Bot isn't made here, and its first run is unchanged (`main-bot-onboarding.md` section 3).
+3. The bot's model object with `fallbacks: []`, through `config.patch`. A bot with a model of its own and no fallbacks is already strict; the empty list makes it explicit.
+4. `agents.list`, to read the bot back.
+
+A step after `agents.create` that does not land leaves the bot "not finished", with what it lacks; Finish writes those steps for that bot's id, on the gateway it was made on, never on another.
 
 | What happened                                                  | The foot                                                                                                                                                                                                                                                                                                                                                                                                  | Then                                                                                             |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
