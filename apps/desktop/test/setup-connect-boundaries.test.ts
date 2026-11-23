@@ -24,7 +24,7 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ClawtrateClient, FULL_SCOPES, type ClawtrateHost } from "@clawtrate/core";
+import { ClawtrateClient, type ClawtrateHost } from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -844,14 +844,16 @@ describe.skipIf(!BIN || !mac)(
       },
     );
 
-    it("pairs through proved sockets with all six scopes and no approval, at OpenClaw's default", async () => {
+    it("pairs through proved sockets with no approval, at OpenClaw's default, asking a plain connection's read", async () => {
       const refused: string[] = [];
       const client = provedClient(gateway, gateway.port, refused);
       try {
         await client.start({ resume: false });
         await client.connect({ url: `ws://127.0.0.1:${gateway.port}`, token });
         await until(() => client.state.connection.status === "connected", 60_000);
-        expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
+        // A plain connect to loopback asks for read (docs/decisions.md, full control): the client
+        // can't know a host's own sockets are proved. #417 gives it the proved route, and the six.
+        expect(client.state.connection.scopes).toEqual(SCOPES);
         expect(client.state.connection.pairing).toBe(null);
         expect(refused).toEqual([]);
       } finally {
@@ -994,7 +996,7 @@ describe.skipIf(!BIN || !mac)(
       await gateway?.remove();
     });
 
-    it("pairs with all six after one approval by the gateway's owner", async () => {
+    it("pairs after one approval by the gateway's owner, asking a plain connection's read", async () => {
       const refused: string[] = [];
       const client = provedClient(gateway, gateway.port, refused);
       try {
@@ -1002,10 +1004,12 @@ describe.skipIf(!BIN || !mac)(
         await client.connect({ url: `ws://127.0.0.1:${gateway.port}`, token: gateway.token });
         await until(() => client.state.connection.pairing !== null, 60_000);
         const { requestId, requestedScopes } = client.state.connection.pairing!;
-        expect([...requestedScopes].sort()).toEqual([...FULL_SCOPES].sort());
+        // A plain connect to loopback asks for read (docs/decisions.md, full control): the client
+        // can't know a host's own sockets are proved. #417 gives it the proved route, and the six.
+        expect(requestedScopes).toEqual(SCOPES);
         expect(gateway.run(["devices", "approve", requestId]).status).toBe(0);
         await until(() => client.state.connection.status === "connected", 60_000);
-        expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
+        expect(client.state.connection.scopes).toEqual(SCOPES);
         expect(refused).toEqual([]);
       } finally {
         client.stop();
