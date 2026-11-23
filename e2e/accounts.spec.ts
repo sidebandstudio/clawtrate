@@ -422,11 +422,15 @@ test("F-520: a bot made in New bot starts as itself: no first-run sequence, its 
   await admin.request("agents.delete", { agentId: made.agentId, deleteFiles: true });
 });
 
-test("F-552: a bot made in New bot with no name takes one in the chat, and is renamed once the person confirms it", async () => {
+test("F-552: a bot made in New bot with no name takes one in the chat, and is renamed once the person confirms it, its picture kept out of its file", async () => {
   test.setTimeout(240_000);
   await page.keyboard.press("ControlOrMeta+n");
   const create = dialog("New bot");
   await expect(create.getByRole("textbox", { name: "Name" })).toBeFocused();
+  // A picture, as most bots made in New bot have: the gateway would copy it into the file.
+  await create.getByRole("radio", { name: "Shellfolk" }).click();
+  await create.getByRole("radio", { name: "Turret" }).click();
+  await create.getByRole("radio", { name: "Sky" }).click();
   await create.getByRole("button", { name: "Next" }).click();
   const account = dialog("Account");
   await account.getByRole("radio", { name: /^Let the gateway choose/ }).click();
@@ -434,6 +438,12 @@ test("F-552: a bot made in New bot with no name takes one in the chat, and is re
   await expect(account).toHaveCount(0, { timeout: 30_000 });
   const identity = async () =>
     ((entry(await config(), "new-bot")!.identity ?? {}) as Json).name as string | undefined;
+  const picture = async () =>
+    choiceFromPicture(
+      String(((entry(await config(), "new-bot")!.identity ?? {}) as Json).avatar ?? ""),
+    );
+  const chosen = { family: "shellfolk", shell: "turret", color: "sky" };
+  expect(await picture()).toEqual(chosen);
   expect(await identity()).toBe("New bot");
   await expect(botRow("New bot")).toHaveAttribute("aria-current", "true", { timeout: 20_000 });
 
@@ -462,11 +472,18 @@ test("F-552: a bot made in New bot with no name takes one in the chat, and is re
   await expect(card).toHaveCount(0, { timeout: 30_000 });
   expect(await identity()).toBe("Johnny");
   const file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
+  expect(file.match(/^- \*{0,2}Name:/gm)).toEqual(["- Name:"]);
   expect(file).toMatch(/^- Name: Johnny$/m);
   expect(file).not.toMatch(/New bot/);
+  // The gateway wrote the picture into the file with the name; Clawtrate took it out again, and
+  // the picture is still the one chosen, in the bot's settings.
+  expect(file).not.toMatch(/^- Avatar:/m);
+  expect(file.length).toBeLessThan(1_000);
+  expect(await picture()).toEqual(chosen);
   await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
   await expect(botRow("Johnny")).toBeVisible();
   await shots("bot-name-renamed");
+  await admin.request("agents.delete", { agentId: "new-bot", deleteFiles: true });
 });
 
 /** Open Settings on Accounts, and the connect component. */
