@@ -1218,11 +1218,19 @@ div.status-line:hover {
   transition: opacity var(--dur-quick) linear;
 }
 
-.msg-unit:hover > .msg-actions,
+/* data-hover: a mouse, or a pen above the screen, is over the message (Messages.tsx). */
+.msg-unit[data-hover] > .msg-actions,
 .msg-actions:focus-within,
 .msg-actions[data-open="true"] {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* A finger held on a message opens its actions, not a text selection or the system's callout. */
+.msg-unit[data-touching] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .msg-actions .icon-button {
