@@ -5,10 +5,16 @@
 // Every send to an archived task is refused with a message and no reason of its own. The refused
 // message fails with the reason and keeps its words; nothing is sent again into whatever the key
 // holds now, unless the person sends it again to the task once it is live again.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
-import { TaskArchivedError, TaskDeletedError, TaskResetError } from "../src/client.ts";
+import {
+  REMOVAL_HOLD_MS,
+  TaskArchivedError,
+  TaskDeletedError,
+  TaskResetError,
+} from "../src/client.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
+import { READ_SCOPES } from "../src/scopes.ts";
 import {
   TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
@@ -981,14 +987,18 @@ describe('"Start a new task with this message" (F-278, F-277)', () => {
 
 describe("a task archived or deleted elsewhere while a message waits in its queue (F-277, F-278)", () => {
   it.each([
-    ["archived", { session: { archived: true } }, TASK_ARCHIVED_ELSEWHERE],
-    ["deleted", { reason: "delete" }, TASK_DELETED_ELSEWHERE],
+    [
+      "archived",
+      { session: { archived: true } },
+      { sessionId: "s-1", archived: true },
+      TASK_ARCHIVED_ELSEWHERE,
+    ],
+    // OpenClaw 2026.10.6's delete names only the key; the gateway then has no row for it.
+    ["deleted", { reason: "delete" }, null, TASK_DELETED_ELSEWHERE],
   ] as const)(
     "%s elsewhere, its event first: the message stays with its words and files, refused as such, and can start a new task",
-    async (_, event, error) => {
-      const { client, gateway, transcript, sends } = await shown({
-        session: { sessionId: "s-1" },
-      });
+    async (_, event, row, error) => {
+      const { client, gateway, transcript, sends } = await shown({ session: row });
       gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
       await until(() => transcript().runs.some((run) => run.state === "running"));
       const id = client.sendMessage(KEY, "Then send me a summary.", {
@@ -1319,7 +1329,7 @@ describe("news of the task reaches the steer check before anything uses it (F-27
     client.stop();
   });
 
-  it("an event of another run while the read is out, with no run read before it: the read can't confirm the run it shows, and the message waits behind it", async () => {
+  it("an event of another run while the read is out, with no run read before it: the read can't confirm the run it shows; one more read, with nothing heard, confirms it", async () => {
     const gateway = grantingGateway();
     gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-1" });
     const { client, transcript } = await openTask({ gateway });
@@ -1332,7 +1342,7 @@ describe("news of the task reaches the steer check before anything uses it (F-27
       return { messages: [], hasMore: false, sessionId: "s-1", inFlightRun: { runId: "run-a" } };
     };
     const before = gateway.calls("chat.history").length;
-    const id = client.sendMessage(KEY, "Skip the photos folder.", { sessionId: "s-1" });
+    client.sendMessage(KEY, "Skip the photos folder.", { sessionId: "s-1" });
     await until(() => gateway.calls("chat.history").length > before);
     // Another run's delta while the read the steer waits for is out.
     gateway.emit("chat", {
@@ -1343,10 +1353,47 @@ describe("news of the task reaches the steer check before anything uses it (F-27
       message: { role: "assistant", content: [{ type: "text", text: "Starting over." }] },
     });
     await sleep(20);
-    read.resolve();
-    await until(() => transcript().outbox.find((each) => each.id === id)?.status === "queued");
-    await sleep(50);
     expect(gateway.calls("chat.send")).toHaveLength(0);
+    read.resolve();
+    await until(() => gateway.calls("chat.send").length === 1);
+    expect(gateway.calls("chat.history")).toHaveLength(before + 2);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ queueMode: "steer" });
+    client.stop();
+  });
+
+  it("another run's delta during every read: a steer reads twice at most, then waits behind the run as a checked send", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-1" });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("run-a", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    // A companion run streams while each read is out, until it ends.
+    let seq = 0;
+    let streaming = true;
+    gateway.handlers["chat.history"] = async () => {
+      seq += 1;
+      if (streaming) gateway.emit("chat", { runId: "run-b", sessionKey: KEY, seq, state: "delta" });
+      await sleep(10);
+      return {
+        messages: [],
+        hasMore: false,
+        sessionId: "s-1",
+        ...(streaming ? { inFlightRun: { runId: "run-a" } } : {}),
+      };
+    };
+    const before = gateway.calls("chat.history").length;
+    const id = client.sendMessage(KEY, "Skip the photos folder.", { sessionId: "s-1" });
+    await until(() => transcript().outbox.find((each) => each.id === id)?.status === "queued");
+    // Time for several more reads, were any asked for.
+    await sleep(800);
+    expect(gateway.calls("chat.history").length - before).toBe(2);
+    expect(gateway.calls("chat.send")).toHaveLength(0);
+    // It goes once the runs end, naming its session.
+    streaming = false;
+    gateway.emit("chat", { runId: "run-b", sessionKey: KEY, seq: 99, state: "final" });
+    gateway.emit("agent", agentEvent("run-a", 2, "lifecycle", { phase: "end" }));
+    await until(() => gateway.calls("chat.send").length === 1);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ sessionId: "s-1" });
     client.stop();
   });
 
@@ -1599,6 +1646,351 @@ describe("Edit on a held message gives back the session it was bound to (F-278)"
     await expect(
       viewer.apply({ type: "takeBackMessage", key: KEY, messageId: id }),
     ).resolves.toMatchObject({ text: "Then send me a summary.", sessionId: "s-1" });
+    client.stop();
+  });
+});
+
+/** A delta of `runId` in the task, as OpenClaw 2026.10.6 sends a `chat` delta. */
+const delta = (runId: string, seq: number) => ({ runId, sessionKey: KEY, seq, state: "delta" });
+
+/** The task's row as OpenClaw 2026.10.6 carries it on its events (`buildGatewaySessionSnapshot`). */
+const snapshot = (sessionId: string, active: string[]) => ({
+  session: {
+    key: KEY,
+    sessionId,
+    status: active.length > 0 ? "running" : "done",
+    hasActiveRun: active.length > 0,
+    activeRunIds: active,
+  },
+  sessionId,
+  status: active.length > 0 ? "running" : "done",
+  hasActiveRun: active.length > 0,
+  activeRunIds: active,
+});
+
+describe("one way in: news of the task not known to be harmless counts against a steer (F-278)", () => {
+  /**
+   * Something heard of the task after the read that confirmed `run-a` in `s-1`: the next steer
+   * waits for a fresh read, which answers `then`, and nothing goes before it.
+   */
+  async function waitsForRead(
+    hear: (task: Awaited<ReturnType<typeof steering>>) => unknown,
+    then: Record<string, unknown> = { sessionId: "s-1", inFlightRun: { runId: "run-a" } },
+  ) {
+    const task = await steering({ session: { sessionId: "s-2" } });
+    const release = task.hold(then);
+    await hear(task);
+    await sleep(20);
+    const id = task.client.sendMessage(KEY, "Skip the photos folder.", { sessionId: "s-1" });
+    await sleep(50);
+    expect(task.sends()).toHaveLength(0);
+    release();
+    return { ...task, id };
+  }
+
+  it("a run's own deltas, in the read's session with only its run active, are harmless: the steer goes with no other read", async () => {
+    const { client, gateway, reads, sends } = await steering({ session: { sessionId: "s-1" } });
+    const before = reads();
+    gateway.emit("chat", delta("run-a", 1));
+    gateway.emit("agent", {
+      ...agentEvent("run-a", 2, "assistant", { text: "Looking." }),
+      ...snapshot("s-1", ["run-a"]),
+    });
+    await sleep(20);
+    client.sendMessage(KEY, "Skip the photos folder.", { sessionId: "s-1" });
+    await until(() => sends().length === 1);
+    expect(sends()[0]).toMatchObject({ queueMode: "steer" });
+    expect(reads()).toBe(before);
+    client.stop();
+  });
+
+  it("an event of a type this client does not know, naming the task: the steer waits for a fresh read", async () => {
+    const { client, sends } = await waitsForRead(({ gateway }) =>
+      gateway.emit("session.wobble", { sessionKey: KEY, ts: 2_000 }),
+    );
+    await until(() => sends().length === 1);
+    expect(sends()[0]).toMatchObject({ queueMode: "steer" });
+    client.stop();
+  });
+
+  it("an archive's check reads the session that replaced the task (`sessions.describe`): no steer goes on the read before it, and the message is refused", async () => {
+    const { client, transcript, sends } = await waitsForRead(
+      ({ client }) => client.archiveTask(KEY).catch(() => undefined),
+      { sessionId: "s-2" },
+    );
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
+    expect(sends()).toHaveLength(0);
+    client.stop();
+  });
+
+  it("a steer refused because the task was deleted while the gateway admitted it: the next steer waits for a fresh read", async () => {
+    const task = await steering({ session: null });
+    task.gateway.handlers["chat.send"] = () => {
+      throw new GatewayError(DELETED_WHILE_STARTING);
+    };
+    const release = task.hold({ sessionId: undefined });
+    task.client.sendMessage(KEY, "Skip the photos folder.", { sessionId: "s-1" });
+    await until(() => task.transcript().outbox[0]?.status === "failed");
+    expect(task.sends()).toHaveLength(1);
+    task.client.sendMessage(KEY, "And the music folder.", { sessionId: "s-1" });
+    await sleep(50);
+    expect(task.sends()).toHaveLength(1);
+    release();
+    await until(() => task.transcript().outbox[1]?.status === "failed");
+    expect(task.transcript().outbox[1]?.error).toBe(TASK_DELETED_ELSEWHERE);
+    // Anything after the read goes as a checked send, naming its session.
+    expect(task.sends().slice(1)).toMatchObject([{ sessionId: "s-1", expectedLeafEntryId: null }]);
+    task.client.stop();
+  });
+
+  it("the run's end as a `sessions.changed` row: the read that confirmed it no longer does, and a steer waits", async () => {
+    const { client, sends } = await waitsForRead(
+      ({ gateway }) =>
+        gateway.emit("sessions.changed", {
+          sessionKey: KEY,
+          agentId: "otto",
+          phase: "end",
+          runId: "run-a",
+          ts: 2_000,
+          ...snapshot("s-1", []),
+        }),
+      { sessionId: "s-1" },
+    );
+    await until(() => sends().length === 1);
+    expect(sends()[0]).toMatchObject({ sessionId: "s-1", queueMode: "followup" });
+    client.stop();
+  });
+
+  it.each([
+    [
+      "session.message",
+      {
+        sessionKey: KEY,
+        message: { role: "assistant", content: [{ type: "text", text: "On it." }] },
+        messageSeq: 3,
+        ...snapshot("s-1", ["run-a", "run-b"]),
+      },
+    ],
+    [
+      "sessions.changed",
+      { sessionKey: KEY, reason: "update", ts: 2_000, ...snapshot("s-1", ["run-b"]) },
+    ],
+  ] as const)(
+    "a `%s` naming another set of active runs in the same session: a steer waits for a fresh read",
+    async (event, payload) => {
+      const { client, sends } = await waitsForRead(({ gateway }) => gateway.emit(event, payload));
+      await until(() => sends().length === 1);
+      client.stop();
+    },
+  );
+
+  it("a `session.tool` of the session and run that replaced the task: a steer waits, and is refused", async () => {
+    const { client, transcript, sends } = await waitsForRead(
+      ({ gateway }) =>
+        gateway.emit("session.tool", {
+          ...agentEvent("run-b", 1, "tool", {
+            phase: "start",
+            name: "exec",
+            toolCallId: "call-1",
+            args: { command: "ls" },
+          }),
+          ...snapshot("s-2", ["run-b"]),
+        }),
+      { sessionId: "s-2", inFlightRun: { runId: "run-b" } },
+    );
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
+    expect(sends()).toHaveLength(0);
+    client.stop();
+  });
+
+  it("a run-phase row naming the run's two ids, and an agent event the task list shows: the read is dropped before either is published", async () => {
+    const { client, gateway } = await steering({ session: { sessionId: "s-1" } });
+    const checks = (client as unknown as { steerChecks: Map<string, unknown> }).steerChecks;
+    const published: boolean[] = [];
+    const stop = client.store.subscribe(() => void published.push(checks.has(KEY)));
+    gateway.emit("sessions.changed", {
+      sessionKey: KEY,
+      agentId: "otto",
+      phase: "start",
+      runId: "run-q",
+      clientRunId: "run-a",
+      ts: 2_000,
+      ...snapshot("s-1", ["run-q"]),
+    });
+    await until(() => published.length > 0);
+    expect(published[0]).toBe(false);
+    // Read again, and confirmed; then an approval the run waits on, which the task list shows.
+    await until(() => checks.has(KEY));
+    published.length = 0;
+    gateway.emit(
+      "agent",
+      agentEvent("run-a", 3, "lifecycle", { phase: "waiting-approval", approvalId: "ap-1" }),
+    );
+    await until(() => published.length > 0);
+    expect(published[0]).toBe(false);
+    stop();
+    client.stop();
+  });
+
+  it("a run id past the id bound in JSON characters, though not in code units: nothing keeps it, and it confirms no steer", async () => {
+    const escaped = String.fromCharCode(1).repeat(900);
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({
+      messages: [],
+      hasMore: false,
+      sessionId: "s-1",
+      inFlightRun: { runId: escaped },
+    });
+    const { client, transcript } = await openTask({ gateway });
+    const checks = (client as unknown as { steerChecks: Map<string, unknown> }).steerChecks;
+    expect(checks.get(KEY)).toMatchObject({ sessionId: "s-1", runId: null });
+    expect(JSON.stringify([KEY, checks.get(KEY)]).length).toBeLessThanOrEqual(
+      CLIENT_OWNERS.steerChecks!.each,
+    );
+    // Its deltas while a read is out are not kept either.
+    const read = deferred<void>();
+    gateway.handlers["chat.history"] = async () => {
+      await read.promise;
+      return { messages: [], hasMore: false, sessionId: "s-1" };
+    };
+    gateway.emit("agent", agentEvent(escaped, 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => (client as unknown as { loads: Map<string, unknown> }).loads.has(KEY));
+    gateway.emit("chat", delta(escaped, 1));
+    await sleep(20);
+    const heard = (client as unknown as { steerHeard: Map<string, Set<string>> }).steerHeard;
+    expect([...(heard.get(KEY) ?? [])]).not.toContain(escaped);
+    read.resolve();
+    client.stop();
+  });
+});
+
+describe("a delete that names only the task's key (F-278, F-420)", () => {
+  it("heard after the session that replaced it: what the key holds is read first, and the message queued for that session stays queued, the task listed", async () => {
+    const gateway = grantingGateway();
+    const rows = [{ key: KEY, agentId: "otto", label: "Disk", sessionId: "s-2" }];
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [...rows], hasMore: false },
+    });
+    gateway.handlers["sessions.list"] = () => ({ sessions: [...rows], hasMore: false });
+    gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-2" });
+    gateway.handlers["sessions.describe"] = () => ({ session: { key: KEY, sessionId: "s-2" } });
+    const { client, transcript } = await openTask({ gateway });
+    const listed = () => client.state.tasksByBot.otto?.some((task) => task.key === KEY) === true;
+    await until(listed);
+    gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    const id = client.sendMessage(KEY, "Then send me a summary.", {
+      sessionId: "s-2",
+      mode: "queue",
+      attachments: [FILE],
+    });
+    const describes = gateway.calls("sessions.describe").length;
+    gateway.emit("sessions.changed", { sessionKey: KEY, agentId: "otto", reason: "delete", ts: 2 });
+    await until(() => gateway.calls("sessions.describe").length > describes);
+    await sleep(400);
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "queued", sessionId: "s-2" });
+    expect(listed()).toBe(true);
+    client.stop();
+  });
+});
+
+describe("this client's own archive holds its messages wherever they are sent from (F-420)", () => {
+  /** A task with a run going and a message waiting, archived here with its answer held. */
+  async function archiving(start: (task: Awaited<ReturnType<typeof shown>>) => Promise<string>) {
+    const task = await shown({ session: { sessionId: "s-1" } });
+    task.gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1" },
+    });
+    const id = await start(task);
+    const patched = deferred<unknown>();
+    task.gateway.handlers["sessions.patch"] = () => patched.promise;
+    const archived = task.client.archiveTask(KEY);
+    await until(() => task.gateway.calls("sessions.patch").length === 1);
+    return { ...task, id, patched, archived };
+  }
+
+  it("Send now on the queued message while the archive is out: nothing is sent, and once the archive succeeds it is cancelled", async () => {
+    const { client, transcript, sends, id, patched, archived } = await archiving(
+      async ({ client, gateway, transcript }) => {
+        gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+        await until(() => transcript().runs.some((run) => run.state === "running"));
+        return client.sendMessage(KEY, "Then send me a summary.", {
+          sessionId: "s-1",
+          mode: "queue",
+        });
+      },
+    );
+    client.sendQueuedNow(KEY, id);
+    await sleep(100);
+    expect(sends()).toHaveLength(0);
+    expect(transcript().outbox.find((each) => each.id === id)?.status).toBe("queued");
+    patched.resolve({ ok: true });
+    await archived;
+    expect(transcript().outbox.find((each) => each.id === id)?.status).toBe("cancelled");
+    await sleep(50);
+    expect(sends()).toHaveLength(0);
+    client.stop();
+  });
+
+  it("Send on a message parked Not sent while the archive is out: nothing is sent until it settles, and once it fails the message goes", async () => {
+    const { client, gateway, sends, id, patched, archived } = await archiving(
+      async ({ client, gateway, transcript }) => {
+        gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+        await until(() => transcript().runs.some((run) => run.state === "running"));
+        const queued = client.sendMessage(KEY, "Then send me a summary.", {
+          sessionId: "s-1",
+          mode: "queue",
+        });
+        gateway.emit("chat", { runId: "run-on", sessionKey: KEY, seq: 2, state: "aborted" });
+        await until(() => transcript().outbox[0]?.status === "not-sent");
+        return queued;
+      },
+    );
+    client.retryMessage(KEY, id);
+    await sleep(100);
+    expect(sends()).toHaveLength(0);
+    patched.reject(new GatewayError({ code: "UNAVAILABLE", message: "busy" }));
+    await expect(archived).rejects.toThrow();
+    await until(() => sends().length === 1);
+    expect(sends()[0]).toMatchObject({ message: "Then send me a summary.", sessionId: "s-1" });
+    expect(gateway.calls("sessions.patch")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("an archive still waiting for write access at `REMOVAL_HOLD_MS` gives up: it holds nothing back, and sends nothing once access comes", async () => {
+    const gateway = grantingGateway();
+    const wait = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-9" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+    gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-1" });
+    const { client, transcript } = await openTask({ gateway, held: READ_SCOPES });
+    gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    client.sendMessage(KEY, "Then send me a summary.", { sessionId: "s-1", mode: "queue" });
+    const removals = (client as unknown as { ownRemovals: Map<number, unknown> }).ownRemovals;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const failed = client.archiveTask(KEY).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await until(() => client.state.connection.upgrade.status === "pending");
+      expect(removals.size).toBe(1);
+      await vi.advanceTimersByTimeAsync(REMOVAL_HOLD_MS);
+      expect(String(await failed)).toMatch(/took too long, so nothing was archived or deleted/);
+      expect(removals.size).toBe(0);
+      wait.resolve({ status: "expired", requestId: "up-9" });
+      await sleep(50);
+      expect(gateway.calls("sessions.describe")).toEqual([]);
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
     client.stop();
   });
 });
