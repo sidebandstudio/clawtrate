@@ -21,6 +21,9 @@ export function validateGatewayUrl(raw: string): string {
  * either asks for read access as before. A malformed address is never protected.
  */
 export function protectedGatewayUrl(raw: string): boolean {
+  // Any `#`, an empty fragment included: normalizing can turn `#/` into an empty fragment, and
+  // the form and the client must agree on the address typed and the address saved.
+  if (raw.includes("#")) return false;
   let url: URL;
   try {
     url = new URL(raw.trim());

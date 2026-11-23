@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
 import { ClawtrateClient, setupGrant, type ClientOptions } from "../src/client.ts";
-import { protectedGatewayUrl } from "../src/gateway-url.ts";
+import { protectedGatewayUrl, validateGatewayUrl } from "../src/gateway-url.ts";
 import type { KeyValueStore } from "../src/host.ts";
 import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -268,11 +268,25 @@ describe("full access behind a flag", () => {
       "wss://user:pw@gateway.example.com",
       "wss://user@gateway.example.com",
       "wss://gateway.example#x",
+      "wss://gateway.example#",
+      "wss://gateway.example#/",
       "https://gateway.example",
       "not an address",
       "",
     ])
       expect(protectedGatewayUrl(url), url).toBe(false);
+    // The form reads the address as typed, the client the address saved: they must agree.
+    for (const url of [
+      "wss://gateway.example",
+      " wss://GATEWAY.example. ",
+      "wss://gateway.example/",
+      "wss://gateway.example#",
+      "wss://gateway.example#/",
+      "wss://gateway.example/#/",
+      "wss://[::ffff:127.0.0.1]",
+      "wss://user@gateway.example.com",
+    ])
+      expect(protectedGatewayUrl(validateGatewayUrl(url)), url).toBe(protectedGatewayUrl(url));
   });
 
   it("F-509: a full setup code's first pairing asks for the six, and its token is written with exactly the grant", async () => {
