@@ -265,8 +265,8 @@ describe("full access behind a flag", () => {
       "wss://[::ffff:127.0.0.1]",
       "wss://[0:0:0:0:0:0:0:1]",
       // §4: an address with a user name, password or fragment can't be used.
-      "wss://user:pw@gateway.example",
-      "wss://user@gateway.example",
+      "wss://user:pw@gateway.example.com",
+      "wss://user@gateway.example.com",
       "wss://gateway.example#x",
       "https://gateway.example",
       "not an address",
