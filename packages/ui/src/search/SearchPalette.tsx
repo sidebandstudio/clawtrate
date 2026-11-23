@@ -5,6 +5,7 @@
 
 import {
   MAX_SEARCH_QUERY_CHARS,
+  NOT_OPEN_IN_VIEW,
   type Bot,
   type ClawtrateState,
   type FileSearch,
@@ -597,30 +598,38 @@ export function SearchPalette({
   /**
    * Ask for a task's history; a refusal shows on the result that asked. A retry
    * reads again for whoever holds the task and opens or closes nothing, so it
-   * never takes a hold from the shell, another view or another result.
+   * never takes a hold from the shell, another view or another result. A retry
+   * in a view that holds nothing (another view does) opens the task instead.
    */
   const load = useCallback(
     (open: Opening) => {
-      bridge.send({ type: open.reread ? "reloadSession" : "openSession", key: open.key }).then(
-        () => {
-          if (!open.reread) return;
-          // States and answers come in order, so the next state holds the history asked for now.
-          const stop = bridge.subscribe(() => {
-            stop();
-            setOpening((now) => (now === open ? { ...open, reread: false } : now));
-          });
-        },
-        (error: unknown) =>
-          setOpening((now) =>
-            now === open
-              ? {
-                  ...open,
-                  status: "failed",
-                  line: `Couldn't load this conversation: ${reason(error)}.`,
-                }
-              : now,
-          ),
-      );
+      const read = () => {
+        if (!open.reread) return;
+        // States and answers come in order, so the next state holds the history asked for now.
+        const stop = bridge.subscribe(() => {
+          stop();
+          setOpening((now) => (now === open ? { ...open, reread: false } : now));
+        });
+      };
+      const failed = (error: unknown) =>
+        setOpening((now) =>
+          now === open
+            ? {
+                ...open,
+                status: "failed",
+                line: `Couldn't load this conversation: ${reason(error)}.`,
+              }
+            : now,
+        );
+      bridge
+        .send({ type: open.reread ? "reloadSession" : "openSession", key: open.key })
+        .then(read, (error: unknown) => {
+          if (!open.reread || !reason(error).endsWith(NOT_OPEN_IN_VIEW)) return failed(error);
+          if (opened.current && opened.current !== open.key)
+            void bridge.send({ type: "closeSession", key: opened.current });
+          opened.current = open.key;
+          bridge.send({ type: "openSession", key: open.key }).then(read, failed);
+        });
     },
     [bridge],
   );

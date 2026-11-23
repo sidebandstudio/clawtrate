@@ -1,4 +1,9 @@
-import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
+import {
+  mapSessionRow,
+  NOT_OPEN_IN_VIEW,
+  type ClawtrateState,
+  type HostInfo,
+} from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
@@ -273,15 +278,30 @@ export function Shell({
 
   // Keep exactly the selected task's transcript open on the host. A refused open
   // (every task slot taken, say) leaves this view without the task, and says why.
+  // Only the latest open of a task decides its refusal: a late answer to an earlier
+  // one says nothing about now.
   const taskKey = task?.key ?? null;
-  const [refusedOpen, setRefusedOpen] = useState<{ key: string; error: string } | null>(null);
+  const [refusals, setRefusals] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const opens = useRef({ count: 0, latest: new Map<string, number>() });
   const open = useCallback(
-    (key: string) =>
+    (key: string) => {
+      const asked = (opens.current.count += 1);
+      opens.current.latest.set(key, asked);
+      const settle = (error: string | null) => {
+        if (opens.current.latest.get(key) !== asked) return;
+        setRefusals((now) => {
+          if ((now.get(key) ?? null) === error) return now;
+          const next = new Map(now);
+          if (error === null) next.delete(key);
+          else next.set(key, error);
+          return next;
+        });
+      };
       void send({ type: "openSession", key }).then(
-        () => setRefusedOpen((now) => (now?.key === key ? null : now)),
-        (error: unknown) =>
-          setRefusedOpen({ key, error: error instanceof Error ? error.message : String(error) }),
-      ),
+        () => settle(null),
+        (error: unknown) => settle(error instanceof Error ? error.message : String(error)),
+      );
+    },
     [send],
   );
   useEffect(() => {
@@ -669,13 +689,16 @@ export function Shell({
   const catchingUp =
     phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
   // Reading again keeps every hold: closing and opening would not read while another view holds
-  // the task. A view whose open was refused holds nothing, so it asks to open the task again.
-  const openRefused = refusedOpen !== null && refusedOpen.key === taskKey;
+  // the task. A view the host doesn't count as holding it (its open was refused, or a reopen
+  // after a reconnect was) is told so, and opens the task instead.
   const reload = useCallback(() => {
     if (!taskKey) return;
-    if (openRefused) open(taskKey);
-    else void send({ type: "reloadSession", key: taskKey });
-  }, [taskKey, openRefused, open, send]);
+    const key = taskKey;
+    send({ type: "reloadSession", key }).catch((error: unknown) => {
+      // The desktop's IPC puts its own words before the host's.
+      if (error instanceof Error && error.message.endsWith(NOT_OPEN_IN_VIEW)) open(key);
+    });
+  }, [taskKey, open, send]);
 
   return (
     <div
@@ -739,7 +762,7 @@ export function Shell({
                 taskCount={selection.tasks.length}
                 discovery={state.discovery}
                 transcript={transcript}
-                openError={openRefused ? refusedOpen.error : null}
+                openError={taskKey ? (refusals.get(taskKey) ?? null) : null}
                 panelOpen={panelOpen}
                 onTogglePanel={togglePanel}
                 onOpenPanel={() => setPanel(true)}

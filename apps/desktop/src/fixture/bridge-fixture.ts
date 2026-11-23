@@ -31,6 +31,8 @@ import {
   type RunRawRead,
   type TaskActivity,
   type Transcript,
+  hasUnsettledWork,
+  NOT_OPEN_IN_VIEW,
 } from "@clawtrate/core";
 import {
   CARD_SCENES,
@@ -805,14 +807,16 @@ export function createFixtureBridge(
       case "openSession": {
         // A history the state no longer holds, or that failed since, is read again: loading at
         // once, as the engine shows it, then loaded as a delayed answer a test can hold. As in
-        // the engine, opening a task some view already holds reads nothing.
+        // the engine, a reread needs a hold, and opening a task some view already holds reads
+        // nothing unless its history failed.
         const { key } = command;
         const history = histories[key];
         const current = state.transcripts[key];
         const held = holds.get(key) ?? 0;
+        if (command.type === "reloadSession" && !held) throw new Error(NOT_OPEN_IN_VIEW);
         if (command.type === "openSession") {
           holds.set(key, held + 1);
-          if (held && current) return;
+          if (held && current && current.status !== "error") return;
         }
         if (!history || history === current || (current && current.status !== "error")) return;
         reads.push(key);
@@ -827,9 +831,21 @@ export function createFixtureBridge(
         return;
       }
       case "closeSession": {
-        const held = holds.get(command.key) ?? 0;
-        if (held > 1) holds.set(command.key, held - 1);
-        else holds.delete(command.key);
+        const { key } = command;
+        const held = holds.get(key) ?? 0;
+        if (held > 1) holds.set(key, held - 1);
+        else if (held === 1) {
+          holds.delete(key);
+          // As the engine: the last view to leave releases the task, unless it holds work.
+          const current = state.transcripts[key];
+          if (current && !hasUnsettledWork(current)) {
+            // The gateway keeps what was read; opening the task again reads it back.
+            if (current.status === "ready") histories = { ...histories, [key]: current };
+            const transcripts = { ...state.transcripts };
+            delete transcripts[key];
+            set({ ...state, transcripts });
+          }
+        }
         // Answered as a delayed answer, so a test can hold a close while the page moves on.
         return new Promise<void>((resolve) => deferred(resolve, 0));
       }
