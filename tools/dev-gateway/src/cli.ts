@@ -109,6 +109,7 @@ import {
   type InstancePorts,
 } from "./registry.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { IMAGE_API_KEY, IMAGE_MODEL_REF, IMAGE_PROVIDER_ID } from "./scripted-images.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
 import { accountStoreProblems } from "./account-stores.ts";
 import {
@@ -402,6 +403,11 @@ export type StartOptions = {
    * closed set (`BOT_BROWSER_CHOICES.renewTimeoutMs`); only with a plugin that declares browsers.
    */
   renewTimeoutMs?: number;
+  /**
+   * The gateway's LiteLLM image provider pointed at the scripted model, which answers with one
+   * fixed picture (scripted-images.ts), and `image_generate` offered to every bot.
+   */
+  images?: boolean;
 };
 
 /** The config the development gateway runs with. Written fresh by every start. */
@@ -468,6 +474,16 @@ export function devConfig(
         },
         // The scripted provider accounts' providers, on the same scripted model.
         ...accounts?.providers,
+        // The stand-in image provider, for image_generate only: no chat model is listed for it.
+        ...(options.images
+          ? {
+              [IMAGE_PROVIDER_ID]: {
+                baseUrl: `http://127.0.0.1:${ports.providerPort}/v1`,
+                apiKey: IMAGE_API_KEY,
+                models: [],
+              },
+            }
+          : {}),
       },
     },
     // Each scripted account's label; the credentials are in the account stores.
@@ -479,6 +495,7 @@ export function devConfig(
         thinkingDefault: "low",
         systemAgent: { agentId: "main" },
         heartbeat: { agentId: "main" },
+        ...(options.images ? { mediaModels: { image: { primary: IMAGE_MODEL_REF } } } : {}),
       },
       // The bots are declared here so their tool policy is part of the checked
       // config from the first start. Several bots need explicit ownership.
@@ -510,12 +527,17 @@ export function devConfig(
         ...ALLOWED_TOOLS,
         ...plugins.flatMap((plugin) => plugin.tools),
         ...(browsers ? ["browser"] : []),
+        ...(options.images ? ["image_generate"] : []),
       ],
       // Denied as well, so a change to the allowlist cannot bring them back:
       // tools that reach the network, manage the gateway or its installation,
       // drive a browser or another device, or send through a channel. With
       // bot browsers the browser tool is denied per bot instead (botEntries).
-      deny: DENIED_TOOLS.filter((tool) => !(browsers && tool === "browser")),
+      // With the stand-in image provider, image_generate is offered instead.
+      deny: DENIED_TOOLS.filter(
+        (tool) =>
+          !(browsers && tool === "browser") && !(options.images && tool === "image_generate"),
+      ),
     },
     // The stand-in coding agent: a local command server, no network, run in
     // the instance's own folder.
@@ -759,10 +781,15 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
     typeof recorded !== "object" ||
     Array.isArray(recorded) ||
     Object.keys(recorded).some(
-      (key) => key !== "accounts" && key !== "defaultLocalPairing" && key !== "renewTimeoutMs",
+      (key) =>
+        key !== "accounts" &&
+        key !== "defaultLocalPairing" &&
+        key !== "renewTimeoutMs" &&
+        key !== "images",
     ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing) ||
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).images) ||
     !renewChoice((recorded as StartOptions).renewTimeoutMs)
   ) {
     throw new Error(`${path} is not a record of start options`);
@@ -1055,6 +1082,8 @@ export async function start(
     node?: boolean;
     /** The bot-browser plugin's window (`StartOptions.renewTimeoutMs`). */
     renewTimeoutMs?: number;
+    /** The stand-in image provider (`StartOptions.images`). */
+    images?: boolean;
   } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
@@ -1080,6 +1109,7 @@ export async function start(
     ...(options.accounts ? { accounts: true } : {}),
     ...(options.defaultLocalPairing ? { defaultLocalPairing: true } : {}),
     ...(options.renewTimeoutMs !== undefined ? { renewTimeoutMs: options.renewTimeoutMs } : {}),
+    ...(options.images ? { images: true } : {}),
   };
   // Refused before anything changes: a name that is not this checkout's own
   // plugin, or whose addition breaks the rule for plugins.
@@ -2139,7 +2169,7 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
+  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2157,6 +2187,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "with-node": { type: "boolean", default: false },
       "default-local-pairing": { type: "boolean", default: false },
       "renew-timeout-ms": { type: "string" },
+      "with-images": { type: "boolean", default: false },
       agent: { type: "string" },
       provider: { type: "string" },
     },
@@ -2193,8 +2224,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     process.exitCode = command ? 1 : 0;
     return;
   }
-  if (values["default-local-pairing"] && command !== "start" && command !== "up") {
-    throw new Error(`--default-local-pairing is a start option; ${command} does not take it`);
+  for (const option of ["default-local-pairing", "with-images"] as const) {
+    if (values[option] && command !== "start" && command !== "up") {
+      throw new Error(`--${option} is a start option; ${command} does not take it`);
+    }
   }
   const renew = values["renew-timeout-ms"];
   if (renew !== undefined && command !== "start" && command !== "up") {
@@ -2212,6 +2245,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         accounts: values["with-accounts"],
         defaultLocalPairing: values["default-local-pairing"],
         node: values["with-node"],
+        images: values["with-images"],
         ...(renew !== undefined ? { renewTimeoutMs: Number(renew) } : {}),
       });
     case "stop":

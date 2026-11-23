@@ -434,6 +434,15 @@
   color: var(--danger);
 }
 
+/* Without commands shown (7.11): the run's actions, in plain words, under its line. */
+.run-actions {
+  padding: 0 0 6px;
+}
+
+.run-actions > :first-child {
+  margin-top: 4px;
+}
+
 .run-record {
   display: flex;
   flex-wrap: wrap;

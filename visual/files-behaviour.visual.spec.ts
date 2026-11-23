@@ -596,7 +596,7 @@ test.describe("from a step to its file, and back", () => {
     page,
   }) => {
     await page.setViewportSize({ width: WIDE.width, height: WIDE.height });
-    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await openFixture(page, `${FILES}&files=loaded&commands=show`, "light");
     await openRow(page, "disk-2026-11-16.md");
     await expect(page.locator(".reader-source")).toContainText("Written by Otto");
     await page.locator(".reader-source").getByRole("button", { name: "Show in chat" }).click();
@@ -621,7 +621,7 @@ test.describe("from a step to its file, and back", () => {
     page,
   }) => {
     await page.setViewportSize({ width: WIDE.width, height: WIDE.height });
-    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await openFixture(page, `${FILES}&files=loaded&commands=show`, "light");
     const change = (source: string) =>
       page.evaluate((body) => {
         const fixture = (
@@ -672,7 +672,7 @@ test.describe("from a step to its file, and back", () => {
     await page.setViewportSize({ width: WIDE.width, height: WIDE.height });
     await openFixture(
       page,
-      `scene=main&${OTTO_DISK}&panel=closed&tab=details&files=loaded`,
+      `scene=main&${OTTO_DISK}&panel=closed&tab=details&files=loaded&commands=show`,
       "light",
     );
     // c6 is the second row of a fold of two writes.

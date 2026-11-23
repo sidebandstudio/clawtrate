@@ -93,6 +93,12 @@ export type ConnectionState = {
   canApprove: boolean;
   /** True while the connection holds `operator.admin`, so bots and accounts can be changed. */
   canAdmin: boolean;
+  /**
+   * True while this device's pairing with the gateway is a full-control pairing, the six asked
+   * for once at its first pairing (`ClientOptions.fullAccess`). What it holds is `scopes`: a
+   * narrower grant is kept, said, and never asked again by itself.
+   */
+  fullPairing: boolean;
   upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
@@ -189,6 +195,11 @@ export type Task = {
    * row), as the gateway names it. Absent when the task records none.
    */
   effort?: string;
+  /**
+   * The external channel the chat came in through (`discord`, `telegram`, …), as the
+   * gateway names it; absent for Clawtrate's own tasks and a bot's main task (`channels.ts`).
+   */
+  channel?: string;
   /** Paths of fields cut to their bound. */
   cut?: string[];
 };
@@ -241,6 +252,23 @@ export type TranscriptBlock =
       result: ToolResult | null;
     };
 
+/**
+ * A picture the gateway put on a bot's message (an `image` block with an
+ * `artifactId`), read with `readChatPicture` by that id. `alt` is the gateway's
+ * text for it, the file name it gave the picture; the sizes are its own.
+ * `prompt` is the description an `image_generate` call of this transcript asked
+ * for, when the message is the gateway's completion of that call's task.
+ */
+export type ChatPicture = {
+  artifactId: string;
+  alt: string | null;
+  prompt: string | null;
+  mimeType: string | null;
+  width: number | null;
+  height: number | null;
+  sizeBytes: number | null;
+};
+
 export type TranscriptItem = {
   /** Stable display key. */
   id: string;
@@ -248,6 +276,8 @@ export type TranscriptItem = {
   timestamp: number | null;
   blocks: TranscriptBlock[];
   model: string | null;
+  /** The pictures the bot's messages of this item hand over, in their order. Absent when none. */
+  pictures?: ChatPicture[];
   /**
    * The gateway cut a row of this item to its display length
    * (`__openclaw.truncated`): present and true only then. Its text, here or
@@ -396,6 +426,11 @@ export type ClawtrateState = {
    */
   turnLimitMinutes?: number;
   /**
+   * "Show external channel chats": whether `tasksByBot` lists chats that came in
+   * through Discord, Telegram and other channels. Off by default, kept by the host.
+   */
+  showChannelChats?: boolean;
+  /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
    * does not read it.
@@ -485,6 +520,7 @@ export const initialConnectionState: ConnectionState = {
   canAnswer: false,
   canApprove: false,
   canAdmin: false,
+  fullPairing: false,
   upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,

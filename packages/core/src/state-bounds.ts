@@ -165,6 +165,7 @@ import type {
   Transcript,
   TranscriptBlock,
   TranscriptItem,
+  ChatPicture,
 } from "./types.ts";
 
 // Field caps, in JSON characters --------------------------------------------------
@@ -240,6 +241,9 @@ export const MAX_HISTORY_ITEMS = 200;
 export const MAX_TOOL_FACTS_CHARS = 160;
 export const MAX_BLOCKS_PER_ITEM = 300;
 export const MAX_HISTORY_BLOCKS = 300;
+/** Pictures a bot's turn hands over, and across a task's history page (`ChatPicture`). */
+export const MAX_PICTURES_PER_ITEM = 8;
+export const MAX_HISTORY_PICTURES = 16;
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */
@@ -571,12 +575,22 @@ const block = union<TranscriptBlock, "kind">("kind")({
     result: toolResult,
   }),
 });
+const picture = object<ChatPicture>()({
+  artifactId: ID,
+  alt: NAME,
+  prompt: NAME,
+  mimeType: NAME,
+  width: NUMBER,
+  height: NUMBER,
+  sizeBytes: NUMBER,
+});
 const item = flagged<TranscriptItem>()({
   id: ID,
   role: ENUM,
   timestamp: NUMBER,
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
+  pictures: list(MAX_PICTURES_PER_ITEM, picture, { pool: "pictures" }),
   truncated: FLAG,
   messageId: ID,
   replyTo: object<ReplyReference>()({
@@ -624,7 +638,9 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   runsOmitted: NUMBER,
   sessionKey: ID,
   status: ENUM,
-  items: list(MAX_HISTORY_ITEMS, item, { pools: { blocks: MAX_HISTORY_BLOCKS } }),
+  items: list(MAX_HISTORY_ITEMS, item, {
+    pools: { blocks: MAX_HISTORY_BLOCKS, pictures: MAX_HISTORY_PICTURES },
+  }),
   error: text(MAX_MESSAGE_LINE_CHARS),
   hasMore: FLAG,
   live: object<NonNullable<Transcript["live"]>>()({ runId: ID, text: text(MAX_RUN_TEXT_CHARS) }),
@@ -676,6 +692,7 @@ const connection = object<ConnectionState>()({
   canAnswer: FLAG,
   canApprove: FLAG,
   canAdmin: FLAG,
+  fullPairing: FLAG,
   upgrade,
   deviceId: ID,
   pairing,
@@ -720,6 +737,7 @@ const task = flagged<Task>()({
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
+  channel: NAME,
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
 const sidebarId = id(MAX_SIDEBAR_ID_CHARS);
@@ -846,15 +864,19 @@ const SESSION_ROW_FIELDS = [
   "agentId",
   "archived",
   "category",
+  "channel",
+  "classification",
   "contextTokens",
   "createdAt",
   "derivedTitle",
   "displayName",
+  "groupChannel",
   "hasActiveRun",
   "isMain",
   "key",
   "label",
   "lastActivityAt",
+  "lastChannel",
   "lastMessagePreview",
   "lastRunError",
   "markedUnreadAt",
@@ -863,6 +885,7 @@ const SESSION_ROW_FIELDS = [
   "sessionKey",
   "spawnedBy",
   "status",
+  "subject",
   "totalTokens",
   "totalTokensFresh",
   "unread",
@@ -1076,7 +1099,7 @@ const botCreation = object<BotCreationState>()({
   slow: FLAG,
   botId: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
-  missing: list(4, ENUM),
+  missing: list(5, ENUM),
   uncertain: FLAG,
 });
 const accountWrite = object<AccountWrite>()({
@@ -1233,6 +1256,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   setup,
   checkIns: CHECK_INS,
   turnLimitMinutes: NUMBER,
+  showChannelChats: FLAG,
   usage: USAGE,
 });
 /** The listed-tasks pool, applied over the whole state. */

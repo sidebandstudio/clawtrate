@@ -35,7 +35,7 @@ The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixe
 - A bots-first interface for the user's own gateway: bots in a sidebar, tasks under each bot, and the bot's work beside the conversation.
 - Fine-grained control over each bot: its model and reasoning effort, its tool permissions and approval rules, an editable memory viewer, and the machine it works on.
 - Each bot runs on a provider account the user chooses when creating it. Subscription sign-ins come first, and API keys are a secondary option.
-- The conversation reads at the level of what a bot did. Each action shows as a plain-words card, in one family with the "Messaged &lt;bot&gt;" and "Messaged T3 Code" cards, that a person can follow without opening anything. Reasoning text stays folded away behind it, and the raw call behind every card is one step further.
+- The conversation shows what a bot says and what it is thinking. Its actions are one step away, as plain-words cards in one family with the "Messaged &lt;bot&gt;" and "Messaged T3 Code" cards. The raw call behind an action shows only when the person turns on "Show commands" in Settings.
 - An optional T3 Code integration: a bot can start a thread there, follow up and read the result. It is a switch in settings, off by default, and nothing else depends on it. Its connection belongs to the gateway, so the client never connects to T3 Code itself.
 
 ## A small glossary

@@ -27,7 +27,16 @@ import { appEnv, debuggingPort } from "./desktop-driver.ts";
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
@@ -38,10 +47,10 @@ import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-set
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
 import {
   cleanUp,
-  readRecord,
   recordPath,
   recoverDeadRuns,
   saveRecord,
+  successorAtCleanUp,
   TEMP_PREFIX,
   type RunRecord,
 } from "../e2e/run-record.ts";
@@ -226,6 +235,22 @@ export function recordExit(child: ChildProcess): ChildProcess {
 }
 
 /**
+ * Writes the app's exit status to `file` as it exits, for the test that quits
+ * it: that test runs in a worker, and only this runner, which started the app,
+ * sees how it ended.
+ */
+export function reportExit(child: ChildProcess, file: string): void {
+  child.once("exit", (code, signal) => {
+    try {
+      writeFileSync(`${file}.tmp`, JSON.stringify({ code, signal }));
+      renameSync(`${file}.tmp`, file);
+    } catch {
+      // The run's folder is removed once the app is gone; no test reads it after that.
+    }
+  });
+}
+
+/**
  * Whether the recorded app exited within `ms`: its recorded exit event, or the
  * kernel saying its PID is gone. Never a wait that started after it exited.
  */
@@ -327,10 +352,11 @@ async function macSetup(app: string, domain: string) {
   };
   let cleaned: string[] | null = null;
   const cleanUpOnce = () => {
+    if (cleaned) return cleaned;
     // A test may have recorded a newer build it started on the same data folder.
-    const saved = readRecord(recordPath(RECORDS, record.run));
-    if (saved?.successor) record.successor = saved.successor;
-    return (cleaned ??= cleanUp(RECORDS, record, reset));
+    const successor = successorAtCleanUp(recordPath(RECORDS, record.run), record.runner);
+    if (successor) record.successor = successor;
+    return (cleaned = cleanUp(RECORDS, record, reset));
   };
   // Forgotten after the app is gone, which cleanUp makes sure of.
   const finish = () => {
@@ -455,6 +481,8 @@ async function macSetup(app: string, domain: string) {
       },
     );
     appProcess = recordExit(gated.child);
+    const exitFile = join(dir, "app-exit.json");
+    reportExit(appProcess, exitFile);
     const found = processIdentity(appProcess.pid!);
     if (found.state !== "alive") {
       gated.abort();
@@ -471,6 +499,7 @@ async function macSetup(app: string, domain: string) {
     process.env.CLAWTRATE_PACKAGED_USER_DATA = userData;
     process.env.CLAWTRATE_PACKAGED_PID = String(appProcess.pid);
     process.env.CLAWTRATE_PACKAGED_LOG = log;
+    process.env.CLAWTRATE_PACKAGED_EXIT = exitFile;
     process.env.CLAWTRATE_PACKAGED_BUNDLE_ID = domain;
     process.env.CLAWTRATE_PACKAGED_RECORD = recordPath(RECORDS, record.run);
   } catch (error) {

@@ -56,6 +56,7 @@ export const LIVE_SCENES = [
   "message-thread-failed",
   "run-stopped-with",
   "run-stopped-timeouts",
+  "run-reasoning",
 ] as const;
 
 export type LiveScene = (typeof LIVE_SCENES)[number];
@@ -192,6 +193,21 @@ function withRun(
 
 const readStep = (now: number, change: Partial<Step> = {}) =>
   toolStep("call-read-1", "read", { path: "/var/log/backup/backup-2026-11-15.log" }, now, change);
+
+const THINKING =
+  "The backup log ends with a clean summary, so last night's run finished. The disk is the open question: the media folder grew by about 40 GB this week, and the transcode cache is the likeliest reason. I'll check its size before suggesting anything.";
+
+/** Reasoning the gateway is still streaming: its text so far. */
+const reasoningStep = (at: number, text: string): Step => ({
+  ...toolStep("unused", "", {}, at),
+  id: "reasoning:run-1:call-read-1:0",
+  kind: "reasoning",
+  title: "Reasoning",
+  toolName: null,
+  toolCallId: null,
+  argsText: null,
+  output: { text, totalChars: text.length },
+});
 
 /** The approval the waiting run asked for, read from a gateway-shaped record as the engine reads it. */
 function approval(now: number): ApprovalCard {
@@ -452,6 +468,17 @@ export function liveScene(
       };
     case "run-thinking":
       return { initial: withRun(base, now, {}), steps: [] };
+    case "run-reasoning":
+      // A read done, then reasoning the gateway is still streaming, with nothing after it yet.
+      return {
+        initial: withRun(base, now, {
+          steps: [
+            readStep(now - 30 * SECOND, { status: "done", endedAt: now - 29 * SECOND }),
+            reasoningStep(now - 4 * SECOND, THINKING),
+          ],
+        }),
+        steps: [],
+      };
     case "run-working":
       return { initial: withRun(base, now, { steps: [readStep(now - 3 * SECOND)] }), steps: [] };
     case "run-streaming":
@@ -971,6 +998,9 @@ export function liveCommand(
       return Promise.resolve({ key: "agent:otto:new-task" });
     case "setTurnLimit":
       set({ ...get(), turnLimitMinutes: command.minutes });
+      return Promise.resolve();
+    case "setShowChannelChats":
+      set({ ...get(), showChannelChats: command.on });
       return Promise.resolve();
     case "readComposerMenu":
       // As the gateway lists them for Otto: its skills and commands, or the bots and a routine.

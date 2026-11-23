@@ -701,6 +701,24 @@ button.b-choice:hover {
   height: 44px;
 }
 
+/* Settings → Conversation: "Show commands" and its switch on one line. */
+.show-commands-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.b-field > .show-commands-row {
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+.show-commands .b-hint {
+  margin: 0;
+}
+
 .b-field-error {
   margin: 0;
   padding: 0 4px;

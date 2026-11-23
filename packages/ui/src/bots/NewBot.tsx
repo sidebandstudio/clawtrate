@@ -510,8 +510,10 @@ export function NewBot({
               >
                 Finish {partial.name}
               </button>
-              {/* A bot the gateway's list doesn't show yet can't be opened. */}
-              {!partial.missing.includes("listed") && (
+              {/* A bot the gateway's list doesn't show yet can't be opened. One whose first-run
+                  questions are still on isn't opened as it is: that would drop the Finish that
+                  turns them off, and its first reply would ask for a name and a picture. */}
+              {!partial.missing.includes("listed") && !partial.missing.includes("identity") && (
                 <button
                   type="button"
                   className="button"

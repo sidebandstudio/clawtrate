@@ -32,6 +32,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
     "handed-to-system": { kind: "handed-to-system", ...offer },
     "handoff-unconfirmed": { kind: "handoff-unconfirmed", version, offerId: offer.offerId },
     "installer-failed": { kind: "handoff-failed", version, reason: "installer-failed" },
+    "inspection-failed": { kind: "verified", version, size: 120000, offerId: offer.offerId },
     "not-checked": { kind: "not-checked" },
     checking: { kind: "checking" },
     "nothing-newer": { kind: "nothing-newer" },
@@ -72,6 +73,21 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           : runningVersion;
   const supportsRestart = kind === "ready" || kind === "offered" || kind === "inspecting";
   function installFor(state: DesktopUpdateState): DesktopUpdateSnapshot["install"] {
+    if (kind === "inspection-failed" && state.kind === "verified")
+      return {
+        kind: "unavailable-in-this-build",
+        reason: "inspection-failed",
+        failure: {
+          stage: "running-signature",
+          exitCode: 0,
+          signal: null,
+          output: "reported",
+          helperStep: "parent-code -67065",
+          errorCode: null,
+          durationMs: 84,
+          system: "macOS 27.2.1",
+        },
+      };
     if (supportsRestart && state.kind === "verified")
       return { kind: "restart-available", offerId: state.offerId, completesOnQuit: true };
     return {
