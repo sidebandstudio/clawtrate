@@ -274,13 +274,13 @@ describe("a task the host refuses to open again after a reconnect", () => {
     const socket = sockets.at(-1)!;
     const handler = deliver.get(socket)!;
     for (const data of held.splice(0)) handler({ data });
-    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(refused).toEqual([]);
 
     // The next reconnect restores the task: the bridge kept the newer open in `wanted`.
     refusing.clear();
     const before = sockets.length;
     socket.terminate();
+    await until(() => interest.get("agent:otto:task") === 0);
     await until(() => sockets.length > before);
     await until(() => interest.get("agent:otto:task") === 1);
     sockets.at(-1)!.close();
