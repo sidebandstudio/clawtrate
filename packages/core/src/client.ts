@@ -113,7 +113,6 @@ import {
 import { ChatTextBaselines } from "./chat-text.ts";
 import {
   FileTransfers,
-  MAX_FILE_TRANSFERS,
   listTaskFiles,
   listWorkspace,
   readCheckoutDiff,
@@ -5510,8 +5509,7 @@ export class ClawtrateClient {
     const generation = this.generation;
     for (
       let waited = 0;
-      (this.fileReads >= MAX_FILE_READS || this.fileTransfers.size >= MAX_FILE_TRANSFERS) &&
-      waited < 300;
+      (this.fileReads >= MAX_FILE_READS || this.fileTransfers.full()) && waited < 300;
       waited += 1
     )
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
