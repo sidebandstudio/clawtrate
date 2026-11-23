@@ -328,6 +328,7 @@ import {
   initialState,
   type ClawtrateState,
   type ConnectionState,
+  type GatewayStamp,
   type DiscoveryState,
   type MessageReaction,
   type ScopeUpgradeState,
@@ -341,6 +342,10 @@ import {
 export const REQUESTED_SCOPES = ["operator.read"] as const;
 /** Why forgetting a gateway was refused: another viewer chose a different one meanwhile. */
 export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose again.";
+
+/** Why a write stamped on an earlier connection target is not sent (`requireSameGateway`). */
+export const CONNECTION_CHANGED =
+  "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 
 /** Disconnect refused because another gateway is selected now: the one asked for is no longer there. */
 export class GatewayChangedError extends Error {
@@ -1348,6 +1353,12 @@ export class ClawtrateClient {
   private searches = 0;
   /** Changes with every hello and every close, so work started on one connection never runs on the next. */
   private epoch = 0;
+  /**
+   * The host's target (`ConnectionState.target`): raised when the host is pointed at a gateway
+   * anew, kept across reconnects to the same one. Never lowered, so no earlier screen matches.
+   * From the clock, so a restarted host never hands out a number a page kept from the last one.
+   */
+  private target = Date.now();
   /** The gateway's identity as read on the connection of `epoch`, once asked. */
   private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
   /** Check-in reads begun; only the latest one's answer is shown. */
@@ -1373,6 +1384,7 @@ export class ClawtrateClient {
     refreshBots: () => this.refreshBots(),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
+    target: () => this.target,
     createMainTask: async (botId) => {
       const generation = this.generation;
       await this.request("sessions.create", {
@@ -1399,6 +1411,7 @@ export class ClawtrateClient {
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     identity: () => this.state.connection.gatewayId,
     withdrawn: (owner) => this.withdrawnOwners.has(owner),
+    target: () => this.target,
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -1595,7 +1608,7 @@ export class ClawtrateClient {
       this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = null;
       this.pairingSeen = null;
-      if (stops === this.stops) await this.open();
+      if (stops === this.stops) await this.open({ newTarget: true });
     });
   }
 
@@ -1641,7 +1654,7 @@ export class ClawtrateClient {
         bootstrapToken: options.bootstrapToken,
         expiresAtMs: options.expiresAtMs,
       };
-      if (stops === this.stops) await this.open();
+      if (stops === this.stops) await this.open({ newTarget: true });
     });
   }
 
@@ -1666,7 +1679,7 @@ export class ClawtrateClient {
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(target, setup);
       this.setupIntent = { url: target, reuse: true };
-      if (stops === this.stops) await this.open();
+      if (stops === this.stops) await this.open({ newTarget: true });
     });
   }
 
@@ -1745,11 +1758,16 @@ export class ClawtrateClient {
       this.raw.clear();
       this.retained.clear();
       this.forgetGatewayState();
+      this.target += 1;
       this.store.set({
         ...initialState,
         turnLimitMinutes: this.turnLimitMs / 60_000,
         showChannelChats: this.showChannelChats,
-        connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
+        connection: {
+          ...initialConnectionState,
+          deviceId: this.identity?.deviceId ?? null,
+          target: this.target,
+        },
       });
     });
   }
@@ -1795,7 +1813,14 @@ export class ClawtrateClient {
       // Runs are kept as they are and reconciled with history after Reconnect.
       this.abandonAccessRequest("Disconnected from the gateway.");
       this.close();
-      this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
+      this.target += 1;
+      this.setConnection({
+        status: "disconnected",
+        retryAt: null,
+        error: null,
+        pairing: null,
+        target: this.target,
+      });
     });
   }
 
@@ -1879,6 +1904,8 @@ export class ClawtrateClient {
   stop(): void {
     this.stops += 1;
     this.close();
+    this.target += 1;
+    this.setConnection({ target: this.target });
   }
 
   /** Open a transcript. Calls are counted; the last matching close releases it. */
@@ -5062,32 +5089,32 @@ export class ClawtrateClient {
     input: NewRoutine,
     key: string,
     owner: object | null = null,
-    gateway?: string | null,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
-    return this.routines.create(input, key, owner, gateway);
+    return this.routines.create(input, key, owner, stamp);
   }
 
   /** One routine as the gateway has it now. */
-  readRoutine(id: string, gateway?: string | null): Promise<Routine | null> {
-    return this.routines.readOne(id, gateway);
+  readRoutine(id: string, stamp?: GatewayStamp): Promise<Routine | null> {
+    return this.routines.readOne(id, stamp);
   }
 
   /** What the gateway shows of a create whose answer never came, by its draft's key. */
   checkRoutineCreate(
     key: string,
     input: RoutineFields,
-    gateway: string | null,
+    stamp: GatewayStamp,
   ): Promise<RoutineSaveCheck> {
-    return this.routines.checkCreate(key, input, gateway);
+    return this.routines.checkCreate(key, input, stamp);
   }
 
   /** What the gateway shows of an edit whose answer never came. */
   checkRoutineUpdate(
     id: string,
     sent: { original: RoutineFields; edit: RoutineFields; expected: RoutineFields },
-    gateway: string | null,
+    stamp: GatewayStamp,
   ): Promise<RoutineSaveCheck> {
-    return this.routines.checkUpdate(id, sent, gateway);
+    return this.routines.checkUpdate(id, sent, stamp);
   }
 
   updateRoutine(
@@ -5096,11 +5123,11 @@ export class ClawtrateClient {
     edit: RoutineFields,
     expected: RoutineRevision,
     owner: object | null = null,
-    gateway?: string | null,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
     if (jsonTextLength(id) > MAX_ID_CHARS)
       return Promise.resolve({ status: "refused", error: "That routine id is too long." });
-    return this.routines.update(id, original, edit, expected, owner, gateway);
+    return this.routines.update(id, original, edit, expected, owner, stamp);
   }
 
   setRoutineEnabled(
@@ -5194,24 +5221,22 @@ export class ClawtrateClient {
   }
 
   /**
-   * Create a bot. With `gatewayId` (the gateway the person was looking at, null when that
-   * gateway names none), nothing is sent unless it is still the gateway connected.
+   * Create a bot. With `stamp` (where the person's screen was read), nothing is sent unless the
+   * host still has that target and that gateway connected.
    */
-  async createBot(input: CreateBotInput, gatewayId?: string | null): Promise<CreatedBot> {
-    if (gatewayId === undefined) return this.accounts.createBot(input);
-    await this.requireSameGateway(gatewayId);
-    // Checked there: known, and the connected gateway's. The whole write stays bound to it.
-    return this.accounts.createBot(input, gatewayId as string);
+  async createBot(input: CreateBotInput, stamp?: GatewayStamp): Promise<CreatedBot> {
+    if (stamp === undefined) return this.accounts.createBot(input);
+    // Checked there: both known and current. The whole write stays bound to them.
+    return this.accounts.createBot(input, await this.requireSameGateway(stamp));
   }
 
   /**
    * Finish a bot whose creation is partial, by its id: what is missing, never a second bot. With
-   * `gatewayId`, as for `createBot`, nothing is sent unless it is still the gateway connected.
+   * `stamp`, as for `createBot`, nothing is sent unless it is still the gateway connected.
    */
-  async finishBot(botId: string, gatewayId?: string | null): Promise<CreatedBot> {
-    if (gatewayId === undefined) return this.accounts.finishBot(botId);
-    await this.requireSameGateway(gatewayId);
-    return this.accounts.finishBot(botId, gatewayId as string);
+  async finishBot(botId: string, stamp?: GatewayStamp): Promise<CreatedBot> {
+    if (stamp === undefined) return this.accounts.finishBot(botId);
+    return this.accounts.finishBot(botId, await this.requireSameGateway(stamp));
   }
 
   dismissBotCreation(): void {
@@ -5240,36 +5265,49 @@ export class ClawtrateClient {
   async setBotPicture(
     botId: string,
     avatar: string,
-    gatewayId?: string | null,
+    stamp?: GatewayStamp,
   ): Promise<{ confirmed: boolean }> {
-    if (gatewayId === undefined) return this.accounts.setBotPicture(botId, avatar);
-    await this.requireSameGateway(gatewayId);
-    return this.accounts.setBotPicture(botId, avatar, gatewayId as string);
+    if (stamp === undefined) return this.accounts.setBotPicture(botId, avatar);
+    return this.accounts.setBotPicture(botId, avatar, await this.requireSameGateway(stamp));
+  }
+
+  /** Refuse a write whose screen was read before the host was last pointed at a gateway anew. */
+  private requireSameTarget(stamp: GatewayStamp): void {
+    if (this.target !== stamp.target) throw new Error(CONNECTION_CHANGED);
   }
 
   /**
-   * Refuse a change unless it was made for the gateway connected now, as a check-in save does:
-   * both identities known and equal, and the same connection before and after reading this
-   * one's. A missing identity on either side is a refusal, never a match.
+   * Refuse a change unless it was made for the gateway connected now. The screen's read was
+   * stamped (`GatewayStamp`): the host must still have the target it had then, so no Connect,
+   * Disconnect, switch or new pairing came between that read and now, and the gateway's
+   * identity must be known on both sides and equal, read on one connection that is still the
+   * one open. A missing identity on either side is a refusal, never a match. The answer is the
+   * write's binding: a write that dispatches later checks the target again before it sends.
    */
-  private async requireSameGateway(gatewayId: string | null): Promise<void> {
+  private async requireSameGateway(
+    stamp: GatewayStamp,
+  ): Promise<{ gatewayId: string; target: number }> {
     const protocol = this.protocol;
     const epoch = this.epoch;
     const alive = () =>
       protocol !== null &&
       this.protocol === protocol &&
       this.epoch === epoch &&
-      this.state.connection.status === "connected";
+      this.state.connection.status === "connected" &&
+      this.target === stamp.target;
+    this.requireSameTarget(stamp);
     if (!alive()) throw new Error("Not connected to the gateway.");
+    const gatewayId = stamp.gatewayId;
     if (gatewayId === null)
       throw new Error("The gateway hasn't said which gateway it is, so nothing was sent.");
     const here = await this.readGatewayIdentity();
     // A bot command can be the first to identify this connection after discovery got no ID.
     this.confirmGatewayIdentity(here, alive);
-    if (!alive()) throw new Error("The connection changed before the change was sent.");
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
     // `gatewayId` is known here, so a gateway that names none (null) never matches it.
     if (here !== gatewayId)
       throw new Error("This change was made for another gateway, so nothing was sent.");
+    return { gatewayId, target: stamp.target };
   }
 
   // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------
@@ -5293,6 +5331,7 @@ export class ClawtrateClient {
         };
       },
       gateway: () => this.readGatewayIdentity(),
+      target: () => this.target,
       begin: () => {
         const mine = (this.checkInReads += 1);
         return () => mine === this.checkInReads;
@@ -5314,14 +5353,14 @@ export class ClawtrateClient {
   }
 
   /** Save one bot's check-ins; the outcome is `checkIns.save` with this `saveId`. */
-  saveCheckIn(
+  async saveCheckIn(
     saveId: string,
     botId: string,
     draft: CheckInDraft,
     owner?: object | null,
   ): Promise<void> {
-    if (!this.state.connection.canAdmin)
-      return Promise.reject(new AdminNeededError("Changing check-ins"));
+    if (!this.state.connection.canAdmin) throw new AdminNeededError("Changing check-ins");
+    await this.requireSameGateway(draft.stamp);
     return saveCheckIn(this.checkInsContext(owner), saveId, botId, draft);
   }
 
@@ -5449,17 +5488,24 @@ export class ClawtrateClient {
   async writeMemory(
     botId: string,
     path: string,
-    gatewayId: string | null,
+    stamp: GatewayStamp,
     expectedHash: string | null,
     content: string | null,
   ) {
     if (this.options.readOnly || !this.state.connection.canAdmin)
       throw new Error("Changing memory requires admin access.");
+    // The target half of the shared guard; `writeMemory` asks the gateway who it is itself, on
+    // the request just before the write.
+    this.requireSameTarget(stamp);
     await writeMemory(
-      (method, params) => this.request(method, params),
+      // Each of its requests is still held to the target its screen was read under.
+      (method, params) =>
+        this.target === stamp.target
+          ? this.request(method, params)
+          : Promise.reject(new Error(CONNECTION_CHANGED)),
       botId,
       path,
-      gatewayId,
+      stamp.gatewayId,
       expectedHash,
       content,
     );
@@ -6003,8 +6049,19 @@ export class ClawtrateClient {
     });
   }
 
-  private async open(options?: { keepPendingAnswer: boolean }): Promise<void> {
-    this.close(options);
+  /** `newTarget`: the person pointed the host at a gateway anew, so no earlier screen's write goes. */
+  private async open(options?: {
+    keepPendingAnswer?: boolean;
+    newTarget?: boolean;
+  }): Promise<void> {
+    this.close({ keepPendingAnswer: options?.keepPendingAnswer === true });
+    if (options?.newTarget) {
+      // A subscriber told of the new target may stop the client: then this open ends here.
+      const before = this.generation;
+      this.target += 1;
+      this.setConnection({ target: this.target });
+      if (this.generation !== before) return;
+    }
     const settings = this.settings;
     if (!settings) return;
     const generation = ++this.generation;
@@ -6024,6 +6081,7 @@ export class ClawtrateClient {
         showChannelChats: this.showChannelChats,
         connection: {
           ...initialConnectionState,
+          target: this.target,
           status: "error",
           gatewayUrl: settings.url,
           deviceId: identity.deviceId,
@@ -6077,6 +6135,7 @@ export class ClawtrateClient {
           }),
       connection: {
         ...initialConnectionState,
+        target: this.target,
         status: hasData ? "reconnecting" : "connecting",
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
@@ -6463,6 +6522,17 @@ export class ClawtrateClient {
               : undefined,
           );
         }
+        // A pairing made by this hello, not one this device kept: whatever a screen read before
+        // was read under another pairing, so the host's target is new.
+        if (
+          issued &&
+          !context.plan.selectedAuth.usingStoredDeviceToken &&
+          generation === this.generation &&
+          live()
+        ) {
+          this.target += 1;
+          this.setConnection({ target: this.target });
+        }
         // A full pairing's record narrows to what this hello granted of what was signed for,
         // whether or not the token changed.
         // A hello with a replacement token narrowed its record in that token's write, above.
@@ -6794,8 +6864,8 @@ export class ClawtrateClient {
 
   private invalidateCheckIns(): void {
     const checkIns = this.state.checkIns;
-    if (checkIns?.gatewayId)
-      this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
+    if (checkIns?.stamp)
+      this.store.update((state) => ({ ...state, checkIns: { ...checkIns, stamp: null } }));
   }
 
   private close(options?: { keepPendingAnswer: boolean }): void {

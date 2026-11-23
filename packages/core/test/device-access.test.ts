@@ -34,12 +34,15 @@ describe("device access", () => {
     expect(fake.gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
     expect(fake.gateway.calls("device.pair.list")).toEqual([]);
 
+    const target = client.state.connection.target;
     await client.requestAccess("pairing");
     await until(() => client.state.connection.upgrade.status === "pending");
     const wanted = [...INTERACTIVE_SCOPES, PAIRING_SCOPE];
     expect(fake.gateway.calls("device.scopes.requestUpgrade")).toEqual([{ scopes: wanted }]);
     wait.resolve({ status: "approved", requestId: "up-7", deviceToken: "rotated", scopes: wanted });
     await until(() => client.state.connection.scopes.includes(PAIRING_SCOPE));
+    // The reconnect that brings the grant keeps the host's target: nothing open is refused.
+    expect(client.state.connection.target).toBe(target);
     const stored = JSON.parse(storage.data.get(tokenKey(URL_A))!);
     expect(stored).toMatchObject({ pairingHeld: true, heldScopes: wanted });
     expect(stored.adminHeld).toBeUndefined();

@@ -76,6 +76,8 @@ export function NewBot({
   const [gateway] = useState(() => connection.gatewayUrl);
   const [firstConnection] = useState(() => connection.connectedAt);
   const [openedOn, setOpenedOn] = useState(connection.gatewayId);
+  // The host's target as it opened: a Connect, Disconnect or switch since refuses what it sends.
+  const [target] = useState(connection.target);
   if (
     openedOn === null &&
     connection.gatewayId !== null &&
@@ -102,6 +104,7 @@ export function NewBot({
   const matchesGateway = (now: ConnectionState) =>
     now.status === "connected" &&
     now.gatewayUrl === gateway &&
+    now.target === target &&
     now.gatewayId !== null &&
     now.gatewayId === openedOn;
   const canSubmitHere = matchesGateway(connection);
@@ -218,8 +221,8 @@ export function NewBot({
         provider,
         model: sent.model,
         effort: sent.effort,
-        // The host refuses it unless this is still the gateway, and the connection, it names.
-        gatewayId: now$.current.gatewayId,
+        // The host refuses it unless this is still the gateway, and the target, it names.
+        stamp: { gatewayId: now$.current.gatewayId, target },
       });
       // An answer for an opening that has gone, from a gateway or connection since replaced, or for
       // a draft changed since, closes, clears and selects nothing.
@@ -246,8 +249,8 @@ export function NewBot({
       const { botId, missing } = await bridge.invoke({
         type: "finishBot",
         botId: partial.botId,
-        // The host refuses it unless this is still the gateway it names.
-        gatewayId: now$.current.gatewayId,
+        // The host refuses it unless this is still the gateway, and the target, it names.
+        stamp: { gatewayId: now$.current.gatewayId, target },
       });
       if (!stands() || missing.length > 0) return;
       announce(`Created ${partial.name}`);
