@@ -56,6 +56,15 @@ export const connectionKey = (connection: ConnectionState) =>
     connection.scopes.join(" "),
   ].join("\n");
 
+/**
+ * Which gateway a placement save belongs to: its confirmed identity, or a key
+ * local to this connection while that identity isn't known yet.
+ */
+const placementScope = (connection: ConnectionState) =>
+  connection.gatewayId
+    ? `gateway:${connection.gatewayId}`
+    : `connection:${connection.target}\n${connectionKey(connection)}`;
+
 type SaveEntry = { pending: number; version: number };
 
 const EMPTY_SAVE: SaveEntry = { pending: 0, version: 0 };
@@ -71,8 +80,9 @@ const PlacementSavesContext = createContext<PlacementSaves | null>(null);
 
 /**
  * Tracks in-flight placement saves and completion reloads above Work, keyed by
- * gateway so closing Work or switching bots keeps a save's pending state and
- * refresh, and another gateway is never affected by it.
+ * confirmed gateway id (with a connection-local fallback while unknown) so
+ * closing Work or switching bots keeps a save's pending state and refresh, and
+ * another gateway at the same address is never affected by it.
  */
 export function PlacementSavesProvider({ children }: { children: ReactNode }) {
   const [entries, setEntries] = useState<Record<string, SaveEntry>>({});
@@ -128,7 +138,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   const bridge = useBridge();
   const saves = useContext(PlacementSavesContext);
   // Every bot on a gateway writes against the same config revision.
-  const scope = connection.gatewayUrl ?? "";
+  const scope = placementScope(connection);
   const entry = saves?.entries[scope] ?? EMPTY_SAVE;
   const savesBegin = saves?.begin ?? null;
   const savesSettled = saves?.settled ?? null;
@@ -155,7 +165,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     let live = true;
     const at = generation;
     const atVersion = version;
-    const stamp = `${at}:${atVersion}`;
+    const stamp = `${scope}\n${at}:${atVersion}`;
     const keep = (name: PlacementPart, part: Partial<Placement>) =>
       live &&
       at === asked.current &&
@@ -216,7 +226,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     credentials: part("credentials"),
   };
   const commandsCurrent =
-    writing === 0 && held?.key === key && held.at.commands === `${generation}:${version}`;
+    writing === 0 && held?.key === key && held.at.commands === `${scope}\n${generation}:${version}`;
   return { read, reload, begin, settled, commandsCurrent };
 }
 

@@ -837,7 +837,7 @@ const holdAnswer = (page: Page, type: string) =>
     const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
     const original = fixture.invoke.bind(fixture);
     const held = window as unknown as {
-      answerHeld?: () => void;
+      answerHeld?: () => Promise<unknown>;
       commandsReads: number;
       workspaceReads: number;
     };
@@ -846,7 +846,17 @@ const holdAnswer = (page: Page, type: string) =>
     fixture.invoke = (command) => {
       if (command.type === type)
         return new Promise((resolve, reject) => {
-          held.answerHeld = () => void original(command).then(resolve, reject);
+          held.answerHeld = () =>
+            original(command).then(
+              (answer) => {
+                resolve(answer);
+                return answer;
+              },
+              (error) => {
+                reject(error);
+                throw error;
+              },
+            );
         });
       if (command.type === "readPlacement") {
         const part = (command as { part?: string }).part;
@@ -1071,6 +1081,32 @@ test("F-046: a command save still out for Otto makes Pip's command picker wait f
   expect(
     (await sent(page)).find((c) => c.type === "setCommandMachine" && c.botId === "pip"),
   ).toMatchObject({ baseHash: "c2" });
+});
+
+test("F-046: a different gateway at the same URL does not inherit a pending command save", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await holdAnswer(page, "setCommandMachine");
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  // Close Work, switch to a different confirmed gateway id at the same URL, and reopen Work.
+  await page.getByTestId("work-panel").getByRole("button", { name: "Close work panel" }).click();
+  await expect(page.getByTestId("work-panel")).toHaveCount(0);
+  await patchConnection(page, { gatewayId: "gw-other" });
+  await page.keyboard.press("ControlOrMeta+\\");
+  await expect(page.getByTestId("work-panel")).toBeVisible();
+  await openRunsOn(page);
+  await expect.poll(() => commandsReads(page)).toBe(2);
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toBeEnabled();
+  // When the old gateway's save answers, the new gateway triggers no extra commands read.
+  await page.evaluate(() =>
+    (window as unknown as { answerHeld: () => Promise<unknown> }).answerHeld(),
+  );
+  await page.waitForTimeout(150);
+  expect(await commandsReads(page)).toBe(2);
 });
 
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
