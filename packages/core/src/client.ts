@@ -124,6 +124,7 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
+import { readChatPicture, type ChatPictureRead } from "./pictures.ts";
 import type {
   ApprovalInstructions,
   ClawtrateHost,
@@ -754,7 +755,10 @@ export type SetupEndpointCheck = {
   /**
    * Whether the host's dialog consent still holds (its two minutes), asked just before the
    * first frame that carries a credential, a saved token's included. Once a hello is in, the
-   * consent is used and isn't asked again.
+   * consent is used and isn't asked again. On a plain `connect` it decides only whether a first
+   * pairing over the proved route asks for the six, before each such request until the gateway
+   * holds one pending, whose retries keep the six: without it the same token asks for read, as a
+   * typed address does, and the connection goes on.
    */
   consent?: () => boolean;
   /**
@@ -1121,6 +1125,8 @@ export class ClawtrateClient {
    * lost, from the moment the refusal is accepted, before its removal runs.
    */
   private fullEligible = false;
+  /** The pending request a first pairing sent the six in, with consent: its retries ask for them. */
+  private fullPending: string | null = null;
   /** This attempt's plans have used a saved token: one gone since was lost. */
   private planHadToken = false;
   /**
@@ -1554,8 +1560,13 @@ export class ClawtrateClient {
     if (settings) await this.open();
   }
 
-  /** Connect to a gateway. A token is only needed until this device is paired. */
-  async connect(options: ConnectOptions): Promise<void> {
+  /**
+   * Connect to a gateway. A token is only needed until this device is paired. `setup` is for a
+   * host's own setup only: the address form passes none. With local connect's proved sockets
+   * and the person's consent it is the route a first pairing at this computer's gateway may ask
+   * for full access on (docs/design/setup-effortless.md §3).
+   */
+  async connect(options: ConnectOptions, setup: SetupEndpointCheck = {}): Promise<void> {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     const endsAtStart = this.eligibilityEnds;
@@ -1581,7 +1592,7 @@ export class ClawtrateClient {
       this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
-      this.setupCheck = null;
+      this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = null;
       this.pairingSeen = null;
       if (stops === this.stops) await this.open();
@@ -5406,14 +5417,18 @@ export class ClawtrateClient {
     if (this.fileReads >= MAX_FILE_READS)
       throw new Error("Other files are being read; try again in a moment.");
     this.fileReads += 1;
+    const owner = options.owner ?? DIRECT_CALLER;
     try {
-      return await read({
+      const result = await read({
         request: (method, params) => this.request(method, params),
         transfers: this.fileTransfers,
-        owner: options.owner ?? DIRECT_CALLER,
+        owner,
         ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
         now: () => this.now(),
       });
+      // A viewer that went away while this read ran can't release what it started: drop it now.
+      if (this.withdrawnOwners.has(owner)) this.fileTransfers.release(owner);
+      return result;
     } finally {
       this.fileReads -= 1;
     }
@@ -5490,6 +5505,42 @@ export class ClawtrateClient {
     options: FileReadOptions = {},
   ): Promise<CheckoutDiff> {
     return this.fileRead((ctx) => readCheckoutDiff(ctx, key, path), options);
+  }
+
+  /** A picture the bot handed over in the task (`pictures.ts`), sharing the file reads' limit. */
+  async readChatPicture(
+    key: string,
+    artifactId: string,
+    options: FileReadOptions = {},
+  ): Promise<ChatPictureRead> {
+    // A turn hands over up to four pictures and a task can hold several such turns, all drawn
+    // at once: a picture waits up to 30 s for one of the file reads' places, and of the
+    // transfers' that carry a picture to its viewer, instead of failing.
+    const generation = this.generation;
+    for (
+      let waited = 0;
+      (this.fileReads >= MAX_FILE_READS || this.fileTransfers.full()) && waited < 300;
+      waited += 1
+    )
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+    // The task and picture are the connection's it was asked on: never read on a later one.
+    if (generation !== this.generation)
+      return { status: "failed", message: "The connection changed while this picture waited." };
+    // A viewer that left while the picture waited asks for nothing.
+    this.checkNotWithdrawn(options.owner);
+    const gatewayUrl = this.state.connection.gatewayUrl ?? "";
+    const read = await this.fileRead(
+      (ctx) =>
+        readChatPicture({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }, key, artifactId),
+      options,
+    );
+    // Bytes that arrive after a switch to another gateway are the old one's: none reach a viewer.
+    if (generation !== this.generation) {
+      if (read.status === "content" && read.transfer.id)
+        this.fileTransfers.release(options.owner ?? DIRECT_CALLER, read.transfer.id);
+      return { status: "failed", message: "The connection changed while this picture was read." };
+    }
+    return read;
   }
 
   /** The next part of a file on its way to this viewer. */
@@ -5986,10 +6037,19 @@ export class ClawtrateClient {
       return;
     }
 
-    // Full access goes only over a protected route (`protectedGatewayUrl`): elsewhere this
-    // device asks for read, as before, and a full pairing's token there asks for read too.
+    // Full access goes only over a protected route: a protected address (`protectedGatewayUrl`),
+    // or this computer's gateway when every socket of the connection is proved (`socketsProved`,
+    // setup-effortless.md §3). Elsewhere this device asks for read, as before, and a full
+    // pairing's token there asks for read too. What a first pairing may ask for on that route
+    // is `firstPairingMayAskFull`'s. Only a plain connect's token takes the proved route: a setup
+    // code, and setup's reuse of a saved pairing, ask for read there.
     const full = this.options.fullAccess === true && !this.options.readOnly;
-    const routed = full && protectedGatewayUrl(settings.url);
+    const proved = !this.setupIntent && !this.setupCode && this.socketsProved(settings.url);
+    const routed = full && (protectedGatewayUrl(settings.url) || proved);
+    // Every socket of this connection, retries included, is the proved route's, also after
+    // setup's check ends at its first read: a full pairing's token never falls back to the
+    // host's own socket here.
+    const provedSocket = proved ? this.setupCheck?.createSocket : undefined;
     const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
     this.fullAccess = routed && secure;
@@ -6113,9 +6173,8 @@ export class ClawtrateClient {
         current = null;
         const check = this.setupCheck?.url === settings.url ? this.setupCheck : null;
         try {
-          socket = check?.createSocket
-            ? check.createSocket(settings.url)
-            : this.host.createWebSocket(settings.url);
+          const create = check?.createSocket ?? provedSocket;
+          socket = create ? create(settings.url) : this.host.createWebSocket(settings.url);
         } catch (error) {
           // A setup socket that couldn't start is a terminal path: its code goes.
           if (this.isSetup(settings.url)) this.dropSetupCredentials();
@@ -6862,6 +6921,15 @@ export class ClawtrateClient {
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
       if (requestId) this.pairingSeen = seen;
+      // The gateway keeps this request's six whatever a retry asks (a smaller one only refreshes
+      // it), so a first pairing that sent them with consent keeps asking for them while it waits.
+      if (
+        requestId &&
+        plan &&
+        !plan.selectedAuth.usingStoredDeviceToken &&
+        plan.scopes.some((scope) => !READ_SCOPES.includes(scope))
+      )
+        this.fullPending = seen;
       // A setup connection shows this device, the scopes it asked for and the gateway's
       // pending-devices instruction, never the request's own fields.
       const scopes =
@@ -7293,6 +7361,17 @@ export class ClawtrateClient {
   }
 
   /**
+   * A `sessions.changed` with `phase: "message"` for an open task: a message of it
+   * changed in place. The gateway writes a picture a turn hands over into its
+   * message after the turn ends, with no `session.message`, so history is read again.
+   */
+  private noteMessageChange(payload: unknown): void {
+    const row = asRecord(payload);
+    const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
+    if (row?.phase === "message" && key && this.tracked(key)) this.scheduleHistory(key);
+  }
+
+  /**
    * Apply a `sessions.changed` event with the same membership rules as the list.
    * A known row is merged and re-checked. An unknown row whose key is not ruled
    * out cannot prove membership from the payload, so the filtered list is
@@ -7301,6 +7380,7 @@ export class ClawtrateClient {
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.discoveryRead) this.discoveryRead.sessionsChanged = true;
     this.noteRunChange(payload);
+    this.noteMessageChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
     // Rows are kept under the id cap.
@@ -8478,13 +8558,39 @@ export class ClawtrateClient {
   }
 
   /**
+   * Whether every socket of the connection to `url` comes from a proved route to this computer's
+   * gateway (setup-effortless.md §3): local connect's sockets, each proved when dialled and again
+   * before its credential. The one place a proved route is named, for the full-access gate.
+   */
+  private socketsProved(url: string): boolean {
+    return this.setupCheck?.url === url && !!this.setupCheck.createSocket;
+  }
+
+  /**
+   * Whether a first pairing at `url` may ask for the six, given full access: always at a
+   * protected address; over a proved route only while the person's consent for it holds. It is
+   * asked here, before each first-pairing credential, until the first hello spends it or the
+   * gateway holds such a request pending. Full access over that route is a plain connect's alone,
+   * so a loopback setup code still starts read-only (F-509).
+   */
+  private firstPairingMayAskFull(url: string): boolean {
+    if (protectedGatewayUrl(url)) return true;
+    if (this.fullPending !== null && this.fullPending === this.pairingSeen) return true;
+    const consent = this.setupCheck?.url === url ? this.setupCheck.consent : undefined;
+    return consent?.() === true;
+  }
+
+  /**
    * The scopes a connect asks for. A read-only host asks for read. With no saved token, a
    * first pairing asks for all six with full access, and read otherwise. A saved token asks
    * for exactly what it holds, except that a setup connection reusing it asks for read.
    */
   private scopesToAsk(url: string, token: StoredDeviceToken | null): string[] {
     if (this.options.readOnly) return [...READ_SCOPES];
-    if (!token) return this.fullAccess && this.fullEligible ? [...FULL_SCOPES] : [...READ_SCOPES];
+    if (!token)
+      return this.fullAccess && this.fullEligible && this.firstPairingMayAskFull(url)
+        ? [...FULL_SCOPES]
+        : [...READ_SCOPES];
     // A full pairing's token is used for more than read only while full access holds.
     if (token.fullGrant && !this.fullAccess) return [...READ_SCOPES];
     // A setup reusing this device's saved pairing asks for read alone, as its consent says,

@@ -11,6 +11,7 @@ import type {
   ToolResult,
   TranscriptBlock,
   TranscriptItem,
+  ChatPicture,
 } from "./types.ts";
 
 export type RawRecord = Record<string, unknown>;
@@ -272,6 +273,33 @@ function prettyArguments(value: unknown): string {
   return JSON.stringify(value === undefined ? null : value, null, 2);
 }
 
+/**
+ * The pictures a bot's message hands over: its `image` blocks that the gateway
+ * holds as artifacts. The address a block names is never kept, so never used.
+ */
+function assistantPictures(content: unknown): ChatPicture[] {
+  const size = (value: unknown) => {
+    const n = num(value);
+    return n !== null && Number.isInteger(n) && n > 0 ? n : null;
+  };
+  return arr(content).flatMap((part) => {
+    const block = asRecord(part);
+    const artifactId = block?.type === "image" ? str(block.artifactId) : null;
+    if (!block || !artifactId) return [];
+    return [
+      {
+        artifactId,
+        alt: str(block.alt),
+        prompt: null,
+        mimeType: str(block.mimeType),
+        width: size(block.width),
+        height: size(block.height),
+        sizeBytes: size(block.sizeBytes),
+      },
+    ];
+  });
+}
+
 function assistantBlocks(content: unknown): TranscriptBlock[] {
   if (typeof content === "string") return content.trim() ? [{ kind: "text", text: content }] : [];
   const blocks: TranscriptBlock[] = [];
@@ -300,6 +328,31 @@ function assistantBlocks(content: unknown): TranscriptBlock[] {
     }
   }
   return blocks;
+}
+
+/**
+ * The description an earlier `image_generate` call asked for, when `runId` is the
+ * turn the gateway runs by itself to deliver that call's background task
+ * (`image_generate:<taskId>:ok:…`): the call whose result named the task.
+ */
+function imagePrompt(runId: string | null, items: TranscriptItem[]): string | null {
+  const task = runId ? /^image_generate:(tool:image_generate:[^:\s]+):ok:/.exec(runId)?.[1] : null;
+  if (!task) return null;
+  for (const item of [...items].reverse())
+    for (const block of item.blocks)
+      if (
+        block.kind === "tool-call" &&
+        block.name === "image_generate" &&
+        block.result?.text.includes(`(${task})`)
+      ) {
+        try {
+          const prompt = asRecord(JSON.parse(block.argumentsText))?.prompt;
+          return typeof prompt === "string" && prompt.trim() ? prompt.trim() : null;
+        } catch {
+          return null;
+        }
+      }
+  return null;
 }
 
 function meta(message: RawRecord): RawRecord {
@@ -407,6 +460,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           if (block.kind === "tool-call" && block.callId) pendingCalls.set(block.callId, block);
         }
         const runId = str(info.runId);
+        const pictures = assistantPictures(message.content);
+        const prompt = pictures.length > 0 ? imagePrompt(runId, items) : null;
+        for (const picture of pictures) picture.prompt = prompt;
         if (runId !== null && runId === precedingRun) {
           for (const user of pendingUsers) user.steered = true;
         }
@@ -418,11 +474,13 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           previous.blocks.push(...blocks);
           item = previous;
         } else {
+          // An empty row starts no turn: a later row of its run gets one of its own, never the last.
+          if (blocks.length === 0 && pictures.length === 0) return;
           currentRun = runId;
-          if (blocks.length === 0) return;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           items.push(item);
         }
+        if (pictures.length > 0) item.pictures = [...(item.pictures ?? []), ...pictures];
         if (cutByGateway) item.truncated = true;
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
         const rowId = str(info.id);

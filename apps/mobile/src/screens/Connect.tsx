@@ -3,12 +3,12 @@
 // install saved, the choice to reconnect to it), the gateway's address with the
 // notice for an unencrypted one, the step list while it connects and loads, the
 // pending approval with the scopes this device signed and its command to copy,
-// and the notice for a gateway on another protocol. The row of characters stands
+// and the notice for a gateway on another protocol. The row of creatures stands
 // at the foot. Every word comes from `@clawtrate/ui/connect-words`, as on the
 // desktop, and nothing the gateway sent back shows a credential.
 
 import type { ConnectionError, ConnectionState, DiscoveryState } from "@clawtrate/core";
-import { ENSEMBLE, showEnsemble } from "../presentation/character.ts";
+import { ENSEMBLE, showEnsemble } from "../presentation/ensemble.ts";
 import {
   CLEARTEXT_WORDS,
   CONNECT_WORDS as W,
@@ -40,7 +40,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import MARK from "../../assets/logo-mark.png";
 import { addressAttemptInProgress, addressSubmission } from "../address.ts";
-import { Character } from "../components/Avatar.tsx";
+import { Creature } from "../components/Creature.tsx";
 import { EyeIcon } from "../components/icons.tsx";
 import { Button, Dot, Txt } from "../components/ui.tsx";
 import { checkPairing, forgetGateway } from "../gateway-actions.ts";
@@ -62,7 +62,7 @@ function Column({ children, testID }: { children: ReactNode; testID: string }) {
         <ScrollView
           testID={testID}
           keyboardShouldPersistTaps="handled"
-          // The form is centred in the space above the characters, which stand on the bottom edge.
+          // The form is centred in the space above the creatures, which stand on the bottom edge.
           contentContainerStyle={{ flexGrow: 1, paddingBottom: ensemble ? 0 : bottom }}
         >
           <View
@@ -92,7 +92,7 @@ function Column({ children, testID }: { children: ReactNode; testID: string }) {
 }
 
 /**
- * The characters along the foot (section 10), scaled to 60% on the phone, on
+ * The creatures along the foot (section 10), scaled to 60% on the phone, on
  * the screen's bottom edge. Decoration only; below 640 points of height they
  * are not shown, so the form fits by itself.
  */
@@ -111,7 +111,7 @@ function Ensemble() {
         height: 90,
       }}
     >
-      {ENSEMBLE.map(({ size, sink, lean, ...spec }, index) => {
+      {ENSEMBLE.map(({ size, sink, lean, choice, variation }, index) => {
         const side = Math.round(size * 0.6);
         return (
           <View
@@ -122,7 +122,7 @@ function Ensemble() {
               transform: [{ rotate: `${lean}deg` }],
             }}
           >
-            <Character spec={spec} size={side} />
+            <Creature choice={choice} variation={variation} size={side} animate={false} />
           </View>
         );
       })}

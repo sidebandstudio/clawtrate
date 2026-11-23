@@ -39,6 +39,7 @@ export const ACTION_SCENES = [
   "actions-retained",
   "actions-retained-history",
   "actions-outcomes",
+  "actions-repeat",
 ] as const;
 
 export type ActionScene = (typeof ACTION_SCENES)[number];
@@ -137,6 +138,8 @@ const LOG = [
   "03:25:03 backup: next run 2026-11-17 02:14",
 ].join("\n");
 
+const REPEATED = "Booked: the survey is on Tuesday, December 2, between 9 and 11 AM.";
+
 /** The runs of each scene, each with the person's message that started it. */
 type Turn = {
   user: string;
@@ -182,6 +185,28 @@ function scene(name: ActionScene): Turn[] {
             {
               text: "Yes. The log is there, and the backup finished at 3:25 AM. The next run is tonight at 2:14.",
             },
+          ],
+        },
+      ];
+    case "actions-repeat":
+      // A bot answering on a conversation: its message there is the same text as its reply (7.11).
+      return [
+        {
+          user: "Tell the survey office we can do the second.",
+          parts: [
+            {
+              thinking: "They want the second of December. I'll confirm it on the thread.",
+              took: 2,
+            },
+            {
+              call: {
+                name: "conversations_send",
+                args: { conversationRef: "conv_1", message: REPEATED },
+                text: '{"status":"sent"}',
+                details: { status: "sent" },
+              },
+            },
+            { text: REPEATED },
           ],
         },
       ];

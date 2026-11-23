@@ -37,10 +37,59 @@ export type UpdateInstallRefusal =
   | "windows-signature"
   | "windows-publisher";
 
+/**
+ * Why the Mac installer's inspection of a download ended in `inspection-failed`. Only codes,
+ * counts and the system version: never file contents, paths or anything secret.
+ */
+export interface UpdateInspectionFailure {
+  /**
+   * `hold-archive`: keeping a private copy of the download; `start-helper`: starting the
+   * inspection helper; `running-signature`: the helper's signature-only call; `archive`: its
+   * full call on the download.
+   */
+  stage: "hold-archive" | "start-helper" | "running-signature" | "archive";
+  /** The helper's exit code; null when it did not exit by itself. */
+  exitCode: number | null;
+  /** The signal that ended the helper, such as SIGKILL. */
+  signal: string | null;
+  /**
+   * What the helper printed. `reported`: it printed inspection-failed itself; `complete`: a
+   * result line, refused for its exit; `unrecognized`: a line no result names. Null when it
+   * never ran.
+   */
+  output: "empty" | "no-line-ending" | "too-long" | "unrecognized" | "reported" | "complete" | null;
+  /** The helper's own words for the step that failed, such as `parent-code -67065`. */
+  helperStep: string | null;
+  /** A system error code, such as ENOENT, never its message. */
+  errorCode: string | null;
+  durationMs: number;
+  /** The operating system and its version, such as `macOS 15.7.9`. */
+  system: string;
+}
+
+/**
+ * A copy the Mac installer made to check a download that it then couldn't remove. It never
+ * changes the inspection's answer; the update folder is cleared again at the next start and
+ * the next check.
+ */
+export interface UpdateCleanupFailure {
+  /** `checked-copy`: the unpacked app the helper checked; `held-copy`: the private copy of the download. */
+  copy: "checked-copy" | "held-copy";
+  /** A system error code, such as ENOTEMPTY, never its message. */
+  errorCode: string;
+}
+
 export type UpdateInstallCapability =
-  | { kind: "unavailable-in-this-build"; reason: UpdateInstallRefusal }
+  | {
+      kind: "unavailable-in-this-build";
+      reason: UpdateInstallRefusal;
+      /** Set with `inspection-failed` when the installer recorded why. */
+      failure?: UpdateInspectionFailure;
+      cleanup?: UpdateCleanupFailure;
+    }
   | {
       kind: "restart-available";
+      cleanup?: UpdateCleanupFailure;
       offerId: string;
       /** Confirm that macOS installs on the next quit even if restart cannot finish. */ completesOnQuit?: true;
     };
@@ -52,6 +101,13 @@ export interface UpdateAttemptOutcome {
   track: UpdateTrack;
   from: string;
   running: string | null;
+  /**
+   * When the update did not take, and the build that handed it off records its quit: whether
+   * that app finished quitting (`quitMs` after it asked to) or was stopped first. macOS installs
+   * a staged update only once the app has quit.
+   */
+  quit?: "finished" | "not-finished";
+  quitMs?: number;
 }
 
 export type DesktopUpdateState =
@@ -67,6 +123,8 @@ export type DesktopUpdateState =
       /** `mac-updater-refused`: the macOS updater stopped before it requested the archive. */
       reason:
         UpdateInstallRefusal | "attempt-not-saved" | "installer-failed" | "mac-updater-refused";
+      /** Set with `inspection-failed` when the installer recorded why. */
+      failure?: UpdateInspectionFailure;
     }
   | { kind: "not-checked" }
   | { kind: "checking" }

@@ -56,7 +56,7 @@ export function gatewayProblem(
   };
 }
 
-/** The Gateway pane's words. */
+/** The Gateway pane's words, then the Conversation section's (F-519). */
 export const SETTINGS_WORDS = {
   title: "Settings",
   close: "Close settings",
@@ -72,7 +72,16 @@ export const SETTINGS_WORDS = {
   reconnect: "Reconnect",
   disconnect: "Disconnect",
   useAnother: "Use another gateway",
+  conversation: "Conversation",
+  channelChats: "Show external channel chats",
 } as const;
+
+/** The desktop's note under the switch, in three parts; the middle one names a gateway setting. */
+export const CHANNEL_CHATS_NOTE = [
+  "Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or another channel stay out of the task list, its previews and its unread marks. A bot's main conversation always shows. If the gateway sends a channel's direct messages to it, which it does unless its ",
+  "session.dmScope",
+  " setting gives each channel conversation its own session, those messages still appear there.",
+] as const;
 
 /**
  * What the pane offers: Reconnect from Offline or Disconnected, Disconnect

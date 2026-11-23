@@ -1066,13 +1066,16 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
     }
   }
   for (const [version, kind] of [
-    ["1.1.0", "target-running"],
     ["1.0.0", "old-version-running"],
     ["1.0.1", "unconfirmed"],
     ["invalid", "unconfirmed"],
+    // Last: once the attempted version runs, the attempt is done with.
+    ["1.1.0", "target-running"],
   ] as const) {
     const prefs = store();
     if (version === "1.1.0") {
+      // Each start clears the update folder; this one checks it reads before clearing.
+      mkdirSync(updates);
       const read = prefs.readPreferences;
       vi.spyOn(prefs, "readPreferences").mockImplementation(async () => {
         expect(existsSync(updates)).toBe(true);
@@ -1086,6 +1089,8 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
       from: "1.0.0",
       track: "stable",
       running: version === "invalid" ? null : version,
+      // This run never reached will-quit after the handoff.
+      ...(kind !== "target-running" && { quit: "not-finished" }),
     });
     expect(existsSync(updates)).toBe(false);
   }
@@ -1249,8 +1254,8 @@ it("retains the selected track and last check when an authorized write replaces 
     attempt,
   });
   for (const [version, kind] of [
-    ["1.2.0", "target-running"],
     ["1.0.0", "old-version-running"],
+    ["1.2.0", "target-running"],
   ] as const) {
     const next = await start({ version, store: prefs });
     expect(next.get().lastAttempt).toMatchObject({ kind, running: version });
@@ -1555,11 +1560,24 @@ it.skipIf(process.platform === "win32")(
     });
     try {
       const inspect = vi.fn(async () => null);
-      const service = await start({ installer: macInstaller("arm64", inspect) });
+      const service = await start({
+        installer: macInstaller("arm64", inspect, undefined, undefined, "macOS 99.1"),
+      });
       const id = await offer(service);
       expect((await service.download(id)).snapshot).toMatchObject({
         state: { kind: "verified", offerId: id },
-        install: { kind: "unavailable-in-this-build", reason: "inspection-failed" },
+        install: {
+          kind: "unavailable-in-this-build",
+          reason: "inspection-failed",
+          failure: {
+            stage: "hold-archive",
+            errorCode: "ENOSPC",
+            exitCode: null,
+            signal: null,
+            output: null,
+            system: "macOS 99.1",
+          },
+        },
       });
       expect(full).toHaveBeenCalled();
       expect(inspect).not.toHaveBeenCalled();
@@ -1577,3 +1595,235 @@ it.skipIf(process.platform === "win32")(
     }
   },
 );
+
+it("a Restart whose inspection fails carries the installer's record of why", async () => {
+  const failure = {
+    stage: "running-signature",
+    exitCode: 0,
+    signal: null,
+    output: "reported",
+    helperStep: "parent-code -67065",
+    errorCode: null,
+    durationMs: 12,
+    system: "macOS 99.1",
+  } as const;
+  const inspect = vi
+    .fn<UpdateInstaller["inspect"]>()
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce("inspection-failed");
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspectionFailure: failure,
+    inspect,
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "restart-available",
+    offerId: id,
+    completesOnQuit: true,
+  });
+  expect((await service.restart(id)).snapshot).toMatchObject({
+    state: { kind: "handoff-failed", reason: "inspection-failed", failure },
+    install: { kind: "unavailable-in-this-build", reason: "inspection-failed", failure },
+  });
+  service.shutdown();
+});
+
+it("records no failure with a refusal other than inspection-failed", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    inspectionFailure: {
+      stage: "archive",
+      exitCode: 1,
+      signal: null,
+      output: "empty",
+      helperStep: null,
+      errorCode: null,
+      durationMs: 1,
+      system: "macOS 99.1",
+    },
+    inspect: async () => "mac-archive",
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "unavailable-in-this-build",
+    reason: "mac-archive",
+  });
+  service.shutdown();
+});
+
+it("carries a copy the installer couldn't remove with the install it offers", async () => {
+  const cleanup = { copy: "checked-copy", errorCode: "ENOTEMPTY" } as const;
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    cleanupFailure: cleanup,
+    inspect: async () => null,
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "restart-available",
+    offerId: id,
+    cleanup,
+  });
+  service.shutdown();
+});
+
+it("records a quit that finished after a handoff, and the next start tells it from one that didn't", async () => {
+  const handOff = async (quit: boolean) => {
+    rmSync(join(dir.path, "preferences.json.quit"), { force: true });
+    const installer: UpdateInstaller = {
+      unavailable: null,
+      completesOnQuit: true,
+      inspect: async () => null,
+      launch: async (_file, _signal, handed) => {
+        handed();
+        return null;
+      },
+    };
+    const service = await start({ installer });
+    const id = await offer(service);
+    await service.download(id);
+    expect((await service.restart(id)).snapshot.state.kind).toBe("handed-to-system");
+    // The app is asked to quit at the handoff; will-quit comes 23 s later.
+    if (quit) service.quitting(Date.now() + 23_000);
+    service.shutdown();
+  };
+  await handOff(true);
+  expect((await start()).get().lastAttempt).toMatchObject({
+    kind: "old-version-running",
+    quit: "finished",
+    quitMs: expect.any(Number),
+  });
+  expect((await start()).get().lastAttempt?.quitMs).toBeGreaterThanOrEqual(23_000);
+  await handOff(false);
+  expect((await start()).get().lastAttempt).toMatchObject({
+    kind: "old-version-running",
+    quit: "not-finished",
+  });
+  expect((await start()).get().lastAttempt).not.toHaveProperty("quitMs");
+  // An update that took says nothing about the quit.
+  expect((await start({ version: "1.1.0" })).get().lastAttempt).toEqual({
+    kind: "target-running",
+    target: "1.1.0",
+    from: "1.0.0",
+    track: "stable",
+    running: "1.1.0",
+  });
+});
+
+it("an update the system refused before any handoff reports no quit, finished or not", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async () => "mac-updater-refused",
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect((await service.restart(id)).snapshot.state.kind).toBe("handoff-failed");
+  service.shutdown();
+  const attempt = (await start()).get().lastAttempt;
+  expect(attempt).toMatchObject({ kind: "old-version-running", target: "1.1.0" });
+  expect(attempt).not.toHaveProperty("quit");
+});
+
+it("a quit recorded while the clock moved back is still a finished quit, of no time", async () => {
+  rmSync(join(dir.path, "preferences.json.quit"), { force: true });
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async (_file, _signal, handed) => {
+      handed();
+      return null;
+    },
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  await service.restart(id);
+  service.quitting(Date.now() - 60_000);
+  service.shutdown();
+  expect((await start()).get().lastAttempt).toMatchObject({ quit: "finished", quitMs: 0 });
+});
+
+it("says nothing about a quit for an attempt written by a build that didn't record quits", async () => {
+  await store().set(
+    "attempt",
+    JSON.stringify({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      time: "2026-11-23T00:00:00.000Z",
+      phase: "handoff",
+    }),
+  );
+  expect((await start()).get().lastAttempt).toEqual({
+    kind: "old-version-running",
+    target: "1.1.0",
+    from: "1.0.0",
+    track: "stable",
+    running: "1.0.0",
+  });
+});
+
+it("a quit with no handoff in this run records nothing", async () => {
+  const markQuit = vi.fn();
+  const service = await start({ store: { ...store(), markQuit } });
+  service.quitting();
+  service.shutdown();
+  expect(markQuit).not.toHaveBeenCalled();
+});
+
+it("a later quit after an unconfirmed handoff records no quit time", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async (_file, _signal, _handed, submitted) => {
+      submitted?.();
+      return null;
+    },
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect((await service.restart(id)).snapshot.state.kind).toBe("handoff-unconfirmed");
+  // The person quits an hour later; nothing asked the app to quit for the update.
+  service.quitting(Date.now() + 3_600_000);
+  service.shutdown();
+  const attempt = (await start()).get().lastAttempt;
+  expect(attempt).toMatchObject({ kind: "old-version-running", quit: "finished" });
+  expect(attempt).not.toHaveProperty("quitMs");
+});
+
+it("forgets the attempt once the attempted version runs, so a later downgrade by hand reports none", async () => {
+  const prefs = store();
+  await prefs.set(
+    "attempt",
+    JSON.stringify({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      time: "2026-11-23T00:00:00.000Z",
+      phase: "handoff",
+      marksQuit: true,
+    }),
+  );
+  prefs.markQuit({ attempt: "2026-11-23T00:00:00.000Z", ms: 9000 });
+  expect((await start({ version: "1.1.0", store: prefs })).get().lastAttempt).toMatchObject({
+    kind: "target-running",
+  });
+  expect(await prefs.get("attempt")).toBeNull();
+  expect(existsSync(join(dir.path, "preferences.json.quit"))).toBe(false);
+  // The person reinstalls 1.0.0 by hand: nothing claims an update didn't take.
+  expect((await start({ version: "1.0.0", store: prefs })).get().lastAttempt).toBeNull();
+});

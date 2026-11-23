@@ -40,6 +40,8 @@ export type Step =
   | { kind: "tool-from"; build: (ctx: PlanContext) => ReplyStep };
 
 const PAGES = "/scripted/pages/";
+/** What the `#image` scenario asks the image tool to draw. */
+export const IMAGE_PROMPT = "A sun over a green hill, in flat solid colours";
 /** An address outside loopback, in a documentation range nothing answers. */
 export const OUTSIDE_ADDRESS = "http://192.0.2.1/";
 /** Another loopback port than the scripted pages' (one Chromium does not refuse itself): not theirs, so refused. */
@@ -827,6 +829,28 @@ export const SCENARIOS: Scenario[] = [
       browserCall(() => ({ action: "navigate", url: OTHER_LOOPBACK })),
       browserCall(() => ({ action: "text" })),
       afterBrowser("Tried both addresses."),
+    ],
+  },
+  {
+    name: "image",
+    phrase: "draw the sun over a green hill",
+    summary:
+      "Asks the image tool for a picture. The tool starts a background task, and the picture arrives in the gateway's next turn in the same task.",
+    bots: "any bot, on an instance started with `--with-images`",
+    steps: () => [
+      think("I will ask the image tool for a picture."),
+      tool("image_generate", { prompt: IMAGE_PROMPT }),
+      (ctx) => {
+        const result = [...ctx.results].reverse().find((r) => r.name === "image_generate");
+        if (!result) return [];
+        return [
+          say(
+            /Background task started/.test(result.text)
+              ? "I asked for the picture. It will arrive in this task when it is ready."
+              : `The image tool answered: ${result.text.split("\n")[0]!.slice(0, 200)}`,
+          ),
+        ];
+      },
     ],
   },
 ];

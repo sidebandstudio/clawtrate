@@ -16,11 +16,13 @@ export function useNow(active: boolean): number {
 
 /**
  * The last thing in a running turn (conversation.md, section 5): the bot's
- * avatar at 28 px and one short phrase, with the elapsed time. One button:
- * it brings the running action's card into view and moves focus to its line,
- * without opening it (7.8), and says so in its name; with no action running
- * it does nothing and says that. A new phrase rises in; under reduced motion
- * it is replaced at once.
+ * avatar at 28 px and one short phrase, with the elapsed time. While an
+ * action's card can be brought into view it is one button that does so,
+ * moving focus to the card's line without opening it (7.8), and says so in its
+ * name. With nothing to bring into view (no action running, or no card while
+ * commands are hidden, 7.11) it is a plain line, not a tab stop, named by the
+ * state and the phrase. Under it, without commands shown, is what the bot is
+ * thinking. A new phrase rises in; under reduced motion it is replaced at once.
  */
 export function StatusLine({
   bot,
@@ -34,21 +36,9 @@ export function StatusLine({
   const now = useNow(view.startedAt !== null);
   const shown = view.startedAt !== null ? elapsed(now - view.startedAt) : null;
   const words = view.state === "waiting" ? "waiting for you" : view.state;
-  return (
-    <button
-      type="button"
-      className="status-line"
-      data-state={view.state}
-      data-tone={view.tone}
-      data-testid="status-line"
-      title={view.phrase}
-      aria-label={
-        onShow
-          ? `${bot.name}, ${words}: ${view.phrase}. Show the action.`
-          : `${bot.name}, ${words}${view.phrase.toLowerCase() === words ? "" : `: ${view.phrase}`}. Nothing running to show.`
-      }
-      onClick={onShow ?? undefined}
-    >
+  const said = `${bot.name}, ${words}${view.phrase.toLowerCase() === words ? "" : `: ${view.phrase}`}`;
+  const parts = (
+    <>
       <Presence bot={bot} state={view.state} badge={view.badge} hidden />
       <span className="status-phrase" key={view.phrase} data-testid="status-phrase">
         {view.phrase}
@@ -58,7 +48,40 @@ export function StatusLine({
           {shown}
         </span>
       )}
+    </>
+  );
+  const common = {
+    className: "status-line",
+    "data-state": view.state,
+    "data-tone": view.tone,
+    "data-testid": "status-line",
+    title: view.phrase,
+  };
+  const line = onShow ? (
+    <button
+      type="button"
+      {...common}
+      aria-label={`${bot.name}, ${words}: ${view.phrase}. Show the action.`}
+      onClick={onShow}
+    >
+      {parts}
     </button>
+  ) : (
+    // Nothing to bring into view: a plain line, not a control (7.11).
+    <div {...common} role="group" aria-label={`${said}.`}>
+      {parts}
+    </div>
+  );
+  // Without commands shown, what the bot is thinking, as it thinks (7.11). Its latest words
+  // are at the bottom, so the line keeps its last three lines.
+  if (!view.thought) return line;
+  return (
+    <>
+      {line}
+      <p className="status-thought" data-testid="status-thought">
+        <span>{view.thought}</span>
+      </p>
+    </>
   );
 }
 
