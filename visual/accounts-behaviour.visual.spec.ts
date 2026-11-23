@@ -1478,6 +1478,38 @@ test("F-533: an id the bridge would refuse is refused where it is typed, and not
   expect((await sent(page)).filter((each) => each.type === "setBotModel")).toEqual([]);
 });
 
+test("F-534: when the gateway reports a newer OpenClaw, New bot and Settings say so under the model, with a link to OpenClaw's update instructions and no command", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&openclaw=behind`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  const note = page.getByTestId("openclaw-update");
+  await expect(note).toContainText(
+    "Your gateway runs OpenClaw 2026.10.6, and 2026.11.6 is out. Updating the gateway is how newer models get listed.",
+  );
+  await expect(note.getByRole("link", { name: /OpenClaw's update instructions/ })).toHaveAttribute(
+    "href",
+    "https://docs.openclaw.ai/install/updating",
+  );
+  // No command: the step differs by install, a container's included.
+  await expect(note.getByTestId("command")).toHaveCount(0);
+  await expect(note).not.toContainText("openclaw update");
+  await page.keyboard.press("Escape");
+  await openFixture(page, `${ADMIN}&openclaw=behind&panel=open&tab=settings`, "light");
+  await expect(page.getByTestId("openclaw-update")).toBeVisible();
+  // A beta is named as one, never as a stable release.
+  await openFixture(page, `${ADMIN}&openclaw=beta&panel=open&tab=settings`, "light");
+  await expect(page.getByTestId("openclaw-update")).toContainText(
+    "Your gateway runs OpenClaw 2026.10.6, and 2026.11.10-beta.1 is out on its beta channel, not as a stable release. Updating the gateway is how newer models get listed.",
+  );
+  // Without the gateway's report, nothing is said.
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings`, "light");
+  await expect(page.getByTestId("model-select")).toBeVisible();
+  await expect(page.getByTestId("openclaw-update")).toHaveCount(0);
+});
+
 /** New bot, connecting an account, on the sign-in methods. */
 async function connectFromNewBot(page: Page) {
   await page.keyboard.press("ControlOrMeta+n");

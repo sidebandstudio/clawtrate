@@ -4,6 +4,7 @@ export * from "./gateway-names.ts";
 export * from "./host.ts";
 export * from "./mapping.ts";
 export * from "./avatar.ts";
+export * from "./gateway-update.ts";
 export * from "./runs.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";

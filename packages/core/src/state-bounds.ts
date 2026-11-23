@@ -5,6 +5,7 @@
 // `docs/decisions.md` states the same numbers. All lengths are JSON
 // characters (`bounds.ts`).
 
+import type { OpenClawUpdate } from "./gateway-update.ts";
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import {
   MAX_ACCOUNTS,
@@ -704,6 +705,7 @@ const connection = object<ConnectionState>()({
   gatewayId: ID,
   gatewayName: NAME,
   serverVersion: NAME,
+  openclawUpdate: object<OpenClawUpdate>()({ current: NAME, latest: NAME, channel: NAME }),
   protocol: NUMBER,
   scopes: list(MAX_SCOPES, NAME),
   requestedScopes: list(MAX_SCOPES, NAME),

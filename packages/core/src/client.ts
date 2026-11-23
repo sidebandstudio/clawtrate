@@ -1,6 +1,7 @@
 // The gateway connection and the state it projects. Built on the official
 // browser-safe protocol client, with transport, storage and signing injected.
 
+import { readOpenClawUpdate } from "./gateway-update.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
   readVoice,
@@ -7284,6 +7285,7 @@ export class ClawtrateClient {
         requestedScopes: this.scopesToAsk(settings.url, stored),
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
+        openclawUpdate: sameGateway ? state.connection.openclawUpdate : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
       },
       transcripts: sameGateway
@@ -8333,6 +8335,7 @@ export class ClawtrateClient {
       serverVersion: this.isSetup(this.settings?.url)
         ? setupVersion(hello.server.version)
         : hello.server.version,
+      openclawUpdate: readOpenClawUpdate(asRecord(hello.snapshot)?.updateAvailable),
       protocol: hello.protocol,
       scopes,
       canWrite,
@@ -9073,6 +9076,11 @@ export class ClawtrateClient {
 
   private handleEvent(event: EventFrame, generation: number): void {
     switch (event.event) {
+      case "update.available":
+        this.setConnection({
+          openclawUpdate: readOpenClawUpdate(asRecord(event.payload)?.updateAvailable),
+        });
+        return;
       case "sessions.changed":
         this.handleSessionsChanged(event.payload, generation);
         return;
