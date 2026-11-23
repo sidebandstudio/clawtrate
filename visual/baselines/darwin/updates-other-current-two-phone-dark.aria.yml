@@ -1,0 +1,24 @@
+- dialog "Settings":
+  - region "Updates":
+    - button "Close settings"
+    - button "Back to settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - paragraph: This build can't install updates itself.
+    - term: Version
+    - definition:
+      - text: Clawtrate 0.1.0
+      - paragraph: This copy is a Stable build.
+    - radiogroup "Update track":
+      - text: Update track
+      - radio "Stable"
+      - text: Stable
+      - radio "Beta" [checked]
+      - text: Beta
+    - paragraph: The next check asks the Beta source.
+    - group "Update status":
+      - term: Updates
+      - definition: No newer Beta build was offered. Clawtrate 0.1.0 is still running.
+      - button "Check for Updates"
+      - paragraph: Checks beta.updates.example for a newer build, only when you choose to.
+    - status: No newer Beta build was offered. Clawtrate 0.1.0 is still running. This build can't install updates itself.

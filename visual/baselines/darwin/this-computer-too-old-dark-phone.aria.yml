@@ -1,0 +1,8 @@
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "This OpenClaw is too old for automatic setup" [level=3]
+  - paragraph: OpenClaw 2026.6.2 is below the version this Clawtrate offers for automatic setup (2026.7.0). Update it, then look again.
+  - button "Look again"
+  - group: How to update
+  - paragraph: On this computer

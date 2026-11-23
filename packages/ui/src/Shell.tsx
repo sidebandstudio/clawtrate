@@ -1,4 +1,9 @@
-import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
+import {
+  mapSessionRow,
+  NOT_OPEN_IN_VIEW,
+  type ClawtrateState,
+  type HostInfo,
+} from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
@@ -271,13 +276,44 @@ export function Shell({
   }, [unread, onUnreadCount]);
   useEffect(() => () => onUnreadCount?.(0), [onUnreadCount]);
 
-  // Keep exactly the selected task's transcript open on the host.
+  // Keep exactly the selected task's transcript open on the host. A refused open
+  // (every task slot taken, say) leaves this view without the task, and says why.
+  // Only the latest open of a task decides its refusal: a late answer to an earlier
+  // one says nothing about now.
   const taskKey = task?.key ?? null;
+  const [refusals, setRefusals] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const opens = useRef({ count: 0, latest: new Map<string, number>() });
+  const open = useCallback(
+    (key: string) => {
+      const asked = (opens.current.count += 1);
+      opens.current.latest.set(key, asked);
+      const settle = (error: string | null) => {
+        if (opens.current.latest.get(key) !== asked) return;
+        setRefusals((now) => {
+          if ((now.get(key) ?? null) === error) return now;
+          const next = new Map(now);
+          if (error === null) next.delete(key);
+          else next.set(key, error);
+          return next;
+        });
+      };
+      void send({ type: "openSession", key }).then(
+        () => settle(null),
+        (error: unknown) => settle(error instanceof Error ? error.message : String(error)),
+      );
+    },
+    [send],
+  );
+  const shown = useRef<string | null>(null);
   useEffect(() => {
     if (!taskKey) return;
-    void send({ type: "openSession", key: taskKey });
-    return () => void send({ type: "closeSession", key: taskKey });
-  }, [taskKey, send]);
+    shown.current = taskKey;
+    open(taskKey);
+    return () => {
+      shown.current = null;
+      void send({ type: "closeSession", key: taskKey });
+    };
+  }, [taskKey, send, open]);
 
   // Opening a task reads it on the gateway too (F-022), and so do new replies while it
   // is open and leaving it. The engine makes that read only while the connection
@@ -657,12 +693,23 @@ export function Shell({
       : connectionStrip;
   const catchingUp =
     phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
+  // Reading again keeps every hold: closing and opening would not read while another view holds
+  // the task. A view the host doesn't count as holding it (its open was refused, or a reopen
+  // after a reconnect was) is told so, and opens the task instead, unless it has left the task
+  // by then: its close is sent, so an open would hold the task with nothing to let it go.
   const reload = useCallback(() => {
     if (!taskKey) return;
-    void send({ type: "closeSession", key: taskKey }).then(() =>
-      send({ type: "openSession", key: taskKey }),
-    );
-  }, [taskKey, send]);
+    const key = taskKey;
+    send({ type: "reloadSession", key }).catch((error: unknown) => {
+      // The desktop's IPC puts its own words before the host's.
+      if (
+        shown.current === key &&
+        error instanceof Error &&
+        error.message.endsWith(NOT_OPEN_IN_VIEW)
+      )
+        open(key);
+    });
+  }, [taskKey, open, send]);
 
   return (
     <div
@@ -726,6 +773,7 @@ export function Shell({
                 taskCount={selection.tasks.length}
                 discovery={state.discovery}
                 transcript={transcript}
+                openError={taskKey ? (refusals.get(taskKey) ?? null) : null}
                 panelOpen={panelOpen}
                 onTogglePanel={togglePanel}
                 onOpenPanel={() => setPanel(true)}

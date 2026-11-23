@@ -1622,6 +1622,9 @@ export type BridgeSession = {
   dispose(): void;
 };
 
+/** The refusal of a reread from a view that doesn't hold the task, so the view can open it instead. */
+export const NOT_OPEN_IN_VIEW = "That task isn't open in this view.";
+
 export function createBridgeSession(
   client: ClawtrateClient,
   policy: BridgePolicy = {},
@@ -1755,7 +1758,7 @@ class ViewerSession implements BridgeSession {
         return;
       }
       case "reloadSession":
-        if (!this.open.has(command.key)) throw new Error("That task isn't open in this view.");
+        if (!this.open.has(command.key)) throw new Error(NOT_OPEN_IN_VIEW);
         return client.reloadSession(command.key);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");

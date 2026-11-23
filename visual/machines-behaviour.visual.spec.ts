@@ -7,7 +7,7 @@
 // Back returning to the row that opened it.
 import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
-import { contextFor, hold, openFixture, OTTO_DISK, release, SIZES } from "./fixture.ts";
+import { contextFor, hold, NOW, openFixture, OTTO_DISK, release, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings`;
@@ -148,6 +148,7 @@ test("F-046: switching bots never draws the previous bot's place while the new o
 
 type Fixture = {
   invoke: (command: { type: string }) => Promise<unknown>;
+  getState: () => ClawtrateState;
   setState: (change: (state: ClawtrateState) => ClawtrateState) => void;
 };
 /** The connection again, with other scopes: a reconnect at another tier. */
@@ -668,4 +669,81 @@ test("F-157: with admin, another device is renamed and a machine removed after a
   await confirm.getByRole("button", { name: "Remove" }).click();
   await expect(settingsAnnouncer(page)).toHaveText("Removed");
   await expect(page.getByTestId("machine-list")).not.toContainText("studio-mac");
+});
+
+const patchConnection = (page: Page, change: Partial<ClawtrateState["connection"]>) =>
+  page.evaluate((change) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      connection: { ...state.connection, ...change },
+    }));
+  }, change);
+
+/**
+ * On a read-only connection, asks for admin on the Runs on page and replays the client's order on
+ * the grant. Returns the connection as it was before the grant.
+ */
+async function grantOnRunsOn(page: Page) {
+  await page.clock.install({ time: NOW });
+  await openFixture(page, `${PANE}&access=read`, "light");
+  // Paused, so the granted bar cannot time out before the check reads it, however slow the page.
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  await openRunsOn(page);
+  const bar = page.getByTestId("admin-bar");
+  await bar.getByRole("button", { name: "Request admin access" }).click();
+  await expect(bar).toContainText("Asking the gateway");
+  const connection = await page.evaluate(
+    () =>
+      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.getState().connection,
+  );
+  const { gatewayId, upgrade } = connection;
+  // The approval, then the reconnect's hello with the admin scope while the gateway's id is
+  // cleared and the connect time is fresh, then the identity read, each its own snapshot. The
+  // connect time and the scopes both change, so the page is keyed anew.
+  await patchConnection(page, { upgrade: { ...upgrade, status: "approved" } });
+  await expect(bar).toContainText("Approved.");
+  await patchConnection(page, {
+    scopes: upgrade.scopes,
+    canAdmin: true,
+    canWrite: true,
+    gatewayId: null,
+    connectedAt: (connection.connectedAt ?? 0) + 1,
+  });
+  await patchConnection(page, { gatewayId });
+  await expect(bar).toContainText("Admin access granted.");
+  return connection;
+}
+
+test("F-046: the Runs on page says admin access was granted after an explicit admin request", async ({
+  page,
+}) => {
+  await grantOnRunsOn(page);
+});
+
+test("F-046: admin taken away soon after the grant brings back the admin bar, not the granted one", async ({
+  page,
+}) => {
+  const before = await grantOnRunsOn(page);
+  await patchConnection(page, {
+    scopes: before.scopes,
+    canAdmin: false,
+    canWrite: before.canWrite,
+    connectedAt: (before.connectedAt ?? 0) + 2,
+  });
+  // The admin bar, with the request's own state, in place of the granted bar.
+  const bar = page.getByTestId("admin-bar");
+  await expect(bar).toHaveAttribute("data-status", "approved");
+  await expect(bar).not.toContainText("Admin access granted.");
+});
+
+test("F-046: a connection lost soon after the grant no longer says admin access was granted", async ({
+  page,
+}) => {
+  await grantOnRunsOn(page);
+  await patchConnection(page, { status: "connecting" });
+  await expect(page.getByTestId("runs-on-page")).not.toContainText("Admin access granted.");
+  // Back on the same gateway with admin, the grant is not announced again.
+  await patchConnection(page, { status: "connected" });
+  await expect(page.getByTestId("runs-on-page")).not.toContainText("Admin access granted.");
 });

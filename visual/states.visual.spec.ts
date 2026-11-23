@@ -1,7 +1,7 @@
 // F-471: every state this branch added matches its approved baseline, in light
 // and dark, at 1440 px and at phone width.
-import { expect, test } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES, STATE_SCENES, THEMES } from "./fixture.ts";
+import { test } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, SIZES, STATE_SCENES, THEMES } from "./fixture.ts";
 
 const SHOWN = SIZES.filter((size) => size.name === "1440" || size.phone);
 

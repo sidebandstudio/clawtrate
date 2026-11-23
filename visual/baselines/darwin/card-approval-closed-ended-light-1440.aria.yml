@@ -1,0 +1,25 @@
+- group:
+  - text: "Closed: the run ended Run mv /srv/media/transcode-cache /srv/scratch/transcode-cache on media-box"
+  - time: 5:39 PM
+  - paragraph: The run ended before this was answered. The command was not run.
+  - group:
+    - text: Hide full request
+    - code: mv /srv/media/transcode-cache /srv/scratch/transcode-cache
+    - button "Copy command"
+    - paragraph: Arguments
+    - list "Arguments":
+      - listitem:
+        - code: mv
+      - listitem:
+        - code: /srv/media/transcode-cache
+      - listitem:
+        - code: /srv/scratch/transcode-cache
+    - term: Runs on
+    - definition: media-box
+    - term: Folder
+    - definition: /srv/media
+    - term: Asked by
+    - definition: Otto
+    - term: Warning
+    - definition: Moves a folder outside Otto's own workspace.
+  - button "Raw"

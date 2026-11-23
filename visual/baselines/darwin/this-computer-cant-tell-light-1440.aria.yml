@@ -1,0 +1,8 @@
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Clawtrate couldn't tell what is on this computer" [level=3]
+  - paragraph: The look didn't finish in time.
+  - button "Use Advanced"
+  - button "Look again"
+  - paragraph: On this computer

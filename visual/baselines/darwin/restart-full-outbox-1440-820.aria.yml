@@ -1,0 +1,6 @@
+- alertdialog "Restart to update?":
+  - heading "Restart to update?" [level=2]
+  - paragraph: Restart asks Clawtrate to install version 0.2.0 and reopen. If macOS stages the update, it can install the next time Clawtrate quits.
+  - paragraph: "64 messages to Otto haven't been sent yet. Restarting discards them: they aren't kept as drafts. Runs on the gateway keep going. 64 messages to Otto were sent to the gateway and aren't confirmed yet. Restarting stops following them. The gateway may still have them."
+  - button "Cancel"
+  - button "Restart"
