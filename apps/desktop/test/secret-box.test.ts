@@ -182,10 +182,9 @@ describe("the Keychain through safeStorage", () => {
       [
         "  private socketsProved(url: string): boolean {",
         "    const check = this.setupCheck?.url === url ? this.setupCheck : null;",
-        "    return (",
-        "      (!!check?.createSocket && !!check.prove) ||",
-        "      (this.savedRoute?.url === url && !!this.savedRoute.sockets)",
-        "    );",
+        "    // The setup's own factory, when it has one, makes every socket: its last proof decides.",
+        "    if (check?.createSocket) return !!check.prove;",
+        "    return this.savedRoute?.url === url && !!this.savedRoute.sockets;",
         "  }",
       ].join("\n"),
     );

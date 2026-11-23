@@ -362,6 +362,19 @@ describe("full access behind a flag", () => {
     client.stop();
   });
 
+  it("a socket factory with no last proof proves nothing, even beside a route the host can prove", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway, {
+      client: { localConnect: () => provedRoute(gateway, () => true).sockets },
+    });
+    const { createSocket, consent } = provedRoute(gateway, () => true).setup;
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, { createSocket, consent, route: ROUTE });
+    await until(() => gateway.connects.length === 1);
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
   it("through the proved sockets without the person's consent, it asks for read alone", async () => {
     const gateway = grantingGateway();
     const { client } = fullClient(gateway);
