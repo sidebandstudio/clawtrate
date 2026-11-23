@@ -2,7 +2,7 @@
 // name, the Beta pill on a Beta build only, and the update button. In the
 // one-pane layout the rail's top band shows the same brand and button instead.
 
-import { useRef, useState, type CSSProperties, type JSX } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type JSX } from "react";
 import logoUrl from "./assets/logo-mark.png";
 import { Confirm } from "./bots/Dialog.tsx";
 import { ClockIcon, DownloadIcon, RefreshIcon, WarnIcon } from "./icons.tsx";
@@ -60,6 +60,14 @@ export function UpdateButton({
   const capability = s && restartCapability(s);
   const confirming = !!capability && capability.offerId === confirmId;
   if (confirmId && !confirming) setConfirmId(null);
+  // A restart asked for here that the host refused or never answered: its reason is said only in
+  // Settings → Updates, so that opens.
+  const restartAsked = useRef(false);
+  useEffect(() => {
+    if (!restartAsked.current || reading.working) return;
+    restartAsked.current = false;
+    if (reading.message) onOpenUpdates();
+  }, [reading.working, reading.message, onOpenUpdates]);
   if (!entry) return null;
   return (
     <>
@@ -103,6 +111,7 @@ export function UpdateButton({
           onCancel={() => setConfirmId(null)}
           onAction={() => {
             setConfirmId(null);
+            restartAsked.current = true;
             void reading.restart(capability.offerId);
           }}
         />

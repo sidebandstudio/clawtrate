@@ -94,7 +94,13 @@ for (const size of [DESKTOP, PHONE])
         await page.getByRole("menuitem", { name: "Name this gateway…" }).click();
         const dialog = page.getByRole("dialog", { name: "Name this gateway" });
         await expect(dialog).toHaveAccessibleDescription(
-          new RegExp(`stays on this device and is never sent to the gateway\\.\\s*${address}`),
+          new RegExp(
+            `stays on this device and is never sent to the gateway\\.\\s*wss?://${address}`,
+          ),
+        );
+        // The whole address the name is kept under, scheme included, not only host and port.
+        await expect(dialog.locator(".rail-dialog-address")).toHaveText(
+          new RegExp(`^wss?://${address.replace(/\./g, "\\.")}$`),
         );
         const field = dialog.getByRole("textbox", { name: "Name" });
         await expect(field).toBeFocused();
@@ -227,6 +233,25 @@ test.describe("1440 dark", () => {
       "Update available: Clawtrate 0.2.0",
     );
   });
+
+  for (const [refusal, said] of [
+    ["busy", "Another update action is in progress."],
+    ["stale", "This offer is no longer current."],
+    ["invalid", "Couldn't start the restart."],
+    ["silent", "Couldn't get a reply to the restart request."],
+  ] as const)
+    test(`F-520: a restart the host refuses (${refusal}) opens Updates, which says why`, async ({
+      page,
+    }) => {
+      await openFixture(page, `scene=main&updates=ready&restart=${refusal}`, "dark");
+      await updateButton(page).click();
+      await page
+        .getByRole("alertdialog", { name: "Restart to update?" })
+        .getByRole("button", { name: "Restart", exact: true })
+        .click();
+      await expect(page.locator(".updates-section")).toBeVisible();
+      await expect(page.locator(".updates-section")).toContainText(said);
+    });
 
   test("F-520: Restarting turns, and stands still with reduced motion", async ({ page }) => {
     await openFixture(page, "scene=main&updates=preparing", "dark");

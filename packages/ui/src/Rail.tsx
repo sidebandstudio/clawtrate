@@ -7,7 +7,12 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE, avatarFor, MAX_GATEWAY_NAME_CHARS } from "@clawtrate/core";
+import {
+  ACTIVE_RUN_MESSAGE,
+  avatarFor,
+  gatewayAddress,
+  MAX_GATEWAY_NAME_CHARS,
+} from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -1257,7 +1262,7 @@ export function Rail({
                       The name shows in the sidebar instead of the address. It stays on this device
                       and is never sent to the gateway.
                     </p>
-                    <p className="rail-dialog-address">{address}</p>
+                    <p className="rail-dialog-address">{gatewayAddress(forgetUrl) ?? address}</p>
                   </>
                 ),
                 confirm: { label: "Save" },

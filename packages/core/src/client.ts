@@ -5856,10 +5856,6 @@ export class ClawtrateClient {
   }
 
   /**
-   * Set the "Turn time limit" (F-100), in whole minutes, and keep it for the next start. Runs
-   * already going are timed against the new limit from when they started.
-   */
-  /**
    * Name the selected gateway on this device, or remove its name with an empty
    * one. Only the address the person saw: another viewer may have changed it.
    * Kept in the host's storage first; the gateway is never told.
@@ -5872,6 +5868,10 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state }));
   }
 
+  /**
+   * Set the "Turn time limit" (F-100), in whole minutes, and keep it for the next start. Runs
+   * already going are timed against the new limit from when they started.
+   */
   async setTurnLimit(minutes: number): Promise<void> {
     if (!validTurnLimit(minutes))
       throw new Error(

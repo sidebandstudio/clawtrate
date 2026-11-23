@@ -97,7 +97,10 @@ function SetupSteps({
   /** While pairing, the step says what it is waiting for. */
   pairingText?: ReactNode;
 }) {
-  const gateway = gatewayTitle(connection);
+  // Pairing is a trust decision, and a name is kept by address alone: a different gateway at a
+  // remembered address would carry it. The address stays beside the name.
+  const address = gatewayLabel(connection.gatewayUrl);
+  const gateway = connection.gatewayName ? `${connection.gatewayName} (${address})` : address;
   const pairing = connection.status === "pairing";
   const reached = pairing || loadingBots;
   const steps: Array<{ state: StepState; label: ReactNode; waiting?: boolean }> = [
