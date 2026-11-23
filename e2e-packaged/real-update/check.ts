@@ -293,16 +293,19 @@ async function drive(page: Page, pid: number): Promise<boolean> {
   result.reopenedRunsReplacement = running !== null && running === cdhash(app);
   if (reopened !== null) {
     await sleep(5000);
+    // The updated app got through its startup: the same process is still running.
+    result.reopenedStayedOpen = mainPid() === reopened;
     // A runner is discarded afterwards; still, stop only what this check started.
     for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
   }
   // Passing needs the replacement, its signature meeting the previous release's requirement,
-  // and the updated app open again, running the replacement's code.
+  // and the updated app open again, running the replacement's code, and still open after startup.
   const ok =
     result.installedVersion === offered.state.version &&
     !!requirement &&
     (result.replacedSignature as string).includes("\nexit 0\n") &&
-    result.reopenedRunsReplacement === true;
+    result.reopenedRunsReplacement === true &&
+    result.reopenedStayedOpen === true;
   result.outcome = ok ? "updated in place" : "not updated in place";
   return ok;
 }
