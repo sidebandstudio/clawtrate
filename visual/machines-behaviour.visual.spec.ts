@@ -7,7 +7,7 @@
 // Back returning to the row that opened it.
 import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
-import { contextFor, hold, openFixture, OTTO_DISK, release, SIZES } from "./fixture.ts";
+import { contextFor, hold, NOW, openFixture, OTTO_DISK, release, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings`;
@@ -148,6 +148,7 @@ test("F-046: switching bots never draws the previous bot's place while the new o
 
 type Fixture = {
   invoke: (command: { type: string }) => Promise<unknown>;
+  getState: () => ClawtrateState;
   setState: (change: (state: ClawtrateState) => ClawtrateState) => void;
 };
 /** The connection again, with other scopes: a reconnect at another tier. */
@@ -668,4 +669,45 @@ test("F-157: with admin, another device is renamed and a machine removed after a
   await confirm.getByRole("button", { name: "Remove" }).click();
   await expect(settingsAnnouncer(page)).toHaveText("Removed");
   await expect(page.getByTestId("machine-list")).not.toContainText("studio-mac");
+});
+
+test("F-046: the Runs on page says admin access was granted after an explicit admin request", async ({
+  page,
+}) => {
+  await page.clock.install({ time: NOW });
+  await openFixture(page, `${PANE}&access=read`, "light");
+  // Paused, so the granted bar cannot time out before the check reads it, however slow the page.
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  await openRunsOn(page);
+  const bar = page.getByTestId("admin-bar");
+  await bar.getByRole("button", { name: "Request admin access" }).click();
+  await expect(bar).toContainText("Asking the gateway");
+
+  const connection = await page.evaluate(
+    () =>
+      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.getState().connection,
+  );
+  const { gatewayId, upgrade } = connection;
+  const patch = (change: Partial<ClawtrateState["connection"]>) =>
+    page.evaluate((change) => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, ...change },
+      }));
+    }, change);
+  // The client's order on an admin grant: the approval, then the reconnect's hello with the admin
+  // scope while the gateway's id is cleared and the connect time is fresh, then the identity read,
+  // each its own snapshot. The connect time and the scopes both change, so the page is keyed anew.
+  await patch({ upgrade: { ...upgrade, status: "approved" } });
+  await expect(bar).toContainText("Approved.");
+  await patch({
+    scopes: upgrade.scopes,
+    canAdmin: true,
+    canWrite: true,
+    gatewayId: null,
+    connectedAt: (connection.connectedAt ?? 0) + 1,
+  });
+  await patch({ gatewayId });
+  await expect(bar).toContainText("Admin access granted.");
 });
