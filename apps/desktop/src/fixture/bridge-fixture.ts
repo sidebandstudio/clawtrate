@@ -63,6 +63,7 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { isPictureScene, PICTURE_SCENES, pictureAnswers, pictureScene } from "./pictures.ts";
 import {
   computerFixture,
   FIXTURE_VIEWER,
@@ -122,6 +123,7 @@ export const SCENES = [
   ...LIVE_SCENES,
   ...RAIL_SCENES,
   ...ACTION_SCENES,
+  ...PICTURE_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -441,6 +443,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
+      if (isPictureScene(name)) return { initial: pictureScene(base, now), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
 }
@@ -548,6 +551,7 @@ export function createFixtureBridge(
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
+  const pictureAnswer = pictureAnswers(name);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
   const routineParams = options.routines ?? { state: "none" };
   let state =
@@ -712,6 +716,7 @@ export function createFixtureBridge(
     sent.push(command);
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
+    if (command.type === "readChatPicture") return pictureAnswer();
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;

@@ -82,6 +82,14 @@ export function revealStep(taskKey: string, callId: string): boolean {
       document.querySelector(`.transcript [data-first="${CSS.escape(fold)}"]`) !== null);
   if (!shown) return false;
   if (typeof fold === "string") writeView(taskKey, viewKeys.fold(fold), true);
+  // Without commands shown the step is in its run line's list (conversation.md, 7.11): open it.
+  const holder =
+    stepElement(callId) ??
+    (typeof fold === "string"
+      ? document.querySelector(`.transcript [data-first="${CSS.escape(fold)}"]`)
+      : null);
+  const runLine = holder?.closest<HTMLElement>(".run-line[data-run]");
+  if (runLine?.dataset.run) writeView(taskKey, viewKeys.run(runLine.dataset.run), true);
   writeView(taskKey, viewKeys.call(callId), true);
   writeView(taskKey, viewKeys.view(callId), "readable");
   // Once the fold and the row are drawn open.

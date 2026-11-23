@@ -988,7 +988,8 @@ test.describe("the computer button, recovery and the machine", () => {
   test("F-153 F-154: commands with how each ended and its duration, and recent actions newest first, each one step from the chat", async ({
     page,
   }) => {
-    await openFixture(page, `${OTTO_COMPUTER}&computer=watching`, "light");
+    // The command lines themselves: with "Show commands" on (conversation.md, 7.11); F-530 checks the default.
+    await openFixture(page, `${OTTO_COMPUTER}&computer=watching&commands=show`, "light");
     const commands = computerPanel(page).getByTestId("computer-commands");
     await expect(commands.locator(".command-row").first()).toContainText(
       "mv /var/lib/transcode-cache /var/lib/transcode-cache.old",

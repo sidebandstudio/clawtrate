@@ -1,0 +1,15 @@
+- region "Conversation":
+  - button "Back to bots"
+  - button "Marlow, Main. Show details.": Marlow
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Main" [level=1]
+    - text: Today 4:56 PM
+    - paragraph: Can you tighten the intro of the newsletter draft?
+    - paragraph: Tightened the intro and cut about 80 words.
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Marlow's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

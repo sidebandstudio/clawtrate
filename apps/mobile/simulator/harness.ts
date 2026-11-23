@@ -17,8 +17,9 @@ import { createServer, Socket, type Server } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
-import { callGateway, openInstance } from "../../../tools/dev-gateway/src/cli.ts";
+import { callGateway, openInstance, openOperator } from "../../../tools/dev-gateway/src/cli.ts";
 import { IOS_STREAM_HOLD_FILE, parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
+import type { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
 import { decodePng } from "../../../tools/brand/src/png.ts";
 
 const run = promisify(execFile);
@@ -132,8 +133,13 @@ export const waitFor = (selector: Selector | string, ms = 60_000): Step => ({
 export const waitGone = (selector: Selector | string, ms = 60_000): Step => ({
   extendedWaitUntil: { notVisible: selector, timeout: ms },
 });
-export const scrollTo = (selector: Selector, direction: "UP" | "DOWN"): Step => ({
-  scrollUntilVisible: { element: selector, direction, timeout: 30_000 },
+/**
+ * Swipe until the element is wholly on screen. Maestro looks before each swipe
+ * and stops once `ms` has passed, so a long scroll needs time for every swipe
+ * and the settling Maestro waits for before and after it.
+ */
+export const scrollTo = (selector: Selector, direction: "UP" | "DOWN", ms = 30_000): Step => ({
+  scrollUntilVisible: { element: selector, direction, timeout: ms },
 });
 
 type Node = { attributes?: Record<string, string>; children?: Node[] };
@@ -315,6 +321,23 @@ export function textSize(size: "large" | "accessibility-extra-extra-extra-large"
   simctl("ui", env.device, "content_size", size);
 }
 
+/**
+ * The system's Reduce Motion, as Settings, Accessibility, Motion sets it.
+ * Launch the app again afterwards, so it reads the new setting as it starts.
+ */
+export function reduceMotion(on: boolean) {
+  simctl(
+    "spawn",
+    env.device,
+    "defaults",
+    "write",
+    "com.apple.Accessibility",
+    "ReduceMotionEnabled",
+    "-bool",
+    String(on),
+  );
+}
+
 /** The built app's Info.plist value for a key. */
 export function infoPlist(key: string): string {
   const result = spawnSync(
@@ -426,6 +449,19 @@ export async function openclaw(args: string[]): Promise<string> {
 
 export function gatewayCall<T>(method: string, params: unknown): Promise<T> {
   return callGateway<T>(openInstance(env.instance), method, params);
+}
+
+/**
+ * A client of the check's own on the instance, paired with the scopes it names. The
+ * OpenClaw command asks for the fewest scopes a method needs, and some requests need admin.
+ */
+export function operator(displayName: string, scopes: string[]): Promise<OperatorSession> {
+  return openOperator(openInstance(env.instance), displayName, scopes, []);
+}
+
+/** A folder in the instance's own state for a bot's workspace. */
+export function workspaceFor(name: string): string {
+  return join(openInstance(env.instance).stateDir, "workspaces", name);
 }
 
 /** Keep this task's scripted reply open until the check has observed the live run. */

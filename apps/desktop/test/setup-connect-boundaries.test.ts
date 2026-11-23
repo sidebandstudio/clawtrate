@@ -24,7 +24,12 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ClawtrateClient, type ClawtrateHost } from "@clawtrate/core";
+import {
+  ClawtrateClient,
+  FULL_SCOPES,
+  type ClawtrateHost,
+  type WebSocketLike,
+} from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -668,9 +673,26 @@ function provedClient(gateway: DevGateway, port: number, refused: string[]) {
     dataDir: mkdtempSync(join(scratch, "app-")),
     client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
   });
-  return new ClawtrateClient(
+  const client = new ClawtrateClient(
     { ...host, createWebSocket: sockets.createWebSocket, secureCredentials: async () => true },
     { reconnect: { initialMs: 50, maxMs: 200 }, fullAccess: true },
+  );
+  provedRoutes.set(client, sockets.createWebSocket);
+  return client;
+}
+
+/** Each `provedClient`'s own proved sockets, for a connection that takes local connect's route. */
+const provedRoutes = new WeakMap<ClawtrateClient, (url: string) => WebSocketLike>();
+
+/**
+ * Connects as setup's local connect will: every socket from the proved route, with the person's
+ * consent held. Only this route may ask for full access at this computer's gateway; a typed
+ * `ws://127.0.0.1` asks for read (setup-effortless.md §3 and §4).
+ */
+function connectProved(client: ClawtrateClient, url: string, token: string) {
+  return client.connect(
+    { url, token },
+    { createSocket: provedRoutes.get(client)!, consent: () => true },
   );
 }
 
@@ -844,16 +866,14 @@ describe.skipIf(!BIN || !mac)(
       },
     );
 
-    it("pairs through proved sockets with no approval, at OpenClaw's default, asking a plain connection's read", async () => {
+    it("pairs through proved sockets with all six scopes and no approval, at OpenClaw's default", async () => {
       const refused: string[] = [];
       const client = provedClient(gateway, gateway.port, refused);
       try {
         await client.start({ resume: false });
-        await client.connect({ url: `ws://127.0.0.1:${gateway.port}`, token });
+        await connectProved(client, `ws://127.0.0.1:${gateway.port}`, token);
         await until(() => client.state.connection.status === "connected", 60_000);
-        // A plain connect to loopback asks for read (docs/decisions.md, full control): the client
-        // can't know a host's own sockets are proved. #417 gives it the proved route, and the six.
-        expect(client.state.connection.scopes).toEqual(SCOPES);
+        expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
         expect(client.state.connection.pairing).toBe(null);
         expect(refused).toEqual([]);
       } finally {
@@ -996,20 +1016,18 @@ describe.skipIf(!BIN || !mac)(
       await gateway?.remove();
     });
 
-    it("pairs after one approval by the gateway's owner, asking a plain connection's read", async () => {
+    it("pairs with all six after one approval by the gateway's owner", async () => {
       const refused: string[] = [];
       const client = provedClient(gateway, gateway.port, refused);
       try {
         await client.start({ resume: false });
-        await client.connect({ url: `ws://127.0.0.1:${gateway.port}`, token: gateway.token });
+        await connectProved(client, `ws://127.0.0.1:${gateway.port}`, gateway.token);
         await until(() => client.state.connection.pairing !== null, 60_000);
         const { requestId, requestedScopes } = client.state.connection.pairing!;
-        // A plain connect to loopback asks for read (docs/decisions.md, full control): the client
-        // can't know a host's own sockets are proved. #417 gives it the proved route, and the six.
-        expect(requestedScopes).toEqual(SCOPES);
+        expect([...requestedScopes].sort()).toEqual([...FULL_SCOPES].sort());
         expect(gateway.run(["devices", "approve", requestId]).status).toBe(0);
         await until(() => client.state.connection.status === "connected", 60_000);
-        expect(client.state.connection.scopes).toEqual(SCOPES);
+        expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
         expect(refused).toEqual([]);
       } finally {
         client.stop();

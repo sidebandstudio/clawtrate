@@ -13,7 +13,9 @@
 // `e2e-<run>-computer`, started with `--with-plugin clawtrate-computer`,
 // whose bots Marlow and Pip have browsers of their own; and the rules checks
 // (rules-checks.ts) on a third, `e2e-<run>-rules`, started with
-// `--with-plugin clawtrate-tool-rules`. Each is recorded and reset the same way.
+// `--with-plugin clawtrate-tool-rules`; and the image check on a fourth,
+// `e2e-<run>-images`, started with `--with-images`. Each is recorded and reset
+// the same way.
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -42,6 +44,7 @@ import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import {
   openCheckClients,
   FAMILY_ROWS,
+  IMAGE_CHECK,
   ownerAgent,
   runScenarioChecks,
   SEQ_GAP_NOTES,
@@ -65,6 +68,8 @@ async function main(): Promise<number> {
   const computerRunId = newRunId();
   const rulesName = `${name}-rules`;
   const rulesRunId = newRunId();
+  const imagesName = `${name}-images`;
+  const imagesRunId = newRunId();
   const self = processIdentity(process.pid);
   if (self.state !== "alive") throw new Error("could not determine this process's start time");
   const record: RunRecord = {
@@ -74,6 +79,7 @@ async function main(): Promise<number> {
       { name, runId },
       { name: computerName, runId: computerRunId },
       { name: rulesName, runId: rulesRunId },
+      { name: imagesName, runId: imagesRunId },
     ],
     host: null,
     dirs: [],
@@ -125,6 +131,7 @@ async function main(): Promise<number> {
       const { passed, failed, notes } = await runScenarioChecks(clients, {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
         providerUrl,
+        only: (check) => check.name !== IMAGE_CHECK,
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
@@ -176,7 +183,8 @@ async function main(): Promise<number> {
     }
     const computer = await computerChecks(computerName, computerRunId, startInstance);
     const rules = await rulesChecks(rulesName, rulesRunId, startInstance);
-    return scenariosFailed === 0 && accountsFailed === 0 && computer === 0 && rules === 0 ? 0 : 1;
+    const images = await imageChecks(imagesName, imagesRunId, startInstance);
+    return [scenariosFailed, accountsFailed, computer, rules, images].every((n) => n === 0) ? 0 : 1;
   } finally {
     const problems = cleanUpOnce();
     if (problems.length > 0) {
@@ -228,6 +236,36 @@ async function computerChecks(
       drainTimeoutMs: declaration.drainTimeoutMs,
     });
     console.log(`${passed} of ${passed + failed} computer checks passed`);
+    return failed;
+  } finally {
+    for (const op of Object.values(clients)) await op.close();
+  }
+}
+
+/** Start the instance with the stand-in image provider, run the image check on it, and return how many failed. */
+async function imageChecks(
+  name: string,
+  runId: string,
+  startInstance: (instance: string, id: string, extra: string[]) => Promise<void>,
+): Promise<number> {
+  console.log(`Starting instance ${name} for the image check`);
+  await startInstance(name, runId, ["--with-images"]);
+  const inst = openInstance(name);
+  const ports = instancePorts(inst);
+  for (const port of [ports.gatewayPort, ports.providerPort]) {
+    if (FORBIDDEN_PORTS.includes(port)) {
+      throw new Error(`instance ${name} is on port ${port}, which the check never uses`);
+    }
+  }
+  const clients = await openCheckClients((label, scopes, caps) =>
+    openOperator(inst, label, scopes, caps),
+  );
+  try {
+    const { passed, failed } = await runScenarioChecks(clients, {
+      only: (check) => check.name === IMAGE_CHECK,
+      images: true,
+    });
+    console.log(`${passed} of ${passed + failed} image checks passed`);
     return failed;
   } finally {
     for (const op of Object.values(clients)) await op.close();

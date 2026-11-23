@@ -3,7 +3,16 @@ import { MAX_OUTBOX_PER_TASK, MAX_TRACKED_TASKS } from "../packages/core/src/cli
 import { MAX_NAME_CHARS } from "../packages/core/src/state-bounds.ts";
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { test } from "@playwright/test";
-import { contextFor, expect, openFixture, settle, showList, SIZES, OTTO_DISK } from "./fixture.ts";
+import {
+  contextFor,
+  expect,
+  openFixture,
+  settle,
+  showList,
+  SIZES,
+  OTTO_DISK,
+  THEMES,
+} from "./fixture.ts";
 
 for (const size of SIZES.filter((s) => s.name === "1440" || s.phone)) {
   test.describe(size.name, () => {
@@ -61,6 +70,36 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone)) {
     }
   });
 }
+
+// A failed inspection's plain reason and its "Copy details" control, in both themes.
+for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
+  for (const theme of THEMES)
+    test.describe(`${size.name} ${theme}`, () => {
+      test.use(contextFor(size, theme));
+      test(`F-231: Restart inspection-failed says why at ${size.name} ${theme}`, async ({
+        page,
+      }) => {
+        await openFixture(page, "scene=main&updates=inspection-failed", theme);
+        await showList(page);
+        await page.getByRole("button", { name: "Open Updates" }).click();
+        const panel = page.getByRole("dialog");
+        await expect(panel).toContainText(
+          "The update checker stopped while checking this app's signature: it couldn't read a signature.",
+        );
+        await expect(panel.getByRole("button", { name: "Copy details" })).toBeVisible();
+        await settle(page);
+        expect(
+          await panel.evaluate(
+            (el) =>
+              el.scrollWidth <= el.clientWidth &&
+              [...el.querySelectorAll("p,dd")].every(
+                (row) => row.scrollWidth <= row.clientWidth + 1,
+              ),
+          ),
+        ).toBe(true);
+        await expect(panel).toHaveScreenshot(`restart-inspection-failed-${size.name}-${theme}.png`);
+      });
+    });
 
 for (const [scene, warning] of [
   [

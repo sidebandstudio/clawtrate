@@ -245,7 +245,7 @@ Two plugin cards can be pending at once. OpenClaw 2026.10.6 accepted an answer t
 
 ### What a refused call looks like
 
-A refused call never runs. In the transcript it is the action card's Not run outcome (`conversation.md` §7.3), shown as failed so it stays in view, and its opened view says what decided it, from what was reported at the time:
+A refused call never runs. In the transcript it is the action card's Not run outcome (`conversation.md` §7.3), shown as failed (with "Show commands" off it is in the run line, which counts it, `conversation.md` §7.11), and its opened view says what decided it, from what was reported at the time:
 
 | Refused by                                                       | The card                               | "Decided by" line                                                                                                                                                                        | What the gateway reported (Raw)                                                  |
 | ---------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -605,7 +605,7 @@ Usage is the gateway's own numbers with their source and age, every time a figur
 5. **By source** (F-131, F-237): "Your messages", "Routines" (runs whose task is a routine's), "Messages from other bots" (runs a send's result names), "Not attributed". A recipient task's whole total is never charged to one message.
 6. **By task**, and **Context** for the open task. "41,200 tokens in the latest prompt, of the model's 128,000." The gateway uses the reported prompt token count. Its fallbacks are input plus cache tokens, or total tokens less the reply's output. "Breakdown unavailable" (F-233).
 
-**Settings, Usage**: provider limits as the gateway reports them, each with its time ("OpenAI · Weekly · 62% used · resets Nov 20 · as of 5:40 PM"; "No limits reported" for one that reports none) (F-235); usage by bot, and by source; budgets.
+**Settings, Usage**: provider limits as the gateway reports them, each with its time ("No limits reported" for one that reports none) (F-235). Each limit reads first as its share used and its reset, "62% used" in the largest size and "resets Nov 20" beside it, over a 10 px bar; above them, smaller and quieter, which limit it is and when the gateway read it, "OpenAI · Weekly · as of 5:40 PM". Then usage by bot, and by source; budgets.
 
 **Near a provider's limit** (F-236): at 90 percent of a reported window (Clawtrate's choice), or when a run waits on a rate limit, a note above the composer of each bot whose account is that provider's: "OpenAI reports 92% of a weekly limit used, as of 5:40 PM. It doesn't say which of your OpenAI accounts." At the limit: "OpenAI reports a weekly limit reached, as of 5:40 PM. It resets Nov 20." It is closed with its button until the figure changes.
 

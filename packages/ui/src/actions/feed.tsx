@@ -3,20 +3,29 @@
 // engine's live run, goes through the engine's one grouping (`groupFeed`), so
 // a live run and a reload draw the same cards. The Messaged and T3 Code cards
 // take their call's place in the column, an approval follows the call it
-// names, and a question card takes its `ask_user` call's place.
+// names, and a question card takes its `ask_user` call's place. With "Show
+// commands" off (7.11) the action cards leave the conversation for the run
+// line's list, and the reasoning that led to them stays at their place. With
+// "Show thinking" off, no reasoning is drawn.
 
 import {
   actionWords,
   askUserQuestionId,
   callFromBlock,
+  callsOf,
   callFromStep,
   groupFeed,
   isTerminal,
+  kindOf,
+  lineOf,
+  mergeThoughts,
   readingContextOf,
   retentionAccount,
   type ActionCall,
   type RetentionAccount,
   runLineOf,
+  staysInView,
+  type Thought,
   segmentFromStep,
   type FeedEntry,
   type FeedGroup,
@@ -49,9 +58,11 @@ import {
 import { fullDate } from "../format.ts";
 import { Markdown } from "../Markdown.tsx";
 import { MessageUnit } from "../Messages.tsx";
+import { useShowCommands, useShowThinking } from "../preferences.ts";
 import {
   ActionEnvContext,
   ActionGroup,
+  ActionsLine,
   RunLineView,
   ThoughtLine,
   actionDomId,
@@ -65,7 +76,9 @@ export type FeedRef =
   | { t: "reply"; run: Run }
   | { t: "card"; ref: CardRef }
   /** Actions the run reported that are not kept here, at their place. */
-  | { t: "gap"; count: number };
+  | { t: "gap"; count: number }
+  /** The action cards of history with no run, behind one line, while commands are not shown. */
+  | { t: "actions"; groups: FeedGroup<FeedRef>[] };
 
 type Groups = FeedGroup<FeedRef>[];
 
@@ -76,6 +89,8 @@ type Feeds = {
   runs: Map<string, { groups: Groups; revision: number }>;
   /** Each run's account of what is drawn (`retentionAccount`), and its drawn calls the engine holds. */
   accounts: Map<string, { account: RetentionAccount; calls: ActionCall[] }>;
+  /** Each run's action cards, in order, kept for its run line while commands are not shown (7.11). */
+  hidden: Map<string, { groups: Groups; revision: number }>;
 };
 
 const FeedsContext = createContext<Feeds | null>(null);
@@ -386,6 +401,138 @@ function runEntries(
   return entries;
 }
 
+/** A message's text, as compared with a reply's: trimmed at its ends, its line breaks and indents kept. */
+const sameText = (text: string) => text.trim();
+
+/**
+ * A message on a channel whose text is a reply the run draws beside it is
+ * marked, so its line leaves the text out (7.11): the reply says it once.
+ */
+export function markRepeats(lists: FeedEntry<FeedRef>[][], ctx: ReadingContext) {
+  const said = new Set<string>();
+  for (const entries of lists)
+    for (const entry of entries) {
+      if (entry.type !== "bubble") continue;
+      const ref = entry.ref;
+      const text =
+        ref.t === "text"
+          ? ref.text
+          : ref.t === "preamble"
+            ? ref.preamble.text
+            : ref.t === "reply"
+              ? ref.run.text
+              : "";
+      if (text.trim()) said.add(sameText(text));
+    }
+  if (!said.size) return;
+  for (const entries of lists)
+    entries.forEach((entry, i) => {
+      if (entry.type !== "action" || kindOf(entry.call, ctx).kind !== "channel") return;
+      const message = entry.call.args.message;
+      if (typeof message === "string" && message.trim() && said.has(sameText(message)))
+        entries[i] = { ...entry, call: { ...entry.call, repeatsReply: true } };
+    });
+}
+
+/**
+ * Without commands shown (7.11): a record's action cards, and the lines of
+ * actions not kept, leave the conversation for its run line's list. The
+ * reasoning that led to them stays where it was, one "Thought" line for each
+ * stretch between the bot's words, and leaves the cards so it is not drawn
+ * twice. In a run still going, reasoning with nothing after it yet is the
+ * status line's (section 5), not a line. An action that waits for the person
+ * (`staysInView`) keeps its card in the conversation, a fold with such a
+ * member keeps the whole fold, and neither is in the run line's list. An
+ * action that went wrong takes the same path as any other.
+ */
+export function quietFeed(
+  groups: Groups,
+  live: boolean,
+  ctx: ReadingContext = {},
+): { shown: Groups; hidden: Groups } {
+  const shown: Groups = [];
+  const hidden: Groups = [];
+  let pending: Thought[] = [];
+  const flush = (place: "reply" | "end") => {
+    if (!pending.length) return;
+    const thought = mergeThoughts(pending);
+    shown.push({ type: "thought", key: thought.id, thought, place });
+    pending = [];
+  };
+  // An action that waits for the person stays in view as its card (7.11).
+  const inView = (call: ActionCall) => staysInView(lineOf(call, ctx).outcome);
+  for (const group of groups) {
+    if (
+      (group.type === "action" && inView(group.call)) ||
+      (group.type === "fold" && group.members.some((m) => inView(m.call)))
+    ) {
+      flush("reply");
+      shown.push(group);
+    } else if (group.type === "action") {
+      if (group.thought) pending.push(group.thought);
+      hidden.push({ ...group, thought: null });
+    } else if (group.type === "fold") {
+      for (const member of group.members) if (member.thought) pending.push(member.thought);
+      hidden.push({ ...group, members: group.members.map((m) => ({ ...m, thought: null })) });
+    } else if (group.type === "break" && group.ref.t === "gap") hidden.push(group);
+    else if (group.type === "thought") {
+      if (!(live && group.place === "end")) pending.push(group.thought);
+    } else {
+      flush("reply");
+      shown.push(group);
+    }
+  }
+  flush("end");
+  return { shown, hidden };
+}
+
+/**
+ * What one record draws in the conversation (`shown`) and what goes to its run
+ * line's list (`hidden`), by the two switches of 7.11. With both on, the
+ * record's groups are drawn as they are, except that in a run still going the
+ * reasoning with nothing after it yet is the status line's (section 5), not a
+ * line, as without commands shown.
+ */
+export function viewGroups(
+  groups: Groups,
+  view: { commands: boolean; thinking: boolean; live: boolean },
+  ctx: ReadingContext = {},
+): { shown: Groups; hidden: Groups } {
+  const thought = view.thinking ? groups : withoutThinking(groups);
+  if (view.commands)
+    return {
+      shown: view.live
+        ? thought.filter((g) => !(g.type === "thought" && g.place === "end"))
+        : thought,
+      hidden: [],
+    };
+  return quietFeed(thought, view.live, ctx);
+}
+
+/**
+ * Without "Show thinking" (7.11): no "Thought" line, and no reasoning inside a
+ * card, a fold or a line of actions.
+ */
+function withoutThinking(groups: Groups): Groups {
+  return groups.flatMap((group): Groups => {
+    switch (group.type) {
+      case "thought":
+        return [];
+      case "action":
+      case "card":
+        return [{ ...group, thought: null }];
+      case "fold":
+        return [{ ...group, members: group.members.map((m) => ({ ...m, thought: null })) }];
+      case "break":
+        return group.ref.t === "actions"
+          ? [{ ...group, ref: { t: "actions", groups: withoutThinking(group.ref.groups) } }]
+          : [group];
+      default:
+        return [group];
+    }
+  });
+}
+
 /**
  * Builds the feed of every run the transcript draws, once per change, and
  * gives the cards what they share. `engineRuns` are the runs drawn from the
@@ -414,9 +561,18 @@ export function ActionScope({
 }) {
   // The gateway's name map, tool inventory and workspace root: what the reading may know at a start.
   const { mcpTools, builtinTools, workspaceRoot } = transcript;
+  // Commands and raw calls only when the person chose to see them (7.11).
+  const [commandsShown] = useShowCommands();
+  const quiet = !commandsShown;
+  // Reasoning only when the person chose to see it (7.11).
+  const [thinkingShown] = useShowThinking();
   const ctx = useMemo(
-    () => ({ ...given, ...readingContextOf({ mcpTools, builtinTools, workspaceRoot }) }),
-    [given, mcpTools, builtinTools, workspaceRoot],
+    () => ({
+      ...given,
+      ...readingContextOf({ mcpTools, builtinTools, workspaceRoot }),
+      ...(quiet ? { quiet: true } : {}),
+    }),
+    [given, mcpTools, builtinTools, workspaceRoot, quiet],
   );
   const scope = useScopeCards();
   const handover = useStepHandover();
@@ -525,14 +681,54 @@ export function ActionScope({
       });
       accounts.set(run.id, { account, calls: drawnCalls });
     }
+    // A message that repeats a reply of its run beside it leaves its text out (7.11).
+    const listsOf = new Map<string, FeedEntry<FeedRef>[][]>();
+    const listOf = (runId: string | undefined, entries: FeedEntry<FeedRef>[]) => {
+      if (runId) listsOf.set(runId, [...(listsOf.get(runId) ?? []), entries]);
+      else markRepeats([entries], ctx);
+    };
+    for (const each of built) listOf(runOf.get(each.id)?.id, each.entries);
+    for (const each of builtRuns) listOf(each.id, each.entries);
+    for (const lists of listsOf.values()) markRepeats(lists, ctx);
     const items = new Map<string, { groups: Groups; revision: number }>();
-    for (const each of built)
-      items.set(each.id, { groups: groupFeed(each.entries, ctx), revision: each.revision });
     const runs = new Map<string, { groups: Groups; revision: number }>();
+    const hidden = new Map<string, { groups: Groups; revision: number }>();
+    // Without commands shown, each run's cards go to its run line, in order (7.11).
+    const keep = (runId: string | undefined, groups: Groups, revision: number): Groups => {
+      const live =
+        runId !== undefined && engineRuns.some((r) => r.id === runId && !isTerminal(r.state));
+      const { shown, hidden: cards } = viewGroups(
+        groups,
+        { commands: !quiet, thinking: thinkingShown, live },
+        ctx,
+      );
+      if (!cards.length) return shown;
+      if (!runId) {
+        // History with no run has no run line: its cards stay behind a line of their own.
+        const first = cards[0]!;
+        shown.push({
+          type: "break",
+          key: `actions:${first.key}`,
+          ref: { t: "actions", groups: cards },
+        });
+        return shown;
+      }
+      const held = hidden.get(runId);
+      hidden.set(runId, { groups: [...(held?.groups ?? []), ...cards], revision });
+      return shown;
+    };
+    for (const each of built)
+      items.set(each.id, {
+        groups: keep(runOf.get(each.id)?.id, groupFeed(each.entries, ctx), each.revision),
+        revision: each.revision,
+      });
     for (const each of builtRuns)
-      runs.set(each.id, { groups: groupFeed(each.entries, ctx), revision: each.revision });
-    return { items, runs, accounts } satisfies Feeds;
-  }, [transcript, engineRuns, selected, handover, placement, ctx]);
+      runs.set(each.id, {
+        groups: keep(each.id, groupFeed(each.entries, ctx), each.revision),
+        revision: each.revision,
+      });
+    return { items, runs, accounts, hidden } satisfies Feeds;
+  }, [transcript, engineRuns, selected, handover, placement, ctx, quiet, thinkingShown]);
 
   const placed = useMemo(() => {
     const keys = new Set<string>();
@@ -561,7 +757,7 @@ export function ActionScope({
     };
   }, [taskKey, transcript.runs, transcript.sessionKey, ctx, rawState, lost, readOnly, effort]);
 
-  useKeepFocus();
+  useKeepFocus(env.stepOf);
   // Cards drawn with the feed's first drawing are not arrivals; later ones are.
   const drawn = useRef(false);
   useEffect(() => {
@@ -581,9 +777,11 @@ export function ActionScope({
  * When the control that held focus is replaced (a card becoming a fold, a
  * fold splitting), focus moves to the same control in what replaced it, or
  * to the replacement's line (section 2, Input). Controls are found by their
- * call and their own name, never by position.
+ * call and their own name, never by position. A card that left the
+ * conversation for its run's list (7.11) gives focus to its run line, or,
+ * while the run works and has none, to the transcript.
  */
-function useKeepFocus() {
+function useKeepFocus(stepOf: ActionEnv["stepOf"]) {
   const last = useRef<{ element: HTMLElement; call: string; control: string } | null>(null);
   useEffect(() => {
     const onFocus = (event: FocusEvent) => {
@@ -611,7 +809,20 @@ function useKeepFocus() {
     const holder =
       document.querySelector<HTMLElement>(`[data-call="${CSS.escape(held.call)}"]`) ??
       document.querySelector<HTMLElement>(`[data-first="${CSS.escape(held.call)}"]`);
-    if (!holder) return;
+    const closedLine = holder?.closest<HTMLElement>("details.run-line:not([open])");
+    if (!holder || closedLine) {
+      const runId = stepOf(held.call)?.runId;
+      const line =
+        closedLine ??
+        (runId
+          ? document.querySelector<HTMLElement>(`details.run-line[data-run="${CSS.escape(runId)}"]`)
+          : null);
+      const fallback =
+        line?.querySelector<HTMLElement>(":scope > summary") ??
+        document.querySelector<HTMLElement>('[data-testid="transcript"]');
+      fallback?.focus({ preventScroll: true });
+      return;
+    }
     const target =
       holder.querySelector<HTMLElement>(
         held.control === ":scope > summary" ? ":scope > summary" : held.control,
@@ -708,6 +919,12 @@ function GroupView({
               {actionWords.RUN_LINE.notKept(ref.count)}
             </p>
           );
+        case "actions":
+          return (
+            <ActionsLine id={group.key} calls={callsOf(ref.groups)}>
+              <Groups groups={ref.groups} revision={revision} reply={reply} />
+            </ActionsLine>
+          );
       }
     }
   }
@@ -769,8 +986,22 @@ export function RunLine({ run }: { run: Run }) {
   // Read as the cards read it, with what the gateway said of the task's tools.
   const ctx = useContext(ActionEnvContext)?.ctx;
   const line = isTerminal(run.state) ? runLineOf(run, calls, ctx, drawn?.account) : null;
-  if (!line) return null;
-  return <RunLineView runId={run.id} line={line} model={run.model} />;
+  // Without commands shown, the run's cards are its line's list (7.11).
+  const hidden = useContext(FeedsContext)?.hidden.get(run.id);
+  const list = hidden?.groups.length ? (
+    <Groups groups={hidden.groups} revision={hidden.revision} reply={() => null} />
+  ) : null;
+  if (!line)
+    return list && isTerminal(run.state) ? (
+      <ActionsLine id={`run:${run.id}`} calls={callsOf(hidden!.groups)}>
+        {list}
+      </ActionsLine>
+    ) : null;
+  return (
+    <RunLineView runId={run.id} line={line} model={run.model}>
+      {list}
+    </RunLineView>
+  );
 }
 
 /** The calls of a run, for the status line's phrase. */
