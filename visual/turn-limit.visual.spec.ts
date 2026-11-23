@@ -25,7 +25,7 @@ type VoiceFixture = {
 test.describe("the plain voice", () => {
   test.use(contextFor(WIDE, "light"));
 
-  test("F-519: a gateway that keeps the voice plugin's hook from running shows Plain voice off, and says how to allow it", async ({
+  test("F-523: a gateway that keeps the voice plugin's hook from running shows Plain voice off, and says how to allow it", async ({
     page,
   }) => {
     await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, "light");
@@ -43,7 +43,7 @@ test.describe("the plain voice", () => {
     await expect(toggle).toBeDisabled();
   });
 
-  test("F-519: after the connection drops, Plain voice shows nothing until the gateway answers again", async ({
+  test("F-523: after the connection drops, Plain voice shows nothing until the gateway answers again", async ({
     page,
   }) => {
     const settings = await openPane(page);
@@ -109,6 +109,29 @@ test.describe("the turn time limit", () => {
     await expect(
       page.getByRole("dialog", { name: "Settings" }).getByLabel("Turn time limit"),
     ).toHaveValue("20");
+  });
+
+  test("F-519: Settings has Show external channel chats, off by default, and a change reaches the host", async ({
+    page,
+  }) => {
+    const settings = await openPane(page);
+    const toggle = settings.getByRole("switch", { name: "Show external channel chats" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(toggle).toHaveAccessibleDescription(/main conversation always shows/);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                clawtrateFixture: { getState(): { showChannelChats?: boolean } };
+              }
+            ).clawtrateFixture.getState().showChannelChats,
+        ),
+      )
+      .toBe(true);
   });
 });
 

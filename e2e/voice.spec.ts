@@ -85,7 +85,7 @@ test.afterAll(async () => {
   await gateway?.close();
 });
 
-test("F-519: the plain voice is on by default, reaches every bot's prompt, and turning it off in Settings removes it", async ({
+test("F-523: the plain voice is on by default, reaches every bot's prompt, and turning it off in Settings removes it", async ({
   page,
 }) => {
   test.setTimeout(180_000);

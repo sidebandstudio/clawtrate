@@ -91,7 +91,7 @@ export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
 
 /**
  * Whether every bot on the gateway is told to write plainly, with no em dashes
- * (F-519), shown as the voice plugin reads it back: nothing is shown as on or
+ * (F-523), shown as the voice plugin reads it back: nothing is shown as on or
  * off until the gateway answers.
  */
 function PlainVoice({
@@ -201,7 +201,10 @@ function PlainVoice({
   );
 }
 
-/** How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100). */
+/**
+ * How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100).
+ * Whether chats from Discord, Telegram and other channels are listed; off by default (F-519).
+ */
 function ConversationPane({
   connection,
   info,
@@ -212,7 +215,19 @@ function ConversationPane({
   announce: (text: string) => void;
 }) {
   const send = useCommand();
-  const minutes = useClawtrateState().turnLimitMinutes ?? 50;
+  const state = useClawtrateState();
+  const minutes = state.turnLimitMinutes ?? 50;
+  const showChannelChats = state.showChannelChats === true;
+  const [channelError, setChannelError] = useState<string | null>(null);
+  const toggleChannelChats = () => {
+    const on = !showChannelChats;
+    setChannelError(null);
+    void send({ type: "setShowChannelChats", on }).then(
+      () => announce(on ? "Channel chats shown" : "Channel chats hidden"),
+      (failure: unknown) =>
+        setChannelError(failure instanceof Error ? failure.message : String(failure)),
+    );
+  };
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const commit = () => {
@@ -264,6 +279,31 @@ function ConversationPane({
       {error && (
         <div className="form-error" role="alert">
           {error}
+        </div>
+      )}
+      <div className="b-field channel-chats-field">
+        <span id="channel-chats-label">Show external channel chats</span>
+        <button
+          type="button"
+          className="b-switch"
+          role="switch"
+          aria-checked={showChannelChats}
+          aria-labelledby="channel-chats-label"
+          aria-describedby="channel-chats-note"
+          data-testid="channel-chats"
+          onClick={toggleChannelChats}
+        />
+      </div>
+      <p className="b-hint" id="channel-chats-note">
+        Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp,
+        Signal or another channel stay out of the task list, its previews and its unread marks. A
+        bot's main conversation always shows. If the gateway sends a channel's direct messages to
+        it, which it does unless its <code>session.dmScope</code> setting gives each channel
+        conversation its own session, those messages still appear there.
+      </p>
+      {channelError && (
+        <div className="form-error" role="alert">
+          {channelError}
         </div>
       )}
     </>

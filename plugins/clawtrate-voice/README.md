@@ -29,6 +29,6 @@ The plugin's `clawtrate-dev-contract.json` grants its hooks conversation access,
 pnpm dev-gateway start --instance voice --with-plugin clawtrate-voice
 ```
 
-Ask any bot "What did plugins add to your system prompt?" and the scripted model quotes the guide, or says nothing was added. `pnpm e2e` loads the plugin on its seeded instance, and `e2e/voice.spec.ts` (F-519) turns the setting off and on in Settings and asks every seeded bot after each change.
+Ask any bot "What did plugins add to your system prompt?" and the scripted model quotes the guide, or says nothing was added. `pnpm e2e` loads the plugin on its seeded instance, and `e2e/voice.spec.ts` (F-523) turns the setting off and on in Settings and asks every seeded bot after each change.
 
 The unit tests run with `pnpm test` (`plugins/clawtrate-voice/test`).

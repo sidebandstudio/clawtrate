@@ -1549,7 +1549,7 @@ button.reaction {
   color: var(--text-muted);
 }
 
-/* Settings, Conversation: the plain voice switch (F-519). */
+/* Settings, Conversation: the plain voice switch (F-523). */
 .plain-voice-field {
   display: flex;
   align-items: center;
@@ -1563,4 +1563,13 @@ button.reaction {
 .plain-voice-field .b-switch:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+/* Settings, Conversation: "Show external channel chats", a switch beside its name (F-519). */
+.b-field.channel-chats-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 22px;
 }

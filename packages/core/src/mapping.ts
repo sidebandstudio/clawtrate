@@ -2,6 +2,7 @@
 // untrusted `unknown` values: a field with the wrong type is ignored rather than
 // trusted, so a newer gateway adding or changing fields cannot crash the UI.
 
+import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import type {
   Bot,
   Task,
@@ -105,12 +106,13 @@ export function isSessionRemoval(payload: unknown): boolean {
 }
 
 /**
- * Gateway previews are the start of the last message, often markdown. Reduce
- * them to readable plain text for a two-line list preview.
+ * Gateway previews are the start of the last message, often markdown, and for
+ * a channel turn wrapped in what the gateway wrote around it. Reduce them to
+ * readable plain text for a two-line list preview.
  */
 export function plainPreview(text: string | null): string | null {
   if (!text) return null;
-  const plain = text
+  const plain = stripChannelMetadata(text)
     .split("\n")
     .filter((line) => !/^\s*\|?\s*:?-{3,}/.test(line)) // table separator rows
     .join(" ")
@@ -178,11 +180,14 @@ export function mapSessionRow(row: RawRecord): Task | null {
   if (!key || !isTaskSession(row)) return null;
   const botId = str(row.agentId) ?? botIdFromSessionKey(key);
   if (!botId) return null;
+  const channel = externalChannelOf(row);
   return {
     key,
     botId,
     sessionId: str(row.sessionId),
-    title: str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? fallbackTitle(key),
+    title: channel
+      ? channelChatTitle(row, channel)
+      : (str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? fallbackTitle(key)),
     preview: plainPreview(str(row.lastMessagePreview)),
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
@@ -194,6 +199,7 @@ export function mapSessionRow(row: RawRecord): Task | null {
     ...(row.markedUnreadAt !== undefined ? { unreadMarker: num(row.markedUnreadAt) } : {}),
     ...contextOf(row),
     ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
+    ...(channel ? { channel } : {}),
   };
 }
 
@@ -217,12 +223,19 @@ export function sessionRowsFromList(result: unknown): RawRecord[] {
   });
 }
 
-/** Group tasks under their bot: pinned first, then newest first. */
-export function groupTasks(rows: Iterable<RawRecord>): Record<string, Task[]> {
+/**
+ * Group tasks under their bot: pinned first, then newest first. Chats from an
+ * external channel are left out unless `showChannelChats`, so nothing derived
+ * from the list (a bot's preview, unread, recency, the badge) counts them.
+ */
+export function groupTasks(
+  rows: Iterable<RawRecord>,
+  options: { showChannelChats?: boolean } = {},
+): Record<string, Task[]> {
   const grouped: Record<string, Task[]> = {};
   for (const row of rows) {
     const task = mapSessionRow(row);
-    if (!task) continue;
+    if (!task || (task.channel && options.showChannelChats !== true)) continue;
     (grouped[task.botId] ??= []).push(task);
   }
   for (const tasks of Object.values(grouped)) {

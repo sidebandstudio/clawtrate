@@ -12,6 +12,12 @@
     - text: Turn time limit
     - spinbutton "Turn time limit": "50"
     - paragraph: Minutes. 50 by default. At the limit Clawtrate asks the gateway to stop the turn so it does not hang, and once the gateway confirms, the turn ends with a note naming the limit. Send a message to pick up where it left off. It applies to turns this device starts.
+    - text: Show external channel chats
+    - switch "Show external channel chats"
+    - paragraph:
+      - text: Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or another channel stay out of the task list, its previews and its unread marks. A bot's main conversation always shows. If the gateway sends a channel's direct messages to it, which it does unless its
+      - code: session.dmScope
+      - text: setting gives each channel conversation its own session, those messages still appear there.
   - status
 - region "Conversation":
   - button "Back to bots"
