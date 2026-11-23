@@ -54,8 +54,12 @@ export function resolveInstance() {
   if (url.protocol !== "ws:" || url.hostname !== "127.0.0.1" || gatewayPort < 19200 || gatewayPort > 19999 || gatewayPort !== runState.gatewayPort || gatewayPort !== marker.gatewayPort) refuse("endpoint is not this named instance");
   const pid = marker.gatewayPid;
   if (!Number.isInteger(pid) || pid <= 1) refuse("no gateway PID on record");
-  const ps = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
-  if (ps.status !== 0 || ps.stdout.trim() !== marker.gatewayIdentity) refuse("the recorded gateway is not running");
+  // The tool records the start time in UTC as "2026-11-16T21:27:01Z" (tools/dev-gateway/src/state-guard.ts).
+  const ps = spawnSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { LC_ALL: "C", TZ: "UTC" } });
+  const [, month, day, time, year] = ps.stdout.trim().split(/\s+/);
+  const monthIndex = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(month ?? "");
+  const identity = monthIndex < 0 ? null : `${year}-${String(monthIndex + 1).padStart(2, "0")}-${(day ?? "").padStart(2, "0")}T${time}Z`;
+  if (ps.status !== 0 || identity !== marker.gatewayIdentity) refuse("the recorded gateway is not running");
   return { name, runDir, stateDir, connection, runState, gatewayPort, scriptedPort: runState.providerPort };
 }
 

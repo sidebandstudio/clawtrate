@@ -566,6 +566,12 @@ button.b-choice:hover {
   min-width: 200px;
 }
 
+/* A select's section line wraps rather than widening the menu past its dialog. */
+.b-menu .menu-label {
+  max-width: 260px;
+  white-space: normal;
+}
+
 .b-menu .menu-item small {
   margin-left: auto;
   padding-left: 12px;
