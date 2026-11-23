@@ -34,6 +34,9 @@ type Read =
   | { status: "error"; message: string }
   | { status: "ready"; view: MachinesView };
 
+/** One removal confirmation; each opening is its own object. */
+type Removal = { kind: "machine" | "device"; id: string; name: string; bots: string[] };
+
 const PAIRING = "operator.pairing";
 
 /** Whether the connection holds device access by name (admin implies it on the gateway). */
@@ -286,15 +289,11 @@ export function useMachinesSection({
   const [tick, setTick] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [removing, setRemoving] = useState<{
-    kind: "machine" | "device";
-    id: string;
-    name: string;
-    bots: string[];
-  } | null>(null);
-  const [busy, setBusy] = useState(false);
-  /** A defaults write, and the file revision it was made over: the choices wait until that changes. */
-  const [writing, setWriting] = useState<{ id: string; over: string | null } | null>(null);
+  const [removing, setRemoving] = useState<Removal | null>(null);
+  // The confirmation whose removal is in flight: its completion closes only that one.
+  const [busy, setBusy] = useState<Removal | null>(null);
+  /** Each machine's defaults write, by the file revision it was made over: its choices wait until that changes. */
+  const [writing, setWriting] = useState<Record<string, string | null>>({});
   const granted = useGranted(connection);
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
@@ -306,8 +305,8 @@ export function useMachinesSection({
     setErrors({});
     setRenaming(null);
     setRemoving(null);
-    setBusy(false);
-    setWriting(null);
+    setBusy(null);
+    setWriting({});
   }
   // The key now shown: a write that completes under another one changes nothing.
   const currentKey = useRef(key);
@@ -384,7 +383,7 @@ export function useMachinesSection({
   const { view } = read;
   const setDefaults = async (machine: MachineRow, file: ApprovalsFile, choice: DefaultsChoice) => {
     setErrors((all) => ({ ...all, [machine.id]: "" }));
-    setWriting({ id: machine.id, over: file.hash });
+    setWriting((all) => ({ ...all, [machine.id]: file.hash }));
     try {
       await bridge.invoke({
         type: "setMachineDefaults",
@@ -396,7 +395,7 @@ export function useMachinesSection({
       announce(`Saved. ${machine.name}: ${CHOICE_WORDS[choice]}`);
     } catch (failure) {
       if (currentKey.current !== key) return;
-      setWriting(null);
+      setWriting(({ [machine.id]: _, ...rest }) => rest);
       setErrors((all) => ({
         ...all,
         [machine.id]: failure instanceof Error ? failure.message : String(failure),
@@ -438,7 +437,7 @@ export function useMachinesSection({
             labelledBy={titleId}
             value={checked}
             // Until the page shows the file this write made, another choice would be made over it.
-            disabled={!admin || (writing?.id === machine.id && writing.over === file.hash)}
+            disabled={!admin || writing[machine.id] === file.hash}
             onChoose={(choice) => void setDefaults(machine, file, choice)}
           />
           {checked === null && (
@@ -684,26 +683,29 @@ export function useMachinesSection({
               : ""
           }`}
           action="Remove"
-          busy={busy}
+          busy={busy === removing}
           onCancel={() => setRemoving(null)}
           onAction={() => {
-            setBusy(true);
+            const asked = removing;
+            setBusy(asked);
             const done =
-              removing.kind === "machine"
-                ? bridge.invoke({ type: "removeMachine", nodeId: removing.id })
-                : bridge.invoke({ type: "removeDevice", deviceId: removing.id });
+              asked.kind === "machine"
+                ? bridge.invoke({ type: "removeMachine", nodeId: asked.id })
+                : bridge.invoke({ type: "removeDevice", deviceId: asked.id });
+            const close = () => {
+              setBusy((was) => (was === asked ? null : was));
+              setRemoving((was) => (was === asked ? null : was));
+            };
             done.then(
               () => {
                 if (currentKey.current !== key) return;
                 announce("Removed");
-                setRemoving(null);
-                setBusy(false);
+                close();
                 reload();
               },
               (failure: unknown) => {
                 if (currentKey.current !== key) return;
-                setBusy(false);
-                setRemoving(null);
+                close();
                 setErrors((all) => ({
                   ...all,
                   remove: failure instanceof Error ? failure.message : String(failure),

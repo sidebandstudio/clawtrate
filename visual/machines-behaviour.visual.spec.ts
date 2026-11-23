@@ -747,3 +747,143 @@ test("F-046: a connection lost soon after the grant no longer says admin access 
   await patchConnection(page, { status: "connected" });
   await expect(page.getByTestId("runs-on-page")).not.toContainText("Admin access granted.");
 });
+
+test("F-046: after a save, the command picker waits for the read that brings the new revision", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  // Once the save has answered, the commands read is held until the test lets it go, or fails it.
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    const held = window as unknown as { saved?: boolean; finishRead?: (fail: boolean) => void };
+    fixture.invoke = (command) => {
+      if (command.type === "setCommandMachine")
+        return original(command).then((answer) => {
+          held.saved = true;
+          return answer;
+        });
+      if (
+        held.saved &&
+        command.type === "readPlacement" &&
+        (command as { part?: string }).part === "commands"
+      )
+        return new Promise((resolve, reject) => {
+          held.finishRead = (fail) =>
+            fail ? reject(new Error("The gateway did not answer.")) : resolve(original(command));
+        });
+      return original(command);
+    };
+  });
+  const select = page.getByTestId("runs-on-machine");
+  await select.click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await expect(announcer(page)).toHaveText(
+    "Saved and applied. Otto's command machine setting: the gateway's machine",
+  );
+  // The page still shows the revision the save was made over: a second choice would be refused.
+  await expect(select).toBeDisabled();
+  await page.evaluate(() =>
+    (window as unknown as { finishRead: (fail: boolean) => void }).finishRead(false),
+  );
+  await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
+  await expect(select).toBeEnabled();
+  // A read after the save that fails offers Try again instead of the old revision's picker.
+  await select.click();
+  await page.getByRole("menuitemradio", { name: /^media-box/ }).click();
+  await expect(announcer(page)).toHaveText(/^Saved and applied\. .*media-box$/);
+  await page.evaluate(() =>
+    (window as unknown as { finishRead: (fail: boolean) => void }).finishRead(true),
+  );
+  await expect(page.getByTestId("runs-on-error")).toContainText("The gateway did not answer.");
+  await expect(
+    page.getByTestId("runs-on-error").getByRole("button", { name: "Try again" }),
+  ).toBeVisible();
+});
+
+test("F-156: one machine's pending save keeps its choices waiting while another machine's is saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openMachines(page);
+  // media-box's write is held until the test lets it go.
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "setMachineDefaults" &&
+      (command as { machineId?: string }).machineId !== "gateway"
+        ? new Promise((resolve) => {
+            (window as unknown as { finishWrite: () => void }).finishWrite = () =>
+              resolve(original(command));
+          })
+        : original(command);
+  });
+  const mediaGroup = page
+    .locator('[data-testid="approvals-file"][data-machine="media-box"]')
+    .getByRole("radiogroup");
+  const gatewayGroup = page
+    .locator('[data-testid="approvals-file"]:not([data-machine="media-box"])')
+    .getByRole("radiogroup");
+  await mediaGroup.getByRole("radio", { name: "Ask every time" }).click();
+  await expect(mediaGroup.getByRole("radio", { name: "Ask every time" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await gatewayGroup.getByRole("radio", { name: "Ask every time" }).click();
+  await expect(settingsAnnouncer(page)).toHaveText(/^Saved\. .*: Ask every time$/);
+  await expect(gatewayGroup.getByRole("radio", { checked: true })).toHaveAccessibleName(
+    "Ask every time",
+  );
+  // media-box's file is still the one its pending write was made over.
+  await expect(mediaGroup.getByRole("radio", { name: "Ask every time" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await page.evaluate(() => (window as unknown as { finishWrite: () => void }).finishWrite());
+  await expect(mediaGroup.getByRole("radio", { checked: true })).toHaveAccessibleName(
+    "Ask every time",
+  );
+  await expect(mediaGroup.getByRole("radio", { name: "Ask every time" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});
+
+test("F-157: a removal that completes after its confirmation was cancelled leaves another confirmation open", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openMachines(page);
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "removeMachine"
+        ? new Promise((resolve) => {
+            (window as unknown as { finishRemove: () => void }).finishRemove = () =>
+              resolve(original(command));
+          })
+        : original(command);
+  });
+  await page.getByRole("button", { name: "Remove studio-mac…" }).click();
+  const confirm = page.getByRole("alertdialog");
+  await confirm.getByRole("button", { name: "Remove" }).click();
+  await expect(confirm.getByRole("button", { name: "Remove…" })).toBeDisabled();
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await page
+    .getByTestId("device-list")
+    .getByRole("button", { name: "Remove", exact: true })
+    .first()
+    .click();
+  await expect(confirm).toContainText("Asks the gateway to remove");
+  await expect(confirm).not.toContainText("studio-mac");
+  // The other confirmation's removal isn't this one's.
+  await expect(confirm.getByRole("button", { name: "Remove", exact: true })).toBeEnabled();
+  await page.evaluate(() => (window as unknown as { finishRemove: () => void }).finishRemove());
+  await expect(settingsAnnouncer(page)).toHaveText("Removed");
+  await expect(page.getByTestId("machine-list")).not.toContainText("studio-mac");
+  await expect(confirm).toBeVisible();
+  await expect(confirm.getByRole("button", { name: "Remove", exact: true })).toBeEnabled();
+});

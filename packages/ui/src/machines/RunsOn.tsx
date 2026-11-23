@@ -231,6 +231,14 @@ export function RunsOnPage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // The commands read shown when a save ended. The picker waits for the read after it, since a
+  // second choice sent over this one's revision would be refused though nobody else changed it.
+  const [stale, setStale] = useState<Placement["commands"] | null>(null);
+  if (stale !== null && read.commands !== stale) setStale(null);
+  const commandsShown = useRef(read.commands);
+  useLayoutEffect(() => {
+    commandsShown.current = read.commands;
+  });
   // A write that completes after this page went away (another bot, connection or access) changes nothing.
   const mounted = useRef(false);
   useLayoutEffect(() => {
@@ -334,7 +342,10 @@ export function RunsOnPage({
       // A change never sent, or a read-back that failed or shows another setting: none confirms a save.
       announce("Save not confirmed");
     } finally {
-      if (mounted.current) setSaving(false);
+      if (mounted.current) {
+        setSaving(false);
+        setStale(commandsShown.current);
+      }
       // Whatever the outcome, the placement is read again, by its owner (the bot's Settings tab,
       // keyed by bot and connection), so the Runs on row shows it even after Back.
       reload();
@@ -383,7 +394,7 @@ export function RunsOnPage({
         <CommandsPart
           part={read.commands.value}
           botName={botName}
-          disabled={!admin || saving}
+          disabled={!admin || saving || stale !== null}
           saveLines={saveLines}
           now={now}
           onSave={save}
