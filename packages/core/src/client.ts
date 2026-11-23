@@ -1144,6 +1144,12 @@ export class ClawtrateClient {
   /** Each failed request's log policy, as it was when the request went out. */
   private readonly dispatchedQuiet = new WeakMap<object, boolean>();
   private settings: ConnectionSettings | null = null;
+  /**
+   * The gateway this client last read from or wrote to the saved settings record: `null` once it
+   * found none or forgot it, `undefined` before it read it. A record naming another gateway was
+   * saved by another client on this store since (`recordTaken`).
+   */
+  private recordUrl: string | null | undefined = undefined;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
   private generation = 0;
@@ -1473,8 +1479,26 @@ export class ClawtrateClient {
 
   /** Written first: settings the host could not save are never the ones in use. */
   private async saveSettings(settings: ConnectionSettings): Promise<void> {
-    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(settings));
+    await this.writeRecord(settings);
     this.settings = settings;
+  }
+
+  /** The saved record alone; this client's settings stay as they are. */
+  private async writeRecord(record: ConnectionSettings): Promise<void> {
+    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(record));
+    this.recordUrl = record.url;
+  }
+
+  /**
+   * Whether `saved` names a gateway other than `url` that another client on this store saved
+   * since this one last read or wrote the record. That record is the other client's latest
+   * choice, and this client's queued changes leave it as it is.
+   */
+  private recordTaken(saved: ConnectionSettings | null, url: string): boolean {
+    const named = saved?.url ?? null;
+    return (
+      named !== null && named !== url && this.recordUrl !== undefined && named !== this.recordUrl
+    );
   }
 
   /**
@@ -1515,6 +1539,7 @@ export class ClawtrateClient {
     if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
       return;
     this.settings = settings;
+    this.recordUrl = settings?.url ?? null;
     if (settings && (settings.suspended || options.resume === "disconnected")) {
       this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
@@ -1687,8 +1712,9 @@ export class ClawtrateClient {
       // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
       // and stays the selection it was. Another client on this store may have saved a different
       // gateway since this one was chosen; that record is the other client's and stays.
-      if ((await this.savedSettings())?.url === this.settings.url) {
+      if (!this.recordTaken(await this.savedSettings(), this.settings.url)) {
         await this.host.storage.delete(SETTINGS_KEY);
+        this.recordUrl = null;
       }
       this.selectionApplied = asked;
       this.abandonAccessRequest("Disconnected from the gateway.");
@@ -1723,7 +1749,17 @@ export class ClawtrateClient {
       if (this.protocol?.connected && this.state.connection.status === "connected") {
         return this.generation;
       }
-      if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
+      if (this.settings.suspended) {
+        // Reconnect is the person's latest choice, as Connect is; a record of this gateway another
+        // client changed since keeps what it changed.
+        const saved = await this.savedSettings();
+        const url = this.settings.url;
+        await this.writeRecord({
+          ...(saved?.url === url ? saved : this.settings),
+          suspended: false,
+        });
+        this.settings = { ...this.settings, suspended: false };
+      }
       if (stops === this.stops) await this.open();
       return null;
     });
@@ -1740,11 +1776,14 @@ export class ClawtrateClient {
       // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
       const url = this.settings.url;
       const typed = this.typedTokenEnds(url);
-      await this.saveSettings({
-        ...this.settings,
-        suspended: true,
-        ...(typed ? { token: null } : {}),
-      });
+      const change = { suspended: true, ...(typed ? { token: null } : {}) };
+      // Another client's gateway saved since stays the one a restart opens, and a record of this
+      // gateway another client changed since keeps what it changed.
+      const saved = await this.savedSettings();
+      if (!this.recordTaken(saved, url)) {
+        await this.writeRecord({ ...(saved?.url === url ? saved : this.settings), ...change });
+      }
+      this.settings = { ...this.settings, ...change };
       // Only once that is saved does the attempt end: a Disconnect that failed keeps it.
       this.endAttempt(url);
       // The connection stops: writes waiting for access fail, as on any lost connection.
@@ -1777,6 +1816,7 @@ export class ClawtrateClient {
    */
   private endTypedAttempt(url: string): void {
     const selection = this.typedAttempt?.selection;
+    const token = this.typedAttempt?.token;
     const typed = this.typedTokenEnds(url);
     this.endAttempt(url);
     if (!typed || !this.settings) return;
@@ -1785,7 +1825,11 @@ export class ClawtrateClient {
       const current = this.settings;
       if (!current || current.url !== url || this.selectionApplied !== selection) return;
       if (current.token !== null) return;
-      await this.saveSettings(current);
+      // Only from the record as it is now, and only while it still holds this token: another
+      // client on this store may have saved another gateway, or forgotten this one, since.
+      const saved = await this.savedSettings();
+      if (saved?.url !== url || saved.token !== token) return;
+      await this.writeRecord({ ...saved, token: null });
     }).catch(() => this.log("warn", "Could not drop the gateway token from this device."));
   }
 
@@ -6464,6 +6508,8 @@ export class ClawtrateClient {
           await this.changeConnection(async () => {
             const current = this.settings;
             if (!live() || generation !== this.generation || current?.url !== settings.url) return;
+            // A gateway another client chose since is the later choice, and stays saved.
+            if (this.recordTaken(await this.savedSettings(), settings.url)) return;
             await this.saveSettings(current);
           });
           return;
@@ -6480,6 +6526,7 @@ export class ClawtrateClient {
               this.close();
               return;
             }
+            if (this.recordTaken(await this.savedSettings(), settings.url)) return;
             await this.saveSettings(current);
             return;
           }
@@ -6492,9 +6539,14 @@ export class ClawtrateClient {
           if (!paired || !live()) return;
           try {
             // Read at the moment of the write: another client on this store may have saved a
-            // different gateway or forgotten this one since, and neither is written over.
-            if ((await this.savedSettings())?.url !== settings.url || !live()) return;
-            await this.saveSettings({ ...current, token: null });
+            // different gateway, forgotten this one or changed its record since. Only the token
+            // goes, from the record as it is now.
+            const saved = await this.savedSettings();
+            if (saved?.url !== settings.url || !live()) return;
+            if (saved.token !== null) {
+              await this.writeRecord({ ...saved, token: null });
+            }
+            this.settings = { ...current, token: null };
           } catch {
             // The settings keep the secret, so the next hello tries again; this one goes on.
             this.log("warn", "Could not remove the shared gateway token from this device.");
