@@ -234,5 +234,71 @@ describe("clients sharing a store keep each other's saved gateway", () => {
         client.stop();
       }
     });
+
+    it("F-457: Suspend then Retry at startup keeps a newer token saved for the same gateway", async () => {
+      const storage = memoryStorage({
+        connection: JSON.stringify({ url: URL_A, token: "old-token" }),
+      });
+      const reading = deferred<void>();
+      const gate = deferred<void>();
+      const get = storage.get;
+      let paused = false;
+      storage.get = async (key) => {
+        if (key !== "connection" || paused) return get(key);
+        paused = true;
+        const value = await get(key);
+        reading.resolve();
+        await gate.promise;
+        return value;
+      };
+      const gatewayA = new FakeGateway();
+      gatewayA.connectReply = () => ({
+        ok: false,
+        error: {
+          code: "NOT_PAIRED",
+          message: "pairing required",
+          details: { code: "PAIRING_REQUIRED", requestId: "req-1", deviceId: "device-1" },
+        },
+      });
+      const otherGateway = new FakeGateway();
+      otherGateway.refuseConnections = true;
+      const client = new ClawtrateClient(testHost(gatewayA, storage), FAST);
+      const other = new ClawtrateClient(testHost(otherGateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading.promise;
+        await other.start({ resume: false });
+        await other.connect({ url: URL_A, token: "new-token" });
+        other.stop();
+        expect(saved(storage)).toEqual({ url: URL_A, token: "new-token" });
+
+        const written: Array<{ url: string; token: string | null; suspended?: boolean }> = [];
+        const set = storage.set;
+        storage.set = (key, value) => {
+          if (key === "connection") {
+            written.push(
+              JSON.parse(value) as { url: string; token: string | null; suspended?: boolean },
+            );
+          }
+          return set(key, value);
+        };
+
+        const suspending = client.suspend();
+        const retrying = client.retryNow();
+        gate.resolve();
+        await Promise.all([starting, suspending, retrying]);
+        expect(written).toEqual([
+          { url: URL_A, token: "new-token", suspended: true },
+          { url: URL_A, token: "new-token", suspended: false },
+        ]);
+        expect(saved(storage)).toEqual({ url: URL_A, token: "new-token", suspended: false });
+        await until(() => gatewayA.connects.length >= 1);
+        expect((gatewayA.connects[0] as ConnectParams).auth?.token).toBe("new-token");
+      } finally {
+        gate.resolve();
+        other.stop();
+        client.stop();
+      }
+    });
   });
 });

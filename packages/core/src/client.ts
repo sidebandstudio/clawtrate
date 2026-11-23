@@ -1841,7 +1841,15 @@ export class ClawtrateClient {
         reload = this.generation;
         return;
       }
-      if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
+      if (this.settings.suspended) {
+        const saved = await this.readSavedSettings(stops);
+        if (!this.settings || stops !== this.stops) return;
+        if (saved?.url === this.settings.url) {
+          await this.saveSettings({ ...saved, suspended: false });
+        } else {
+          this.settings = { ...this.settings, suspended: false };
+        }
+      }
       this.connectionCommands += 1;
       if (stops === this.stops) await this.open();
     });
@@ -1853,19 +1861,24 @@ export class ClawtrateClient {
    * pairing and what is on screen. `retryNow` reconnects.
    */
   async suspend(): Promise<void> {
-    const restoring = this.restoring !== null;
     return this.connectionCommand(async (stops) => {
       if (!this.settings) return;
+      // Read the current record so another client's gateway or newer token stays intact.
+      const saved = await this.readSavedSettings(stops);
+      if (!this.settings || stops !== this.stops) return;
       // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
       const url = this.settings.url;
       const typed = this.typedTokenEnds(url);
-      const next = { ...this.settings, suspended: true, ...(typed ? { token: null } : {}) };
-      // Read at startup, the record may be another client's by now: that one stays as it is.
-      const saved = restoring ? await this.readSavedSettings(stops) : null;
-      if (!this.settings || stops !== this.stops) return;
-      const kept = !restoring || JSON.stringify(saved) === JSON.stringify(this.settings);
-      if (kept) await this.saveSettings(next);
-      else this.settings = next;
+      if (saved?.url === url) {
+        const dropToken = typed && saved.token === this.settings.token;
+        await this.saveSettings({
+          ...saved,
+          suspended: true,
+          ...(dropToken ? { token: null } : {}),
+        });
+      } else {
+        this.settings = { ...this.settings, suspended: true, ...(typed ? { token: null } : {}) };
+      }
       this.connectionCommands += 1;
       // Only once that is saved does the attempt end: a Disconnect that failed keeps it.
       this.endAttempt(url);
