@@ -57,6 +57,27 @@ const saved = (storage: { data: Map<string, string> }) => {
   return raw ? (JSON.parse(raw) as { url: string; token: string | null }) : null;
 };
 
+/** A gateway that asks every device at B to wait for pairing, and connects A. */
+function pairingAtB() {
+  const gateway = new FakeGateway();
+  gateway.connectReply = (params, url) => {
+    const { scopes, auth } = params as ConnectParams;
+    if (url === URL_B)
+      return {
+        ok: false,
+        error: {
+          code: "NOT_PAIRED",
+          message: "pairing required",
+          details: { code: "PAIRING_REQUIRED", requestId: "req-1", deviceId: "device-1" },
+        },
+      };
+    return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
+  };
+  return gateway;
+}
+
+const setupCode = { url: URL_B, bootstrapToken: CODE, expiresAtMs: Date.now() + 600_000 };
+
 describe("clients sharing a store keep each other's saved gateway", () => {
   it("a queued disconnect of A leaves gateway B, saved by another client just before it", async () => {
     const storage = memoryStorage({
@@ -386,6 +407,49 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       await until(() => saved(storage)?.token === null);
       await client.suspend();
       expect(saved(storage)).toEqual({ url: URL_A, token: null, suspended: true });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("setup's Back on a client that resumed nothing leaves gateway A, saved by another client during setup", async () => {
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(pairingAtB(), storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+    try {
+      await client.start({ resume: false });
+      const selection = client.nextSelection();
+      await client.connectWithSetupCode(setupCode);
+      await until(() => client.state.connection.status === "pairing");
+      await other.start({ resume: false });
+      await other.connect({ url: URL_A });
+      await client.disconnect(URL_B, selection);
+      expect(saved(storage)).toEqual({ url: URL_A, token: null });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("setup's Back leaves gateway A, saved again by another client after it chose C during setup", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: readToken("token-A"),
+    });
+    const client = new ClawtrateClient(testHost(pairingAtB(), storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+    try {
+      await client.start();
+      await until(() => client.state.connection.status === "connected");
+      const selection = client.nextSelection();
+      await client.connectWithSetupCode(setupCode);
+      await until(() => client.state.connection.status === "pairing");
+      await other.start({ resume: false });
+      await other.connect({ url: URL_C });
+      await other.connect({ url: URL_A });
+      await client.disconnect(URL_B, selection);
+      expect(saved(storage)).toEqual({ url: URL_A, token: null });
     } finally {
       other.stop();
       client.stop();

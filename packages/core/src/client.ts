@@ -625,6 +625,8 @@ type ConnectionWrites = {
    * an approved rotation whose reads of the saved record fail.
    */
   grants: Map<string, { full: boolean; held: number } | null>;
+  /** Bumped by every write or removal of the saved settings record, by any client on the store. */
+  settingsRevision: number;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
 
@@ -1145,11 +1147,11 @@ export class ClawtrateClient {
   private readonly dispatchedQuiet = new WeakMap<object, boolean>();
   private settings: ConnectionSettings | null = null;
   /**
-   * The gateway this client last read from or wrote to the saved settings record: `null` once it
-   * found none or forgot it, `undefined` before it read it. A record naming another gateway was
-   * saved by another client on this store since (`recordTaken`).
+   * The store's settings revision when this client last read or wrote the saved record, or null
+   * before it did. Any other revision is a record another client on this store saved or forgot
+   * since (`recordSeen`).
    */
-  private recordUrl: string | null | undefined = undefined;
+  private seenRevision: number | null = null;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
   private generation = 0;
@@ -1460,6 +1462,7 @@ export class ClawtrateClient {
       refusals: 0,
       rotations: new Map(),
       grants: new Map(),
+      settingsRevision: 0,
     };
     connectionWrites.set(host.storage, this.writes);
     this.options = options;
@@ -1486,7 +1489,21 @@ export class ClawtrateClient {
   /** The saved record alone; this client's settings stay as they are. */
   private async writeRecord(record: ConnectionSettings): Promise<void> {
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(record));
-    this.recordUrl = record.url;
+    this.seenRevision = ++this.writes.settingsRevision;
+  }
+
+  private async forgetRecord(): Promise<void> {
+    await this.host.storage.delete(SETTINGS_KEY);
+    this.seenRevision = ++this.writes.settingsRevision;
+  }
+
+  /**
+   * Whether the saved record is the one this client last read or wrote. Any other is another
+   * client's on this store, saved or forgotten since, and this client changes in it only what it
+   * means to change.
+   */
+  private recordSeen(): boolean {
+    return this.seenRevision === this.writes.settingsRevision;
   }
 
   /**
@@ -1495,10 +1512,7 @@ export class ClawtrateClient {
    * choice, and this client's queued changes leave it as it is.
    */
   private recordTaken(saved: ConnectionSettings | null, url: string): boolean {
-    const named = saved?.url ?? null;
-    return (
-      named !== null && named !== url && this.recordUrl !== undefined && named !== this.recordUrl
-    );
+    return saved !== null && saved.url !== url && !this.recordSeen();
   }
 
   /**
@@ -1535,11 +1549,13 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     if (options.resume === false) return;
     // Startup needs to open the socket without waiting for another client's credential write.
+    // A write that lands while this reads leaves the revision this client saw behind it.
+    const revision = this.writes.settingsRevision;
     const settings = await this.savedSettings();
     if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
       return;
     this.settings = settings;
-    this.recordUrl = settings?.url ?? null;
+    this.seenRevision = revision;
     if (settings && (settings.suspended || options.resume === "disconnected")) {
       this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
@@ -1710,11 +1726,11 @@ export class ClawtrateClient {
         throw new GatewayChangedError();
       }
       // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
-      // and stays the selection it was. Another client on this store may have saved a different
-      // gateway since this one was chosen; that record is the other client's and stays.
-      if (!this.recordTaken(await this.savedSettings(), this.settings.url)) {
-        await this.host.storage.delete(SETTINGS_KEY);
-        this.recordUrl = null;
+      // and stays the selection it was. A record another client on this store saved since for a
+      // different gateway is that client's, and stays.
+      const saved = await this.savedSettings();
+      if (saved === null || saved.url === this.settings.url || this.recordSeen()) {
+        await this.forgetRecord();
       }
       this.selectionApplied = asked;
       this.abandonAccessRequest("Disconnected from the gateway.");
