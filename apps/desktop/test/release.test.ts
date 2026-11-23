@@ -11,15 +11,18 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { artifactName, makeFeed } from "../packaging/feed.ts";
 import {
+  certificateThumbprint,
   checkMacSignature,
   checkWindowsSignature,
   macSignatureKind,
+  powerShellArgs,
+  powerShellEnv,
   signingPlan,
   signingProblems,
   signingSummary,
+  windowsCertificate,
   windowsSignature,
-  windowsSignatureArgs,
-  windowsSignatureEnv,
+  windowsSigner,
 } from "../packaging/signing.ts";
 import { releaseDate, updateDefines } from "../packaging/update-defines.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
@@ -186,14 +189,21 @@ describe("signing", () => {
   });
 
   it("the build prints the plan before building and checks the signature after", () => {
-    const build = readFileSync(join(APP, "packaging/build.ts"), "utf8");
+    const build = readFileSync(join(APP, "packaging/build.ts"), "utf8").replaceAll("\r\n", "\n");
     expect(build).toContain("signingProblems(process.env, target)");
     expect(build).toContain("console.log(signingSummary(plan, target));");
     expect(build).toContain('spawnSync("codesign", ["--display", "--verbose=2", app]');
     expect(build).toContain("readWindowsSignature(join(output.path, file), process.env)");
-    expect(build).toContain("checkWindowsSignature(plan.windows, shown)");
+    expect(build).toContain("checkWindowsSignature(signer, shown)");
     expect(build.indexOf("signingSummary(")).toBeLessThan(build.indexOf("await build("));
     expect(build.indexOf("await build(")).toBeLessThan(build.indexOf("checkWindowsSignature("));
+    // The certificate's signer, read before anything is built; a problem stops the build.
+    expect(build).toContain(
+      'if (target === "win" && plan.windows === "certificate") {\n  const expected = windowsSigner(process.env, APP_DIR);',
+    );
+    expect(build).toContain("signer = expected.thumbprint;");
+    expect(build.indexOf("windowsSigner(process.env")).toBeLessThan(build.indexOf("await build("));
+    expect(build).toContain("projectDir: APP_DIR,");
     // The x64 installer by its expected name, not whichever .exe files the build lists.
     expect(build).toContain("const installer = `${PRODUCT_NAME}-${version}-win-x64.exe`;");
     expect(build).toContain("for (const file of [`win-unpacked/${PRODUCT_NAME}.exe`, installer])");
@@ -233,13 +243,14 @@ describe("signing", () => {
 
   it("reads Windows signatures with WinVerifyTrust, without PowerShell 7's module path, and stops at any error", () => {
     expect(
-      windowsSignatureEnv(
-        { PATH: "p", PSModulePath: "C:\\pwsh7\\Modules", PSMODULEPATH: "q", SIGNED_FILE: "old" },
-        "D:\\out\\Clawtrate.exe",
-      ),
-    ).toEqual({ PATH: "p", SIGNED_FILE: "D:\\out\\Clawtrate.exe" });
+      powerShellEnv({ PATH: "p", PSModulePath: "C:\\pwsh7\\Modules", PSMODULEPATH: "q" }),
+    ).toEqual({ PATH: "p" });
+    // The file named last, over any SIGNED_FILE the environment already has.
+    expect(readFileSync(join(APP, "packaging/signing.ts"), "utf8")).toContain(
+      "env: { ...powerShellEnv(env), SIGNED_FILE: file },",
+    );
     const script = readFileSync(join(APP, "packaging/authenticode.ps1"), "utf8");
-    const args = windowsSignatureArgs();
+    const args = powerShellArgs("authenticode.ps1");
     expect(args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
     expect(Buffer.from(args[3]!, "base64").toString("utf16le")).toBe(script);
     // Without it, a command that cannot be found prints its error and the command goes on.
@@ -248,6 +259,155 @@ describe("signing", () => {
     // The file's own signatures, never a catalog's, each one checked by its index.
     expect(script).toContain("data.dwUnionChoice = 1;");
     expect(script).toContain("settings.dwFlags = index == 0 ? 3u : 1u;");
+  });
+
+  describe("the certificate a signed Windows build must carry", () => {
+    // Made-up bytes. No test opens a certificate: these read files and base64,
+    // and certificate.ps1's output, which is stood in for.
+    const PFX = Buffer.from("made-up certificate bytes");
+    const THUMBPRINT = "0123456789ABCDEF0123456789ABCDEF01234567";
+    let dir = "";
+    afterEach(() => {
+      if (dir) rmSync(dir, { recursive: true, force: true });
+      dir = "";
+    });
+    const appDir = () => {
+      dir = mkdtempSync(join(tmpdir(), "clawtrate-certificate-"));
+      mkdirSync(join(dir, "app"));
+      writeFileSync(join(dir, "app", "cert.pfx"), PFX);
+      return join(dir, "app");
+    };
+
+    it("reads the bytes electron-builder's own importCertificate reads, from a file or base64", async () => {
+      const app = appDir();
+      const from = (base: string, name: string) => createRequire(base).resolve(name);
+      const builder = from(join(APP, "package.json"), "electron-builder");
+      const lib = from(builder, "app-builder-lib");
+      const { importCertificate } = createRequire(lib)(join(lib, "../codeSign/codesign.js")) as {
+        importCertificate: (link: string, tmp: unknown, dir: string) => Promise<string>;
+      };
+      const { TmpDir } = createRequire(builder)("builder-util") as {
+        TmpDir: new (name: string) => { cleanup: () => Promise<void> };
+      };
+      const tmp = new TmpDir("clawtrate-certificate-test");
+      const base64 = PFX.toString("base64");
+      const long = Buffer.alloc(1800, 7);
+      try {
+        for (const [link, bytes] of [
+          [join(app, "cert.pfx"), PFX],
+          [` cert.pfx `, PFX],
+          ["../app/cert.pfx", PFX],
+          [`file://${join(app, "cert.pfx")}`, PFX],
+          [`data:application/x-pkcs12;base64,${base64}`, PFX],
+          // Base64 without the prefix when it ends in "=", or is longer than 2048 characters.
+          [base64, PFX],
+          [long.toString("base64"), long],
+        ] as const) {
+          const theirs = readFileSync(await importCertificate(link, tmp, app));
+          expect(theirs, link).toEqual(bytes);
+          const env = { WIN_CSC_LINK: link, WIN_CSC_KEY_PASSWORD: " made-up " };
+          expect(windowsCertificate(env, app), link).toEqual({ pfx: theirs, password: "made-up" });
+        }
+      } finally {
+        await tmp.cleanup();
+      }
+    });
+
+    it("takes the certificate and password from the variables electron-builder would", () => {
+      const app = appDir();
+      const data = `data:application/x-pkcs12;base64,${Buffer.from("win").toString("base64")}`;
+      expect(
+        windowsCertificate(
+          {
+            WIN_CSC_LINK: data,
+            CSC_LINK: "cert.pfx",
+            WIN_CSC_KEY_PASSWORD: "w",
+            CSC_KEY_PASSWORD: "c",
+          },
+          app,
+        ),
+      ).toEqual({ pfx: Buffer.from("win"), password: "w" });
+      expect(windowsCertificate({ CSC_LINK: "cert.pfx", CSC_KEY_PASSWORD: "c" }, app)).toEqual({
+        pfx: PFX,
+        password: "c",
+      });
+      // An empty WIN_ password wins over a generic one: a certificate without a password.
+      expect(
+        windowsCertificate(
+          { CSC_LINK: "cert.pfx", WIN_CSC_KEY_PASSWORD: "", CSC_KEY_PASSWORD: "c" },
+          app,
+        ),
+      ).toEqual({ pfx: PFX, password: "" });
+    });
+
+    it("refuses an https address and a file it cannot read, naming the variable and not its value", () => {
+      const app = appDir();
+      for (const [env, problem] of [
+        [
+          { WIN_CSC_LINK: "https://example.invalid/cert.pfx", WIN_CSC_KEY_PASSWORD: "" },
+          "WIN_CSC_LINK is an https address, which the build does not download (give a .pfx file's path or its base64 data)",
+        ],
+        [
+          { CSC_LINK: "missing.pfx", CSC_KEY_PASSWORD: "" },
+          "CSC_LINK names a file that cannot be read",
+        ],
+        [
+          { WIN_CSC_LINK: app, WIN_CSC_KEY_PASSWORD: "" },
+          "WIN_CSC_LINK names a file that cannot be read",
+        ],
+      ] as const) {
+        expect(windowsCertificate(env, app)).toEqual({ problem });
+        // Before any PowerShell starts.
+        expect(windowsSigner(env, app)).toEqual({ problem });
+      }
+    });
+
+    it("takes the one certificate with its private key as the signer, and nothing else", () => {
+      expect(certificateThumbprint({ status: 0, stdout: `${THUMBPRINT}\r\n` })).toEqual({
+        thumbprint: THUMBPRINT,
+      });
+      const unopened = {
+        problem:
+          "the certificate WIN_CSC_LINK or CSC_LINK names cannot be opened with its password",
+      };
+      for (const result of [
+        { status: 1, stdout: "" },
+        { status: 1, stdout: `${THUMBPRINT}\r\n` },
+        { status: null, stdout: null },
+        { status: 0, stdout: `${THUMBPRINT.toLowerCase()}\r\n` },
+        { status: 0, stdout: `${THUMBPRINT} extra\r\n` },
+        { status: 0, stdout: `${THUMBPRINT}\r\nnot a thumbprint\r\n` },
+      ]) {
+        expect(certificateThumbprint(result), JSON.stringify(result)).toEqual(unopened);
+      }
+      const holds = (count: number) => ({
+        problem: `the certificate WIN_CSC_LINK or CSC_LINK names holds ${count} certificates with a private key, not one`,
+      });
+      expect(certificateThumbprint({ status: 0, stdout: "" })).toEqual(holds(0));
+      expect(certificateThumbprint({ status: 0, stdout: "\r\n" })).toEqual(holds(0));
+      expect(
+        certificateThumbprint({ status: 0, stdout: `${THUMBPRINT}\r\n${"F".repeat(40)}\r\n` }),
+      ).toEqual(holds(2));
+    });
+
+    it("opens the .pfx in memory only, with the flags EphemeralKeySet stands for", () => {
+      const script = readFileSync(join(APP, "packaging/certificate.ps1"), "utf8");
+      const args = powerShellArgs("certificate.ps1");
+      expect(args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+      expect(Buffer.from(args[3]!, "base64").toString("utf16le")).toBe(script);
+      expect(script).toMatch(/^\$ErrorActionPreference = 'Stop'\r?$/m);
+      // PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP, on every import.
+      expect(script).toContain("const uint InMemory = 0x8000 | 0x200;");
+      expect(script.match(/PFXImportCertStore\(ref blob, [^)]*\)/g)).toEqual([
+        "PFXImportCertStore(ref blob, password, InMemory)",
+        "PFXImportCertStore(ref blob, null, InMemory)",
+      ]);
+      // No certificate store, no .NET import that could persist a key, and no input but stdin.
+      expect(script).not.toMatch(
+        /X509Store|Cert:|CertOpenStore|X509KeyStorageFlags[.\]]|\.Import\(|\$env:/,
+      );
+      expect(script).toContain("[Console]::In.ReadToEnd()");
+    });
   });
 
   describe("what WinVerifyTrust says of a Windows file's embedded signatures", () => {
@@ -352,19 +512,25 @@ describe("signing", () => {
       status: 0,
       stdout: `checked 1\r\n0 800b0109 2.16.840.1.101.3.4.2.1 ${signer}\r\n`,
     };
-    expect(checkWindowsSignature("unsigned", none)).toEqual({
+    expect(checkWindowsSignature(null, none)).toEqual({
       kind: "none",
       signer: null,
       matches: true,
     });
-    expect(checkWindowsSignature("certificate", certificate)).toEqual({
+    expect(checkWindowsSignature(signer, certificate)).toEqual({
       kind: "certificate",
       signer,
       matches: true,
     });
-    expect(checkWindowsSignature("unsigned", certificate).matches).toBe(false);
-    expect(checkWindowsSignature("certificate", none).matches).toBe(false);
-    for (const plan of ["unsigned", "certificate"] as const) {
+    expect(checkWindowsSignature(null, certificate).matches).toBe(false);
+    expect(checkWindowsSignature(signer, none).matches).toBe(false);
+    // Signed and trusted alike, but by a certificate other than the one the variables name.
+    expect(checkWindowsSignature("B".repeat(40), certificate)).toEqual({
+      kind: "certificate",
+      signer,
+      matches: false,
+    });
+    for (const expected of [null, signer]) {
       for (const result of [
         { status: 1, stdout: none.stdout },
         { status: 1, stdout: certificate.stdout },
@@ -372,7 +538,7 @@ describe("signing", () => {
         { status: 0, stdout: "" },
         { status: null, stdout: null },
       ]) {
-        expect(checkWindowsSignature(plan, result)).toEqual({
+        expect(checkWindowsSignature(expected, result)).toEqual({
           kind: "invalid",
           signer: null,
           matches: false,
