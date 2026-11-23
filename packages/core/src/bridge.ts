@@ -136,7 +136,10 @@ export type BridgeCommand =
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
   | { type: "sendQueuedNow"; key: string; messageId: string }
-  /** Take a held or queued message back to edit it: its words and files, files held again under new ids. */
+  /**
+   * Take a held or queued message back to edit it: its words and files, files held again under new
+   * ids, and the session it was bound to, which the words keep in the editor (F-278).
+   */
   | { type: "takeBackMessage"; key: string; messageId: string }
   /** Send a held message's words and files again as a new message (Try again on a failed turn). */
   | { type: "sendAgain"; key: string; messageId: string }
@@ -431,7 +434,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
   : C extends { type: "sendAgain" }
     ? { messageId: string }
     : C extends { type: "takeBackMessage" }
-      ? { text: string; attachments: AttachmentInfo[] }
+      ? { text: string; attachments: AttachmentInfo[]; sessionId?: string }
       : C extends { type: "createTask" | "startTaskFromMessage" }
         ? { key: string }
         : C extends { type: "readStepRaw" }
@@ -1948,17 +1951,24 @@ class ViewerSession implements BridgeSession {
         return { messageId: client.sendAgain(this.mine(command.key), command.messageId) };
       case "takeBackMessage": {
         const key = this.mine(command.key);
+        // The words go back with the session they were bound to, which the editor keeps.
+        const session = (back: { sessionId?: string }) =>
+          back.sessionId ? { sessionId: back.sessionId } : {};
         if (!policy.attachments) {
           const back = client.takeBack(key, command.messageId);
           if (back.attachments.length > 0) throw new Error("This host does not take files.");
-          return { text: back.text, attachments: [] };
+          return { text: back.text, attachments: [], ...session(back) };
         }
         // All or nothing: the whole batch is checked, bytes and count, before the message
         // is taken back; when it cannot fit, the message stays exactly as it was.
         const files = client.peekTakeBack(key, command.messageId).attachments;
         if (!policy.attachments.fits(files)) throw new Error(TAKE_BACK_NO_ROOM);
         const back = client.takeBack(key, command.messageId);
-        return { text: back.text, attachments: policy.attachments.restore(back.attachments) };
+        return {
+          text: back.text,
+          attachments: policy.attachments.restore(back.attachments),
+          ...session(back),
+        };
       }
       case "createTask":
         // Until the gateway is asked, a viewer that goes away takes its request with it.

@@ -141,6 +141,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   steerChecks: { max: T, each: 3 * ID + N, row: "bookkeeping" },
   // How many times news of each followed task dropped what its read established.
   steerDrops: { max: T, each: ID + N, row: "bookkeeping" },
+  // The runs heard of in each followed task while its read is out, each within the id bound.
+  steerHeard: { max: T, each: ID + MAX_RUN_LIST * (ID + 1), row: "bookkeeping" },
+  // Counted in their task's own size.
+  "steerHeard.*": { max: MAX_RUN_LIST, each: ID, row: null },
   // This client's archives and deletes while out, at most T: an id, the task, the session the
   // request named, what was heard, and the ids of the messages waiting when it began.
   ownRemovals: { max: T, each: N + 2 * ID + SHORT + MAX_OUTBOX * ID, row: "bookkeeping" },
