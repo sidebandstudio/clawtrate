@@ -46,6 +46,8 @@ describe("packaging configuration", () => {
     expect(() => output("custom-dist")).toThrow("must be an absolute path");
   });
 
+  // The first case loads the pinned electron-builder, hundreds of modules: about 0.5 s idle and
+  // several seconds when a full run shares a busy machine.
   it.each(["1.2.0", "1.2.0-beta.20261104.10"])(
     "emits the full signed setup version and setup-only marker for %s",
     (version) => {
@@ -78,6 +80,7 @@ describe("packaging configuration", () => {
       expect(fields).toContain('/LANG=1033 ProductName "Clawtrate"');
       expect(fields).toContain(`/LANG=1033 ProductVersion "${version}"`);
     },
+    30_000,
   );
 
   it("builds into a folder git ignores and publishes nothing", () => {
