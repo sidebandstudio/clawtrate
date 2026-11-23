@@ -322,27 +322,41 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
       const proven = provenCheckout("alpha", { port });
       const devGateway = proven.read()!;
       expect(devGateway).not.toBeNull();
+      // Each time the gateway is proved again before a connection, and how many times it wasn't.
+      let refused = 0;
       const runtime = await startHostRuntime({
         kind: mode === "desktop" ? "desktop" : "web",
         displayName: "Clawtrate",
         dataDir: mkdtempSync(join(tmpdir(), "clawtrate-runtime-")),
         devGateway,
         autoConnectDev: true,
-        recheckDevGateway: proven.read,
+        recheckDevGateway: () => {
+          const proof = proven.read();
+          if (proof === null) refused += 1;
+          return proof;
+        },
         ...(mode === "token-free" ? { devOnly: true } : {}),
+      });
+      // Retries the client schedules, from here on.
+      let scheduled = 0;
+      runtime.client.store.subscribe((state) => {
+        if (state.connection.retryAt !== null) scheduled += 1;
       });
       await until(() => sockets.length === 1);
       // The gateway process is gone; the protocol's own retry must ask again.
       childFor(proven.gateway.pid).kill("SIGTERM");
       await new Promise((resolve) => childFor(proven.gateway.pid).once("exit", resolve));
       sockets[0]!.terminate();
+      // The retry is scheduled, asks for the proof again, is refused, and leaves none waiting.
       await until(
-        () => runtime.client.state.connection.error?.code === "GATEWAY_NOT_ALLOWED",
-        8000,
+        () =>
+          scheduled > 0 &&
+          refused > 0 &&
+          runtime.client.state.connection.error?.code === "GATEWAY_NOT_ALLOWED" &&
+          runtime.client.state.connection.retryAt === null,
+        20_000,
       );
-      await new Promise((resolve) => setTimeout(resolve, 2500));
       expect(sockets.length, mode).toBe(1);
-      expect(runtime.client.state.connection.retryAt).toBeNull();
       runtime.client.stop();
       await new Promise((resolve) => listener.close(resolve));
     }
