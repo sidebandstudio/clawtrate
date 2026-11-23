@@ -99,11 +99,13 @@ export function echoesError(item: TranscriptItem, run: Run): boolean {
   return error !== "" && plain(itemText(item)) === error;
 }
 
-/** Under the task's name: how much of the model's context the task uses. */
+/** Under the task's name: how much of the model's context the task uses, once the gateway reports it. */
 function TaskContext({ task }: { task: Task }) {
+  const words = contextWords(task.context);
+  if (!words) return null;
   return (
     <p className="task-context" data-testid="task-context">
-      {contextWords(task.context)}
+      {words}
     </p>
   );
 }

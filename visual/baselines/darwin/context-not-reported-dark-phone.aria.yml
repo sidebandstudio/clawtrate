@@ -4,7 +4,6 @@
   - button "Show work panel"
   - region "Transcript":
     - heading "Main" [level=1]
-    - paragraph: "Context: unavailable"
     - text: Today 4:56 PM
     - paragraph: Can you tighten the intro of the newsletter draft?
     - paragraph: Tightened the intro and cut about 80 words.
