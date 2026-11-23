@@ -478,6 +478,45 @@ partial. Both rows use the same field list (row 14).
   `resolveSessionsDeleteRequiredScope`, same file, lines 94-100 and
   116-118). `sessions.describe {key}` (`operator.read`)
   returns one full row (live).
+- **Channel sessions** (2026.10.6, live on a development gateway, F-519).
+  A session that reached the bot through an external channel has an
+  external delivery route, and its row says so:
+  - `channel` and `lastChannel` are the gateway's channel id (`discord`,
+    `telegram`, `slack`, `whatsapp`, `signal`, `imessage`, other built-in
+    ids, or a plugin channel's own id as given). A native Clawtrate session
+    has neither: Clawtrate's turns use the internal `webchat` channel. The
+    other internal channels (`heartbeat`, `cron`, `webhook`, `voice`,
+    `sessions_send`) never make a route external. `origin` and
+    `deliveryContext` carry the same facts as objects.
+  - Keys name the channel for peer sessions:
+    `agent:<id>:<channel>:direct|dm|group|channel:<peer>` and
+    `agent:<id>:<channel>:<account>:direct:<peer>`, with `:thread:<id>`
+    after a thread. With the default `session.dmScope: "main"`, every
+    channel's direct messages go to the bot's main session; `per-peer`
+    gives `agent:<id>:direct:<peer>`, a key with no channel.
+  - `classification` is `main`, `subagent`, `acp`, `cron`, `thread`,
+    `group`, `channel` or `direct`, decided in that order, and rows carry
+    `isMain` and `peerKind`. A native task is `direct` too, so only `main`
+    is a usable signal. `chatType` and `kind` default to `direct` for every
+    session and say nothing here.
+  - **A main session keeps its channel.** Once a channel's direct message
+    reaches `agent:<id>:main`, a later native turn leaves `channel` set:
+    the gateway does not let an internal turn retire an external route. So
+    `channel` on a main row means "this session has a channel route on
+    file", not "this chat is from a channel". Rows and `sessions.changed`
+    say nothing about which turns of a shared session came from a channel.
+  - `sessions.changed` payloads carry `channel`, `lastChannel`, `origin`
+    and `deliveryContext` flat beside `sessionKey`, and not
+    `classification`, `isMain` or `peerKind`.
+  - `sessions.list` has no parameter that filters channel sessions out.
+  - Group rows carry `subject` and `groupChannel`; their `displayName` and
+    `derivedTitle` can be a raw id such as `discord:g-<id>`.
+  - **Making one without a channel account.** An `operator.admin`
+    `chat.send` takes `originatingChannel` and `originatingTo` and gives
+    the session that external route, for any built-in or plugin-style id,
+    with no channel configured; with `deliver: false` nothing is sent.
+    Such a run sends the sending client no terminal `chat` event, so a
+    check waits on the row (`e2e/channel-chats.spec.ts`).
 - **Status: available.**
 
 ### 5. Send, attach, abort, queue, steer

@@ -177,6 +177,29 @@ describe("F-519: Show external channel chats", () => {
     client.stop();
   });
 
+  it("F-519: the client keeps each row field that says what a session is and what to call it", async () => {
+    const listed = [
+      // A main key configured otherwise, which the gateway names main by its classification.
+      { key: "agent:pip:home", agentId: "pip", classification: "main", channel: "telegram" },
+      // Per-peer direct messages: the key names no channel; only the row's channel fields do.
+      { key: "agent:pip:direct:u1", agentId: "pip", channel: "whatsapp", updatedAt: 60 },
+      { key: "agent:pip:direct:u2", agentId: "pip", lastChannel: "signal", updatedAt: 50 },
+      { key: "agent:pip:t:group:1", agentId: "pip", channel: "t", subject: "Ops", updatedAt: 40 },
+      { key: "agent:pip:d:channel:2", agentId: "pip", channel: "d", groupChannel: "#builds" },
+    ];
+    const { client, keys } = await connected({}, listed);
+    expect(keys()).toEqual(["agent:pip:home"]);
+    await client.setShowChannelChats(true);
+    expect(Object.fromEntries(client.state.tasksByBot.pip!.map((t) => [t.key, t.title]))).toEqual({
+      "agent:pip:home": "home",
+      "agent:pip:direct:u1": "WhatsApp chat",
+      "agent:pip:direct:u2": "Signal chat",
+      "agent:pip:t:group:1": "Ops",
+      "agent:pip:d:channel:2": "#builds",
+    });
+    client.stop();
+  });
+
   it("F-519: the Archived group leaves channel chats out unless they are shown", async () => {
     const archived = rows().map((row) => ({ ...row, archived: true, sessionId: row.key }));
     const ctx = {
