@@ -5,16 +5,18 @@ import type { UpdateInstaller, VerifiedArtifact } from "./update/install.ts";
 /** The gate the signed upgrade trial lifts (#309). Until then nothing is handed to setup. */
 const PENDING_TRIAL = "windows-install-pending-trial";
 
-/** Reads, in one run, the running app's signature and then the installer's under one handle
+/** Reads, in one run, the running app's signatures and then the installer's under one handle
  * that denies writes and deletion. NTFS also refuses to rename the file or any folder above
- * it while that handle is open, so the hash, the signature and the version all come from the
- * same bytes. WinVerifyTrust checks only an embedded signature, shows no prompt, skips
- * revocation and downloads nothing: the chain is built from certificates already on this
- * machine and in the signature. Each line is a fact; `windowsRefusal` decides. */
+ * it while that handle is open, so the hash, the signatures and the version all come from the
+ * same bytes. WinVerifyTrust checks one embedded signature at a time, picked by its index,
+ * shows no prompt, skips revocation and downloads nothing: the chain is built from
+ * certificates already on this machine and in the signature. Each line is a fact;
+ * `windowsRefusal` decides. */
 const inspectWindows = `
 $ErrorActionPreference='Stop'
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -32,6 +34,8 @@ public static class UpdateSignature {
   [StructLayout(LayoutKind.Sequential)]
   struct TrustFile { public uint size; public IntPtr path, file, subject; }
   [StructLayout(LayoutKind.Sequential)]
+  struct Settings { public uint size, index, flags, secondary, verified; public IntPtr policy; }
+  [StructLayout(LayoutKind.Sequential)]
   struct TrustData {
     public uint size;
     public IntPtr policy, sip;
@@ -42,6 +46,13 @@ public static class UpdateSignature {
     public uint flags, context;
     public IntPtr settings;
   }
+  // CRYPT_PROVIDER_SGNR up to psSigner, and CMSG_SIGNER_INFO up to HashAlgorithm.pszObjId.
+  [StructLayout(LayoutKind.Sequential)]
+  struct Signer { public uint size, asOfLow, asOfHigh, certs; public IntPtr chain; public uint type; public IntPtr info; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct Blob { public uint size; public IntPtr data; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct SignerInfo { public uint version; public Blob issuer, serial; public IntPtr digest; }
   [DllImport("kernel32", CharSet=CharSet.Unicode, SetLastError=true)]
   static extern SafeFileHandle CreateFileW(string path, uint access, uint share, IntPtr security,
     uint creation, uint flags, IntPtr template);
@@ -57,13 +68,20 @@ public static class UpdateSignature {
   static string Encode(string text) {
     return text == null ? "-" : Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
   }
-  // The trust result, the leaf's subject and the SHA-256 of the chain's root certificate.
-  static string Trust(string path, SafeFileHandle handle) {
+  // One embedded signature, picked by its index: the trust result, the signer's digest
+  // algorithm, the leaf's subject and the SHA-256 of the chain's root certificate, all from
+  // that signature's own WinVerifyTrust state. The first also counts the ones after it.
+  static string Trust(string path, FileStream held, uint index, out uint secondary) {
     var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
     var file = new TrustFile();
     file.size = (uint)Marshal.SizeOf(typeof(TrustFile));
     file.path = Marshal.StringToHGlobalUni(path);
-    file.file = handle == null ? IntPtr.Zero : handle.DangerousGetHandle();
+    file.file = held == null ? IntPtr.Zero : held.SafeFileHandle.DangerousGetHandle();
+    var settings = new Settings();
+    settings.size = (uint)Marshal.SizeOf(typeof(Settings));
+    settings.index = index;
+    // WSS_VERIFY_SPECIFIC, and with the first WSS_GET_SECONDARY_SIG_COUNT.
+    settings.flags = index == 0 ? 3u : 1u;
     var data = new TrustData();
     data.size = (uint)Marshal.SizeOf(typeof(TrustData));
     data.ui = 2;
@@ -71,14 +89,23 @@ public static class UpdateSignature {
     data.action = 1;
     data.flags = 0x10 | 0x1000 | 0x2000;
     data.file = Marshal.AllocHGlobal((int)file.size);
+    data.settings = Marshal.AllocHGlobal((int)settings.size);
     try {
       Marshal.StructureToPtr(file, data.file, false);
+      Marshal.StructureToPtr(settings, data.settings, false);
+      if (held != null) held.Seek(0, SeekOrigin.Begin);
       int result = WinVerifyTrust(new IntPtr(-1), ref action, ref data);
       try {
-        string subject = "-", root = "-";
+        secondary = ((Settings)Marshal.PtrToStructure(data.settings, typeof(Settings))).secondary;
+        string digest = "-", subject = "-", root = "-";
         IntPtr provider = data.state == IntPtr.Zero ? IntPtr.Zero : WTHelperProvDataFromStateData(data.state);
         IntPtr signer = provider == IntPtr.Zero ? IntPtr.Zero : WTHelperGetProvSignerFromChain(provider, 0, false, 0);
         if (signer != IntPtr.Zero) {
+          var state = (Signer)Marshal.PtrToStructure(signer, typeof(Signer));
+          if (state.info != IntPtr.Zero) {
+            var info = (SignerInfo)Marshal.PtrToStructure(state.info, typeof(SignerInfo));
+            if (info.digest != IntPtr.Zero) digest = Encode(Marshal.PtrToStringAnsi(info.digest));
+          }
           X509Certificate2 leaf = null, last = null;
           for (uint i = 0; ; i++) {
             IntPtr cert = WTHelperGetProvCertFromChain(signer, i);
@@ -92,19 +119,28 @@ public static class UpdateSignature {
             using (var sha = SHA256.Create()) root = Convert.ToBase64String(sha.ComputeHash(last.RawData));
           }
         }
-        return result.ToString("x8") + " " + subject + " " + root;
+        return "signature " + index + " " + result.ToString("x8") + " " + digest + " " + subject + " " + root;
       } finally {
         data.action = 2;
         WinVerifyTrust(new IntPtr(-1), ref action, ref data);
       }
     } finally {
+      Marshal.FreeHGlobal(data.settings);
       Marshal.FreeHGlobal(data.file);
       Marshal.FreeHGlobal(file.path);
     }
   }
+  // "<name> <count>", then every embedded signature in index order.
+  static void Signatures(List<string> lines, string name, string path, FileStream held) {
+    uint more, unused;
+    var found = new List<string> { Trust(path, held, 0, out more) };
+    for (uint index = 1; index <= more; index++) found.Add(Trust(path, held, index, out unused));
+    lines.Add(name + " " + found.Count);
+    lines.AddRange(found);
+  }
   public static string[] Inspect(string path, long expected, string running) {
-    var lines = new string[4];
-    lines[0] = "running " + Trust(running, null);
+    var lines = new List<string>();
+    Signatures(lines, "running", running, null);
     using (var handle = CreateFileW(path, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero)) {
       Info info;
       if (handle.IsInvalid || GetFileType(handle) != 1 || !GetFileInformationByHandle(handle, out info)
@@ -112,18 +148,18 @@ public static class UpdateSignature {
       var final = new StringBuilder(32768);
       uint length = GetFinalPathNameByHandleW(handle, final, (uint)final.Capacity, 0);
       if (length == 0 || length >= final.Capacity) throw new IOException();
-      using (var file = new FileStream(handle, FileAccess.Read)) {
+      // Unbuffered, so a seek moves the handle's own position before each WinVerifyTrust.
+      using (var file = new FileStream(handle, FileAccess.Read, 1)) {
         string hash = "-";
         if (file.Length == expected) {
           using (var sha = SHA512.Create()) hash = Convert.ToBase64String(sha.ComputeHash(file));
         }
-        lines[1] = "file " + info.volume + "." + info.indexHigh + "." + info.indexLow + " " + file.Length + " " + hash;
-        file.Seek(0, SeekOrigin.Begin);
-        lines[2] = "installer " + Trust(final.ToString(), handle);
-        lines[3] = "version " + Encode(FileVersionInfo.GetVersionInfo(final.ToString()).ProductVersion);
+        lines.Add("file " + info.volume + "." + info.indexHigh + "." + info.indexLow + " " + file.Length + " " + hash);
+        Signatures(lines, "installer", final.ToString(), file);
+        lines.Add("version " + Encode(FileVersionInfo.GetVersionInfo(final.ToString()).ProductVersion));
       }
     }
-    return lines;
+    return lines.ToArray();
   }
 }
 '@
@@ -153,18 +189,52 @@ const inspectWithPowerShell: InspectWindowsFile = async (file, runningApp, signa
 const TRUSTED = "00000000";
 // TRUST_E_NOSIGNATURE: the file carries no embedded signature.
 const NOT_SIGNED = "800b0100";
-const SIGNER = "([0-9a-f]{8}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]{43}=)";
+// The signer's digest algorithm, as CMSG_SIGNER_INFO names it.
+const SHA256 = "2.16.840.1.101.3.4.2.1";
+const SIGNATURE =
+  /^signature (\d+) ([0-9a-f]{8}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]+={0,2}) (-|[A-Za-z0-9+/]{43}=)$/;
+
+type Signature = { result: string; digest: string | null; subject: string; root: string };
 
 function decode(value: string) {
   return value === "-" ? null : Buffer.from(value, "base64").toString("utf8");
 }
 
+/** Takes `<name> <count>` and that many signatures, in index order, off the front of `lines`. */
+function takeSignatures(lines: string[], name: string): Signature[] | null {
+  const head = /^(\w+) ([1-9]\d*)$/.exec(lines.shift() ?? "");
+  if (head?.[1] !== name) return null;
+  const signatures: Signature[] = [];
+  for (let index = 0; index < Number(head[2]); index++) {
+    const line = SIGNATURE.exec(lines.shift() ?? "");
+    if (line?.[1] !== String(index)) return null;
+    signatures.push({
+      result: line[2]!,
+      digest: decode(line[3]!),
+      subject: line[4]!,
+      root: line[5]!,
+    });
+  }
+  return signatures;
+}
+
+/**
+ * The file's one SHA-256 signature, when Windows trusts it and it names a signer. A signature
+ * with another digest, such as the SHA-1 one electron-builder puts first by default, does not
+ * count. No build has two SHA-256 signatures, and with two there is no one signer to compare.
+ */
+function sha256Signer(signatures: Signature[]) {
+  const found = signatures.filter((signature) => signature.digest === SHA256);
+  const only = found.length === 1 ? found[0]! : null;
+  return only?.result === TRUSTED && only.subject !== "-" && only.root !== "-" ? only : null;
+}
+
 /**
  * What the helper's facts mean for this download. The installer must have the running app's
  * publisher: a leaf certificate with the same subject whose chain ends at the same root, both
- * trusted by Windows. A renewed certificate, or one from a new intermediate under that root,
- * passes; a different root or subject does not. Anything unexpected is `inspection-failed`,
- * never a pass.
+ * trusted by Windows, read from each file's SHA-256 signature. A renewed certificate, or one
+ * from a new intermediate under that root, passes; a different root or subject does not.
+ * Anything unexpected is `inspection-failed`, never a pass.
  */
 export function windowsRefusal(
   output: string,
@@ -172,19 +242,19 @@ export function windowsRefusal(
 ): UpdateInstallRefusal | null {
   const lines = output.split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
-  const running = new RegExp(`^running ${SIGNER}$`).exec(lines[0] ?? "");
-  const held = /^file (\d+\.\d+\.\d+) (\d+) (-|[A-Za-z0-9+/]{86}==)$/.exec(lines[1] ?? "");
-  const installer = new RegExp(`^installer ${SIGNER}$`).exec(lines[2] ?? "");
-  const version = /^version (-|[A-Za-z0-9+/]+={0,2})$/.exec(lines[3] ?? "");
-  if (lines.length !== 4 || !running || !held || !installer || !version) return "inspection-failed";
-  if (running[1] === NOT_SIGNED) return "build-not-signed";
-  if (running[1] !== TRUSTED || running[2] === "-" || running[3] === "-")
-    return "running-signature-untrusted";
+  const running = takeSignatures(lines, "running");
+  const held = /^file (\d+\.\d+\.\d+) (\d+) (-|[A-Za-z0-9+/]{86}==)$/.exec(lines.shift() ?? "");
+  const installer = takeSignatures(lines, "installer");
+  const version = /^version (-|[A-Za-z0-9+/]+={0,2})$/.exec(lines.shift() ?? "");
+  if (lines.length || !running || !held || !installer || !version) return "inspection-failed";
+  if (running[0]!.result === NOT_SIGNED) return "build-not-signed";
+  const app = sha256Signer(running);
+  if (!app) return "running-signature-untrusted";
   if (held[1] !== file.identity || held[2] !== String(file.size) || held[3] !== file.sha512)
     return "artifact-changed";
-  if (installer[1] !== TRUSTED || installer[2] === "-" || installer[3] === "-")
-    return "windows-signature";
-  if (installer[2] !== running[2] || installer[3] !== running[3]) return "windows-publisher";
+  const setup = sha256Signer(installer);
+  if (!setup) return "windows-signature";
+  if (setup.subject !== app.subject || setup.root !== app.root) return "windows-publisher";
   if (decode(version[1]!) !== file.version) return "installer-version";
   return null;
 }

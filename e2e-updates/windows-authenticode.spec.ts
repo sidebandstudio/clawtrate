@@ -142,10 +142,10 @@ if (windows && files)
       JSON.parse(readFileSync("apps/desktop/package.json", "utf8")) as { version: string }
     ).version;
     // Clawtrate.exe and the installer from this run's build, each signed by the job.
-    const inspect = async (name: string) => {
+    const inspect = async (name: string, running = "running.exe") => {
       const path = join(dir, name);
       copyFileSync(join(files!, name), path);
-      return windowsInstaller(join(files!, "running.exe")).inspect(await proof(path, version));
+      return windowsInstaller(join(files!, running)).inspect(await proof(path, version));
     };
 
     test("F-231: accepts the installer signed with the running app's certificate", async () => {
@@ -174,5 +174,22 @@ if (windows && files)
 
     test("F-231: refuses the installer as built, unsigned", async () => {
       expect(await inspect("unsigned.exe")).toBe("windows-signature");
+    });
+
+    // SHA-1 first and SHA-256 nested after it, the way electron-builder signs by default.
+    test("F-231: accepts an installer and a running app each signed SHA-1 then SHA-256", async () => {
+      expect(await inspect("dual.exe", "running-dual.exe")).toBeNull();
+    });
+
+    test("F-231: accepts a SHA-256 signature from the running app's certificate under another publisher's SHA-1 one", async () => {
+      expect(await inspect("dual-other-sha1.exe")).toBeNull();
+    });
+
+    test("F-231: refuses another publisher's SHA-256 signature under the running app's SHA-1 one", async () => {
+      expect(await inspect("dual-other-sha256.exe")).toBe("windows-publisher");
+    });
+
+    test("F-231: refuses an installer with only a SHA-1 signature from the running app's certificate", async () => {
+      expect(await inspect("sha1.exe")).toBe("windows-signature");
     });
   });

@@ -15,13 +15,27 @@ const proof: VerifiedArtifact = {
 };
 const base64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 const publisher = base64("CN=Example Publisher, O=Example Publisher, C=US");
+const other = base64("CN=Other Publisher, O=Other Publisher, C=US");
 const root = Buffer.alloc(32, 1).toString("base64");
+const otherRoot = Buffer.alloc(32, 2).toString("base64");
+const sha1 = base64("1.3.14.3.2.26");
+const sha256 = base64("2.16.840.1.101.3.4.2.1");
+// One embedded signature as the helper reads it: result, digest algorithm, subject and root.
+const ours = `00000000 ${sha256} ${publisher} ${root}`;
+const oursSha1 = `00000000 ${sha1} ${publisher} ${root}`;
 
-function facts(change: Partial<Record<"running" | "file" | "installer" | "version", string>> = {}) {
+/** `<name> <count>`, then each signature with its index, as the helper prints them. */
+function signed(name: string, ...signatures: string[]) {
+  return [`${name} ${signatures.length}`, ...signatures.map((line, i) => `signature ${i} ${line}`)];
+}
+
+function facts(
+  change: { running?: string[]; file?: string; installer?: string[]; version?: string } = {},
+) {
   return [
-    change.running ?? `running 00000000 ${publisher} ${root}`,
+    ...(change.running ?? signed("running", ours)),
     change.file ?? `file ${proof.identity} ${proof.size} ${proof.sha512}`,
-    change.installer ?? `installer 00000000 ${publisher} ${root}`,
+    ...(change.installer ?? signed("installer", ours)),
     change.version ?? `version ${base64(proof.version)}`,
     "",
   ].join("\r\n");
@@ -33,27 +47,52 @@ it("F-231: accepts an installer from the running app's publisher at the offered 
 
 it.each([
   ["an empty answer", ""],
-  ["a missing line", facts().split("\r\n").slice(0, 3).join("\r\n")],
-  ["an extra line", facts() + "running 00000000 - -\r\n"],
+  ["a missing line", facts().split("\r\n").slice(0, 4).join("\r\n")],
+  ["an extra line", facts() + "running 1\r\n"],
   ["lines out of order", facts().split("\r\n").reverse().join("\r\n")],
-  ["a trust result that is not one", facts({ installer: `installer ok ${publisher} ${root}` })],
-  ["a root that is not a digest", facts({ installer: `installer 00000000 ${publisher} root` })],
+  [
+    "a count with a missing signature",
+    facts({ installer: ["installer 2", `signature 0 ${ours}`] }),
+  ],
+  ["signatures out of order", facts({ installer: ["installer 1", `signature 1 ${ours}`] })],
+  ["no signature lines at all", facts({ installer: ["installer 0"] })],
+  [
+    "a trust result that is not one",
+    facts({ installer: signed("installer", `ok ${sha256} ${publisher} ${root}`) }),
+  ],
+  [
+    "a digest that is not encoded",
+    facts({ installer: signed("installer", `00000000 2.16.840 ${publisher} ${root}`) }),
+  ],
+  [
+    "a root that is not a digest",
+    facts({ installer: signed("installer", `00000000 ${sha256} ${publisher} root`) }),
+  ],
 ])("F-231: never treats %s as a pass", (_case, output) => {
   expect(windowsRefusal(output, proof)).toBe("inspection-failed");
 });
 
 it("F-231: an unsigned running app is a build that cannot update itself", () => {
-  expect(windowsRefusal(facts({ running: "running 800b0100 - -" }), proof)).toBe(
+  expect(windowsRefusal(facts({ running: signed("running", "800b0100 - - -") }), proof)).toBe(
     "build-not-signed",
   );
 });
 
 it.each([
-  ["a root Windows does not trust", `running 800b0109 ${publisher} ${root}`],
-  ["a change after signing", `running 80096010 ${publisher} ${root}`],
-  ["no signer", "running 00000000 - -"],
-])("F-231: refuses when the running app's signature has %s", (_case, running) => {
-  expect(windowsRefusal(facts({ running }), proof)).toBe("running-signature-untrusted");
+  ["a root Windows does not trust", [`800b0109 ${sha256} ${publisher} ${root}`]],
+  ["a change after signing", [`80096010 ${sha256} ${publisher} ${root}`]],
+  ["no signer", [`00000000 ${sha256} - -`]],
+  ["only a SHA-1 signature", [oursSha1]],
+  ["two SHA-256 signatures", [ours, `00000000 ${sha256} ${other} ${root}`]],
+])("F-231: refuses when the running app's signatures have %s", (_case, running) => {
+  expect(windowsRefusal(facts({ running: signed("running", ...running) }), proof)).toBe(
+    "running-signature-untrusted",
+  );
+});
+
+it("F-231: reads the running app's publisher from its SHA-256 signature when SHA-1 comes first", () => {
+  const running = signed("running", `00000000 ${sha1} ${other} ${otherRoot}`, ours);
+  expect(windowsRefusal(facts({ running }), proof)).toBeNull();
 });
 
 it.each([
@@ -65,27 +104,49 @@ it.each([
 });
 
 it.each([
-  ["no signature", "installer 800b0100 - -"],
-  ["a change after signing", `installer 80096010 ${publisher} ${root}`],
-  ["a root Windows does not trust", `installer 800b0109 ${publisher} ${root}`],
-  ["an expired certificate", `installer 800b0101 ${publisher} ${root}`],
-  ["no signer", "installer 00000000 - -"],
+  ["no signature", ["800b0100 - - -"]],
+  ["a change after signing", [`80096010 ${sha256} ${publisher} ${root}`]],
+  ["a root Windows does not trust", [`800b0109 ${sha256} ${publisher} ${root}`]],
+  ["an expired certificate", [`800b0101 ${sha256} ${publisher} ${root}`]],
+  ["no signer", [`00000000 ${sha256} - -`]],
+  ["no digest algorithm", [`00000000 - ${publisher} ${root}`]],
+  ["only a SHA-1 signature, by the running app's publisher", [oursSha1]],
+  [
+    "a trusted SHA-1 signature and a SHA-256 one changed after signing",
+    [oursSha1, `80096010 ${sha256} ${publisher} ${root}`],
+  ],
+  ["two SHA-256 signatures", [ours, ours]],
 ])("F-231: refuses an installer with %s", (_case, installer) => {
-  expect(windowsRefusal(facts({ installer }), proof)).toBe("windows-signature");
-});
-
-it("F-231: refuses another subject under the running app's root", () => {
-  const other = base64("CN=Other Publisher, O=Other Publisher, C=US");
-  expect(windowsRefusal(facts({ installer: `installer 00000000 ${other} ${root}` }), proof)).toBe(
-    "windows-publisher",
+  expect(windowsRefusal(facts({ installer: signed("installer", ...installer) }), proof)).toBe(
+    "windows-signature",
   );
 });
 
-it("F-231: refuses the running app's subject under another root", () => {
-  const otherRoot = Buffer.alloc(32, 2).toString("base64");
-  expect(
-    windowsRefusal(facts({ installer: `installer 00000000 ${publisher} ${otherRoot}` }), proof),
-  ).toBe("windows-publisher");
+it.each([
+  ["SHA-1 first and SHA-256 second, as electron-builder signs by default", [oursSha1, ours]],
+  [
+    "SHA-1 by another publisher first, SHA-256 by the running app's second",
+    [`00000000 ${sha1} ${other} ${otherRoot}`, ours],
+  ],
+  ["SHA-256 alone", [ours]],
+])("F-231: accepts an installer signed %s", (_case, installer) => {
+  expect(windowsRefusal(facts({ installer: signed("installer", ...installer) }), proof)).toBeNull();
+});
+
+it.each([
+  ["another subject under the running app's root", [`00000000 ${sha256} ${other} ${root}`]],
+  [
+    "the running app's subject under another root",
+    [`00000000 ${sha256} ${publisher} ${otherRoot}`],
+  ],
+  [
+    "the running app's SHA-1 signature, and another publisher's SHA-256 one",
+    [oursSha1, `00000000 ${sha256} ${other} ${root}`],
+  ],
+])("F-231: refuses %s as another publisher", (_case, installer) => {
+  expect(windowsRefusal(facts({ installer: signed("installer", ...installer) }), proof)).toBe(
+    "windows-publisher",
+  );
 });
 
 it.each([
@@ -103,7 +164,9 @@ it("F-231: a signed Windows build still withholds Download and Restart until the
 });
 
 it("F-231: inspect reads the download against the running app and reports the verdict", async () => {
-  const inspect = vi.fn(async () => facts({ installer: "installer 80096010 - -" }));
+  const inspect = vi.fn(async () =>
+    facts({ installer: signed("installer", `80096010 ${sha256} - -`) }),
+  );
   const installer = windowsInstaller("C:\\Clawtrate\\Clawtrate.exe", inspect);
   expect(await installer.inspect(proof)).toBe("windows-signature");
   expect(inspect).toHaveBeenCalledExactlyOnceWith(
