@@ -161,11 +161,25 @@ describe("a task the host refuses to open again after a reconnect", () => {
   it("F-105: is told to the view with the host's reason, and not asked for again", async () => {
     const { base, interest, refusing } = await host();
     const sockets: WebSocket[] = [];
+    const sentBySocket: Array<Array<{ type: string; key?: string }>> = [];
     const bridge = await createRemoteBridge({
       open: () => {
         const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
           headers: { cookie: `${ACCESS_COOKIE}=${TOKEN}`, origin: base },
         });
+        const outgoing: Array<{ type: string; key?: string }> = [];
+        sentBySocket.push(outgoing);
+        const send = socket.send.bind(socket);
+        socket.send = ((data: unknown, ...rest: unknown[]) => {
+          if (typeof data === "string") {
+            const parsed = JSON.parse(data) as {
+              type?: string;
+              command?: { type: string; key?: string };
+            };
+            if (parsed.type === "command" && parsed.command) outgoing.push(parsed.command);
+          }
+          return (send as (...args: unknown[]) => void)(data, ...rest);
+        }) as typeof socket.send;
         sockets.push(socket);
         return socket as unknown as WebSocketLike;
       },
@@ -194,7 +208,8 @@ describe("a task the host refuses to open again after a reconnect", () => {
       const lost = statuses.indexOf("reconnecting", lostAt);
       return lost >= 0 && statuses.slice(lost + 1).some((status) => status !== "reconnecting");
     });
-    await bridge.send({ type: "closeSession", key: "agent:otto:other" }).catch(() => undefined);
+    await bridge.send({ type: "closeSession", key: "agent:otto:other" });
+    expect(sentBySocket[2]).toEqual([{ type: "closeSession", key: "agent:otto:other" }]);
     expect(interest.get("agent:otto:task")).toBe(0);
     sockets[2]!.close();
   });
