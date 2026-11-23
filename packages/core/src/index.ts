@@ -85,6 +85,7 @@ export {
   SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
   validateGatewayUrl,
+  hasUnsettledWork,
   type SetupEndpointCheck,
   type ClientOptions,
   type ConnectOptions,
