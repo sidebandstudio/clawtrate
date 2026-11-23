@@ -6,6 +6,7 @@ import {
   type PageAssertionsToHaveScreenshotOptions,
 } from "@playwright/test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
 
 /**
  * `expect` for the visual specs. Its `toHaveScreenshot` also compares the accessibility
@@ -42,14 +43,18 @@ export const expect = baseExpect.extend({
 // changed duration or count would still match. This keeps the snapshot verbatim.
 async function matchText(region: Locator, name: string): Promise<void> {
   const info = test.info();
+  if (info.project.ignoreSnapshots) return;
   const path = info.snapshotPath(name, { kind: "screenshot" }).replace(/\.png$/, ".aria.yml");
   const actual = `${await region.ariaSnapshot()}\n`;
   const mode = info.config.updateSnapshots;
   if (!existsSync(path)) {
-    if (mode === "none") throw new Error(`No text snapshot at ${path}.`);
-    writeFileSync(path, actual);
-    if (mode === "all" || mode === "changed" || mode === "missing") return;
-    throw new Error(`No text snapshot at ${path}, writing actual.`);
+    if (mode === "all" || mode === "changed" || mode === "missing") {
+      writeFileSync(path, actual);
+      return;
+    }
+    // Only an update writes a baseline: one written here would let CI's retry pass.
+    await info.attach(basename(path), { body: actual, contentType: "text/plain" });
+    throw new Error(`No text snapshot at ${path}. \`pnpm visual:update\` writes it.`);
   }
   const expected = readFileSync(path, "utf8");
   if (actual !== expected && (mode === "all" || mode === "changed")) {
