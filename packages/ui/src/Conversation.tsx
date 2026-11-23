@@ -86,8 +86,13 @@ export function echoesError(item: TranscriptItem, run: Run): boolean {
   return error !== "" && plain(itemText(item)) === error;
 }
 
-/** Under the task's name: how much of the model's context the task uses. */
+/**
+ * Under the task's name: how much of the model's context the task uses. A task
+ * the gateway hasn't counted yet, such as a new one before its first run ends,
+ * gets no line rather than one that reads as an error.
+ */
 function TaskContext({ task }: { task: Task }) {
+  if (!task.context) return null;
   return (
     <p className="task-context" data-testid="task-context">
       {contextWords(task.context)}

@@ -29,7 +29,7 @@ const atTop = (page: Page) =>
 
 test.use(contextFor(WIDE, "light"));
 
-test("F-059: the task's header shows context use as tokens used out of the window, or Context: unavailable", async ({
+test("F-059: the task's header shows context use as tokens used out of the window, or no line until the gateway counts it", async ({
   page,
 }) => {
   await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
@@ -67,12 +67,14 @@ test("F-059: the task's header shows context use as tokens used out of the windo
     }));
   });
   await expect(context).toHaveText("Context: 21,050 of 128,000 tokens");
-  // Marlow's gateway reports none.
+  // Marlow's gateway has no count yet, so the header has no context line at all.
   await page
     .getByTestId("bot-list")
     .getByRole("button", { name: /^Marlow\b/ })
     .click();
-  await expect(page.getByTestId("task-context")).toHaveText("Context: unavailable");
+  await expect(page.getByRole("heading", { level: 1 })).not.toHaveText(/Disk almost full/);
+  await expect(page.getByTestId("task-context")).toHaveCount(0);
+  await expect(page.locator(".transcript")).not.toContainText("Context:");
 });
 
 test("F-063: centred grey stamps separate blocks: before the first message and after ten quiet minutes or a new day", async ({
