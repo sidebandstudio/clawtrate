@@ -1,7 +1,7 @@
 import type { UpdateInstallRefusal } from "@clawtrate/core";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, dirname } from "node:path";
 import { Readable } from "node:stream";
@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import { APP_ID } from "./identity.ts";
 import { ChangedMacArchive, holdMacArchive, type HeldMacArchive } from "./mac-archive.ts";
 import type { UpdateInstaller } from "./update/install.ts";
+import { rm } from "./update-tree-fs.ts";
 
 async function runInspector(
   args: string[],
@@ -76,7 +77,12 @@ async function inspectBundle(
   try {
     return await runInspector([scratch, APP_ID, archive.proof.version, arch], signal, archive);
   } finally {
-    await rm(scratch, { recursive: true, force: true });
+    // The checked copy holds the candidate's app.asar. Removing it can't change the
+    // inspection's answer: a copy left behind goes with the update folder, which is cleared
+    // at the next start and the next check.
+    await rm(scratch, { recursive: true, force: true }).catch((error: unknown) => {
+      console.error(`Couldn't remove the checked copy of the update (${errorCode(error)})`);
+    });
   }
 }
 
@@ -279,4 +285,10 @@ export function macInstaller(
       }
     },
   };
+}
+
+/** A system error's code, such as ENOENT, never its message. */
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? code : "unknown";
 }
