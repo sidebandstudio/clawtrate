@@ -24,6 +24,7 @@ import {
   type CreateBotInput,
   type CreatedBot,
 } from "./accounts-engine.ts";
+import { BotNames } from "./bot-names.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -1394,6 +1395,37 @@ export class ClawtrateClient {
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     identity: () => this.state.connection.gatewayId,
     withdrawn: (owner) => this.withdrawnOwners.has(owner),
+  });
+  /** Names bots wrote for themselves, waiting for the person (`bot-names.ts`); its state is `botNames`. */
+  private readonly botNames = new BotNames({
+    request: (method, params) => this.request(method, params),
+    bots: () => this.state.bots,
+    canRename: () =>
+      this.state.connection.status === "connected" &&
+      this.state.connection.canAdmin &&
+      !this.options.readOnly,
+    gateway: () => this.state.connection.gatewayId ?? this.state.connection.gatewayUrl,
+    storage: {
+      get: (key) => this.host.storage.get(key),
+      set: (key, value) => this.host.storage.set(key, value),
+      delete: (key) => this.host.storage.delete(key),
+    },
+    takeRead: () => {
+      if (this.fileReads >= MAX_FILE_READS) return null;
+      this.fileReads += 1;
+      let released = false;
+      return () => {
+        if (!released) this.fileReads -= 1;
+        released = true;
+      };
+    },
+    refreshBots: () => this.refreshBots(),
+    missingScope: (error) => {
+      this.noteMissingScope(error);
+      return isMissingScope(error);
+    },
+    publish: (botNames) => this.store.update((state) => ({ ...state, botNames })),
+    log: (message) => this.log("warn", message),
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -5226,6 +5258,17 @@ export class ClawtrateClient {
     return this.accounts.removeFallbacks(botId);
   }
 
+  /** Rename on a name card: `name` must be the one it shows (`bot-names.ts`). */
+  acceptBotName(botId: string, name: string): Promise<void> {
+    if (this.options.readOnly) return Promise.reject(new Error("This host only reads."));
+    return this.botNames.accept(botId, name);
+  }
+
+  /** Not now on a name card: kept on this device for that bot and that name. */
+  declineBotName(botId: string, name: string): Promise<void> {
+    return this.botNames.decline(botId, name);
+  }
+
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
   async setBotPicture(
     botId: string,
@@ -5382,6 +5425,7 @@ export class ClawtrateClient {
     const result = await this.request("agents.list", {});
     if (generation !== this.generation || !this.newestBots(issued)) return;
     this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+    this.botNames.onBots(this.state.bots);
   }
 
   /**
@@ -6745,6 +6789,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    this.botNames.reset();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
@@ -7158,6 +7203,7 @@ export class ClawtrateClient {
             ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
+          if (newest) this.botNames.onBots(this.state.bots);
         }
         return result;
       }),
@@ -7748,6 +7794,8 @@ export class ClawtrateClient {
     const phase = asRecord(payload.data)?.phase;
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
+      const botId = botIdFromSessionKey(key);
+      if (botId) void this.botNames.afterRun(botId);
     }
   }
 

@@ -166,6 +166,7 @@ import type {
   TranscriptBlock,
   TranscriptItem,
   ChatPicture,
+  NameProposal,
 } from "./types.ts";
 
 // Field caps, in JSON characters --------------------------------------------------
@@ -721,6 +722,13 @@ const bot = flagged<Bot>()({
   model: NAME,
   isDefault: FLAG,
 });
+const nameProposal = object<NameProposal>()({
+  botId: ID,
+  name: NAME,
+  from: NAME,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+});
 const task = flagged<Task>()({
   key: ID,
   botId: ID,
@@ -1258,6 +1266,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
   usage: USAGE,
+  botNames: list(MAX_BOTS, nameProposal),
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };
