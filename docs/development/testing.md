@@ -17,7 +17,7 @@ The unit tests include the SSH transport's, some against an `sshd` they start th
 
 CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm and Electron under `xvfb-run`, split by file across three runners, `pnpm visual` on every core and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made. A pull request that changes only documentation (`docs/`, the Markdown files at the top level, the issue and pull request templates) runs the Linux `check` job alone.
 
-`pnpm test:desktop-updates` runs the desktop update flow on macOS and Windows. It builds a temporary Electron app with a loopback feed, launches it with a fresh profile, and checks the renderer through the real preload and main process. It runs independently of packaging and development gateways.
+`pnpm test:desktop-updates` runs the desktop update flow on macOS and Windows. It builds a temporary Electron app with a loopback feed, launches it with a fresh profile, and checks the renderer through the real preload and main process. It runs independently of packaging and development gateways. On Windows it also reads real Authenticode signatures through the update installer's helper (`e2e-updates/windows-authenticode.spec.ts`). Node's own signed executable stands in for the running app, and copies of it and another publisher's executable for downloads. It signs nothing.
 
 ## The scenario check
 
