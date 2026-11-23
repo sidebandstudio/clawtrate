@@ -26,6 +26,7 @@
 // those of settled requests whose ledger entries retention has removed.
 
 import { randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { canonical, digestOf } from "./canonical.js";
 import {
   ORPHAN_MS,
