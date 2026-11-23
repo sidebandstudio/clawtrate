@@ -113,6 +113,7 @@ import {
 import { ChatTextBaselines } from "./chat-text.ts";
 import {
   FileTransfers,
+  MAX_FILE_TRANSFERS,
   listTaskFiles,
   listWorkspace,
   readCheckoutDiff,
@@ -5407,14 +5408,18 @@ export class ClawtrateClient {
     if (this.fileReads >= MAX_FILE_READS)
       throw new Error("Other files are being read; try again in a moment.");
     this.fileReads += 1;
+    const owner = options.owner ?? DIRECT_CALLER;
     try {
-      return await read({
+      const result = await read({
         request: (method, params) => this.request(method, params),
         transfers: this.fileTransfers,
-        owner: options.owner ?? DIRECT_CALLER,
+        owner,
         ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
         now: () => this.now(),
       });
+      // A viewer that went away while this read ran can't release what it started: drop it now.
+      if (this.withdrawnOwners.has(owner)) this.fileTransfers.release(owner);
+      return result;
     } finally {
       this.fileReads -= 1;
     }
@@ -5500,9 +5505,19 @@ export class ClawtrateClient {
     options: FileReadOptions = {},
   ): Promise<ChatPictureRead> {
     // A turn hands over up to four pictures and a task can hold several such turns, all drawn
-    // at once: a picture waits up to 30 s for one of the file reads' places instead of failing.
-    for (let waited = 0; this.fileReads >= MAX_FILE_READS && waited < 300; waited += 1)
+    // at once: a picture waits up to 30 s for one of the file reads' places, and of the
+    // transfers' that carry a picture to its viewer, instead of failing.
+    const generation = this.generation;
+    for (
+      let waited = 0;
+      (this.fileReads >= MAX_FILE_READS || this.fileTransfers.size >= MAX_FILE_TRANSFERS) &&
+      waited < 300;
+      waited += 1
+    )
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+    // The task and picture are the connection's it was asked on: never read on a later one.
+    if (generation !== this.generation)
+      return { status: "failed", message: "The connection changed while this picture waited." };
     const gatewayUrl = this.state.connection.gatewayUrl ?? "";
     return this.fileRead(
       (ctx) =>

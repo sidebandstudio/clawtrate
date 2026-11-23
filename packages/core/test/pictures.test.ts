@@ -11,7 +11,7 @@ import type { HttpFetch, HttpResponseLike } from "../src/host.ts";
 import { mapHistory } from "../src/mapping.ts";
 import { MAX_PICTURE_BYTES, readChatPicture, type ChatPictureContext } from "../src/pictures.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
-import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
+import { FAST, grantingGateway, KEY, URL_A, URL_B } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const TASK = "tool:image_generate:9b21401e-321f-48bb-a101-c2db7c0d78e9";
@@ -265,6 +265,15 @@ describe("F-519: reading a picture", () => {
     });
   });
 
+  it("F-519: a picture that arrives when every transfer's place is taken says so, not that the gateway was unreachable", async () => {
+    const { ctx } = context({ url: ISSUED, expiresAt: LATER }, png);
+    for (let held = 0; held < 4; held += 1) ctx.transfers.start({}, PNG, 1);
+    expect(await readChatPicture({ ...ctx, maxChars: 1 }, KEY, ARTIFACT)).toEqual({
+      status: "failed",
+      message: "Other files are on their way to a viewer; try again in a moment.",
+    });
+  });
+
   it("F-519: a host that can't fetch fetches nothing, and says so", async () => {
     const { ctx, asked } = context({ url: ISSUED, expiresAt: LATER }, png);
     expect(await readChatPicture({ ...ctx, fetch: null }, KEY, ARTIFACT)).toEqual({
@@ -319,6 +328,68 @@ describe("F-519: the client", () => {
     const reads = Array.from({ length: 6 }, () => client.readChatPicture(KEY, ARTIFACT));
     setTimeout(release, 50);
     expect((await Promise.all(reads)).map((read) => read.status)).toEqual(Array(6).fill("content"));
+    client.stop();
+  });
+
+  it("F-519: pictures that each need a transfer wait for one of the transfers' places too, and all show", async () => {
+    const { client } = await open(async () => png());
+    // Three-byte parts: each picture is a transfer its viewer reads part by part.
+    const reads = Array.from({ length: 6 }, () =>
+      client.readChatPicture(KEY, ARTIFACT, { maxChars: 1 }),
+    );
+    const first = await Promise.all(reads.slice(0, 4));
+    const ids = first.map((read) => (read.status === "content" ? read.transfer.id : null));
+    expect(ids.every((id) => id !== null)).toBe(true);
+    // The first four are still on their way when a read's place frees: the rest wait for them.
+    await new Promise<void>((resolve) => setTimeout(resolve, 300));
+    for (const id of ids) client.releaseFile(id!);
+    expect((await Promise.all(reads.slice(4))).map((read) => read.status)).toEqual([
+      "content",
+      "content",
+    ]);
+    client.stop();
+  });
+
+  it("F-519: a picture that waited through a switch to another gateway isn't read there", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { client, gateway } = await open(async () => {
+      await held;
+      return png();
+    });
+    const busy = Array.from({ length: 4 }, () => client.readChatPicture(KEY, ARTIFACT));
+    const waiting = client.readChatPicture(KEY, ARTIFACT);
+    void client.connect({ url: URL_B, token: "t" }).catch(() => {});
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.gatewayUrl === URL_B,
+    );
+    release();
+    await Promise.allSettled(busy);
+    expect(await waiting).toEqual({
+      status: "failed",
+      message: "The connection changed while this picture waited.",
+    });
+    expect(gateway.calls("artifacts.download")).toHaveLength(4);
+    client.stop();
+  });
+
+  it("F-519: a picture whose viewer went away while it was read leaves no transfer behind", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { client } = await open(async () => {
+      await held;
+      return png();
+    });
+    const viewer = {};
+    const reading = client.readChatPicture(KEY, ARTIFACT, { owner: viewer, maxChars: 1 });
+    client.withdraw(viewer);
+    release();
+    const read = await reading;
+    if (read.status !== "content" || !read.transfer.id) throw new Error("expected a transfer");
+    const id = read.transfer.id;
+    expect(() => client.readFileChunk(id, 1, viewer)).toThrow("This file's transfer has ended");
     client.stop();
   });
 

@@ -172,13 +172,14 @@ export async function readChatPicture(
     }
     if (!matchesType(mimeType, bytes))
       return failed("The gateway sent something that isn't a picture this app shows.");
-    return {
-      status: "content",
-      kind: "image",
-      mimeType,
-      bytes: size,
-      transfer: ctx.transfers.start(ctx.owner, bytes, ctx.maxChars),
-    };
+    // Refused here, not by the gateway: the transfer's own reason, never "couldn't be reached".
+    let transfer: FileTransferStart;
+    try {
+      transfer = ctx.transfers.start(ctx.owner, bytes, ctx.maxChars);
+    } catch (error) {
+      return failed(error instanceof Error ? error.message : String(error));
+    }
+    return { status: "content", kind: "image", mimeType, bytes: size, transfer };
   } catch (error) {
     const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
     return failed(
