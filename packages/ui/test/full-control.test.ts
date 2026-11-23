@@ -10,8 +10,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BridgeProvider } from "../src/bridge.tsx";
+import { AdminBar } from "../src/bots/parts.tsx";
 import { ConnectScreen } from "../src/ConnectScreen.tsx";
 import { CONSENT_LINE, notGranted, WHAT_IT_MEANS } from "../src/FullControl.tsx";
+import { DeviceBar } from "../src/machines/Machines.tsx";
 
 const base: HostInfo = { kind: "desktop", version: "test", devGateway: null };
 
@@ -29,7 +31,7 @@ function form(info: HostInfo, url: string): string {
 }
 
 describe("the consent line on the address form", () => {
-  it("F-519: a host that pairs with full control shows it directly above Connect for a secure address", () => {
+  it("F-522: a host that pairs with full control shows it directly above Connect for a secure address", () => {
     const html = form({ ...base, fullControl: true }, "wss://gateway.example");
     expect(CONSENT_LINE).toBe(
       "Full control lets Clawtrate change gateway settings, approve devices and, when the gateway allows it, open a terminal on the computer running OpenClaw.",
@@ -87,7 +89,7 @@ describe("what a full pairing granted less is missing", () => {
     expect(notGranted(connected(six, true))).toEqual([]);
   });
 
-  it("F-519: each scope it lacks, in plain words and in order", () => {
+  it("F-522: each scope it lacks, in plain words and in order", () => {
     expect(notGranted(connected(["operator.read"], true))).toEqual([
       "sending and stopping",
       "deciding approvals",
@@ -104,5 +106,58 @@ describe("what a full pairing granted less is missing", () => {
     expect(notGranted({ ...connected(["operator.read"], true), status: "reconnecting" })).toEqual(
       [],
     );
+  });
+});
+
+describe("the admin and device bars of a full pairing", () => {
+  const six = [
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.questions",
+    "operator.admin",
+    "operator.pairing",
+  ];
+  const LESS = "OpenClaw granted less than full control.";
+  const bars = (connection: ConnectionState) =>
+    [
+      createElement(AdminBar, { connection, info: base, need: "Changing a bot needs it." }),
+      createElement(DeviceBar, { connection, info: base }),
+    ].map((bar) =>
+      renderToStaticMarkup(
+        createElement(BridgeProvider, {
+          bridge: { info: base } as ClawtrateBridge,
+          children: bar,
+        }),
+      ),
+    );
+
+  it("F-522: granted less, each says so and offers no request", () => {
+    const narrowed: ConnectionState = {
+      ...initialState.connection,
+      status: "connected",
+      scopes: ["operator.read"],
+      fullPairing: true,
+    };
+    for (const html of bars(narrowed)) {
+      expect(html).toContain(LESS);
+      expect(html).not.toContain("<button");
+    }
+  });
+
+  it("while a pairing that holds all six reconnects, neither says it was granted less", () => {
+    // A drop clears what the connection may do until the next hello; the pairing is still a full one.
+    const reconnecting: ConnectionState = {
+      ...initialState.connection,
+      status: "reconnecting",
+      scopes: six,
+      canWrite: false,
+      canAdmin: false,
+      fullPairing: true,
+    };
+    for (const html of bars(reconnecting)) {
+      expect(html).not.toContain(LESS);
+      expect(html).not.toContain("<button");
+    }
   });
 });

@@ -1,4 +1,4 @@
-// F-519: the packaged Mac app's address form shows the consent line directly above
+// F-522: the packaged Mac app's address form shows the consent line directly above
 // Connect for a secure address, with "What this means" (docs/design/setup-effortless.md §2),
 // and a full pairing the gateway granted less says so and asks for nothing (§2, §8). In light
 // and dark, at 1440 px and the phone; reached by keyboard and named for a screen reader.
@@ -14,7 +14,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
     test.describe(`${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
 
-      test("F-519: the consent line, closed and open", async ({ page }) => {
+      test("F-522: the consent line, closed and open", async ({ page }) => {
         await openFixture(page, "scene=connect-full", theme);
         await expect(page.getByTestId("full-control-consent")).toBeVisible();
         await settle(page);
@@ -25,7 +25,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
         await expect(page).toHaveScreenshot(`full-control-what-${theme}-${size.name}.png`);
       });
 
-      test("F-519: a narrower grant, in Settings", async ({ page }) => {
+      test("F-522: a narrower grant, in Settings", async ({ page }) => {
         await openFixture(page, `scene=access-narrowed&${OTTO_DISK}`, theme);
         await page.keyboard.press("ControlOrMeta+,");
         const dialog = page.getByRole("dialog", { name: "Settings" });
@@ -38,7 +38,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
   }
 }
 
-test("F-519: the consent line sits directly above Connect, and only for a secure address", async ({
+test("F-522: the consent line sits directly above Connect, and only for a secure address", async ({
   page,
 }) => {
   await openFixture(page, "scene=connect-full", "dark");
@@ -56,7 +56,7 @@ test("F-519: the consent line sits directly above Connect, and only for a secure
   await expect(page.getByTestId("full-control-consent")).toBeVisible();
 });
 
-test("F-519: What this means opens and closes from the keyboard, and says whether it is open", async ({
+test("F-522: What this means opens and closes from the keyboard, and says whether it is open", async ({
   page,
 }) => {
   await openFixture(page, "scene=connect-full", "dark");
@@ -82,7 +82,7 @@ test("F-519: What this means opens and closes from the keyboard, and says whethe
   await expect(page.getByRole("button", { name: "Connect a gateway" })).toBeFocused();
 });
 
-test("F-519: a full pairing the gateway granted less keeps it, says so, and offers no request for more", async ({
+test("F-522: a full pairing the gateway granted less keeps it, says so, and offers no request for more", async ({
   page,
 }) => {
   await openFixture(page, `scene=access-narrowed&${OTTO_DISK}`, "dark");
@@ -100,7 +100,7 @@ test("F-519: a full pairing the gateway granted less keeps it, says so, and offe
   await expect(dialog.getByRole("button", { name: "Re-pair" })).toHaveCount(0);
 });
 
-test("F-519: a full pairing granted read, write, approvals and questions is offered admin and device access nowhere", async ({
+test("F-522: a full pairing granted read, write, approvals and questions is offered admin and device access nowhere", async ({
   page,
 }) => {
   await openFixture(
@@ -136,7 +136,7 @@ const ASKS: Array<[string, string, string]> = [
   ["the Computer tab", `${COMPUTER}&computer=watching&access=read`, "computer-readonly"],
 ];
 for (const [where, query, testId] of ASKS) {
-  test(`F-519: a full pairing the gateway granted less is offered no request for more in ${where}`, async ({
+  test(`F-522: a full pairing the gateway granted less is offered no request for more in ${where}`, async ({
     page,
   }) => {
     await openFixture(page, `${query}&full=1`, "light");
@@ -145,7 +145,7 @@ for (const [where, query, testId] of ASKS) {
   });
 }
 
-test("F-519: Settings doesn't tell a full pairing holding admin that it asked for admin", async ({
+test("F-522: Settings doesn't tell a full pairing holding admin that it asked for admin", async ({
   page,
 }) => {
   await openFixture(page, `scene=access-narrowed&${OTTO_DISK}&access=admin`, "light");

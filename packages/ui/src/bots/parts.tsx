@@ -286,8 +286,9 @@ export function AdminBar({
   let body: ReactNode;
   let action: ReactNode = null;
   let tone: "danger" | undefined;
-  if (connection.fullPairing && !info.readOnly) {
+  if (connection.status === "connected" && connection.fullPairing && !info.readOnly) {
     // A full pairing the gateway granted less: its limit stands, and nothing asks again (§2).
+    // Said only while connected: a drop clears the scopes until the next hello.
     body = (
       <>
         <b>OpenClaw granted less than full control.</b> {need}

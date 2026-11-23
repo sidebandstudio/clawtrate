@@ -157,7 +157,7 @@ No new tokens.
 - One choice list with two rows, each opening the next screen (a chevron at its end):
   - "This computer", with "Clawtrate looks for OpenClaw here." under it.
   - "Another computer", with "A computer you reach with SSH, such as a server or a desktop at home." under it.
-- Under the list, two quiet links on one line: "Have a setup code?" and "Advanced". "Advanced" opens the address-and-token form exactly as it was built (`connect.html`, F-493). In the packaged Mac app the form also shows `setup-effortless.md` §2's consent line above Connect for a `wss://` address that isn't loopback, where the first pairing asks for full control (F-519).
+- Under the list, two quiet links on one line: "Have a setup code?" and "Advanced". "Advanced" opens the address-and-token form exactly as it was built (`connect.html`, F-493). In the packaged Mac app the form also shows `setup-effortless.md` §2's consent line above Connect for a `wss://` address that isn't loopback, where the first pairing asks for full control (F-522).
 - One hint (13, faint): "New to OpenClaw? Choose where it should run, and Clawtrate offers to set it up there." On Windows the hint is "New to OpenClaw? Choose Another computer to use or set up OpenClaw on a Mac or a Linux computer." (section 10).
 
 The person never chooses between "I already use OpenClaw" and "I am new to OpenClaw"; those are the two results of the look (section 6). The row of bots stands along the foot as before, and is hidden below 640 px of height.
