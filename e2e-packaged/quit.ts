@@ -7,6 +7,9 @@
  * deadline passes, whichever is first, so a stuck debugging client never holds
  * the caller past the deadline; the answer is the one captured at the deadline:
  * a process that exits after it fails, even while `detach` is still pending.
+ * The exit is judged by the clock when `gone` settles, not by which callback
+ * runs first: a synchronous poll that straddles the deadline can settle `gone`
+ * before the overdue timer gets to run.
  */
 export async function quitWithin(
   ask: () => void,
@@ -14,14 +17,18 @@ export async function quitWithin(
   detach: () => Promise<unknown>,
   ms: number,
 ): Promise<boolean> {
+  const end = performance.now() + ms;
   ask();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<false>((resolve) => {
-    timer = setTimeout(() => resolve(false), ms);
-  });
-  const quit = Promise.race([gone().then(() => true as const), deadline]);
-  const detached = Promise.race([detach().catch(() => undefined), deadline]);
-  const [result] = await Promise.all([quit, detached]);
-  clearTimeout(timer);
-  return result;
+  try {
+    const deadline = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), ms);
+    });
+    const quit = Promise.race([gone().then(() => performance.now() < end), deadline]);
+    const detached = Promise.race([detach().catch(() => undefined), deadline]);
+    const [result] = await Promise.all([quit, detached]);
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
 }
