@@ -125,6 +125,7 @@ import {
   type WorkspacePage,
 } from "./files.ts";
 import type { ApprovalInstructions, ClawtrateHost, WebSocketLike } from "./host.ts";
+import { externalChannelOf } from "./channels.ts";
 import {
   asRecord,
   botIdFromSessionKey,
@@ -381,6 +382,8 @@ export const MAX_TURN_LIMIT_MINUTES = 24 * 60;
 /** Reads of a task's reactions, the first and again each time a newer change overtook one. */
 const REACTION_LIST_ATTEMPTS = 3;
 const TURN_LIMIT_KEY = "turn-limit-minutes";
+/** Where the host keeps "Show external channel chats"; absent is off. */
+const CHANNEL_CHATS_KEY = "show-channel-chats";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
 /**
@@ -454,7 +457,11 @@ function holdsInput(history: RawRecord | null): boolean {
   return Array.isArray(items) && items.some((item) => asRecord(item)?.state !== "cancelled");
 }
 
-/** The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound, keyed under the id cap. */
+/**
+ * The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound,
+ * keyed under the id cap. Chats from external channels give way first, so a busy channel never
+ * pushes Clawtrate's own tasks out of the list.
+ */
 function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
   const kept = new Map<string, RawRecord>();
   for (const row of rows) {
@@ -465,7 +472,11 @@ function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
   }
   return new Map(
     [...kept]
-      .sort(([, a], [, b]) => Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0))
+      .sort(
+        ([, a], [, b]) =>
+          Number(externalChannelOf(a) !== null) - Number(externalChannelOf(b) !== null) ||
+          Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0),
+      )
       .slice(0, MAX_LISTED_TASKS),
   );
 }
@@ -1157,6 +1168,8 @@ export class ClawtrateClient {
   private gatewayBootId: string | null = null;
   /** The turn limit in force (F-100): the host's option, else the person's choice, else 50 minutes. */
   private turnLimitMs = DEFAULT_TURN_LIMIT_MS;
+  /** "Show external channel chats": the person's choice, off until they turn it on. */
+  private showChannelChats = false;
   /**
    * The person this connection acts for, as the gateway names them (`users.self` profile id):
    * which reactions are this person's own. Read once per connection; null until then, or when
@@ -1508,7 +1521,13 @@ export class ClawtrateClient {
       const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
       if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
     }
-    this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
+    this.showChannelChats =
+      (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
+    this.store.update((state) => ({
+      ...state,
+      turnLimitMinutes: this.turnLimitMs / 60_000,
+      showChannelChats: this.showChannelChats,
+    }));
     if (options.resume === false) return;
     // Startup needs to open the socket without waiting for another client's credential write.
     const settings = await this.savedSettings();
@@ -1702,6 +1721,7 @@ export class ClawtrateClient {
       this.store.set({
         ...initialState,
         turnLimitMinutes: this.turnLimitMs / 60_000,
+        showChannelChats: this.showChannelChats,
         connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
       });
     });
@@ -5810,6 +5830,19 @@ export class ClawtrateClient {
     for (const key of Object.keys(this.state.transcripts)) this.afterActivity(key);
   }
 
+  /**
+   * "Show external channel chats": list chats that came in through Discord, Telegram and other
+   * channels, or leave them out (the default). Kept for the next start. The rows are already
+   * held, so the list changes at once, with nothing read again; a bot's main task always shows.
+   */
+  async setShowChannelChats(on: boolean): Promise<void> {
+    // Kept first: a choice the host could not keep is not taken.
+    await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
+    this.showChannelChats = on;
+    this.store.update((state) => ({ ...state, showChannelChats: on }));
+    this.publishTasks();
+  }
+
   private turnLimitReached(key: string, runId: string): void {
     this.turnTimers.delete(`${key}\u0000${runId}`);
     const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
@@ -5917,6 +5950,7 @@ export class ClawtrateClient {
       this.store.set({
         ...initialState,
         turnLimitMinutes: this.turnLimitMs / 60_000,
+        showChannelChats: this.showChannelChats,
         connection: {
           ...initialConnectionState,
           status: "error",
@@ -5951,7 +5985,13 @@ export class ClawtrateClient {
     }
     this.everConnected = hasData;
     this.store.update((state) => ({
-      ...(sameGateway ? state : { ...initialState, turnLimitMinutes: this.turnLimitMs / 60_000 }),
+      ...(sameGateway
+        ? state
+        : {
+            ...initialState,
+            turnLimitMinutes: this.turnLimitMs / 60_000,
+            showChannelChats: this.showChannelChats,
+          }),
       connection: {
         ...initialConnectionState,
         status: hasData ? "reconnecting" : "connecting",
@@ -7147,7 +7187,7 @@ export class ClawtrateClient {
   }
 
   private publishTasks(): void {
-    const tasksByBot = groupTasks(this.rows.values());
+    const tasksByBot = groupTasks(this.rows.values(), { showChannelChats: this.showChannelChats });
     // What waits for the person, and whose latest run was stopped (`waiting.ts`): a task the
     // engine follows by its runs, any other by the gateway's events.
     for (const tasks of Object.values(tasksByBot)) {
@@ -8016,7 +8056,9 @@ export class ClawtrateClient {
   async listArchived(botId: string): Promise<ArchivedList> {
     if (this.state.connection.status !== "connected")
       throw new Error("Not connected to the gateway.");
-    return listArchived(this.actionContext(null), botId);
+    return listArchived(this.actionContext(null), botId, {
+      showChannelChats: this.showChannelChats,
+    });
   }
 
   // Search (`search.ts`; search.md). All `operator.read`; nothing is kept, and the query is never logged.

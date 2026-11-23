@@ -1,0 +1,200 @@
+// "Show external channel chats" (F-519) through the client: off by default, kept by the host,
+// applied to rows already held without reading the list again, and to rows a `sessions.changed`
+// event classifies. The row shapes are the ones OpenClaw 2026.10.6 reported (channels.test.ts).
+
+import { describe, expect, it } from "vitest";
+import { parseBridgeCommand } from "../src/bridge.ts";
+import { ClawtrateClient } from "../src/client.ts";
+import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
+import { listArchived, type TaskActionContext } from "../src/task-actions.ts";
+import { FAST, URL_A } from "./client-harness.ts";
+import { FakeGateway, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
+
+const DISCORD = "agent:pip:discord:channel:1234567890";
+const NATIVE = "agent:pip:dashboard:0f6c2a9e-1111";
+const MAIN = "agent:pip:main";
+
+const rows = () => [
+  {
+    key: DISCORD,
+    agentId: "pip",
+    channel: "discord",
+    classification: "channel",
+    displayName: "discord:g-1234567890",
+    lastMessagePreview: "From the server",
+    updatedAt: 300,
+    unread: true,
+  },
+  {
+    key: NATIVE,
+    agentId: "pip",
+    label: "Disk space",
+    lastMessagePreview: "Freed 4 GB",
+    updatedAt: 200,
+  },
+  // The main session after a Telegram direct message: its channel sticks.
+  {
+    key: MAIN,
+    agentId: "pip",
+    channel: "telegram",
+    lastChannel: "telegram",
+    classification: "main",
+    isMain: true,
+    updatedAt: 100,
+  },
+];
+
+async function connected(saved: Record<string, string> = {}, listed = rows()) {
+  const gateway = new FakeGateway();
+  gateway.handlers["sessions.subscribe"] = () => ({
+    subscribed: true,
+    list: { sessions: listed, hasMore: false },
+  });
+  gateway.handlers["sessions.list"] = () => ({ sessions: listed, hasMore: false });
+  const storage = memoryStorage(saved);
+  const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+  await client.start();
+  await client.connect({ url: URL_A, token: "bootstrap" });
+  await until(() => client.state.discovery.status === "ready");
+  const keys = () => (client.state.tasksByBot.pip ?? []).map((task) => task.key);
+  return { client, gateway, storage, keys };
+}
+
+describe("F-519: Show external channel chats", () => {
+  it("F-519: off by default: channel chats are not listed, and the bot's preview and unread are its own tasks'", async () => {
+    const { client, keys } = await connected();
+    expect(client.state.showChannelChats).toBe(false);
+    expect(keys()).toEqual([NATIVE, MAIN]);
+    const [latest] = client.state.tasksByBot.pip!;
+    expect(latest!.preview).toBe("Freed 4 GB");
+    expect(client.state.tasksByBot.pip!.some((task) => task.unread)).toBe(false);
+    client.stop();
+  });
+
+  it("F-519: turning it on lists them at once, without reading the list again, and the choice is kept", async () => {
+    const { client, gateway, storage, keys } = await connected();
+    const reads =
+      gateway.calls("sessions.list").length + gateway.calls("sessions.subscribe").length;
+    await client.setShowChannelChats(true);
+    expect(client.state.showChannelChats).toBe(true);
+    expect(keys()).toEqual([DISCORD, NATIVE, MAIN]);
+    expect(client.state.tasksByBot.pip![0]).toMatchObject({ title: "Discord chat", unread: true });
+    expect(storage.data.get("show-channel-chats")).toBe("true");
+    await client.setShowChannelChats(false);
+    expect(keys()).toEqual([NATIVE, MAIN]);
+    await sleep(300);
+    expect(gateway.calls("sessions.list").length + gateway.calls("sessions.subscribe").length).toBe(
+      reads,
+    );
+    client.stop();
+
+    const again = await connected({ "show-channel-chats": "true" });
+    expect(again.client.state.showChannelChats).toBe(true);
+    expect(again.keys()).toEqual([DISCORD, NATIVE, MAIN]);
+    again.client.stop();
+  });
+
+  it("F-519: a choice the host could not keep is not taken", async () => {
+    const { client, storage, keys } = await connected();
+    storage.set = () => Promise.reject(new Error("The disk is full."));
+    await expect(client.setShowChannelChats(true)).rejects.toThrow("The disk is full.");
+    expect(client.state.showChannelChats).toBe(false);
+    expect(keys()).toEqual([NATIVE, MAIN]);
+    client.stop();
+  });
+
+  it("F-519: a sessions.changed event that names a channel moves a task out of the list, and back when shown", async () => {
+    const peer = { key: "agent:pip:direct:u1", agentId: "pip", label: "Ada", updatedAt: 250 };
+    const { client, gateway, keys } = await connected({}, [...rows(), peer]);
+    expect(keys()).toEqual([peer.key, NATIVE, MAIN]);
+    // Flat, as the gateway sends it: the delivery fields beside `sessionKey`, no classification.
+    gateway.emit("sessions.changed", {
+      sessionKey: peer.key,
+      agentId: "pip",
+      channel: "whatsapp",
+      lastChannel: "whatsapp",
+      lastMessagePreview: "On my way",
+      updatedAt: 400,
+    });
+    await until(() => !keys().includes(peer.key));
+    expect(client.state.tasksByBot.pip![0]!.preview).toBe("Freed 4 GB");
+    await client.setShowChannelChats(true);
+    expect(client.state.tasksByBot.pip![0]).toMatchObject({
+      key: peer.key,
+      channel: "whatsapp",
+      preview: "On my way",
+    });
+    client.stop();
+  });
+
+  it("F-519: the main session stays listed when a change names the channel that reached it", async () => {
+    const { client, gateway, keys } = await connected();
+    gateway.emit("sessions.changed", {
+      sessionKey: MAIN,
+      agentId: "pip",
+      channel: "telegram",
+      lastMessagePreview: "Hi from Telegram",
+      updatedAt: 500,
+      unread: true,
+    });
+    await until(() => client.state.tasksByBot.pip?.[0]?.key === MAIN);
+    expect(client.state.tasksByBot.pip![0]).toMatchObject({
+      title: "Main",
+      isMain: true,
+      preview: "Hi from Telegram",
+    });
+    expect(client.state.tasksByBot.pip![0]).not.toHaveProperty("channel");
+    expect(keys()).toEqual([MAIN, NATIVE]);
+    client.stop();
+  });
+
+  it("F-519: an unknown channel session is read with the list, so turning it on can show it", async () => {
+    const { client, gateway } = await connected();
+    const before = gateway.calls("sessions.list").length;
+    gateway.emit("sessions.changed", {
+      sessionKey: "agent:pip:telegram:group:-100200",
+      agentId: "pip",
+      channel: "telegram",
+    });
+    await until(() => gateway.calls("sessions.list").length > before);
+    client.stop();
+  });
+
+  it("F-519: a busy channel never pushes the bot's own tasks out of the list", async () => {
+    const busy = Array.from({ length: MAX_LISTED_TASKS }, (_, index) => ({
+      key: `agent:pip:discord:channel:${index}`,
+      agentId: "pip",
+      channel: "discord",
+      updatedAt: 10_000 + index,
+    }));
+    const { client, keys } = await connected({ "show-channel-chats": "true" }, [
+      ...busy,
+      ...rows(),
+    ]);
+    expect(keys()).toHaveLength(MAX_LISTED_TASKS);
+    expect(keys()).toContain(NATIVE);
+    expect(keys()).toContain(MAIN);
+    client.stop();
+  });
+
+  it("F-519: the Archived group leaves channel chats out unless they are shown", async () => {
+    const archived = rows().map((row) => ({ ...row, archived: true, sessionId: row.key }));
+    const ctx = {
+      request: async () => ({ sessions: archived, hasMore: false }),
+    } as unknown as TaskActionContext;
+    expect((await listArchived(ctx, "pip")).tasks.map((task) => task.key)).toEqual([NATIVE, MAIN]);
+    expect(
+      (await listArchived(ctx, "pip", { showChannelChats: true })).tasks.map((task) => task.key),
+    ).toEqual([DISCORD, NATIVE, MAIN]);
+  });
+
+  it("F-519: the bridge takes the setting only as true or false", () => {
+    expect(parseBridgeCommand({ type: "setShowChannelChats", on: true })).toEqual({
+      type: "setShowChannelChats",
+      on: true,
+    });
+    expect(() => parseBridgeCommand({ type: "setShowChannelChats", on: "yes" })).toThrow(
+      "invalid channel chats setting",
+    );
+  });
+});

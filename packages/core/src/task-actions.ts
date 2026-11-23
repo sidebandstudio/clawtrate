@@ -8,6 +8,7 @@
 // again each time, and the task list itself is the client's, updated by the
 // gateway's `sessions.changed`.
 
+import { externalChannelOf } from "./channels.ts";
 import { asRecord, mapSessionRow, plainPreview, type RawRecord } from "./mapping.ts";
 
 /** The longest label the gateway takes (`SESSION_LABEL_MAX_LENGTH`). */
@@ -179,12 +180,18 @@ export function mapArchivedRow(row: RawRecord, botId: string): ArchivedTask | nu
   };
 }
 
-export async function listArchived(ctx: TaskActionContext, botId: string): Promise<ArchivedList> {
+/** A bot's archived tasks; chats from external channels only with `showChannelChats`, as the list. */
+export async function listArchived(
+  ctx: TaskActionContext,
+  botId: string,
+  options: { showChannelChats?: boolean } = {},
+): Promise<ArchivedList> {
   const result = asRecord(await ctx.request("sessions.list", archivedListParams(botId)));
   const rows = Array.isArray(result?.sessions) ? result.sessions : [];
   const tasks: ArchivedTask[] = [];
   for (const entry of rows) {
     const row = asRecord(entry);
+    if (row && options.showChannelChats !== true && externalChannelOf(row)) continue;
     const task = row && mapArchivedRow(row, botId);
     if (task) tasks.push(task);
   }

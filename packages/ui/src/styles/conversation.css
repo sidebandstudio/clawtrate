@@ -1548,3 +1548,12 @@ button.reaction {
 .turn-limit-field > span {
   color: var(--text-muted);
 }
+
+/* Settings, Conversation: "Show external channel chats", a switch beside its name (F-519). */
+.channel-chats-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 22px;
+}
