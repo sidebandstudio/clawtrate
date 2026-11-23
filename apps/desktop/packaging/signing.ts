@@ -1,7 +1,7 @@
 // Which signing a build plans, decided from the names of the variables in its
-// environment, before electron-builder runs. Nothing here prints a value;
-// electron-builder's own output, which the build passes through, can.
-// docs/development/packaging.md lists the variables.
+// environment, before electron-builder runs, and what the files' signatures are
+// after it. Nothing here prints a value; electron-builder's own output, which
+// the build passes through, can. docs/development/packaging.md lists the variables.
 
 export type Env = Record<string, string | undefined>;
 
@@ -177,4 +177,30 @@ export function checkMacSignature(
 ) {
   const kind = result.status === 0 ? macSignatureKind(result.stderr ?? "") : "none";
   return { kind, matches: kind === (plan === "developer-id" ? "certificate" : "ad hoc") };
+}
+
+/** Prints a file's Authenticode status and whether it names a signer, for `windowsSignatureKind`. */
+export const WINDOWS_SIGNATURE_COMMAND =
+  "$s = Get-AuthenticodeSignature -LiteralPath $env:SIGNED_FILE -ErrorAction Stop; '{0} {1}' -f $s.Status, [bool]$s.SignerCertificate";
+
+/**
+ * What `WINDOWS_SIGNATURE_COMMAND` says of a file's signature. A signature that
+ * covers the file counts even when this machine does not trust its root, which
+ * Get-AuthenticodeSignature reports as UnknownError. A signature that no longer
+ * matches the file, or any other status, is invalid.
+ */
+export function windowsSignatureKind(output: string): "certificate" | "none" | "invalid" {
+  const [status, signer] = output.trim().split(" ");
+  if (status === "NotSigned") return "none";
+  if (signer === "True" && ["Valid", "UnknownError", "NotTrusted"].includes(status ?? ""))
+    return "certificate";
+  return "invalid";
+}
+
+export function checkWindowsSignature(
+  plan: SigningPlan["windows"],
+  result: { status: number | null; stdout: string | null },
+) {
+  const kind = result.status === 0 ? windowsSignatureKind(result.stdout ?? "") : "invalid";
+  return { kind, matches: kind === (plan === "certificate" ? "certificate" : "none") };
 }

@@ -10,10 +10,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { artifactName, makeFeed } from "../packaging/feed.ts";
 import {
   checkMacSignature,
+  checkWindowsSignature,
   macSignatureKind,
   signingPlan,
   signingProblems,
   signingSummary,
+  WINDOWS_SIGNATURE_COMMAND,
+  windowsSignatureKind,
 } from "../packaging/signing.ts";
 import { releaseDate, updateDefines } from "../packaging/update-defines.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
@@ -184,7 +187,46 @@ describe("signing", () => {
     expect(build).toContain("signingProblems(process.env, target)");
     expect(build).toContain("console.log(signingSummary(plan, target));");
     expect(build).toContain('spawnSync("codesign", ["--display", "--verbose=2", app]');
+    expect(build).toContain('"-Command", WINDOWS_SIGNATURE_COMMAND]');
+    expect(build).toContain("checkWindowsSignature(plan.windows, shown)");
     expect(build.indexOf("signingSummary(")).toBeLessThan(build.indexOf("await build("));
+    expect(build.indexOf("await build(")).toBeLessThan(build.indexOf("checkWindowsSignature("));
+  });
+
+  it("reads what Get-AuthenticodeSignature says of a Windows file's signature", () => {
+    expect(WINDOWS_SIGNATURE_COMMAND).toContain("-LiteralPath $env:SIGNED_FILE");
+    expect(windowsSignatureKind("NotSigned False\r\n")).toBe("none");
+    expect(windowsSignatureKind("Valid True\r\n")).toBe("certificate");
+    // A certificate no root on the machine vouches for, such as CI's throwaway one.
+    expect(windowsSignatureKind("UnknownError True\r\n")).toBe("certificate");
+    expect(windowsSignatureKind("NotTrusted True")).toBe("certificate");
+    // A file changed after signing, or a status that names no signer.
+    expect(windowsSignatureKind("HashMismatch True")).toBe("invalid");
+    expect(windowsSignatureKind("UnknownError False")).toBe("invalid");
+    expect(windowsSignatureKind("NotSupportedFileFormat False")).toBe("invalid");
+    expect(windowsSignatureKind("")).toBe("invalid");
+  });
+
+  it("requires a successful readback of the requested signature on each Windows file", () => {
+    const none = { status: 0, stdout: "NotSigned False\r\n" };
+    const certificate = { status: 0, stdout: "UnknownError True\r\n" };
+    expect(checkWindowsSignature("unsigned", none)).toEqual({ kind: "none", matches: true });
+    expect(checkWindowsSignature("certificate", certificate)).toEqual({
+      kind: "certificate",
+      matches: true,
+    });
+    expect(checkWindowsSignature("unsigned", certificate).matches).toBe(false);
+    expect(checkWindowsSignature("certificate", none).matches).toBe(false);
+    for (const plan of ["unsigned", "certificate"] as const) {
+      for (const result of [
+        { status: 1, stdout: "NotSigned False\r\n" },
+        { status: 1, stdout: "Valid True\r\n" },
+        { status: 0, stdout: "HashMismatch True\r\n" },
+        { status: null, stdout: null },
+      ]) {
+        expect(checkWindowsSignature(plan, result)).toEqual({ kind: "invalid", matches: false });
+      }
+    }
   });
 
   it("requires a successful readback of the requested signature on each macOS bundle", () => {

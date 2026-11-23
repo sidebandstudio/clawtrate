@@ -17,12 +17,19 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { build, Platform } from "electron-builder";
 import { LOGO_PATH, MANIFEST_PATH, sha256 } from "../../../tools/brand/src/make-icons.ts";
 import { APP_ID, builderConfig, PRODUCT_NAME } from "./config.ts";
 import { OUTPUT_VARIABLE, packageOutput } from "./output.ts";
-import { checkMacSignature, signingPlan, signingProblems, signingSummary } from "./signing.ts";
+import {
+  checkMacSignature,
+  checkWindowsSignature,
+  signingPlan,
+  signingProblems,
+  signingSummary,
+  WINDOWS_SIGNATURE_COMMAND,
+} from "./signing.ts";
 import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 
 const APP_DIR = join(import.meta.dirname, "..");
@@ -102,6 +109,29 @@ if (target === "mac") {
     const shown = spawnSync("codesign", ["--display", "--verbose=2", app], { encoding: "utf8" });
     const { kind, matches } = checkMacSignature(plan.mac, shown);
     console.log(`Signature of ${output.label}/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
+    if (!matches) {
+      console.error("The signature is not the one the signing variables asked for.");
+      process.exitCode = 1;
+    }
+  }
+}
+
+// What the Windows executable's and installer's signatures are, read back from the
+// files. electron-builder deletes its copy of the uninstaller once the installer
+// holds it, so the uninstaller can be read only from an install.
+if (target === "win") {
+  const output = packageOutput(env, APP_DIR);
+  const installers = artifacts
+    .filter((file) => file.endsWith(".exe"))
+    .map((file) => basename(file));
+  for (const file of [`win-unpacked/${PRODUCT_NAME}.exe`, ...installers]) {
+    const shown = spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_SIGNATURE_COMMAND],
+      { encoding: "utf8", env: { ...process.env, SIGNED_FILE: join(output.path, file) } },
+    );
+    const { kind, matches } = checkWindowsSignature(plan.windows, shown);
+    console.log(`Signature of ${output.label}/${file}: ${kind}.`);
     if (!matches) {
       console.error("The signature is not the one the signing variables asked for.");
       process.exitCode = 1;
