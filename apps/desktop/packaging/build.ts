@@ -101,11 +101,17 @@ for (const artifact of artifacts) console.log(artifact);
 
 // electron-builder's temporary-file cleanup (async-exit-hook) ends the process with
 // status 0 once nothing is left to run, whatever process.exitCode says, so a failed
-// check sets the status again as the process exits.
-function failSignatureCheck() {
-  console.error("The signature is not the one the signing variables asked for.");
-  process.on("exit", () => (process.exitCode = 1));
+// check sets the status again as the process exits. Another failing status stands.
+let failed = false;
+function failCheck(message: string) {
+  console.error(message);
+  if (failed) return;
+  failed = true;
+  process.on("exit", (code) => {
+    if (code === 0) process.exitCode = 1;
+  });
 }
+const SIGNATURE_DIFFERS = "The signature is not the one the signing variables asked for.";
 
 // What the macOS apps' signatures are, read back from the bundles. electron-builder
 // skips signing in a pull request's CI run even with an identity set.
@@ -118,7 +124,7 @@ if (target === "mac") {
     const shown = spawnSync("codesign", ["--display", "--verbose=2", app], { encoding: "utf8" });
     const { kind, matches } = checkMacSignature(plan.mac, shown);
     console.log(`Signature of ${output.label}/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
-    if (!matches) failSignatureCheck();
+    if (!matches) failCheck(SIGNATURE_DIFFERS);
   }
 }
 
@@ -138,6 +144,6 @@ if (target === "win") {
     );
     const { kind, matches } = checkWindowsSignature(plan.windows, shown);
     console.log(`Signature of ${output.label}/${file}: ${kind}.`);
-    if (!matches) failSignatureCheck();
+    if (!matches) failCheck(SIGNATURE_DIFFERS);
   }
 }

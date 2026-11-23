@@ -196,23 +196,33 @@ describe("signing", () => {
     expect(build.indexOf("await build(")).toBeLessThan(build.indexOf("checkWindowsSignature("));
   });
 
-  it("a failed signature check fails the build, though electron-builder's exit hook ends with 0", () => {
+  it("a failed check fails the build, though electron-builder's exit hook ends with 0, and keeps any other failing status", () => {
     // electron-builder → app-builder-lib → temp-file → async-exit-hook, which calls
-    // process.exit(0) from its beforeExit handler.
+    // process.exit(0) from its beforeExit handler, and process.exit(130) on SIGINT.
     const from = (base: string, name: string) => createRequire(base).resolve(name);
     const builder = from(join(APP, "package.json"), "electron-builder");
     const exitHook = from(from(from(builder, "app-builder-lib"), "temp-file"), "async-exit-hook");
+    // Like temp-file's, the hook cleans up at once when it gets no callback, as on process.exit().
     const run = (fail: string) =>
       spawnSync(process.execPath, [
         "-e",
-        `require(${JSON.stringify(exitHook)})((done) => setTimeout(done, 10)); ${fail}`,
+        `require(${JSON.stringify(exitHook)})((done) => done && setTimeout(done, 10)); ${fail}`,
       ]).status;
+    const listener =
+      'process.on("exit", (code) => {\n    if (code === 0) process.exitCode = 1;\n  });';
     expect(run("process.exitCode = 1;")).toBe(0);
-    expect(run('process.on("exit", () => (process.exitCode = 1));')).toBe(1);
-    const build = readFileSync(join(APP, "packaging/build.ts"), "utf8");
-    expect(build).toContain('process.on("exit", () => (process.exitCode = 1));');
+    expect(run(listener)).toBe(1);
+    expect(run(`${listener} process.exit(7);`)).toBe(7);
+    expect(run(`${listener} process.exit(130);`)).toBe(130);
+    // A listener that always sets 1 replaces them.
+    expect(run('process.on("exit", () => (process.exitCode = 1)); process.exit(130);')).toBe(1);
+    const build = readFileSync(join(APP, "packaging/build.ts"), "utf8").replaceAll("\r\n", "\n");
+    expect(build).toContain(listener);
+    // Registered once, however many checks fail.
+    expect(build.match(/process\.on\("exit"/g)).toHaveLength(1);
+    expect(build).toContain("if (failed) return;\n  failed = true;\n  process.on(");
     expect(build).not.toMatch(/^\s*process\.exitCode = 1;/m);
-    expect(build.match(/if \(!matches\) failSignatureCheck\(\);/g)).toHaveLength(2);
+    expect(build.match(/if \(!matches\) failCheck\(SIGNATURE_DIFFERS\);/g)).toHaveLength(2);
   });
 
   it("reads a Windows signature without PowerShell 7's module path, and stops at any error", () => {
