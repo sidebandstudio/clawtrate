@@ -323,17 +323,28 @@ async function lastReply(session: string, message: string): Promise<string> {
 
 /**
  * The workspace files a task's last run was given, from the gateway's own report of that run
- * (`/context json`, its `injectedWorkspaceFiles`), each with whether it was there.
+ * (`/context json`, its `injectedWorkspaceFiles`), each with whether it was there. The task's
+ * history cuts a long reply, so only that list, which comes early, is read.
  */
 async function injected(session: string): Promise<Record<string, boolean>> {
   const text = await lastReply(session, "/context json");
-  const report = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as {
-    report: { source: string; injectedWorkspaceFiles: Array<{ name: string; missing: boolean }> };
-  };
-  expect(report.report.source, "the report is of the run itself, not an estimate").toBe("run");
-  return Object.fromEntries(
-    report.report.injectedWorkspaceFiles.map((file) => [file.name, !file.missing]),
-  );
+  expect(text, "the report is of the run itself, not an estimate").toMatch(/"source": "run"/);
+  const start = text.indexOf("[", text.indexOf('"injectedWorkspaceFiles"'));
+  let depth = 0;
+  let quoted = false;
+  let end = -1;
+  for (let at = start; at < text.length && end < 0; at += 1) {
+    const char = text[at];
+    if (quoted) {
+      if (char === "\\") at += 1;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === "[" || char === "{") depth += 1;
+    else if ((char === "]" || char === "}") && --depth === 0) end = at;
+  }
+  expect(end, "the report lists the run's workspace files in full").toBeGreaterThan(start);
+  const files = JSON.parse(text.slice(start, end + 1)) as Array<{ name: string; missing: boolean }>;
+  return Object.fromEntries(files.map((file) => [file.name, !file.missing]));
 }
 
 test("F-519: a bot made in New bot starts as itself: no first-run sequence, its starting files kept, its name and picture its identity", async () => {
