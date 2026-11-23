@@ -308,7 +308,10 @@ it.skipIf(process.platform === "win32").each([
   ],
   [
     "anything else on standard error",
-    { out: "inspection-failed\n", err: "/Users/someone/Library/x token=abc\n" },
+    {
+      out: "inspection-failed\n",
+      err: "objc[42]: Class Probe is implemented in both a and b token=abc\n",
+    },
     { exitCode: 0, output: "reported", helperStep: null },
   ],
 ] as const)("records the signature-only call's failure from %s", async (_, run, failure) => {
