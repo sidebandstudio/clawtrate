@@ -180,6 +180,10 @@ It makes the release a draft again and reads it back to report that GitHub lists
 
 Withdrawing the only published beta leaves the site as it was: with no beta to fill the download page from, the Site workflow deploys nothing, so the last deployment keeps serving the withdrawn feed and the script says so. Cut a fixed beta, or unpublish the Pages site in the repository's settings until there is one. GitHub's download addresses can keep answering from caches for a while; the signed trial is where to see how long. The app may still show the offer, and a cached download can still answer. Copies already downloaded stay on those Macs, and the engine never downgrades, so whoever installed the withdrawn beta needs a newer one: fix the problem and cut the next beta. Keep the draft as the record, and never reuse its version; the script counts drafts.
 
+### What's new on the download page
+
+The download page lists what each of the newest betas added, in a section a visitor opens. It reads that from each release's page on GitHub: the last line reading `What's new:` and the `- ` lines after it, so the list goes at the end of the notes. `pnpm release:beta` does not write that list, so whoever publishes a beta adds it to the release's notes afterwards (one line per change a person would notice, ending with the pull request's number as `(#123)`; at most 30 lines of at most 200 characters are read), then runs `gh workflow run site.yml --ref main` so the page is assembled again. A release with no such list is left off the page.
+
 ### Rolling back after the credentials move
 
 The first release with secure storage moves each data folder's device key and tokens into `credentials.bin` ([decisions.md](../decisions.md), "Rolling back after the move"). From that release on, a rollback is a newer signed build that reads that record; never reinstall an earlier build over a person's data folder. To run an earlier build for comparison, give it a separate, disposable data folder.
