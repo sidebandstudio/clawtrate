@@ -104,6 +104,11 @@ export type ActionCall = {
    * absent when the row had none, or the value as sent (`null` included).
    */
   rowArgs?: { kept: false } | { kept: true; value: unknown };
+  /**
+   * A message on a channel whose text is a reply of the same run, drawn
+   * beside it: its line leaves the text out, so it is not shown twice (7.11).
+   */
+  repeatsReply?: boolean;
 };
 
 /** What the reading needs to know beyond the call. */
@@ -123,6 +128,11 @@ export type ReadingContext = {
    * (`tools.effective`): a general card of one of these folds by its name (8.3).
    */
   builtinTools?: readonly string[];
+  /**
+   * "Show commands" is off (7.11): a line names a command as "a command" and
+   * leaves out command lines, exit codes and the readable view's command.
+   */
+  quiet?: boolean;
 };
 
 // Small helpers ----------------------------------------------------------------------
@@ -676,6 +686,21 @@ export type OutcomeOf = { outcome: Outcome; word?: string };
 
 export function isOpenOutcome(outcome: Outcome): boolean {
   return outcome === "running" || outcome === "review" || outcome === "waiting";
+}
+
+/**
+ * An outcome the conversation keeps in view even with "Show commands" off
+ * (7.11): the action waits for the person, or it went wrong (it failed, was
+ * blocked or refused, or could not be done).
+ */
+export function staysInView(outcome: Outcome): boolean {
+  return (
+    outcome === "waiting" ||
+    outcome === "failed" ||
+    outcome === "blocked" ||
+    outcome === "refused" ||
+    outcome === "unavailable"
+  );
 }
 
 const SUCCESS: Record<string, true> = {
@@ -1778,8 +1803,10 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
     case "channel": {
       const object = str(d.channel) || str(a.channel) || OBJECTS.aConversation;
       const to = str(a.to) || str(a.target);
+      // A message that is the reply shown beside it leaves out only its text; the recipient stays (7.11).
+      const said = call.repeatsReply ? "" : firstLine(a.message);
       return {
-        ...three(VERBS.send, object, FORMS.toWhom(to, firstLine(a.message))),
+        ...three(VERBS.send, object, said ? FORMS.toWhom(to, said) : to ? FORMS.to(to) : ""),
         noun: [NOUNS.messageOn, object],
         suppressed: [FORMS.didntSend, object],
       };
@@ -2078,10 +2105,27 @@ export function lineOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): Acti
     else if (d.error) detail = (str(d.message) || str(d.error)).split(/[.\n]/)[0] ?? "";
     else detail = (textReason(call.text).split(/\. /)[0] ?? "").replace(/\.$/, "");
   }
-  const exit = o.outcome === "done" ? (w.exit ?? "") : "";
+  let exit = o.outcome === "done" ? (w.exit ?? "") : "";
+  if (ctx.quiet) {
+    // Plain words only: no command line, no program name, no exit code (7.11).
+    // A blocked command has no object ("Blocked by policy"): none is added (7.11).
+    if (info.kind === "command" && call.name !== "code_execution" && object)
+      object = OBJECTS.aCommand;
+    // A reason read from the gateway's text names no command either.
+    if (info.kind === "command" && call.name !== "code_execution") detail = quietOutput(detail);
+    if (mono) detail = "";
+    mono = false;
+    exit = "";
+  }
   const mark = stateMark(call, info, o);
   const words = [verb, object].filter(Boolean).join(" ");
-  const running = [runningPair[0], runningPair[1]].filter(Boolean).join(" ");
+  const running = (
+    ctx.quiet && info.kind === "command" && call.name !== "code_execution"
+      ? [runningPair[0], OBJECTS.aCommand]
+      : runningPair
+  )
+    .filter(Boolean)
+    .join(" ");
   return {
     id: call.id,
     kind: info.kind,
@@ -2101,6 +2145,17 @@ export function lineOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): Acti
     spoken: `${words}${detail ? `, ${detail}` : ""}${exit ? `, ${exit}` : ""}, ${spokenState(call, mark, o)}`,
     title: `${words}${detail ? ` · ${detail}` : ""}${exit ? ` · ${exit}` : ""}`,
   };
+}
+
+/**
+ * A command's output or error text without the command or its exit code, for
+ * "Show commands" off (7.11): the gateway's "(Command exited with code 1)" at
+ * the end goes, and a denial's "Exec denied (…): <command>" ends at its colon.
+ */
+export function quietOutput(text: string): string {
+  const denied = /^(Exec denied \([^)]*\)):[\s\S]*$/.exec(text);
+  if (denied) return denied[1]!;
+  return text.replace(/\n*\(Command exited with code -?\d+\)\s*$/, "");
 }
 
 /** What an opened card says about an outcome short of Done, if anything (8.1, "Opened"). */
@@ -2358,7 +2413,8 @@ export function foldLineOf(calls: ActionCall[], ctx: ReadingContext = {}): FoldL
   } else if (live) {
     detail = lower(live.running);
   } else {
-    detail = foldObjects(kind, calls, lines);
+    // Without commands shown, a fold of commands names none of them (7.11).
+    detail = ctx.quiet && kind === "command" ? "" : foldObjects(kind, calls, lines);
   }
 
   let state: FoldLine["state"];
@@ -2698,11 +2754,13 @@ export function readableOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): 
       break;
     }
     case "command":
-      add(LABELS.command, a.command ?? a.task, true);
+      // Without commands shown, what ran is not spelled out; where and what came back are (7.11).
+      if (!ctx.quiet) add(LABELS.command, a.command ?? a.task, true);
       if (call.name !== "code_execution") add(LABELS.runsOn, str(a.host) || LABELS.gatewayHost);
-      add(LABELS.folder, a.workdir ?? a.cwd, true);
+      if (!ctx.quiet) add(LABELS.folder, a.workdir ?? a.cwd, true);
       label = LABELS.output;
-      if (!open && num(d.exitCode) !== null) view.exitCode = num(d.exitCode);
+      // Without commands shown, no exit code either (7.11).
+      if (!open && !ctx.quiet && num(d.exitCode) !== null) view.exitCode = num(d.exitCode);
       break;
     case "terminal":
       add(LABELS.action, a.action);
@@ -2821,7 +2879,11 @@ export function readableOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): 
       // The gateway's own English title for the call, shown as sent (8.3, point 5).
       if (kind === "tool") add(LABELS.gatewayCallsIt, call.gatewayTitle);
   }
-  const text = result || (open ? (call.partial ?? "") : (call.text ?? ""));
+  const received = result || (open ? (call.partial ?? "") : (call.text ?? ""));
+  const text =
+    ctx.quiet && kind === "command" && call.name !== "code_execution"
+      ? quietOutput(received)
+      : received;
   if (text) {
     view.block = {
       label: open ? LABELS.outputSoFar : call.isError ? LABELS.error : label,

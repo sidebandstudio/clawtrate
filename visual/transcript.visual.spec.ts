@@ -275,7 +275,8 @@ test("F-065: on a narrow column a wide table scrolls inside its bubble", async (
 test("F-088: the bot's progress narration shows as short separate bubbles, in order, with its action cards between", async ({
   page,
 }) => {
-  await openFixture(page, `scene=main&${PIP_WEEK}`, "light");
+  // The cards between the bubbles: with "Show commands" on (conversation.md, 7.11).
+  await openFixture(page, `scene=main&${PIP_WEEK}&commands=show`, "light");
   await atTop(page);
   const turn = page.getByTestId("transcript-turn").nth(1);
   const parts = await turn

@@ -248,6 +248,37 @@
   color: var(--text-muted);
 }
 
+/* What the bot is thinking, as it thinks, under the status line (conversation.md, 7.11):
+   its last three lines, its newest words at the bottom, quiet, at a "Thought" line's width.
+   The text sits at the end of a box three lines tall, so what does not fit is cut at the top. */
+.status-thought {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-width: 62ch;
+  max-height: calc(3 * 1.45em);
+  margin: 2px 0 0 36px;
+  padding: 0 8px;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+  white-space: pre-line;
+}
+
+.status-thought > span {
+  flex: none;
+}
+
+/* With nothing to bring into view the line is not a control. */
+div.status-line {
+  cursor: default;
+}
+
+div.status-line:hover {
+  background: transparent;
+}
+
 .status-line[data-leaving="true"] {
   cursor: default;
   animation: fold-out var(--dur-base) var(--ease-out) both;

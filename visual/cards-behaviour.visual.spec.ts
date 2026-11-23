@@ -1,6 +1,8 @@
 // How the cards behave in the fixture mode (conversation.md sections 9 to 13):
 // decisions and answers go through the bridge to the engine's reducers, and
 // the cards show only what the engine's state establishes.
+// These checks are the cards themselves, Raw included: they open with "Show commands" on
+// (docs/design/conversation.md, 7.11); visual/quiet.visual.spec.ts checks the cards without it.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
 
@@ -55,7 +57,7 @@ test.describe("approval cards", () => {
   test("F-163 F-171 F-329 F-155: a pending approval names the bot, says what runs where, shows its warnings, and offers only the request's decisions, its refusal labelled Deny", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     const card = page.getByRole("region", { name: "Otto wants to run a command. Needs approval." });
     await expect(card.getByRole("heading", { name: "Otto wants to run a command" })).toBeVisible();
     await expect(card.locator(".tag")).toHaveText("Needs approval");
@@ -69,7 +71,7 @@ test.describe("approval cards", () => {
     // A refusal is always called Deny; there is no Skip or Not now.
     await expect(card.getByRole("button", { name: /Skip|Not now|Never/ })).toHaveCount(0);
 
-    await openFixture(page, "scene=approval-allow-only", "light");
+    await openFixture(page, "commands=show&scene=approval-allow-only", "light");
     await expect(approvalCard(page).locator('.request-actions[data-row="main"] button')).toHaveText(
       ["Allow", "Deny"],
     );
@@ -78,7 +80,7 @@ test.describe("approval cards", () => {
   test("F-163: keyboard order is Show full request, Allow once, Always allow…, Deny, Raw", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     const card = approvalCard(page);
     await card.locator(".request-full > summary").focus();
     const order: string[] = [];
@@ -121,7 +123,7 @@ test.describe("approval cards", () => {
         "approval-cut",
         "approval-run-ended",
       ]) {
-        await openFixture(page, `scene=${scene}`, "light");
+        await openFixture(page, `commands=show&scene=${scene}`, "light");
         const row = approvalCard(page).locator(".request-actions").first();
         const buttons = row.locator("button");
         await expect(buttons.last(), `${scene} ${size.name}`).toHaveText("Deny");
@@ -135,7 +137,7 @@ test.describe("approval cards", () => {
         }
       }
       // With the form open too.
-      await openFixture(page, "scene=approval-pending", "light");
+      await openFixture(page, "commands=show&scene=approval-pending", "light");
       await approvalCard(page).getByRole("button", { name: "Always allow…" }).click();
       await expect(
         approvalCard(page).getByRole("group", { name: "Always allow" }).locator("button").last(),
@@ -147,7 +149,7 @@ test.describe("approval cards", () => {
   test("F-164: Show full request opens the exact command with a copy button, and reads Hide full request", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     const card = approvalCard(page);
     await card.getByText("Show full request").click();
     await expect(card.locator(".command-line code")).toHaveText(
@@ -173,7 +175,7 @@ test.describe("approval cards", () => {
   test("F-163 F-325: Allow once goes through the engine: Sending…, then Allowed once, with focus on the resolved line", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     await recordCommands(page);
     // The gateway's answer is held until the check has seen the decision on its way: that state
     // lasts only until the answer, so a fixed delay is never long enough on a loaded machine.
@@ -211,7 +213,7 @@ test.describe("approval cards", () => {
   test("F-163: Deny works while an earlier decision is on its way; a second allow is not offered", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-sending", "light");
+    await openFixture(page, "commands=show&scene=approval-sending", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await expect(card.getByText("Sending your decision…")).toBeVisible();
@@ -225,7 +227,7 @@ test.describe("approval cards", () => {
   test("F-165: Deny sends deny, the buttons go, and the card says the command was not run", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await card.getByRole("button", { name: "Deny" }).click();
@@ -239,7 +241,7 @@ test.describe("approval cards", () => {
   test("F-167 F-155: Always allow… shows the request's own fields and what is kept, with focus on Allow and save; Escape returns; saving sends allow-always", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     const always = card.getByRole("button", { name: "Always allow…" });
@@ -280,7 +282,7 @@ test.describe("approval cards", () => {
   });
 
   test("F-167: a routine's grant takes whole days from 1 to 3650", async ({ page }) => {
-    await openFixture(page, "scene=approval-routine", "light");
+    await openFixture(page, "commands=show&scene=approval-routine", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await card.getByRole("button", { name: "Always allow…" }).click();
@@ -310,7 +312,7 @@ test.describe("approval cards", () => {
   test("F-167: a routine's grant left as it starts lasts the gateway's default", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-routine", "light");
+    await openFixture(page, "commands=show&scene=approval-routine", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await card.getByRole("button", { name: "Always allow…" }).click();
@@ -327,7 +329,7 @@ test.describe("approval cards", () => {
   test("F-163: ⌘↵ in the card allows once, or allows and saves with the form open; Deny has no shortcut", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await card.getByRole("button", { name: "Always allow…" }).click();
@@ -336,7 +338,7 @@ test.describe("approval cards", () => {
     await expect(card.locator(".tag")).toHaveText("Always allowed");
     expect((await sent(page)).at(-1)).toMatchObject({ decision: "allow-always" });
 
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     await recordCommands(page);
     await approvalCard(page).getByRole("button", { name: "Deny" }).focus();
     await page.keyboard.press("ControlOrMeta+Enter");
@@ -347,7 +349,7 @@ test.describe("approval cards", () => {
   test("F-163: a refused save says why, offers Try again, Allow once instead, Back and Deny, and says the request is open only once read back", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-refused", "light");
+    await openFixture(page, "commands=show&scene=approval-refused", "light");
     const card = approvalCard(page);
     // Opened already refused: the reason, and the choices beside it.
     await expect(card.getByRole("alert")).toHaveText(
@@ -368,7 +370,7 @@ test.describe("approval cards", () => {
   test("F-163: with no answer, the outcome is unknown: only Check again and Deny until the request is read back, then the choices return", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-unknown", "light");
+    await openFixture(page, "commands=show&scene=approval-unknown", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await expect(card.getByRole("status")).toHaveText(
@@ -394,7 +396,7 @@ test.describe("approval cards", () => {
   test("F-163: a request whose text the engine cut offers only Deny until it is read whole; the allow then names the whole text's digest", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-cut", "light");
+    await openFixture(page, "commands=show&scene=approval-cut", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await expect(card.locator('.request-actions[data-row="main"] button')).toHaveText(["Deny"]);
@@ -420,7 +422,7 @@ test.describe("approval cards", () => {
   test("F-163: Allow is offered only while the whole text read through the engine is on screen, its fields kept apart", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-cut", "light");
+    await openFixture(page, "commands=show&scene=approval-cut", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     // Read without opening the full request first: reading opens it.
@@ -448,7 +450,7 @@ test.describe("approval cards", () => {
     for (const size of [WIDE, PHONE]) {
       const context = await browser.newContext(contextFor(size, "light"));
       const page = await context.newPage();
-      await openFixture(page, "scene=approval-cut", "light");
+      await openFixture(page, "commands=show&scene=approval-cut", "light");
       const card = approvalCard(page);
       const code = card.locator(".request-summary code");
       await expect(code).toHaveText(/…$/);
@@ -462,7 +464,7 @@ test.describe("approval cards", () => {
   test("F-167: the Always allow form shows the command exactly and each argument on its own", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     const card = approvalCard(page);
     await card.getByRole("button", { name: "Always allow…" }).click();
     const form = card.getByRole("group", { name: "Always allow" });
@@ -486,11 +488,11 @@ test.describe("approval cards", () => {
   test("F-168: a pending card says when it expires; an expired one says the command was not run", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     await expect(approvalCard(page).locator(".request-foot")).toHaveText(
       "Expires in 28 minutes; the command is not run if it does.",
     );
-    await openFixture(page, "scene=approval-expired", "light");
+    await openFixture(page, "commands=show&scene=approval-expired", "light");
     const card = approvalCard(page);
     await expect(card.locator(".tag")).toHaveText("Expired");
     await card.locator("summary").first().click();
@@ -502,7 +504,7 @@ test.describe("approval cards", () => {
   test("F-169 F-418: Stop's cancellation, a closed request, and one still open after its run ended say exactly that", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-cancelled", "light");
+    await openFixture(page, "commands=show&scene=approval-cancelled", "light");
     await expect(approvalCard(page).locator(".tag")).toHaveText("Cancelled");
     await approvalCard(page).locator("summary").first().click();
     await expect(
@@ -510,9 +512,9 @@ test.describe("approval cards", () => {
         "You stopped the run before answering. The command was not run.",
       ),
     ).toBeVisible();
-    await openFixture(page, "scene=approval-closed-ended", "light");
+    await openFixture(page, "commands=show&scene=approval-closed-ended", "light");
     await expect(approvalCard(page).locator(".tag")).toHaveText("Closed: the run ended");
-    await openFixture(page, "scene=approval-run-ended", "light");
+    await openFixture(page, "commands=show&scene=approval-run-ended", "light");
     await expect(
       approvalCard(page).getByText(
         "Otto's run has ended. This request is still open, and you can still answer it.",
@@ -524,7 +526,7 @@ test.describe("approval cards", () => {
   test("F-163: Raw shows the request as the gateway sent it; Escape closes it and returns focus to Raw", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     const card = approvalCard(page);
     const raw = card.getByRole("button", { name: "Raw" });
     await raw.click();
@@ -547,7 +549,7 @@ test.describe("approval cards", () => {
     const REQUEST =
       "The request record, as the gateway sent it (exec.approval.requested or exec.approval.list)";
     // Settled elsewhere: the gateway's event, and a line that this app sent nothing.
-    await openFixture(page, "scene=approval-denied", "light");
+    await openFixture(page, "commands=show&scene=approval-denied", "light");
     let card = approvalCard(page);
     await card.locator("summary").first().click();
     await card.getByRole("button", { name: "Raw" }).click();
@@ -562,7 +564,7 @@ test.describe("approval cards", () => {
     await expect(panel).not.toContainText("did not receive");
 
     // No record of how it ended reached the engine: it says so, and shows nothing in its place.
-    await openFixture(page, "scene=approval-expired", "light");
+    await openFixture(page, "commands=show&scene=approval-expired", "light");
     card = approvalCard(page);
     await card.locator("summary").first().click();
     await card.getByRole("button", { name: "Raw" }).click();
@@ -573,7 +575,7 @@ test.describe("approval cards", () => {
     await expect(panel.locator("pre")).toHaveCount(1);
 
     // Decided here: the parameters sent, the gateway's reply and its event.
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     card = approvalCard(page);
     await card.getByRole("button", { name: "Allow once" }).click();
     await expect(card.locator(".tag")).toHaveText("Allowed once");
@@ -593,7 +595,7 @@ test.describe("approval cards", () => {
     await expect(panel).not.toContainText("sent nothing");
 
     // A question answered here: the same, with the answer as sent.
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     card = questionCard(page);
     await card.getByRole("radio", { name: /A week/ }).click();
     await expect(card).toHaveAttribute("data-state", "answered");
@@ -610,7 +612,7 @@ test.describe("approval cards", () => {
     await expect(panel.locator("pre").nth(3)).toContainText('"A week"');
 
     // Dismissed elsewhere: its event, and nothing sent from here.
-    await openFixture(page, "scene=question-dismissed", "light");
+    await openFixture(page, "commands=show&scene=question-dismissed", "light");
     card = questionCard(page);
     await card.getByRole("button", { name: "Raw" }).click();
     panel = card.getByRole("region", { name: "What the gateway sent" });
@@ -619,7 +621,7 @@ test.describe("approval cards", () => {
     );
     await expect(panel).toContainText("This app sent nothing to settle it.");
 
-    await openFixture(page, "scene=incoming-line", "light");
+    await openFixture(page, "commands=show&scene=incoming-line", "light");
     const line = page.getByTestId("incoming-line");
     await line.locator("summary").click();
     await line.getByRole("button", { name: "Raw" }).click();
@@ -633,7 +635,7 @@ test.describe("approval cards", () => {
   test("F-163: a request this device can read but not answer has no decisions and offers Request access", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-readonly", "light");
+    await openFixture(page, "commands=show&scene=approval-readonly", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await expect(
@@ -647,7 +649,7 @@ test.describe("approval cards", () => {
   test("F-163: on a connection without approval access neither the shortcut nor anything else sends a decision", async ({
     page,
   }) => {
-    await openFixture(page, "scene=approval-readonly", "light");
+    await openFixture(page, "commands=show&scene=approval-readonly", "light");
     await recordCommands(page);
     const card = approvalCard(page);
     await card.getByRole("button", { name: "Raw" }).focus();
@@ -660,7 +662,7 @@ test.describe("approval cards", () => {
   });
 
   test("F-163: ⌘J moves focus to the oldest pending card", async ({ page }) => {
-    await openFixture(page, "scene=approval-pending", "light");
+    await openFixture(page, "commands=show&scene=approval-pending", "light");
     // The card has arrived and is the task's pending one, and the page has focus, before the
     // key: the app's handler, attached before the first paint, reads the transcript then.
     await expect(approvalCard(page)).toBeVisible();
@@ -681,7 +683,7 @@ test.describe("question cards", () => {
   test("F-112: a question shows its text, Dismiss, lettered options with their descriptions, and the own-answer field", async ({
     page,
   }) => {
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     const card = page.getByRole("region", {
       name: "Otto asks: How long should I keep the cache in /srv/scratch before deleting it?",
     });
@@ -696,7 +698,7 @@ test.describe("question cards", () => {
   test("F-113: choosing an option answers at once; the card keeps the title and shrinks to the answer with a check", async ({
     page,
   }) => {
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     await recordCommands(page);
     const card = questionCard(page);
     await card.getByRole("radio", { name: /A week/ }).click();
@@ -719,7 +721,7 @@ test.describe("question cards", () => {
   test("F-113: once answered, the question is not repeated as a message, also after history brings the run's later rows", async ({
     page,
   }) => {
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     const card = questionCard(page);
     await card.getByRole("radio", { name: /A week/ }).click();
     await expect(card).toHaveAttribute("data-state", "answered");
@@ -783,7 +785,7 @@ test.describe("question cards", () => {
   test("F-114: several answers: Choose all that apply, two chosen, Send answer, both answered", async ({
     page,
   }) => {
-    await openFixture(page, "scene=question-multi", "light");
+    await openFixture(page, "commands=show&scene=question-multi", "light");
     await recordCommands(page);
     const card = questionCard(page);
     await expect(card.getByText("Choose all that apply.")).toBeVisible();
@@ -802,7 +804,7 @@ test.describe("question cards", () => {
   test("F-303: a typed answer is sent as typed and shown answered; typing clears chosen options and choosing clears the text", async ({
     page,
   }) => {
-    await openFixture(page, "scene=question-three", "light");
+    await openFixture(page, "commands=show&scene=question-three", "light");
     const card = questionCard(page);
     const first = card.locator(".question").first();
     await first.getByRole("radio", { name: /A month/ }).click();
@@ -814,7 +816,7 @@ test.describe("question cards", () => {
     await first.getByRole("radio", { name: /A month/ }).click();
     await expect(first.getByPlaceholder("Type your own answer")).toHaveValue("");
 
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     await recordCommands(page);
     const single = questionCard(page);
     await single.getByPlaceholder("Type your own answer").fill("Two weeks, then ask me");
@@ -828,7 +830,7 @@ test.describe("question cards", () => {
   test("F-302: Dismiss sends no answer, folds the card to Dismissed, and the run is running again", async ({
     page,
   }) => {
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     await recordCommands(page);
     expect((await transcript(page)).runs[0]!.state).toBe("waiting");
     await questionCard(page).getByRole("button", { name: "Dismiss Otto's question" }).click();
@@ -844,7 +846,7 @@ test.describe("question cards", () => {
   test("F-112 F-303: keyboard: one tab stop, arrows move, letters choose; Escape clears a draft, then dismisses; ⌘↵ sends from the typed field", async ({
     page,
   }) => {
-    await openFixture(page, "scene=question-multi", "light");
+    await openFixture(page, "commands=show&scene=question-multi", "light");
     await recordCommands(page);
     const card = questionCard(page);
     await card.getByRole("checkbox").first().focus();
@@ -865,7 +867,7 @@ test.describe("question cards", () => {
     await page.keyboard.press("ControlOrMeta+Enter");
     await expect(card.locator(".answer")).toHaveText(["All three"]);
 
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     await recordCommands(page);
     await questionCard(page).getByRole("radio").first().focus();
     await page.keyboard.press("Escape");
@@ -880,25 +882,25 @@ test.describe("question cards", () => {
         const active = document.activeElement as HTMLElement | null;
         return active?.dataset.testid === "question-card" && active.dataset.state !== "pending";
       });
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     const field = questionCard(page).getByPlaceholder("Type your own answer");
     await field.fill("Two weeks");
     await field.press("Enter");
     await expect(questionCard(page)).toHaveAttribute("data-state", "answered");
     expect(await settledFocused()).toBe(true);
 
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     await questionCard(page).getByPlaceholder("Type your own answer").fill("Two weeks");
     await questionCard(page).getByRole("button", { name: "Send this answer" }).click();
     await expect(questionCard(page)).toHaveAttribute("data-state", "answered");
     expect(await settledFocused()).toBe(true);
 
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     await questionCard(page).getByRole("button", { name: "Dismiss Otto's question" }).click();
     await expect(questionCard(page)).toHaveAttribute("data-state", "dismissed");
     expect(await settledFocused()).toBe(true);
 
-    await openFixture(page, "scene=question-three", "light");
+    await openFixture(page, "commands=show&scene=question-three", "light");
     const card = questionCard(page);
     await card.locator(".question").nth(0).getByRole("radio").first().click();
     await card.locator(".question").nth(1).getByRole("checkbox").first().click();
@@ -909,7 +911,7 @@ test.describe("question cards", () => {
   });
 
   test("F-303: ⌘↵ in a single question's typed field sends the answer once", async ({ page }) => {
-    await openFixture(page, "scene=question-single", "light");
+    await openFixture(page, "commands=show&scene=question-single", "light");
     await recordCommands(page);
     const field = questionCard(page).getByPlaceholder("Type your own answer");
     await field.fill("Two weeks");
@@ -921,7 +923,7 @@ test.describe("question cards", () => {
   });
 
   test("F-112: with three questions nothing is sent until each has an answer", async ({ page }) => {
-    await openFixture(page, "scene=question-three", "light");
+    await openFixture(page, "commands=show&scene=question-three", "light");
     await recordCommands(page);
     const card = questionCard(page);
     await expect(card.getByRole("heading", { name: "Otto has 3 questions" })).toBeVisible();
@@ -943,7 +945,7 @@ test.describe("question cards", () => {
   test("F-112: a question record outside the ordinary subset is readable, with Raw, and cannot be answered", async ({
     page,
   }) => {
-    await openFixture(page, "scene=question-unanswerable", "light");
+    await openFixture(page, "commands=show&scene=question-unanswerable", "light");
     const card = questionCard(page);
     await expect(
       card.getByRole("heading", { name: "Otto asked something this app can't answer yet" }),
@@ -965,7 +967,7 @@ test.describe("Messaged cards", () => {
   test("F-119 F-122: the folded card shows Messaged, the recipient's avatar and name, the first line and the state", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-working", "light");
+    await openFixture(page, "commands=show&scene=messaged-working", "light");
     const card = page.getByTestId("messaged-card");
     const line = card.locator("summary");
     await expect(line).toHaveAccessibleName(
@@ -984,7 +986,7 @@ test.describe("Messaged cards", () => {
   test("F-121: the card opens in place and folds again; nothing above it moves", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-replied", "light");
+    await openFixture(page, "commands=show&scene=messaged-replied", "light");
     const card = page.getByTestId("messaged-card").last();
     const above = page.locator('.msg[data-role="user"]').first();
     const before = await above.boundingBox();
@@ -999,7 +1001,7 @@ test.describe("Messaged cards", () => {
   test("F-123: open, the card shows the exact text sent and the reply, each with its time", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-replied", "light");
+    await openFixture(page, "commands=show&scene=messaged-replied", "light");
     const card = page.getByTestId("messaged-card").last();
     await card.locator("summary").click();
     const items = card.locator(".exchange-item");
@@ -1019,7 +1021,7 @@ test.describe("Messaged cards", () => {
     page,
   }) => {
     const verb = async (scene: string, testId: string) => {
-      await openFixture(page, `scene=${scene}`, "light");
+      await openFixture(page, `commands=show&scene=${scene}`, "light");
       const card = page.getByTestId(testId).last();
       await card.locator("summary").click();
       return card
@@ -1052,7 +1054,7 @@ test.describe("Messaged cards", () => {
       expect(await verb(scene, "t3-card"), scene).toBe("asked to send");
     }
     expect(await verb("t3-call-made", "t3-card")).toBe("sent");
-    await openFixture(page, "scene=received-completed", "light");
+    await openFixture(page, "commands=show&scene=received-completed", "light");
     const received = page.getByTestId("received-card");
     await received.locator("summary").click();
     await expect(received.getByText("This run has finished.")).toBeVisible();
@@ -1062,7 +1064,7 @@ test.describe("Messaged cards", () => {
   test("F-124: Open in Marlow opens Marlow's task at its Message from Otto card; Open in Otto comes back with the card still open", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-working", "light");
+    await openFixture(page, "commands=show&scene=messaged-working", "light");
     const card = page.getByTestId("messaged-card");
     await card.locator("summary").click();
     await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
@@ -1082,7 +1084,7 @@ test.describe("Messaged cards", () => {
   test("F-124: Open in Marlow waits for its Message from Otto card when Marlow's task shows its runs before its history has loaded", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-working", "light");
+    await openFixture(page, "commands=show&scene=messaged-working", "light");
     type Fixture = {
       clawtrateFixture: {
         setState(
@@ -1129,7 +1131,7 @@ test.describe("Messaged cards", () => {
     page,
   }) => {
     for (const back of ["button", "shortcut"] as const) {
-      await openFixture(page, "scene=messaged-return", "light");
+      await openFixture(page, "commands=show&scene=messaged-return", "light");
       const scroller = page.getByTestId("transcript");
       const card = page.getByTestId("messaged-card");
       await card.evaluate((element) => element.scrollIntoView({ block: "center" }));
@@ -1175,7 +1177,7 @@ test.describe("Messaged cards", () => {
   test("with the task's whole history loaded, Show full exchange shows every message between the two bots in this task, read-only, and returns to the card", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-replied", "light");
+    await openFixture(page, "commands=show&scene=messaged-replied", "light");
     const card = page.getByTestId("messaged-card").last();
     await card.locator("summary").click();
     const toggle = card.getByRole("button", {
@@ -1202,7 +1204,7 @@ test.describe("Messaged cards", () => {
   test("with only part of the task's history loaded, the exchange is not called every message, and says what may be missing", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-replied", "light");
+    await openFixture(page, "commands=show&scene=messaged-replied", "light");
     const key = "agent:otto:transcode-cache";
     for (const partial of [{ hasMore: true }, { runsOmitted: 2 }]) {
       await page.evaluate(
@@ -1252,7 +1254,7 @@ test.describe("Messaged cards", () => {
     page,
   }) => {
     const word = async (scene: string) => {
-      await openFixture(page, `scene=${scene}`, "light");
+      await openFixture(page, `commands=show&scene=${scene}`, "light");
       return page.getByTestId("messaged-card").last().locator("summary .state").textContent();
     };
     expect(await word("messaged-recipient-stopped")).toBe("Recipient stopped");
@@ -1272,7 +1274,7 @@ test.describe("Messaged cards", () => {
       "received-stopped": "Stopped",
     };
     for (const [scene, state] of Object.entries(states)) {
-      await openFixture(page, `scene=${scene}`, "light");
+      await openFixture(page, `commands=show&scene=${scene}`, "light");
       const line = page.getByTestId("received-card").locator("summary");
       await expect(line.locator(".messaged-verb")).toHaveText("Message from");
       await expect(line.locator(".messaged-who")).toHaveText("Otto");
@@ -1288,7 +1290,7 @@ test.describe("Messaged cards", () => {
   test("F-120: a reply no identifier ties to a card arrives as a Message from line that opens to the message and its Raw", async ({
     page,
   }) => {
-    await openFixture(page, "scene=incoming-line", "light");
+    await openFixture(page, "commands=show&scene=incoming-line", "light");
     const line = page.getByTestId("incoming-line");
     await expect(line.locator("summary")).toHaveText("Message from Marlow");
     await line.locator("summary").click();
@@ -1299,7 +1301,7 @@ test.describe("Messaged cards", () => {
   test("F-122 F-134: while the connection is lost a Working card reads Last seen working, and with reduced motion nothing on a card moves", async ({
     page,
   }) => {
-    await openFixture(page, "scene=messaged-last-seen", "light");
+    await openFixture(page, "commands=show&scene=messaged-last-seen", "light");
     const state = page.getByTestId("messaged-card").locator("summary .state");
     await expect(state).toHaveText("Last seen working");
     await expect(state.locator(".glyph")).toHaveCSS("animation-name", "none");
@@ -1444,7 +1446,7 @@ test.describe("Messaged T3 Code cards", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 640 });
-    await openFixture(page, "scene=t3-approval", "light");
+    await openFixture(page, "commands=show&scene=t3-approval", "light");
     // No map from the gateway: the call is an ordinary step until its result names it.
     await historyStep(page, false);
     const step = page.getByTestId("tool-call");
@@ -1481,7 +1483,7 @@ test.describe("Messaged T3 Code cards", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 640 });
-    await openFixture(page, "scene=t3-approval", "light");
+    await openFixture(page, "commands=show&scene=t3-approval", "light");
     // The gateway's map names T3 Code's tool: the card from the call's start, the step not drawn.
     await historyStep(page, true);
     const card = page.getByTestId("t3-card");
@@ -1516,7 +1518,7 @@ test.describe("Messaged T3 Code cards", () => {
   test("F-132 F-134: a T3 Code card read on Raw, with focus on Copy arguments, becomes the ordinary action on its Raw tab with focus on its Copy arguments", async ({
     page,
   }) => {
-    await openFixture(page, "scene=t3-approval", "light");
+    await openFixture(page, "commands=show&scene=t3-approval", "light");
     await historyStep(page, true);
     const card = page.getByTestId("t3-card");
     await card.locator("summary").click();
@@ -1536,7 +1538,7 @@ test.describe("Messaged T3 Code cards", () => {
     page,
   }) => {
     // Step to card: the call's action card closed, focus on its line.
-    await openFixture(page, "scene=t3-approval", "light");
+    await openFixture(page, "commands=show&scene=t3-approval", "light");
     await historyStep(page, false);
     const step = page.getByTestId("tool-call");
     await step
@@ -1550,7 +1552,7 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(card.locator("summary")).toBeFocused();
 
     // Card to step: the card the map made, closed, focus on its line.
-    await openFixture(page, "scene=t3-approval", "light");
+    await openFixture(page, "commands=show&scene=t3-approval", "light");
     await historyStep(page, true);
     await expect(card).toHaveCount(1);
     await card
@@ -1568,19 +1570,19 @@ test.describe("Messaged T3 Code cards", () => {
     page,
   }) => {
     for (const scene of ["t3-started", "t3-approval", "t3-delivery-unknown", "t3-not-sent"]) {
-      await openFixture(page, `scene=${scene}`, "light");
+      await openFixture(page, `commands=show&scene=${scene}`, "light");
       await expect(page.getByTestId("t3-card"), scene).toHaveCount(1);
       await historyStep(page, false);
       await expect(page.getByTestId("t3-card"), scene).toHaveCount(0);
     }
-    await openFixture(page, "scene=t3-call-made", "light");
+    await openFixture(page, "commands=show&scene=t3-call-made", "light");
     await expect(page.getByTestId("t3-card")).toHaveCount(1);
   });
 
   test("F-132: the folded card shows Clawtrate's own mark, the label T3 Code, the first line sent and the state", async ({
     page,
   }) => {
-    await openFixture(page, "scene=t3-call-made", "light");
+    await openFixture(page, "commands=show&scene=t3-call-made", "light");
     const line = page.getByTestId("t3-card").locator("summary");
     await expect(line.locator(".messaged-verb")).toHaveText("Messaged");
     await expect(line.locator(".messaged-who")).toHaveText("T3 Code");
@@ -1595,7 +1597,7 @@ test.describe("Messaged T3 Code cards", () => {
   test("F-133 F-135: open, it shows the text sent and its target fields, the result with its time, its files, and Open thread as a link", async ({
     page,
   }) => {
-    await openFixture(page, "scene=t3-call-made", "light");
+    await openFixture(page, "commands=show&scene=t3-call-made", "light");
     const card = page.getByTestId("t3-card");
     await card.locator("summary").click();
     await expect(card.locator(".exchange-item").first().locator(".exchange-text")).toHaveText(
@@ -1617,7 +1619,7 @@ test.describe("Messaged T3 Code cards", () => {
       "href",
       "https://t3.example.test/projects/backup-scripts/threads/18",
     );
-    await openFixture(page, "scene=t3-failed", "light");
+    await openFixture(page, "commands=show&scene=t3-failed", "light");
     await page.getByTestId("t3-card").locator("summary").click();
     await expect(page.getByTestId("t3-card").getByRole("link")).toHaveCount(0);
   });
@@ -1634,7 +1636,7 @@ test.describe("Messaged T3 Code cards", () => {
       "t3-failed": "Failed",
     };
     for (const [scene, state] of Object.entries(states)) {
-      await openFixture(page, `scene=${scene}`, "light");
+      await openFixture(page, `commands=show&scene=${scene}`, "light");
       await expect(page.getByTestId("t3-card").locator("summary .state"), scene).toHaveText(state);
     }
     await page.getByTestId("t3-card").locator("summary").click();
@@ -1647,7 +1649,7 @@ test.describe("Messaged T3 Code cards", () => {
   test("F-137: after a stop, a call that returned keeps Call made and says work may continue", async ({
     page,
   }) => {
-    await openFixture(page, "scene=t3-work-may-continue", "light");
+    await openFixture(page, "commands=show&scene=t3-work-may-continue", "light");
     const card = page.getByTestId("t3-card");
     await expect(card.locator("summary .state")).toHaveText("Call made");
     await card.locator("summary").click();
@@ -1667,11 +1669,11 @@ test.describe("Messaged T3 Code cards", () => {
     });
     page.on("websocket", (socket) => outbound.push(socket.url()));
     await context.route("https://t3.example.test/**", (route) => route.abort());
-    await openFixture(page, "scene=t3-started", "light");
+    await openFixture(page, "commands=show&scene=t3-started", "light");
     const card = page.getByTestId("t3-card");
     // Later gateway updates: the call returns, the bot is stopped, the connection drops and returns.
     for (const scene of ["t3-call-made", "t3-work-may-continue"]) {
-      await openFixture(page, `scene=${scene}`, "light");
+      await openFixture(page, `commands=show&scene=${scene}`, "light");
     }
     await card.locator("summary").click();
     await card.getByRole("button", { name: "Raw" }).click();

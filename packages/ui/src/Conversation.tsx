@@ -37,6 +37,7 @@ import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { Pictures } from "./Pictures.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
+import { useShowCommands } from "./preferences.ts";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -257,7 +258,13 @@ function TranscriptView({
     }),
     [task.key, transcript, bot.name, liveOptions.interactive, liveOptions.connected, onAnnounce],
   );
-  const live = buildLive(bot, task, transcript, { ...liveOptions, reading });
+  // Without commands shown, the status line says the kind of work and what the bot thinks (7.11).
+  const [commandsShown] = useShowCommands();
+  const live = buildLive(bot, task, transcript, {
+    ...liveOptions,
+    reading,
+    quiet: !commandsShown,
+  });
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
   const contentSize = `${itemCount}:${live.signature}`;
@@ -560,6 +567,8 @@ function heldByEngine(run: Run, transcript: Transcript): boolean {
 type LiveOptions = {
   /** What the reading needs beyond each call, as the cards read it. */
   reading?: ReadingContext;
+  /** "Show commands" is off (7.11). */
+  quiet?: boolean;
   connected: boolean;
   interactive: boolean;
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */
@@ -706,7 +715,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         </div>,
       );
     }
-    signature.push(status.phrase);
+    signature.push(status.phrase, status.thought ?? "");
     foot.push(
       <StatusLine
         key={`status-${active.id}`}

@@ -59,9 +59,6 @@
       - text: ", then choose"
       - code: Add a library
       - text: if it asks twice.
-    - group:
-      - text: Used the browser · 2 actions
-      - time: 2.4s
     - 'region "Juniper asks: Sign in to your library account, then hand the browser back."':
       - heading "Sign in to your library account, then hand the browser back." [level=3]
       - radiogroup "Sign in to your library account, then hand the browser back.":
@@ -71,11 +68,10 @@
           - radio "Skip Check the holds another way." [disabled]
       - paragraph: You can read this question but not answer it from this device.
       - button "Request access"
-      - button "Raw"
     - paragraph:
       - text: Juniper is waiting for an approval or an answer. This device can't see it on a read-only connection.
       - button "Request access"
-    - 'button "Juniper, thinking: Waiting for an answer. Nothing running to show."': Waiting for an answer
+    - 'group "Juniper, thinking: Waiting for an answer."': Waiting for an answer
     - status
   - region "Access":
     - text: Read-only. You can follow Juniper's work here. Approvals and questions aren't shown on this connection.
