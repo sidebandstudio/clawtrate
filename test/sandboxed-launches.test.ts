@@ -3,7 +3,7 @@
 // computer (docs/development/setup.md). Every launch of the packaged app the
 // launch check makes carries `--clawtrate-setup-sandbox`.
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ import {
   launchArgs,
   launchPlace,
   recordExit,
+  reportExit,
   withCheckBundle,
 } from "../e2e-packaged/global-setup.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
@@ -54,8 +55,13 @@ describe("the packaged app's launches", () => {
     expect(source.indexOf("preferencesForgetter(domain)")).toBeGreaterThan(
       source.indexOf("async function macSetup("),
     );
-    for (const file of readdirSync(join(ROOT, "e2e-packaged"))) {
-      const text = readFileSync(join(ROOT, "e2e-packaged", file), "utf8");
+    // Every file at any depth, the real update check's folder too.
+    for (const entry of readdirSync(join(ROOT, "e2e-packaged"), {
+      recursive: true,
+      withFileTypes: true,
+    }).filter((each) => each.isFile())) {
+      const file = entry.name;
+      const text = readFileSync(join(entry.parentPath, file), "utf8");
       const uses = (text.match(/"defaults"|Library\/Preferences/g) ?? []).length;
       expect(uses, file).toBe(file === "global-setup.ts" ? 2 : 0);
     }
@@ -161,6 +167,30 @@ describe("the packaged app's launches", () => {
     const started = Date.now();
     expect(await exitedWithin(child, 5_000)).toBe(true);
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("reports how the app ended to the test that quit it, which runs in another process", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-exit-"));
+    try {
+      const file = join(dir, "app-exit.json");
+      const cases: [string, { code: number | null; signal: string | null }][] = [
+        ["process.exit(0)", { code: 0, signal: null }],
+        ["process.exit(3)", { code: 3, signal: null }],
+      ];
+      // libuv sends no SIGSEGV on Windows: the child would throw and exit 1.
+      if (process.platform !== "win32")
+        cases.push(["process.kill(process.pid, 'SIGSEGV')", { code: null, signal: "SIGSEGV" }]);
+      for (const [script, ended] of cases) {
+        rmSync(file, { force: true });
+        const child = spawn(process.execPath, ["-e", script], { stdio: "ignore" });
+        reportExit(child, file);
+        await new Promise((resolve) => child.once("exit", resolve));
+        expect(existsSync(file), script).toBe(true);
+        expect(JSON.parse(readFileSync(file, "utf8")), script).toEqual(ended);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("an app still running at the end of the wait has not exited", async () => {

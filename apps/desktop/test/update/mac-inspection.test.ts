@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, openSync, closeSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { arch } from "node:os";
 import { join, resolve } from "node:path";
@@ -368,6 +368,17 @@ describe.skipIf(process.platform !== "darwin")("Mac update inspection helper", (
     expect(["build-not-signed", "running-signature-untrusted"]).toContain(
       runWith(helper, args, archive, dir.path),
     );
+  });
+  it("names the failed step on standard error, and keeps one result line on standard output", () => {
+    // /bin/sh as the parent: Apple-signed, so the Developer ID requirement fails at a named step.
+    const ran = spawnSync(
+      "/bin/sh",
+      ["-c", '"$0" --running-signature dev.clawtrate.desktop; exit $?', helper],
+      { encoding: "utf8" },
+    );
+    expect(ran.status).toBe(0);
+    expect(ran.stdout).toBe("running-signature-untrusted\n");
+    expect(ran.stderr).toMatch(/^parent-[a-z-]+ -?\d+\n$/);
   });
   // The archive check runs before inspect() reads the running signature.
   it.each(refused.filter(([name]) => /LZMA entry in only|zip -fz|empty file/.test(name)))(

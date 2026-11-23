@@ -398,6 +398,12 @@
   color: var(--text-faint);
 }
 
+/* Without commands shown (conversation.md, 7.11): the row in plain words. */
+.command-row span.command-plain {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
 .command-row .link-button {
   justify-self: start;
 }

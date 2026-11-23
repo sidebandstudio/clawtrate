@@ -29,6 +29,7 @@ import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { canonical, digestOf } from "./canonical.js";
 import {
+  ORPHAN_MS,
   Refusal,
   attach,
   clearAge,
@@ -112,17 +113,19 @@ export class Records {
   async transact(change, verify, deadline) {
     for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
       const seen = await this.store.observe(LEDGER);
-      const before = seen.value ?? emptyLedger();
-      const ledger = structuredClone(before);
+      // observe() returns a freshly decoded row; snapshot its JSON instead of cloning up to 512 orphanAges.
+      const ledger = seen.value ?? emptyLedger();
+      const beforeJson = seen.value ? JSON.stringify(ledger) : null;
+      const beforeVisible = JSON.stringify([ledger.proposals, ledger.grants]);
       sweep(ledger, this.now());
       if (verify) await verify(ledger, this.now());
       const now = this.now();
       sweep(ledger, now);
       const until = deadline?.(ledger) ?? Infinity;
       const result = change(ledger, now);
-      if (digestOf(ledger) === digestOf(before) && seen.value) return result;
+      if (beforeJson !== null && JSON.stringify(ledger) === beforeJson) return result;
       // A revision on every stored change, so no change restores an earlier row.
-      ledger.rev = (before.rev ?? 0) + 1;
+      ledger.rev = (ledger.rev ?? 0) + 1;
       let late = false;
       const store = this.store.withCurrent({
         assertCurrent: () => {
@@ -143,11 +146,7 @@ export class Records {
         throw error;
       }
       if (out.status === "conflict") continue;
-      if (
-        !isDeepStrictEqual(before.proposals, ledger.proposals) ||
-        !isDeepStrictEqual(before.grants, ledger.grants)
-      )
-        this.onChange();
+      if (JSON.stringify([ledger.proposals, ledger.grants]) !== beforeVisible) this.onChange();
       return result;
     }
     throw new Error("The gateway's request records kept changing. Try again.");
@@ -256,10 +255,32 @@ export class Records {
         const live = referenced(await this.ledger());
         const keys = [...page.map(({ key }) => key), ...(unreadable ? [unreadable] : [])];
         const ids = keys.map((key) => key.slice(VERSION.length)).filter((id) => !live.has(id));
-        if (ids.length) await this.transact((l) => recordAges(l, ids, ages()));
-        for (const id of ids)
-          if (await this.transact((l) => markSweeping(l, id, ages())))
-            await this.reclaim(id, removed);
+        const due = ids.length
+          ? await this.transact((l) => {
+              const at = ages();
+              recordAges(l, ids, at);
+              const since = l.orphanAges?.epoch === at.epoch ? l.orphanAges.since : null;
+              return since
+                ? ids.filter((id) => Object.hasOwn(since, id) && at.now - since[id] >= ORPHAN_MS)
+                : [];
+            })
+          : [];
+        // Clear the finished deletion and mark the next due orphan in one ledger update.
+        let marked = null;
+        for (const id of due) {
+          if (marked) {
+            await this.versions.delete(VERSION + marked);
+            removed.push(marked);
+          }
+          const prev = marked;
+          marked = (await this.transact((l) => {
+            if (prev) clearSweeping(l, prev);
+            return markSweeping(l, id, ages());
+          }))
+            ? id
+            : null;
+        }
+        if (marked) await this.reclaim(marked, removed);
         if (!unreadable && page.length < PAGE) return removed;
         start = `${unreadable ?? page[page.length - 1].key}\u0000`;
       }

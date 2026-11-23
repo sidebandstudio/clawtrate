@@ -506,7 +506,7 @@ describe.skipIf(platform !== "darwin")("the macOS helper", () => {
 #undef main
 int main(int argc, char **argv) {
   if (argc == 3 && strcmp(argv[1], "folder") == 0) {
-    const char *why = checkOpened(open(argv[2], O_RDONLY | O_DIRECTORY), 1);
+    const char *why = checkOpened(open(argv[2], O_RDONLY | O_DIRECTORY), 1, 0);
     puts(why ? why : "ok");
     return 0;
   }
@@ -516,14 +516,14 @@ int main(int argc, char **argv) {
     return 0;
   }
   int fd = open(argv[2], O_RDONLY);
-  const char *why = checkOpened(fd, 0);
+  const char *why = checkOpened(fd, 0, SETTINGS_LIMIT);
   if (why) { printf("checked: %s\\n", why); return 0; }
   FILE *grow = fopen(argv[2], "a");
   for (int i = 0; i <= SETTINGS_LIMIT; ++i) fputc('x', grow);
   fclose(grow);
   size_t length;
   char *buffer = malloc(SETTINGS_LIMIT + 1);
-  why = readBounded(fd, buffer, &length);
+  why = readBounded(fd, buffer, SETTINGS_LIMIT, &length);
   printf("read: %s\\n", why ? why : "ok");
   return 0;
 }`,
@@ -982,7 +982,7 @@ describe("the account's real home", () => {
   });
 });
 
-it("nothing in a shipped host reaches the reader yet", () => {
+it("a shipped host reaches the reader only through local connect's proof, and reads no settings yet", () => {
   const own = new Set([
     "settings-reader.ts",
     "settings-parse.ts",
@@ -992,7 +992,7 @@ it("nothing in a shipped host reaches the reader yet", () => {
   ]);
   const shipped = ["apps/desktop/src", "packages/core/src", "packages/ui/src"].flatMap((dir) =>
     (readdirSync(join(ROOT, dir), { recursive: true }) as string[])
-      .filter((path) => /\.tsx?$/.test(path))
+      .filter((path) => /\.[cm]?[jt]sx?$/.test(path))
       .map((path) => join(ROOT, dir, path)),
   );
   const importers = shipped.filter((file) => {
@@ -1002,7 +1002,17 @@ it("nothing in a shipped host reaches the reader yet", () => {
       readFileSync(file, "utf8").includes(module.replace(/\.ts$/, "")),
     );
   });
-  expect(importers.map((file) => relative(ROOT, file).split(sep).join("/"))).toEqual([]);
+  // The proof holds the home and runs the helper as the reader does; local connect, which no
+  // shipped host turns on (local-connect.test.ts), is the proof's one caller.
+  expect(importers.map((file) => relative(ROOT, file).split(sep).join("/"))).toEqual([
+    "apps/desktop/src/setup/local-prove.ts",
+  ]);
+  const readers = shipped.filter(
+    (file) =>
+      !file.endsWith(`${sep}settings-reader.ts`) &&
+      /\b(readLocalSettings|openSettingsFile|parseInWorker)\b/.test(readFileSync(file, "utf8")),
+  );
+  expect(readers).toEqual([]);
 });
 
 // CI installs the pinned OpenClaw from npm and names its folder: it must be the pinned version,

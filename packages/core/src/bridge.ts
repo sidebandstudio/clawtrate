@@ -13,6 +13,7 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
+import type { ChatPictureRead } from "./pictures.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
@@ -204,6 +205,8 @@ export type BridgeCommand =
     }
   /** The checkout's patch for one of a task's files. */
   | { type: "readCheckoutDiff"; key: string; path: string }
+  /** A picture the bot handed over in the task, by the id its message gave (`ChatPictureRead`). */
+  | { type: "readChatPicture"; key: string; artifactId: string }
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
@@ -566,7 +569,11 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                                                           | "checkRoutineUpdate";
                                                                                                       }
                                                                                                     ? RoutineSaveCheck
-                                                                                                    : void;
+                                                                                                    : C extends {
+                                                                                                          type: "readChatPicture";
+                                                                                                        }
+                                                                                                      ? ChatPictureRead
+                                                                                                      : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -584,6 +591,12 @@ export type HostInfo = {
    * more access and refuses every command that writes.
    */
   readOnly?: boolean;
+  /**
+   * Set when a first pairing over a protected address (`protectedGatewayUrl`) asks for full
+   * control: the packaged Mac app, which keeps credentials in the Keychain. Its address form
+   * shows the consent line above Connect.
+   */
+  fullControl?: boolean;
   /**
    * Set when the host offers setup on its own computer (docs/design/setup.md):
    * the first screen asks where OpenClaw runs. Absent on a host that keeps the
@@ -1354,6 +1367,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "readTaskFile":
     case "readCheckoutDiff":
       return { type: command.type, key: sessionKey(command.key), path: filePath(command.path) };
+    case "readChatPicture":
+      return {
+        type: "readChatPicture",
+        key: sessionKey(command.key),
+        artifactId: id(command.artifactId, "picture id"),
+      };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
     case "readMemory":
@@ -1992,6 +2011,12 @@ class ViewerSession implements BridgeSession {
         return client.readTaskFile(this.mine(command.key), command.path, this.fileOptions());
       case "readCheckoutDiff":
         return client.readCheckoutDiff(this.mine(command.key), command.path, this.fileOptions());
+      case "readChatPicture":
+        return client.readChatPicture(
+          this.mine(command.key),
+          command.artifactId,
+          this.fileOptions(),
+        );
       case "listMemory":
         return client.listMemory(command.botId);
       case "readMemory":

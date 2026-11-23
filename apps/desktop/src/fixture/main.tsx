@@ -113,6 +113,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   usage: usageParams(params),
   machines: machineParams(params),
   search: searchParams(params),
+  fullPairing: params.get("full") === "1",
 });
 if (params.has("hold")) bridge.hold();
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.

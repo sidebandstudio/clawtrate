@@ -419,16 +419,18 @@ function PendingQuestion({
           <p className="request-ended">
             You can read this question but not answer it from this device.
           </p>
-          <div className="request-actions">
-            <button
-              type="button"
-              className="button"
-              data-variant="primary"
-              onClick={() => void env.send({ type: "requestAccess" })}
-            >
-              Request access
-            </button>
-          </div>
+          {!env.connection.fullPairing && (
+            <div className="request-actions">
+              <button
+                type="button"
+                className="button"
+                data-variant="primary"
+                onClick={() => void env.send({ type: "requestAccess" })}
+              >
+                Request access
+              </button>
+            </div>
+          )}
         </>
       )}
       {card.error && !busy && (

@@ -63,6 +63,7 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { isPictureScene, PICTURE_SCENES, pictureAnswers, pictureScene } from "./pictures.ts";
 import {
   computerFixture,
   FIXTURE_VIEWER,
@@ -117,9 +118,12 @@ export const SCENES = [
   "disconnected",
   "offline-unreachable",
   "offline-down",
+  "connect-full",
+  "access-narrowed",
   ...LIVE_SCENES,
   ...RAIL_SCENES,
   ...ACTION_SCENES,
+  ...PICTURE_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -268,6 +272,18 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: base, steps: [] };
     case "connect":
       return { initial: idle(), steps: [] };
+    // The packaged Mac app's address form, with a secure address typed (setup-effortless.md §2).
+    case "connect-full":
+      return {
+        initial: withConnection(idle(), { gatewayUrl: "wss://gateway.example" }),
+        steps: [],
+      };
+    // A full pairing the gateway granted read alone (§8).
+    case "access-narrowed":
+      return {
+        initial: withConnection(base, { gatewayUrl: "wss://gateway.example", fullPairing: true }),
+        steps: [],
+      };
     case "connect-error":
       return {
         initial: withConnection(idle(), {
@@ -427,6 +443,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
+      if (isPictureScene(name)) return { initial: pictureScene(base, now), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
 }
@@ -497,6 +514,8 @@ export function createFixtureBridge(
     computer?: ComputerParams;
     checkIns?: CheckInParams;
     search?: SearchParams;
+    /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
+    fullPairing?: boolean;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -532,6 +551,7 @@ export function createFixtureBridge(
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
+  const pictureAnswer = pictureAnswers(name);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
   const routineParams = options.routines ?? { state: "none" };
   let state =
@@ -587,6 +607,8 @@ export function createFixtureBridge(
       transcripts: withComputerRuns(state.transcripts, now, computerParams),
     };
   }
+  if (options.fullPairing)
+    state = { ...state, connection: { ...state.connection, fullPairing: true } };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
@@ -694,6 +716,7 @@ export function createFixtureBridge(
     sent.push(command);
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
+    if (command.type === "readChatPicture") return pictureAnswer();
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;
@@ -1051,7 +1074,9 @@ export function createFixtureBridge(
       ? setupInfo(FIXTURE_INFO, setupName)
       : name === "access-pinned"
         ? { ...FIXTURE_INFO, readOnly: true }
-        : FIXTURE_INFO,
+        : name === "connect-full" || name === "access-narrowed" || options.fullPairing
+          ? { ...FIXTURE_INFO, fullControl: true }
+          : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);

@@ -18,5 +18,8 @@ declare class URL {
   readonly protocol: string;
   readonly host: string;
   readonly hostname: string;
+  readonly username: string;
+  readonly password: string;
+  readonly hash: string;
   toString(): string;
 }

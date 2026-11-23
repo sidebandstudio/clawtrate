@@ -86,11 +86,16 @@ export function gatewayLabel(url: string | null): string {
   }
 }
 
-/** A task's context use, for its header: "Context: 18,432 of 128,000 tokens". */
+/**
+ * A task's context use, for its header: "Context: 18,432 of 128,000 tokens".
+ * Null unless the task's row carries both figures: a task before its first run
+ * has none yet, and a line saying so would read as an error. "about" marks a
+ * count the gateway says is from before the latest run.
+ */
 export function contextWords(
   context: { used: number; window: number; fresh: boolean } | undefined,
-): string {
-  if (!context) return "Context: unavailable";
+): string | null {
+  if (!context) return null;
   const n = (value: number) => value.toLocaleString(undefined);
   return `Context: ${context.fresh ? "" : "about "}${n(context.used)} of ${n(context.window)} tokens`;
 }

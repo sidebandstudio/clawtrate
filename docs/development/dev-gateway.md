@@ -89,6 +89,14 @@ pnpm dev-gateway start --instance machines --with-node
 
 A development gateway has no paired machine, so Settings, Machines and a bot's "Where it runs" would have nothing to show. `--with-node` (named instances only) starts the gateway's own headless node host, `openclaw node run`, on this computer, on loopback, under the instance's profile, recorded and stopped like the gateway (`status` lists it as `node`). It is called media-box and declares only the two commands that read and write its exec approvals file, so no bot's command can run on it. Its state, its approvals file included, is a folder of its own inside the instance's folder, so its file is not the gateway machine's. `start` approves its pairing request and its command request by id once each is exactly what it must be. `pnpm e2e` starts its accounts instance with it. [The decision](../decisions.md#where-a-bot-runs-and-machines) says what the gateway returned for each method these pages use.
 
+## Pictures from the image tool
+
+```bash
+pnpm dev-gateway start --instance pictures --with-images
+```
+
+A development gateway denies `image_generate`, since a real image provider is a hosted service. `--with-images` points the gateway's bundled LiteLLM image provider at the instance's own scripted model, which answers `POST /v1/images/generations` with one fixed 256 × 256 PNG it draws (`tools/dev-gateway/src/scripted-images.ts`), and offers `image_generate` to every bot. Nothing leaves the machine. Send `#image`: the tool starts a background task, and the gateway delivers the picture in a turn of its own in the same task, which the scripted model answers with a caption and the picture's `MEDIA:` line. `pnpm e2e` starts its main instance with it.
+
 ## Migrating from an older version
 
 Earlier versions of the tool recorded no process start times, so this version cannot prove anything about the state they left and refuses it for good: it never signals its processes, starts it over or deletes it. Move it aside once, by hand, from the checkout that started it. For the default instance:
@@ -155,6 +163,7 @@ The scripted model can put a run into every situation the live conversation has 
 | `#browse-slow`     | open the slow scripted page            | Navigates the current tab to a scripted page that takes eight seconds to load.                                                                                                                                                  | a bot with a browser of its own |
 | `#browse-download` | download the scripted file             | Navigates the current tab to a scripted file that downloads slowly, over eight seconds.                                                                                                                                         | a bot with a browser of its own |
 | `#browse-outside`  | open an outside address                | Navigates to an address outside loopback, then to another loopback port, and reads what the tab shows; both are refused.                                                                                                        | a bot with a browser of its own |
+| `#image`           | draw the sun over a green hill         | Asks the image tool for a picture; it arrives in the gateway's next turn in the same task.                                                                                                                                      | any bot, with `--with-images`   |
 
 Where it matters which bot you ask:
 
