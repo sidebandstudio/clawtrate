@@ -3,8 +3,8 @@
 // from what the host read through the gateway's download. The scene is written
 // in the gateway's own shapes (apps/desktop/src/fixture/pictures.ts); the live
 // check is e2e/ui-pictures.spec.ts.
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
