@@ -54,9 +54,11 @@ jobs:
   # A scheduled run's failure shows only in the Actions tab, so it is kept in one open issue,
   # found by its label, until a later scheduled run passes. This is its own job so that the
   # Simulator job keeps contents: read, and so that a failure here cannot mask the Simulator's.
+  # cancelled() is the whole run, replaced by a newer one; a Simulator job past its
+  # timeout-minutes is cancelled alone, and is reported like a failure.
   report:
     needs: simulator
-    if: always() && github.event_name == 'schedule' && needs.simulator.result != 'cancelled'
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -69,6 +71,7 @@ jobs:
       LABEL: "ci: daily ios"
     steps:
       - run: |
+          [ "$RESULT" = skipped ] && exit 0
           open=$(gh issue list --state open --label "$LABEL" --json number --jq '.[0].number // empty')
           if [ "$RESULT" = success ]; then
             if [ -n "$open" ]; then
@@ -76,7 +79,9 @@ jobs:
             fi
             exit 0
           fi
-          message="The scheduled run $RUN_URL failed on main at $GITHUB_SHA."
+          ended=failed
+          [ "$RESULT" = cancelled ] && ended="did not finish in its time limit"
+          message="The scheduled run $RUN_URL $ended on main at $GITHUB_SHA."
           if [ -n "$open" ]; then
             gh issue comment "$open" --body "$message"
           else
