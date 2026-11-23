@@ -104,6 +104,18 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     asked.current += 1;
     setGeneration(asked.current);
   }, []);
+  // Saves still out, counted here and not on the page: a page opened again after Back while one
+  // is out must wait for it too.
+  const [writing, setWriting] = useState(0);
+  const begin = useCallback(() => {
+    setWriting((n) => n + 1);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      setWriting((n) => n - 1);
+    };
+  }, []);
   // On a disconnect or another key, what was read is dropped before anything is derived.
   if (held && (!connected || held.key !== key)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>
@@ -117,8 +129,8 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     inventory: part("inventory"),
     credentials: part("credentials"),
   };
-  const commandsCurrent = held?.key === key && held.at.commands === generation;
-  return { read, reload, commandsCurrent };
+  const commandsCurrent = writing === 0 && held?.key === key && held.at.commands === generation;
+  return { read, reload, begin, commandsCurrent };
 }
 
 /** A mark of section 2: an icon and its words, never colour alone. */
@@ -231,6 +243,7 @@ export function RunsOnPage({
   botName,
   read,
   reload,
+  begin,
   commandsCurrent,
   nameOf,
   connection,
@@ -243,7 +256,9 @@ export function RunsOnPage({
   botName: string;
   read: Placement;
   reload: () => void;
-  /** Whether the commands part shown was read after the latest reload, a save's included. */
+  /** Counts a save as out until the returned function is called, on this page or one opened again. */
+  begin: () => () => void;
+  /** Whether no save is out and the commands part shown was read after the latest reload. */
   commandsCurrent: boolean;
   nameOf: (id: string) => string;
   connection: ConnectionState;
@@ -318,6 +333,7 @@ export function RunsOnPage({
   );
 
   const save = async (value: string, baseHash: string | null) => {
+    const done = begin();
     setSaving(true);
     setError(null);
     setNote(null);
@@ -361,6 +377,7 @@ export function RunsOnPage({
       // A change never sent, or a read-back that failed or shows another setting: none confirms a save.
       announce("Save not confirmed");
     } finally {
+      done();
       if (mounted.current) setSaving(false);
       // Whatever the outcome, the placement is read again, by its owner (the bot's Settings tab,
       // keyed by bot and connection), so the Runs on row shows it even after Back. The picker

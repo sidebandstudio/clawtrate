@@ -212,6 +212,7 @@ export function BotSettings({
           botName={name}
           read={placement.read}
           reload={placement.reload}
+          begin={placement.begin}
           commandsCurrent={placement.commandsCurrent}
           nameOf={nameOf}
           connection={connection}

@@ -831,6 +831,51 @@ test("F-046: after a save, Back and opening the page again still waits for the r
   await expect(select).toBeEnabled();
 });
 
+/** Holds the answer to `type` until `answerHeld`, counting the commands reads answered meanwhile. */
+const holdAnswer = (page: Page, type: string) =>
+  page.evaluate((type) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    const held = window as unknown as { answerHeld?: () => void; commandsReads: number };
+    held.commandsReads = 0;
+    fixture.invoke = (command) => {
+      if (command.type === type)
+        return new Promise((resolve, reject) => {
+          held.answerHeld = () => void original(command).then(resolve, reject);
+        });
+      if (command.type === "readPlacement" && (command as { part?: string }).part === "commands")
+        return original(command).then((answer) => {
+          held.commandsReads += 1;
+          return answer;
+        });
+      return original(command);
+    };
+  }, type);
+const commandsReads = (page: Page) =>
+  page.evaluate(() => (window as unknown as { commandsReads: number }).commandsReads);
+
+test("F-046: Back and opening the page again while a save is still out waits for the read after it", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await holdAnswer(page, "setCommandMachine");
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  // Back before the save answers. Opening the page again reads the placement, and that read
+  // answers while the save is still out.
+  await page.getByRole("button", { name: "Back to settings" }).click();
+  const before = await commandsReads(page);
+  await openRunsOn(page);
+  await expect.poll(() => commandsReads(page)).toBeGreaterThan(before);
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
+  await expect(select).toBeDisabled();
+  await page.evaluate(() => (window as unknown as { answerHeld: () => void }).answerHeld());
+  await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
+  await expect(select).toBeEnabled();
+});
+
 test("F-046: while the read asked for after a workspace save is out, the command picker waits for it", async ({
   page,
 }) => {
