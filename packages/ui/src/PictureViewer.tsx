@@ -31,13 +31,8 @@ function PictureViewer({ url, alt, onClose }: { url: string; alt: string; onClos
       data-testid="picture-viewer"
       onKeyDown={onKey}
     >
-      <button
-        type="button"
-        className="picture-viewer-scrim"
-        aria-label="Close"
-        tabIndex={-1}
-        onClick={onClose}
-      />
+      {/* The backdrop is for a pointer; Close is the named way out. */}
+      <div className="picture-viewer-scrim" aria-hidden="true" onClick={onClose} />
       <img src={url} alt={alt} />
       <button type="button" className="picture-viewer-close" ref={close} onClick={onClose}>
         <CloseIcon />

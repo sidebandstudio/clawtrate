@@ -62,7 +62,8 @@
     - toolbar "Message actions":
       - button "More"
     - figure:
-      - 'img "Picture made from the description: A sun over a green hill, in flat solid colours"'
+      - 'button "Picture made from the description: A sun over a green hill, in flat solid colours"':
+        - 'img "Picture made from the description: A sun over a green hill, in flat solid colours"'
     - group: Worked 1 action
     - status
   - region "Access":

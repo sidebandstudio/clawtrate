@@ -63,7 +63,13 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
-import { isPictureScene, PICTURE_SCENES, pictureAnswers, pictureScene } from "./pictures.ts";
+import {
+  isPictureScene,
+  PICTURE_SCENES,
+  pictureAnswers,
+  pictureScene,
+  sentPictureAnswer,
+} from "./pictures.ts";
 import {
   computerFixture,
   FIXTURE_VIEWER,
@@ -443,7 +449,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
-      if (isPictureScene(name)) return { initial: pictureScene(base, now), steps: [] };
+      if (isPictureScene(name)) return { initial: pictureScene(base, now, name), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
 }
@@ -717,6 +723,7 @@ export function createFixtureBridge(
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
     if (command.type === "readChatPicture") return pictureAnswer();
+    if (command.type === "readSentPicture") return sentPictureAnswer(command);
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;
