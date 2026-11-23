@@ -50,3 +50,42 @@ jobs:
           echo "JAVA_HOME=$JAVA_HOME_21_arm64" >> "$GITHUB_ENV"
       - run: pnpm mobile:build
       - run: pnpm mobile:check --bail=1 --reporter=verbose
+
+  # A scheduled run's failure shows only in the Actions tab, so it is kept in one open issue,
+  # found by its label, until a later scheduled run passes. This is its own job so that the
+  # Simulator job keeps contents: read, and so that a failure here cannot mask the Simulator's.
+  # cancelled() is the whole run, replaced by a newer one; a Simulator job past its
+  # timeout-minutes is cancelled alone, and is reported like a failure.
+  report:
+    needs: simulator
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RESULT: ${{ needs.simulator.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      LABEL: "ci: daily ios"
+    steps:
+      - run: |
+          [ "$RESULT" = skipped ] && exit 0
+          open=$(gh issue list --state open --label "$LABEL" --json number --jq '.[0].number // empty')
+          if [ "$RESULT" = success ]; then
+            if [ -n "$open" ]; then
+              gh issue close "$open" --comment "The scheduled run $RUN_URL passed on main at $GITHUB_SHA."
+            fi
+            exit 0
+          fi
+          ended=failed
+          [ "$RESULT" = cancelled ] && ended="did not finish in its time limit"
+          message="The scheduled run $RUN_URL $ended on main at $GITHUB_SHA."
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$message"
+          else
+            gh label create "$LABEL" --force --color b60205 \
+              --description "The daily iPhone Simulator check on main is failing"
+            gh issue create --title "The daily iPhone Simulator check is failing" --label "$LABEL" --body "$message"
+          fi
