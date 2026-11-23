@@ -5,7 +5,7 @@
 // gateway's own shapes (apps/desktop/src/fixture/bot-name.ts); the live check
 // is in e2e/accounts.spec.ts.
 import { test, type Page } from "@playwright/test";
-import type { ClawtrateState } from "@clawtrate/core";
+import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
