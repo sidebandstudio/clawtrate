@@ -146,7 +146,7 @@ for (const theme of THEMES) {
     test("a reader who scrolls up after a held line and a return to the end stays there", async ({
       page,
     }) => {
-      await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, theme);
+      await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed&commands=show`, theme);
       await atEnd(page);
       const transcript = page.getByTestId("transcript");
       const tops = (frames: Array<{ top: number }>) => frames.map(({ top }) => top);

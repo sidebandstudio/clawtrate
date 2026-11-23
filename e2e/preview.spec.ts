@@ -125,6 +125,35 @@ async function gatewayTask(botId: string, label: string): Promise<{ key: string;
   return { key, title };
 }
 
+/**
+ * Remove a task a check made on the gateway, so a run it left failed or stopped does not
+ * stay in its bot's rail state for a later check (the bot's row reports the most urgent of
+ * all its tasks, and a failed one outranks a later routine run's "working"). Stops any run,
+ * archives, then deletes it with its transcript; a task already gone is left alone.
+ */
+async function removeTask(key: string): Promise<void> {
+  const row = await gatewayCall<{ session: SessionRow & { sessionId?: string } }>(
+    "sessions.describe",
+    { key },
+  )
+    .then((result) => result.session)
+    .catch(() => null);
+  if (!row?.sessionId) return;
+  await gatewayCall("chat.abort", { sessionKey: key }).catch(() => {});
+  if (!row.archived)
+    await gatewayCall("sessions.patch", {
+      key,
+      archived: true,
+      expectedSessionId: row.sessionId,
+    }).catch(() => {});
+  await gatewayCall("sessions.delete", {
+    key,
+    archivedOnly: true,
+    deleteTranscript: true,
+    expectedSessionId: row.sessionId,
+  }).catch(() => {});
+}
+
 /** A run in a task, as the gateway's owner starts one; resolves when it has ended. */
 async function runOnGateway(botId: string, key: string, message: string): Promise<void> {
   await openclaw([
@@ -1570,6 +1599,9 @@ test("F-301: a turn the gateway fails offers Copy request ID, which copies the i
   await card.getByRole("button", { name: "Copy request ID" }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+  // This is the only check that leaves a bot with a failed run; remove its task so Otto's
+  // rail state does not stay "failed" for a later file's check (F-024 in routines.spec.ts).
+  await removeTask(key);
 });
 
 test("F-066 F-283 F-067: on a real turn of a progress bubble and a final one, each bubble's actions name its own row: a reaction is set and taken back on the gateway, and a reply sent from its thread names it", async ({
@@ -2578,6 +2610,43 @@ test("F-468: a real question holds a message typed while it is pending, and answ
   await expect.poll(() => gatewayHasMessage(key, text), { timeout: 30_000 }).toBe(true);
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("transcript-turn").filter({ hasText: text })).not.toHaveCount(0);
+});
+
+// Most checks here read the action cards themselves, so they run with "Show commands" on
+// (conversation.md, 7.11); the F-528 check runs on the default, with it off.
+test.beforeEach(async ({ page }, info) => {
+  if (!info.title.startsWith("F-528"))
+    await page.addInitScript(() => localStorage.setItem("clawtrate.commands", "show"));
+});
+
+test("F-528 F-529 F-530: by default a real run shows no card: the status line names the kind of work, and the run line opens to the actions in plain words", async ({
+  page,
+}) => {
+  await openShell(page);
+  await ownTaskOf(page, "pip", "Pip", "Go through the files quietly");
+  await composer(page).fill("Go through the workspace. #read-six #slow-tool 8");
+  await page.keyboard.press("Enter");
+  const status = page.getByTestId("status-line");
+  // While the slow tool runs: no card at level 0, and the phrase is the kind of work.
+  await expect(status.getByTestId("status-phrase")).toHaveText("Using tools", {
+    timeout: 30_000,
+  });
+  await expect(status).toHaveAccessibleName("Pip, working: Using tools.");
+  for (const card of await page.locator(".transcript details.card.action").all())
+    await expect(card).toBeHidden();
+  await expect(page.getByText("I read six files in my workspace.", { exact: true })).toHaveCount(1);
+  // The run ends: one line, which opens to the actions in plain words.
+  await expect(status).toHaveCount(0, { timeout: 60_000 });
+  const run = page.getByTestId("run-line").last();
+  await expect(run.locator(":scope > summary")).toHaveAccessibleName(
+    /^Worked for \d+s · 7 actions$/,
+  );
+  await run.locator(":scope > summary").click();
+  await expect(run.locator(".run-actions details.card.action[data-fold]")).toHaveAttribute(
+    "data-fold",
+    "6",
+  );
+  await expect(run.locator(".run-actions")).toContainText("Read 5 files · 6 reads");
 });
 
 /** The action cards' and folds' lines in a transcript, in order. */

@@ -2,7 +2,12 @@
 // instance. `pnpm scenarios` runs the same checks on an instance of its own.
 
 import { expect, test } from "@playwright/test";
-import { instancePorts, openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
+import {
+  instancePorts,
+  openInstance,
+  openOperator,
+  recordedStartOptions,
+} from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import {
   createHarness,
@@ -34,6 +39,8 @@ test.describe.serial("scenario check", () => {
       clients,
       (botId, key, message) => ownerAgent(inst, botId, key, message),
       `http://127.0.0.1:${instancePorts(inst).providerPort}`,
+      // Global setup starts this instance with `--with-images` (e2e/ui-pictures.spec.ts).
+      recordedStartOptions(inst).images === true,
     );
     await prepareRecipient(harness);
   });

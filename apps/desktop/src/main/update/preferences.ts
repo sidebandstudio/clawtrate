@@ -1,10 +1,10 @@
 import type { DesktopUpdateSnapshot, UpdateTrack } from "@clawtrate/core";
-import { constants } from "node:fs";
+import { constants, writeFileSync } from "node:fs";
 import { open, rename } from "node:fs/promises";
 import { rm } from "../update-tree-fs.ts";
 import { parseReleaseDate } from "./feed.ts";
 
-import { readAttempt } from "./attempt.ts";
+import { readAttempt, readQuit, type UpdateQuit } from "./attempt.ts";
 
 export const MAX_PREFERENCE_BYTES = 1024;
 
@@ -94,25 +94,65 @@ export function createUpdatePreferenceStore(path: string) {
       if (key === "lastCheck") return prefs.lastCheck ? JSON.stringify(prefs.lastCheck) : null;
       throw Error("Unknown update preference");
     },
+    /**
+     * Synchronous, for the moment the app quits after a handoff, when nothing asynchronous
+     * finishes. A failure is ignored: the next start then reports the quit as not finished.
+     */
+    markQuit(quit: UpdateQuit): void {
+      try {
+        writeFileSync(path + ".quit", JSON.stringify(quit), { mode: 0o600 });
+      } catch {
+        // Reported as a quit that didn't finish.
+      }
+    },
+    async readQuit(): Promise<UpdateQuit | null> {
+      try {
+        const file = await open(path + ".quit", constants.O_RDONLY | constants.O_NONBLOCK);
+        try {
+          const bytes = Buffer.alloc(MAX_PREFERENCE_BYTES + 1);
+          const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+          const stat = await file.stat();
+          if (!stat.isFile() || bytesRead > MAX_PREFERENCE_BYTES) return null;
+          return readQuit(JSON.parse(bytes.toString("utf8", 0, bytesRead)));
+        } finally {
+          await file.close();
+        }
+      } catch {
+        return null;
+      }
+    },
     async set(key: string, value: string): Promise<void> {
       if (key !== "selectedTrack" && key !== "lastCheck" && key !== "attempt")
         throw Error("Unknown update preference");
       const { prefs, invalid } = project({ ...(await load(path)).prefs, [key]: value });
       if (invalid.has(key)) throw Error("Invalid update preference");
-      const temp = path + ".next";
-      await rm(temp, { force: true });
-      const file = await open(temp, "wx", 0o600);
-      try {
-        try {
-          await file.writeFile(JSON.stringify(prefs));
-          await file.sync();
-        } finally {
-          await file.close();
-        }
-        await rename(temp, path);
-      } finally {
-        await rm(temp, { force: true });
+      await save(prefs);
+    },
+    /** Once the attempted version runs, the attempt and its quit record are done with. */
+    async forgetAttempt(): Promise<void> {
+      const { prefs } = await load(path);
+      if (prefs.attempt) {
+        delete prefs.attempt;
+        await save(prefs);
       }
+      await rm(path + ".quit", { force: true });
     },
   };
+
+  async function save(prefs: Preferences): Promise<void> {
+    const temp = path + ".next";
+    await rm(temp, { force: true });
+    const file = await open(temp, "wx", 0o600);
+    try {
+      try {
+        await file.writeFile(JSON.stringify(prefs));
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(temp, path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+  }
 }

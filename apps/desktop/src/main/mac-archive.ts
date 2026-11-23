@@ -23,6 +23,8 @@ function sourcePathError(error: NodeJS.ErrnoException): never {
 export async function holdMacArchive(
   proof: VerifiedArtifact,
   signal?: AbortSignal,
+  /** Told the error code when the private copy's folder can't be removed. */
+  cleanupFailed: (code: string) => void = () => {},
 ): Promise<HeldMacArchive> {
   signal?.throwIfAborted();
   const source = await open(
@@ -85,7 +87,13 @@ export async function holdMacArchive(
         }
       } finally {
         // A folder left behind is removed with the update folder later; it never changes the result.
-        await rm(scratch, { recursive: true, force: true }).catch(() => {});
+        await rm(scratch, { recursive: true, force: true }).catch((error: unknown) => {
+          const code = (error as { code?: unknown } | null)?.code;
+          const name =
+            typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? code : "unknown";
+          console.error(`Couldn't remove the private copy of the update (${name})`);
+          cleanupFailed(name);
+        });
       }
     } finally {
       await source.close();

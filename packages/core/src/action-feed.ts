@@ -5,7 +5,7 @@
 // breaks the fold; reasoning is not shown, so it breaks nothing, and belongs
 // to the next action, else to the reply that follows, else to the run's end.
 
-import { RUN_LINE, durationWords } from "./action-words.ts";
+import { KIND_PHRASES, PHRASES, RUN_LINE, durationWords } from "./action-words.ts";
 import { sha256Hex, utf8Bytes } from "./bytes.ts";
 import {
   isOpenOutcome,
@@ -61,6 +61,11 @@ export type FeedGroup<R> =
   /** Reasoning over a reply (`reply`), or at the end of a run with neither an action nor a reply after it. */
   | { type: "thought"; key: string; thought: Thought; place: "reply" | "end" };
 
+/** Several "Thought" lines as one: their segments in order, their durations added (7.11). */
+export function mergeThoughts(thoughts: Thought[]): Thought {
+  return thoughtOf(thoughts.flatMap((t) => t.segments));
+}
+
 function thoughtOf(segments: ThoughtSegment[]): Thought {
   const spans = segments.map((s) =>
     s.startedAt !== null && s.endedAt !== null && s.endedAt >= s.startedAt
@@ -88,6 +93,12 @@ export function groupFeed<R>(entries: FeedEntry<R>[], ctx: ReadingContext = {}):
       const next = entries[j]!;
       if (next.type === "action" || next.type === "card") {
         target = j;
+        break;
+      }
+      // Without commands shown, the bot's words end a stretch of thinking: reasoning before them
+      // is their Thought line, so it never shows after the words it came before (7.11).
+      if (next.type === "bubble" && ctx.quiet) {
+        bubble = j;
         break;
       }
       if (next.type === "bubble" && bubble === null) bubble = j;
@@ -361,6 +372,19 @@ export function phraseCall(calls: ActionCall[], ctx: ReadingContext = {}): Actio
 /** The status line's phrase from an action: its running words, or "Reviewing a command". */
 export function phraseLine(call: ActionCall, ctx: ReadingContext = {}): ActionLine {
   return lineOf(call, ctx);
+}
+
+/**
+ * The status line's phrase for a running action while "Show commands" is off
+ * (7.11): what the bot is doing, by the action's kind ("Using the computer",
+ * "Reading files"), never the call. A message to a bot or to T3 Code keeps
+ * its card's words ("Messaging Juniper"); a command under review says so.
+ */
+export function kindPhrase(call: ActionCall, ctx: ReadingContext = {}): string {
+  const line = lineOf(call, { ...ctx, quiet: true });
+  if (line.outcome === "review") return PHRASES.reviewing;
+  if (line.kind === "message" || line.kind === "t3") return line.running;
+  return KIND_PHRASES[line.kind];
 }
 
 // What retention left out --------------------------------------------------------------

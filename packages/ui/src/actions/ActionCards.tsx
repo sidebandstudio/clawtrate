@@ -451,6 +451,14 @@ function ActionDetail({ call }: { call: ActionCall }) {
     event.preventDefault();
     choose(next, true);
   };
+  // Without commands shown there is no Raw: the readable view alone (7.11).
+  if (env.ctx.quiet)
+    return (
+      <div className="step-body" data-view="readable">
+        <StepFileLinks callId={call.id} />
+        <Readable call={call} env={env} />
+      </div>
+    );
   const tab = (key: string, label: string) => (
     <button
       type="button"
@@ -860,15 +868,51 @@ export function ThoughtLine({
 
 // The run line -------------------------------------------------------------------------
 
+/**
+ * "4 actions": the action cards of history that names no run, behind one line
+ * of their own while commands are not shown (7.11). Kept open as a run line is.
+ */
+export function ActionsLine({
+  id,
+  count,
+  children,
+}: {
+  id: string;
+  count: number;
+  children: ReactNode;
+}) {
+  const env = useActionEnv();
+  const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(id), false);
+  const words = actionWords.RUN_LINE.actions(count);
+  return (
+    <details
+      className="run-line"
+      data-testid="run-line"
+      data-run={id}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="event-line" aria-label={words}>
+        <span className="run-count">{words}</span>
+        <ChevronIcon className="chevron" />
+      </summary>
+      <div className="run-actions">{children}</div>
+    </details>
+  );
+}
+
 /** "Worked for 1m 12s · 14 actions", after everything the run put in the transcript (7.7). */
 export function RunLineView({
   runId,
   line,
   model,
+  children,
 }: {
   runId: string;
   line: RunLine;
   model: string | null;
+  /** Without commands shown, the run's action cards, its list (7.11). */
+  children?: ReactNode;
 }) {
   const env = useActionEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
@@ -907,6 +951,7 @@ export function RunLineView({
         ))}
         <ChevronIcon className="chevron" />
       </summary>
+      {children && <div className="run-actions">{children}</div>}
       <p className="run-record">
         <span>{record}</span>
         <span aria-hidden="true">·</span>

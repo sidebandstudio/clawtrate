@@ -20,6 +20,8 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
+  "apps/desktop/src/main/mac-install.ts:RESULTS": "static, the helper's eight result lines",
+  "apps/desktop/src/main/mac-install.ts:HELPER_STEPS": "static, the helper's eleven step names",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
   "packages/core/src/computer.ts:BUSY_REASONS": "static, the plugin's five busy codes",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
@@ -34,6 +36,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/file-paths.ts:filePathsOf>paths":
     "one call's paths, at most `MAX_STEP_PATHS`, returned to the caller",
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
+  "packages/core/src/pictures.ts:SIGNATURES.image/png": "static, one byte signature",
+  "packages/core/src/pictures.ts:SIGNATURES.image/jpeg": "static, one byte signature",
+  "packages/core/src/pictures.ts:SIGNATURES.image/gif": "static, two byte signatures",
+  "packages/core/src/pictures.ts:SIGNATURES.image/webp": "static, one byte signature",
   "packages/core/src/files.ts:PICTURE_EXTENSIONS": "static, nine extensions",
   "packages/core/src/files.ts:AUDIO_EXTENSIONS": "static, nine extensions",
   "packages/core/src/files.ts:VIDEO_EXTENSIONS": "static, six extensions",

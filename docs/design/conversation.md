@@ -6,7 +6,7 @@ The behaviour these components must have is checked by `docs/parity.md`. This do
 
 One rule sits above the rest: **no label claims more than the gateway has reported.** A card says "Sent" when an event says the message was accepted, not when the call started. An approval's outcome says the command can run, not that it ran. While the connection is down, nothing on screen looks live.
 
-A second rule sits beside it: **the conversation reads at the level of what a bot did.** Every action is a plain-words card a person can follow without opening anything; reasoning stays folded away, and the raw call is one step further (section 7).
+A second rule sits beside it: **the conversation is what a bot says and what it is thinking.** By default a run shows one plain-words status line while it works, with the bot's thinking under it, and one compact line after it that opens to its actions as plain-words cards; raw commands and calls stay hidden unless the person turns on "Show commands" (7.11). With "Show commands" on, every action is a card in the conversation, with the raw call one step further, as sections 7.1 to 7.10 describe.
 
 The prototype shows all of it: `prototype/gallery.html` has every component in every state, and `prototype/conversation.html` plays one scripted turn inside the shell, and three more runs that test the action cards (`?scene=short`, `?scene=long`, `?scene=thought`). The styles are in `prototype/css/conversation.css` and the markup in `prototype/js/components.js`, one function per component.
 
@@ -18,7 +18,7 @@ The prototype shows all of it: `prototype/gallery.html` has every component in e
 4. The state avatar
 5. The status line
 6. Streaming text and message captions
-7. What a bot did: action cards
+7. What a bot did: action cards, and the default view (7.11)
 8. The kinds of action
 9. Raw: what the gateway sent
 10. The Messaged card
@@ -255,8 +255,8 @@ Phrases are in the user's language, have no bot name in front and no trailing el
 **Input.**
 
 - Hover: the full phrase as a tooltip, for when it is truncated. (F-087)
-- Click, tap or Enter: brings the running action's card into view and moves focus to its line, without opening it (7.8). With no action running, it does nothing and says so in its name.
-- Accessible name: "Otto, working: Reading backup-2026-11-15.log. Show the action." With nothing running: "Otto, thinking. Nothing running to show."
+- Click, tap or Enter: brings the running action's card into view and moves focus to its line, without opening it (7.8). With nothing to bring into view (no action running, or no card while "Show commands" is off, 7.11) the line is not a button and not a tab stop: a plain line with no hover.
+- Accessible name: "Otto, working: Reading backup-2026-11-15.log. Show the action." With nothing to bring into view, the state and the phrase: "Otto, thinking.", "Otto, working: Using the computer."
 - Screen readers hear lifecycle changes through the announcer (section 2), not every phrase.
 
 ## 6. Streaming text and message captions
@@ -279,7 +279,7 @@ A message that has not been sent is never drawn in your colour and never dimmed:
 
 ## 7. What a bot did: action cards
 
-The conversation reads at the level of what a bot did (`AGENTS.md`, F-488). Every action a bot takes is a card in the transcript, at the moment it happened: one line with a verb, what it acted on, and its state. A person follows a run by reading those lines between the bot's own bubbles, without opening anything. Reasoning stays out of sight until it is opened, and the raw call is one step further, behind each card.
+With "Show commands" on (7.11), the conversation reads at the level of what a bot did (`AGENTS.md`, F-488). Every action a bot takes is a card in the transcript, at the moment it happened: one line with a verb, what it acted on, and its state. A person follows a run by reading those lines between the bot's own bubbles, without opening anything. Reasoning stays out of sight until it is opened, and the raw call is one step further, behind each card.
 
 The Messaged card (section 10) and the Messaged T3 Code card (section 11) are two members of this family. Every other kind of action takes their form, and section 8 lists the kinds.
 
@@ -491,6 +491,26 @@ The status line and the cards say the same thing at the same moment, in the same
 A connection on the read tier sees the same cards. A client that did not start a run receives its tool events, with their arguments and results, once it subscribes to the session, so a card for a run started elsewhere, or watched on a read-only connection, is as full as one this device started. There is no reduced form of any card.
 
 What the read tier changes is only what section 3 says: approvals and questions are not sent to it. So a call waiting for approval shows "Waiting for approval" from the run's own lifecycle event, without the approval card, and the question a bot asks shows as the action card "Asked you a question" (section 8) with its text from the call's arguments, and the note "This device can't answer it on a read-only connection." with "Request access".
+
+### 7.11 The default: what the bot says and thinks
+
+The owner's direction: a person cares about what the bot says and what it is thinking, not the commands it runs. So by default, with "Show commands" off, the conversation shows the bot's words and its thinking, and the cards of 7.1 to 7.10 move one level in. (F-528 to F-532)
+
+**At level 0** are your bubbles, the bot's bubbles (its progress text, the text beside a call and its reply), approval and question cards, turn errors and notes, the Messaged and T3 Code cards, "Thought" lines, the status line while the run is active and the run line once it has ended. Anything that needs the person or went wrong stays in view too: an action that waits for approval, failed, was blocked or refused, or could not be done (`staysInView` in `packages/core/src/actions.ts`) keeps its plain-words card at its place, live and after the run, and a fold with such a member keeps the whole fold. No other action card, fold or gap line is at level 0. (F-528)
+
+**While a run works**, the status line's phrase says the kind of work, not the call: "Thinking", "Using the computer" (a command, a terminal, the computer), "Reading files", "Editing files", "Searching the web", "Reading the web", "Using the browser", "Searching memory", "Saving to memory", "Planning", "Making media", "Sending a message", "Using tools". A message to a bot or to T3 Code keeps its card's words, "Messaging Juniper". A command under review is "Reviewing a command"; the other rows of section 5 (waiting, retries, stopping, the connection) are unchanged. The words are `KIND_PHRASES` in `packages/core/src/action-words.ts`. An action has no card in view, so the line is a plain line, not a button or a tab stop, and its name says only the state and the phrase (section 5, Input). A message to a bot or to T3 Code is the exception: its Messaged card is always in view, so the line stays the button that brings that card into view. (F-529)
+
+**What the bot is thinking** shows as it thinks: while the run's latest step is reasoning and no reply text has come after it, its text is under the status line, aligned with the phrase, 13 px, `--text-muted`, 62 characters wide, ending on its latest words (the last 280 characters, from a word's start, after "…"). It shows its last three lines: the text sits at the bottom of a box three lines tall, so what does not fit is cut at the top, never the newest words. It goes when an action starts or the reply streams; the reasoning is then a "Thought" line in the conversation. (F-529)
+
+**"Thought" lines.** Reasoning stays where it was in the run. Reasoning that led to actions is drawn as one "Thought" line at their place, one for each stretch between the bot's words, merged with the reasoning over a reply when they meet; it leaves the cards, so it is never drawn twice. Unlike 7.5, a stretch ends at the bot's words: reasoning before a bubble is that bubble's "Thought" line, even when an action comes after the bubble, so it never shows below the words it came before. A card kept in view keeps the reasoning that led to it inside, as 7.5 says. Folded, as 7.5 says.
+
+**After the run**, the run line of 7.7 opens to the run's other actions as the cards and folds of 7.2 to 7.4, in order, with no bubble between them, and then to its record. History that names no run has no run line, so its actions sit behind a line of their own, "4 actions", after the item that holds them. Showing a step in the chat from the Work pane opens the line that holds it; a step of a run still working is not in the conversation yet, and the note says "This step shows in the chat when the turn ends." (F-530)
+
+**Plain words inside.** Without "Show commands" a card names a command "a command": "Ran a command", "Running a command", "Couldn't run a command", "Ran 3 commands". It shows no command line, no program name and no exit code; a fold of commands lists none. Opened, a card shows its readable view alone, with no Raw tab: where a command ran and what came back, but not the command, its folder or its exit code. The text the gateway returns is read the same way: its closing "(Command exited with code 1)" is left out, and a denial's "Exec denied (…): <command>" ends at the colon. A command a policy blocked reads "Blocked by policy", with nothing after it. Nothing else offers Raw either: a "Thought" line, an approval or question card, and a Messaged or T3 Code card have no Raw button. An approval card still names the exact command it asks about, because the person must see what they approve. (F-530, F-531)
+
+**No text twice.** A message on a channel (row 23 of 8.1) whose text is the same as a reply the same run draws (trimmed at its ends, with its line breaks and indents as they are) leaves out only that text: "Message on a conversation · Sent", or "… to the survey office", not the text again above the reply that says it. The recipient stays, and so does a failure's or a refusal's reason. This holds with "Show commands" on too. (F-532)
+
+**"Show commands"** is a switch in Settings → Conversation, off by default, kept on the device like the theme (`clawtrate.commands`; `?commands=show` sets it for the fixture). On, all of this section except "No text twice" is undone: each action is its card at level 0, the status line says the running card's words and brings it into view, Raw is back, and the Computer tab lists command lines (`work-pane.md`, "Recent actions and commands"). It changes at once in every open view. (F-531)
 
 ## 8. The kinds of action
 
