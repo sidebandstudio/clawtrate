@@ -717,11 +717,13 @@ test("F-476 F-490: an account only another bot keeps is no account for this bot,
     agents: { entries: { second: { model: { primary: "acme/dev-1@acme:studio" } } } },
   });
   try {
+    // Opening the Account page reads Second's model again, after the patch above. No "Check now"
+    // here: that read can land first, and the No account page it brings has no such button.
     const settings = await accountPage();
-    await settings.getByRole("button", { name: "Check now" }).click();
+    // This instance isn't seeded, so Otto has no name of its own and is shown by its id.
     await expect(
       settings.getByText(
-        "No account. Second's account, Acme · Studio, is kept by Otto only, so Second can't use it.",
+        "No account. Second's account, Acme · Studio, is kept by otto only, so Second can't use it.",
         { exact: false },
       ),
     ).toBeVisible({ timeout: 20_000 });

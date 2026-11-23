@@ -922,6 +922,30 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     client.stop();
   });
 
+  it("leaves another bot's identity, settings and files exactly as they were, after Create and after Finish", async () => {
+    const { client, fake } = await accountsClient();
+    fake.seedWorkspace("otto");
+    fake.files.get("otto")!.set("IDENTITY.md", "# IDENTITY.md - Who Am I?\n\n- Name: Otto\n");
+    const otto = () =>
+      JSON.stringify({
+        bot: fake.bots.find((each) => each.id === "otto"),
+        entry: (fake.config.agents as { entries: Record<string, unknown> }).entries.otto,
+        files: [...fake.files.get("otto")!],
+      });
+    const before = otto();
+    const named = () =>
+      [...fake.gateway.calls("agents.files.get"), ...fake.gateway.calls("agents.files.set")].map(
+        (call) => (call as { agentId: string }).agentId,
+      );
+    fake.failFileSet = "workspace unavailable";
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: ["identity"] });
+    expect(otto()).toBe(before);
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    expect(otto()).toBe(before);
+    expect(new Set(named())).toEqual(new Set(["viral"]));
+    client.stop();
+  });
+
   it("names the bot, and names a picture only when one was chosen, in lines the gateway reads", () => {
     expect(identityFile("  Maple \n Leaf ", false)).toBe(
       "# IDENTITY.md - Who Am I?\n\n- **Name:** Maple Leaf\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n",
