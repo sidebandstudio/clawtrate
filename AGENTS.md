@@ -12,7 +12,7 @@ This file is for the coding agents and the people who change Clawtrate. Claude C
 
 Every commit, pull request title and body, and issue is published the moment it is pushed. Never put any of these in them: secrets or tokens, private hostnames or IP addresses, usernames or home-directory paths, email addresses, personal data, the names or conversations of anyone's real bots, or third-party images and copied assets. Read the diff, the title and the body for these before every push.
 
-Public text describes Clawtrate on its own terms. It does not name another product as what a feature is modelled on. Naming what Clawtrate works with, such as OpenClaw, model providers and T3 Code, is fine.
+Public text describes Clawtrate on its own terms. It never describes a feature as matching, copying or improving on another product, whether that product is named or not. Naming what Clawtrate works with, such as OpenClaw, model providers and T3 Code, is fine.
 
 ### The user's gateway is theirs
 
