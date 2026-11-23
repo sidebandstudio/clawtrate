@@ -19,6 +19,7 @@ type Fixture = {
   clawtrateFixture: {
     sent: Array<{ type: string }>;
     setState(change: (state: ClawtrateState) => ClawtrateState): void;
+    getState(): ClawtrateState;
   };
 };
 const sent = (page: Page) =>
@@ -62,7 +63,14 @@ test.describe("bot name behaviour", () => {
       await page.keyboard.press("Shift+Tab");
     await expect(rename).toBeFocused();
     await page.keyboard.press("Enter");
-    expect(await sent(page)).toEqual([{ type: "acceptBotName", botId: "new-bot", name: "Johnny" }]);
+    // Bound to the gateway the card was read on: the one the fixture is connected to.
+    const gateway = await page.evaluate(
+      () => (window as unknown as Fixture).clawtrateFixture.getState().connection.gatewayId,
+    );
+    expect(gateway).toMatch(/^[0-9a-f]+$/);
+    expect(await sent(page)).toEqual([
+      { type: "acceptBotName", botId: "new-bot", name: "Johnny", gatewayId: gateway },
+    ]);
     await expect(card(page)).toHaveCount(0);
     await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
     await expect(
@@ -106,5 +114,11 @@ test.describe("bot name behaviour", () => {
     );
     await expect(card(page).locator(".name-card-name")).toHaveText(name);
     await expect(card(page).locator("img, b")).toHaveCount(0);
+    // A name is isolated wherever it shows, so a right-to-left one can't reorder the words around it.
+    await expect(card(page).locator("bdi.name-card-name")).toHaveCount(1);
+    await expect(page.locator("bdi.title-pill-name")).toHaveText("New bot");
+    await expect(
+      page.getByTestId("bot-list").locator("bdi.bot-name").filter({ hasText: "New bot" }),
+    ).toHaveCount(1);
   });
 });

@@ -12,7 +12,7 @@
       - button "New bot, 1 task":
         - text: New bot
         - time: 5:35 PM
-        - text: Johnny it is. Saved, so I'll remember.
+        - text: Johnny it is. It shows once you confirm it in Clawtrate.
     - listitem:
       - button "Juniper, 3 tasks, unread, research, primary bot":
         - text: Juniper research
@@ -40,7 +40,6 @@
   - button "Show work panel"
   - region "Transcript":
     - heading "Main" [level=1]
-    - paragraph: "Context: unavailable"
     - text: Today 5:35 PM
     - paragraph: can i name u
     - toolbar "Message actions":
@@ -51,7 +50,7 @@
     - paragraph: Johnny
     - toolbar "Message actions":
       - button "More"
-    - paragraph: Johnny it is. Saved, so I'll remember.
+    - paragraph: Johnny it is. It shows once you confirm it in Clawtrate.
     - toolbar "Message actions":
       - button "More"
     - group: Worked 2 actions

@@ -4,7 +4,6 @@
   - button "Show work panel"
   - region "Transcript":
     - heading "Main" [level=1]
-    - paragraph: "Context: unavailable"
     - text: Today 5:35 PM
     - paragraph: can i name u
     - toolbar "Message actions":
@@ -21,7 +20,7 @@
       - button "Add a reaction"
       - button "Reply in a thread"
       - button "More"
-    - paragraph: Johnny it is. Saved, so I'll remember.
+    - paragraph: Johnny it is. It shows once you confirm it in Clawtrate.
     - toolbar "Message actions":
       - button "Add a reaction"
       - button "Reply in a thread"
@@ -30,7 +29,7 @@
     - status
   - region "A new name for New bot":
     - paragraph: New bot would like to be called “Johnny”
-    - paragraph: It wrote this name for itself. Rename saves it on the gateway, where Clawtrate reads it.
+    - paragraph: It wrote this name for itself. Rename changes its name everywhere it shows.
     - button "Rename"
     - button "Not now"
   - button "Attach files"
