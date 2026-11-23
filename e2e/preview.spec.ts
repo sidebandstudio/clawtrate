@@ -267,9 +267,12 @@ test.beforeEach(() => {
 // eslint-disable-next-line no-empty-pattern
 test.afterEach(async ({}, testInfo) => {
   test.setTimeout(testInfo.timeout + 120_000);
-  for (const stop of ownHosts) await stop();
-  if (testInfo.status !== testInfo.expectedStatus) await leaveIdle(gatewayCall, checkStarted);
-  for (const made of madeTasks) await removeTask(made);
+  try {
+    for (const stop of ownHosts) await stop();
+    if (testInfo.status !== testInfo.expectedStatus) await leaveIdle(gatewayCall, checkStarted);
+  } finally {
+    for (const made of madeTasks) await removeTask(made);
+  }
 });
 
 /**
