@@ -301,6 +301,20 @@ describe("signing", () => {
       expect(windowsSignature(`checked 1\n0 800b0109 - ${SIGNER}\n`)).toEqual(invalid);
     });
 
+    it("refuses a passing signature that names no digest algorithm, beside a SHA-256 one", () => {
+      const missing = (index: number) =>
+        dual("800b0109").replace(
+          `\n${index} 800b0109 ${index === 0 ? SHA1 : SHA256} `,
+          `\n${index} 800b0109 - `,
+        );
+      expect(missing(0)).toContain("\n0 800b0109 - ");
+      expect(windowsSignature(missing(0))).toEqual(invalid);
+      expect(windowsSignature(missing(1))).toEqual(invalid);
+      expect(
+        windowsSignature(`checked 2\n0 00000000 - ${SIGNER}\n1 00000000 ${SHA256} ${SIGNER}\n`),
+      ).toEqual(invalid);
+    });
+
     it("refuses anything but one complete reading", () => {
       for (const output of [
         "",

@@ -235,9 +235,10 @@ const INVALID: WindowsSignature = { kind: "invalid", signer: null };
 /**
  * What authenticode.ps1 says of a file. A file without an embedded signature is
  * `none`. A signed file is `certificate` when each embedded signature verifies, or
- * fails only on a root this machine does not trust, all name one signer, and one
- * is SHA-256. electron-builder signs each file twice, SHA-1 and then SHA-256
- * nested in it, so both must pass. Any other result, such as an expired or
+ * fails only on a root this machine does not trust, names its digest algorithm,
+ * all name one signer, and one is SHA-256. A file signed twice, as electron-builder
+ * does by default (SHA-1, then SHA-256 nested in it), passes only when both
+ * signatures do. Any other result, such as an expired or
  * distrusted certificate or a file changed after signing, is invalid, and so is
  * output that is not exactly one complete reading.
  */
@@ -261,7 +262,9 @@ export function windowsSignature(output: string): WindowsSignature {
   const passes =
     signatures.every(
       (each) =>
-        (each.result === VERIFIED || each.result === UNTRUSTED_ROOT) && each.signer === signer,
+        (each.result === VERIFIED || each.result === UNTRUSTED_ROOT) &&
+        each.digest !== "-" &&
+        each.signer === signer,
     ) && signatures.some(({ digest }) => digest === SHA256);
   return passes ? { kind: "certificate", signer } : INVALID;
 }
