@@ -5494,11 +5494,15 @@ export class ClawtrateClient {
   }
 
   /** A picture the bot handed over in the task (`pictures.ts`), sharing the file reads' limit. */
-  readChatPicture(
+  async readChatPicture(
     key: string,
     artifactId: string,
     options: FileReadOptions = {},
   ): Promise<ChatPictureRead> {
+    // A turn hands over up to four pictures and a task can hold several such turns, all drawn
+    // at once: a picture waits up to 30 s for one of the file reads' places instead of failing.
+    for (let waited = 0; this.fileReads >= MAX_FILE_READS && waited < 300; waited += 1)
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
     const gatewayUrl = this.state.connection.gatewayUrl ?? "";
     return this.fileRead(
       (ctx) =>
@@ -7308,12 +7312,6 @@ export class ClawtrateClient {
   }
 
   /**
-   * Apply a `sessions.changed` event with the same membership rules as the list.
-   * A known row is merged and re-checked. An unknown row whose key is not ruled
-   * out cannot prove membership from the payload, so the filtered list is
-   * re-read instead of inserting it.
-   */
-  /**
    * A `sessions.changed` with `phase: "message"` for an open task: a message of it
    * changed in place. The gateway writes a picture a turn hands over into its
    * message after the turn ends, with no `session.message`, so history is read again.
@@ -7324,6 +7322,12 @@ export class ClawtrateClient {
     if (row?.phase === "message" && key && this.tracked(key)) this.scheduleHistory(key);
   }
 
+  /**
+   * Apply a `sessions.changed` event with the same membership rules as the list.
+   * A known row is merged and re-checked. An unknown row whose key is not ruled
+   * out cannot prove membership from the payload, so the filtered list is
+   * re-read instead of inserting it.
+   */
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.discoveryRead) this.discoveryRead.sessionsChanged = true;
     this.noteRunChange(payload);

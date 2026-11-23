@@ -195,7 +195,7 @@ A picture a bot makes with `image_generate` arrives in a turn the gateway runs b
 - The picture is drawn under that turn, from the bytes the host read through `artifacts.download`, as [Addresses a gateway hands the client](#addresses-a-gateway-hands-the-client) allows (`packages/core/src/pictures.ts`). The block's own `url` and `openUrl` are not kept in the state.
 - Its text alternative is the description of the `image_generate` call whose task the turn's run id names, when that call is in the transcript. The gateway's `alt` is the file name it gave the picture, so it is not used.
 - The gateway can write the block into the message after the turn ends. It then sends `sessions.changed` with `phase: "message"` and no `session.message`, so the client reads an open task's history again on that event.
-- A picture is read each time its turn is drawn, within the file reads' gate (`MAX_FILE_READS`), and its bytes go to the viewer as a file transfer (`fileTransfers`). Nothing else of it is kept. The iPhone app does not draw pictures yet.
+- A picture is read each time its turn is drawn, waiting for a place in the file reads' gate (`MAX_FILE_READS`), and its bytes go to the viewer as a file transfer (`fileTransfers`). Nothing else of it is kept. The iPhone app does not draw pictures yet.
 
 ## The reading of an action
 

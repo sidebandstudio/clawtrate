@@ -126,6 +126,16 @@ describe("F-519: a picture in history", () => {
     expect(items[1]!.pictures).toBeUndefined();
   });
 
+  it("F-519: a turn whose message is only the picture still shows it", () => {
+    const only = rows();
+    only[3]!.content = [imageBlock];
+    expect(
+      mapHistory(only)
+        .at(-1)!
+        .pictures?.map((each) => each.artifactId),
+    ).toEqual([ARTIFACT]);
+  });
+
   it("F-519: an image block the gateway holds no artifact for is not a picture, and a turn of another run names no description", () => {
     const { artifactId: _, ...bare } = imageBlock;
     expect(mapHistory(rows(bare)).at(-1)!.pictures).toBeUndefined();
@@ -217,6 +227,44 @@ describe("F-519: reading a picture", () => {
     });
   });
 
+  it("F-519: JPEG, GIF and WebP are shown when their bytes start as their type's, and not otherwise", async () => {
+    const answer = { url: ISSUED, expiresAt: LATER };
+    const cases: Array<[string, number[], boolean]> = [
+      ["image/jpeg", [0xff, 0xd8, 0xff, 0xe0], true],
+      ["image/gif", [...ascii("GIF87a")], true],
+      ["image/gif", [...ascii("GIF89a")], true],
+      ["image/webp", [...ascii("RIFF"), 1, 2, 3, 4, ...ascii("WEBP")], true],
+      ["image/webp", [...ascii("RIFF"), 1, 2, 3, 4, ...ascii("WAVE")], false],
+      ["image/jpeg", [...PNG], false],
+    ];
+    for (const [type, bytes, shown] of cases) {
+      const { ctx } = context(answer, () =>
+        response(200, { "content-type": type }, [new Uint8Array(bytes)]),
+      );
+      expect((await readChatPicture(ctx, KEY, ARTIFACT)).status, type).toBe(
+        shown ? "content" : "failed",
+      );
+    }
+  });
+
+  it("F-519: a refused redirect and an unreachable gateway each say so in a fixed sentence that names no address", async () => {
+    const answer = { url: ISSUED, expiresAt: LATER };
+    const redirect = context(answer, () => {
+      throw new TypeError("fetch failed", { cause: new Error("unexpected redirect") });
+    });
+    expect(await readChatPicture(redirect.ctx, KEY, ARTIFACT)).toEqual({
+      status: "failed",
+      message: "The gateway sent this picture somewhere else, and Clawtrate doesn't follow that.",
+    });
+    const down = context(answer, () => {
+      throw new TypeError(`Failed to parse URL from http://127.0.0.1:19540${ISSUED}`);
+    });
+    expect(await readChatPicture(down.ctx, KEY, ARTIFACT)).toEqual({
+      status: "failed",
+      message: "The gateway couldn't be reached for this picture.",
+    });
+  });
+
   it("F-519: a host that can't fetch fetches nothing, and says so", async () => {
     const { ctx, asked } = context({ url: ISSUED, expiresAt: LATER }, png);
     expect(await readChatPicture({ ...ctx, fetch: null }, KEY, ARTIFACT)).toEqual({
@@ -258,6 +306,19 @@ describe("F-519: the client", () => {
     setHistory(rows());
     gateway.emit("sessions.changed", { sessionKey: KEY, phase: "message", updatedAt: 2 });
     await until(() => client.state.transcripts[KEY]!.items.some((item) => item.pictures));
+    client.stop();
+  });
+
+  it("F-519: more pictures than the file reads' places wait their turn and all show", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { client } = await open(async () => {
+      await held;
+      return png();
+    });
+    const reads = Array.from({ length: 6 }, () => client.readChatPicture(KEY, ARTIFACT));
+    setTimeout(release, 50);
+    expect((await Promise.all(reads)).map((read) => read.status)).toEqual(Array(6).fill("content"));
     client.stop();
   });
 

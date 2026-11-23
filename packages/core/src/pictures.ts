@@ -180,10 +180,13 @@ export async function readChatPicture(
       transfer: ctx.transfers.start(ctx.owner, bytes, ctx.maxChars),
     };
   } catch (error) {
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
     return failed(
       controller.signal.aborted
         ? "The picture took too long to arrive."
-        : `The picture couldn't be loaded: ${error instanceof Error ? error.message : String(error)}`,
+        : cause === "unexpected redirect"
+          ? "The gateway sent this picture somewhere else, and Clawtrate doesn't follow that."
+          : "The gateway couldn't be reached for this picture.",
     );
   } finally {
     clearTimeout(timer);

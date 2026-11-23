@@ -3,7 +3,7 @@
 // LiteLLM image provider calls (`POST <baseUrl>/images/generations`, JSON
 // `{model, prompt, n, size}`), with one fixed picture this file draws. No
 // picture comes from anywhere else and nothing leaves the machine
-// (docs/research/image-generation.md on the r5-image-tool-research branch).
+// (docs/research/image-generation.md, research in #172).
 
 import { crc32, deflateSync } from "node:zlib";
 
