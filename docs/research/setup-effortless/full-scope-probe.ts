@@ -7,7 +7,8 @@
 //   pnpm dev-gateway start --instance <remote> --no-seed
 //   node docs/research/setup-effortless/full-scope-probe.ts <experiment> --instance <name>
 //
-// It acts only on a named development instance this checkout started. The
+// It acts only on a named development instance this checkout started, and its one
+// write to the instance's files (`tls`) passes the tool's ownership guard first. The
 // address and the shared token are read from that instance's own
 // `openclaw.json` (as the design reads a real one), never from `~/.openclaw`.
 // `openclaw` runs only through the development tool's guarded runner, so
@@ -72,9 +73,20 @@ if (!values.instance) throw new Error("--instance <name> is required; the defaul
 const inst = openInstance(values.instance);
 const localPairing = recordedStartOptions(inst).defaultLocalPairing === true;
 
+// The instance's own paths, from the development tool: the folder its guard checks.
+const { stateDir, configPath } = inst;
+
+/**
+ * Refuse unless this checkout owns the instance and its running gateway: the same
+ * guard (`OpenclawRunner.refusal`) that every OpenClaw subprocess passes. Run before
+ * any write to the instance's files, so a probe never changes another checkout's gateway.
+ */
+function assertOwnedFor(action: string) {
+  const reason = inst.runner.refusal();
+  if (reason) throw new Error(`${action} refused, nothing changed: ${reason}`);
+}
+
 // --- the config file, read as the design reads it ------------------------------
-const stateDir = join(process.env.HOME!, `.openclaw-clawtrate-dev-${values.instance}`);
-const configPath = join(stateDir, "openclaw.json");
 const configMode = (statSync(configPath).mode & 0o777).toString(8);
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
   gateway?: { port?: number; bind?: string; auth?: { mode?: string; token?: unknown } };
@@ -562,8 +574,11 @@ async function exec() {
 async function tls() {
   says();
   if (!localPairing) throw new Error("`tls` needs an instance started with --default-local-pairing");
+  assertOwnedFor(`turning on gateway.tls in ${configPath}`);
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as { gateway: Record<string, unknown> };
   raw.gateway.tls = { enabled: true };
+  // Checked again just before the write: the run record can change while the file is read.
+  assertOwnedFor(`turning on gateway.tls in ${configPath}`);
   writeFileSync(configPath, JSON.stringify(raw, null, 2), { mode: 0o600 });
   say("set gateway.tls.enabled in", configPath, "(this development instance only)");
   const certPath = join(stateDir, "gateway", "tls", "gateway-cert.pem");

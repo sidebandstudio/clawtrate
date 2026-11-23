@@ -10,7 +10,7 @@
   const go = (to, extra = {}) => {
     const next = new URLSearchParams(location.search);
     next.set("screen", to);
-    for (const key of ["warn", "tab", "typed", "result"]) next.delete(key);
+    for (const key of ["warn", "tab", "typed", "result", "from"]) next.delete(key);
     for (const [key, value] of Object.entries(extra)) next.set(key, value);
     return `setup-effortless.html?${next}`;
   };
@@ -61,8 +61,14 @@
       .map(([words, name, tone]) => `<li${tone ? ` data-tone="${tone}"` : ""}><span>${words}</span><code>${name}</code></li>`)
       .join("") +
     `</ul>`;
-  const consent = () =>
-    `<p class="se-full-line">${CONSENT} <a href="#what-this-means">What this means</a></p>`;
+  // The link opens the short "What this means" page of setup-effortless.md §2, and its
+  // Back returns to the card it came from.
+  const consent = () => {
+    const from = params.get("screen") || "found";
+    const extra = { from };
+    if (params.get("tab")) extra.tab = params.get("tab");
+    return `<p class="se-full-line">${CONSENT} <a href="${go("means", extra)}">What this means</a></p>`;
+  };
   const otherRow = () =>
     `<ul class="b-choices" aria-label="Or">` +
     `<li><a class="b-choice" href="${go("another")}"><span class="b-choice-text"><span class="b-choice-title">Another computer</span>` +
@@ -101,6 +107,28 @@
       `<a class="button se-wide" data-size="lg" href="${go("settings")}">Look again</a>` +
       `</div>` +
       otherRow(),
+
+    // "What this means", from the consent line on every card that pairs.
+    means: () => {
+      const from = params.get("from") === "another" ? "another" : "found";
+      const backTo = params.get("tab") ? go(from, { tab: params.get("tab") }) : go(from);
+      return (
+        `<div class="s-top"><a class="button" data-variant="quiet" data-size="sm" href="${backTo}" data-back>${icon("back")}Back</a></div>` +
+        mark() +
+        `<section id="what-this-means" aria-labelledby="se-means-title">` +
+        `<h2 class="s-title" id="se-means-title" tabindex="-1">What full control means</h2>` +
+        lede(CONSENT) +
+        `<ul class="se-means">` +
+        `<li>The terminal runs as the gateway's user and inherits that process's environment. It is on by default, within the gateway's and the sandbox's limits.</li>` +
+        `<li>Disconnecting this device leaves its pairing on the gateway. Removing it (Settings, Gateway, Devices, from another admin device) ends that pairing.</li>` +
+        `<li>If this device is lost, remove it from another admin connection.</li>` +
+        `<li>If the shared token leaked, rotate it on the gateway and review the other paired devices.</li>` +
+        `<li>Protecting this app's data limits copies made from backups and app files. It doesn't protect a computer that is already compromised.</li>` +
+        `</ul>` +
+        scopeList() +
+        `</section>`
+      );
+    },
 
     connecting: () =>
       mark() +
@@ -257,14 +285,53 @@
       if (!approve.disabled) location.href = go("approve", { result: "approved" });
     });
     update();
+    // The prompt is modal: everything else in the app is inert, Tab and Shift+Tab stay
+    // inside it, and Escape ("Not now") closes it in place and returns focus.
+    const dialog = document.querySelector(".se-prompt");
+    const over = document.getElementById("setup-over");
+    if (dialog && over) {
+      const prior = document.activeElement;
+      const behind = [...document.getElementById("root").children].filter((el) => el !== over);
+      for (const el of behind) el.inert = true;
+      const close = () => {
+        document.removeEventListener("keydown", keys);
+        for (const el of behind) el.inert = false;
+        over.innerHTML = "";
+        history.replaceState(null, "", go("found"));
+        const back =
+          prior && prior !== document.body && prior.isConnected
+            ? prior
+            : card.querySelector("a[href], button:not([disabled])");
+        back?.focus();
+      };
+      const keys = (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const items = [...dialog.querySelectorAll("a[href], button:not([disabled]), input, textarea")].filter(
+          (el) => el.offsetParent !== null,
+        );
+        if (!items.length) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        const at = document.activeElement;
+        if (event.shiftKey && (at === first || !dialog.contains(at) || at.id === "se-prompt-title")) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (at === last || !dialog.contains(at))) {
+          event.preventDefault();
+          first.focus();
+        }
+      };
+      document.addEventListener("keydown", keys);
+    }
     document.getElementById("se-prompt-title")?.focus();
   } else {
     card.innerHTML = (SCREENS[screen] || SCREENS.found)();
   }
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && screen === "approve") location.href = go("found");
-  });
 
   document.addEventListener("DOMContentLoaded", () => {
     const extra = document.getElementById("proto-extra");

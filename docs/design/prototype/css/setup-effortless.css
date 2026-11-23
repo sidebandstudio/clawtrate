@@ -147,6 +147,15 @@
   color: var(--text-muted);
 }
 
+.se-means {
+  margin: var(--space-3) 0;
+  padding-left: 20px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.se-means li + li,
 .se-ways li + li {
   margin-top: var(--space-2);
 }

@@ -229,7 +229,7 @@ A process that can't open the profile's 0700 folder (a sandboxed proxy, the case
 
 **Over SSH,** the same rule applies on the far side. The SSH host key authenticates the SSH server. The forward's far end is still an unproved loopback connection, and a scan of connections attributed to `sshd` can't bind its result to Clawtrate's channel. So:
 
-- With TLS on there, Clawtrate reads the certificate over the authenticated SSH channel and checks it inside TLS through the forward (`tlsServerName` 127.0.0.1).
+- With TLS on there, Clawtrate reads the certificate over the authenticated SSH channel and checks it inside TLS through the forward (`tlsServerName` 127.0.0.1). The certificate is read there under the same rules as on this Mac (above), so SSH doesn't stand in for a certificate those rules refuse.
 - Without TLS, the SSH route sends no credential by itself. The person uses the address route, or turns TLS on themselves.
 
 ### The settings reader
@@ -330,6 +330,8 @@ The TLS path is checked by a probe-style test that turns TLS on in its own insta
 
 More rules for addresses:
 
+- A loopback address has no fingerprint flow. On this Mac, §3's gate decides what may be sent, and a fingerprint offered for a loopback address would come from the same unproved socket.
+- A gateway on this Mac can still be reached by address through a `wss://` name that isn't loopback, such as a Tailscale Serve address, under the rules above.
 - A private-looking address or hostname doesn't make a route protected.
 - A gateway's base path is kept after normalizing the endpoint.
 - Normal trust and hostname verification are the default.
@@ -353,7 +355,20 @@ More rules for addresses:
   2. In OpenClaw's Control UI on the gateway's computer, under Devices (`<openclaw>/docs/web/control-ui/connect-and-pair.md` lines 32-34).
   3. Last, the command `openclaw devices approve <requestId>`, with the profile line of `setup.md` §9.
 
-Clawtrate retries every 3 seconds, keeping the request id. Clawtrate caps its own wait at 10 minutes. The gateway's five minutes count from the last refresh, which the public record hides. After the cap: "Clawtrate stopped waiting for approval." and "Ask again". After a Deny, or a code the gateway refuses, Clawtrate doesn't make a new request by itself.
+**How the waiting device learns the request ended.** Clawtrate retries every 3 seconds, and each retry is a new `connect`. In 2026.10.6 every connect from a device that isn't paired files or refreshes a pending request (`requestDevicePairing`, `<openclaw>/dist/message-handler-CRCo2VX0.mjs` line 2061). It keeps the same id while that request is pending and makes a new one otherwise (§5, "What a `requestId` binds"). The device gets no event when it is denied:
+
+- `device.pair.resolved` goes only to pairing connections (§5).
+- A connection is held open for its own decision only for OpenClaw's Control UI (`waitForResolution = state.isControlUi && role === "operator"`, same file line 2057).
+- A Deny deletes the pending row and keeps no record of it (`rejectDevicePairingInWorker`, `<openclaw>/dist/device-pairing-core.worker-B-kYFMQS.mjs` lines 327-341).
+
+So:
+
+- **The signal.** The `PAIRING_REQUIRED` answer carries the id of this device's pending request (`requestId`, `message-handler-CRCo2VX0.mjs` lines 2156 and 2180). While the request waits, every retry gets the same id. A different id means the request Clawtrate was waiting on ended without approval: denied, expired or superseded. 2026.10.6 doesn't say which.
+- **Clawtrate stops on that signal,** before any further connect, with "This request is no longer pending." and "Ask again".
+- **The one request that retry filed.** Nothing refreshes it, so it expires on the gateway five minutes later. Other admin devices see it as a new request. Approving it approves this same device and grant, and the next Ask again connects.
+- **A code the gateway refuses** (`AUTH_BOOTSTRAP_TOKEN_INVALID`) also stops the retries.
+- **No new request by itself.** After either stop, Clawtrate makes no new request until the person chooses Ask again.
+- **The cap.** Clawtrate caps its own wait at 10 minutes. The gateway's five minutes count from the last refresh, which the public record hides. After the cap: "Clawtrate stopped waiting for approval." and "Ask again".
 
 ## 5. Approving a device from inside Clawtrate
 
@@ -372,7 +387,7 @@ Clawtrate retries every 3 seconds, keeping the request id. Clawtrate caps its ow
   - The approver must hold every scope it grants (`<openclaw>/dist/device-pairing-approval-uwflSfHu.mjs` lines 6-56).
   - A shared-auth operator session can decide eligible operator requests within its scopes. Paired Clawtrate is never one.
   - Live: a read-and-pairing device was refused for another device's request, even a read-only one. The admin device approved and rejected.
-  - Approving twice answers "unknown requestId". After a rejection, the device's next connect files a new request.
+  - Approving twice answers "unknown requestId". After a rejection, the device's next connect files a new request. §4 ("How the waiting device learns the request ended") says how Clawtrate notices that and stops.
 - **What a `requestId` binds (source).** A pending request is refreshed under the same id only when the public key, browser origin and role are unchanged, and the roles and scopes stay within the existing set (`canRefreshPendingDevicePairingRequest`, `<openclaw>/dist/device-pairing-core.worker-B-kYFMQS.mjs` lines 240-256). The refresh keeps the existing roles and scopes (lines 257-274). Any other change deletes the old request and makes a new id (lines 279-324).
   - So under one id, `deviceId` (the hash of the key), `publicKey`, `browserOrigin`, roles and scopes are fixed.
   - Only the reported metadata and `remoteIp` can drift.
@@ -491,12 +506,14 @@ Provider latency and a remote approval's wait are reported apart. Not reachable 
 | No listener                                                                    | "Nothing answered at port ‹port›."                                                                                      | Look again                                                                                                        |
 | The socket's other end not proved                                              | "Clawtrate couldn't verify what is listening at port ‹port›."                                                           | Look again                                                                                                        |
 | Two profiles qualify                                                           | "Choose the OpenClaw profile to connect to."                                                                            | The two by name                                                                                                   |
-| TLS with no readable owner-only certificate                                    | "Verify this gateway's certificate to continue."                                                                        | The fingerprint flow of §4                                                                                        |
+| TLS on, with no certificate Clawtrate can read under §3's rules                | "Clawtrate couldn't safely read OpenClaw's certificate. It must be a private file that belongs to your Mac account."    | Look again once it is; a `wss://` address that isn't loopback (§4). SSH reads it under the same rules (§3)        |
 | The endpoint changed during an attempt                                         | "OpenClaw's address or listener changed. Look again."                                                                   | Look again                                                                                                        |
 | The token was refused                                                          | "OpenClaw didn't accept the token in its settings."                                                                     | An address and token                                                                                              |
 | `PAIRING_REQUIRED` (local auto-approval off)                                   | §4's waiting screen                                                                                                     | as there                                                                                                          |
 | A narrower grant                                                               | "OpenClaw granted less than full control." with what is missing                                                         | Continue with what was granted                                                                                    |
 | Secure storage unavailable                                                     | "Clawtrate couldn't save this device securely. Unlock your keychain and try again."                                     | Try again; this session only                                                                                      |
+
+Where an action above names an address for a gateway on this Mac, it means a `wss://` address that isn't loopback, under §4's rules. A typed loopback address is refused there, with no fingerprint flow. SSH to this Mac sends a credential by itself only with TLS on and a certificate §3's rules accept.
 
 ## 9. iOS
 
@@ -604,15 +621,16 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
 ## 12. What still needs an approval or a command, and why
 
-| Case                                                                | What 2026.10.6 forces     | Why                                                                                                                                                                                  | Smallest path around it                                                                |
-| ------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| The first device of a gateway by address                            | One approval              | Off loopback, a client that isn't one of OpenClaw's own apps is never paired by its credential alone (`resolvePairingApprovalPlan`, `message-handler-CRCo2VX0.mjs` lines 1916-1969). | SSH (0 when TLS is on there); the Control UI's Devices (no command); the command, last |
-| This Mac with `autoApproveLocal: false`                             | One approval              | The owner turned silent local pairing off (`node-connect-reconcile-CAkPC2vI.mjs` line 182).                                                                                          | The Control UI or the command; Clawtrate doesn't run it                                |
-| A token kept as a SecretRef                                         | Typing the token once     | The value is in OpenClaw's database, a service's environment or a command                                                                                                            | The address form                                                                       |
-| A socket whose other end can't be proved                            | No connection             | §3                                                                                                                                                                                   | §13                                                                                    |
-| Approving another device without `clawtrate-pairing` on the gateway | The owner's route         | The stock RPC can't bind the displayed request (§5)                                                                                                                                  | Install the helper once from the app, with consent                                     |
-| A changed platform or family                                        | One approval off loopback | The gateway pins both                                                                                                                                                                | Never change them                                                                      |
-| A token its owner narrowed                                          | Keep the narrower grant   | The owner's limit wins                                                                                                                                                               | None, by design                                                                        |
+| Case                                                                 | What 2026.10.6 forces                   | Why                                                                                                                                                                                  | Smallest path around it                                                                |
+| -------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| The first device of a gateway by address                             | One approval                            | Off loopback, a client that isn't one of OpenClaw's own apps is never paired by its credential alone (`resolvePairingApprovalPlan`, `message-handler-CRCo2VX0.mjs` lines 1916-1969). | SSH (0 when TLS is on there); the Control UI's Devices (no command); the command, last |
+| This Mac with `autoApproveLocal: false`                              | One approval                            | The owner turned silent local pairing off (`node-connect-reconcile-CAkPC2vI.mjs` line 182).                                                                                          | The Control UI or the command; Clawtrate doesn't run it                                |
+| A token kept as a SecretRef                                          | Typing the token once                   | The value is in OpenClaw's database, a service's environment or a command                                                                                                            | The address form                                                                       |
+| A socket whose other end can't be proved                             | No connection                           | §3                                                                                                                                                                                   | §13                                                                                    |
+| This Mac with TLS on and a certificate that isn't an owner-only file | One change to the file, then Look again | The pin is only as good as the file it is read from (§3)                                                                                                                             | A `wss://` address that isn't loopback, with a certificate the system trusts (§4)      |
+| Approving another device without `clawtrate-pairing` on the gateway  | The owner's route                       | The stock RPC can't bind the displayed request (§5)                                                                                                                                  | Install the helper once from the app, with consent                                     |
+| A changed platform or family                                         | One approval off loopback               | The gateway pins both                                                                                                                                                                | Never change them                                                                      |
+| A token its owner narrowed                                           | Keep the narrower grant                 | The owner's limit wins                                                                                                                                                               | None, by design                                                                        |
 
 ## 13. Residual risk on this Mac, accepted
 
