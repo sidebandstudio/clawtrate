@@ -109,11 +109,18 @@ class FakeSocket implements WebSocketLike {
         if (!handler) throw new GatewayError({ code: "UNKNOWN_METHOD", message: method });
         return handler(frame.params);
       })
-      .then((payload) =>
-        method === "chat.history"
-          ? namingRun(namingSession(payload, frame.params), frame.params, this.gateway.running)
-          : payload,
-      )
+      .then((payload) => {
+        if (method !== "chat.history") return payload;
+        const named = namingRun(
+          namingSession(payload, frame.params),
+          frame.params,
+          this.gateway.running,
+        );
+        const key = (frame.params as { sessionKey?: unknown } | undefined)?.sessionKey;
+        if (typeof key === "string" && named && typeof named === "object")
+          this.gateway.named.set(key, (named as { sessionId?: string }).sessionId);
+        return named;
+      })
       .then(
         (payload) => this.reply(id, { ok: true, payload }),
         (error: unknown) =>
@@ -153,6 +160,22 @@ export class FakeGateway {
     "sessions.messages.subscribe": () => ({ ok: true }),
     "sessions.messages.unsubscribe": () => ({ ok: true }),
     "chat.history": () => ({ messages: [], hasMore: false }),
+    // OpenClaw 2026.10.6's row of what a key holds now: the session its latest history named, one
+    // per key before any read, and the run a `start` this gateway emitted began, until its end.
+    "sessions.describe": (params) => {
+      const key = String((params as { key?: unknown } | undefined)?.key);
+      const sessionId = this.named.has(key) ? this.named.get(key) : `session:${key}`;
+      if (!sessionId) return { session: null };
+      const run = this.running.get(key);
+      return {
+        session: {
+          key,
+          sessionId,
+          hasActiveRun: run !== undefined,
+          activeRunIds: run ? [run] : [],
+        },
+      };
+    },
   };
   connectReply: (params: unknown, url: string) => Reply = () => ({ ok: true, payload: helloOk() });
 
@@ -164,6 +187,8 @@ export class FakeGateway {
 
   /** The run each task has in flight, by the lifecycle events emitted, for its history. */
   readonly running = new Map<string, string>();
+  /** The session each task's latest history answer named, none included. */
+  readonly named = new Map<string, string | undefined>();
 
   /** Deliver an event to every open socket. */
   emit(event: string, payload: unknown, frameSeq?: number): void {

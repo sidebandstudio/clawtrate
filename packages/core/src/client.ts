@@ -266,7 +266,6 @@ import {
   MAX_OUTBOX,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_REACTIONS_PER_MESSAGE,
-  MAX_RUN_LIST,
   MAX_RUN_TEXT_CHARS,
   MAX_STEPS_PER_TASK,
   MAX_TASK_LINE_CHARS,
@@ -1108,85 +1107,11 @@ function sessionNamed(history: RawRecord | null): string | null {
 }
 
 /**
- * A run id as the steer evidence keeps it: within the id bound, counted as JSON is, or null for one
- * past it, which no read can confirm. Never cut or digested: a steer goes only into the run a read
- * named.
- */
-function boundedRun(runId: string): string | null {
-  return runId.length > 0 && jsonTextLength(runId) <= MAX_ID_CHARS ? runId : null;
-}
-
-/** The run an id stands for in a task: through its steer and queue aliases, or itself. */
-function canonicalRun(activity: TaskActivity, runId: string): string {
-  return activity.steerAliases[runId] ?? activity.queueAliases[runId] ?? runId;
-}
-
-/** The `agent` streams of a run's text as it is written: the assistant's and its thinking's. */
-const DELTA_STREAMS: ReadonlySet<unknown> = new Set(["assistant", "thinking"]);
-
-/**
- * Answers that say nothing of a task's runs (OpenClaw 2026.10.6): this client's own subscription to
- * its messages (`{subscribed, key, agentId}`), its tools, and its reactions, which may name the
- * session they were read from. A refusal of one says nothing of the task either.
- */
-const QUIET_ANSWERS: ReadonlySet<string> = new Set([
-  "sessions.messages.subscribe",
-  "sessions.messages.unsubscribe",
-  "tools.effective",
-  "session.reactions.list",
-  "session.reactions.set",
-]);
-
-/** The tasks a payload names: by `sessionKey` or `key`, at its top level or one record down. */
-function tasksNamed(payload: RawRecord): Set<string> {
-  const keys = new Set<string>();
-  for (const record of [payload, ...Object.values(payload).map(asRecord)]) {
-    for (const field of ["sessionKey", "key"]) {
-      const key = record?.[field];
-      if (typeof key === "string") keys.add(key);
-    }
-  }
-  return keys;
-}
-
-/** Whether a payload names a session other than `known`, at its top level or in the row it carries. */
-function namesOtherSession(payload: RawRecord, known: string | null): boolean {
-  return [payload.sessionId, asRecord(payload.session)?.sessionId].some(
-    (id) => id !== undefined && id !== null && id !== known,
-  );
-}
-
-/**
- * The runs a delta of `runId` speaks of: its own, and the task's active ones when the row it carries
- * names them (`activeRunIds`, an exact set). Null when it says more than a delta of a run in flight
- * does: that no run is active, or an id past the bound.
- */
-function deltaRuns(runId: string, payload: RawRecord | null): string[] | null {
-  const rows = [payload, asRecord(payload?.session)];
-  if (rows.some((row) => row?.hasActiveRun === false)) return null;
-  const named = rows.map((row) => row?.activeRunIds).filter(Array.isArray);
-  if (named.some((ids) => ids.length === 0)) return null;
-  const runs: unknown[] = [runId, ...named.flat()];
-  return runs.every((id) => typeof id === "string" && boundedRun(id) !== null)
-    ? (runs as string[])
-    : null;
-}
-
-/**
  * The messages an archive or delete of `session` settles, by the session each was bound to: those
  * bound to it, and any bound to none; every one when it names none.
  */
 function ofSession(session: string | null): (bound: string | undefined) => boolean {
   return (bound) => session === null || bound === undefined || bound === session;
-}
-
-/** A delta's runs kept for the read out (`steerHeard`): false once they are more than it keeps. */
-function keepHeard(heard: Set<string>, runs: readonly string[]): boolean {
-  for (const run of runs) {
-    if (!heard.has(run) && heard.size >= MAX_RUN_LIST) return false;
-    heard.add(run);
-  }
-  return true;
 }
 
 /**
@@ -1421,26 +1346,6 @@ export class ClawtrateClient {
   /** Tasks whose runs' `agent.wait` check is on its way, and the runs each last checked. */
   private readonly endChecking = new Set<string>();
   private readonly endChecked = new Map<string, string>();
-  /**
-   * What the latest read of each followed task's history established: the connection it was read
-   * on (`epoch`, which changes with every hello and close), the session it named (null when none)
-   * and the run it had in flight (null when none, or when news of the task came while it was out).
-   * A steer relies on nothing else (`steerConfirmed`). News of the task that conflicts with it, a
-   * row naming another session, its removal or an event of another run, drops it before that news
-   * is published or used, and asks for a fresh read (`noteEvidence`).
-   */
-  private readonly steerChecks = new Map<
-    string,
-    { epoch: number; sessionId: string | null; runId: string | null }
-  >();
-  /** Each followed task's drops, so a read that was out when one happened confirms no run. */
-  private readonly steerDrops = new Map<string, number>();
-  /**
-   * The runs heard of in each followed task while its history read is out, at most
-   * `MAX_RUN_LIST`: the read confirms its run in flight only when every one of them is that run,
-   * whatever was cached before it (`readTranscript`). One more, or one past the id bound, is a drop.
-   */
-  private readonly steerHeard = new Map<string, Set<string>>();
   /**
    * This client's own archives and deletes of followed tasks while each is out, at most
    * `MAX_TRACKED_TASKS` (`removing`): its task, the messages waiting there when it began, the
@@ -2179,9 +2084,6 @@ export class ClawtrateClient {
     this.retained.delete(key);
     this.incarnations.delete(key);
     this.endChecked.delete(key);
-    this.steerChecks.delete(key);
-    this.steerDrops.delete(key);
-    this.steerHeard.delete(key);
     this.loads.delete(key);
     // Drop the chat stream baselines this task held.
     this.streams.retire(key);
@@ -3448,43 +3350,35 @@ export class ClawtrateClient {
       this.failDelivery(key, messageId, new Error(NEW_TASK_TAKEN), true);
       return;
     }
-    // A steer goes only into the run the latest read on this connection had in flight, in the
-    // session the steer was written for (`steerConfirmed`): the gateway does not check a steer's
-    // session, and the run shown active may belong to a task made under the key since, or have
-    // ended unseen with its task. Otherwise the task is read first, and read once more if news of it
-    // while that read was out left a run it showed unconfirmed; never more. A run the reads settle
-    // makes the steer a checked send below; one they do not confirm makes it wait behind that run.
+    // The gateway does not check a steer's session, and a steer to a key that holds another session,
+    // or none, goes into that one or makes the task again. So every steer reads its task first, with
+    // a read of its own, and nothing else decides whether it may go: the gateway's row of the key
+    // now (`sessions.describe`). Naming the steer's session with a run in flight, it steers; naming
+    // another session or none, the task was reset or is gone, and it is refused unsent. Unread, it is
+    // not sent and can be sent again. With no run in flight it goes as a checked send below.
+    let inFlight = false;
     const bound = message.sessionId;
     if (message.mode === "steer" && bound !== undefined) {
-      for (let reads = 0; reads < 2 && !this.steerConfirmed(key, bound); reads += 1) {
-        const check = this.steerChecks.get(key);
-        const shown = this.state.transcripts[key];
-        if (
-          reads > 0 &&
-          (check?.epoch !== this.epoch || check.sessionId !== bound || !shown || !activeRun(shown))
-        )
-          break;
-        await this.loadTranscript(key, false, null);
-      }
-      message = this.outgoing(key, messageId);
-      if (!message || (message.status !== "sending" && message.status !== "awaiting-access"))
-        return;
-      if (!this.readOnThisConnection(key)) {
-        // What the key holds now is not established: nothing is sent, and it can be sent again.
-        const reason = this.state.transcripts[key]?.error;
+      let row: RawRecord | null;
+      try {
+        row = asRecord(asRecord(await this.request("sessions.describe", { key }))?.session);
+      } catch (error) {
         this.failDelivery(
           key,
           messageId,
-          new Error(`This task couldn't be read, so it wasn't sent${reason ? `: ${reason}` : "."}`),
+          new Error(`This task couldn't be read, so it wasn't sent: ${errorMessage(error)}`),
           false,
         );
         return;
       }
-      if (bound !== this.state.transcripts[key]?.sessionId) {
-        // The key holds another session now: the task the steer was written in was reset or is gone.
-        this.failDelivery(key, messageId, await this.sessionGone(key, bound), true);
+      message = this.outgoing(key, messageId);
+      if (!message || (message.status !== "sending" && message.status !== "awaiting-access"))
+        return;
+      if (sessionNamed(row) !== bound) {
+        this.failDelivery(key, messageId, await this.sessionGone(key, bound, row), true);
         return;
       }
+      inFlight = row?.hasActiveRun === true;
     }
 
     // A message waiting when this client's own archive or delete of the task began goes nowhere
@@ -3537,9 +3431,10 @@ export class ClawtrateClient {
             this.now(),
           );
         });
-      } else if (active.state === "stopping" || !this.steerConfirmed(key, message.sessionId)) {
-        // A run the latest read did not show in flight in this message's session is not steered:
-        // the message waits behind it, and goes as a checked send once it ends.
+      } else if (active.state === "stopping" || !inFlight) {
+        // A run the steer's read did not show in flight is not steered: the message waits behind
+        // it, and goes as a checked send once it ends, which the task read again settles.
+        if (!inFlight) this.scheduleHistory(key);
         this.updateActivity(key, (activity) => {
           const next = updateMessage(activity, messageId, {
             mode: "queue",
@@ -3738,7 +3633,6 @@ export class ClawtrateClient {
       // What the gateway has under the key is not known: its refusal stands as it came.
       throw error;
     }
-    // The refusal and what the key holds now were news of the task before this (`screenAnswer`).
     if (row?.sessionId !== params.sessionId)
       throw await this.sessionGone(key, params.sessionId, row);
     if (row?.archived === true) throw new TaskArchivedError();
@@ -3746,7 +3640,7 @@ export class ClawtrateClient {
     let leaf = this.rowReadFrom(key, params.sessionId);
     if (!leaf) {
       await this.loadTranscript(key, false, null);
-      leaf = this.readOnThisConnection(key) ? this.rowReadFrom(key, params.sessionId) : null;
+      leaf = this.rowReadFrom(key, params.sessionId);
     }
     if (!leaf) throw error;
     return again(leaf).catch((refused: unknown) =>
@@ -3806,120 +3700,14 @@ export class ClawtrateClient {
   }
 
   /**
-   * Whether a steer written for `sessionId` may go into the run the task shows active: the latest
-   * read, on this connection, named that session and had that run in flight, and nothing heard of
-   * the task since has dropped it (`steerChecks`). This is the only check a steer passes.
+   * A row of a followed task, from the list or an event, that names a session other than the one
+   * its view shows: the task is read again, so the view shows that session before anything can be
+   * sent there. The list never takes a read over (F-278).
    */
-  private steerConfirmed(key: string, sessionId: string | undefined): boolean {
-    const check = this.steerChecks.get(key);
-    const transcript = this.state.transcripts[key] ?? emptyActivity;
-    const active = activeRun(transcript);
-    return (
-      check?.epoch === this.epoch &&
-      check.runId !== null &&
-      sessionId !== undefined &&
-      check.sessionId === sessionId &&
-      active !== undefined &&
-      canonicalRun(transcript, active.id) === check.runId
-    );
-  }
-
-  /**
-   * The one way in for gateway events: every event, before its handler sees it or anything it
-   * publishes (`handleEvent`), as news of each followed task it names (`hearOfTask`). An event that
-   * names no task but a run is news of the followed task that holds the run. Only a `chat` delta or
-   * an `agent` event of the assistant's or its thinking's text can be harmless; any other event,
-   * one of a type this client does not know included, counts against a steer.
-   */
-  private screenEvent(event: EventFrame): void {
-    const payload = asRecord(event.payload);
-    if (!payload) return;
-    const keys = tasksNamed(payload);
-    const runId = typeof payload.runId === "string" ? payload.runId : undefined;
-    if (keys.size === 0 && runId !== undefined) {
-      for (const transcript of Object.values(this.state.transcripts))
-        if (findRun(transcript, runId)) keys.add(transcript.sessionKey);
-    }
-    const delta =
-      (event.event === "chat" && payload.state === "delta") ||
-      (event.event === "agent" && DELTA_STREAMS.has(payload.stream))
-        ? runId
-        : undefined;
-    for (const key of keys) {
-      this.hearOfTask(key, {
-        payload,
-        ...(delta !== undefined ? { delta } : {}),
-        removed: event.event === "sessions.changed" && isSessionRemoval(payload),
-      });
-    }
-  }
-
-  /**
-   * The one way in for gateway answers (`request`): an answer or refusal to a request that names a
-   * task (`sessionKey` or `key`), as news of that task, and each row of a page of the task list as
-   * news of the task it names (`hearOfTask`). Only the answers of `QUIET_ANSWERS` can be harmless.
-   */
-  private screenAnswer(method: string, params: unknown, answer: unknown): void {
-    const record = answer instanceof Error ? null : asRecord(answer);
-    if (method === "sessions.list" || method === "sessions.subscribe") {
-      const page = method === "sessions.subscribe" ? asRecord(record?.list) : record;
-      for (const row of sessionRowsFromList(page)) {
-        const key = sessionRowKey(row);
-        if (key) this.hearOfTask(key, { payload: row });
-      }
-    }
-    const asked = asRecord(params);
-    for (const field of ["sessionKey", "key"]) {
-      const key = asked?.[field];
-      if (typeof key !== "string") continue;
-      this.hearOfTask(key, {
-        payload: record,
-        quiet: QUIET_ANSWERS.has(method),
-        // The key holds no session now.
-        removed: method === "sessions.describe" && record !== null && record.session === null,
-      });
-    }
-  }
-
-  /**
-   * News of a followed task, from the one way in (`screenEvent`, `screenAnswer`), before anything
-   * uses it. Harmless news is a short list: a delta (`delta`) of the run the latest read had in
-   * flight, naming that read's session or none, and no other active run; and a quiet answer
-   * (`QUIET_ANSWERS`) naming no other session. Anything else drops what the latest read established,
-   * for this task only, and leaves a read still out unable to confirm a run; it asks for a fresh read
-   * when what it dropped had a run a steer could go into, or when it names another session or the
-   * task's removal. Without a read on record, a session named is weighed against the one the view
-   * shows. While a read is out, a delta's runs are kept for it to weigh against the run it shows in
-   * flight (`steerHeard`); one more than it can keep, or one past the id bound, leaves it unable to
-   * confirm one.
-   */
-  private hearOfTask(
-    key: string,
-    news: { payload: RawRecord | null; delta?: string; quiet?: boolean; removed?: boolean },
-  ): void {
-    if (!this.tracked(key)) return;
-    const check = this.steerChecks.get(key);
-    const transcript = this.state.transcripts[key] ?? emptyActivity;
-    const known = check ? check.sessionId : (this.state.transcripts[key]?.sessionId ?? null);
-    const other =
-      news.removed === true || (news.payload !== null && namesOtherSession(news.payload, known));
-    const quiet = !other && news.quiet === true;
-    const runs = !other && news.delta !== undefined ? deltaRuns(news.delta, news.payload) : null;
-    const heard = this.steerHeard.get(key);
-    if (heard && !quiet && !(runs && keepHeard(heard, runs)))
-      this.steerDrops.set(key, (this.steerDrops.get(key) ?? 0) + 1);
-    const harmless =
-      quiet ||
-      (runs !== null &&
-        check?.runId != null &&
-        runs.every((run) => canonicalRun(transcript, run) === check.runId));
-    if (check && !harmless) this.steerChecks.delete(key);
-    if (other || (check?.runId != null && !harmless)) this.scheduleHistory(key);
-  }
-
-  /** Whether a read of the task's history succeeded on this connection, and nothing has dropped it. */
-  private readOnThisConnection(key: string): boolean {
-    return this.steerChecks.get(key)?.epoch === this.epoch;
+  private noteRowSession(key: string, row: RawRecord | null): void {
+    const named = sessionNamed(row);
+    if (named !== null && this.tracked(key) && named !== this.state.transcripts[key]?.sessionId)
+      this.scheduleHistory(key);
   }
 
   /**
@@ -7490,10 +7278,7 @@ export class ClawtrateClient {
         this.pendingResync = "gap";
       },
       onEvent: (event) => {
-        if (generation !== this.generation) return;
-        // The one way in: news of a followed task is weighed before any handler sees it.
-        this.screenEvent(event);
-        this.handleEvent(event, generation);
+        if (generation === this.generation) this.handleEvent(event, generation);
       },
       onCallbackError: (label, error) => this.log("error", `${label}: ${String(error)}`),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
@@ -7527,9 +7312,6 @@ export class ClawtrateClient {
     this.foreign.clear();
     this.foreignReads.clear();
     this.endChecked.clear();
-    this.steerChecks.clear();
-    this.steerDrops.clear();
-    this.steerHeard.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -8025,9 +7807,8 @@ export class ClawtrateClient {
   }
 
   private replaceRows(rows: Map<string, RawRecord>): void {
-    // Each page's rows were news of their tasks as it came (`screenAnswer`): a followed task's row
-    // naming another session than its read did had that task read again, so the view shows that
-    // session before anything can be sent there. The list never takes a read over (F-278).
+    for (const key of Object.keys(this.state.transcripts))
+      this.noteRowSession(key, rows.get(capId(key, MAX_ID_CHARS)) ?? null);
     this.rows = rows;
     this.publishTasks();
   }
@@ -8138,9 +7919,8 @@ export class ClawtrateClient {
       this.scheduleRefresh(generation);
       return;
     }
-    // The task removed, or its key holding a session other than the one read, was news before this
-    // (`screenEvent`): the task is read again.
     const named = sessionNamed(row);
+    if (!isSessionRemoval(payload)) this.noteRowSession(key, row);
     const cached = this.rows.get(key);
     // A removal or an archive of a session the key's row no longer holds is not that row's: it
     // stays, and the list is read again, which settles it.
@@ -8346,12 +8126,6 @@ export class ClawtrateClient {
       generation !== this.generation ||
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation;
-    // News of the task while the read is out leaves the read unable to confirm a run for a steer,
-    // and so does any run heard meanwhile that it does not show in flight (`noteEvidence`).
-    const drops = this.steerDrops.get(key) ?? 0;
-    const epoch = this.epoch;
-    const heard = new Set<string>();
-    this.steerHeard.set(key, heard);
     // Runs active when the read starts; one the gateway then no longer has has ended.
     const activeBefore = new Set(
       (this.state.transcripts[key]?.runs ?? [])
@@ -8365,11 +8139,7 @@ export class ClawtrateClient {
         });
       }
       const history = asRecord(
-        await this.request(
-          "chat.history",
-          { sessionKey: key, limit: HISTORY_LIMIT },
-          { read: true },
-        ),
+        await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
       );
       if (stale()) return;
       // A resync starts every stream of this task again from what the gateway sends next.
@@ -8465,18 +8235,6 @@ export class ClawtrateClient {
         loadedAt: this.now(),
       };
       this.retainTaskRaw(key, rebuilt);
-      // What this read established, on the connection it was read on: the session it named, and
-      // the run it had in flight unless news of the task came while it was out, a delta of a run it
-      // does not show in flight included (`hearOfTask`). A steer waiting on it reads once more at
-      // most (`deliver`). A steer's own id in flight stands for the run it joined.
-      const listed = inFlightId === null ? null : boundedRun(inFlightId);
-      const flight = listed === null ? null : boundedRun(canonicalRun(rebuilt, listed));
-      const others = [...heard].some((id) => canonicalRun(rebuilt, id) !== flight);
-      this.steerChecks.set(key, {
-        epoch,
-        sessionId: named,
-        runId: (this.steerDrops.get(key) ?? 0) === drops && !others ? flight : null,
-      });
       this.setTranscript(key, () => withLive(rebuilt));
       // A read is news of its own: the runs it leaves active are asked again.
       this.endChecked.delete(key);
@@ -8500,8 +8258,6 @@ export class ClawtrateClient {
         status: "error",
         error: errorMessage(error),
       }));
-    } finally {
-      if (this.steerHeard.get(key) === heard) this.steerHeard.delete(key);
     }
   }
 
@@ -8573,8 +8329,8 @@ export class ClawtrateClient {
       this.updateForeign(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
       return;
     }
-    const phase = asRecord(payload.data)?.phase;
     this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
+    const phase = asRecord(payload.data)?.phase;
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
     }
@@ -8592,11 +8348,8 @@ export class ClawtrateClient {
         }
         return;
       case "session.message": {
-        const payload = asRecord(event.payload);
-        const key = payload?.sessionKey;
-        if (typeof key !== "string" || !this.tracked(key)) return;
-        // News of the task already (`screenEvent`): the read it asks for shows what it changed.
-        this.scheduleHistory(key);
+        const key = asRecord(event.payload)?.sessionKey;
+        if (typeof key === "string" && this.tracked(key)) this.scheduleHistory(key);
         return;
       }
       case "chat":
@@ -9244,33 +8997,19 @@ export class ClawtrateClient {
 
   // Helpers --------------------------------------------------------------------
 
-  /**
-   * One request to the gateway. Its answer, or the gateway's refusal, is weighed as news of the
-   * tasks it names before the caller has it (`screenAnswer`), unless it is the history read that
-   * establishes what a steer relies on (`read`).
-   */
   private request(
     method: string,
     params: unknown,
-    options?: { onSent?: (requestId: string) => void; read?: boolean },
+    options?: { onSent?: (requestId: string) => void },
   ): Promise<unknown> {
     if (!this.protocol) return Promise.reject(new NotSentError());
     // The log policy of the connection this goes out on: a late failure is logged with it,
     // never with that of a connection that replaced it.
     const quiet = this.quiet();
-    const sent = options?.onSent ? { onSent: options.onSent } : undefined;
-    return this.protocol.request(method, params, sent).then(
-      (answer) => {
-        if (!options?.read) this.screenAnswer(method, params, answer);
-        return answer;
-      },
-      (error: unknown) => {
-        if (typeof error === "object" && error !== null) this.dispatchedQuiet.set(error, quiet);
-        if (error instanceof GatewayProtocolRequestError && !options?.read)
-          this.screenAnswer(method, params, error);
-        throw error;
-      },
-    );
+    return this.protocol.request(method, params, options).catch((error: unknown) => {
+      if (typeof error === "object" && error !== null) this.dispatchedQuiet.set(error, quiet);
+      throw error;
+    });
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {

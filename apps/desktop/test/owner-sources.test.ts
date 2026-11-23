@@ -52,8 +52,6 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/client.ts:APPROVAL_CAPS": "static, three caps",
   "packages/core/src/client.ts:APPROVAL_SOURCES": "static, three list readers",
   "packages/core/src/client.ts:NAMED_CONNECT_CODES": "static, the pinned protocol's connect codes",
-  "packages/core/src/client.ts:DELTA_STREAMS": "static, the two agent streams of a run's text",
-  "packages/core/src/client.ts:QUIET_ANSWERS": "static, five request methods",
   "packages/core/src/runs.ts:TERMINAL_RUN_STATES": "static, the terminal run states",
   "packages/core/src/runs.ts:TIMEOUT_PHASES": "static, five phases",
   "packages/core/src/runs.ts:HARD_TIMEOUT_PHASES": "static, three phases",
