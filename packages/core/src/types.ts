@@ -93,6 +93,12 @@ export type ConnectionState = {
   canApprove: boolean;
   /** True while the connection holds `operator.admin`, so bots and accounts can be changed. */
   canAdmin: boolean;
+  /**
+   * True while this device's pairing with the gateway is a full-control pairing, the six asked
+   * for once at its first pairing (`ClientOptions.fullAccess`). What it holds is `scopes`: a
+   * narrower grant is kept, said, and never asked again by itself.
+   */
+  fullPairing: boolean;
   upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
@@ -495,6 +501,7 @@ export const initialConnectionState: ConnectionState = {
   canAnswer: false,
   canApprove: false,
   canAdmin: false,
+  fullPairing: false,
   upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,

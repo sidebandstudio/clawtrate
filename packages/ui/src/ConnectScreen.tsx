@@ -6,7 +6,7 @@ import type {
   HostInfo,
   SetupState,
 } from "@clawtrate/core";
-import { SETUP_PAIRING_APPEARED, SETUP_PAIRING_GONE } from "@clawtrate/core";
+import { protectedGatewayUrl, SETUP_PAIRING_APPEARED, SETUP_PAIRING_GONE } from "@clawtrate/core";
 import {
   useEffect,
   useRef,
@@ -20,6 +20,7 @@ import { Creature } from "./Avatar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { useForget } from "./forget.ts";
+import { FullControlConsent } from "./FullControl.tsx";
 import { gatewayLabel } from "./format.ts";
 import { BackIcon, CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
 import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
@@ -237,6 +238,8 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   const [submitError, setSubmitError] = useState<{ title: string; message: string } | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const busy = connection.status === "connecting";
+  // On a host that pairs with full control, a protected address asks for it (§2, §4).
+  const full = info.fullControl === true && protectedGatewayUrl(url);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -313,6 +316,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             </button>
           </div>
         )}
+        {full && <FullControlConsent />}
         <div className="actions">
           <button
             type="submit"
@@ -338,8 +342,10 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
           )}
         </div>
         <p className="field-hint">
-          {PRODUCT_NAME} works with an OpenClaw gateway you already run. It asks for read access
-          only.
+          {PRODUCT_NAME} works with an OpenClaw gateway you already run.{" "}
+          {info.fullControl
+            ? "At a secure address (wss://) it asks once for full control; at any other address it asks for read access only."
+            : "It asks for read access only."}
         </p>
       </form>
     </section>

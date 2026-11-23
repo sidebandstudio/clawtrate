@@ -18,7 +18,7 @@ import {
   until,
 } from "./fake-gateway.ts";
 
-const URL = "ws://127.0.0.1:19960";
+const URL = "wss://gateway.example:19960";
 const FAST: ClientOptions = { reconnect: { initialMs: 20, maxMs: 40 }, fullAccess: true };
 type ConnectParams = { scopes: string[]; auth?: { token?: string; deviceToken?: string } };
 
@@ -273,7 +273,7 @@ describe("full access under interleavings", () => {
       if (key === "connection") throw new Error("disk full");
       return set(key, value);
     };
-    await expect(client.connect({ url: "ws://127.0.0.1:19961", token: "other" })).rejects.toThrow();
+    await expect(client.connect({ url: "wss://gateway.example:19961", token: "other" })).rejects.toThrow();
     storage.set = set;
     const before = gateway.connects.length;
     await until(() => gateway.connects.length >= before + 2);
@@ -1094,7 +1094,7 @@ describe("full access under interleavings", () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL, token: null }),
       [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
-      [tokenKey("ws://127.0.0.1:19962")]: JSON.stringify({
+      [tokenKey("wss://gateway.example:19962")]: JSON.stringify({
         token: "token-B",
         grantedScopes: READ_SCOPES,
         heldScopes: READ_SCOPES,
@@ -1111,7 +1111,7 @@ describe("full access under interleavings", () => {
     void client.requestAccess().catch(() => {});
     await until(() => client.state.connection.upgrade.status === "pending");
     // A setup look reads another gateway's saved pairing meanwhile.
-    expect(await client.deviceAccess("ws://127.0.0.1:19962")).toBe("paired");
+    expect(await client.deviceAccess("wss://gateway.example:19962")).toBe("paired");
     const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
       .scopes;
     approval.resolve({
@@ -1230,7 +1230,7 @@ describe("full access under interleavings", () => {
   });
 
   it("a refusal from the old gateway while a Connect to another is being saved leaves the new one asking for the six", async () => {
-    const URL_B = "ws://127.0.0.1:19963";
+    const URL_B = "wss://gateway.example:19963";
     const storage = memoryStorage();
     const gateway = new FakeGateway();
     gateway.connectReply = (params, url) =>
@@ -1274,7 +1274,7 @@ describe("full access under interleavings", () => {
   });
 
   it("a refusal for a gateway while a Connect to it waits still stands after another gateway's attempt ends", async () => {
-    const URL_C = "ws://127.0.0.1:19964";
+    const URL_C = "wss://gateway.example:19964";
     const storage = memoryStorage();
     const gateway = new FakeGateway();
     const asked: Array<{ url: string; scopes: string[] }> = [];
@@ -1326,8 +1326,8 @@ describe("full access under interleavings", () => {
   });
 
   it("refusals at two other gateways while a Connect to a fresh one waits leave its first pairing asking for the six", async () => {
-    const URL_B = "ws://127.0.0.1:19964";
-    const URL_C = "ws://127.0.0.1:19965";
+    const URL_B = "wss://gateway.example:19964";
+    const URL_C = "wss://gateway.example:19965";
     const storage = memoryStorage();
     const gateway = new FakeGateway();
     const asked: Array<{ url: string; scopes: string[] }> = [];
@@ -1380,8 +1380,8 @@ describe("full access under interleavings", () => {
   });
 
   it("a Connect that never takes effect, queued after one to a fresh gateway, leaves that one's first pairing asking for the six", async () => {
-    const URL_B = "ws://127.0.0.1:19964";
-    const URL_C = "ws://127.0.0.1:19965";
+    const URL_B = "wss://gateway.example:19964";
+    const URL_C = "wss://gateway.example:19965";
     const storage = memoryStorage();
     const gateway = new FakeGateway();
     const asked: Array<{ url: string; scopes: string[] }> = [];

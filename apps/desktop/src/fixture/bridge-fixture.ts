@@ -117,6 +117,8 @@ export const SCENES = [
   "disconnected",
   "offline-unreachable",
   "offline-down",
+  "connect-full",
+  "access-narrowed",
   ...LIVE_SCENES,
   ...RAIL_SCENES,
   ...ACTION_SCENES,
@@ -268,6 +270,18 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: base, steps: [] };
     case "connect":
       return { initial: idle(), steps: [] };
+    // The packaged Mac app's address form, with a secure address typed (setup-effortless.md §2).
+    case "connect-full":
+      return {
+        initial: withConnection(idle(), { gatewayUrl: "wss://gateway.example" }),
+        steps: [],
+      };
+    // A full pairing the gateway granted read alone (§8).
+    case "access-narrowed":
+      return {
+        initial: withConnection(base, { gatewayUrl: "wss://gateway.example", fullPairing: true }),
+        steps: [],
+      };
     case "connect-error":
       return {
         initial: withConnection(idle(), {
@@ -1051,7 +1065,9 @@ export function createFixtureBridge(
       ? setupInfo(FIXTURE_INFO, setupName)
       : name === "access-pinned"
         ? { ...FIXTURE_INFO, readOnly: true }
-        : FIXTURE_INFO,
+        : name === "connect-full" || name === "access-narrowed"
+          ? { ...FIXTURE_INFO, fullControl: true }
+          : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);

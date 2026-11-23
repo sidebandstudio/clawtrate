@@ -585,6 +585,12 @@ export type HostInfo = {
    */
   readOnly?: boolean;
   /**
+   * Set when a first pairing over a protected address (`protectedGatewayUrl`) asks for full
+   * control: the packaged Mac app, which keeps credentials in the Keychain. Its address form
+   * shows the consent line above Connect.
+   */
+  fullControl?: boolean;
+  /**
    * Set when the host offers setup on its own computer (docs/design/setup.md):
    * the first screen asks where OpenClaw runs. Absent on a host that keeps the
    * address-and-token form as its first screen, as the web preview does by default.

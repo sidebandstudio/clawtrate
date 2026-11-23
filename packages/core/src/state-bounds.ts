@@ -676,6 +676,7 @@ const connection = object<ConnectionState>()({
   canAnswer: FLAG,
   canApprove: FLAG,
   canAdmin: FLAG,
+  fullPairing: FLAG,
   upgrade,
   deviceId: ID,
   pairing,
