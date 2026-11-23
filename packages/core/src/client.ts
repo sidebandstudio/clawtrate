@@ -1845,8 +1845,13 @@ export class ClawtrateClient {
     const count = this.openSessions.get(key) ?? 0;
     this.openSessions.set(key, count + 1);
     if (count > 0) {
-      // A view coming to a task whose history failed asks for it, as a first open would.
-      if (this.state.transcripts[key]?.status === "error") this.reloadSession(key);
+      // A view coming to a task whose history failed asks for it, as a first open would,
+      // unless a read already under way will settle it.
+      const current = this.state.transcripts[key];
+      if (current?.status !== "error") return;
+      if (this.loads.has(key))
+        this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
+      else this.reloadSession(key);
       return;
     }
     // A task closed with unsent work was kept: reopening shows the same queue.

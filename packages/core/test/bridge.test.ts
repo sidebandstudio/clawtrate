@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession, MAX_OPAQUE_ID_CHARS, parseBridgeCommand } from "../src/bridge.ts";
 import type { ClawtrateClient } from "../src/client.ts";
 import { KEY, openTask } from "./client-harness.ts";
-import { GatewayError, until } from "./fake-gateway.ts";
+import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 describe("parseBridgeCommand", () => {
   it("accepts the known commands", () => {
@@ -252,6 +252,44 @@ describe("openSession", () => {
       await third.apply({ type: "openSession", key: KEY });
       expect(gateway.calls("chat.history")).toHaveLength(before + 1);
       third.dispose();
+    } finally {
+      first.dispose();
+      second.dispose();
+      client.stop();
+    }
+  });
+
+  it("F-105: a view opening a task whose failed history is already being read again starts no read of its own", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    const second = createBridgeSession(client);
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      // A run ending refreshes the history; that read is held while the second view opens.
+      const refresh = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => refresh.promise;
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+
+      await second.apply({ type: "openSession", key: KEY });
+      expect(client.state.transcripts[KEY]?.status).toBe("loading");
+      // Any further read fails: it would put the conversation back in its error state.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      refresh.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status !== "loading");
+      await sleep(50);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
     } finally {
       first.dispose();
       second.dispose();
