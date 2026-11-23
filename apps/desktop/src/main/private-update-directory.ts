@@ -78,18 +78,27 @@ export async function clearUpdateDirectory(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true });
 }
 
-async function makePrivateDirectory(path: string): Promise<void> {
+/**
+ * How long Windows may take to make an offer's folders. The first PowerShell
+ * start on a machine usually takes a few seconds and sometimes ten times
+ * that. A 15-second limit could fail a download that was only slow to start.
+ */
+export const PRIVATE_DIRECTORIES_TIMEOUT_MS = 60_000;
+
+/** Makes each directory in order. Each must be new. */
+async function makePrivateDirectories(paths: string[]): Promise<void> {
   if (process.platform !== "win32") {
-    await mkdir(path, { mode: 0o700 });
+    for (const path of paths) await mkdir(path, { mode: 0o700 });
     return;
   }
-  // Windows ignores POSIX mode bits. Create the directory with a protected
+  // Windows ignores POSIX mode bits. Create each directory with a protected
   // DACL so the artifact inherits just the current user's full-control rule.
+  // One PowerShell run makes them all, so a slow start is paid once.
   const script = [
     "$ErrorActionPreference='Stop'",
-    "$p=$env:CLAWTRATE_PRIVATE_DIRECTORY",
-    "if ([IO.Directory]::Exists($p) -or [IO.File]::Exists($p)) {throw 'Directory exists'}",
     "$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User",
+    'foreach ($p in $env:CLAWTRATE_PRIVATE_DIRECTORIES -split "`n") {',
+    "if ([IO.Directory]::Exists($p) -or [IO.File]::Exists($p)) {throw 'Directory exists'}",
     "$acl=New-Object Security.AccessControl.DirectorySecurity",
     "$acl.SetOwner($sid)",
     "$acl.SetAccessRuleProtection($true,$false)",
@@ -99,8 +108,13 @@ async function makePrivateDirectory(path: string): Promise<void> {
     "$actual=$dir.GetAccessControl()",
     "$rules=$actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])",
     "if (!$actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or $rules[0].IdentityReference -ne $sid -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne 'FullControl' -or ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) {throw 'Directory permissions refused'}",
+    "}",
   ].join("\n");
-  await runUpdatePowerShell(script, { CLAWTRATE_PRIVATE_DIRECTORY: path }, 15000);
+  await runUpdatePowerShell(
+    script,
+    { CLAWTRATE_PRIVATE_DIRECTORIES: paths.join("\n") },
+    PRIVATE_DIRECTORIES_TIMEOUT_MS,
+  );
 }
 
 export function runUpdatePowerShell(
@@ -131,6 +145,5 @@ export function runUpdatePowerShell(
 /** Both directories must be fresh. Never reopen a destination left by another offer. */
 export async function prepareUpdateDirectory(root: string, offerId: string): Promise<void> {
   await checkParents(root);
-  await makePrivateDirectory(root);
-  await makePrivateDirectory(join(root, offerId));
+  await makePrivateDirectories([root, join(root, offerId)]);
 }

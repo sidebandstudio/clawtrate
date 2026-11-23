@@ -1,7 +1,11 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   checkWindowsDirectorySpelling,
+  prepareUpdateDirectory,
+  PRIVATE_DIRECTORIES_TIMEOUT_MS,
   runUpdatePowerShell,
 } from "../../src/main/private-update-directory.ts";
 
@@ -81,5 +85,42 @@ it("starts the Windows folder helper from SystemRoot with the host environment a
     );
   } finally {
     vi.unstubAllEnvs();
+  }
+});
+
+it("makes both Windows update folders in one PowerShell run that may take 20 seconds to start", async () => {
+  const parent = realpathSync.native(mkdtempSync(join(tmpdir(), "clawtrate-folders-")));
+  const root = join(parent, "updates");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  vi.useFakeTimers();
+  // A stand-in PowerShell that answers after 20 seconds, killed at its run's limit as execFile does.
+  execFile.mockReset();
+  execFile.mockImplementation((_file, _args, { timeout }, done) => {
+    const answer = setTimeout(() => {
+      clearTimeout(kill);
+      done(null, "");
+    }, 20_000);
+    const kill = setTimeout(() => {
+      clearTimeout(answer);
+      done(Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" }));
+    }, timeout);
+  });
+  try {
+    const prepared = prepareUpdateDirectory(root, "stable-offer");
+    await vi.waitFor(() => expect(execFile).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(prepared).resolves.toBeUndefined();
+    expect(execFile).toHaveBeenCalledOnce();
+    const [, , options] = execFile.mock.calls[0]!;
+    expect(options.timeout).toBe(PRIVATE_DIRECTORIES_TIMEOUT_MS);
+    expect(options.env.CLAWTRATE_PRIVATE_DIRECTORIES.split("\n")).toEqual([
+      root,
+      join(root, "stable-offer"),
+    ]);
+  } finally {
+    vi.useRealTimers();
+    Object.defineProperty(process, "platform", platform);
+    rmSync(parent, { recursive: true, force: true });
   }
 });
