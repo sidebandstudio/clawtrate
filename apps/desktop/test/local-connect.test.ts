@@ -9,7 +9,7 @@ import { join, relative, sep } from "node:path";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { until } from "../../../packages/core/test/fake-gateway.ts";
+import { deferred, until } from "../../../packages/core/test/fake-gateway.ts";
 import { localConnectFor, provedSockets } from "../src/setup/local-connect.ts";
 
 const servers: { close(): void }[] = [];
@@ -124,6 +124,26 @@ describe("local connect's connector", () => {
       expect(() => sockets.createWebSocket(url), url).toThrow(/only go to OpenClaw/);
     expect(asked).toBe(0);
     expect(listener.peers).toEqual([]);
+  });
+
+  it("verifies nothing for a socket replaced while it was proved again", async () => {
+    const server = await websocketServer();
+    const held = deferred<boolean>();
+    let calls = 0;
+    const sockets = provedSockets(server.port, async () => {
+      calls += 1;
+      // The dial's proof passes at once; the second one waits until the socket is replaced.
+      return calls === 1 || (await held.promise);
+    });
+    const url = `ws://127.0.0.1:${server.port}`;
+    const first = sockets.createWebSocket(url);
+    await new Promise<void>((done) => (first.onopen = () => done()));
+    const verified = sockets.verify(new AbortController().signal);
+    const second = sockets.createWebSocket(url);
+    held.resolve(true);
+    expect(await verified).toBe(false);
+    first.close();
+    second.close();
   });
 
   it("takes its home rule from mustSandbox", () => {
