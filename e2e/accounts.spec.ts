@@ -483,7 +483,8 @@ test("F-552: a bot made in New bot with no name takes one in the chat, and is re
   await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
   await expect(botRow("Johnny")).toBeVisible();
   await shots("bot-name-renamed");
-  await admin.request("agents.delete", { agentId: "new-bot", deleteFiles: true });
+  // Johnny stays: deleting it behind the page's back would leave the page listing a bot the
+  // gateway no longer has, and the accounts checks after this read every listed bot.
 });
 
 /** Open Settings on Accounts, and the connect component. */
