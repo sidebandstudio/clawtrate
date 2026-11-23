@@ -1,14 +1,16 @@
 // The app: the connection screens until the gateway's bots have loaded, then
 // Home, a bot's task list and a task's chat, with Settings as a sheet. The
-// shell stays up through every reconnect once it has something to show.
+// shell stays up through every reconnect once it has something to show. One
+// screen shows at a time, except on iPhone Duo unfolded, where the list and
+// the chat share the window (presentation/panes.ts).
 
 import type { ConnectionError, Task } from "@clawtrate/core";
 import { markSeen, type SeenMap } from "../../../packages/ui/src/unread.ts";
 import { useCallback, useEffect, useState } from "react";
-import { StatusBar, useColorScheme } from "react-native";
+import { StatusBar, StyleSheet, useColorScheme, View, type ViewStyle } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { BotTasks } from "./screens/BotTasks.tsx";
-import { Chat } from "./screens/Chat.tsx";
+import { Chat, NoChat } from "./screens/Chat.tsx";
 import { Address, Pairing, Protocol, Setup, Welcome } from "./screens/Connect.tsx";
 import { Home } from "./screens/Home.tsx";
 import { Settings } from "./screens/Settings.tsx";
@@ -19,11 +21,14 @@ import {
   HOME,
   inShell,
   keptMismatch,
+  panesFor,
   type Route,
 } from "./navigation.ts";
+import { panes } from "./presentation/panes.ts";
 import { RuntimeContext, startRuntime, useClawtrateState } from "./runtime.ts";
 import { useSwitcherProbe } from "./switcher-probe.ts";
-import { ThemeContext, themeFor } from "./theme/index.ts";
+import { ThemeContext, themeFor, useTheme } from "./theme/index.ts";
+import { useWindowShape, WindowShapeProvider } from "./window-shape.tsx";
 
 /** A clock for the rows' relative times: once a minute is enough. */
 function useMinuteClock(): number {
@@ -38,6 +43,8 @@ function useMinuteClock(): number {
 function Screens() {
   const state = useClawtrateState();
   const now = useMinuteClock();
+  const theme = useTheme();
+  const shape = useWindowShape();
   const [route, setRoute] = useState<Route>(HOME);
   const [addressOpen, setAddressOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -72,23 +79,44 @@ function Screens() {
     }
   }
 
-  const shown = current(route, state);
-  const bot = shown.name === "home" ? undefined : state.bots.find((b) => b.id === shown.botId);
+  const found = current(route, state);
+  const bot = found.name === "home" ? undefined : state.bots.find((b) => b.id === found.botId);
   const task =
-    shown.name === "task"
-      ? (state.tasksByBot[shown.botId] ?? []).find((t) => t.key === shown.key)
+    found.name === "task"
+      ? (state.tasksByBot[found.botId] ?? []).find((t) => t.key === found.key)
       : undefined;
-  const settings = (
-    <Settings
-      connection={state.connection}
-      showChannelChats={state.showChannelChats === true}
-      visible={settingsOpen}
-      onClose={() => setSettingsOpen(false)}
-      onForget={another}
-    />
-  );
-  if (shown.name === "task" && bot && task) {
-    return (
+  // A task the list has not sent yet shows its bot's tasks until it arrives.
+  const shown = found.name === "task" && !task ? back(found) : found;
+  const layout = panes(shape);
+  const show = panesFor(shown, layout.kind === "split");
+  // Each pane keeps its key whichever way the window is split, so folding or
+  // unfolding keeps the chat that is open, scrolled where it was.
+  const place = (pane: "list" | "chat"): ViewStyle =>
+    layout.kind === "split"
+      ? { position: "absolute", top: 0, bottom: 0, left: layout[pane].x, width: layout[pane].width }
+      : StyleSheet.absoluteFill;
+  const list =
+    show.list === "bot" && bot ? (
+      <BotTasks
+        state={state}
+        bot={bot}
+        seen={seen}
+        now={now}
+        openKey={show.chat === "task" && shown.name === "task" ? shown.key : null}
+        onBack={() => setRoute(HOME)}
+        onOpenTask={(key) => setRoute({ name: "task", botId: bot.id, key })}
+      />
+    ) : show.list ? (
+      <Home
+        state={state}
+        seen={seen}
+        now={now}
+        onOpenBot={(botId) => setRoute({ name: "bot", botId })}
+        onSettings={() => setSettingsOpen(true)}
+      />
+    ) : null;
+  const chat =
+    show.chat === "task" && shown.name === "task" && bot && task ? (
       <Chat
         state={state}
         bot={bot}
@@ -97,31 +125,43 @@ function Screens() {
         onBack={() => setRoute(back(shown))}
         onRead={onRead}
       />
-    );
-  }
-  if (shown.name !== "home" && bot) {
-    return (
-      <BotTasks
-        state={state}
-        bot={bot}
-        seen={seen}
-        now={now}
-        onBack={() => setRoute(HOME)}
-        onOpenTask={(key) => setRoute({ name: "task", botId: bot.id, key })}
-      />
-    );
-  }
+    ) : show.chat ? (
+      <NoChat />
+    ) : null;
+  const divided = layout.kind === "split" && !layout.atFold;
   return (
-    <>
-      <Home
-        state={state}
-        seen={seen}
-        now={now}
-        onOpenBot={(botId) => setRoute({ name: "bot", botId })}
-        onSettings={() => setSettingsOpen(true)}
-      />
-      {settings}
-    </>
+    <View style={{ flex: 1, backgroundColor: theme.c.bg }}>
+      {[
+        list && (
+          <View key="list" style={place("list")}>
+            {list}
+          </View>
+        ),
+        chat && (
+          <View
+            key="chat"
+            style={[
+              place("chat"),
+              divided && {
+                borderLeftWidth: StyleSheet.hairlineWidth,
+                borderLeftColor: theme.c.border,
+              },
+            ]}
+          >
+            {chat}
+          </View>
+        ),
+      ]}
+      {show.list === "home" && (
+        <Settings
+          connection={state.connection}
+          showChannelChats={state.showChannelChats === true}
+          visible={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          onForget={another}
+        />
+      )}
+    </View>
   );
 }
 
@@ -135,7 +175,9 @@ export function App({ switcherProbePort }: { switcherProbePort?: number }) {
       <ThemeContext.Provider value={theme}>
         <SafeAreaProvider>
           <StatusBar barStyle={theme.scheme === "dark" ? "light-content" : "dark-content"} />
-          <Screens />
+          <WindowShapeProvider>
+            <Screens />
+          </WindowShapeProvider>
         </SafeAreaProvider>
       </ThemeContext.Provider>
     </RuntimeContext.Provider>
