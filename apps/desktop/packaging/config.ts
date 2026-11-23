@@ -146,6 +146,10 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
     win: {
       icon: "resources/icon.ico",
       target: [{ target: "nsis", arch: ["x64"] }],
+      // One SHA-256 signature per file. electron-builder's default adds a SHA-1
+      // signature first, for Windows releases that cannot check SHA-256, and
+      // Electron 45 runs on none of them.
+      signtoolOptions: { signingHashAlgorithms: ["sha256"] },
     },
     nsis: {
       oneClick: false,
