@@ -1,0 +1,11 @@
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Use Advanced on Windows" [level=3]
+  - paragraph: "Clawtrate can't yet look for OpenClaw on Windows. It doesn't set OpenClaw up on Windows either: OpenClaw's Windows installer can change Node.js or PATH and installs OpenClaw globally."
+  - button "Use Advanced"
+  - button "Use another computer"
+  - paragraph:
+    - link "OpenClaw's own install instructions":
+      - /url: https://docs.openclaw.ai/install
+  - paragraph: On this computer

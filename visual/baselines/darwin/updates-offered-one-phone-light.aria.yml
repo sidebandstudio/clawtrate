@@ -1,0 +1,16 @@
+- dialog "Settings":
+  - region "Updates":
+    - button "Close settings"
+    - button "Back to settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - term: Version
+    - definition:
+      - text: Clawtrate 0.1.0
+      - paragraph: This copy is a Stable build.
+    - group "Update status":
+      - term: Updates
+      - definition: Clawtrate 0.2.0 is offered by the update source.
+      - button "Download"
+      - paragraph: Downloads Clawtrate 0.2.0, only when you choose to.
+    - status: Clawtrate 0.2.0 is offered by the update source.

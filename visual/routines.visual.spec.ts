@@ -3,8 +3,8 @@
 // bot's routines, a routine's page with its runs, a run with its conversation
 // and one without, the calendar, and a bot working while its routine runs.
 // The fixture's routines are made up (apps/desktop/src/fixture/routines.ts).
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
 type Scene = { name: string; query: string; ready: (page: Page, phone: boolean) => Promise<void> };
 

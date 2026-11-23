@@ -1,0 +1,17 @@
+- 'region "Otto asks: How long should I keep the cache in /srv/scratch before deleting it?"':
+  - heading "How long should I keep the cache in /srv/scratch before deleting it?" [level=3]
+  - button "Dismiss Otto's question"
+  - radiogroup "How long should I keep the cache in /srv/scratch before deleting it?":
+    - listitem:
+      - radio "A week Delete it next Monday"
+    - listitem:
+      - radio "A month"
+    - listitem:
+      - radio "Until I say so Keep it and remind me"
+    - listitem:
+      - radio "Delete it now"
+  - text: Type your own answer
+  - textbox "Type your own answer Send this answer":
+    - /placeholder: Type your own answer
+  - button "Send this answer" [disabled]
+  - button "Raw"
