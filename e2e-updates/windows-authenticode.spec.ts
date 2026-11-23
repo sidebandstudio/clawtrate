@@ -109,6 +109,12 @@ if (windows)
         "setup.exe",
         readFileSync(join(system, "WindowsPowerShell", "v1.0", "powershell.exe")),
       );
+      // First, that Windows trusts this copy, and only through a catalog.
+      const trust = await windowsSays(
+        `$s = Get-AuthenticodeSignature -LiteralPath $env:CLAWTRATE_CHECKED_FILE; "$($s.Status) $($s.SignatureType)"`,
+        path,
+      );
+      expect(trust).toBe("Valid Catalog");
       expect(await windowsInstaller(running).inspect(await proof(path, version))).toBe(
         "windows-signature",
       );
