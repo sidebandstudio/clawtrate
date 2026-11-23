@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ClawtrateClient, FULL_SCOPES, type ClawtrateHost } from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
@@ -530,6 +530,32 @@ function profileFiles(home: string, folder: string, lock: object) {
 }
 
 describe.skipIf(!mac)("local connect's send gate, with a listener of the test's own", () => {
+  it("refuses every socket when the profile's folder isn't in the home local connect names", async () => {
+    const lines: string[] = [];
+    const elsewhere = realpathSync(mkdtempSync(join(scratch, "elsewhere-")));
+    const listener = createServer((socket) => socket.on("error", () => {}));
+    await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
+    const port = (listener.address() as { port: number }).port;
+    try {
+      await withLocalSetup(
+        makeClient(new FakeGateway()),
+        async (setup) => {
+          await setup.connect();
+          await until(() => lines.length >= 1, 15_000);
+          expect(lines[0]).toBe(`[setup] couldn't verify what is listening at port ${port} (path)`);
+        },
+        { pid: 4242 },
+        {
+          port,
+          log: (line) => lines.push(line),
+          localConnect: () => ({ home: elsewhere, helper, platform, sandboxed: true }),
+        },
+      );
+    } finally {
+      listener.close();
+    }
+  });
+
   for (const mode of ["bootstrap", "saved-token"] as const) {
     it(`F-492: a same-account listener that isn't OpenClaw gets no byte of any setup socket (${mode})`, async () => {
       // This process holds the accepted end: (e) passes, and (f) refuses it.
@@ -678,7 +704,9 @@ describe.skipIf(!BIN || !mac)(
         /^\(version 1\)\(allow default\)\(deny file-read\* \(subpath "[^"()]+"\)\)$/,
       );
       const port = await freePort();
-      const proxy = await standIn(port, gateway.port, ["/usr/bin/sandbox-exec", "-p", profile]);
+      const proxy = await standIn(port, gateway.port, {
+        wrap: ["/usr/bin/sandbox-exec", "-p", profile],
+      });
       try {
         const refused = await refusedThrough(gateway, port, token);
         expect(refused[0]).toBe("module");
@@ -775,6 +803,41 @@ describe.skipIf(!BIN || !mac)(
         );
       } finally {
         chmodSync(folder, 0o700);
+      }
+    });
+
+    it("F-492: a same-account process with OpenClaw's own module loaded, but not the gateway, gets no upgrade and no credential", async () => {
+      // The pinned module of the very package the gateway runs, mapped into a stand-in of the
+      // test's own; then with the profile's lock, and with its database, open as well.
+      const module = join(
+        dirname(realpathSync(BIN!)),
+        "node_modules/@openclaw",
+        `fs-safe-darwin-${process.arch}`,
+        "fs-safe-native.node",
+      );
+      const lock = join(
+        gateway.home,
+        FOLDER,
+        "tmp",
+        `openclaw-${process.geteuid!()}`,
+        "gateway.state.lock",
+      );
+      const database = join(gateway.home, FOLDER, "state", "openclaw.sqlite");
+      for (const [hold, why] of [
+        [[], "lock"],
+        [[lock], "state"],
+        // Everything (f) looks for, but the lock names the gateway, not this process.
+        [[lock, database], "named"],
+      ] as const) {
+        const port = await freePort();
+        const impostor = await standIn(port, gateway.port, { load: module, hold: [...hold] });
+        try {
+          const refused = await refusedThrough(gateway, port, token);
+          expect(refused[0], why).toBe(why);
+          expect(impostor.bytes()).toBe(0);
+        } finally {
+          await impostor.stop();
+        }
       }
     });
 

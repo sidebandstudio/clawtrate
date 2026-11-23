@@ -4,7 +4,7 @@
 // and stand-in helpers for what the host checks in the helper's answer. A
 // development gateway proves the passing case (setup-connect-boundaries.test.ts).
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -99,6 +99,53 @@ describe.skipIf(platform !== "darwin")("the proof, against listeners of the test
     }
   });
 
+  it("proves exactly this connection, by both its ports", async () => {
+    const spare = createServer((socket) => socket.on("error", () => {}));
+    await new Promise<void>((done) => spare.listen(0, "127.0.0.1", done));
+    const sparePort = (spare.address() as { port: number }).port;
+    const toServer = await connection(port);
+    const toSpare = await connection(sparePort);
+    try {
+      // The far end of another connection of this process's, to another port, holds neither.
+      expect(await proveLocalGateway(options(home(), toSpare.localPort))).toEqual(
+        refused("holder"),
+      );
+      expect(
+        await proveLocalGateway(options(home(), toServer.localPort, { port: sparePort })),
+      ).toEqual(refused("holder"));
+    } finally {
+      toServer.end();
+      toSpare.end();
+      spare.close();
+    }
+  }, 15_000);
+
+  it("refuses a holder of this account's that isn't Node", async () => {
+    const perl = spawn(
+      "/usr/bin/perl",
+      [
+        "-MIO::Socket::INET",
+        "-e",
+        '$|=1; my $s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 0, Listen => 4) or die; print $s->sockport, "\n"; my @held; while (my $c = $s->accept) { push @held, $c }',
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    try {
+      const listening = await new Promise<number>((done) =>
+        perl.stdout.once("data", (text: Buffer) => done(Number(String(text).trim()))),
+      );
+      const { localPort, end } = await connection(listening);
+      try {
+        const proof = await proveLocalGateway(options(home(), localPort, { port: listening }));
+        expect(proof).toEqual(refused("node"));
+      } finally {
+        end();
+      }
+    } finally {
+      perl.kill("SIGKILL");
+    }
+  });
+
   it("finds no holder for a connection that isn't there", async () => {
     // A port of this run's that no connection uses, as the far end of nothing.
     const spare = createServer();
@@ -142,6 +189,14 @@ describe.skipIf(platform !== "darwin")("the proof, against listeners of the test
       const shared = home();
       chmodSync(join(shared, FOLDER), 0o750);
       expect(await proveLocalGateway(options(shared, localPort))).toEqual(refused("mode"));
+      // A sandboxed run's home must be private, ACL included, as the reader's is.
+      const granted = home();
+      execFileSync("/bin/chmod", ["+a", "everyone allow read", granted]);
+      try {
+        expect(await proveLocalGateway(options(granted, localPort))).toEqual(refused("acl"));
+      } finally {
+        execFileSync("/bin/chmod", ["-N", granted]);
+      }
     } finally {
       end();
     }

@@ -185,10 +185,18 @@ export async function startGateway(
   };
 }
 
-/** A program of the test's own, in a process of its own: a listener that counts what it is sent. */
+/**
+ * A program of the test's own, in a process of its own: a listener that counts
+ * what it is sent. It may first load a native module and open files, read-only,
+ * to look more like OpenClaw.
+ */
 const LISTENER = `
+const fs = require("node:fs");
 const net = require("node:net");
-const [listen, target] = process.argv.slice(1).map(Number);
+const [listen, target] = process.argv.slice(1, 3).map(Number);
+const [load, ...hold] = process.argv.slice(3);
+if (load) process.dlopen({ exports: {} }, load);
+const held = hold.map((file) => fs.openSync(file, "r"));
 let bytes = 0;
 net.createServer((socket) => {
   socket.on("error", () => {});
@@ -207,21 +215,23 @@ export type StandIn = { accepted: () => number; bytes: () => number; stop: () =>
 
 /**
  * A listener at `port` in a process of its own, forwarding every byte to
- * `target` when given one; `wrap` runs it under another program
- * (`sandbox-exec`). It reports what it accepted and was sent.
+ * `target` when given one. `wrap` runs it under another program
+ * (`sandbox-exec`); `load` maps a native module into it first, and `hold`
+ * keeps files open. It reports what it accepted and was sent.
  */
 export async function standIn(
   port: number,
   target: number | null,
-  wrap: string[] = [],
+  options: { wrap?: string[]; load?: string; hold?: string[] } = {},
 ): Promise<StandIn> {
   const [program, ...args] = [
-    ...wrap,
+    ...(options.wrap ?? []),
     process.execPath,
     "-e",
     LISTENER,
     String(port),
     String(target ?? 0),
+    ...(options.load ? [options.load, ...(options.hold ?? [])] : []),
   ];
   const child = spawn(program!, args, { stdio: ["ignore", "pipe", "inherit"] });
   let accepted = 0;
