@@ -252,6 +252,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
+  // Settings reads a stop ends: connection commands run one at a time, each with one read.
+  stopWaiters: { max: 1, each: 0, row: null },
+  // Startups still reading: a host starts once, and again only after a stop.
+  startReads: { max: 1, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
   // Each failed request's log policy; an entry lives only as long as that error object.
