@@ -227,6 +227,39 @@ describe("bridge session policy", () => {
   });
 });
 
+describe("openSession", () => {
+  it("F-105: a view opening a task whose history failed for another view reads it again, once", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    const second = createBridgeSession(client);
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      // Only the first viewer holds the task now.
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false });
+      const before = gateway.calls("chat.history").length;
+      await second.apply({ type: "openSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+      // An open of a task whose history is fine reads nothing.
+      const third = createBridgeSession(client);
+      await third.apply({ type: "openSession", key: KEY });
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+      third.dispose();
+    } finally {
+      first.dispose();
+      second.dispose();
+      client.stop();
+    }
+  });
+});
+
 describe("reloadSession", () => {
   it("F-033: a viewer retries a failed history read with one fresh request, and both viewers still hold the task", async () => {
     const { client, gateway } = await openTask();
