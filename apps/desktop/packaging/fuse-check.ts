@@ -13,6 +13,11 @@ const DISABLE = "0".charCodeAt(0);
 const FUSE_SENTINEL = Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX");
 const FUSE_HEADER_SIZE = 2;
 
+/**
+ * The fuse wire read straight from a Windows executable. `@electron/fuses`
+ * takes any path with `.app/Contents/MacOS/` in it for a macOS bundle and
+ * looks for a framework that a Windows install does not have.
+ */
 async function windowsFuseWire(binary: string): Promise<Uint8Array> {
   const file = await open(binary, "r");
   try {
