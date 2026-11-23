@@ -94,7 +94,7 @@ export type StatusLineView = {
   /** The running call the phrase names, which the line brings into view; null when none. */
   callId: string | null;
   /**
-   * Without commands shown (7.11), what the bot is thinking right now: the
+   * With "Show thinking" on (7.11), what the bot is thinking right now: the
    * text of the reasoning the run ends on, while nothing has come after it.
    */
   thought?: string | null;
@@ -126,8 +126,10 @@ export function statusLineFor(
     connected: boolean;
     interactive: boolean;
     reading?: ReadingContext | undefined;
-    /** "Show commands" is off: the phrase says the kind of work, and the thinking shows (7.11). */
+    /** "Show commands" is off: the phrase says the kind of work (7.11). */
     quiet?: boolean;
+    /** "Show thinking" is on: the thinking shows under the phrase (7.11). */
+    thinking?: boolean;
   },
 ): StatusLineView {
   let view: StatusLineView;
@@ -198,8 +200,9 @@ export function statusLineFor(
   }
   // A clock only for a start the gateway reported, never this client's own send time.
   view.startedAt = run.reportedStartAt;
-  if (options.quiet)
-    view.thought = view.state === "thinking" && view.tone === "live" ? liveThought(run) : null;
+  // "Show thinking" decides the thinking under the line, with commands shown or hidden (7.11).
+  view.thought =
+    options.thinking && view.state === "thinking" && view.tone === "live" ? liveThought(run) : null;
   if (!options.connected) {
     const last = view.phrase.replace(/…$/, "");
     return {

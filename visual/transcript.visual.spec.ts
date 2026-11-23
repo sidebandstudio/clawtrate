@@ -29,7 +29,7 @@ const atTop = (page: Page) =>
 
 test.use(contextFor(WIDE, "light"));
 
-test("F-059: the task's header shows context use as tokens used out of the window, or Context: unavailable", async ({
+test("F-059: the task's header shows context use as tokens used out of the window, and no line when the gateway reports none", async ({
   page,
 }) => {
   await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
@@ -41,38 +41,48 @@ test("F-059: the task's header shows context use as tokens used out of the windo
   const line = await rect(context);
   expect(line.y).toBeGreaterThanOrEqual(title.y + title.height - 1);
   expect(line.y - (title.y + title.height)).toBeLessThan(8);
+  // The task's context as the gateway reports it next, through the fixture's state.
+  const report = (next: unknown) =>
+    page.evaluate((value) => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState(
+              f: (s: {
+                tasksByBot: Record<string, Array<{ key: string; context?: unknown }>>;
+              }) => unknown,
+            ): void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        tasksByBot: {
+          ...state.tasksByBot,
+          otto: state.tasksByBot.otto!.map((t) =>
+            t.key === "agent:otto:disk-space" ? { ...t, context: value ?? undefined } : t,
+          ),
+        },
+      }));
+    }, next);
   // After a run the gateway reports a new count, and the header follows it.
-  await page.evaluate(() => {
-    const fixture = (
-      window as unknown as {
-        clawtrateFixture: {
-          setState(
-            f: (s: {
-              tasksByBot: Record<string, Array<{ key: string; context?: unknown }>>;
-            }) => unknown,
-          ): void;
-        };
-      }
-    ).clawtrateFixture;
-    fixture.setState((state) => ({
-      ...state,
-      tasksByBot: {
-        ...state.tasksByBot,
-        otto: state.tasksByBot.otto!.map((t) =>
-          t.key === "agent:otto:disk-space"
-            ? { ...t, context: { used: 21_050, window: 128_000, fresh: true } }
-            : t,
-        ),
-      },
-    }));
-  });
+  await report({ used: 21_050, window: 128_000, fresh: true });
   await expect(context).toHaveText("Context: 21,050 of 128,000 tokens");
-  // Marlow's gateway reports none.
+  // A count the gateway marks as from before the latest run reads "about".
+  await report({ used: 21_050, window: 128_000, fresh: false });
+  await expect(context).toHaveText("Context: about 21,050 of 128,000 tokens");
+  // When a later read of the task carries no count, the line goes.
+  await report(null);
+  await expect(page.getByTestId("task-context")).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // Marlow's gateway reports none: the header has no context line, and says nothing in its place.
   await page
     .getByTestId("bot-list")
     .getByRole("button", { name: /^Marlow\b/ })
     .click();
-  await expect(page.getByTestId("task-context")).toHaveText("Context: unavailable");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.getByTestId("task-context")).toHaveCount(0);
+  await expect(page.locator(".transcript")).not.toContainText("Context:");
 });
 
 test("F-063: centred grey stamps separate blocks: before the first message and after ten quiet minutes or a new day", async ({

@@ -312,7 +312,7 @@ export function fixtureTasks(now: number, bots: Bot[]): Record<string, Task[]> {
       updatedAt: now - spec.ago * MINUTE,
       status: spec.status ?? "done",
       unread: spec.unread ?? false,
-      // Marlow's gateway reports no context use, so its task says so.
+      // Marlow's gateway reports no context use, so its task shows no context line.
       ...(bot.id === "marlow"
         ? {}
         : {
