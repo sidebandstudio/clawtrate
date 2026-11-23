@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: build your own Claw</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/conversation.css" />
+    <link rel="stylesheet" href="css/bots.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <link rel="stylesheet" href="css/avatars.css" />
+    <link rel="stylesheet" href="css/avatar-studio.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script src="js/creatures.js"></script>
+    <script src="js/fit-inset.js"></script>
+    <script src="js/accessories.js"></script>
+    <script src="js/avatar-picture.js"></script>
+    <script src="js/fit-measure.js"></script>
+    <script src="js/avatar-studio.js" defer></script>
+  </head>
+  <body class="as-page">
+    <header class="proto-bar" id="proto-bar"></header>
+    <!-- docs/design/avatar-studio.md. The studio (New bot and Edit picture),
+         a bot proposing its own picture in chat, and the board of every family
+         wearing accessories in each state at each size. js/avatar-studio.js
+         fills the frame; ?view= picks studio, chat or board. -->
+    <main class="proto-stage">
+      <div class="proto-frame" id="as-frame"></div>
+    </main>
+    <p class="visually-hidden" id="as-live" aria-live="polite"></p>
+  </body>
+</html>
