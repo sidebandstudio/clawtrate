@@ -69,10 +69,10 @@ const shown = (locator: Locator) =>
 async function touchScreen(page: Page) {
   const cdp = await page.context().newCDPSession(page);
   const down = new Map<number, { x: number; y: number }>();
-  const send = (type: "touchStart" | "touchMove" | "touchEnd") =>
+  const send = (type: "touchStart" | "touchMove" | "touchEnd", ids = [...down.keys()]) =>
     cdp.send("Input.dispatchTouchEvent", {
       type,
-      touchPoints: [...down].map(([id, at]) => ({ id, ...at, radiusX: 10, radiusY: 10, force: 1 })),
+      touchPoints: ids.map((id) => ({ id, ...down.get(id)!, radiusX: 10, radiusY: 10, force: 1 })),
     });
   return async (turn: Locator) => {
     const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
@@ -82,9 +82,12 @@ async function touchScreen(page: Page) {
     await send("touchStart");
     return {
       move: (dx: number, dy: number) => (at(dx, dy), send("touchMove")),
-      // A touchEnd carries no points and lifts them all; one finger of several lifts by moving
-      // the others, which leaves it out.
-      lift: () => (down.delete(id), send(down.size > 0 ? "touchMove" : "touchEnd")),
+      // A touchEnd lifts the points it carries, or all of them when it carries none: one finger
+      // of several lifts alone, with a pointerup of its own.
+      lift: async () => {
+        await send("touchEnd", down.size > 1 ? [id] : []);
+        down.delete(id);
+      },
     };
   };
 }
@@ -810,13 +813,16 @@ test.describe("message actions on a phone", () => {
     const turn = await holdReady(page);
     const text = turn.locator(".msg > .bubble").last();
     const finger = await fingerOn(turn);
-    await page.getByTestId("transcript").evaluate(
-      (el) =>
-        new Promise((scrolled) => {
-          el.addEventListener("scroll", scrolled, { once: true });
-          el.scrollTop -= 40;
-        }),
-    );
+    // Away and back: the message is where it started by the time the long press would open.
+    for (const dy of [-40, 40])
+      await page.getByTestId("transcript").evaluate(
+        (el, by) =>
+          new Promise((scrolled) => {
+            el.addEventListener("scroll", scrolled, { once: true });
+            el.scrollTop += by;
+          }),
+        dy,
+      );
     await page.clock.runFor(600);
     await expect(text).toHaveCSS("user-select", "none");
     await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
