@@ -124,6 +124,7 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
+import { readChatPicture, type ChatPictureRead } from "./pictures.ts";
 import type {
   ApprovalInstructions,
   ClawtrateHost,
@@ -5406,14 +5407,18 @@ export class ClawtrateClient {
     if (this.fileReads >= MAX_FILE_READS)
       throw new Error("Other files are being read; try again in a moment.");
     this.fileReads += 1;
+    const owner = options.owner ?? DIRECT_CALLER;
     try {
-      return await read({
+      const result = await read({
         request: (method, params) => this.request(method, params),
         transfers: this.fileTransfers,
-        owner: options.owner ?? DIRECT_CALLER,
+        owner,
         ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
         now: () => this.now(),
       });
+      // A viewer that went away while this read ran can't release what it started: drop it now.
+      if (this.withdrawnOwners.has(owner)) this.fileTransfers.release(owner);
+      return result;
     } finally {
       this.fileReads -= 1;
     }
@@ -5490,6 +5495,42 @@ export class ClawtrateClient {
     options: FileReadOptions = {},
   ): Promise<CheckoutDiff> {
     return this.fileRead((ctx) => readCheckoutDiff(ctx, key, path), options);
+  }
+
+  /** A picture the bot handed over in the task (`pictures.ts`), sharing the file reads' limit. */
+  async readChatPicture(
+    key: string,
+    artifactId: string,
+    options: FileReadOptions = {},
+  ): Promise<ChatPictureRead> {
+    // A turn hands over up to four pictures and a task can hold several such turns, all drawn
+    // at once: a picture waits up to 30 s for one of the file reads' places, and of the
+    // transfers' that carry a picture to its viewer, instead of failing.
+    const generation = this.generation;
+    for (
+      let waited = 0;
+      (this.fileReads >= MAX_FILE_READS || this.fileTransfers.full()) && waited < 300;
+      waited += 1
+    )
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+    // The task and picture are the connection's it was asked on: never read on a later one.
+    if (generation !== this.generation)
+      return { status: "failed", message: "The connection changed while this picture waited." };
+    // A viewer that left while the picture waited asks for nothing.
+    this.checkNotWithdrawn(options.owner);
+    const gatewayUrl = this.state.connection.gatewayUrl ?? "";
+    const read = await this.fileRead(
+      (ctx) =>
+        readChatPicture({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }, key, artifactId),
+      options,
+    );
+    // Bytes that arrive after a switch to another gateway are the old one's: none reach a viewer.
+    if (generation !== this.generation) {
+      if (read.status === "content" && read.transfer.id)
+        this.fileTransfers.release(options.owner ?? DIRECT_CALLER, read.transfer.id);
+      return { status: "failed", message: "The connection changed while this picture was read." };
+    }
+    return read;
   }
 
   /** The next part of a file on its way to this viewer. */
@@ -7293,6 +7334,17 @@ export class ClawtrateClient {
   }
 
   /**
+   * A `sessions.changed` with `phase: "message"` for an open task: a message of it
+   * changed in place. The gateway writes a picture a turn hands over into its
+   * message after the turn ends, with no `session.message`, so history is read again.
+   */
+  private noteMessageChange(payload: unknown): void {
+    const row = asRecord(payload);
+    const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
+    if (row?.phase === "message" && key && this.tracked(key)) this.scheduleHistory(key);
+  }
+
+  /**
    * Apply a `sessions.changed` event with the same membership rules as the list.
    * A known row is merged and re-checked. An unknown row whose key is not ruled
    * out cannot prove membership from the payload, so the filtered list is
@@ -7301,6 +7353,7 @@ export class ClawtrateClient {
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.discoveryRead) this.discoveryRead.sessionsChanged = true;
     this.noteRunChange(payload);
+    this.noteMessageChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
     // Rows are kept under the id cap.

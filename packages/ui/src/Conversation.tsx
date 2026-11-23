@@ -35,20 +35,32 @@ import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
+import { Pictures } from "./Pictures.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
  * bubbles, action cards and "Thought" lines in their order (section 7).
  */
-function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?: boolean }) {
+function Turn({
+  taskKey,
+  item,
+  incomplete = false,
+}: {
+  taskKey: string;
+  item: TranscriptItem;
+  incomplete?: boolean;
+}) {
   const role = item.role === "user" ? "user" : "assistant";
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
   return (
     <div className="turn" data-role={role} data-testid="transcript-turn">
       <ReplyQuote item={item} />
       {role === "assistant" ? (
-        <ItemFeed itemId={item.id} />
+        <>
+          <ItemFeed itemId={item.id} />
+          <Pictures taskKey={taskKey} item={item} />
+        </>
       ) : (
         <MessageUnit
           message={
@@ -386,7 +398,7 @@ function TranscriptView({
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
         ) : live.echoes.has(item.id) ? null : (
-          <Turn item={item} incomplete={live.incomplete.has(item.id)} />
+          <Turn taskKey={task.key} item={item} incomplete={live.incomplete.has(item.id)} />
         )}
       </CardSlot>,
     );

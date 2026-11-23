@@ -46,6 +46,28 @@ export type ClientIdentity = {
   platform: string;
 };
 
+/** The part of a WHATWG `fetch` response core reads: browsers, Node, Electron and React Native have it. */
+export type HttpResponseLike = {
+  readonly status: number;
+  readonly headers: { get(name: string): string | null };
+  readonly body: {
+    getReader(): {
+      read(): Promise<{ done: boolean; value?: Uint8Array }>;
+      cancel(): Promise<void>;
+    };
+    cancel(): Promise<void>;
+  } | null;
+};
+
+/**
+ * An HTTP GET with no cookies and no redirects. Core asks it only for a path on the
+ * gateway's own origin that the gateway itself issued (`pictures.ts`).
+ */
+export type HttpFetch = (
+  url: string,
+  init: { method: "GET"; redirect: "error"; credentials: "omit"; signal: AbortSignal },
+) => Promise<HttpResponseLike>;
+
 export type ApprovalInstructions = { command: string; note: string | null };
 
 export type ClawtrateHost = {
@@ -72,4 +94,6 @@ export type ClawtrateHost = {
    * gateway is the local development one; core falls back to the generic command.
    */
   approvalInstructions?: (gatewayUrl: string, requestId: string) => ApprovalInstructions;
+  /** Fetches the downloads the gateway issues for pictures (`pictures.ts`); without it, none is shown. */
+  fetch?: HttpFetch;
 };
