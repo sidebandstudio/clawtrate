@@ -808,4 +808,25 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("setup's Back leaves gateway B, which another client saved with its own token during setup for B", async () => {
+    const storage = memoryStorage();
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const client = new ClawtrateClient(testHost(pairingAtB(), storage), FAST);
+    const other = new ClawtrateClient(testHost(closed, storage), FAST);
+    try {
+      await client.start();
+      const selection = client.nextSelection();
+      await client.connectWithSetupCode(setupCode);
+      await until(() => client.state.connection.status === "pairing");
+      await other.start({ resume: false });
+      await other.connect({ url: URL_B, token: "typed-B" });
+      await client.disconnect(URL_B, selection);
+      expect(saved(storage)).toEqual({ url: URL_B, token: "typed-B" });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });

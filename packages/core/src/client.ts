@@ -1791,12 +1791,10 @@ export class ClawtrateClient {
         throw new GatewayChangedError();
       }
       // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
-      // and stays the selection it was. A record another client on this store saved since for a
-      // different gateway is that client's, and stays.
+      // and stays the selection it was. A record another client on this store saved or changed
+      // since is that client's, and stays, even for this gateway.
       const saved = await this.savedSettings();
-      if (saved === null || saved.url === this.settings.url || this.recordSeen()) {
-        await this.forgetRecord();
-      }
+      if (saved === null || this.recordSeen()) await this.forgetRecord();
       this.selectionApplied = asked;
       this.abandonAccessRequest("Disconnected from the gateway.");
       this.close();
