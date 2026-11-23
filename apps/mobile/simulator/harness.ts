@@ -315,6 +315,23 @@ export function textSize(size: "large" | "accessibility-extra-extra-extra-large"
   simctl("ui", env.device, "content_size", size);
 }
 
+/**
+ * The system's Reduce Motion, as Settings, Accessibility, Motion sets it.
+ * Launch the app again afterwards, so it reads the new setting as it starts.
+ */
+export function reduceMotion(on: boolean) {
+  simctl(
+    "spawn",
+    env.device,
+    "defaults",
+    "write",
+    "com.apple.Accessibility",
+    "ReduceMotionEnabled",
+    "-bool",
+    String(on),
+  );
+}
+
 /** The built app's Info.plist value for a key. */
 export function infoPlist(key: string): string {
   const result = spawnSync(
