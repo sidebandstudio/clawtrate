@@ -201,6 +201,10 @@ for (const size of [DESKTOP, PHONE])
             await confirm.getByRole("button", { name: "Restart", exact: true }).click();
             await expect(updateButton(page)).toHaveAccessibleName(/^Restarting…/);
             await expect(updateButton(page)).toHaveAttribute("aria-disabled", "true");
+            // An accepted restart leaves Settings closed. Two frames first, so a wrong open
+            // after the reply would already show.
+            await settle(page);
+            await expect(page.locator(".updates-section")).toHaveCount(0);
           }
         });
     });

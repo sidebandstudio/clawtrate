@@ -169,7 +169,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       return reply("accepted");
     },
     restart: async (id) => {
-      // `restart=busy|stale|invalid|silent`: the host refuses, or never answers.
+      // `restart=busy|stale|invalid|silent`: the host refuses, or the request gets no reply (it fails).
       const refusal = params.get("restart");
       if (refusal === "silent") throw new Error("no reply");
       if (refusal === "busy" || refusal === "stale" || refusal === "invalid") return reply(refusal);
