@@ -12,7 +12,7 @@ Where things were run:
 
 - **Development instances** of the gateway, named and started by this checkout with `pnpm dev-gateway start --instance <name> --default-local-pairing`. That option (added for this note, `tools/dev-gateway`) leaves `gateway.nodes.pairing.autoApproveLocal` unset, at the gateway's default; every other instance sets it to `false`. The probes are in `setup-flow/pair-probe.ts` and use this project's own client (`packages/core`) where the desktop app would.
 - **An `sshd` of my own**, run as my own user on a loopback port, with a host key, a user key, a configuration and a home created for it in a temporary folder, reached with `ssh -F <that configuration>`, `IdentitiesOnly`, that key and that known-hosts file. Nothing of the machine's own SSH setup was read or used.
-- **GitHub's hosted runners** (macOS, Ubuntu and Windows), for everything that installs or registers a service, which must never run on a machine with a working gateway. The workflows are `.github/workflows/setup-research.yml` (runs 44415483883 and 44416142360) and `.github/workflows/setup-owned-install.yml` (runs 44432670957 and 44433669562) on the branch `su-research`, which is not merged.
+- **GitHub's hosted runners** (macOS, Ubuntu and Windows), for everything that installs or registers a service, which must never run on a machine with a working gateway. The workflows are `.github/workflows/setup-research.yml` (runs 44415483883 and 44416142360) and `.github/workflows/setup-owned-install.yml` (runs 44432670957 and 44433669562) on the branch `su-research`, which is not merged, and `.github/workflows/windows-private-install.yml` for the private Windows install in §6.6.
 
 Sections 3.1, 6.8, 6.9 and 7.2 were added after an independent review of the first version, together with narrower wording where it had claimed more than the evidence (sections 1, 2, 3 and 6.6).
 
@@ -285,6 +285,50 @@ Run 44416142360 went on past the failure (Node 26.13.1 was now installed):
 
 So on Windows: the version pin works; the install changes the machine's Node and global npm prefix; onboarding makes a Scheduled Task; removal can end with exit 1 over an empty, locked folder, which the next install does not trip on (a fresh `~\.openclaw` is created inside it).
 
+#### A private install with its own Scheduled Task, pending its first run
+
+Written 2026-11-23. Nothing in this part has run yet. The workflow `.github/workflows/windows-private-install.yml` runs `setup-flow/windows-private-install.ps1` on GitHub's `windows-2025` runner in Windows PowerShell 5.1 and uploads its record as the artifact `windows-private-install`. The script stops at once anywhere but a GitHub-hosted runner. It uses only the profile `clawtrate-proof`, never the default one, and puts everything it installs under `%LOCALAPPDATA%\Clawtrate-proof`, called `<root>` below.
+
+What it runs, in order:
+
+| Step | What runs | What it checks |
+|---|---|---|
+| Node.js | Downloads `node-v24.22.1-win-x64.zip`, the version `install-cli.sh` uses (§6.1), with `SHASUMS256.txt` and `SHASUMS256.txt.sig` from nodejs.org, and the signing key from `nodejs/release-keys` at a fixed commit. Windows' `tar.exe` unpacks the zip into `<root>\node` | Nothing is unpacked unless the key file's SHA-256, a valid signature by key `5BE8A3F6…B168D356` and the zip's SHA-256 `d2046d28…b95fa5` all match values written into the script, and `SHASUMS256.txt` lists that hash |
+| OpenClaw | The private Node runs its own `npm-cli.js install --global --prefix <root>\openclaw --cache <root>\npm\cache --userconfig <an empty file> --globalconfig <another empty file> --allow-scripts=openclaw openclaw@2026.10.6`. Only that process has the private Node first on its PATH | The installed `dist/entry.js` has the tarball's SHA-256 `84d9ae45…ce0d08` (§6.8), and no `.openclaw-lifecycle-pending` or install guard is left |
+| Version | `node.exe <root>\openclaw\node_modules\openclaw\dist\entry.js --profile clawtrate-proof --version`, the way `install-cli.sh`'s wrapper runs OpenClaw | It prints 2026.10.6 |
+| Onboarding | The same program with `onboard --non-interactive --accept-risk --auth-choice skip --gateway-bind loopback --gateway-auth token --gateway-port <free port> --install-daemon --skip-skills --json`, as in §6.8 | The JSON's `ok`, and the startup mode it prints |
+| The task | `Get-ScheduledTask`, `Export-ScheduledTask`, the profile's `gateway.cmd`, the process listening on the port, `/healthz` and `gateway status --json` | A task named `OpenClaw Gateway (clawtrate-proof)` exists, and the listener and `gateway.cmd` run the private `node.exe` and the private OpenClaw |
+| A killed gateway | `Stop-Process` on the listening process, then 150 s of `/healthz`, past two of `RestartOnFailure`'s one-minute intervals | Whether anything starts it again by itself |
+| Starting the task | `Start-ScheduledTask`, which runs the action a logon or boot trigger runs, under the same account. The triggers themselves aren't fired: a runner can't log its user on again or reboot | The gateway answers again, and how soon |
+| Ending the task | `Stop-ScheduledTask`, then `Start-ScheduledTask` | Every process from `<root>` stops, and the gateway comes back |
+| Removal | `uninstall --service --state --workspace --yes --non-interactive`. Then the script removes and records whatever is left of the profile's task, Startup entry, state folder and processes, trying an empty state folder up to six times, and deletes `<root>` | Uninstall's exit code, what it left, and whether a later try removes it |
+| Before and after | A record taken before the download and again after removal | The machine and user PATH in the registry, `where node`, `where npm`, both versions, `npm config get prefix cache userconfig globalconfig`, `npm ls --global --depth=0`, the npmrc files' SHA-256 and `HKCU\Environment` must be unchanged. The script also lists what was added to or removed from the profile folders, the temporary folder, ProgramData, Program Files, the Startup folder, `%APPDATA%\npm`, the scheduled tasks and four registry keys, and any OpenClaw file left in the temporary folder |
+
+The run fails only when the script couldn't finish or the computer's own Node.js, npm or PATH changed. Every other result is a finding in `summary.json`.
+
+**What the source predicts.** Read in the 2026.10.6 package, not yet run:
+
+| Prediction | Where |
+|---|---|
+| The task is `OpenClaw Gateway (clawtrate-proof)`, and its launcher is `~\.openclaw-clawtrate-proof\gateway.cmd` | `resolveGatewayWindowsTaskName`, `<openclaw>/dist/constants-BLghGsId.mjs` line 66; `resolveGatewayTaskScriptPath`, `<openclaw>/dist/paths-CPHiohZf.mjs` line 30 |
+| The task runs `cmd.exe /d /s /c ""<gateway.cmd>""` as the current user with an S4U logon. It has a boot and a logon trigger, and `RestartOnFailure` every minute, three times | `<openclaw>/dist/schtasks-xml-D9bmn9Az.mjs` lines 69-106 |
+| Registering that boot task needs an elevated terminal. Without one, or when creation is denied, onboarding writes a Startup-folder login item instead, which runs only after an interactive logon. The runner's job is elevated, so this run covers only the elevated path | `<openclaw>/docs/platforms/windows.md` lines 161-173; `shouldFallbackToStartupEntry`, `<openclaw>/dist/schtasks-layout-DFG9D9iI.mjs` line 355 |
+| The service keeps the Node that ran onboarding when that Node is supported and isn't in a version manager's folder such as `.nvm`, `.fnm` or `.volta`. Otherwise it takes the first supported `%ProgramFiles%\nodejs\node.exe`. `gateway.cmd` sets the service's environment but never its PATH | `resolvePreferredNodePath` and `buildSystemNodeCandidates`, `<openclaw>/dist/runtime-paths-Opl9Rh2e.mjs` lines 94-112 and 321-334; `buildTaskScript`, `schtasks-layout-DFG9D9iI.mjs` line 637 |
+| Nothing restarts a killed gateway. The task supervisor restarts its child only when the child exits with the restart code the supervisor gave it; any other exit ends the supervisor with that failure. OpenClaw's docs say `RestartOnFailure` covers a launch that fails, not a gateway that started and then exited | `<openclaw>/dist/task-supervisor-CUAL9wW3.mjs` lines 41-75; `windows.md` line 439 |
+| Uninstall may leave the empty state folder with `EBUSY`, as it left `~\.openclaw` in run 44416142360. Its state cleanup removes the empty folder before its `finally` releases the database removal admission, and `EBUSY` isn't among the errors it tolerates there. If that admission holds the folder, a removal after uninstall exits succeeds | `removeEmptyStateAncestors` and `removeStateAndLinkedPaths`, `<openclaw>/dist/cleanup-utils-CBwuNAzf.mjs` lines 207-220 and 303-312 |
+| The gateway's log stays in `%TEMP%\openclaw-<id>\` after uninstall | `<openclaw>/docs/logging.md` lines 37-40 |
+
+**To fill in from the artifact**, then replace "pending its first run" with the run's id and date:
+
+- The run's id, the runner image, `findings.environment` and `totalSeconds`.
+- Each entry of `steps` with its time, `installSizeMB`, and npm's "added N packages" from the install step.
+- From `afterOnboard`, `task.xml` and `gateway.cmd.txt`: the logon type, triggers, action and restart settings, which `node.exe` and entry point the task runs, `startupMode`, and `status` (service label, `rpc.ok`, version).
+- `afterKill.backAfterSeconds` with the task's state and `lastTaskResult`, then the times of "start the task after the kill", "end the task" and "start the task after ending it", and any survivors in `afterEnd`.
+- `afterUninstall`: the exit code, the uninstall output in `proof.log`, what was left, and `taskRemovedByProof`, `stateDirRemovalByProof` and `processesStoppedByProof`.
+- Every entry of `checks`, `leftAfterRemoval` and `addedOrRemoved`, saying item by item what stayed on the machine.
+- Mark each prediction above as confirmed or not.
+- Then F-517's and F-514's gateway dependency cells, only where the run proved something, and §9 for the logon trigger, the boot trigger and an install without elevation, which this run doesn't cover.
+
 ### 6.8 An install that owns what it makes, from checked files (live)
 
 Runs 44432670957 and 44433669562 (macOS arm64 and Ubuntu x64), workflow `setup-owned-install.yml`. A decoy `~/.openclaw/keep-me` was made first, standing for a person's own OpenClaw.
@@ -400,3 +444,4 @@ From `<openclaw>/docs/gateway/tailscale.md` and the ingress source only. **No `t
 | File | What it is |
 |---|---|
 | `setup-flow/pair-probe.ts` | The probes for sections 1 to 4 and 3.1: `pair`, `upgrade`, `code` (with `--limited`, `--voice` and `--scopes`), `method`, `proxy`. Acts only on a named instance started with `--default-local-pairing`; runs `openclaw` only through the development tool's guarded runner; refuses a `--port` unless its one listener is an `ssh` forwarding exactly that port to the instance; removes the scratch client folder it makes; redacts every token it prints. |
+| `setup-flow/windows-private-install.ps1` | The Windows proof in §6.6: installs a checked Node.js and OpenClaw into private folders, onboards the `clawtrate-proof` profile with its Scheduled Task, restarts and removes it, and compares the computer's Node.js, npm and PATH before and after. Refuses to start anywhere but a GitHub-hosted runner; run by `.github/workflows/windows-private-install.yml`; redacts tokens in what it records. |
