@@ -24,12 +24,7 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  ClawtrateClient,
-  FULL_SCOPES,
-  type ClawtrateHost,
-  type WebSocketLike,
-} from "@clawtrate/core";
+import { ClawtrateClient, FULL_SCOPES, type ClawtrateHost } from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -677,22 +672,29 @@ function provedClient(gateway: DevGateway, port: number, refused: string[]) {
     { ...host, createWebSocket: sockets.createWebSocket, secureCredentials: async () => true },
     { reconnect: { initialMs: 50, maxMs: 200 }, fullAccess: true },
   );
-  provedRoutes.set(client, sockets.createWebSocket);
+  provedRoutes.set(client, sockets);
   return client;
 }
 
 /** Each `provedClient`'s own proved sockets, for a connection that takes local connect's route. */
-const provedRoutes = new WeakMap<ClawtrateClient, (url: string) => WebSocketLike>();
+const provedRoutes = new WeakMap<ClawtrateClient, ReturnType<typeof provedSockets>>();
 
 /**
- * Connects as setup's local connect will: every socket from the proved route, with the person's
- * consent held. Only this route may ask for full access at this computer's gateway; a typed
- * `ws://127.0.0.1` asks for read (setup-effortless.md §3 and §4).
+ * Connects as setup's local connect will: every socket from the proved route, each proved again
+ * last before its credential, saved with that route, and with the person's consent held. Only
+ * this route may ask for full access at this computer's gateway; a typed `ws://127.0.0.1` asks
+ * for read (setup-effortless.md §3 and §4).
  */
 function connectProved(client: ClawtrateClient, url: string, token: string) {
+  const sockets = provedRoutes.get(client)!;
   return client.connect(
     { url, token },
-    { createSocket: provedRoutes.get(client)!, consent: () => true },
+    {
+      createSocket: sockets.createWebSocket,
+      prove: sockets.verify,
+      route: FOLDER,
+      consent: () => true,
+    },
   );
 }
 
