@@ -1,0 +1,54 @@
+- group:
+  - text: Messaged T3 Code Call made
+  - list:
+    - listitem:
+      - text: Otto sent
+      - time: 5:38 PM
+      - text: In backup-scripts, make the weekly check skip machines that are asleep instead of failing, and add a test for it. Project backup-scripts Branch main
+    - listitem:
+      - text: T3 Code · the call returned
+      - time: 5:39 PM
+      - text: Started thread 18 in backup-scripts on main. Working on the change now.
+      - paragraph: This shows the call was made. It does not show that the work is finished.
+  - text: plan.md
+  - link "Open the T3 Code thread in your browser":
+    - /url: https://t3.example.test/projects/backup-scripts/threads/18
+    - text: Open thread
+  - button "Raw" [expanded]
+  - region "What the gateway sent":
+    - term: Tool
+    - definition:
+      - text: t3code__t3_thread_launch
+      - button "Copy tool name"
+    - paragraph: Arguments
+    - button "Copy arguments"
+    - text: "{ \"environmentId\": \"local\", \"projectId\": \"backup-scripts\", \"title\": \"Skip machines that are asleep\", \"workspaceStrategy\": { \"type\": \"root\", \"branch\": \"main\" }, \"message\": \"In backup-scripts, make the weekly check skip machines that are asleep instead of failing, and add a test for it.\" }"
+    - paragraph:
+      - button "Show all 10 lines"
+    - paragraph: Result
+    - button "Copy result"
+    - text: "{ \"content\": [ { \"type\": \"text\", \"text\": \"Started thread 18 in backup-scripts on main. Working on the change now.\" }, { \"type\": \"resource\", \"resource\": { \"name\": \"plan.md\", \"mimeType\": \"text/markdown\", \"uri\": \"file:///plan.md\" } } ], \"details\": { \"mcpServer\": \"t3code\", \"mcpTool\": \"t3_thread_launch\", \"structuredContent\": { \"threadId\": \"thread-18\", \"link\": \"https://t3.example.test/projects/backup-scripts/threads/18\", \"projectId\": \"backup-scripts\", \"runId\": \"run-t3-1\", \"status\": \"starting\" } } }"
+    - paragraph:
+      - button "Show all 27 lines"
+    - paragraph: Timing
+    - term: Started
+    - definition:
+      - text: 5:38:00 PM
+      - button "Copy started time"
+    - term: Ended
+    - definition:
+      - text: 5:39:00 PM
+      - button "Copy ended time"
+    - term: Took
+    - definition:
+      - text: 60.0 s
+      - button "Copy took time"
+    - paragraph: Identifiers
+    - term: Tool call
+    - definition:
+      - text: call_t3
+      - button "Copy tool call id"
+    - term: Run
+    - definition:
+      - text: run_7f3a91c2
+      - button "Copy run id"

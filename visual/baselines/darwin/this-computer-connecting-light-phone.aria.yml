@@ -1,0 +1,9 @@
+- main:
+  - button "Back"
+  - heading "Connecting" [level=2]
+  - paragraph: Requesting read access
+  - list "Steps":
+    - listitem "Making a one-time code, done": Making a one-time code
+    - listitem "Requesting read access, running": Requesting read access
+    - listitem "Loading your bots, waiting": Loading your bots
+  - paragraph: Connecting

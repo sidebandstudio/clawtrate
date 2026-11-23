@@ -7,11 +7,12 @@
 import { describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
 import { ClawtrateClient, setupGrant, type ClientOptions } from "../src/client.ts";
+import { protectedGatewayUrl, validateGatewayUrl } from "../src/gateway-url.ts";
 import type { KeyValueStore } from "../src/host.ts";
 import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
-const URL = "ws://127.0.0.1:19950";
+const URL = "wss://gateway.example:19950";
 const SHARED = "shared-gateway-token-7d3f";
 const ISSUED = "issued-device-token-41ac";
 const CODE = "setup-bootstrap-0123456789abcdefghijklmnopqrstuvw";
@@ -88,6 +89,7 @@ describe("full access behind a flag", () => {
       canApprove: true,
       canAnswer: true,
       canAdmin: true,
+      fullPairing: true,
     });
 
     gateway.dropAll();
@@ -157,6 +159,8 @@ describe("full access behind a flag", () => {
       scopes: [...READ_SCOPES],
       canWrite: false,
       canAdmin: false,
+      // Still a full pairing, holding less: the interface says so and asks for nothing.
+      fullPairing: true,
     });
 
     gateway.dropAll();
@@ -183,6 +187,7 @@ describe("full access behind a flag", () => {
     await until(() => client.state.connection.status === "connected");
     expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
     expect(storage.data.get(tokenKey(URL))).toBe(record);
+    expect(client.state.connection.fullPairing).toBe(false);
     client.stop();
   });
 
@@ -203,9 +208,233 @@ describe("full access behind a flag", () => {
       expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
       expect(stored(storage)?.heldScopes).toEqual([...READ_SCOPES]);
       expect(client.state.connection.canAdmin).toBe(false);
+      expect(client.state.connection.fullPairing).toBe(false);
       client.stop();
     });
   }
+
+  // docs/design/setup-effortless.md §3 and §4: full access only over `wss://` to an address
+  // that isn't loopback, until the send gate proves a local socket.
+  const unprotected = [
+    ["plain ws:// to another computer", "ws://gateway.example:19950"],
+    ["ws:// on loopback", "ws://127.0.0.1:19950"],
+    ["wss:// on loopback", "wss://127.0.0.1:19950"],
+    ["wss:// to localhost", "wss://localhost:19950"],
+    ["wss:// to IPv6 loopback", "wss://[::1]:19950"],
+  ];
+  for (const [name, url] of unprotected) {
+    it(`stays off for ${name}: a first pairing there asks for read alone`, async () => {
+      const gateway = grantingGateway();
+      const { client, storage } = fullClient(gateway);
+      await client.start();
+      await client.connect({ url: url!, token: SHARED });
+      await until(() => client.state.connection.status === "connected");
+      expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+      const record = JSON.parse(storage.data.get(tokenKey(url!)) ?? "null") as {
+        fullGrant?: boolean;
+      };
+      expect(record.fullGrant).toBeUndefined();
+      expect(client.state.connection).toMatchObject({ canAdmin: false, fullPairing: false });
+      client.stop();
+    });
+  }
+
+  // §3's send gate: this computer's gateway through local connect's proved sockets. Every socket
+  // of the connection comes from that route, and the person's consent holds when it opens.
+  const LOOPBACK = "ws://127.0.0.1:19950";
+  const provedRoute = (gateway: FakeGateway, consent: () => boolean) => {
+    const made: string[] = [];
+    return {
+      made,
+      setup: {
+        createSocket: (url: string) => (made.push(url), gateway.createWebSocket(url)),
+        consent,
+      },
+    };
+  };
+
+  it("through local connect's proved sockets, with the person's consent, a first pairing at this computer's gateway asks for the six", async () => {
+    const gateway = grantingGateway();
+    const { client, storage } = fullClient(gateway);
+    const route = provedRoute(gateway, () => true);
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, route.setup);
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...FULL_SCOPES]);
+    expect(route.made).toEqual([LOOPBACK]);
+    const record = JSON.parse(storage.data.get(tokenKey(LOOPBACK)) ?? "null") as {
+      fullGrant?: boolean;
+    };
+    expect(record.fullGrant).toBe(true);
+    // A retry after setup's first read still goes over the proved route, never the host's socket.
+    await until(() => client.state.discovery.status === "ready");
+    gateway.dropAll();
+    await until(() => gateway.connects.length === 2);
+    expect(route.made).toEqual([LOOPBACK, LOOPBACK]);
+    expect(connectAt(gateway, 1)).toMatchObject({
+      scopes: [...FULL_SCOPES],
+      auth: { deviceToken: ISSUED },
+    });
+    client.stop();
+  });
+
+  it("setup's reuse of a saved pairing through the proved sockets asks for read, and so do its retries", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway);
+    const route = provedRoute(gateway, () => true);
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, route.setup);
+    await until(() => client.state.discovery.status === "ready");
+    expect(client.state.connection.fullPairing).toBe(true);
+    await client.connectForSetup(LOOPBACK, route.setup);
+    await until(() => gateway.connects.length === 2);
+    expect(connectAt(gateway, 1).scopes).toEqual([...READ_SCOPES]);
+    // The reuse's own read of the bots ends setup; its retries are then the saved gateway's own.
+    await until(
+      () => gateway.calls("agents.list").length === 2 && client.state.discovery.status === "ready",
+    );
+    expect(client.state.connection.fullPairing).toBe(false);
+    gateway.dropAll();
+    await until(() => gateway.connects.length === 3);
+    expect(connectAt(gateway, 2).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("through the proved sockets without the person's consent, it asks for read alone", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway);
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, provedRoute(gateway, () => false).setup);
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("a loopback setup code still starts read-only, even through the proved sockets (F-509)", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway);
+    await client.start();
+    await client.connectWithSetupCode(
+      { url: LOOPBACK, bootstrapToken: CODE, expiresAtMs: Date.now() + 600_000 },
+      provedRoute(gateway, () => true).setup,
+    );
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("a first pairing's six that wait for approval are asked for again on its retries, after consent runs out", async () => {
+    const gateway = new FakeGateway();
+    let approved = false;
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      if (approved) return { ok: true, payload: helloOk([...scopes], auth?.deviceToken ?? ISSUED) };
+      return {
+        ok: false,
+        error: {
+          code: "NOT_PAIRED",
+          message: "pairing required",
+          details: { code: "PAIRING_REQUIRED", requestId: "req-1" },
+        },
+      };
+    };
+    const { client, storage } = fullClient(gateway);
+    let consent = true;
+    await client.start();
+    await client.connect(
+      { url: LOOPBACK, token: SHARED },
+      provedRoute(gateway, () => consent).setup,
+    );
+    await until(() => client.state.connection.status === "pairing");
+    // OpenClaw keeps the pending request's six whatever a retry asks, and approves them.
+    consent = false;
+    approved = true;
+    await client.retryNow();
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 1).scopes).toEqual([...FULL_SCOPES]);
+    const record = JSON.parse(storage.data.get(tokenKey(LOOPBACK)) ?? "null") as {
+      fullGrant?: boolean;
+    };
+    expect(record.fullGrant).toBe(true);
+    client.stop();
+  });
+
+  it("a typed loopback address with a saved full pairing asks for read over the host's socket, in every spelling", async () => {
+    for (const typed of [LOOPBACK, "ws://localhost:19950", "ws://[::1]:19950"]) {
+      const url = validateGatewayUrl(typed);
+      const gateway = grantingGateway();
+      const storage = memoryStorage();
+      storage.data.set(
+        tokenKey(url),
+        JSON.stringify({
+          token: ISSUED,
+          grantedScopes: [...FULL_SCOPES],
+          heldScopes: [...FULL_SCOPES],
+          fullGrant: true,
+        }),
+      );
+      const { client } = fullClient(gateway, { storage });
+      await client.start();
+      // A setup check that brings no proved sockets proves nothing either.
+      await client.connect({ url: typed, token: SHARED }, { consent: () => true });
+      await until(() => gateway.connects.length === 1);
+      expect(connectAt(gateway, 0)).toMatchObject({
+        scopes: [...READ_SCOPES],
+        auth: { deviceToken: ISSUED },
+      });
+      client.stop();
+    }
+  });
+
+  it("a protected route is wss:// to an address that isn't loopback, in any spelling", () => {
+    for (const url of [
+      "wss://gateway.example",
+      "wss://gateway.example:8443/openclaw",
+      "wss://gateway.example.org",
+      "wss://203.example",
+      "wss://[2001:db8::1]",
+      " wss://GATEWAY.example. ",
+    ])
+      expect(protectedGatewayUrl(url), url).toBe(true);
+    for (const url of [
+      "ws://gateway.example",
+      "wss://localhost",
+      "wss://LOCALHOST.",
+      "wss://app.localhost",
+      "wss://127.0.1",
+      "wss://127.1",
+      "wss://0x7f000001",
+      "wss://2130706433",
+      "wss://127.0.0.1",
+      "wss://0.0.0.0",
+      "wss://[::1]",
+      "wss://[::]",
+      "wss://[::ffff:127.0.0.1]",
+      "wss://[0:0:0:0:0:0:0:1]",
+      // §4: an address with a user name, password or fragment can't be used.
+      "wss://user:pw@gateway.example.com",
+      "wss://user@gateway.example.com",
+      "wss://gateway.example#x",
+      "wss://gateway.example#",
+      "wss://gateway.example#/",
+      "https://gateway.example",
+      "not an address",
+      "",
+    ])
+      expect(protectedGatewayUrl(url), url).toBe(false);
+    // The form reads the address as typed, the client the address saved: they must agree.
+    for (const url of [
+      "wss://gateway.example",
+      " wss://GATEWAY.example. ",
+      "wss://gateway.example/",
+      "wss://gateway.example#",
+      "wss://gateway.example#/",
+      "wss://gateway.example/#/",
+      "wss://[::ffff:127.0.0.1]",
+      "wss://user@gateway.example.com",
+    ])
+      expect(protectedGatewayUrl(validateGatewayUrl(url)), url).toBe(protectedGatewayUrl(url));
+  });
 
   it("F-509: a full setup code's first pairing asks for the six, and its token is written with exactly the grant", async () => {
     const gateway = grantingGateway();

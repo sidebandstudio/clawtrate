@@ -126,6 +126,36 @@ export const GATEWAY_TURN_PROMPTS = [
 const REMINDER_PROMPT = "A scheduled reminder has been triggered. The reminder content is:\n\n";
 const REMINDER_RELAY = "Please relay this reminder to the user in a helpful and friendly way.";
 
+/**
+ * How the gateway opens its report that a background image_generate task ended
+ * (OpenClaw 2026.10.6, formatTaskCompletionEvent): as the prompt of a turn of
+ * its own behind the header of an inter-session message from the tool, or as a
+ * runtime context block, whose header the gateway escapes in a person's text.
+ */
+const IMAGE_COMPLETION =
+  /^(?:\[Inter-session message\] sourceSession=image_generate:tool:\S+ sourceChannel=internal sourceTool=image_generate isUser=false\n|OpenClaw runtime context:\n)[\s\S]*?\nsource: image_generation\n/;
+
+/**
+ * The gateway's report that a background image_generate task ended: whether it
+ * succeeded, and the `MEDIA:` lines of what it made. Null for any other text.
+ */
+export function imageCompletion(text: string): { ok: boolean; media: string[] } | null {
+  if (!IMAGE_COMPLETION.test(text) || !text.includes("\ntype: image generation task\n"))
+    return null;
+  const lines = text.split("\n");
+  const label = lines.lastIndexOf("Generated media:");
+  const media = [];
+  for (const line of label < 0 ? [] : lines.slice(label + 1)) {
+    if (!/^MEDIA:\S/.test(line)) break;
+    media.push(line);
+  }
+  return { ok: text.includes("\nstatus: completed successfully\n"), media };
+}
+
+/** The reply to a finished image task: a caption and its pictures, as the gateway asks. */
+export const IMAGE_READY_REPLY = "Here is the picture you asked for.";
+export const IMAGE_FAILED_REPLY = "The picture could not be made.";
+
 export const isGatewayTurn = (prompt: string) =>
   GATEWAY_TURN_PROMPTS.some((start) => prompt.startsWith(start));
 
@@ -197,6 +227,20 @@ export function planReply(
     const [content, instruction] = prompt.slice(REMINDER_PROMPT.length).split(/\n\n(?=[^\n]*$)/);
     if (instruction === REMINDER_RELAY) return [{ kind: "text", text: `Reminder: ${content}` }];
     return [{ kind: "text", text: SILENT_REPLY }];
+  }
+  // A finished image task, reported in the prompt or a runtime context block of this turn.
+  const completion = [
+    raw,
+    ...messages
+      .slice(lastUserIndex + 1)
+      .filter(isRuntimeContext)
+      .map(messageText),
+  ]
+    .map(imageCompletion)
+    .find((found) => found !== null);
+  if (completion) {
+    if (!completion.ok) return [{ kind: "text", text: IMAGE_FAILED_REPLY }];
+    return [{ kind: "text", text: [IMAGE_READY_REPLY, "", ...completion.media].join("\n") }];
   }
   if (isGatewayTurn(prompt) && !forwarded) return [{ kind: "text", text: SILENT_REPLY }];
 

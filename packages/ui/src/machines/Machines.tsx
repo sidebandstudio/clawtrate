@@ -48,7 +48,7 @@ const holdsPairing = (connection: ConnectionState) =>
  * The access bar asking for device access only (`operator.pairing`), the
  * request's progress in the same words as the admin bar's.
  */
-function DeviceBar({ connection, info }: { connection: ConnectionState; info: HostInfo }) {
+export function DeviceBar({ connection, info }: { connection: ConnectionState; info: HostInfo }) {
   const send = useCommand();
   const ask = () => void send({ type: "requestAccess", tier: "pairing" }).catch(() => {});
   const upgrade = connection.upgrade;
@@ -56,7 +56,11 @@ function DeviceBar({ connection, info }: { connection: ConnectionState; info: Ho
   const status = mine ? upgrade.status : "idle";
   let body: ReactNode;
   let action: ReactNode = null;
-  if (info.readOnly)
+  // A full pairing the gateway granted less: its limit stands, and nothing asks again (§2).
+  // Said only while connected: a drop clears the scopes until the next hello.
+  if (connection.status === "connected" && connection.fullPairing && !info.readOnly)
+    body = <b>OpenClaw granted less than full control.</b>;
+  else if (info.readOnly)
     body = (
       <>
         <b>Read-only.</b> This connection only reads.
@@ -103,7 +107,7 @@ function DeviceBar({ connection, info }: { connection: ConnectionState; info: Ho
       </button>
     );
   }
-  if (connection.status !== "connected" || info.readOnly) action = null;
+  if (connection.status !== "connected" || info.readOnly || connection.fullPairing) action = null;
   return (
     <section
       className="access-bar"

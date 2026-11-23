@@ -28,7 +28,7 @@ Every document in the repository, by what you want to do.
 ## The plan
 
 - [Roadmap](roadmap.md): what is left to build, by milestone, and how to take a part of it.
-- [Parity checklist](parity.md): the definition of done, one behavior and one automated check per row.
+- [Behavior checklist](parity.md): the definition of done, one behavior and one automated check per row.
 
 ## Design
 
@@ -45,7 +45,6 @@ Every document in the repository, by what you want to do.
 
 ## Research
 
-- [Grok Bot flows](research/grok-bot-flows.md): how the reference app behaves on desktop and iOS, from public material.
 - [Gateway capabilities](research/gateway-capabilities.md): what a client can do against an OpenClaw gateway, method by method.
 - [Provider accounts and T3 Code](research/provider-accounts-and-t3-code.md): how OpenClaw handles provider accounts, and how a bot can work with T3 Code.
 - [The setup flow](research/setup-flow.md): first pairing, setup codes, the gateway's identity, installing and removing OpenClaw, SSH from a shipped app, and Tailscale, from OpenClaw's source and live runs.

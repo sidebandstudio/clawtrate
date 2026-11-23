@@ -2,9 +2,9 @@
 // size the app draws avatars at, with the state ring and badge, in dark (the
 // default) and light; the fine detail dropped below 21 px; and a still pose
 // per state, never a frame from the middle, when motion is reduced.
-import { expect, test, type Page } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import { SHEET_SIZES } from "../apps/desktop/src/fixture/avatar-sizes.ts";
-import { NOW, openFixture, OTTO_DISK, THEMES } from "./fixture.ts";
+import { expect, NOW, openFixture, OTTO_DISK, THEMES } from "./fixture.ts";
 
 async function openSheet(page: Page, theme: string) {
   await page.clock.setFixedTime(NOW);

@@ -605,6 +605,12 @@ export class FileTransfers {
     }
   }
 
+  /** Whether the next transfer would be refused for room: expired ones are dropped first, as `start` drops them. */
+  full(): boolean {
+    this.sweep();
+    return this.held.size >= MAX_FILE_TRANSFERS;
+  }
+
   get size(): number {
     return this.held.size;
   }

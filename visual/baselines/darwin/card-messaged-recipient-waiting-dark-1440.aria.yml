@@ -1,0 +1,12 @@
+- group:
+  - text: Messaged Marlow Recipient waiting
+  - list:
+    - listitem:
+      - text: Otto sent
+      - time: 5:38 PM
+      - text: "Write a two-line entry for the house log: the weekly backup finished, 41 GB across three machines."
+    - listitem:
+      - text: Marlow
+      - paragraph: "Marlow is waiting on its user in its own task: it asked a question, or it needs an approval."
+  - button "Open this message in Marlow's task": Open in Marlow
+  - button "Raw"

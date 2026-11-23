@@ -17,6 +17,8 @@ import {
   type SetupHost,
   type SetupState,
 } from "@clawtrate/core";
+import { basename, dirname } from "node:path";
+import { proveFor, provedSockets, type LocalConnect } from "./local-connect.ts";
 import { boundedFileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { ProgramResult } from "./programs.ts";
@@ -56,6 +58,12 @@ export type SetupControllerOptions = {
   /** The host's log: fixed lines only, never a program's output or a credential. */
   log?: (line: string) => void;
   now?: () => number;
+  /**
+   * Local connect (docs/design/setup-effortless.md §3): every socket of a setup
+   * connection is dialled by the host and its far end proved, before its first
+   * byte and again before its credential. Off in every shipped host.
+   */
+  localConnect?: LocalConnect;
 };
 
 /**
@@ -436,15 +444,19 @@ export class SetupController implements SetupHost {
         return false;
       }
     };
+    // With local connect, the host dials each socket itself and proves its far end first.
+    const local = this.provedRoute(found);
     // Once each socket is up and again just before its credential goes, the endpoint's
     // listener is read again: the port's listener by PID and start time, the endpoint, the
-    // program file, as the look found them. Any difference sends nothing (docs/decisions.md).
+    // program file, as the look found them; with local connect, that socket's far end proved
+    // again. Any difference sends nothing (docs/decisions.md).
     // The client's signal ends with the socket or the reads' shared time: the commands stop then.
     const verify = async (signal: AbortSignal) => {
       if (attempt !== this.attempt) return false;
       try {
         return (
           (await this.unchanged(opened, found, signal)) &&
+          (!local || (await local.verify(signal))) &&
           !signal.aborted &&
           attempt === this.attempt
         );
@@ -467,6 +479,7 @@ export class SetupController implements SetupHost {
         check: listening,
         verify,
         consent: () => !expired(),
+        ...(local ? { createSocket: local.createWebSocket } : {}),
       });
       return;
     }
@@ -498,7 +511,24 @@ export class SetupController implements SetupHost {
       check: listening,
       verify,
       consent: () => !expired(),
+      ...(local ? { createSocket: local.createWebSocket } : {}),
     });
+  }
+
+  /**
+   * Local connect's sockets for the gateway found, or null when it is off. The
+   * profile's folder must be directly in the home the host named; otherwise
+   * every socket is refused before it is dialled.
+   */
+  private provedRoute(found: FoundGateway) {
+    const local = this.options.localConnect;
+    if (!local) return null;
+    const folder =
+      dirname(found.profile.stateDir) === local.home ? basename(found.profile.stateDir) : "";
+    const prove = proveFor(local, folder, found.port, (why) =>
+      this.log(`couldn't verify what is listening at port ${found.port} (${why})`),
+    );
+    return provedSockets(found.port, prove);
   }
 
   /**

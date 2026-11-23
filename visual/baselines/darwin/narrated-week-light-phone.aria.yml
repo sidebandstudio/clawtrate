@@ -1,0 +1,59 @@
+- region "Conversation":
+  - button "Back to bots"
+  - button "Pip, Plan the week. Show details.": Pip
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Plan the week" [level=1]
+    - paragraph: "Context: 9,870 of 128,000 tokens"
+    - text: Today 3:07 PM
+    - paragraph: Plan my week. Keep Thursday clear.
+    - paragraph: On it. Checking your calendar first.
+    - paragraph: Reading Thursday's notes now. The table is next.
+    - paragraph: Thursday is empty, so I kept it that way.
+    - paragraph: Here is the week, with Thursday kept clear.
+    - table:
+      - rowgroup:
+        - row "Mon Tue Wed Thu Fri Sat Sun":
+          - columnheader
+          - columnheader "Mon"
+          - columnheader "Tue"
+          - columnheader "Wed"
+          - columnheader "Thu"
+          - columnheader "Fri"
+          - columnheader "Sat"
+          - columnheader "Sun"
+      - rowgroup:
+        - row "Morning Dentist at 9:00 Groceries before work Gym Clear Car service at 8:30 Farmers' market Long walk":
+          - cell "Morning"
+          - cell "Dentist at 9:00"
+          - cell "Groceries before work"
+          - cell "Gym"
+          - cell "Clear"
+          - cell "Car service at 8:30"
+          - cell "Farmers' market"
+          - cell "Long walk"
+        - row "Afternoon Report draft Team review Report final Clear Pick up the car Birthday present Read":
+          - cell "Afternoon"
+          - cell "Report draft"
+          - cell "Team review"
+          - cell "Report final"
+          - cell "Clear"
+          - cell "Pick up the car"
+          - cell "Birthday present"
+          - cell "Read"
+        - row "Evening Laundry Call the plumber School play at 6:30 Clear Dinner out Birthday dinner Plan next week":
+          - cell "Evening"
+          - cell "Laundry"
+          - cell "Call the plumber"
+          - cell "School play at 6:30"
+          - cell "Clear"
+          - cell "Dinner out"
+          - cell "Birthday dinner"
+          - cell "Plan next week"
+    - group: 2 actions
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Pip's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

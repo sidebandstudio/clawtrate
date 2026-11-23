@@ -4,7 +4,7 @@
 // and a read-only connection. The fixture answers the bridge's usage commands
 // as the engine does (apps/desktop/src/fixture/usage.ts).
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle } from "./fixture.ts";
+import { contextFor, NOW, openFixture, OTTO_DISK, settle } from "./fixture.ts";
 
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=write`;
 const PAGE = `${PANE}&uview=usage`;
@@ -408,9 +408,11 @@ test("F-235: provider limits carry their window, reset, the gateway's time and n
 }) => {
   await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
   const settings = await settingsUsage(page);
-  await expect(settings.getByTestId("limits")).toContainText(
-    "OpenAI · Weekly · 62% used · resets Nov 17 · as of 5:38 PM",
-  );
+  const limit = settings.getByTestId("limit");
+  await expect(limit).toHaveCount(1);
+  await expect(limit.locator(".c-limit-which")).toHaveText("OpenAI · Weekly · as of 5:38 PM");
+  await expect(limit.locator(".c-limit-share")).toHaveText("62% used");
+  await expect(limit.locator(".c-limit-reset")).toHaveText("resets Nov 17");
   await expect(settings.getByTestId("limits")).toContainText("xAI: no limits reported.");
   await expect(settings.getByTestId("limits")).toContainText(
     "The gateway doesn't say which of your accounts a limit is about",
@@ -418,6 +420,191 @@ test("F-235: provider limits carry their window, reset, the gateway's time and n
   await expect(
     settings.getByRole("meter", { name: "OpenAI's Weekly limit: 62% used, as of 5:38 PM" }),
   ).toHaveCount(1);
+});
+
+for (const [name, size] of [
+  ["desktop", { width: 1440, height: 900 }],
+  ["phone", { width: 390, height: 844 }],
+] as const)
+  test(`F-235: a provider limit's share used and reset read first, over a 10 px bar, at ${name} width (fixture)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(size);
+    await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
+    const settings = await settingsUsage(page);
+    const limit = settings.getByTestId("limit");
+    const px = (selector: string, property: string) =>
+      limit
+        .locator(selector)
+        .evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), property);
+    // The share in the type scale's largest size, strong; the reset a step above body text.
+    expect(await px(".c-limit-share", "font-size")).toBe("17px");
+    expect(await px(".c-limit-share", "font-weight")).toBe("600");
+    expect(await px(".c-limit-reset", "font-size")).toBe("14px");
+    // Which provider and window, and the gateway's time, are smaller and quieter.
+    expect(await px(".c-limit-which", "font-size")).toBe("13px");
+    const bar = await limit.getByRole("meter").boundingBox();
+    expect(bar!.height).toBe(10);
+    // Everything fits the width: nothing is cut or scrolls sideways.
+    const share = (await limit.locator(".c-limit-share").boundingBox())!;
+    const reset = (await limit.locator(".c-limit-reset").boundingBox())!;
+    expect(reset.x + reset.width).toBeLessThanOrEqual(bar!.x + bar!.width + 1);
+    expect(share.x).toBeGreaterThanOrEqual(bar!.x - 1);
+    expect(
+      await settings
+        .getByTestId("usage-section")
+        .evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+  });
+
+type FixtureWindow = { label: string; usedPercent: number; resetAt: number | null };
+
+/** From now on, the gateway reports these providers' limits (the core's parsed shape). */
+const reportLimits = (
+  page: Page,
+  providers: Array<{ provider: string; displayName: string; windows: FixtureWindow[] }>,
+) =>
+  page.evaluate(
+    (next) =>
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            setState(
+              change: (state: { usage: { limits: { providers: unknown[] } } }) => unknown,
+            ): void;
+          };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        usage: {
+          ...state.usage,
+          limits: {
+            ...state.usage.limits,
+            providers: next.map((each) => ({ ...each, error: null })),
+          },
+        },
+      })),
+    providers,
+  );
+
+/** A token's colour as the page computes it. */
+const tokenColor = (page: Page, token: string) =>
+  page.evaluate((name) => {
+    const probe = document.createElement("span");
+    probe.style.color = `var(${name})`;
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  }, token);
+
+test("F-235: a provider limit's meter carries the reported share as its value and fill, and turns to the warning colour at 80% (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
+  const settings = await settingsUsage(page);
+  const muted = await tokenColor(page, "--text-muted");
+  const warn = await tokenColor(page, "--warn");
+  expect(muted).not.toBe(warn);
+  // 79.6 is shown as "80% used", and is coloured as shown: the number and the bar never disagree.
+  for (const [used, shown, colour] of [
+    [79, 79, muted],
+    [79.6, 80, warn],
+    [80, 80, warn],
+  ] as const) {
+    await reportLimits(page, [
+      {
+        provider: "openai",
+        displayName: "OpenAI",
+        windows: [{ label: "Weekly", usedPercent: used, resetAt: null }],
+      },
+    ]);
+    const meter = settings.getByRole("meter", {
+      name: `OpenAI's Weekly limit: ${shown}% used, as of 5:38 PM`,
+    });
+    await expect(meter).toHaveCount(1);
+    await expect(meter).toHaveAttribute("aria-valuemin", "0");
+    await expect(meter).toHaveAttribute("aria-valuemax", "100");
+    await expect(meter).toHaveAttribute("aria-valuenow", String(used));
+    await expect(settings.getByTestId("limit").locator(".c-limit-share")).toHaveText(
+      `${shown}% used`,
+    );
+    const fill = meter.locator("span");
+    const bar = (await meter.boundingBox())!;
+    const filled = (await fill.boundingBox())!;
+    expect(Math.abs(filled.width - (bar.width * used) / 100)).toBeLessThanOrEqual(1);
+    expect(await fill.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(colour);
+  }
+});
+
+test.describe("on a phone", () => {
+  test.use(contextFor({ name: "phone", width: 390, height: 844, phone: true }, "light"));
+
+  test("F-235: each window reads as the gateway labels it, a long provider name wraps, and nothing overflows (fixture)", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
+    const settings = await settingsUsage(page);
+    const name = "Northwind Regional Language Models Cooperative";
+    const day = (date: string) => new Date(`${date}T12:00:00-05:00`).getTime();
+    await reportLimits(page, [
+      {
+        provider: "northwind",
+        displayName: name,
+        windows: [
+          { label: "5h", usedPercent: 41, resetAt: day("2026-11-17") },
+          { label: "168h", usedPercent: 78, resetAt: day("2026-11-23") },
+          { label: "37h", usedPercent: 12, resetAt: day("2026-11-18") },
+          // A window the provider gave no label or reset: the core names it "Limit" (parseLimits).
+          { label: "Limit", usedPercent: 55, resetAt: null },
+        ],
+      },
+    ]);
+    const rows = settings.getByTestId("limit");
+    await expect(rows).toHaveCount(4);
+    const expected = [
+      ["5h", "41% used", "resets Nov 17"],
+      ["168h", "78% used", "resets Nov 23"],
+      ["37h", "12% used", "resets Nov 18"],
+      ["Limit", "55% used", null],
+    ] as const;
+    for (const [i, [label, share, reset]] of expected.entries()) {
+      const row = rows.nth(i);
+      await expect(row.locator(".c-limit-which")).toHaveText(`${name} · ${label} · as of 5:38 PM`);
+      await expect(row.locator(".c-limit-share")).toHaveText(share);
+      if (reset) await expect(row.locator(".c-limit-reset")).toHaveText(reset);
+      else await expect(row.locator(".c-limit-reset")).toHaveCount(0);
+      await expect(row.getByRole("meter")).toHaveAccessibleName(
+        `${name}'s ${label} limit: ${share}, as of 5:38 PM`,
+      );
+      // Nothing in the row is cut or reaches past the section, and the share and reset never overlap.
+      const fits = await row.evaluate((el) => {
+        const section = el.closest('[data-testid="usage-section"]')!.getBoundingClientRect();
+        return [el, ...el.querySelectorAll("*")].every((each) => {
+          const box = each.getBoundingClientRect();
+          return (
+            each.scrollWidth <= each.clientWidth + 1 &&
+            box.left >= section.left - 1 &&
+            box.right <= section.right + 1
+          );
+        });
+      });
+      expect(fits, `row ${label} fits`).toBe(true);
+      if (reset) {
+        const a = (await row.locator(".c-limit-share").boundingBox())!;
+        const b = (await row.locator(".c-limit-reset").boundingBox())!;
+        expect(b.y >= a.y + a.height - 1 || b.x >= a.x + a.width).toBe(true);
+      }
+    }
+    // The long name wraps instead of being shortened.
+    const which = rows.first().locator(".c-limit-which");
+    expect(await which.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(20);
+    expect(
+      await settings
+        .getByTestId("usage-section")
+        .evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+  });
 });
 
 test("F-235: a gateway whose providers report no limits says so, with its time (fixture)", async ({
@@ -724,4 +911,52 @@ test("the Usage row's value wraps rather than shortening at phone width", async 
   expect(shape.lines).toBeGreaterThan(1);
   expect(shape.hidden).toBeLessThanOrEqual(0);
   await context.close();
+});
+
+test.describe("Settings, Usage on a phone", () => {
+  test.use(contextFor({ name: "phone", width: 390, height: 844, phone: true }, "light"));
+
+  test("F-237: a Usage pane hidden behind the settings list asks for nothing, and asks again once shown (fixture)", async ({
+    page,
+  }) => {
+    await page.clock.install({ time: NOW });
+    await openFixture(page, `scene=main&${OTTO_DISK}&access=write&usage=busy`, "light");
+    // Paused, so only the check moves the clock: the busy host's retry every few seconds.
+    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    const settings = await settingsUsageWaiting(page);
+    await expect(settings.getByTestId("usage-waiting")).toBeVisible();
+    const before = await usageReads(page);
+    await page.clock.runFor(10_000);
+    expect(await usageReads(page)).toBeGreaterThan(before);
+    // Back to the list: the pane is hidden and sends nothing, however long it waits.
+    await settings.getByRole("button", { name: "Back to settings" }).click();
+    await expect(settings.getByTestId("usage-section")).toBeHidden();
+    const hidden = await usageReads(page);
+    await page.clock.runFor(30_000);
+    expect(await usageReads(page)).toBe(hidden);
+    // Shown again, it asks again.
+    await settings.getByRole("button", { name: "Usage", exact: true }).click();
+    await expect.poll(() => usageReads(page)).toBeGreaterThan(hidden);
+    // Hidden again, then the window widens: the pane is beside the list, and reads.
+    await settings.getByRole("button", { name: "Back to settings" }).click();
+    await expect(settings.getByTestId("usage-section")).toBeHidden();
+    const narrow = await usageReads(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(settings.getByTestId("usage-section")).toBeVisible();
+    await page.clock.runFor(10_000);
+    await expect.poll(() => usageReads(page)).toBeGreaterThan(narrow);
+  });
+});
+
+test("F-234: Raise budget over Otto's Account page, then Back, returns focus to the Account page (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&budget=reached`, "light");
+  const tab = page.getByTestId("bot-settings");
+  await tab.locator("[data-bs='account']").click();
+  await expect(tab.getByRole("heading", { name: "Account", exact: true })).toBeFocused();
+  await page.getByTestId("raise-from-composer").click();
+  await expect(page.getByTestId("budget-form")).toBeVisible();
+  await usage(page).getByRole("button", { name: "Back to settings" }).click();
+  await expect(tab.getByRole("heading", { name: "Account", exact: true })).toBeFocused();
 });

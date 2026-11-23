@@ -1,0 +1,28 @@
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:10 PM
+    - paragraph: Plan Saturday's errands around the backup window.
+    - toolbar "Message actions":
+      - button "More"
+    - group: Read backup-2026-11-15.log 6 lines
+    - group: Couldn't ask a question questions must contain at least one question Failed
+    - group: Read errands.md 3 lines
+    - 'region "Question, answered: Which route on Saturday?"':
+      - heading "Which route on Saturday?" [level=3]
+      - text: Lake loop
+      - button "Raw"
+    - paragraph: "Lake loop it is: hardware store first, then the library and the post office."
+    - toolbar "Message actions":
+      - button "More"
+    - group: Worked 4 actions 1 failed
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

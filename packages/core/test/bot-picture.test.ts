@@ -246,6 +246,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     "users.prefs.set",
     "sessions.create",
     "agents.update",
+    "agents.files.set",
   ];
   const sentSince = (fake: AccountsGateway, from: number) =>
     (fake.gateway as unknown as { requests: Array<{ method: string }> }).requests
@@ -711,7 +712,84 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
-  /** Start Create A and hold its record of the account, the first write after the bot is made. */
+  /** Start Create A and hold its first-run step's first read, the first request after the bot is made. */
+  async function heldAtFirstRun(
+    client: Awaited<ReturnType<typeof accountsClient>>["client"],
+    fake: AccountsGateway,
+  ) {
+    const original = fake.gateway.handlers["agents.files.get"]!;
+    const reply = deferred<void>();
+    onTestFinished(() => {
+      fake.gateway.handlers["agents.files.get"] = original;
+      reply.resolve();
+      client.stop();
+    });
+    fake.gateway.handlers["agents.files.get"] = (params) =>
+      reply.promise.then(() => original(params));
+    const created = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        (result) => result,
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("agents.files.get").length === 1);
+    fake.gateway.handlers["agents.files.get"] = original;
+    return { created, release: () => reply.resolve() };
+  }
+
+  it("sends nothing to another gateway that replaced it during the first-run step, and keeps nothing", async () => {
+    const { client, fake } = await accountsClient();
+    const { created, release } = await heldAtFirstRun(client, fake);
+    fake.identity = "gateway-b";
+    const from = requested(fake);
+    await reconnected(client, fake);
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    release();
+    expect(await created).toMatch("gateway changed");
+    expect(sentSince(fake, from)).toEqual([]);
+    expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+    expect(client.state.accounts.creation).toBeNull();
+    // A's Finish, delivered late, is never run on B.
+    await expect(
+      createBridgeSession(client).apply({
+        type: "finishBot",
+        botId: "viral",
+        gatewayId: "gateway-a",
+      }),
+    ).rejects.toThrow();
+    expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+  });
+
+  it("keeps A's made bot with its first run still to end when A drops during that step, and A back ends it", async () => {
+    const { client, fake } = await accountsClient();
+    const { created, release } = await heldAtFirstRun(client, fake);
+    const from = requested(fake);
+    await reconnected(client, fake);
+    release();
+    expect(await created).toMatch("gateway changed");
+    expect(sentSince(fake, from)).toEqual([]);
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    expect(client.state.accounts.creation).toMatchObject({
+      status: "partial",
+      botId: "viral",
+      missing: ["identity", "preference", "fallbacks", "listed", "task"],
+    });
+    expect(
+      await createBridgeSession(client).apply({
+        type: "finishBot",
+        botId: "viral",
+        gatewayId: "gateway-a",
+      }),
+    ).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.files.set")).toEqual([
+      expect.objectContaining({ agentId: "viral", name: "IDENTITY.md" }),
+    ]);
+    expect(fake.files.get("viral")!.get("IDENTITY.md")).toMatch(/^- \*\*Name:\*\* Viral$/m);
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
+  });
+
+  /** Start Create A and hold its record of the account, a write after the bot is made. */
   async function heldAtPreference(
     client: Awaited<ReturnType<typeof accountsClient>>["client"],
     fake: AccountsGateway,

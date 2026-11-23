@@ -398,7 +398,11 @@ async function main(): Promise<void> {
         KEYCHAIN_CHECK,
         hasSwitch(MOCK_KEYCHAIN_SWITCH),
       )
-        ? { secretBox: safeStorageBox(safeStorage, process.platform) }
+        ? {
+            secretBox: safeStorageBox(safeStorage, process.platform),
+            // With the Keychain, a first pairing over a protected address asks for full control.
+            fullAccess: true,
+          }
         : {}),
       // A sandboxed or refused start (every development build and automated run) has no
       // development gateway, doesn't auto-connect and never resumes a saved gateway.
@@ -459,6 +463,7 @@ async function main(): Promise<void> {
         window.webContents.send("clawtrate:update:changed", snapshot);
     },
   });
+  app.on("will-quit", () => updates.quitting());
   app.on("quit", () => updates.shutdown());
   ipcMain.handle("clawtrate:update:restart", (_event, id: unknown) => updates.restart(id));
   ipcMain.handle("clawtrate:update:get", () => updates.get());

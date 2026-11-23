@@ -45,7 +45,7 @@ A run only ever removes its own lock file and those of runs that have certainly 
    - For the build only, the keychain goes first on your keychain search list, with your other keychains after it in their order and your default keychain unchanged. electron-builder asks `codesign` for the identity by name with `--keychain`, and `codesign` finds no identity in a keychain that is not on the list. The list as it was is recorded in the signing folder first.
    - When the build ends, the run reads the list again before writing anything. If it is exactly what the run put there, the recorded list goes back. If it holds the run's keychain among other changes, made by you or another tool meanwhile, only the run's keychain comes off and those changes stay. If it is already the recorded list, nothing is written. If it cannot be read, or no longer holds the run's keychain, the run writes nothing. What it writes counts only once it reads back as written.
    - Apple notarizes each app, and the packager's own reading of each signature must be a certificate;
-4. copies each zip into the private folder, unpacks the copy and checks the app in it: bundle id, version, architecture (`lipo`), `codesign --verify --deep --strict`, a Developer ID Application signature by the keychain's team, `spctl --assess --type execute` accepting it as notarized, and `xcrun stapler validate`. Every one of these tools must succeed and print what is expected. Should a ticket be missing, it staples the app, zips it again, unpacks that zip and checks it all again;
+4. copies each zip into the private folder, unpacks the copy and checks the app in it: bundle id, version, architecture (`lipo`), `codesign --verify --deep --strict`, a Developer ID Application signature by the keychain's team, `spctl --assess --type execute` accepting it as notarized, and `xcrun stapler validate`. Every one of these tools must succeed and print what is expected. Should a ticket be missing, it staples the app, zips it again, unpacks that zip and checks it all again. Then it runs the update helper's ZIP preflight on the zip as it will be staged, built from `inspect-archive.m` by `packaging/mac/check-zip.m`, and stops, naming the zip and the check, on a zip that installed apps from beta `0.1.1-beta.20261122.4` on would refuse with `mac-archive`. Publishing runs the same check on the staged zips before it uploads anything;
 5. writes `.release/beta/<version>/` from those verified copies, then removes its marker. The folder holds:
    - the two zips;
    - `feed.json`, the Beta feed, naming each zip at its release download address with its size and SHA-512;
@@ -187,6 +187,20 @@ The first release with secure storage moves each data folder's device key and to
 ### What only a signed build shows
 
 The tests and the unsigned launch check show the release files, the redirect rule and that a newer build opens the same data folder, device key and saved connection. Two consecutive Developer ID beta builds are needed to show that Squirrel.Mac accepts the successor's designated requirement and hands the app over, and that the person's pairing and tasks are there after the real restart. That is the owner's trial.
+
+### Check that the previous release updates in place
+
+The [Real update](../../.github/workflows/real-update.yml) workflow runs a real signed release through a whole update on GitHub-hosted Macs that are discarded afterwards: macOS 15, the newest generally available image and the newest preview image. It installs the previous release into `/Applications` as `install.sh` does, opens it through Launch Services with its own data folder, and drives Settings → Updates over the Chrome DevTools protocol ([check.ts](../../e2e-packaged/real-update/check.ts)): check, download, inspection, Restart to Update. An image passes only when the system updater replaced the bundle with the candidate, that copy's signature meets the previous release's designated requirement, and the app that reopens runs the replacement's code (its CDHash matches the installed bundle's). Never run `check.ts` on a person's Mac: the app writes to the login keychain and replaces itself.
+
+```sh
+gh workflow run real-update.yml -f previous=<the release before> -f candidate=<the release just published>
+```
+
+Both inputs are optional: empty ones take the two newest published releases. The candidate must be what the Beta feed offers. The run's conclusion is the answer, and its `real-update-summary` artifact holds it as JSON: `previous`, `candidate`, `passed`, and for each image its outcome, macOS version, offered and installed versions, and the install capability the app reported. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
+
+It can pass only when the previous release has the fix for [#383](https://github.com/sidebandstudio/clawtrate/issues/383): every earlier build fails at inspection, which is what the check showed on macOS 26 with `0.1.1-beta.20261122.4`. So it is meaningful from the second release after that fix.
+
+The app reads only the update source compiled into it, over HTTPS checked against the roots bundled with it, so a released build can be offered only what the live Beta feed offers. The check therefore runs right after `--publish`, not before it. A failure there means the release must not stay on the feed: withdraw it (above). A preview image is not the newest macOS a person may run, and a hosted Mac is not a person's Mac: if the check passes and a person's Mac still fails, Settings → Updates shows why the inspection failed, and "Copy details" gives the record for the issue.
 
 ### The owner's signed trial
 

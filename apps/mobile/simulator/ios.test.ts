@@ -8,6 +8,17 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
+import {
+  AVATAR_BALL,
+  AVATAR_COLORS,
+  SHELLFOLK_CREAM,
+  avatarScene,
+  avatarVariation,
+  defaultAvatar,
+  firstChoice,
+  pictureWithChoice,
+  type AvatarChoice,
+} from "@clawtrate/core";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import {
   CLEARTEXT_WORDS,
@@ -16,17 +27,17 @@ import {
   PRODUCT_NAME,
   SLOGAN,
 } from "../src/presentation/connect-words.ts";
-import { ENSEMBLE } from "../src/presentation/character.ts";
+import { ENSEMBLE } from "../src/presentation/ensemble.ts";
 import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
-import { stampTime } from "../../../packages/ui/src/format.ts";
+import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
 import { addressWords } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
-import { decodePng } from "../../../tools/brand/src/png.ts";
+import { decodePng, encodePng } from "../../../tools/brand/src/png.ts";
 import { REDACTED } from "../src/host/secrets.ts";
 import { TASKS_FAILED } from "../src/lists.ts";
 import { LINK_WORDS } from "../src/markdown.ts";
-import { DARK, LIGHT } from "../src/theme/tokens.ts";
+import { DARK, LIGHT, TOUCH } from "../src/theme/tokens.ts";
 import {
   activate,
   appLog,
@@ -54,6 +65,7 @@ import {
   protocolFiveGateway,
   Proxy,
   quit,
+  reduceMotion,
   reinstall,
   running,
   rgb,
@@ -138,14 +150,14 @@ function runOnGateway(botId: string, key: string, message: string): Promise<stri
 }
 
 /**
- * Whether the row of characters stands at the foot of a connection screen:
+ * Whether the row of creatures stands at the foot of a connection screen:
  * their colours fill the bottom band of the screen. They are decoration,
  * hidden from VoiceOver, so they are found by their pixels.
  */
-async function charactersAtFoot(screenId: string): Promise<boolean> {
+async function creaturesAtFoot(screenId: string): Promise<boolean> {
   const view = (await layout()).get(screenId)![0]!;
   const pixel = screen(view.x2);
-  const colours = ENSEMBLE.map((character) => rgb(character.color));
+  const colours = ENSEMBLE.map(({ choice }) => rgb(AVATAR_COLORS[choice.color]));
   let hits = 0;
   for (let y = view.y2 - 56; y < view.y2 - 4; y += 4)
     for (let x = 4; x < view.x2 - 4; x += 4)
@@ -314,8 +326,8 @@ describe("the iOS app", () => {
       notSee({ id: "reconnect-saved" }),
       notSee({ id: "connect-button" }),
     ]);
-    // The characters stand at the foot, on a screen tall enough for them.
-    expect(await charactersAtFoot("welcome")).toBe(true);
+    // The creatures stand at the foot, on a screen tall enough for them.
+    expect(await creaturesAtFoot("welcome")).toBe(true);
     await shoot("welcome");
     await steps("address", [
       tap({ id: "connect-a-gateway" }),
@@ -440,7 +452,7 @@ describe("the iOS app", () => {
     expect(pasteboard()).toBe(command);
     await shoot("pairing");
     await steps("pairing-foot", ["scroll", "scroll"]);
-    expect(await charactersAtFoot("pairing")).toBe(true);
+    expect(await creaturesAtFoot("pairing")).toBe(true);
     await steps("pairing-top", [
       scrollTo({ id: "mark" }, "UP"),
       see({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }),
@@ -581,8 +593,7 @@ describe("the iOS app", () => {
           }),
           see({ id: `bot-label-${agent.id}`, text: lit(agent.identity!.theme!) }),
           see({ id: `bot-preview-${agent.id}`, text: ".+" }),
-          // Today's activity, as "7:12 AM".
-          see({ id: `bot-time-${agent.id}`, text: "\\d{1,2}:\\d{2}.(AM|PM)" }),
+          see({ id: `bot-time-${agent.id}`, text: ".+" }),
         ];
       }),
       // In order of their latest activity, newest first.
@@ -596,12 +607,22 @@ describe("the iOS app", () => {
       see({ id: "settings-button", text: "Settings. Gateway connected." }),
       see({ id: "connection-dot-connected" }),
     ]);
-    // Each row's latest line is its newest task's.
+    // The app refreshes its display clock every 30 seconds. If the capture
+    // straddles midnight, the hierarchy can show either day's wording.
+    const earliestClock = Date.now() - 30_000;
     const positions = await layout();
+    const latestClock = Date.now();
+    // Each row's latest line and time are its newest task's.
     for (const agent of agents) {
       const newest = rows
         .filter((r) => r.agentId === agent.id)
         .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]!;
+      expect(newest.updatedAt).toBeTypeOf("number");
+      const expectedTimes = [earliestClock, latestClock].map((now) =>
+        rowTime(newest.updatedAt ?? null, now).replace(/\s+/g, " "),
+      );
+      const time = positions.get(`bot-time-${agent.id}`)?.[0]?.text.replace(/\s+/g, " ");
+      expect(expectedTimes, `latest activity for ${agent.id}`).toContain(time);
       const preview = positions.get(`bot-preview-${agent.id}`)?.[0]?.text ?? "";
       expect(preview.length).toBeGreaterThan(0);
       const lastLine =
@@ -1102,7 +1123,9 @@ describe("the iOS app", () => {
       waitFor({ id: "licenses" }, 20_000),
       see("Figtree"),
       see("(?s).*SIL OPEN FONT LICENSE Version 1\\.1.*"),
-      scrollTo({ text: "JetBrains Mono" }, "DOWN"),
+      // Figtree's whole license comes first: five swipes, each taking seconds
+      // more on a slow runner.
+      scrollTo({ text: "JetBrains Mono" }, "DOWN", 180_000),
     ]);
     await shoot("licenses");
     await steps("licenses-back", [
@@ -1469,6 +1492,146 @@ describe("the iOS app", () => {
     } finally {
       textSize("large");
       await proxy.close();
+    }
+  });
+
+  it("F-017: on iPhone, Home draws each bot as its creature from the shared spec, or its own picture in a circle, and a working creature moves unless Reduce Motion is on", async () => {
+    const photoColor = "#c71fd5";
+    const photo = `data:image/png;base64,${encodePng({
+      width: 2,
+      height: 2,
+      data: Uint8Array.from(Array.from({ length: 4 }, () => [...rgb(photoColor), 255]).flat()),
+    }).toString("base64")}`;
+    const shellfolk = firstChoice("shellfolk", "orchid");
+    const lantern = firstChoice("lantern", "sky");
+    const pictures = new Map([
+      ["otto", pictureWithChoice(photo, shellfolk)!],
+      ["pip", pictureWithChoice(photo, lantern)!],
+      ["marlow", photo],
+    ]);
+    let chosen = false;
+    const avatarGateway = await relay(env.gateway, {
+      fromGateway: (frame, method) => {
+        if (!chosen || method !== "agents.list" || !frame.ok) return;
+        for (const agent of (frame.payload?.agents ?? []) as Array<{
+          id: string;
+          identity?: { name?: string; avatarUrl?: string };
+        }>) {
+          const avatarUrl = pictures.get(agent.id);
+          if (avatarUrl && agent.identity) {
+            agent.identity.avatarUrl = avatarUrl;
+            agent.identity.name += " (avatar check)";
+          }
+        }
+      },
+    });
+    try {
+      launch({ fresh: true, devGateway: avatarGateway.url });
+      await steps("avatars-welcome", [waitFor({ id: "welcome" })]);
+      await shoot("avatars-welcome");
+      await steps("avatars-connect", [
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(avatarGateway.url, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      await steps("avatars-home", [
+        waitFor({ id: "bot-main" }, 120_000),
+        see({ id: "primary-star", childOf: { id: "bot-main" } }),
+        // The bots probed below are at rest, so each is drawn in its idle pose.
+        ...["main", "otto", "pip"].map((id) =>
+          notSee({ id: "state-.*", childOf: { id: `bot-${id}` } }),
+        ),
+      ]);
+      await shoot("avatars-home");
+
+      // Map points inside the shared scene to the Home row's avatar.
+      const side = TOUCH.avatarRow;
+      const avatarBounds = (positions: Awaited<ReturnType<typeof layout>>, id: string) => {
+        const row = positions.get(`bot-${id}`)![0]!;
+        return [row.x1 + 10, (row.y1 + row.y2 - side) / 2] as const;
+      };
+      const expectPaint = (
+        positions: Awaited<ReturnType<typeof layout>>,
+        read: ReturnType<typeof screen>,
+        id: string,
+        choice: AvatarChoice,
+        probes: Array<[x: number, y: number, paint: string]>,
+      ) => {
+        const { fit, shift } = avatarScene(choice, "idle", avatarVariation(id));
+        const [x0, y0] = avatarBounds(positions, id);
+        for (const [x, y, paint] of probes) {
+          const actual = read(
+            x0 + ((20 + shift[0] + (x - 20) * fit) * side) / 40,
+            y0 + ((20 + shift[1] + (y - 20) * fit) * side) / 40,
+          );
+          expect(near(actual, rgb(paint)), `${id} at scene point (${x}, ${y}): ${actual}`).toBe(
+            true,
+          );
+        }
+      };
+      let positions = await layout();
+      let read = screen(positions.get("home")![0]!.x2);
+      const clawling = defaultAvatar("main");
+      // The body, its single raised stalk, and the open space beside it.
+      expectPaint(positions, read, "main", clawling, [
+        [25, 28, AVATAR_COLORS[clawling.color]],
+        [20, 17, AVATAR_COLORS[clawling.color]],
+        [9, 15, LIGHT.bg],
+      ]);
+
+      chosen = true;
+      avatarGateway.drop();
+      await steps("avatars-updated", [
+        waitFor({ id: "bot-name-otto", text: lit("Otto (avatar check)") }, 120_000),
+        see({ id: "bot-name-pip", text: lit("Pip (avatar check)") }),
+        see({ id: "bot-name-marlow", text: lit("Marlow (avatar check)") }),
+      ]);
+      await shoot("avatars-choices");
+      positions = await layout();
+      read = screen(positions.get("home")![0]!.x2);
+      // A cream foot and the shell. The marked PNG itself is a solid square.
+      expectPaint(positions, read, "otto", shellfolk, [
+        [21, 33, SHELLFOLK_CREAM],
+        [32, 21, AVATAR_COLORS.orchid],
+      ]);
+      expectPaint(positions, read, "pip", lantern, [
+        [20, 32, AVATAR_COLORS.sky],
+        [30.6, 10.2, AVATAR_BALL],
+      ]);
+      const [x, y] = avatarBounds(positions, "marlow");
+      expect(near(read(x + side / 2, y + side / 2), rgb(photoColor))).toBe(true);
+      expect(near(read(x + 1, y + 1), rgb(LIGHT.bg))).toBe(true);
+
+      // While Pip works its Lantern conducts with its lure; with Reduce Motion
+      // on it holds the pose still, the lure upright as at rest.
+      const { key } = await gatewayTask("pip", "Avatar motion");
+      const release = holdStreamCompletion(key);
+      onTestFinished(release);
+      const finished = runOnGateway("pip", key, "#stream 20");
+      void finished.catch(() => {}); // Awaited after the checks, even if it fails early.
+      const working = async (name: string) => {
+        await steps(name, [
+          waitFor({ id: "bot-pip", text: `${lit("Pip (avatar check)")}, working, .*` }, 90_000),
+          see({ id: "avatar-working", childOf: { id: "bot-pip" } }),
+        ]);
+        const shown = await layout();
+        const [left, top] = avatarBounds(shown, "pip");
+        const wide = shown.get("home")![0]!.x2;
+        return { shown, wide, region: { x1: left, y1: top, x2: left + side, y2: top + side } };
+      };
+      const moving = await working("avatar-moving");
+      expect(await moves(moving.region, moving.wide)).toBe(true);
+      reduceMotion(true);
+      onTestFinished(() => reduceMotion(false));
+      launch({ devGateway: avatarGateway.url });
+      const still = await working("avatar-still");
+      expect(await moves(still.region, still.wide)).toBe(false);
+      expectPaint(still.shown, screen(still.wide), "pip", lantern, [[30.6, 10.2, AVATAR_BALL]]);
+      release();
+      await finished;
+    } finally {
+      await avatarGateway.close();
     }
   });
 });

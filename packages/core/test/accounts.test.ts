@@ -4,6 +4,7 @@
 // through each ending, the read after a sign-in, the bounds, and a typed key
 // leaving no trace.
 
+import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
 import { describe, expect, it, vi } from "vitest";
 import {
   ACCOUNTS,
@@ -28,7 +29,8 @@ import { createBridgeSession } from "../src/bridge.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { AccountsGateway, accountsClient, CHOICES } from "./accounts-fake.ts";
+import { identityFile } from "../src/accounts-engine.ts";
+import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 import {
   deferred,
@@ -717,6 +719,7 @@ describe("a bot left half-made", () => {
     expect(accounts().creation?.error).toMatch(/did not say whether Viral was made/);
     // The gateway did make it, as it turns out.
     fake.bots.push({ id: "viral", name: "Viral" });
+    fake.seedWorkspace("viral");
     expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
     expect(fake.gateway.calls("agents.create")).toHaveLength(1);
     client.stop();
@@ -734,6 +737,8 @@ describe("a bot left half-made", () => {
       };
       await expect(viewer.apply(command)).rejects.toThrow("create answer unavailable");
       fake.bots.push({ id: "viral", name: "Viral" });
+      fake.seedWorkspace("viral");
+      fake.seedWorkspace("viral");
       fake.gateway.handlers["agents.create"] = create;
       fake.gateway.handlers["agents.list"] = () => {
         throw new GatewayError({ code: "UNAVAILABLE", message: "list unavailable" });
@@ -784,6 +789,172 @@ describe("a bot left half-made", () => {
     // A bot Clawtrate never set is not its to report.
     expect(binding(accounts(), "otto").fallbacksUnwritten).toBe(false);
     client.stop();
+  });
+});
+
+describe("a bot made in New bot starts as itself, without OpenClaw's first-run questions", () => {
+  const input = {
+    name: "Viral",
+    avatar: PICTURE,
+    account: "acme:work",
+    provider: "acme",
+    model: "dev-1",
+    effort: null,
+  } as const;
+  const sha256 = (text: string) => sha256Hex(utf8Bytes(text));
+  const sent = (fake: AccountsGateway) =>
+    (fake.gateway as unknown as { requests: Array<{ method: string }> }).requests.map(
+      (each) => each.method,
+    );
+
+  it("right after agents.create, writes its name into IDENTITY.md, held to the template it read, and keeps the other starting files", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.files.set")).toEqual([
+      {
+        agentId: "viral",
+        name: "IDENTITY.md",
+        content: identityFile("Viral", true),
+        expectedHash: sha256(IDENTITY_TEMPLATE),
+      },
+    ]);
+    // The first write after the bot is made, before any other step.
+    const order = sent(fake);
+    const after = order.slice(order.indexOf("agents.create") + 1);
+    expect(after.slice(0, 3)).toEqual(["agents.files.get", "agents.files.get", "agents.files.set"]);
+    const files = fake.files.get("viral")!;
+    expect(files.get("IDENTITY.md")).toMatch(/^- \*\*Name:\*\* Viral$/m);
+    expect([...files.keys()]).toEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "IDENTITY.md",
+      "USER.md",
+      "BOOTSTRAP.md",
+    ]);
+    expect(files.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    // The picture stays where agents.create put it, with the bot; the file is never a copy of it.
+    expect(files.get("IDENTITY.md")).not.toContain("data:");
+    expect(fake.gateway.calls("agents.update")).toEqual([]);
+    expect(accounts().creation).toMatchObject({ status: "created", botId: "viral", missing: [] });
+    client.stop();
+  });
+
+  it("writes nothing when the new workspace has no first run to end", async () => {
+    const { client, fake } = await accountsClient();
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = async (params) => {
+      const made = (await create(params)) as { agentId: string };
+      fake.files.get(made.agentId)!.delete("BOOTSTRAP.md");
+      return made;
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+    expect(fake.files.get("viral")!.get("IDENTITY.md")).toBe(IDENTITY_TEMPLATE);
+    client.stop();
+  });
+
+  it("a refused write leaves it partial, with the first run still on, and Finish ends it without creating again", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.failFileSet = "workspace unavailable";
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: ["identity"] });
+    expect(accounts().creation).toMatchObject({
+      status: "partial",
+      botId: "viral",
+      missing: ["identity"],
+    });
+    expect(accounts().creation?.error).toMatch(
+      /Viral was created, but OpenClaw's first-run questions were not turned off: workspace unavailable/,
+    );
+    expect(fake.files.get("viral")!.get("IDENTITY.md")).toBe(IDENTITY_TEMPLATE);
+    // The later steps still went through.
+    expect(fake.gateway.calls("sessions.create")).toHaveLength(1);
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("IDENTITY.md")).toBe(identityFile("Viral", true));
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    expect(fake.gateway.calls("sessions.create")).toHaveLength(1);
+    expect(accounts().creation).toMatchObject({ status: "created", botId: "viral" });
+    client.stop();
+  });
+
+  it("never writes over an IDENTITY.md changed after it was read: partial, and Finish reads it again", async () => {
+    const { client, fake } = await accountsClient();
+    const get = fake.gateway.handlers["agents.files.get"]!;
+    let changed = false;
+    fake.gateway.handlers["agents.files.get"] = async (params) => {
+      const answer = await get(params);
+      const { agentId, name } = params as { agentId: string; name: string };
+      if (name === "IDENTITY.md" && !changed) {
+        changed = true;
+        fake.files.get(agentId)!.set("IDENTITY.md", "# IDENTITY.md\n\n- Name: Someone else\n");
+      }
+      return answer;
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: ["identity"] });
+    expect(fake.files.get("viral")!.get("IDENTITY.md")).toContain("Someone else");
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.files.set").at(-1)).toMatchObject({
+      expectedHash: sha256("# IDENTITY.md\n\n- Name: Someone else\n"),
+    });
+    client.stop();
+  });
+
+  it("a Finish of something else never touches the workspace", async () => {
+    const { client, fake } = await accountsClient();
+    fake.failPatch = "the gateway refused the patch";
+    expect(await client.createBot({ ...input })).toEqual({
+      botId: "viral",
+      missing: ["fallbacks"],
+    });
+    const files = fake.gateway.calls("agents.files.get").length;
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.files.get")).toHaveLength(files);
+    expect(fake.gateway.calls("agents.files.set")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("carries only the new name after the gateway renames the bot", async () => {
+    const { client, fake } = await accountsClient();
+    await client.createBot({ ...input, name: "Maple" });
+    await fake.gateway.handlers["agents.update"]!({ agentId: "maple", name: "Juniper" });
+    const file = fake.files.get("maple")!.get("IDENTITY.md")!;
+    expect(file).toMatch(/^- Name: Juniper$/m);
+    expect(file).not.toContain("Maple");
+    client.stop();
+  });
+
+  it("leaves another bot's identity, settings and files exactly as they were, after Create and after Finish", async () => {
+    const { client, fake } = await accountsClient();
+    fake.seedWorkspace("otto");
+    fake.files.get("otto")!.set("IDENTITY.md", "# IDENTITY.md - Who Am I?\n\n- Name: Otto\n");
+    const otto = () =>
+      JSON.stringify({
+        bot: fake.bots.find((each) => each.id === "otto"),
+        entry: (fake.config.agents as { entries: Record<string, unknown> }).entries.otto,
+        files: [...fake.files.get("otto")!],
+      });
+    const before = otto();
+    const named = () =>
+      [...fake.gateway.calls("agents.files.get"), ...fake.gateway.calls("agents.files.set")].map(
+        (call) => (call as { agentId: string }).agentId,
+      );
+    fake.failFileSet = "workspace unavailable";
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: ["identity"] });
+    expect(otto()).toBe(before);
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    expect(otto()).toBe(before);
+    expect(new Set(named())).toEqual(new Set(["viral"]));
+    client.stop();
+  });
+
+  it("names the bot, and names a picture only when one was chosen, in lines the gateway reads", () => {
+    expect(identityFile("  Maple \n Leaf ", false)).toBe(
+      "# IDENTITY.md - Who Am I?\n\n- **Name:** Maple Leaf\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n",
+    );
+    const withPicture = identityFile("Maple", true);
+    expect(withPicture).toMatch(/^- \*\*Picture:\*\* chosen in Clawtrate/m);
+    expect(withPicture).toContain("Keep both. Don't make or save another picture");
+    // The gateway reads `- Avatar:` as a picture; the file never has one.
+    expect(withPicture).not.toMatch(/^- \*{0,2}avatar/im);
   });
 });
 
