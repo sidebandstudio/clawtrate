@@ -96,7 +96,11 @@ it("makes both Windows update folders in one PowerShell run that may take 20 sec
   vi.useFakeTimers();
   // A stand-in PowerShell that answers after 20 seconds, killed at its run's limit as execFile does.
   execFile.mockReset();
+  // The folder's own checks run on the real file system first, for as long as they take.
+  let started!: () => void;
+  const called = new Promise<void>((resolve) => (started = resolve));
   execFile.mockImplementation((_file, _args, { timeout }, done) => {
+    started();
     const answer = setTimeout(() => {
       clearTimeout(kill);
       done(null, "");
@@ -107,10 +111,10 @@ it("makes both Windows update folders in one PowerShell run that may take 20 sec
     }, timeout);
   });
   try {
-    const prepared = prepareUpdateDirectory(root, "stable-offer");
-    await vi.waitFor(() => expect(execFile).toHaveBeenCalled());
+    const prepared = expect(prepareUpdateDirectory(root, "stable-offer")).resolves.toBeUndefined();
+    await called;
     await vi.advanceTimersByTimeAsync(20_000);
-    await expect(prepared).resolves.toBeUndefined();
+    await prepared;
     expect(execFile).toHaveBeenCalledOnce();
     const [, , options] = execFile.mock.calls[0]!;
     expect(options.timeout).toBe(PRIVATE_DIRECTORIES_TIMEOUT_MS);

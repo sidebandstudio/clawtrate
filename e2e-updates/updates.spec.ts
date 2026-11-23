@@ -498,7 +498,15 @@ for (const stage of ["check", "download"] as const) {
         await expect(stable).toBeChecked();
       }
       await check.click();
+      const fetched = server.requests.filter((path) => path === filePath).length;
       await download.click();
+      // Windows makes the offer's protected folders before it requests the file; checking it
+      // has a budget of its own after that.
+      await expect
+        .poll(() => server.requests.filter((path) => path === filePath).length, {
+          timeout: folderWait,
+        })
+        .toBeGreaterThan(fetched);
       await expect(status).toContainText("checksum match");
       expect(await page.evaluate(() => (window as unknown as ProbeWindow).seenUpdates)).toContain(
         "verified",
@@ -786,7 +794,14 @@ test.describe("installer refusals", () => {
     for (const reason of reasons) {
       writeFileSync(join(profile, "inspect-refusal"), reason);
       await page.evaluate(checkStable);
+      const fetched = server.requests.filter((path) => path === filePath).length;
       await page.getByRole("button", { name: "Download", exact: true }).click();
+      // The protected folders come first on Windows, then the file, then its checks.
+      await expect
+        .poll(() => server.requests.filter((path) => path === filePath).length, {
+          timeout: folderWait,
+        })
+        .toBeGreaterThan(fetched);
       await expect
         .poll(() =>
           page.evaluate(async () => {
