@@ -1901,11 +1901,13 @@ export class ClawtrateClient {
         this.reloadSession(key);
         return;
       }
+      // Capture the incarnation before publishing loading: a synchronous store listener can close
+      // every hold and reopen the same key, replacing it before this open returns.
+      const incarnation = this.incarnations.get(key);
       this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
       // A read that published its failure while this view arrived (its listeners run before it
       // ends) settles nothing more: still loading once it ends, the task is read again. A close
       // and reopen between here and then is a different task, so its incarnation must still match.
-      const incarnation = this.incarnations.get(key);
       void load.done.then(() => {
         if (
           this.openSessions.has(key) &&

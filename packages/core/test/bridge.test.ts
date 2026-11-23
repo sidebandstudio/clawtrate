@@ -383,6 +383,58 @@ describe("openSession", () => {
       client.stop();
     }
   });
+
+  it("F-105: closing and reopening a failing task inside its loading notification attaches no old refresh to the new task", async () => {
+    const { client, gateway } = await openTask({ held: ["operator.read"] });
+    const reopen = deferred<unknown>();
+    let reopened = false;
+    let stop: (() => void) | null = null;
+    try {
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      client.reloadSession(KEY);
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      // A background refresh is pending on the failing task.
+      const refresh = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => refresh.promise;
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+
+      // When a second open publishes loading, a synchronous store listener closes both holds
+      // and reopens the same key, giving it a new incarnation before the second open returns.
+      stop = client.store.subscribe(() => {
+        if (reopened || client.state.transcripts[KEY]?.status !== "loading") return;
+        reopened = true;
+        client.closeSession(KEY);
+        client.closeSession(KEY);
+        gateway.handlers["chat.history"] = () => reopen.promise;
+        client.openSession(KEY);
+      });
+      client.openSession(KEY);
+      expect(reopened).toBe(true);
+      await until(() => gateway.calls("chat.history").length === before + 2);
+
+      // Any extra read fails and would replace the reopened task's successful history with error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      refresh.resolve({ messages: [], hasMore: false });
+      await Promise.resolve();
+      await Promise.resolve();
+      reopen.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status !== "loading");
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 2);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+    } finally {
+      stop?.();
+      client.stop();
+    }
+  });
 });
 
 describe("reloadSession", () => {
