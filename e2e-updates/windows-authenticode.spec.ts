@@ -103,12 +103,13 @@ function portable(tree: Buffer) {
   return file;
 }
 
-/** A resource directory whose entries all have the number id and point at these targets. */
-function directory(targets: number[], id = 1) {
+/** A resource directory whose entries have the number id, or each its own, and point at these
+ * targets. */
+function directory(targets: number[], id: number | number[] = 1) {
   const bytes = Buffer.alloc(16 + 8 * targets.length);
   bytes.writeUInt16LE(targets.length, 14);
   targets.forEach((target, i) => {
-    bytes.writeUInt32LE(id, 16 + 8 * i);
+    bytes.writeUInt32LE(typeof id === "number" ? id : id[i]!, 16 + 8 * i);
     bytes.writeUInt32LE(target >>> 0, 20 + 8 * i);
   });
   return bytes;
@@ -180,6 +181,27 @@ function versionTree(resource: Buffer, size = resource.length) {
     directory([72], 0x409),
     dataEntry(88, size),
     resource,
+  ]);
+}
+
+/** A resource table with one version resource for each language, under name 1. */
+function languagesTree(...resources: [language: number, resource: Buffer][]) {
+  const entries = 48 + 16 + 8 * resources.length;
+  let at = entries + 16 * resources.length;
+  const data = resources.map(([, resource]) => {
+    const entry = dataEntry(at, resource.length);
+    at += pad(resource).length;
+    return entry;
+  });
+  return Buffer.concat([
+    directory([DIRECTORY | 24], 16),
+    directory([DIRECTORY | 48]),
+    directory(
+      resources.map((_, i) => entries + 16 * i),
+      resources.map(([language]) => language),
+    ),
+    ...data,
+    ...resources.map(([, resource]) => pad(resource)),
   ]);
 }
 
@@ -391,6 +413,29 @@ if (windows)
       expect(lines).toEqual(["versions 1", `resource 1.2.0.7 ${base64("1.2.0")} - -`]);
     });
 
+    // A German version resource beside the English one, at the same release or another.
+    const german = (version: string) =>
+      versionResource([1, 2, 0, 0], [["040704b0", version]], [[0x407, 1200]]);
+
+    test("F-231: gives every version resource the file holds, one for each language", async () => {
+      const tree = languagesTree([0x407, german("1.2.0")], [0x409, release]);
+      const { lines } = await readVersions(place("setup.exe", portable(tree)));
+      const line = `resource 1.2.0.0 ${base64("1.2.0")}`;
+      expect(lines).toEqual(["versions 2", line, line]);
+    });
+
+    test("F-231: gives a second language's version resource that reads another release", async () => {
+      // Windows here reads the English one, at the release offered. The whole check requires
+      // every one to give it.
+      const tree = languagesTree([0x407, german("1.2.1")], [0x409, release]);
+      const { lines } = await readVersions(place("setup.exe", portable(tree)));
+      expect(lines).toEqual([
+        "versions 2",
+        `resource 1.2.0.0 ${base64("1.2.1")}`,
+        `resource 1.2.0.0 ${base64("1.2.0")}`,
+      ]);
+    });
+
     test("F-231: refuses a copy without the held file's SHA-512, and removes it", async () => {
       const path = place("setup.exe", portable(versionTree(release)));
       const { lines } = await readVersions(path, { sha512: "A".repeat(86) + "==" });
@@ -424,24 +469,28 @@ if (windows)
     // 65535 named entries and 65535 numbered ones.
     const crowded = Buffer.alloc(16);
     crowded.writeUInt32LE(0xffffffff, 12);
-    // Windows finds one version resource by its number and language, and reads the length the
-    // resource gives itself. So a table that leads to one resource many times, a data entry
-    // over 64 KiB and 17 resources give the one release it finds. The rest give no version, or
-    // fail, which the whole check refuses.
+    // Windows reads the length a version resource gives itself, so a data entry over 64 KiB
+    // gives the one release. The helper lists every version resource and refuses more than 16,
+    // so a table that leads to one resource many times is refused as soon as it passes 16.
+    // Windows lists a version resource it then can't load from a table that loops or nests
+    // wrongly, and refuses to list one that claims more entries than it holds. The helper
+    // refuses those, and a file without a version resource gives none, which the whole check
+    // refuses too.
     const found = ["versions 1", `resource 1.2.0.0 ${base64("1.2.0")}`];
     const crafted: [string, Buffer, string[]][] = [
+      ["finds no version in a resource table without one", directory([]), ["versions 0"]],
       [
-        "reads one release from a resource table that reaches one directory and one data entry many times",
+        "refuses a resource table that reaches one directory and one data entry many times",
         loopingTree(4000),
-        found,
+        ["refused InvalidDataException"],
       ],
       [
-        "finds no version in a type directory that leads back to the root",
+        "refuses a type directory that leads back to the root",
         directory([DIRECTORY | 0], 16),
-        ["versions 0"],
+        ["refused IOException"],
       ],
       [
-        "finds no version where a directory stands for a language's data entry",
+        "refuses a directory where a language's data entry belongs",
         Buffer.concat([
           directory([DIRECTORY | 24], 16),
           directory([DIRECTORY | 48]),
@@ -450,21 +499,17 @@ if (windows)
           dataEntry(112, release.length),
           release,
         ]),
-        ["versions 0"],
+        ["refused IOException"],
       ],
       ["reads the release's own length from a data entry over 64 KiB", versionTree(huge), found],
-      [
-        "finds no version in a directory claiming more entries than it holds",
-        crowded,
-        ["versions 0"],
-      ],
+      ["refuses a directory claiming more entries than it holds", crowded, ["refused IOException"]],
       [
         "fails on a version resource whose length ends inside its key",
         versionTree(key),
         ["refused IOException"],
       ],
       [
-        "reads one release from 17 version resources",
+        "refuses 17 version resources",
         Buffer.concat([
           directory([DIRECTORY | 24], 16),
           directory([DIRECTORY | 48]),
@@ -477,7 +522,7 @@ if (windows)
           ),
           release,
         ]),
-        found,
+        ["refused InvalidDataException"],
       ],
     ];
     for (const [name, tree, expected] of crafted)

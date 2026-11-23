@@ -12,7 +12,7 @@ const PENDING_TRIAL = "windows-install-pending-trial";
  * WinVerifyTrust checks one embedded signature at a time, picked by its index, shows no prompt,
  * skips revocation and downloads nothing: the chain is built from certificates already on this
  * machine and in the signature. Only when the bytes are the ones the engine verified and the
- * installer has the running app's publisher does `UpdateVersions` ask Windows for the version.
+ * installer has the running app's publisher does `UpdateVersions` ask Windows for its versions.
  * Each line is a fact; `windowsRefusal` decides.
  * e2e-updates/windows-authenticode.spec.ts compiles it too, to run the version reader alone. */
 export const inspectSource = `
@@ -26,7 +26,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
-// The version Windows itself reads from a held file. Windows' version lookup opens the file
+// The versions Windows itself reads from a held file. Windows' version lookup opens the file
 // again by path, and takes the strings, or the whole version, from a .mui file in a language
 // folder beside it when there is one. So it reads a copy of the held bytes, alone in a new
 // folder this run makes and protects as private-update-directory.ts protects an update folder.
@@ -35,12 +35,36 @@ public static class UpdateVersions {
   // FILE_VER_GET_LOCALISED, which reads what .NET's FileVersionInfo reads, a .mui file's
   // version included when there is one.
   const uint Localised = 1;
+  // LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE: mapped for its resources alone.
+  const uint AsResources = 0x2 | 0x20;
+  // RESOURCE_ENUM_LN: the file's own resources, never a .mui file's.
+  const uint OwnResources = 1;
+  // RT_VERSION
+  static readonly IntPtr VersionType = new IntPtr(16);
+  // More version resources than this refuse the file.
+  const int Most = 16;
   [DllImport("version", CharSet=CharSet.Unicode, SetLastError=true)]
   static extern uint GetFileVersionInfoSizeExW(uint flags, string path, out uint handle);
   [DllImport("version", CharSet=CharSet.Unicode, SetLastError=true)]
   static extern bool GetFileVersionInfoExW(uint flags, string path, uint handle, uint size, IntPtr data);
   [DllImport("version", CharSet=CharSet.Unicode)]
   static extern bool VerQueryValueW(IntPtr block, string path, out IntPtr value, out uint size);
+  delegate bool NameFound(IntPtr module, IntPtr type, IntPtr name, IntPtr context);
+  delegate bool LanguageFound(IntPtr module, IntPtr type, IntPtr name, ushort language, IntPtr context);
+  [DllImport("kernel32", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
+  [DllImport("kernel32")] static extern bool FreeLibrary(IntPtr module);
+  [DllImport("kernel32", SetLastError=true)]
+  static extern bool EnumResourceNamesExW(IntPtr module, IntPtr type, NameFound found, IntPtr context,
+    uint flags, ushort language);
+  [DllImport("kernel32", SetLastError=true)]
+  static extern bool EnumResourceLanguagesExW(IntPtr module, IntPtr type, IntPtr name, LanguageFound found,
+    IntPtr context, uint flags, ushort language);
+  [DllImport("kernel32", SetLastError=true)]
+  static extern IntPtr FindResourceExW(IntPtr module, IntPtr type, IntPtr name, ushort language);
+  [DllImport("kernel32", SetLastError=true)] static extern IntPtr LoadResource(IntPtr module, IntPtr found);
+  [DllImport("kernel32")] static extern IntPtr LockResource(IntPtr loaded);
+  [DllImport("kernel32", SetLastError=true)] static extern uint SizeofResource(IntPtr module, IntPtr found);
   [StructLayout(LayoutKind.Sequential)]
   struct Security { public int size; public IntPtr descriptor; public bool inherit; }
   [DllImport("kernel32", CharSet=CharSet.Unicode, SetLastError=true)]
@@ -58,40 +82,121 @@ public static class UpdateVersions {
     Marshal.Copy(at, bytes, 0, (int)count);
     return bytes;
   }
-  // "versions 0" for a file without a version resource. Otherwise "versions 1" and the resource
-  // Windows picks: its fixed product version, then the ProductVersion of each translation it
-  // lists, "-" for one without.
+  // A version resource's line: its fixed product version, then the ProductVersion of each
+  // translation it lists, "-" for one without.
+  static string Facts(IntPtr data, uint size) {
+    string product = "-";
+    var info = Value(data, size, "\\\\", false);
+    if (info != null && info.Length >= 52 && U32(info, 0) == 0xfeef04bd) {
+      uint high = U32(info, 16), low = U32(info, 20);
+      product = (high >> 16) + "." + (high & 0xffff) + "." + (low >> 16) + "." + (low & 0xffff);
+    }
+    var line = new StringBuilder("resource " + product);
+    var translations = Value(data, size, "\\\\VarFileInfo\\\\Translation", false);
+    for (int at = 0; translations != null && at + 4 <= translations.Length; at += 4) {
+      string key = U16(translations, at).ToString("x4") + U16(translations, at + 2).ToString("x4");
+      var text = Value(data, size, "\\\\StringFileInfo\\\\" + key + "\\\\ProductVersion", true);
+      string version = text == null ? null : Encoding.Unicode.GetString(text).Split('\\0')[0];
+      line.Append(" ").Append(UpdateSignature.Encode(version == "" ? null : version));
+    }
+    return line.ToString();
+  }
+  // The same, from a resource's bytes in a block laid out as Windows lays out its own copy: sized
+  // from the resource's own length, with room after it.
+  static string Facts(byte[] resource) {
+    var block = new byte[2 * resource.Length + 4];
+    Buffer.BlockCopy(resource, 0, block, 0, resource.Length);
+    var pin = GCHandle.Alloc(block, GCHandleType.Pinned);
+    try {
+      return Facts(pin.AddrOfPinnedObject(), (uint)block.Length);
+    } finally {
+      pin.Free();
+    }
+  }
+  static bool IsNumber(IntPtr name) { return ((ulong)name.ToInt64() >> 16) == 0; }
+  static bool Same(byte[] one, byte[] other) {
+    if (one.Length != other.Length) return false;
+    for (int i = 0; i < one.Length; i++) if (one[i] != other[i]) return false;
+    return true;
+  }
+  // Why an enumeration stopped: too many, or, when none may be, nothing of the kind.
+  static void Ended(int found, bool none) {
+    int error = Marshal.GetLastWin32Error();
+    if (found > Most) throw new InvalidDataException("More than " + Most + " version resources");
+    // ERROR_RESOURCE_DATA_NOT_FOUND to ERROR_RESOURCE_LANG_NOT_FOUND.
+    if (!none || error < 1812 || error > 1815) throw new IOException("Resource enumeration failed", error);
+  }
+  // One resource's bytes, as long as the resource says it is, which its data must hold.
+  static byte[] Bytes(IntPtr module, IntPtr name, ushort language) {
+    IntPtr found = FindResourceExW(module, VersionType, name, language);
+    IntPtr loaded = found == IntPtr.Zero ? IntPtr.Zero : LoadResource(module, found);
+    IntPtr at = loaded == IntPtr.Zero ? IntPtr.Zero : LockResource(loaded);
+    uint size = at == IntPtr.Zero ? 0 : SizeofResource(module, found);
+    if (size < 2) throw new IOException("Version resource unreadable");
+    int length = (ushort)Marshal.ReadInt16(at);
+    if (length > size) throw new InvalidDataException("Version resource longer than its data");
+    var bytes = new byte[length];
+    Marshal.Copy(at, bytes, 0, length);
+    return bytes;
+  }
+  // Every version resource the file holds itself, under each name and language, as Windows'
+  // resource loader lists them.
+  static List<byte[]> Embedded(string path) {
+    IntPtr module = LoadLibraryExW(path, IntPtr.Zero, AsResources);
+    if (module == IntPtr.Zero) throw new IOException("LoadLibraryExW failed", Marshal.GetLastWin32Error());
+    var names = new List<IntPtr>();
+    try {
+      // A name that is not a number is a string Windows owns only during the call, so it is copied.
+      NameFound name = (m, t, found, c) => {
+        names.Add(IsNumber(found) ? found : Marshal.StringToHGlobalUni(Marshal.PtrToStringUni(found)));
+        return names.Count <= Most;
+      };
+      if (!EnumResourceNamesExW(module, VersionType, name, IntPtr.Zero, OwnResources, 0)) Ended(names.Count, true);
+      var languages = new List<KeyValuePair<IntPtr, ushort>>();
+      foreach (var each in names) {
+        LanguageFound language = (m, t, n, found, c) => {
+          languages.Add(new KeyValuePair<IntPtr, ushort>(each, found));
+          return languages.Count <= Most;
+        };
+        // A name it listed has a language, or the table is malformed.
+        if (!EnumResourceLanguagesExW(module, VersionType, each, language, IntPtr.Zero, OwnResources, 0))
+          Ended(languages.Count, false);
+      }
+      var resources = new List<byte[]>();
+      foreach (var each in languages) resources.Add(Bytes(module, each.Key, each.Value));
+      return resources;
+    } finally {
+      foreach (var each in names) if (!IsNumber(each)) Marshal.FreeHGlobal(each);
+      FreeLibrary(module);
+    }
+  }
+  // "versions <count>", then each version resource the file holds. A file can hold one for each
+  // language, and Windows reads the one its resource loader picks for the person's language.
+  // That one must be among them, byte for byte, so each is read as Windows reads it.
   static string[] Versions(string path) {
+    var embedded = Embedded(path);
     uint unused, size = GetFileVersionInfoSizeExW(Localised, path, out unused);
     if (size == 0) {
       int error = Marshal.GetLastWin32Error();
-      // ERROR_RESOURCE_DATA_NOT_FOUND to ERROR_RESOURCE_LANG_NOT_FOUND.
-      if (error >= 1812 && error <= 1815) return new[] { "versions 0" };
-      throw new IOException("GetFileVersionInfoSizeExW failed", error);
+      if (error < 1812 || error > 1815) throw new IOException("GetFileVersionInfoSizeExW failed", error);
+      if (embedded.Count != 0) throw new InvalidDataException("Version resources Windows does not read");
+      return new[] { "versions 0" };
     }
     // Windows sizes its copy from the resource's own 16-bit length, so it stays small.
     IntPtr data = Marshal.AllocHGlobal((int)size);
     try {
       if (!GetFileVersionInfoExW(Localised, path, 0, size, data))
         throw new IOException("GetFileVersionInfoExW failed", Marshal.GetLastWin32Error());
-      string product = "-";
-      var info = Value(data, size, "\\\\", false);
-      if (info != null && info.Length >= 52 && U32(info, 0) == 0xfeef04bd) {
-        uint high = U32(info, 16), low = U32(info, 20);
-        product = (high >> 16) + "." + (high & 0xffff) + "." + (low >> 16) + "." + (low & 0xffff);
-      }
-      var line = new StringBuilder("resource " + product);
-      var translations = Value(data, size, "\\\\VarFileInfo\\\\Translation", false);
-      for (int at = 0; translations != null && at + 4 <= translations.Length; at += 4) {
-        string key = U16(translations, at).ToString("x4") + U16(translations, at + 2).ToString("x4");
-        var text = Value(data, size, "\\\\StringFileInfo\\\\" + key + "\\\\ProductVersion", true);
-        string version = text == null ? null : Encoding.Unicode.GetString(text).Split('\\0')[0];
-        line.Append(" ").Append(UpdateSignature.Encode(version == "" ? null : version));
-      }
-      return new[] { "versions 1", line.ToString() };
+      var picked = new byte[Math.Min((ushort)Marshal.ReadInt16(data), (int)size)];
+      Marshal.Copy(data, picked, 0, picked.Length);
+      if (!embedded.Exists(bytes => Same(bytes, picked)))
+        throw new InvalidDataException("Windows reads a version resource the file does not hold");
     } finally {
       Marshal.FreeHGlobal(data);
     }
+    var lines = new List<string> { "versions " + embedded.Count };
+    foreach (var bytes in embedded) lines.Add(Facts(bytes));
+    return lines.ToArray();
   }
   // Makes the folder, failing if anything is there already, with its DACL: owned by this user,
   // inheriting nothing, and one rule giving this user full control.
@@ -472,10 +577,10 @@ function sameRelease(product: string, version: string) {
  * What the helper's facts mean for this download. The installer must have the running app's
  * publisher: every SHA-256 signature on each file trusted by Windows, with a leaf certificate of
  * the same subject whose chain ends at the same root. A renewed certificate, or one from a new
- * intermediate under that root, passes; a different root or subject does not. The version
- * resource Windows reads must give the offer's version as the ProductVersion of every
- * translation it lists, and the release's numbers as its fixed product version. Anything
- * unexpected is `inspection-failed`, never a pass.
+ * intermediate under that root, passes; a different root or subject does not. Every version
+ * resource the installer holds, one for each language it has, must give the offer's version as
+ * the ProductVersion of every translation it lists, and the release's numbers as its fixed
+ * product version. Anything unexpected is `inspection-failed`, never a pass.
  */
 export function windowsRefusal(
   output: string,
