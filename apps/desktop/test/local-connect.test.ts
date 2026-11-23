@@ -289,9 +289,11 @@ it("no shipped host turns local connect on", () => {
   const found = shipped.flatMap((file) =>
     localConnectUses(relative(ROOT, file).split(sep).join("/"), readFileSync(file, "utf8")),
   );
-  // The option's declaration and its one read; nothing sets it, or calls the builder.
+  // Each option's declaration and its one read; nothing sets either, or calls the builder.
   expect(found.sort()).toEqual([
     "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect;",
     "apps/desktop/src/setup/controller.ts read this.options.localConnect",
+    "packages/core/src/client.ts PropertySignature localConnect?: (url: string, route: string) => ProvedRoute | null;",
+    "packages/core/src/client.ts read this.options.localConnect",
   ]);
 });

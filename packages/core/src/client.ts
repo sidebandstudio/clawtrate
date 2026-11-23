@@ -517,6 +517,23 @@ export type ConnectionSettings = {
   token: string | null;
   /** The user chose Disconnect: stay disconnected, across restarts, until Reconnect. */
   suspended?: boolean;
+  /**
+   * The host's name for the proved route this gateway was set up through (local
+   * connect's profile folder, `SetupEndpointCheck.route`). While it is set, every
+   * socket of every connection to it, after a restart too, comes from
+   * `ClientOptions.localConnect` for this name; with none, nothing is opened.
+   */
+  route?: string;
+};
+
+/**
+ * Sockets the host proves itself (local connect, docs/design/setup-effortless.md
+ * §3): each one's far end before its first byte, and again, by `verify`, just
+ * before its credential. `verify` is about the latest socket `createSocket` made.
+ */
+export type ProvedRoute = {
+  createSocket: WebSocketFactory;
+  verify: (signal: AbortSignal) => Promise<boolean>;
 };
 
 export type ConnectOptions = { url: string; token?: string | null };
@@ -565,6 +582,12 @@ export type ClientOptions = {
    * `readOnly`. A device paired before keeps what it holds.
    */
   fullAccess?: boolean;
+  /**
+   * Local connect: the proved sockets for a gateway saved with `route`, asked as
+   * each connection to it opens, or null when the host can't prove that route
+   * (then nothing is opened). Off in every shipped host.
+   */
+  localConnect?: (url: string, route: string) => ProvedRoute | null;
 };
 
 /** A file sent with a message, as `chat.send` takes it: base64 content. */
@@ -762,6 +785,18 @@ export type SetupEndpointCheck = {
    * of it, retries included: local connect's, each proved before a byte goes.
    */
   createSocket?: WebSocketFactory;
+  /**
+   * The far end of the latest socket `createSocket` made, proved again: asked last before
+   * the frame that carries a credential, after the plan's final storage read, so nothing
+   * but the send follows it. Failing sends nothing, as `verify` failing does.
+   */
+  prove?: (signal: AbortSignal) => Promise<boolean>;
+  /**
+   * The host's name for the route `createSocket` proves (local connect's profile folder),
+   * saved with the gateway (`ConnectionSettings.route`): once setup ends, and after a
+   * restart, every socket of the connection comes from `ClientOptions.localConnect`.
+   */
+  route?: string;
 };
 
 /**
@@ -772,14 +807,21 @@ export type SetupEndpointCheck = {
 export const SETUP_LISTENER_READS_MS = 10_000;
 
 function setupCheckFor(url: string, setup: SetupEndpointCheck) {
-  if (!setup.check && !setup.verify && !setup.consent && !setup.createSocket) return null;
+  if (!setup.check && !setup.verify && !setup.consent && !setup.createSocket && !setup.prove)
+    return null;
   return {
     url,
     check: setup.check ?? (() => true),
     ...(setup.verify ? { verify: setup.verify } : {}),
     ...(setup.consent ? { consent: setup.consent } : {}),
     ...(setup.createSocket ? { createSocket: setup.createSocket } : {}),
+    ...(setup.prove ? { prove: setup.prove } : {}),
   };
+}
+
+/** A setup's gateway, with the proved route it was set up through, if any. */
+function setupSettings(url: string, setup: SetupEndpointCheck): ConnectionSettings {
+  return { url, token: null, ...(setup.route !== undefined ? { route: setup.route } : {}) };
 }
 
 /** A setup connection's first device token, held in memory until its grant is checked. */
@@ -1085,6 +1127,8 @@ export class ClawtrateClient {
     consent?: () => boolean;
     /** The host's own sockets for this setup (local connect's), in place of `createWebSocket`. */
     createSocket?: WebSocketFactory;
+    /** The far end of `createSocket`'s latest socket proved again, last before its credential. */
+    prove?: (signal: AbortSignal) => Promise<boolean>;
   } | null = null;
   /**
    * A connection the host's setup opened, from its first socket through its
@@ -1621,7 +1665,7 @@ export class ClawtrateClient {
       this.planHadToken = false;
       this.typedAttempt = null;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
-      this.settings = { url, token: null };
+      this.settings = setupSettings(url, setup);
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = { url, reuse: false };
@@ -1651,7 +1695,7 @@ export class ClawtrateClient {
       this.selectionApplied = selection;
       if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
-      this.settings = { url: target, token: null };
+      this.settings = setupSettings(target, setup);
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(target, setup);
       this.setupIntent = { url: target, reuse: true };
@@ -6061,6 +6105,8 @@ export class ClawtrateClient {
     // plan waits for, and the signal both reads share, ended when the socket closes or their time is up.
     type SocketReads = {
       check: ClawtrateClient["setupCheck"];
+      /** The host's second proof of this socket, asked last before its credential (local connect). */
+      prove: ((signal: AbortSignal) => Promise<boolean>) | undefined;
       reads: AbortController;
       /** Settles when the reads end: the socket closed or was replaced, or their time is up. */
       ended: Promise<false>;
@@ -6075,6 +6121,12 @@ export class ClawtrateClient {
     let refusalsAtRead = 0;
     /** `rotations` as the plan first read the saved token. */
     let rotationsAtPlan = 0;
+    // A gateway set up through local connect: every socket of this connection is the host's
+    // proved one, once setup's own sockets end; false when the host can't prove it.
+    const route =
+      settings.route === undefined
+        ? null
+        : (this.options.localConnect?.(settings.url, settings.route) ?? false);
     const endReads = (reads: SocketReads | null) => {
       if (!reads) return;
       if (reads.timer) clearTimeout(reads.timer);
@@ -6112,10 +6164,27 @@ export class ClawtrateClient {
         endReads(current);
         current = null;
         const check = this.setupCheck?.url === settings.url ? this.setupCheck : null;
+        const proved = check?.createSocket ? null : route;
+        // A gateway set up through local connect opens no socket the host can't prove.
+        if (proved === false) {
+          if (generation === this.generation)
+            this.setConnection({
+              status: "error",
+              retryAt: null,
+              error: {
+                code: "LOCAL_UNVERIFIED",
+                message: `Clawtrate couldn't verify what is listening at ${hostOf(settings.url)}.`,
+                hint: null,
+              },
+            });
+          throw new Error("this gateway's sockets can't be proved");
+        }
         try {
           socket = check?.createSocket
             ? check.createSocket(settings.url)
-            : this.host.createWebSocket(settings.url);
+            : proved
+              ? proved.createSocket(settings.url)
+              : this.host.createWebSocket(settings.url);
         } catch (error) {
           // A setup socket that couldn't start is a terminal path: its code goes.
           if (this.isSetup(settings.url)) this.dropSetupCredentials();
@@ -6125,6 +6194,7 @@ export class ClawtrateClient {
         const ended = new Promise<false>((resolve) => (end = () => resolve(false)));
         const mine: SocketReads = {
           check,
+          prove: check?.createSocket ? check.prove : proved ? proved.verify : undefined,
           reads: new AbortController(),
           ended,
           end,
@@ -6317,6 +6387,23 @@ export class ClawtrateClient {
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
+        }
+        // Last, after the plan's final read: the host proves the far end of this very socket
+        // again (local connect), so nothing but the send follows the proof. A refusal sends
+        // nothing; a setup socket's ends its setup as a change, any other's is retried.
+        if (mine?.prove) {
+          const signal = mine.reads.signal;
+          const holds =
+            !signal.aborted &&
+            (await Promise.race([mine.prove(signal).catch(() => false), mine.ended]));
+          stillCurrent();
+          if (!holds || signal.aborted) {
+            if (setup && mine.check && mine.ours()) {
+              this.setupEndpointChanged(mine.check.url, generation);
+              this.close();
+            }
+            throw new Error("the far end of this socket couldn't be proved again");
+          }
         }
         this.setConnection({ requestedScopes: [...requested] });
         return plan;

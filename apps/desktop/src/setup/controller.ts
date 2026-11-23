@@ -444,19 +444,27 @@ export class SetupController implements SetupHost {
         return false;
       }
     };
-    // With local connect, the host dials each socket itself and proves its far end first.
+    // With local connect, the host dials each socket itself and proves its far end first, and
+    // again last before its credential; the gateway is saved with that route, so its sockets
+    // after setup, and after a restart, are proved the same way.
     const local = this.provedRoute(found);
+    const proved = local
+      ? {
+          createSocket: local.sockets.createWebSocket,
+          prove: async (signal: AbortSignal) =>
+            attempt === this.attempt && (await local.sockets.verify(signal)),
+          route: local.folder,
+        }
+      : {};
     // Once each socket is up and again just before its credential goes, the endpoint's
     // listener is read again: the port's listener by PID and start time, the endpoint, the
-    // program file, as the look found them; with local connect, that socket's far end proved
-    // again. Any difference sends nothing (docs/decisions.md).
+    // program file, as the look found them. Any difference sends nothing (docs/decisions.md).
     // The client's signal ends with the socket or the reads' shared time: the commands stop then.
     const verify = async (signal: AbortSignal) => {
       if (attempt !== this.attempt) return false;
       try {
         return (
           (await this.unchanged(opened, found, signal)) &&
-          (!local || (await local.verify(signal))) &&
           !signal.aborted &&
           attempt === this.attempt
         );
@@ -479,7 +487,7 @@ export class SetupController implements SetupHost {
         check: listening,
         verify,
         consent: () => !expired(),
-        ...(local ? { createSocket: local.createWebSocket } : {}),
+        ...proved,
       });
       return;
     }
@@ -511,7 +519,7 @@ export class SetupController implements SetupHost {
       check: listening,
       verify,
       consent: () => !expired(),
-      ...(local ? { createSocket: local.createWebSocket } : {}),
+      ...proved,
     });
   }
 
@@ -528,7 +536,7 @@ export class SetupController implements SetupHost {
     const prove = proveFor(local, folder, found.port, (why) =>
       this.log(`couldn't verify what is listening at port ${found.port} (${why})`),
     );
-    return provedSockets(found.port, prove);
+    return { sockets: provedSockets(found.port, prove), folder };
   }
 
   /**

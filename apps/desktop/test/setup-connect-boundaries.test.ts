@@ -39,7 +39,12 @@ import {
 } from "../../../packages/core/test/fake-gateway.ts";
 import { localGatewayBuild } from "../packaging/config.ts";
 import { SetupController } from "../src/setup/controller.ts";
-import { proveFor, provedSockets, type LocalConnect } from "../src/setup/local-connect.ts";
+import {
+  proveFor,
+  provedRouteFor,
+  provedSockets,
+  type LocalConnect,
+} from "../src/setup/local-connect.ts";
 import { proveLocalGateway } from "../src/setup/local-prove.ts";
 import type { Opened } from "../src/setup/sandbox.ts";
 import { readLocalSettings } from "../src/setup/settings-reader.ts";
@@ -604,6 +609,47 @@ describe.skipIf(!mac)("local connect's send gate, with a listener of the test's 
       }
     }, 30_000);
   }
+
+  it("F-492: a gateway saved with its route gets no byte from a restart when a listener that isn't OpenClaw holds its port", async () => {
+    let bytes = 0;
+    let accepted = 0;
+    const listener = createServer((socket) => {
+      accepted += 1;
+      socket.on("data", (data) => (bytes += data.length));
+      socket.on("error", () => {});
+    });
+    await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
+    const port = (listener.address() as { port: number }).port;
+    const url = `ws://127.0.0.1:${port}`;
+    const home = realpathSync(mkdtempSync(join(scratch, "restart-")));
+    chmodSync(home, 0o700);
+    profileFiles(home, ".openclaw", { pid: process.pid, role: "gateway", port });
+    // As a gateway set up through local connect is saved: its route, and this device's token.
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url, token: null, route: ".openclaw" }),
+      [tokenKey(url)]: READ_TOKEN,
+    });
+    const gateway = new FakeGateway();
+    const refused: string[] = [];
+    const local: LocalConnect = { home, helper, platform, sandboxed: true };
+    const client = new ClawtrateClient(testHost(gateway, storage), {
+      reconnect: { initialMs: 10, maxMs: 20 },
+      localConnect: provedRouteFor(local, (why) => refused.push(why)),
+    });
+    try {
+      await client.start();
+      // Each socket, retries included, is dialled and refused before its first byte.
+      await until(() => refused.length >= 2, 15_000);
+      await sleep(500);
+      expect(refused[0]).toBe("lock");
+      expect(accepted).toBeGreaterThanOrEqual(2);
+      expect(bytes).toBe(0);
+      expect(gateway.sockets).toHaveLength(0);
+    } finally {
+      client.stop();
+      listener.close();
+    }
+  }, 30_000);
 });
 
 const BIN = openclawBin();
@@ -768,6 +814,49 @@ describe.skipIf(!BIN || !mac)(
         expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
         expect(client.state.connection.pairing).toBe(null);
         expect(refused).toEqual([]);
+      } finally {
+        client.stop();
+      }
+    });
+
+    it("after a restart, connects a gateway saved with its route on a socket proved when dialled and again before its token", async () => {
+      const local: LocalConnect = { home: gateway.home, helper, platform, sandboxed: true };
+      const routes = provedRouteFor(local);
+      let dials = 0;
+      let proofs = 0;
+      const host = createNodeHost({
+        dataDir: mkdtempSync(join(scratch, "app-")),
+        client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
+      });
+      const url = `ws://127.0.0.1:${gateway.port}`;
+      // As a gateway set up through local connect is saved, with the settings file's token.
+      await host.storage.set("connection", JSON.stringify({ url, token, route: FOLDER }));
+      const client = new ClawtrateClient(
+        {
+          ...host,
+          createWebSocket: () => {
+            throw new Error("a socket that isn't proved");
+          },
+          secureCredentials: async () => true,
+        },
+        {
+          reconnect: { initialMs: 50, maxMs: 200 },
+          fullAccess: true,
+          localConnect: (at, route) => {
+            const sockets = routes(at, route)!;
+            return {
+              createSocket: (to) => (dials++, sockets.createSocket(to)),
+              verify: async (signal) => (proofs++, sockets.verify(signal)),
+            };
+          },
+        },
+      );
+      try {
+        await client.start();
+        await until(() => client.state.connection.status === "connected", 60_000);
+        expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
+        expect(dials).toBe(1);
+        expect(proofs).toBe(1);
       } finally {
         client.stop();
       }

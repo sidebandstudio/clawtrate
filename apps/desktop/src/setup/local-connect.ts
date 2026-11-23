@@ -5,12 +5,15 @@
 // proves it again just before the frame that carries a credential. Every
 // WebSocket gets an agent and a socket of its own, so a retry or a reconnect
 // is dialled and proved afresh, and a socket that isn't proved carries no byte.
+// A gateway set up this way is saved with its profile folder as its route, and
+// `provedRouteFor` gives the client its sockets after setup, and after a
+// restart, the same way.
 //
-// No shipped host turns this on yet: `SetupControllerOptions.localConnect` is
-// off in every one of them.
+// No shipped host turns this on yet: `SetupControllerOptions.localConnect` and
+// `ClientOptions.localConnect` are off in every one of them.
 
 import { connect as dial, type Socket } from "node:net";
-import type { WebSocketLike } from "@clawtrate/core";
+import type { ProvedRoute, WebSocketLike } from "@clawtrate/core";
 import { Agent, WebSocket } from "undici";
 import { proveLocalGateway, type ProveRefusal } from "./local-prove.ts";
 import { mustSandbox } from "./world.ts";
@@ -47,6 +50,24 @@ export function proveFor(
     const proof = await proveLocalGateway({ ...local, folder, port, localPort });
     if (!proof.proved) refused(proof.why);
     return proof.proved;
+  };
+}
+
+/**
+ * The client's sockets for a gateway saved with a local connect route
+ * (`ClientOptions.localConnect`): only `ws://127.0.0.1:<port>`, proved as the
+ * profile folder `route` in the home local connect names. Anything else is null,
+ * and the client opens nothing for it.
+ */
+export function provedRouteFor(
+  local: LocalConnect,
+  refused: (why: ProveRefusal) => void = () => {},
+): (url: string, route: string) => ProvedRoute | null {
+  return (url, route) => {
+    const port = Number(/^ws:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/.exec(url)?.[1]);
+    if (!(port <= 65535)) return null;
+    const sockets = provedSockets(port, proveFor(local, route, port, refused));
+    return { createSocket: sockets.createWebSocket, verify: sockets.verify };
   };
 }
 
