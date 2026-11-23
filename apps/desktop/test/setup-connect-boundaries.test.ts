@@ -5,11 +5,28 @@
 // failed; and a saved pairing that went or came after the person agreed.
 // Production's setup world with in-memory sockets, fixture outputs and a
 // fake process lookup: no gateway, no OpenClaw command and no network.
-import { mkdtempSync, rmSync } from "node:fs";
+//
+// Local connect's send gate (docs/design/setup-effortless.md §3): each socket's
+// far end proved before its first byte. Here with a listener of the test's
+// own, and, with `OPENCLAW_BIN` and `CLAWTRATE_LOCAL_GATEWAY=1`, on a
+// development gateway of the test's own (fixtures/local-gateway.ts).
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { ClawtrateClient, type ClawtrateHost } from "@clawtrate/core";
-import { describe, expect, it, vi } from "vitest";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { ClawtrateClient, FULL_SCOPES, type ClawtrateHost } from "@clawtrate/core";
+import { createNodeHost } from "@clawtrate/core/node";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   FakeGateway,
   deferred,
@@ -20,9 +37,21 @@ import {
   tokenKey,
   until,
 } from "../../../packages/core/test/fake-gateway.ts";
+import { localGatewayBuild } from "../packaging/config.ts";
 import { SetupController } from "../src/setup/controller.ts";
+import { proveFor, provedSockets, type LocalConnect } from "../src/setup/local-connect.ts";
+import { proveLocalGateway } from "../src/setup/local-prove.ts";
 import type { Opened } from "../src/setup/sandbox.ts";
+import { readLocalSettings } from "../src/setup/settings-reader.ts";
 import { productionWorld } from "../src/setup/world.ts";
+import {
+  FOLDER,
+  freePort,
+  openclawBin,
+  standIn,
+  startGateway,
+  type DevGateway,
+} from "./fixtures/local-gateway.ts";
 import { authJson, qrJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
 
 const URL = "ws://127.0.0.1:19940";
@@ -46,14 +75,31 @@ async function withLocalSetup(
   client: ClawtrateClient,
   exercise: (setup: SetupController) => Promise<void>,
   listener: Listener = { pid: 4242 },
+  /** Another port for the look to find, and local connect with its home in this run's folder. */
+  more: {
+    port?: number;
+    localConnect?: (home: string) => LocalConnect;
+    log?: (line: string) => void;
+    /** The one profile the look finds, by its state folder (a development gateway's). */
+    stateDir?: string;
+  } = {},
 ) {
-  const dir = mkdtempSync(join(tmpdir(), "clawtrate-setup-edges-"));
+  const port = more.port ?? PORT;
+  const url = `ws://127.0.0.1:${port}`;
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-setup-edges-")));
   const world = {
     ...productionWorld({ home: dir, appData: dir, platform: "darwin" }),
     candidates: [process.execPath],
     // A fixture CLI of the test's own, run as a read-only version would be.
     readOnly: async () => ({ verified: true, version: null }),
     deep: false,
+    ...(more.stateDir
+      ? {
+          profiles: [
+            { name: "default", args: [], stateDir: more.stateDir, required: true, env: {} },
+          ],
+        }
+      : {}),
   };
   const opened: Opened = {
     world,
@@ -70,11 +116,11 @@ async function withLocalSetup(
         text === "--version"
           ? VERSION_LINE
           : text === "gateway status --json"
-            ? statusJson({ port: PORT, listenerPid: listener.pid })
+            ? statusJson({ port, listenerPid: listener.pid })
             : text === "config get gateway.auth.mode --json"
               ? authJson()
               : text.startsWith("qr ")
-                ? qrJson(URL, CODE, Date.now() + 60_000)
+                ? qrJson(url, CODE, Date.now() + 60_000)
                 : "";
       return { stdout, exitCode: stdout ? 0 : 1, timedOut: false, tooLarge: false, failed: false };
     },
@@ -85,6 +131,8 @@ async function withLocalSetup(
       open: async () => opened,
       confirm: async () => true,
       stopPrograms: () => {},
+      ...(more.localConnect ? { localConnect: more.localConnect(dir) } : {}),
+      ...(more.log ? { log: more.log } : {}),
     });
     await client.start({ resume: false });
     await setup.look();
@@ -457,3 +505,388 @@ describe("a saved pairing that went or came after the person agreed", () => {
     });
   });
 });
+
+// The proof runs on macOS only: Linux's walk through /proc is setup PR 2a-3's.
+const platform = process.platform;
+const mac = platform === "darwin";
+let scratch: string;
+let helper: string | null = null;
+beforeAll(() => {
+  scratch = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-local-connect-")));
+  if (platform === "darwin") {
+    helper = join(scratch, "helper");
+    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper));
+  }
+});
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+/** A profile whose gateway lock and state database exist, as a running gateway's would. */
+function profileFiles(home: string, folder: string, lock: object) {
+  const own = join(home, folder, "tmp", `openclaw-${process.geteuid!()}`);
+  mkdirSync(own, { recursive: true, mode: 0o700 });
+  mkdirSync(join(home, folder, "state"), { mode: 0o700 });
+  writeFileSync(join(own, "gateway.state.lock"), JSON.stringify(lock), { mode: 0o600 });
+  writeFileSync(join(home, folder, "state", "openclaw.sqlite"), "", { mode: 0o600 });
+}
+
+describe.skipIf(!mac)("local connect's send gate, with a listener of the test's own", () => {
+  it("refuses every socket when the profile's folder isn't in the home local connect names", async () => {
+    const lines: string[] = [];
+    const elsewhere = realpathSync(mkdtempSync(join(scratch, "elsewhere-")));
+    const listener = createServer((socket) => socket.on("error", () => {}));
+    await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
+    const port = (listener.address() as { port: number }).port;
+    try {
+      await withLocalSetup(
+        makeClient(new FakeGateway()),
+        async (setup) => {
+          await setup.connect();
+          await until(() => lines.length >= 1, 15_000);
+          expect(lines[0]).toBe(`[setup] couldn't verify what is listening at port ${port} (path)`);
+        },
+        { pid: 4242 },
+        {
+          port,
+          log: (line) => lines.push(line),
+          localConnect: () => ({ home: elsewhere, helper, platform, sandboxed: true }),
+        },
+      );
+    } finally {
+      listener.close();
+    }
+  });
+
+  for (const mode of ["bootstrap", "saved-token"] as const) {
+    it(`F-492: a same-account listener that isn't OpenClaw gets no byte of any setup socket (${mode})`, async () => {
+      // This process holds the accepted end: (e) passes, and (f) refuses it.
+      let bytes = 0;
+      let accepted = 0;
+      const listener = createServer((socket) => {
+        accepted += 1;
+        socket.on("data", (data) => (bytes += data.length));
+        socket.on("error", () => {});
+      });
+      await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
+      const port = (listener.address() as { port: number }).port;
+      const url = `ws://127.0.0.1:${port}`;
+      const gateway = new FakeGateway();
+      const storage = memoryStorage(mode === "saved-token" ? { [tokenKey(url)]: READ_TOKEN } : {});
+      const client = makeClient(gateway, storage);
+      const lines: string[] = [];
+      try {
+        await withLocalSetup(
+          client,
+          async (setup) => {
+            await setup.connect();
+            // Each socket it opens, retries included, is dialled and refused before its first byte.
+            await until(() => lines.length >= 1, 15_000);
+            await sleep(500);
+            // A retry may be on its way through its proof as this counts.
+            expect(accepted).toBeGreaterThanOrEqual(lines.length);
+            expect(bytes).toBe(0);
+            expect(gateway.sockets).toHaveLength(0);
+            expect(lines[0]).toBe(
+              `[setup] couldn't verify what is listening at port ${port} (lock)`,
+            );
+          },
+          { pid: 4242 },
+          {
+            port,
+            log: (line) => lines.push(line),
+            localConnect: (home) => {
+              profileFiles(home, ".openclaw", { pid: process.pid, role: "gateway", port });
+              return { home, helper, platform, sandboxed: true };
+            },
+          },
+        );
+      } finally {
+        listener.close();
+      }
+    }, 30_000);
+  }
+});
+
+const BIN = openclawBin();
+
+/** A client of the app's own kind, whose every socket goes through local connect's connector. */
+function provedClient(gateway: DevGateway, port: number, refused: string[]) {
+  const local: LocalConnect = { home: gateway.home, helper, platform, sandboxed: true };
+  const sockets = provedSockets(
+    port,
+    proveFor(local, FOLDER, port, (why) => refused.push(why)),
+  );
+  const host = createNodeHost({
+    dataDir: mkdtempSync(join(scratch, "app-")),
+    client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
+  });
+  return new ClawtrateClient(
+    { ...host, createWebSocket: sockets.createWebSocket, secureCredentials: async () => true },
+    { reconnect: { initialMs: 50, maxMs: 200 }, fullAccess: true },
+  );
+}
+
+/** Connects with the settings file's token, through the connector, until `refused` fills. */
+async function refusedThrough(gateway: DevGateway, port: number, token: string) {
+  const refused: string[] = [];
+  const client = provedClient(gateway, port, refused);
+  try {
+    await client.start({ resume: false });
+    void client.connect({ url: `ws://127.0.0.1:${port}`, token }).catch(() => {});
+    await until(() => refused.length >= 2, 30_000);
+  } finally {
+    client.stop();
+  }
+  return refused;
+}
+
+describe.skipIf(!BIN || !mac)(
+  "F-492 on a development gateway: local connect's send gate",
+  { timeout: 300_000 },
+  () => {
+    let gateway: DevGateway;
+    let token: string;
+    beforeAll(async () => {
+      gateway = await startGateway(BIN!, { approval: false });
+      // The token as Connect will read it: the reader, on the instance's own settings file.
+      const read = await readLocalSettings({
+        home: gateway.home,
+        platform,
+        helper,
+        sandboxed: true,
+        worker: pathToFileURL(join(import.meta.dirname, "../src/setup/settings-parse.ts")),
+      });
+      const found = read.find((entry) => entry.profile === "clawtrate")?.outcome;
+      if (found?.kind !== "found" || found.port !== gateway.port)
+        throw new Error("the reader didn't find the instance's own gateway");
+      token = found.token.reveal();
+    }, 300_000);
+    afterAll(async () => {
+      await gateway?.remove();
+    });
+
+    it("two direct connections pass (e) and (f), each within the deadline", async () => {
+      for (let round = 0; round < 2; round += 1) {
+        const socket = connect({ host: "127.0.0.1", port: gateway.port });
+        await new Promise<void>((done) => socket.once("connect", () => done()));
+        const started = Date.now();
+        const proof = await proveLocalGateway({
+          home: gateway.home,
+          folder: FOLDER,
+          port: gateway.port,
+          localPort: socket.localPort!,
+          platform,
+          helper,
+          sandboxed: true,
+        });
+        socket.destroy();
+        expect(proof).toEqual({ proved: true });
+        expect(Date.now() - started).toBeLessThan(2_000);
+      }
+    });
+
+    it("F-492: a same-account forwarding proxy gets no upgrade and no credential", async () => {
+      const port = await freePort();
+      const proxy = await standIn(port, gateway.port);
+      try {
+        const refused = await refusedThrough(gateway, port, token);
+        // It can't hold the profile's lock open, so (f) refuses it before its program is opened.
+        expect(refused[0]).toBe("lock");
+        expect(proxy.accepted()).toBeGreaterThanOrEqual(2);
+        expect(proxy.bytes()).toBe(0);
+      } finally {
+        await proxy.stop();
+      }
+    });
+
+    it("F-492: a same-account proxy that a sandbox denies the profile's folder gets no upgrade and no credential", async () => {
+      // The profile only denies: everything is allowed as without it, except reading the folder.
+      const profile = `(version 1)(allow default)(deny file-read* (subpath "${join(gateway.home, FOLDER)}"))`;
+      expect(profile).toMatch(
+        /^\(version 1\)\(allow default\)\(deny file-read\* \(subpath "[^"()]+"\)\)$/,
+      );
+      const port = await freePort();
+      const proxy = await standIn(port, gateway.port, {
+        wrap: ["/usr/bin/sandbox-exec", "-p", profile],
+      });
+      try {
+        const refused = await refusedThrough(gateway, port, token);
+        // It can't hold the profile's lock open, so (f) refuses it before its program is opened.
+        expect(refused[0]).toBe("lock");
+        expect(proxy.bytes()).toBe(0);
+      } finally {
+        await proxy.stop();
+      }
+    });
+
+    it.skipIf(!process.env.CLAWTRATE_OTHER_ACCOUNT_LISTENER)(
+      "F-492: another account's listener gets no upgrade and no credential (hosted runner)",
+      async () => {
+        // Set up by CI on a discarded hosted runner: a listener run as `nobody`, logging what it got.
+        const [port, log] = process.env.CLAWTRATE_OTHER_ACCOUNT_LISTENER!.split(":");
+        const refused = await refusedThrough(gateway, Number(port), token);
+        // Its descriptors are invisible to this account, so no holder of this account is found.
+        expect(refused[0]).toBe("holder");
+        const lines = readFileSync(log!, "utf8").split("\n");
+        expect(lines).toContain("accepted");
+        expect(lines.some((line) => line.startsWith("bytes "))).toBe(false);
+      },
+    );
+
+    it("pairs through proved sockets with all six scopes and no approval, at OpenClaw's default", async () => {
+      const refused: string[] = [];
+      const client = provedClient(gateway, gateway.port, refused);
+      try {
+        await client.start({ resume: false });
+        await client.connect({ url: `ws://127.0.0.1:${gateway.port}`, token });
+        await until(() => client.state.connection.status === "connected", 60_000);
+        expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
+        expect(client.state.connection.pairing).toBe(null);
+        expect(refused).toEqual([]);
+      } finally {
+        client.stop();
+      }
+    });
+
+    it("F-492: Connect proves each setup socket twice, then sends its code", async () => {
+      const lines: string[] = [];
+      const client = provedClient(gateway, gateway.port, []);
+      await withLocalSetup(
+        client,
+        async (setup) => {
+          await setup.connect();
+          await until(() => setup.current.phase === "failed", 60_000);
+          // Both proofs passed, so the code went: the gateway itself refused the fixture's code.
+          expect(setup.current.failure?.kind).toBe("code-refused");
+          expect(lines).toEqual([]);
+        },
+        { pid: 4242 },
+        {
+          port: gateway.port,
+          stateDir: join(gateway.home, FOLDER),
+          log: (line) => lines.push(line),
+          localConnect: () => ({ home: gateway.home, helper, platform, sandboxed: true }),
+        },
+      );
+    });
+
+    it("F-492: a socket proved when dialled but not before its credential sends no code", async () => {
+      const lines: string[] = [];
+      const client = provedClient(gateway, gateway.port, []);
+      const folder = join(gateway.home, FOLDER);
+      // While the request is signed, after the dial's proof: the profile's folder is no longer
+      // private, so the proof before the credential refuses it.
+      const host = (client as unknown as { host: ClawtrateHost }).host;
+      const sign = host.signer.sign;
+      host.signer = {
+        ...host.signer,
+        sign: async (payload) => {
+          chmodSync(folder, 0o750);
+          return sign(payload);
+        },
+      };
+      try {
+        await withLocalSetup(
+          client,
+          async (setup) => {
+            await setup.connect();
+            await until(() => setup.current.phase === "failed", 60_000);
+            expect(setup.current.failure?.kind).toBe("changed");
+            expect(lines).toContain(
+              `[setup] couldn't verify what is listening at port ${gateway.port} (mode)`,
+            );
+          },
+          { pid: 4242 },
+          {
+            port: gateway.port,
+            stateDir: folder,
+            log: (line) => lines.push(line),
+            localConnect: () => ({ home: gateway.home, helper, platform, sandboxed: true }),
+          },
+        );
+      } finally {
+        chmodSync(folder, 0o700);
+      }
+    });
+
+    it("F-492: a same-account process with OpenClaw's own module loaded, but not the gateway, gets no upgrade and no credential", async () => {
+      // The pinned module of the very package the gateway runs, mapped into a stand-in of the
+      // test's own; then with the profile's lock, and with its database, open as well.
+      const module = join(
+        dirname(realpathSync(BIN!)),
+        "node_modules/@openclaw",
+        `fs-safe-darwin-${process.arch}`,
+        "fs-safe-native.node",
+      );
+      const lock = join(
+        gateway.home,
+        FOLDER,
+        "tmp",
+        `openclaw-${process.geteuid!()}`,
+        "gateway.state.lock",
+      );
+      const database = join(gateway.home, FOLDER, "state", "openclaw.sqlite");
+      for (const [hold, why] of [
+        [[], "lock"],
+        [[lock], "state"],
+        // Everything (f) looks for, but the lock names the gateway, not this process.
+        [[lock, database], "named"],
+      ] as const) {
+        const port = await freePort();
+        const impostor = await standIn(port, gateway.port, { load: module, hold: [...hold] });
+        try {
+          const refused = await refusedThrough(gateway, port, token);
+          expect(refused[0], why).toBe(why);
+          expect(impostor.bytes()).toBe(0);
+        } finally {
+          await impostor.stop();
+        }
+      }
+    });
+
+    // Last: it stops the instance.
+    it("F-492: a listener holding the port while the instance is stopped gets no upgrade and no credential", async () => {
+      await gateway.stop();
+      const holder = await standIn(gateway.port, null);
+      try {
+        const refused = await refusedThrough(gateway, gateway.port, token);
+        // The stopped gateway's lock is gone, or names a process that no longer holds it.
+        expect(["lock", "module"]).toContain(refused[0]);
+        expect(holder.bytes()).toBe(0);
+      } finally {
+        await holder.stop();
+      }
+    });
+  },
+);
+
+describe.skipIf(!BIN || !mac)(
+  "local connect on a development gateway with local auto-approval off",
+  { timeout: 300_000 },
+  () => {
+    let gateway: DevGateway;
+    beforeAll(async () => {
+      gateway = await startGateway(BIN!, { approval: true });
+    }, 300_000);
+    afterAll(async () => {
+      await gateway?.remove();
+    });
+
+    it("pairs with all six after one approval by the gateway's owner", async () => {
+      const refused: string[] = [];
+      const client = provedClient(gateway, gateway.port, refused);
+      try {
+        await client.start({ resume: false });
+        await client.connect({ url: `ws://127.0.0.1:${gateway.port}`, token: gateway.token });
+        await until(() => client.state.connection.pairing !== null, 60_000);
+        const { requestId, requestedScopes } = client.state.connection.pairing!;
+        expect([...requestedScopes].sort()).toEqual([...FULL_SCOPES].sort());
+        expect(gateway.run(["devices", "approve", requestId]).status).toBe(0);
+        await until(() => client.state.connection.status === "connected", 60_000);
+        expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
+        expect(refused).toEqual([]);
+      } finally {
+        client.stop();
+      }
+    });
+  },
+);

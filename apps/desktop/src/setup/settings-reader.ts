@@ -9,8 +9,9 @@
 // resource limits and a deadline, and the token found is held for one attempt
 // only (`HeldToken`).
 //
-// Nothing in a shipped host calls this yet: setup PR 2a-2 connects it, behind
-// a host option that is off.
+// Nothing in a shipped host reads settings yet. Local connect's proof
+// (local-prove.ts), behind a host option that is off, holds the home and runs
+// the helper as the reader does.
 
 import { spawn } from "node:child_process";
 import { constants, lstatSync, realpathSync } from "node:fs";
@@ -316,23 +317,40 @@ export async function holdHome(
   }
 }
 
-/**
- * The helper's answer, or `helper` for a missing helper, a timeout, a failed
- * exit, or output that isn't exactly one of its two forms.
- */
-function readWithHelper(
+/** The helper's answer, or `helper` for any failure of `runHelper` or output of another form. */
+async function readWithHelper(
   helper: string,
   home: FileHandle,
   args: string[],
   deadlineMs = READ_DEADLINE_MS,
-) {
-  const failed = refused("helper");
-  return new Promise<Opened>((done) => {
+): Promise<Opened> {
+  const output = await runHelper(helper, home, args, HELPER_OUTPUT_LIMIT, deadlineMs);
+  if (!output) return refused("helper");
+  try {
+    return helperAnswer(output);
+  } finally {
+    output.fill(0);
+  }
+}
+
+/**
+ * Runs the native helper with the held home as fd 3, a fixed environment and
+ * no input: its whole output, or null for a missing helper, a timeout, a
+ * failed exit, or more than `limit` bytes.
+ */
+export function runHelper(
+  helper: string,
+  home: FileHandle,
+  args: string[],
+  limit: number,
+  deadlineMs = READ_DEADLINE_MS,
+): Promise<Buffer | null> {
+  return new Promise<Buffer | null>((done) => {
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
     let child: ReturnType<typeof spawn>;
-    const settle = (result: Opened) => {
+    const settle = (result: Buffer | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -342,27 +360,25 @@ function readWithHelper(
       done(result);
     };
     // Its own deadline: a descendant holding the pipe open can't delay the answer.
-    const timer = setTimeout(() => settle(failed), deadlineMs);
+    const timer = setTimeout(() => settle(null), deadlineMs);
     try {
       child = spawn(helper, args, {
         env: { PATH: "/usr/bin:/bin" },
         stdio: ["ignore", "pipe", "ignore", home.fd],
       });
     } catch {
-      settle(failed);
+      settle(null);
       return;
     }
     child.stdout!.on("data", (data: Buffer) => {
       size += data.length;
       chunks.push(data);
-      if (size > HELPER_OUTPUT_LIMIT) settle(failed);
+      if (size > limit) settle(null);
     });
-    child.on("error", () => settle(failed));
+    child.on("error", () => settle(null));
     child.once("close", (code, signal) => {
       if (settled) return;
-      const output = Buffer.concat(chunks);
-      settle(code === 0 && signal === null ? helperAnswer(output) : failed);
-      output.fill(0);
+      settle(code === 0 && signal === null ? Buffer.concat(chunks) : null);
     });
   });
 }
