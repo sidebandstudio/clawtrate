@@ -67,6 +67,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # A unit test reads the gateway's own tool-naming function from the installed package.
       - run: npm install --global openclaw@2026.10.6
+      # The settings reader's test checks its pinned native-module hashes against this package.
+      - run: echo "CLAWTRATE_PINNED_OPENCLAW=$(npm root --global)/openclaw" >> "$GITHUB_ENV"
       # The development gateway's browser tests start the Chromium that Playwright installs.
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm lint
@@ -121,6 +123,20 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec vitest run apps/desktop/test/update/mac-inspection.test.ts
+      # A settings file another account owns, for the settings reader's owner check: made only on
+      # a discarded GitHub-hosted runner, where sudo needs no password. The test only reads it.
+      - if: runner.environment == 'github-hosted'
+        run: |
+          fixture=$(realpath "$(mktemp -d)")
+          mkdir -m 700 "$fixture/fixture-home" "$fixture/fixture-home/.openclaw"
+          file="$fixture/fixture-home/.openclaw/openclaw.json"
+          printf '{}' > "$file"
+          chmod 600 "$file"
+          sudo -n chown root "$file"
+          sudo -n chmod +a "$(id -un) allow read" "$file"
+          echo "CLAWTRATE_OWNER_FIXTURE_HOME=$fixture/fixture-home" >> "$GITHUB_ENV"
+      # The settings reader's macOS helper, built with packaging's flags.
+      - run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
       # What a failed or flaky check saw: the first attempt's actual and difference pictures,
@@ -151,6 +167,8 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Check the settings reader on Windows
+        run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts -t "reads nothing on Windows|in a production run"
       # Unsigned: no signing variables are set.
       - run: pnpm test:desktop-updates
       - run: pnpm package:win
