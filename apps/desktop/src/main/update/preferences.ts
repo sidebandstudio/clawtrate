@@ -1,6 +1,7 @@
 import type { DesktopUpdateSnapshot, UpdateTrack } from "@clawtrate/core";
 import { constants } from "node:fs";
-import { open, rename, rm } from "node:fs/promises";
+import { open, rename } from "node:fs/promises";
+import { rm } from "../update-tree-fs.ts";
 import { parseReleaseDate } from "./feed.ts";
 
 import { readAttempt } from "./attempt.ts";
