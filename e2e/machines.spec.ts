@@ -40,8 +40,9 @@ let OTTO = "Otto";
 /** Otto's stored command host before the checks, as the picker names it. */
 let ottoHost = "Not set";
 
-async function config(): Promise<Json> {
-  return ((await admin.request<{ config: Json }>("config.get", {})).config ?? {}) as Json;
+async function config(timeoutMs?: number): Promise<Json> {
+  return ((await admin.request<{ config: Json }>("config.get", {}, timeoutMs)).config ??
+    {}) as Json;
 }
 const entry = (cfg: Json, bot: string) =>
   (((cfg.agents as Json).entries as Json)[bot] ?? {}) as Json;
@@ -187,31 +188,44 @@ test.afterAll(async () => {
     ),
   );
   // Put back Otto's settings: its command placement and deny list, and its workspace, each on its
-  // own. Only what beforeAll recorded is put back; failures are reported after everything is closed.
+  // own bounded budget so both restores and admin.close fit inside the 90-second hook limit.
+  const budget = (ms: number) => {
+    const deadline = Date.now() + ms;
+    return () => {
+      const left = deadline - Date.now();
+      if (left <= 0) throw new Error(`machines restore timed out after ${ms} ms`);
+      return left;
+    };
+  };
   const restores: Array<() => Promise<void>> = [];
   if (admin && ottoTools)
     restores.push(async () => {
-      const cfg = await admin.request<{ hash: string }>("config.get", {});
+      const left = budget(20_000);
+      const cfg = await admin.request<{ hash: string }>("config.get", {}, left());
       const exec = (ottoTools.exec ?? {}) as Json;
       const deny = ottoTools.deny as string[] | undefined;
-      await admin.request("config.patch", {
-        raw: JSON.stringify({
-          agents: {
-            entries: {
-              otto: {
-                tools: {
-                  exec: { ...exec, host: exec.host ?? null, node: exec.node ?? null },
-                  deny: deny ?? null,
+      await admin.request(
+        "config.patch",
+        {
+          raw: JSON.stringify({
+            agents: {
+              entries: {
+                otto: {
+                  tools: {
+                    exec: { ...exec, host: exec.host ?? null, node: exec.node ?? null },
+                    deny: deny ?? null,
+                  },
                 },
               },
             },
-          },
-        }),
-        baseHash: cfg.hash,
-        // The list is replaced, or removed when Otto had none: either way its path is named.
-        replacePaths: ["agents.entries.otto.tools.deny"],
-      });
-      const back = (entry(await config(), "otto").tools ?? {}) as Json;
+          }),
+          baseHash: cfg.hash,
+          // The list is replaced, or removed when Otto had none: either way its path is named.
+          replacePaths: ["agents.entries.otto.tools.deny"],
+        },
+        left(),
+      );
+      const back = (entry(await config(left()), "otto").tools ?? {}) as Json;
       expect(back.exec ?? null, "Otto's command placement put back").toEqual(
         ottoTools.exec ?? null,
       );
@@ -219,8 +233,9 @@ test.afterAll(async () => {
     });
   if (admin && ottoWorkspace)
     restores.push(async () => {
-      await admin.request("agents.update", { agentId: "otto", workspace: ottoWorkspace });
-      const agents = await admin.request<{ agents: Json[] }>("agents.list", {});
+      const left = budget(20_000);
+      await admin.request("agents.update", { agentId: "otto", workspace: ottoWorkspace }, left());
+      const agents = await admin.request<{ agents: Json[] }>("agents.list", {}, left());
       expect(
         agents.agents.find((agent) => agent.id === "otto")?.workspace,
         "Otto's workspace put back",
