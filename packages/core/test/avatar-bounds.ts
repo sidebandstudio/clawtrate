@@ -256,3 +256,72 @@ export function enclosing(all: Array<[number, number]>): { x: number; y: number;
   for (const p of points) r = Math.max(r, Math.hypot(p[0] - x, p[1] - y));
   return { x, y, r };
 }
+
+/**
+ * A shape's visible outline in its parent's frame over every pose its own
+ * placement takes, as convex hulls by stroke half-width (a negative width is a
+ * stroke kept a fixed width on screen, in grid units at 18 px). Collapsing each
+ * group to hulls before its parents move it keeps nested motions, such as a
+ * hat tipping on a hop, from multiplying their poses.
+ */
+function hulls(shape: AvatarShape): Map<number, Array<[number, number]>> {
+  const own = new Map<number, Array<[number, number]>>();
+  if (shape.clip) return own;
+  const add = (map: typeof own, pad: number, points: Array<[number, number]>) => {
+    const list = map.get(pad);
+    if (list) list.push(...points);
+    else map.set(pad, [...points]);
+  };
+  if (shape.kind === "group") {
+    for (const child of shape.children)
+      for (const [pad, points] of hulls(child)) add(own, pad, points);
+  } else if ((shape.opacity ?? 1) > 0) {
+    const { points, pad } = outline(shape);
+    add(own, shape.fixedStroke ? -((shape.strokeWidth ?? 1) * 40) / 18 / 2 : pad, points);
+  }
+  const out = new Map<number, Array<[number, number]>>();
+  for (const { m, opacity } of placements(shape)) {
+    if (opacity <= 0) continue;
+    const s = stretch(m);
+    for (const [pad, points] of own)
+      // Rounded up, so poses whose stretch differs only in its last digits share a hull.
+      add(
+        out,
+        pad < 0 ? pad : Math.ceil(pad * s * 1e6) / 1e6,
+        points.map((p) => apply(m, p)),
+      );
+  }
+  for (const [pad, points] of out) if (points.length > 3) out.set(pad, hull(points));
+  return out;
+}
+
+/** A scene's outline before it is fitted: hulls of its visible points, by stroke half-width. */
+export type Outline = Map<number, Array<[number, number]>>;
+
+/** The scene's outline, with each stroke as the round-capped band it is (`hulls`). */
+export function sceneOutline(scene: AvatarScene): Outline {
+  return hulls(scene.root);
+}
+
+/** How far an outline, drawn with this fit and shift, reaches from the grid's centre. */
+export function fittedReach(outline: Outline, fit: number, shift: [number, number]): number {
+  let reach = 0;
+  for (const [pad, points] of outline) {
+    const width = pad < 0 ? -pad : pad * fit;
+    for (const [x, y] of points)
+      reach = Math.max(
+        reach,
+        Math.hypot(shift[0] + fit * (x - 20), shift[1] + fit * (y - 20)) + width,
+      );
+  }
+  return reach;
+}
+
+/**
+ * How far any visible point of the scene, fitted, reaches from the grid's
+ * centre: the same outline as `sceneReach`, a little tighter on strokes, and
+ * fast enough for every creature in every outfit.
+ */
+export function outfitReach(scene: AvatarScene): number {
+  return fittedReach(sceneOutline(scene), scene.fit, scene.shift);
+}
