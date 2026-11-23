@@ -1,0 +1,13 @@
+- main:
+  - heading "Clawtrate" [level=1]
+  - paragraph: Your OpenClaw agents, orchestrated.
+  - heading "Where does OpenClaw run?" [level=2]
+  - list "Where does OpenClaw run?":
+    - listitem:
+      - button "This computer Clawtrate looks for OpenClaw here."
+    - listitem:
+      - button "Another computer A computer you reach with SSH, such as a server or a desktop at home."
+  - paragraph:
+    - button "Advanced"
+  - paragraph: New to OpenClaw? Choose where it should run, and Clawtrate says what it finds there.
+  - paragraph: Where does OpenClaw run?

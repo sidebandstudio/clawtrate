@@ -2,8 +2,8 @@
 // what typing a trigger lists, how a row is chosen by keyboard and pointer,
 // and that its chip goes with the message. The gateway's lists are proven in
 // e2e/preview.spec.ts.
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 

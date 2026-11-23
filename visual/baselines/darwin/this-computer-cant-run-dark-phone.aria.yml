@@ -1,0 +1,8 @@
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Clawtrate couldn't run OpenClaw here" [level=3]
+  - paragraph: Clawtrate found OpenClaw's program, but it didn't start. Check that OpenClaw runs here, or use Advanced.
+  - button "Use Advanced"
+  - button "Look again"
+  - paragraph: On this computer

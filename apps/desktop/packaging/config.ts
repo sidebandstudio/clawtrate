@@ -39,6 +39,28 @@ export function fuses(platform: string): FuseV1Config {
   };
 }
 
+/** The helper that reads OpenClaw's settings file (setup-effortless.md §3), in Contents/Helpers. */
+export const LOCAL_GATEWAY_HELPER = "ClawtrateLocalGateway";
+
+/** `xcrun`'s arguments that build it, for packaging and its tests alike. */
+export function localGatewayBuild(output: string): string[] {
+  return [
+    "clang",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-O2",
+    "-arch",
+    "arm64",
+    "-arch",
+    "x86_64",
+    "-mmacosx-version-min=12.0",
+    join(import.meta.dirname, "mac", "local-gateway.c"),
+    "-o",
+    output,
+  ];
+}
+
 /** Flip the fuses, then, on an unsigned macOS build, sign ad hoc so the app runs on Apple silicon. */
 export function afterPack(env: Env) {
   return async (context: AfterPackContext): Promise<void> => {
@@ -67,6 +89,7 @@ export function afterPack(env: Env) {
         "-o",
         join(helpers, "ClawtrateUpdateInspection"),
       ]);
+      execFileSync("/usr/bin/xcrun", localGatewayBuild(join(helpers, LOCAL_GATEWAY_HELPER)));
     }
     if (platform === "darwin" && !macSigningRequested(env)) {
       const app = join(context.appOutDir, `${PRODUCT_NAME}.app`);

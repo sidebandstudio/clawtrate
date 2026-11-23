@@ -763,6 +763,7 @@ export function Conversation({
   taskCount,
   discovery,
   transcript,
+  openError,
   panelOpen,
   onTogglePanel,
   onOpenPanel,
@@ -785,6 +786,8 @@ export function Conversation({
   taskCount: number;
   discovery: DiscoveryState;
   transcript: Transcript | undefined;
+  /** Why the host refused to open this task, while this view doesn't hold it. */
+  openError: string | null;
   panelOpen: boolean;
   onTogglePanel: () => void;
   onOpenPanel: () => void;
@@ -1022,6 +1025,14 @@ export function Conversation({
         title="Waiting for the gateway"
         body="This conversation loads when the connection returns."
       />
+    );
+  } else if (!transcript && openError) {
+    body = (
+      <EmptyState bot={bot} title="Could not load this conversation" body={openError}>
+        <button type="button" className="button" onClick={onReload}>
+          Try again
+        </button>
+      </EmptyState>
     );
   } else if (!transcript || (transcript.status === "loading" && itemCount === 0 && !hasLive)) {
     body = (

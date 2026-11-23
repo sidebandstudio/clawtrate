@@ -301,6 +301,13 @@ app.on("web-contents-created", (_event, contents) => {
  */
 function lockDownSession(): void {
   const ses = session.defaultSession;
+  // For a language Windows has no spell checker for, Chromium downloads a
+  // dictionary from Google's servers, and the filter below never sees that
+  // request. Until the person can choose such a download (F-393), Windows
+  // checks no spelling: with no languages, Chromium loads no checker and asks
+  // for no dictionary. macOS downloads none. Linux, where Hunspell is the only
+  // checker, keeps Chromium's download.
+  if (process.platform === "win32") ses.setSpellCheckerLanguages([]);
   ses.webRequest.onBeforeRequest((details, callback) => {
     const allowed =
       isAppContent(details.url) ||

@@ -720,6 +720,7 @@ const task = flagged<Task>()({
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
+  channel: NAME,
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
 const sidebarId = id(MAX_SIDEBAR_ID_CHARS);
@@ -846,15 +847,19 @@ const SESSION_ROW_FIELDS = [
   "agentId",
   "archived",
   "category",
+  "channel",
+  "classification",
   "contextTokens",
   "createdAt",
   "derivedTitle",
   "displayName",
+  "groupChannel",
   "hasActiveRun",
   "isMain",
   "key",
   "label",
   "lastActivityAt",
+  "lastChannel",
   "lastMessagePreview",
   "lastRunError",
   "markedUnreadAt",
@@ -863,6 +868,7 @@ const SESSION_ROW_FIELDS = [
   "sessionKey",
   "spawnedBy",
   "status",
+  "subject",
   "totalTokens",
   "totalTokensFresh",
   "unread",
@@ -1233,6 +1239,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   setup,
   checkIns: CHECK_INS,
   turnLimitMinutes: NUMBER,
+  showChannelChats: FLAG,
   usage: USAGE,
 });
 /** The listed-tasks pool, applied over the whole state. */

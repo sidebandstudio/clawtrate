@@ -188,11 +188,11 @@ export type SandboxContext = {
   roots?: TempRoot[];
 };
 
-const within = (inner: string, outer: string) =>
+export const within = (inner: string, outer: string) =>
   inner === outer || inner.startsWith(outer.endsWith(sep) ? outer : outer + sep);
 
 /** The folders from `top` (included) down to `path`'s parent. */
-function ancestorsBelow(top: string, path: string): string[] {
+export function ancestorsBelow(top: string, path: string): string[] {
   const chain: string[] = [];
   for (let at = dirname(path); within(at, top); at = dirname(at)) {
     chain.unshift(at);
@@ -206,7 +206,7 @@ function ancestorsBelow(top: string, path: string): string[] {
  * folder, owned by this account or the system, and writable by its group or
  * others only when sticky (then only an entry's owner may rename or remove it).
  */
-function protectedAncestor(entry: Entry | null, uid: number | null): boolean {
+export function protectedAncestor(entry: Entry | null, uid: number | null): boolean {
   if (entry === null || !entry.isDirectory()) return false;
   if (uid === null) return true;
   if (entry.uid !== uid && entry.uid !== 0) return false;
@@ -214,7 +214,7 @@ function protectedAncestor(entry: Entry | null, uid: number | null): boolean {
 }
 
 /** A folder of this account's that only it can enter, not a link (its `lstat`). */
-const privateFolder = (entry: Entry | null, uid: number | null) =>
+export const privateFolder = (entry: Entry | null, uid: number | null) =>
   entry !== null &&
   entry.isDirectory() &&
   (uid === null || (entry.uid === uid && (entry.mode & 0o077) === 0));

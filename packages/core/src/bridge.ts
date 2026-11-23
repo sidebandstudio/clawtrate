@@ -119,6 +119,8 @@ export type BridgeCommand =
   | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
   /** The "Turn time limit", in minutes, for every run this client starts (F-100). */
   | { type: "setTurnLimit"; minutes: number }
+  /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
+  | { type: "setShowChannelChats"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
@@ -1208,6 +1210,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       if (typeof command.minutes !== "number" || !Number.isInteger(command.minutes))
         throw new Error("invalid turn limit");
       return { type: "setTurnLimit", minutes: command.minutes };
+    case "setShowChannelChats":
+      if (typeof command.on !== "boolean") throw new Error("invalid channel chats setting");
+      return { type: "setShowChannelChats", on: command.on };
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
@@ -1622,6 +1627,9 @@ export type BridgeSession = {
   dispose(): void;
 };
 
+/** The refusal of a reread from a view that doesn't hold the task, so the view can open it instead. */
+export const NOT_OPEN_IN_VIEW = "That task isn't open in this view.";
+
 export function createBridgeSession(
   client: ClawtrateClient,
   policy: BridgePolicy = {},
@@ -1755,7 +1763,7 @@ class ViewerSession implements BridgeSession {
         return;
       }
       case "reloadSession":
-        if (!this.open.has(command.key)) throw new Error("That task isn't open in this view.");
+        if (!this.open.has(command.key)) throw new Error(NOT_OPEN_IN_VIEW);
         return client.reloadSession(command.key);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
@@ -1928,6 +1936,8 @@ class ViewerSession implements BridgeSession {
         return client.stopRun(this.mine(command.key), command.runId, { owner });
       case "setTurnLimit":
         return client.setTurnLimit(command.minutes);
+      case "setShowChannelChats":
+        return client.setShowChannelChats(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":

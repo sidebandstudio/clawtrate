@@ -1,0 +1,172 @@
+- main:
+  - table:
+    - rowgroup:
+      - row "idle thinking working waiting blocked done":
+        - columnheader
+        - columnheader "idle"
+        - columnheader "thinking"
+        - columnheader "working"
+        - columnheader "waiting"
+        - columnheader "blocked"
+        - columnheader "done"
+    - rowgroup:
+      - row "Atlas 18":
+        - rowheader "Atlas 18"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Juniper 18":
+        - rowheader "Juniper 18"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Wren 18":
+        - rowheader "Wren 18"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Otto 18":
+        - rowheader "Otto 18"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Atlas 22":
+        - rowheader "Atlas 22"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Juniper 22":
+        - rowheader "Juniper 22"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Wren 22":
+        - rowheader "Wren 22"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Otto 22":
+        - rowheader "Otto 22"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Atlas 32":
+        - rowheader "Atlas 32"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Juniper 32":
+        - rowheader "Juniper 32"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Wren 32":
+        - rowheader "Wren 32"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Otto 32":
+        - rowheader "Otto 32"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Atlas 40":
+        - rowheader "Atlas 40"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Juniper 40":
+        - rowheader "Juniper 40"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Wren 40":
+        - rowheader "Wren 40"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Otto 40":
+        - rowheader "Otto 40"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Atlas 56":
+        - rowheader "Atlas 56"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Juniper 56":
+        - rowheader "Juniper 56"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Wren 56":
+        - rowheader "Wren 56"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+      - row "Otto 56":
+        - rowheader "Otto 56"
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
+        - cell
