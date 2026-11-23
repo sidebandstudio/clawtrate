@@ -46,7 +46,8 @@ function fsProblems(source: string): string[] {
           .split(/\s+as\s+/)[0]!
           .replace(/^type\s+/, ""),
       )
-      .filter((name) => TREE_OPERATIONS.has(name));
+      // `default` in braces is the whole module, as a default import is.
+      .filter((name) => TREE_OPERATIONS.has(name) || name === "default");
   const problems: string[] = [];
   // import { rm } from "node:fs"; import fs, { rm } from "node:fs"; export { rm } from "node:fs"
   for (const match of source.matchAll(
@@ -100,6 +101,8 @@ it.each([
   ['const fs = await import("node:fs/promises");', ["import()"]],
   ['import { lstat, open } from "node:fs/promises";', []],
   ['import type { Stats } from "node:fs";', []],
+  ['import { default as fs } from "node:fs";', ["default"]],
+  ['export { default } from "node:fs/promises";', ["default"]],
 ] as const)("the guard reads %s", (source, problems) => {
   expect(fsProblems(source)).toEqual(problems);
 });

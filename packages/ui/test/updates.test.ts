@@ -495,7 +495,7 @@ it("F-231: says when the check left a copy it couldn't remove, and that it tries
 it.each([
   [
     { quit: "not-finished" },
-    "Clawtrate 1.0.0 is running, not 1.1.0. The app didn't finish quitting for the update, and macOS installs it only after that. Check for updates to try again.",
+    "Clawtrate 1.0.0 is running, not 1.1.0. No finished quit was recorded for this update, and macOS installs it only after the app quits. Check for updates to try again.",
   ],
   [
     { quit: "finished", quitMs: 23_400 },

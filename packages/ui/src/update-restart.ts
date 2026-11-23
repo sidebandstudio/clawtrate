@@ -121,7 +121,7 @@ export function handoffLocked(state: DesktopUpdateState) {
 /** Whether the app that handed the update off finished quitting, when it recorded that. */
 function quitLine(attempt: NonNullable<DesktopUpdateSnapshot["lastAttempt"]>) {
   if (attempt.quit === "not-finished")
-    return " The app didn't finish quitting for the update, and macOS installs it only after that.";
+    return " No finished quit was recorded for this update, and macOS installs it only after the app quits.";
   if (attempt.quit !== "finished") return "";
   if (attempt.quitMs === undefined) return " The app quit, but macOS didn't install the update.";
   return ` The app quit for the update after ${Math.max(1, Math.round(attempt.quitMs / 1000))} s, but macOS didn't install it.`;

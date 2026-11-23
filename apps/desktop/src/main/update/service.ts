@@ -284,7 +284,8 @@ export class DesktopUpdateService {
     // No quit time when nothing asked the app to quit for the update (an unconfirmed handoff).
     this.options.store.markQuit?.({
       attempt: time,
-      ...(quitAskedAt !== null && { ms: now - quitAskedAt }),
+      // The wall clock can move back between the two: a quit is still a quit, of no time.
+      ...(quitAskedAt !== null && { ms: Math.max(0, now - quitAskedAt) }),
     });
   }
 
@@ -574,14 +575,12 @@ export class DesktopUpdateService {
     if (refused) return fail(refused);
     if (!this.fileWatch?.current()) return fail("artifact-changed");
     const time = new Date().toISOString();
+    const attempt = { target: version, track: selectedTrack, from: runningVersion, time };
     try {
       await this.options.store.set(
         "attempt",
         JSON.stringify({
-          target: version,
-          track: selectedTrack,
-          from: runningVersion,
-          time,
+          ...attempt,
           phase: "handoff",
           ...(this.options.store.markQuit && { marksQuit: true }),
         }),
@@ -589,10 +588,18 @@ export class DesktopUpdateService {
     } catch {
       return this.closed ? this.reply("superseded") : fail("attempt-not-saved");
     }
+    // A failure before anything reached the system owes no quit: the attempt is kept without
+    // that mark, so the next start doesn't report a quit that never had to happen.
+    const failBeforeHandoff = async (reason: Parameters<typeof fail>[0]) => {
+      await this.options.store
+        .set("attempt", JSON.stringify({ ...attempt, phase: "handoff" }))
+        .catch(() => {});
+      return fail(reason);
+    };
     if (this.closed) return this.reply("superseded");
     this.publish({ kind: "handing-off", version, offerId: id });
     if (this.closed) return this.reply("superseded");
-    if (!this.fileWatch?.current()) return fail("artifact-changed");
+    if (!this.fileWatch?.current()) return failBeforeHandoff("artifact-changed");
     let handed = false;
     const reason = await installer
       .launch(
@@ -619,7 +626,7 @@ export class DesktopUpdateService {
       this.publish({ kind: "handoff-unconfirmed", version, offerId: id });
       return this.reply("accepted");
     }
-    if (reason) return fail(reason);
+    if (reason) return failBeforeHandoff(reason);
     this.options.quitAfterLaunch?.();
     return this.reply("accepted");
   }

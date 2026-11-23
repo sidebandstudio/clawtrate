@@ -1716,6 +1716,43 @@ it("records a quit that finished after a handoff, and the next start tells it fr
   });
 });
 
+it("an update the system refused before any handoff reports no quit, finished or not", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async () => "mac-updater-refused",
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect((await service.restart(id)).snapshot.state.kind).toBe("handoff-failed");
+  service.shutdown();
+  const attempt = (await start()).get().lastAttempt;
+  expect(attempt).toMatchObject({ kind: "old-version-running", target: "1.1.0" });
+  expect(attempt).not.toHaveProperty("quit");
+});
+
+it("a quit recorded while the clock moved back is still a finished quit, of no time", async () => {
+  rmSync(join(dir.path, "preferences.json.quit"), { force: true });
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async (_file, _signal, handed) => {
+      handed();
+      return null;
+    },
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  await service.restart(id);
+  service.quitting(Date.now() - 60_000);
+  service.shutdown();
+  expect((await start()).get().lastAttempt).toMatchObject({ quit: "finished", quitMs: 0 });
+});
+
 it("says nothing about a quit for an attempt written by a build that didn't record quits", async () => {
   await store().set(
     "attempt",
