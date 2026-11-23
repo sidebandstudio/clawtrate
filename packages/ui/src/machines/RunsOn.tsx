@@ -50,15 +50,22 @@ export const connectionKey = (connection: ConnectionState) =>
  * A bot's placement, its parts read when shown and again on `reload()`. A read
  * belongs to the bot and the connection's access it was made for: while another
  * bot's, an earlier connection's or other scopes' read is all there is, nothing
- * is drawn. Each part is kept as soon as its own read answers.
+ * is drawn. Each part is kept as soon as its own read answers, with the reload
+ * it was read after: `commandsCurrent` says the commands part shown was read
+ * after the latest `reload()`, so a choice made over it isn't made over a
+ * revision a save since has replaced, whichever page asked for that reload.
  */
 export function usePlacement(botId: string, connection: ConnectionState, active: boolean) {
   const bridge = useBridge();
-  const [held, setHeld] = useState<{ key: string; parts: Partial<Placement> } | null>(null);
-  const [tick, setTick] = useState(0);
+  const [held, setHeld] = useState<{
+    key: string;
+    parts: Partial<Placement>;
+    at: Partial<Record<PlacementPart, number>>;
+  } | null>(null);
+  // The latest reload asked for, as rendered.
+  const [generation, setGeneration] = useState(0);
   // Bumped as soon as a reload is asked, so the reads started before it are dropped at once,
-  // not only once the reload's render ends them: a choice waiting for the read after a save
-  // must not be freed by a read from before it.
+  // not only once the reload's render ends them.
   const asked = useRef(0);
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
@@ -67,15 +74,22 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     if (!active || !connected) return;
     let live = true;
     const at = asked.current;
-    const keep = (part: Partial<Placement>) =>
+    const keep = (name: PlacementPart, part: Partial<Placement>) =>
       live &&
       at === asked.current &&
-      setHeld((was) => ({ key, parts: { ...(was?.key === key ? was.parts : {}), ...part } }));
+      setHeld((was) => {
+        const same = was?.key === key;
+        return {
+          key,
+          parts: { ...(same ? was.parts : {}), ...part },
+          at: { ...(same ? was.at : {}), [name]: at },
+        };
+      });
     for (const part of PLACEMENT_PARTS)
       bridge.invoke({ type: "readPlacement", botId, part }).then(
-        (value) => keep({ [part]: { status: "ready", value } }),
+        (value) => keep(part, { [part]: { status: "ready", value } }),
         (error: unknown) =>
-          keep({
+          keep(part, {
             [part]: {
               status: "error",
               message: error instanceof Error ? error.message : String(error),
@@ -85,10 +99,10 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     return () => {
       live = false;
     };
-  }, [bridge, botId, active, connected, key, tick]);
+  }, [bridge, botId, active, connected, key, generation]);
   const reload = useCallback(() => {
     asked.current += 1;
-    setTick((n) => n + 1);
+    setGeneration(asked.current);
   }, []);
   // On a disconnect or another key, what was read is dropped before anything is derived.
   if (held && (!connected || held.key !== key)) setHeld(null);
@@ -103,7 +117,8 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     inventory: part("inventory"),
     credentials: part("credentials"),
   };
-  return { read, reload };
+  const commandsCurrent = held?.key === key && held.at.commands === generation;
+  return { read, reload, commandsCurrent };
 }
 
 /** A mark of section 2: an icon and its words, never colour alone. */
@@ -216,6 +231,7 @@ export function RunsOnPage({
   botName,
   read,
   reload,
+  commandsCurrent,
   nameOf,
   connection,
   info,
@@ -227,6 +243,8 @@ export function RunsOnPage({
   botName: string;
   read: Placement;
   reload: () => void;
+  /** Whether the commands part shown was read after the latest reload, a save's included. */
+  commandsCurrent: boolean;
   nameOf: (id: string) => string;
   connection: ConnectionState;
   info: HostInfo;
@@ -240,14 +258,6 @@ export function RunsOnPage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  // The commands read shown when a save ended. The picker waits for the read after it, since a
-  // second choice sent over this one's revision would be refused though nobody else changed it.
-  const [stale, setStale] = useState<Placement["commands"] | null>(null);
-  if (stale !== null && read.commands !== stale) setStale(null);
-  const commandsShown = useRef(read.commands);
-  useLayoutEffect(() => {
-    commandsShown.current = read.commands;
-  });
   // A write that completes after this page went away (another bot, connection or access) changes nothing.
   const mounted = useRef(false);
   useLayoutEffect(() => {
@@ -351,12 +361,11 @@ export function RunsOnPage({
       // A change never sent, or a read-back that failed or shows another setting: none confirms a save.
       announce("Save not confirmed");
     } finally {
-      if (mounted.current) {
-        setSaving(false);
-        setStale(commandsShown.current);
-      }
+      if (mounted.current) setSaving(false);
       // Whatever the outcome, the placement is read again, by its owner (the bot's Settings tab,
-      // keyed by bot and connection), so the Runs on row shows it even after Back.
+      // keyed by bot and connection), so the Runs on row shows it even after Back. The picker
+      // waits for that read, here or on a page opened again: a second choice sent over this
+      // one's revision would be refused though nobody else changed it.
       reload();
     }
   };
@@ -403,7 +412,7 @@ export function RunsOnPage({
         <CommandsPart
           part={read.commands.value}
           botName={botName}
-          disabled={!admin || saving || stale !== null}
+          disabled={!admin || saving || !commandsCurrent}
           saveLines={saveLines}
           now={now}
           onSave={save}
