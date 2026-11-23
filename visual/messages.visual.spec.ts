@@ -2,6 +2,7 @@
 // more beside it, reactions as badges under it, and a thread assembled around
 // a message and its replies (parity F-066, F-067, F-283). The gateway's half
 // is proven in e2e/preview.spec.ts.
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { test, type Locator, type Page } from "@playwright/test";
 import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
@@ -42,6 +43,24 @@ async function record(page: Page): Promise<void> {
 }
 const sent = (page: Page) =>
   page.evaluate(() => (window as unknown as { sent: Array<Record<string, unknown>> }).sent);
+
+/** The task's history now names another session under its key, as the host's next snapshot would. */
+async function setSession(page: Page, sessionId: string) {
+  await page.evaluate((id) => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const key = "agent:otto:disk-space";
+      return {
+        ...state,
+        transcripts: { ...state.transcripts, [key]: { ...state.transcripts[key]!, sessionId: id } },
+      };
+    });
+  }, sessionId);
+}
 
 /** The names of a toolbar's buttons, in order. */
 const names = (locator: Locator) =>
@@ -358,6 +377,29 @@ test.describe("message actions", () => {
     await page.evaluate(() => (window as unknown as { refuse: () => void }).refuse());
     await expect(thread.locator(".thread-error")).toContainText("The gateway refused it.");
     await expect(input).toHaveValue("The first reply\ntyped meanwhile");
+  });
+
+  test("F-278: a reply keeps the session it was started in, with the message it answers: once the view shows another, Enter sends nothing, and it offers a new task with its words and Delete", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    const input = thread.getByTestId("thread-input");
+    await input.fill("Keep the last three backups.");
+    // The task was replaced elsewhere: its history names another session under the key.
+    await setSession(page, "otto-disk-space-2");
+    const note = thread.getByTestId("thread-waits");
+    await expect(note).toContainText("Not sent. This task was deleted or reset elsewhere");
+    await expect(thread.getByRole("button", { name: "Send reply" })).toBeDisabled();
+    await input.focus();
+    await page.keyboard.press("Enter");
+    await expect(input).toHaveValue("Keep the last three backups.");
+    expect((await sent(page)).filter((command) => command.type === "sendMessage")).toEqual([]);
+    await note.getByRole("button", { name: "Delete" }).click();
+    await expect(input).toHaveValue("");
+    await expect(note).toHaveCount(0);
   });
 
   test("F-067: a reply refused after another thread was opened comes back to its own thread, not the one shown", async ({

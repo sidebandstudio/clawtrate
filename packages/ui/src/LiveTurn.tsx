@@ -465,6 +465,9 @@ export function RunEnding({
   const also =
     ending.kind === "turn-limit" ? stoppedWithLines(run, (key) => botOfSession(bots, key)) : [];
   const text = messageTextOf(run, transcript);
+  // Words from history go only to a session the view shows: until then Try again waits, and says so.
+  const held = transcript.outbox.some((message) => message.id === run.messageId);
+  const retryWaits = held ? null : sendWaits(transcript);
   const requestId = run.requestId ?? null;
   const raw = run.error?.raw;
   const showRaw = (open: boolean) => {
@@ -521,6 +524,11 @@ export function RunEnding({
           Couldn't send it again: {retryError}
         </p>
       )}
+      {text && retryWaits && (
+        <p className="turn-error-reason" data-testid="retry-waits">
+          {retryWaits}
+        </p>
+      )}
       {(text || requestId || raw) && (
         <div className="turn-error-actions">
           {text && (
@@ -528,20 +536,17 @@ export function RunEnding({
               type="button"
               className="button"
               data-size="sm"
+              disabled={retryWaits !== null}
+              aria-description={retryWaits ?? undefined}
               onClick={() => {
                 setRetryError(null);
                 // The engine still holds the message: its words and files go again together, to
                 // the session it was written for. Otherwise only history has it, and history
-                // gives the words alone, for the session that history came from. A reply goes
-                // again as a reply to the same message.
-                const held = transcript.outbox.some((message) => message.id === run.messageId);
+                // gives the words alone, for the session that history came from, as drawn with
+                // them. A reply goes again as a reply to the same message.
                 const parent = messageReplyOf(run, transcript);
-                // Words from history go only to a session the view shows.
-                const waits = held ? null : sendWaits(transcript);
-                if (waits) {
-                  setRetryError(waits);
-                  return;
-                }
+                const session = transcript.sessionId;
+                if (!held && (retryWaits || !session)) return;
                 const again = held
                   ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
                   : bridge.invoke({
@@ -551,7 +556,7 @@ export function RunEnding({
                       mode: "auto",
                       attachmentIds: [],
                       ...(parent ? { replyToId: parent } : {}),
-                      ...(transcript.sessionId ? { sessionId: transcript.sessionId } : {}),
+                      sessionId: session!,
                     });
                 void again.catch((error: unknown) =>
                   setRetryError(error instanceof Error ? error.message : String(error)),

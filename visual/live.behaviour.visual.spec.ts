@@ -77,7 +77,63 @@ async function setOutbox(page: Page, change: (message: OutgoingMessage) => Outgo
   }, change.toString());
 }
 
+/** The task's history now names another session under its key, as the host's next snapshot would. */
+async function setSession(page: Page, sessionId: string) {
+  await page.evaluate((id) => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const key = "agent:otto:disk-space";
+      return {
+        ...state,
+        transcripts: { ...state.transcripts, [key]: { ...state.transcripts[key]!, sessionId: id } },
+      };
+    });
+  }, sessionId);
+}
+
 test.describe("sending", () => {
+  test("F-278: a draft keeps the session it was started in: once the view shows another, Enter and Send send nothing, and it offers a new task with its words and Delete", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        commands: Array<{ type: string; text?: string }>;
+      };
+      w.commands = [];
+      const original = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command: unknown) => {
+        w.commands.push(command as { type: string; text?: string });
+        return original(command);
+      };
+    });
+    const commands = () =>
+      page.evaluate(
+        () => (window as unknown as { commands: Array<{ type: string; text?: string }> }).commands,
+      );
+    await field(page).fill("Clear the cache first.");
+    // The task was replaced elsewhere: its history names another session under the key.
+    await setSession(page, "otto-disk-space-2");
+    const note = page.getByTestId("composer-waits");
+    await expect(note).toContainText("Not sent. This task was deleted or reset elsewhere");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await field(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(field(page)).toHaveValue("Clear the cache first.");
+    expect((await commands()).filter((command) => command.type === "sendMessage")).toEqual([]);
+    await note.getByRole("button", { name: "Start a new task with this message" }).click();
+    await expect(field(page)).toHaveValue("");
+    expect((await commands()).filter((command) => command.type === "createTask")).toMatchObject([
+      { text: "Clear the cache first." },
+    ]);
+    expect((await commands()).filter((command) => command.type === "sendMessage")).toEqual([]);
+  });
+
   test("F-068 F-072: Enter sends and clears the draft, Shift+Enter adds a line, and an empty draft sends nothing", async ({
     page,
   }) => {

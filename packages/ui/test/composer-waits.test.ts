@@ -1,13 +1,21 @@
-// A message goes only to the session the screen shows (F-278). Until the view shows the task's
-// session, from its list row, its creation or its history, the composer keeps the draft with Send
-// disabled and says why, so a read that arrives later never decides where the words go.
-import type { ClawtrateBridge, ClawtrateState, Transcript } from "@clawtrate/core";
+// A message goes only to the session the screen showed when its words were written (F-278). Until
+// the view shows the task's session, from its list row, its creation or its history, the composer
+// keeps the draft with Send disabled and says why, so a read that arrives later never decides where
+// the words go. A draft keeps the session it was started in: once the view shows another, nothing
+// is sent until the person starts a new task with its words or deletes it.
+import {
+  newRun,
+  type ClawtrateBridge,
+  type ClawtrateState,
+  type Transcript,
+} from "@clawtrate/core";
 import { createElement, createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BridgeProvider } from "../src/bridge.tsx";
 import { Composer } from "../src/Composer.tsx";
-import { sendWaits } from "../src/live.ts";
+import { DRAFT_MOVED, sendWaits } from "../src/live.ts";
+import { RunEnding } from "../src/LiveTurn.tsx";
 
 const KEY = "agent:otto:disk-space";
 
@@ -23,11 +31,16 @@ const transcript = (change: Partial<Transcript>): Transcript =>
     ...change,
   }) as unknown as Transcript;
 
-/** The composer as drawn with a draft of the person's words. */
-const composer = (shown: Transcript | undefined) => {
+/** The composer as drawn with a draft of the person's words, started in `started` when given. */
+const composer = (shown: Transcript | undefined, started?: string) => {
   const saved = globalThis.localStorage;
   globalThis.localStorage = {
-    getItem: () => "Is this still running?",
+    getItem: (key: string) =>
+      key.startsWith("clawtrate.draftSession.")
+        ? (started ?? null)
+        : key.startsWith("clawtrate.draft.")
+          ? "Is this still running?"
+          : null,
     setItem: () => undefined,
     removeItem: () => undefined,
   } as unknown as Storage;
@@ -65,11 +78,13 @@ const composer = (shown: Transcript | undefined) => {
 const send = (html: string) => /<button[^>]*data-testid="send"[^>]*>/.exec(html)?.[0] ?? "";
 
 describe("F-278: a draft written before the view shows the task's session", () => {
-  it("while the task loads: the words stay, Send is disabled, and the composer says it waits", () => {
+  it("while the task loads: the words stay, Send is disabled, and the composer says it waits, with Start as new task in reach", () => {
     const html = composer(transcript({ status: "loading" }));
     expect(html).toContain("Is this still running?");
     expect(html).toContain("Sending waits until this task loads.");
     expect(send(html)).toContain("disabled");
+    // Send can't open its menu while disabled: the way to a new task is its own control.
+    expect(html).toMatch(/<button[^>]*>Start as new task<\/button>/);
   });
 
   it("read, with no session under the key: the words stay, and it says the task isn't there", () => {
@@ -83,5 +98,70 @@ describe("F-278: a draft written before the view shows the task's session", () =
     expect(html).not.toContain("Sending waits");
     expect(send(html)).not.toContain("disabled");
     expect(sendWaits(transcript({ status: "ready", sessionId: "s-1" }))).toBeNull();
+  });
+});
+
+describe("F-278: a draft keeps the session it was started in", () => {
+  it("started while the view showed one session, which shows another now: Send is disabled, it says it was not sent, and offers a new task with its words and Delete", () => {
+    const html = composer(transcript({ status: "ready", sessionId: "s-2" }), "s-1");
+    expect(html).toContain("Is this still running?");
+    expect(html).toContain(DRAFT_MOVED);
+    expect(send(html)).toContain("disabled");
+    expect(html).toMatch(/<button[^>]*>Start a new task with this message<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Delete<\/button>/);
+  });
+
+  it("the view still shows the session it was started in: Send takes the words", () => {
+    const html = composer(transcript({ status: "ready", sessionId: "s-1" }), "s-1");
+    expect(html).not.toContain(DRAFT_MOVED);
+    expect(send(html)).not.toContain("disabled");
+  });
+});
+
+describe("F-278: Try again on a failed turn whose words only history holds", () => {
+  const failed = newRun(
+    "run-1",
+    {
+      state: "failed",
+      origin: "gateway",
+      anchorItemId: "row-1",
+      error: { message: "The model provider is down.", kind: "gateway" },
+    },
+    1,
+  );
+  const row = {
+    id: "row-1",
+    role: "user",
+    timestamp: 1,
+    blocks: [{ kind: "text", text: "Back up the photos." }],
+    model: null,
+  };
+  const ending = (shown: Transcript) => {
+    const state = { bots: [], tasksByBot: {}, transcripts: {} } as unknown as ClawtrateState;
+    const bridge = { getState: () => state, subscribe: () => () => undefined };
+    return renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: bridge as unknown as ClawtrateBridge,
+        children: createElement(RunEnding, {
+          run: failed,
+          bot: { id: "otto", name: "Otto" } as never,
+          transcript: shown,
+          taskKey: KEY,
+        }),
+      }),
+    ).replaceAll("&#x27;", "'");
+  };
+  const retry = (html: string) => /<button[^>]*>Try again<\/button>/.exec(html)?.[0] ?? "";
+
+  it("before the view shows the task's session: disabled, with the reason shown up front", () => {
+    const html = ending(transcript({ status: "ready", items: [row] as never }));
+    expect(retry(html)).toContain("disabled");
+    expect(html).toContain("This task isn't on the gateway.");
+  });
+
+  it("once the view shows it: it can go, to that session", () => {
+    const html = ending(transcript({ status: "ready", sessionId: "s-1", items: [row] as never }));
+    expect(retry(html)).not.toContain("disabled");
+    expect(html).not.toContain("This task isn't on the gateway.");
   });
 });

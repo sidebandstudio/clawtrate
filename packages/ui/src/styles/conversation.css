@@ -716,12 +716,21 @@
   font-size: var(--text-sm);
 }
 
-/* Why Send waits while the task's session is not shown yet; the draft stays. */
+/* Why Send waits while the task's session is not shown yet, or will not send a draft whose session
+   is gone; the draft stays, with the way to a new task beside the reason, or below it when narrow. */
 .composer-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
   margin: 0 0 6px;
   padding: 0 4px;
   font-size: var(--text-sm);
   color: var(--text-muted);
+}
+
+.composer-note[data-tone="danger"] {
+  color: var(--text);
 }
 
 /* The access bar: the composer's place on the read tier. */

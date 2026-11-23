@@ -316,6 +316,14 @@ export function sendWaits(transcript: Transcript | undefined): string | null {
 }
 
 /**
+ * A draft, in the composer or a reply, started while the view showed one session of its task, when
+ * the view shows another: the first was deleted or reset elsewhere. The draft keeps its session and
+ * goes nowhere until the person starts a new task with its words or deletes it (F-278).
+ */
+export const DRAFT_MOVED =
+  "Not sent. This task was deleted or reset elsewhere after you started this message.";
+
+/**
  * Where Resend sends a message refused because its task was archived or reset elsewhere, once the
  * gateway shows the task live again: listed, so not archived, and its history naming the session
  * the screen shows. Restored, that is the session the message was written for; reset, the one

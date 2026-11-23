@@ -28,6 +28,7 @@ import { ArrowUpIcon, ChevronIcon, CloseIcon, FileIcon, PlusIcon } from "./icons
 import {
   composerFor,
   couldNotStart,
+  DRAFT_MOVED,
   questionPending,
   refusedElsewhere,
   sendName,
@@ -161,6 +162,26 @@ function writeDraft(key: string, text: string): void {
   }
 }
 
+// The session each draft was started in, kept with it: the draft goes there only (F-278).
+const draftSessions = new Map<string, string | undefined>();
+function readDraftSession(key: string): string | undefined {
+  if (draftSessions.has(key)) return draftSessions.get(key);
+  try {
+    return localStorage.getItem(`clawtrate.draftSession.${key}`) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+function writeDraftSession(key: string, session: string | undefined): void {
+  draftSessions.set(key, session);
+  try {
+    if (session) localStorage.setItem(`clawtrate.draftSession.${key}`, session);
+    else localStorage.removeItem(`clawtrate.draftSession.${key}`);
+  } catch {
+    // Storage may be unavailable; the draft keeps its session for this page.
+  }
+}
+
 /** True on a Mac, where ⌘ is the command key; elsewhere Ctrl stands for it. */
 const isMac = () => /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? "");
 export const command = (event: { metaKey: boolean; ctrlKey: boolean }) =>
@@ -261,8 +282,11 @@ export function Composer({
   const sendRef = useRef<HTMLButtonElement>(null);
 
   const runId = transcript?.runs.find((run) => run.state !== "queued" && isLive(run))?.id ?? null;
-  // The task's session as drawn: a send goes there only, whatever the host learns before it arrives.
+  // The task's session as drawn now.
   const shownSession = transcript?.sessionId;
+  // The session the draft was started in, kept with it from its first word: it goes there only.
+  const [bound, setBound] = useState(() => readDraftSession(draftKey));
+  useEffect(() => writeDraftSession(draftKey, bound), [draftKey, bound]);
   const view: ComposerView = composerFor(transcript, {
     bot: bot.name,
     connected,
@@ -280,7 +304,7 @@ export function Composer({
       text: sentText(tokens, text),
       idempotencyKey: "x".repeat(36),
       queueMode: view.mode === "steer" ? "steer" : "followup",
-      sessionId: transcript?.sessionId ?? null,
+      sessionId: bound ?? shownSession ?? null,
       files: files.map((file) => ({
         fileName: file.name,
         mimeType: file.mimeType,
@@ -299,6 +323,12 @@ export function Composer({
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
   // Until the view shows the task's session the draft stays here: only a new task takes it.
   const waits = sendWaits(transcript);
+  // A draft started while the view showed one session, and the view shows another now: that
+  // session was deleted or reset elsewhere. The draft keeps its session, and nothing is sent until
+  // the person picks a new task for its words or deletes it.
+  const binding = hasContent ? (bound ?? shownSession) : undefined;
+  if (binding !== bound) setBound(binding);
+  const moved = binding !== undefined && shownSession !== undefined && binding !== shownSession;
 
   const stop = useCallback(
     (run: Run) => {
@@ -328,8 +358,15 @@ export function Composer({
           });
         return;
       }
-      if (how !== "new-task" && waits) {
-        onNotice({ title: "This message is still in the composer.", reason: waits });
+      if (how !== "new-task" && (waits || !binding)) {
+        onNotice({
+          title: "This message is still in the composer.",
+          reason: waits ?? "Sending waits until this task loads.",
+        });
+        return;
+      }
+      if (how !== "new-task" && moved) {
+        onNotice({ title: "This message is still in the composer.", reason: DRAFT_MOVED });
         return;
       }
       if (submitting.current) {
@@ -369,6 +406,7 @@ export function Composer({
       const body = sentText(chips, words);
       const taken = files;
       const attachmentIds = taken.flatMap((file) => (file.info ? [file.info.id] : []));
+      const session = binding;
       setText("");
       setFiles([]);
       setTokens([]);
@@ -392,7 +430,7 @@ export function Composer({
           text: body,
           mode: how === "queue" ? "queue" : "auto",
           attachmentIds,
-          ...(shownSession ? { sessionId: shownSession } : {}),
+          sessionId: session!,
         });
         // A pending question holds every message, however it was sent.
         if (view.mode === "hold") onAnnounce("Held until you answer");
@@ -405,6 +443,8 @@ export function Composer({
         });
         setFiles((current) => [...taken, ...current]);
         setTokens((current) => [...chips, ...current]);
+        // The words come back with the session they were written for.
+        setBound(session);
         onNotice({
           title: how === "new-task" ? "Couldn't start a new task." : "Couldn't send this message.",
           reason: error instanceof Error ? error.message : String(error),
@@ -431,10 +471,22 @@ export function Composer({
       view,
       stop,
       runId,
-      shownSession,
+      binding,
+      moved,
       waits,
     ],
   );
+
+  /** Delete on a draft whose session is gone: its words, chips and files leave the composer. */
+  const discard = () => {
+    const held = files.flatMap((file) => (file.info ? [file.info.id] : []));
+    if (held.length > 0) void bridge.send({ type: "releaseAttachments", attachmentIds: held });
+    setText("");
+    setFiles([]);
+    setTokens([]);
+    setPicker(null);
+    focusRef.current?.focus();
+  };
 
   // Window-wide keys: ⌘. stops, ⌘↵ sends from anywhere except inside a card
   // that answers it, ⌘I focuses the field, ⌘L adds the selected text.
@@ -936,10 +988,24 @@ export function Composer({
               {tooMuch && <p className="attachments-note">{refusalReason}</p>}
             </div>
           )}
-          {hasContent && waits && (
-            <p className="composer-note" role="status" data-testid="composer-waits">
-              {waits}
-            </p>
+          {hasContent && (waits || moved) && (
+            // Send waits, or will not send: the way to a new task stays in reach on touch too.
+            <div
+              className="composer-note"
+              role="status"
+              data-testid="composer-waits"
+              data-tone={moved ? "danger" : undefined}
+            >
+              <span>{moved ? DRAFT_MOVED : waits}</span>
+              <button type="button" className="link-button" onClick={() => void sendAs("new-task")}>
+                {moved ? "Start a new task with this message" : "Start as new task"}
+              </button>
+              {moved && (
+                <button type="button" className="link-button" onClick={discard}>
+                  Delete
+                </button>
+              )}
+            </div>
           )}
           <div className="composer-row">
             <button
@@ -1022,9 +1088,9 @@ export function Composer({
               type="button"
               className="icon-button send-button"
               aria-label={sendName(view.mode)}
-              aria-description={refusalReason ?? waits ?? undefined}
-              title={refusalReason ?? waits ?? sendName(view.mode)}
-              disabled={!canSend || waits !== null}
+              aria-description={refusalReason ?? waits ?? (moved ? DRAFT_MOVED : undefined)}
+              title={refusalReason ?? waits ?? (moved ? DRAFT_MOVED : sendName(view.mode))}
+              disabled={!canSend || waits !== null || moved}
               data-testid="send"
               onClick={() => {
                 // The release that ends a long press is not a send.
