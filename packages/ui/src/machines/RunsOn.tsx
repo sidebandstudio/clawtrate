@@ -332,7 +332,10 @@ export function RunsOnPage({
     </>
   );
 
+  const commandsDisabled = !admin || saving || !commandsCurrent;
+
   const save = async (value: string, baseHash: string | null) => {
+    if (commandsDisabled) return;
     const done = begin();
     setSaving(true);
     setError(null);
@@ -429,7 +432,7 @@ export function RunsOnPage({
         <CommandsPart
           part={read.commands.value}
           botName={botName}
-          disabled={!admin || saving || !commandsCurrent}
+          disabled={commandsDisabled}
           saveLines={saveLines}
           now={now}
           onSave={save}
@@ -728,7 +731,7 @@ function CommandsPart({
         choices={choices}
         disabled={disabled}
         onChoose={(value) => {
-          if (value !== current) onSave(value, part.configHash);
+          if (!disabled && value !== current) onSave(value, part.configHash);
         }}
         testId="runs-on-machine"
       />

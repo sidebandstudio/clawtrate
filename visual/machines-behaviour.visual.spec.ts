@@ -897,6 +897,33 @@ test("F-046: while the read asked for after a workspace save is out, the command
   await expect(select).toBeEnabled();
 });
 
+test("F-046: a command menu opened during a workspace save closes when the save asks for a fresh read and sends nothing", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await holdCommandsReadAfter(page, "setBotWorkspace");
+  await page.getByRole("button", { name: "Change…" }).click();
+  await page
+    .getByRole("textbox", { name: /path on the gateway's machine/ })
+    .fill("/srv/clawtrate/workspaces/otto-2");
+  await hold(page);
+  await page.getByRole("button", { name: "Save folder" }).click();
+  // Open the command menu while the workspace save is still pending.
+  const select = page.getByTestId("runs-on-machine");
+  await select.click();
+  const menu = page.getByRole("menu", { name: "Otto's command machine" });
+  await expect(menu).toBeVisible();
+  // Let the workspace save finish; its follow-up commands read is held.
+  await release(page);
+  await expect(announcer(page)).toHaveText(/^Saved\. Otto's workspace: /);
+  await expect(select).toBeDisabled();
+  await expect(menu).toHaveCount(0);
+  expect((await sent(page)).filter((c) => c.type === "setCommandMachine")).toHaveLength(0);
+  await finishRead(page, false);
+  await expect(select).toBeEnabled();
+});
+
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
   page,
 }) => {
