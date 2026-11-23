@@ -701,8 +701,8 @@ button.b-choice:hover {
   height: 44px;
 }
 
-/* Settings → Conversation: "Show commands" and its switch on one line. */
-.show-commands-row {
+/* Settings → Advanced: a switch kept on this device and its name on one line. */
+.device-switch-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -710,12 +710,12 @@ button.b-choice:hover {
   min-height: 44px;
 }
 
-.b-field > .show-commands-row {
+.b-field > .device-switch-row {
   color: var(--text);
   font-size: var(--text-md);
 }
 
-.show-commands .b-hint {
+.device-switch .b-hint {
   margin: 0;
 }
 

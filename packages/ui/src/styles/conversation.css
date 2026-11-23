@@ -1588,13 +1588,19 @@ button.reaction {
   color: var(--text-muted);
 }
 
-/* Settings, Conversation: "Show external channel chats", a switch beside its name (F-519). */
+/* Settings, Advanced: "Show external channel chats", a switch beside its name (F-519). */
 .b-field.channel-chats-field {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-top: 22px;
+  /* In line with the other switches of Advanced, whose rows inset theirs by 4px. */
+  padding-right: 4px;
+}
+
+.b-field.channel-chats-field + .b-hint {
+  margin-inline: 0;
 }
 
 /* A picture the bot handed over, under its turn (F-535): at most its own size, never wider than a

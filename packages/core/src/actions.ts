@@ -690,17 +690,11 @@ export function isOpenOutcome(outcome: Outcome): boolean {
 
 /**
  * An outcome the conversation keeps in view even with "Show commands" off
- * (7.11): the action waits for the person, or it went wrong (it failed, was
- * blocked or refused, or could not be done).
+ * (7.11): the action waits for the person. An action that went wrong is like
+ * any other: it is in its run line, which counts it.
  */
 export function staysInView(outcome: Outcome): boolean {
-  return (
-    outcome === "waiting" ||
-    outcome === "failed" ||
-    outcome === "blocked" ||
-    outcome === "refused" ||
-    outcome === "unavailable"
-  );
+  return outcome === "waiting";
 }
 
 const SUCCESS: Record<string, true> = {

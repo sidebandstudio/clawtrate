@@ -115,7 +115,7 @@ async function unfold(): Promise<void> {
 async function setShown(on: boolean): Promise<void> {
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("button", { name: "Conversation", exact: true }).click();
+  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
   const toggle = settings.getByRole("switch", { name: "Show external channel chats" });
   await expect(toggle).toHaveAccessibleDescription(/main conversation always shows/);
   if ((await toggle.getAttribute("aria-checked")) !== String(on)) await toggle.click();
