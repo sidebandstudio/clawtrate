@@ -6,6 +6,7 @@
 import { toBase64, type ChatPicture, type TranscriptItem } from "@clawtrate/core";
 import { useEffect, useState } from "react";
 import { useBridge } from "./bridge.tsx";
+import { OpenablePicture } from "./PictureViewer.tsx";
 import { collectBytes } from "./work/content.ts";
 
 type Shown =
@@ -51,8 +52,8 @@ function Picture({ taskKey, picture }: { taskKey: string; picture: ChatPicture }
       style={{ aspectRatio: ratio, maxWidth: picture.width ? `${picture.width}px` : undefined }}
     >
       {shown.status === "shown" ? (
-        <img
-          src={shown.url}
+        <OpenablePicture
+          url={shown.url}
           alt={pictureAlt(picture)}
           onError={() =>
             setShown({ status: "failed", message: "This device couldn't draw the picture." })

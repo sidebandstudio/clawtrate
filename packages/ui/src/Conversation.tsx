@@ -36,6 +36,7 @@ import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { Pictures } from "./Pictures.tsx";
+import { SentFiles } from "./SentFiles.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 
@@ -79,6 +80,11 @@ function Turn({
               </div>
             ) : null,
           )}
+          <SentFiles
+            taskKey={taskKey}
+            messageKey={item.idempotencyKey ?? null}
+            files={item.attachments ?? []}
+          />
         </MessageUnit>
       )}
       {item.steered && (

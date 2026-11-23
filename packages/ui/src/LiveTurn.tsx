@@ -20,6 +20,7 @@ import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
 import { Markdown } from "./Markdown.tsx";
+import { SentFiles } from "./SentFiles.tsx";
 
 /** Your message while the engine holds it, with what is known about its delivery. */
 export function OutgoingBubble({
@@ -102,15 +103,13 @@ export function OutgoingBubble({
       data-mode={message.mode}
     >
       <div className="msg" data-role="user" data-pending={accepted ? undefined : "held"}>
-        <div className="bubble">
-          <Markdown text={message.text} />
-          {message.attachments.length > 0 && (
-            <p className="bubble-files">
-              {message.attachments.map((file) => file.fileName).join(", ")}
-            </p>
-          )}
-        </div>
+        {message.text && (
+          <div className="bubble">
+            <Markdown text={message.text} />
+          </div>
+        )}
       </div>
+      <SentFiles taskKey={taskKey} messageKey={message.id} files={message.attachments} />
       {caption && (
         <div className="msg-caption" data-tone={message.status === "failed" ? "danger" : undefined}>
           {caption}
