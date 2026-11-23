@@ -136,6 +136,27 @@ describe("F-535: a picture in history", () => {
     ).toEqual([ARTIFACT]);
   });
 
+  it("F-535: a picture stays on its own run's turn when that run began with an empty row", () => {
+    const items = mapHistory([
+      { role: "user", content: "hi", __openclaw: { id: "u1", seq: 1 } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "First." }],
+        __openclaw: { id: "a1", seq: 2, runId: "run-a" },
+      },
+      { role: "assistant", content: [], __openclaw: { id: "b0", seq: 3, runId: "run-b" } },
+      {
+        role: "assistant",
+        content: [imageBlock],
+        __openclaw: { id: "b1", seq: 4, runId: "run-b" },
+      },
+    ]);
+    const turns = items.filter((item) => item.role === "assistant");
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.pictures).toBeUndefined();
+    expect(turns[1]!.pictures?.map((each) => each.artifactId)).toEqual([ARTIFACT]);
+  });
+
   it("F-535: an image block the gateway holds no artifact for is not a picture, and a turn of another run names no description", () => {
     const { artifactId: _, ...bare } = imageBlock;
     expect(mapHistory(rows(bare)).at(-1)!.pictures).toBeUndefined();
@@ -274,6 +295,16 @@ describe("F-535: reading a picture", () => {
     });
   });
 
+  it("F-535: a picture's media type is read without regard to case", async () => {
+    const { ctx } = context({ url: ISSUED, expiresAt: LATER }, () =>
+      response(200, { "content-type": "Image/PNG" }, [PNG]),
+    );
+    expect(await readChatPicture(ctx, KEY, ARTIFACT)).toMatchObject({
+      status: "content",
+      mimeType: "image/png",
+    });
+  });
+
   it("F-535: a host that can't fetch fetches nothing, and says so", async () => {
     const { ctx, asked } = context({ url: ISSUED, expiresAt: LATER }, png);
     expect(await readChatPicture({ ...ctx, fetch: null }, KEY, ARTIFACT)).toEqual({
@@ -390,6 +421,48 @@ describe("F-535: the client", () => {
     if (read.status !== "content" || !read.transfer.id) throw new Error("expected a transfer");
     const id = read.transfer.id;
     expect(() => client.readFileChunk(id, 1, viewer)).toThrow("This file's transfer has ended");
+    client.stop();
+  });
+
+  it("F-535: a picture whose viewer left while it waited asks the gateway for nothing", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { client, gateway } = await open(async () => {
+      await held;
+      return png();
+    });
+    const busy = Array.from({ length: 4 }, () => client.readChatPicture(KEY, ARTIFACT));
+    const viewer = {};
+    const waiting = client.readChatPicture(KEY, ARTIFACT, { owner: viewer });
+    client.withdraw(viewer);
+    release();
+    await Promise.all(busy);
+    await expect(waiting).rejects.toThrow();
+    expect(gateway.calls("artifacts.download")).toHaveLength(4);
+    client.stop();
+  });
+
+  it("F-535: a picture whose bytes arrive after a switch to another gateway reaches no viewer", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { client } = await open(async () => {
+      await held;
+      return png();
+    });
+    const viewer = {};
+    const reading = client.readChatPicture(KEY, ARTIFACT, { owner: viewer, maxChars: 1 });
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    void client.connect({ url: URL_B, token: "t" }).catch(() => {});
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.gatewayUrl === URL_B,
+    );
+    release();
+    expect(await reading).toEqual({
+      status: "failed",
+      message: "The connection changed while this picture was read.",
+    });
     client.stop();
   });
 

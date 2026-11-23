@@ -139,7 +139,11 @@ export async function readChatPicture(
           : `The gateway answered ${response.status} for this picture.`,
       );
     }
-    const mimeType = (response.headers.get("content-type") ?? "").split(";")[0]!.trim();
+    // Media types are case-insensitive (RFC 9110): `Image/PNG` is a PNG, still checked by its bytes.
+    const mimeType = (response.headers.get("content-type") ?? "")
+      .split(";")[0]!
+      .trim()
+      .toLowerCase();
     const declared = Number(response.headers.get("content-length") ?? NaN);
     if (!SIGNATURES[mimeType]) {
       await response.body?.cancel().catch(() => {});

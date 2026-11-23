@@ -474,8 +474,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           previous.blocks.push(...blocks);
           item = previous;
         } else {
-          currentRun = runId;
+          // An empty row starts no turn: a later row of its run gets one of its own, never the last.
           if (blocks.length === 0 && pictures.length === 0) return;
+          currentRun = runId;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           items.push(item);
         }

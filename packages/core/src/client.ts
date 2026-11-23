@@ -5516,12 +5516,21 @@ export class ClawtrateClient {
     // The task and picture are the connection's it was asked on: never read on a later one.
     if (generation !== this.generation)
       return { status: "failed", message: "The connection changed while this picture waited." };
+    // A viewer that left while the picture waited asks for nothing.
+    this.checkNotWithdrawn(options.owner);
     const gatewayUrl = this.state.connection.gatewayUrl ?? "";
-    return this.fileRead(
+    const read = await this.fileRead(
       (ctx) =>
         readChatPicture({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }, key, artifactId),
       options,
     );
+    // Bytes that arrive after a switch to another gateway are the old one's: none reach a viewer.
+    if (generation !== this.generation) {
+      if (read.status === "content" && read.transfer.id)
+        this.fileTransfers.release(options.owner ?? DIRECT_CALLER, read.transfer.id);
+      return { status: "failed", message: "The connection changed while this picture was read." };
+    }
+    return read;
   }
 
   /** The next part of a file on its way to this viewer. */
