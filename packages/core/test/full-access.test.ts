@@ -266,6 +266,37 @@ describe("full access behind a flag", () => {
       fullGrant?: boolean;
     };
     expect(record.fullGrant).toBe(true);
+    // A retry after setup's first read still goes over the proved route, never the host's socket.
+    await until(() => client.state.discovery.status === "ready");
+    gateway.dropAll();
+    await until(() => gateway.connects.length === 2);
+    expect(route.made).toEqual([LOOPBACK, LOOPBACK]);
+    expect(connectAt(gateway, 1)).toMatchObject({
+      scopes: [...FULL_SCOPES],
+      auth: { deviceToken: ISSUED },
+    });
+    client.stop();
+  });
+
+  it("setup's reuse of a saved pairing through the proved sockets asks for read, and so do its retries", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway);
+    const route = provedRoute(gateway, () => true);
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, route.setup);
+    await until(() => client.state.discovery.status === "ready");
+    expect(client.state.connection.fullPairing).toBe(true);
+    await client.connectForSetup(LOOPBACK, route.setup);
+    await until(() => gateway.connects.length === 2);
+    expect(connectAt(gateway, 1).scopes).toEqual([...READ_SCOPES]);
+    // The reuse's own read of the bots ends setup; its retries are then the saved gateway's own.
+    await until(
+      () => gateway.calls("agents.list").length === 2 && client.state.discovery.status === "ready",
+    );
+    expect(client.state.connection.fullPairing).toBe(false);
+    gateway.dropAll();
+    await until(() => gateway.connects.length === 3);
+    expect(connectAt(gateway, 2).scopes).toEqual([...READ_SCOPES]);
     client.stop();
   });
 

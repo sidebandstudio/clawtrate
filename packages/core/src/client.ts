@@ -755,7 +755,9 @@ export type SetupEndpointCheck = {
   /**
    * Whether the host's dialog consent still holds (its two minutes), asked just before the
    * first frame that carries a credential, a saved token's included. Once a hello is in, the
-   * consent is used and isn't asked again.
+   * consent is used and isn't asked again. On a plain `connect` it decides only whether a first
+   * pairing over the proved route asks for the six, before each such request: without it the
+   * same token asks for read, as a typed address does, and the connection goes on.
    */
   consent?: () => boolean;
   /**
@@ -6036,9 +6038,15 @@ export class ClawtrateClient {
     // or this computer's gateway when every socket of the connection is proved (`socketsProved`,
     // setup-effortless.md §3). Elsewhere this device asks for read, as before, and a full
     // pairing's token there asks for read too. What a first pairing may ask for on that route
-    // is `firstPairingMayAskFull`'s.
+    // is `firstPairingMayAskFull`'s. Only a plain connect's token takes the proved route: a setup
+    // code, and setup's reuse of a saved pairing, ask for read there.
     const full = this.options.fullAccess === true && !this.options.readOnly;
-    const routed = full && (protectedGatewayUrl(settings.url) || this.socketsProved(settings.url));
+    const proved = !this.setupIntent && !this.setupCode && this.socketsProved(settings.url);
+    const routed = full && (protectedGatewayUrl(settings.url) || proved);
+    // Every socket of this connection, retries included, is the proved route's, also after
+    // setup's check ends at its first read: a full pairing's token never falls back to the
+    // host's own socket here.
+    const provedSocket = proved ? this.setupCheck?.createSocket : undefined;
     const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
     this.fullAccess = routed && secure;
@@ -6162,9 +6170,8 @@ export class ClawtrateClient {
         current = null;
         const check = this.setupCheck?.url === settings.url ? this.setupCheck : null;
         try {
-          socket = check?.createSocket
-            ? check.createSocket(settings.url)
-            : this.host.createWebSocket(settings.url);
+          const create = check?.createSocket ?? provedSocket;
+          socket = create ? create(settings.url) : this.host.createWebSocket(settings.url);
         } catch (error) {
           // A setup socket that couldn't start is a terminal path: its code goes.
           if (this.isSetup(settings.url)) this.dropSetupCredentials();
@@ -8549,14 +8556,15 @@ export class ClawtrateClient {
 
   /**
    * Whether a first pairing at `url` may ask for the six, given full access: always at a
-   * protected address; over a proved route only while the person's consent for it holds (asked
-   * here, before any credential) and by token, since a loopback setup code still starts
+   * protected address; over a proved route only while the person's consent for it holds. It is
+   * asked here, before each first-pairing credential, until the first hello spends it. Full
+   * access over that route is a plain connect's alone, so a loopback setup code still starts
    * read-only (F-509).
    */
   private firstPairingMayAskFull(url: string): boolean {
     if (protectedGatewayUrl(url)) return true;
     const consent = this.setupCheck?.url === url ? this.setupCheck.consent : undefined;
-    return consent?.() === true && !this.setupCode;
+    return consent?.() === true;
   }
 
   /**
