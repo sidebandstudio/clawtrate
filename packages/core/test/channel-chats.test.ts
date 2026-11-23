@@ -44,7 +44,10 @@ const rows = () => [
   },
 ];
 
-async function connected(saved: Record<string, string> = {}, listed = rows()) {
+async function connected(
+  saved: Record<string, string> = {},
+  listed: Record<string, unknown>[] = rows(),
+) {
   const gateway = new FakeGateway();
   gateway.handlers["sessions.subscribe"] = () => ({
     subscribed: true,
