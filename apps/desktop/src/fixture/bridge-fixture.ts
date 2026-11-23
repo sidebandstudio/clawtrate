@@ -443,7 +443,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
-      if (isPictureScene(name)) return { initial: pictureScene(base, now), steps: [] };
+      if (isPictureScene(name)) return { initial: pictureScene(base, now, name), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
 }

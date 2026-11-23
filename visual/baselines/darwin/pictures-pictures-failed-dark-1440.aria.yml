@@ -60,12 +60,12 @@
     - toolbar "Message actions":
       - button "More"
     - paragraph: Here is the picture you asked for.
-    - toolbar "Message actions":
-      - button "More"
     - figure "Couldn't show the picture. The gateway refused this picture's download ticket. Try again":
       - alert:
         - text: Couldn't show the picture. The gateway refused this picture's download ticket.
         - button "Try again"
+    - toolbar "Message actions":
+      - button "More"
     - group: Worked 1 action
     - status
   - region "Access":
