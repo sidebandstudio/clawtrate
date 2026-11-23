@@ -437,8 +437,11 @@ it.skipIf(process.platform === "win32")(
   "a superseded inspection's late records don't land on the next one",
   async () => {
     let calls = 0;
+    let entered!: () => void;
+    const running = new Promise<void>((resolve) => (entered = resolve));
     const installer = macInstaller("arm64", async (_held, _arch, signal, record, cleanupFailed) => {
       if (calls++ > 0) return null;
+      entered();
       await new Promise((resolve) => signal.addEventListener("abort", resolve));
       record?.("archive", {
         exitCode: null,
@@ -453,7 +456,8 @@ it.skipIf(process.platform === "win32")(
     });
     const file = await candidate();
     const first = installer.inspect(file);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The first check is inside the helper call when the second replaces it.
+    await running;
     expect(await installer.inspect({ ...file, offerId: "two" })).toBeNull();
     await first;
     expect(installer.inspectionFailure).toBeNull();
