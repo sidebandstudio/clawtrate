@@ -1,8 +1,17 @@
 // The title bar, the update button, the Settings gear and the gateway's name
 // (docs/design/titlebar.md).
 import type { BridgeCommand } from "../packages/core/src/bridge.ts";
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, showList, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import {
+  contextFor,
+  expect,
+  openFixture,
+  OTTO_DISK,
+  settle,
+  showList,
+  SIZES,
+  THEMES,
+} from "./fixture.ts";
 
 const DESKTOP = SIZES.find((s) => s.name === "1440")!;
 const PHONE = SIZES.find((s) => s.phone)!;
