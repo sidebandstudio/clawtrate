@@ -982,6 +982,97 @@ test("F-274: a workspace save that finishes after Back and reopening still shows
   );
 });
 
+test("F-046: a command save still out for Otto makes Pip's command picker wait for the new revision", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    const held = window as unknown as {
+      ottoAnswered?: boolean;
+      answerOtto?: () => Promise<unknown>;
+      answerPipRead?: () => void;
+      pipRevisions: string[];
+    };
+    held.pipRevisions = [];
+    fixture.invoke = (command) => {
+      const cmd = command as { type: string; botId?: string; part?: string };
+      if (cmd.type === "setCommandMachine" && cmd.botId === "otto")
+        return new Promise((resolve, reject) => {
+          held.answerOtto = () =>
+            original(command).then(
+              (answer) => {
+                held.ottoAnswered = true;
+                resolve(answer);
+                return answer;
+              },
+              (error) => {
+                reject(error);
+                throw error;
+              },
+            );
+        });
+      if (cmd.type === "readPlacement" && cmd.botId === "pip" && cmd.part === "commands") {
+        const run = () =>
+          original(command).then((answer) => {
+            held.pipRevisions.push((answer as { configHash: string }).configHash);
+            return answer;
+          });
+        if (held.ottoAnswered)
+          return new Promise((resolve, reject) => {
+            held.answerPipRead = () => void run().then(resolve, reject);
+          });
+        return run();
+      }
+      return original(command);
+    };
+  });
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  // Switch to Pip while Otto's save is still out, and let Pip read revision c1.
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Pip\b/ })
+    .click();
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /^Where Pip runs: / }).click();
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toHaveAccessibleName("Pip's command machine: Not set");
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { pipRevisions: string[] }).pipRevisions.at(-1)),
+    )
+    .toBe("c1");
+  await expect(select).toBeDisabled();
+  // Release Otto's save; Pip's picker still waits until Pip has read c2.
+  await page.evaluate(() =>
+    (window as unknown as { answerOtto: () => Promise<unknown> }).answerOtto(),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => typeof (window as unknown as { answerPipRead?: unknown }).answerPipRead),
+    )
+    .toBe("function");
+  await expect(select).toBeDisabled();
+  await page.evaluate(() => (window as unknown as { answerPipRead: () => void }).answerPipRead());
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { pipRevisions: string[] }).pipRevisions.at(-1)),
+    )
+    .toBe("c2");
+  await expect(select).toBeEnabled();
+  await select.click();
+  await page.getByRole("menuitemradio", { name: /^media-box/ }).click();
+  await expect(announcer(page)).toHaveText(
+    "Saved and applied. Pip's command machine setting: media-box",
+  );
+  expect(
+    (await sent(page)).find((c) => c.type === "setCommandMachine" && c.botId === "pip"),
+  ).toMatchObject({ baseHash: "c2" });
+});
+
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
   page,
 }) => {

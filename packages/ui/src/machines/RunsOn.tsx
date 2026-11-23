@@ -71,8 +71,8 @@ const PlacementSavesContext = createContext<PlacementSaves | null>(null);
 
 /**
  * Tracks in-flight placement saves and completion reloads above Work, keyed by
- * bot and gateway so closing Work keeps a save's pending state and refresh,
- * and another gateway or bot is never affected by it.
+ * gateway so closing Work or switching bots keeps a save's pending state and
+ * refresh, and another gateway is never affected by it.
  */
 export function PlacementSavesProvider({ children }: { children: ReactNode }) {
   const [entries, setEntries] = useState<Record<string, SaveEntry>>({});
@@ -127,7 +127,8 @@ export function PlacementSavesProvider({ children }: { children: ReactNode }) {
 export function usePlacement(botId: string, connection: ConnectionState, active: boolean) {
   const bridge = useBridge();
   const saves = useContext(PlacementSavesContext);
-  const scope = `${botId}\n${connection.gatewayUrl ?? ""}`;
+  // Every bot on a gateway writes against the same config revision.
+  const scope = connection.gatewayUrl ?? "";
   const entry = saves?.entries[scope] ?? EMPTY_SAVE;
   const savesBegin = saves?.begin ?? null;
   const savesSettled = saves?.settled ?? null;
@@ -345,7 +346,7 @@ export function RunsOnPage({
   reload: () => void;
   /** Counts a save as out until the returned function is called, on this page or one opened again. */
   begin: () => () => void;
-  /** Refreshes this bot's placement on its gateway after a save settles, even if this page unmounted. */
+  /** Refreshes placement on this gateway after a save settles, even if this page unmounted. */
   settled: () => void;
   /** Whether no save is out and the commands part shown was read after the latest reload. */
   commandsCurrent: boolean;
@@ -469,9 +470,9 @@ export function RunsOnPage({
       // A change never sent, or a read-back that failed or shows another setting: none confirms a save.
       announce("Save not confirmed");
     } finally {
-      // Ending the save also bumps its bot-and-gateway version above Work, so any
-      // open or reopened Runs on view for that bot and gateway refreshes and waits
-      // for the new read, without touching another bot or gateway.
+      // Ending the save also bumps this gateway's version above Work, so any
+      // open or reopened Runs on view on that gateway refreshes and waits for
+      // the new read, without touching another gateway.
       done();
       if (mounted.current) setSaving(false);
     }
