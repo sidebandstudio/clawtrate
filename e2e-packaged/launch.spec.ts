@@ -413,8 +413,11 @@ function runEndpoint() {
 /** Pairs the app global setup started with the run's instance, from its connect screen. */
 async function pair(): Promise<void> {
   const endpoint = runEndpoint();
+  // The address-and-token form is under Advanced, which the first test opens; run alone, nothing has.
+  const address = page.getByPlaceholder("Gateway address");
+  if (!(await address.isVisible())) await page.getByRole("button", { name: "Advanced" }).click();
 
-  await page.getByPlaceholder("Gateway address").fill(endpoint.url);
+  await address.fill(endpoint.url);
   await page.getByPlaceholder("Gateway token, for pairing").fill(endpoint.token);
   await page.getByRole("button", { name: "Connect" }).click();
 
