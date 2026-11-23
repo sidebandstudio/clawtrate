@@ -181,6 +181,8 @@ describe("F-519: what the gateway wrote around a channel turn is not shown as it
       ),
     ).toBe("hello there");
     expect(plainPreview("hello there")).toBe("hello there");
+    // A code span the person closed before the gateway's block doesn't keep the block.
+    expect(plainPreview("run `ls` now Context: ⟦openclaw:ctx⟧ thread stuff")).toBe("run ls now");
     // Nothing after the closing marker: the line ends with it, and is still not a header.
     expect(
       plainPreview("Conversation info: ⟦openclaw:ctx⟧ hello there Context: ⟦openclaw:ctx⟧"),
@@ -193,6 +195,7 @@ describe("F-519: what the gateway wrote around a channel turn is not shown as it
       "[draft] notes",
       "Plain words",
       "Explain `Context: ⟦openclaw:ctx⟧`",
+      "Explain `use Context: ⟦openclaw:ctx⟧` here",
     ])
       expect(stripChannelMetadata(text)).toBe(text);
   });
