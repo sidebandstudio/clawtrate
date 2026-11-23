@@ -1077,9 +1077,19 @@ test("keeps this device's credentials in the Keychain: a fresh build moves them 
   const secrets = [...tokens, "PRIVATE KEY"];
 
   try {
-    expect(await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-1"))).toBe(
-      deviceId,
-    );
+    // With the Keychain, the Mac app's host pairs with full control (docs/decisions.md, "On in
+    // the packaged Mac app, for a protected address"); its interface is told so.
+    const fullControl = async (view: Page) => {
+      const info = await view.evaluate(async () => {
+        const host = (window as unknown as { clawtrateHost: { hello(): Promise<unknown> } })
+          .clawtrateHost;
+        return ((await host.hello()) as { info: { fullControl?: boolean } }).info;
+      });
+      expect(info.fullControl).toBe(true);
+    };
+    expect(
+      await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-1"), fullControl),
+    ).toBe(deviceId);
     // Moved: the sealed record, and the files without a credential or the key.
     expect(readdirSync(folder).sort()).toEqual(["credentials.bin", "state.json"]);
     expect(Object.keys(state()).some((key) => key.startsWith("deviceToken:"))).toBe(false);

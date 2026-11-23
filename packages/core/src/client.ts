@@ -249,7 +249,7 @@ import {
   WRITE_SCOPE,
 } from "./scopes.ts";
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
-import { validateGatewayUrl } from "./gateway-url.ts";
+import { protectedGatewayUrl, validateGatewayUrl } from "./gateway-url.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -5986,10 +5986,13 @@ export class ClawtrateClient {
       return;
     }
 
+    // Full access goes only over a protected route (`protectedGatewayUrl`): elsewhere this
+    // device asks for read, as before, and a full pairing's token there asks for read too.
     const full = this.options.fullAccess === true && !this.options.readOnly;
-    const secure = full ? await this.secureCredentials() : false;
+    const routed = full && protectedGatewayUrl(settings.url);
+    const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
-    this.fullAccess = full && secure;
+    this.fullAccess = routed && secure;
     const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
@@ -6985,6 +6988,7 @@ export class ClawtrateClient {
       canAnswer: scopeSatisfied(scopes, QUESTIONS_SCOPE),
       canApprove: scopeSatisfied(scopes, APPROVALS_SCOPE),
       canAdmin: scopes.includes(ADMIN_SCOPE),
+      fullPairing: this.fullAccess && this.holdsFullPairing(),
       pairing: null,
       error: null,
       retryAt: null,
@@ -8541,6 +8545,14 @@ export class ClawtrateClient {
 
   private tokenParams(deviceId: string) {
     return { clientId: CLIENT_ID, deviceId, role: "operator" };
+  }
+
+  /** Whether this device's saved pairing with the current gateway is a full pairing's record. */
+  private holdsFullPairing(): boolean {
+    const url = this.settings?.url;
+    const deviceId = this.state.connection.deviceId;
+    if (!url || !deviceId) return false;
+    return this.writes.grants.get(this.tokenKey(url, deviceId, "operator"))?.full === true;
   }
 
   /** Device tokens are scoped to one gateway, so a token is never offered to another. */
