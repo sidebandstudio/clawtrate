@@ -57,7 +57,8 @@ async function matchText(region: Locator, name: string): Promise<void> {
     throw new Error(`No text snapshot at ${path}. \`pnpm visual:update\` writes it.`);
   }
   const expected = readFileSync(path, "utf8");
-  if (actual !== expected && (mode === "all" || mode === "changed")) {
+  if (actual === expected) return;
+  if (mode === "all" || mode === "changed") {
     writeFileSync(path, actual);
     return;
   }
