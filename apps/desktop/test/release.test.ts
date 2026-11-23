@@ -2,8 +2,10 @@
 // does and the line it prints, the constants it writes for the update engine,
 // and the feed it writes for its artifacts. Every value here is made up.
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -191,6 +193,25 @@ describe("signing", () => {
     expect(build).toContain("checkWindowsSignature(plan.windows, shown)");
     expect(build.indexOf("signingSummary(")).toBeLessThan(build.indexOf("await build("));
     expect(build.indexOf("await build(")).toBeLessThan(build.indexOf("checkWindowsSignature("));
+  });
+
+  it("a failed signature check fails the build, though electron-builder's exit hook ends with 0", () => {
+    // electron-builder → app-builder-lib → temp-file → async-exit-hook, which calls
+    // process.exit(0) from its beforeExit handler.
+    const from = (base: string, name: string) => createRequire(base).resolve(name);
+    const builder = from(join(APP, "package.json"), "electron-builder");
+    const exitHook = from(from(from(builder, "app-builder-lib"), "temp-file"), "async-exit-hook");
+    const run = (fail: string) =>
+      spawnSync(process.execPath, [
+        "-e",
+        `require(${JSON.stringify(exitHook)})((done) => setTimeout(done, 10)); ${fail}`,
+      ]).status;
+    expect(run("process.exitCode = 1;")).toBe(0);
+    expect(run('process.on("exit", () => (process.exitCode = 1));')).toBe(1);
+    const build = readFileSync(join(APP, "packaging/build.ts"), "utf8");
+    expect(build).toContain('process.on("exit", () => (process.exitCode = 1));');
+    expect(build).not.toMatch(/^\s*process\.exitCode = 1;/m);
+    expect(build.match(/if \(!matches\) failSignatureCheck\(\);/g)).toHaveLength(2);
   });
 
   it("reads what Get-AuthenticodeSignature says of a Windows file's signature", () => {
