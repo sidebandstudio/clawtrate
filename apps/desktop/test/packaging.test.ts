@@ -1,7 +1,7 @@
 // The packaging configuration: what is shipped, and that signing is chosen by
 // the environment alone.
 import { FuseV1Options } from "@electron/fuses";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -177,6 +177,29 @@ describe("packaging configuration", () => {
         "EnableEmbeddedAsarIntegrityValidation",
         "OnlyLoadAppFromAsar",
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the Windows executable even under a path shaped like a Mac bundle", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-fuses-"));
+    try {
+      const install = join(dir, "Clawtrate test.app", "Contents", "MacOS");
+      mkdirSync(install, { recursive: true });
+      const binary = join(install, "Clawtrate.exe");
+      writeFileSync(
+        binary,
+        Buffer.concat([
+          Buffer.alloc(4 * 1024 * 1024 - 8),
+          Buffer.from(FUSE_SENTINEL),
+          Buffer.from([1, 8]),
+          Buffer.from("00001101"),
+        ]),
+      );
+      expect(await fuseMismatches(binary, "win32")).toEqual([]);
+      writeFileSync(binary, Buffer.concat([Buffer.from(FUSE_SENTINEL), Buffer.from([1, 8])]));
+      await expect(fuseMismatches(binary, "win32")).rejects.toThrow("fuse wire is truncated");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
