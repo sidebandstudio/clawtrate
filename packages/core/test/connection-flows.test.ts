@@ -473,6 +473,92 @@ describe("connecting", () => {
     }
   });
 
+  describe("a command sent while the saved gateway is still being read at startup", () => {
+    /** A store whose read of the saved gateway waits until `release`. */
+    function pausedRead() {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      const reading = deferred<void>();
+      const gate = deferred<void>();
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (key === "connection") {
+          reading.resolve();
+          await gate.promise;
+        }
+        return get(key);
+      };
+      return { storage, reading: reading.promise, release: () => gate.resolve() };
+    }
+
+    it("F-457: Disconnect forgets the saved gateway, which then never opens", async () => {
+      const { storage, reading, release } = pausedRead();
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const forgetting = createBridgeSession(client).apply(
+          parseBridgeCommand({ type: "disconnect", gatewayUrl: URL }),
+        );
+        release();
+        await Promise.all([starting, forgetting]);
+        await sleep(100);
+        expect(gateway.sockets).toHaveLength(0);
+        expect(savedSettings(storage)).toBeNull();
+        expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-457: Suspend leaves the saved gateway offline, across a restart too", async () => {
+      const { storage, reading, release } = pausedRead();
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const suspending = createBridgeSession(client).apply(
+          parseBridgeCommand({ type: "suspend" }),
+        );
+        release();
+        await Promise.all([starting, suspending]);
+        await sleep(100);
+        expect(gateway.sockets).toHaveLength(0);
+        expect(savedSettings(storage)).toMatchObject({ url: URL, suspended: true });
+        expect(client.state.connection).toMatchObject({ status: "disconnected", gatewayUrl: URL });
+        client.stop();
+        const restarted = new ClawtrateClient(testHost(gateway, storage), FAST);
+        await restarted.start();
+        await sleep(100);
+        expect(gateway.sockets, "a restart does not open it either").toHaveLength(0);
+        restarted.stop();
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-387: Retry opens the saved gateway offered as a choice", async () => {
+      const { storage, reading, release } = pausedRead();
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start({ resume: "disconnected" });
+        await reading;
+        const retrying = createBridgeSession(client).apply(parseBridgeCommand({ type: "retry" }));
+        release();
+        await Promise.all([starting, retrying]);
+        await until(() => client.state.connection.status === "connected");
+        expect(client.state.connection.gatewayUrl).toBe(URL);
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+  });
+
   it("a Reconnect that could not be saved fails again on the next try, and opens nothing", async () => {
     const gateway = new FakeGateway();
     gateway.connectReply = () => ({

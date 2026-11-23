@@ -1144,6 +1144,13 @@ export class ClawtrateClient {
   /** Each failed request's log policy, as it was when the request went out. */
   private readonly dispatchedQuiet = new WeakMap<object, boolean>();
   private settings: ConnectionSettings | null = null;
+  /**
+   * While `start` reads the saved settings: settled once they are in `settings`. A Disconnect,
+   * Suspend or Retry sent meanwhile waits for it, so it acts on the saved gateway.
+   */
+  private restoring: Promise<void> | null = null;
+  /** Each Disconnect, Suspend or Retry, counted as it is sent. */
+  private connectionCommands = 0;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
   private generation = 0;
@@ -1510,11 +1517,26 @@ export class ClawtrateClient {
     }
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     if (options.resume === false) return;
-    // Startup needs to open the socket without waiting for another client's credential write.
-    const settings = await this.savedSettings();
-    if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
+    const commands = this.connectionCommands;
+    const restored = Promise.withResolvers<void>();
+    this.restoring = restored.promise;
+    let settings: ConnectionSettings | null;
+    try {
+      // Startup needs to open the socket without waiting for another client's credential write.
+      settings = await this.savedSettings();
+      if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
+        return;
+      this.settings = settings;
+    } finally {
+      if (this.restoring === restored.promise) this.restoring = null;
+      restored.resolve();
+    }
+    // A Disconnect, Suspend or Retry sent during the read decides what happens to the gateway,
+    // which shows as closed until it does.
+    if (commands !== this.connectionCommands) {
+      if (settings) this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
-    this.settings = settings;
+    }
     if (settings && (settings.suspended || options.resume === "disconnected")) {
       this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
@@ -1675,7 +1697,9 @@ export class ClawtrateClient {
    */
   async disconnect(gatewayUrl?: string, selection?: number): Promise<void> {
     const asked = ++this.selectionAsked;
+    this.connectionCommands += 1;
     return this.changeConnection(async () => {
+      await this.restoring;
       if (!this.settings) return;
       if (gatewayUrl !== undefined && this.settings.url !== gatewayUrl) {
         throw new GatewayChangedError();
@@ -1713,8 +1737,10 @@ export class ClawtrateClient {
    */
   async retryNow(): Promise<void> {
     const stops = this.stops;
+    this.connectionCommands += 1;
     // The reload runs outside the queue: it changes nothing saved.
     const reload = await this.changeConnection(async () => {
+      await this.restoring;
       if (!this.settings || stops !== this.stops) return null;
       if (this.setupIntent?.refusal === "pairing-changed") return null;
       if (this.protocol?.connected && this.state.connection.status === "connected") {
@@ -1732,7 +1758,9 @@ export class ClawtrateClient {
    * pairing and what is on screen. `retryNow` reconnects.
    */
   async suspend(): Promise<void> {
+    this.connectionCommands += 1;
     return this.changeConnection(async () => {
+      await this.restoring;
       if (!this.settings) return;
       // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
       const url = this.settings.url;
