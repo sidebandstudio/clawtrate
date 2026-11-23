@@ -224,7 +224,7 @@ jobs:
           $installer = @(Get-ChildItem apps/desktop/dist/Clawtrate-*-win-x64.exe)
           if ($installer.Count -ne 1) { throw "expected one installer, found $($installer.Count)" }
           # A space in the path, as a folder a person picks may have. NSIS takes /D= last and unquoted.
-          $dir = Join-Path $env:RUNNER_TEMP "Clawtrate install"
+          $dir = Join-Path $env:RUNNER_TEMP "Clawtrate test.app\Contents\MacOS"
           $run = Start-Process $installer[0].FullName -ArgumentList '/S', '/currentuser', "/D=$dir" -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "the installer exited with $($run.ExitCode)" }
           foreach ($file in 'Clawtrate.exe', 'resources\app.asar', 'Uninstall Clawtrate.exe') {

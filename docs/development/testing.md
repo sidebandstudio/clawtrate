@@ -43,7 +43,7 @@ The fixture mode is the real interface fed a fixed state through the same bridge
 
 For Settings → Updates, choose a [fixture update state](../../apps/desktop/src/fixture/updates.ts) with `?updates=offered`, for example. The fixture has two tracks unless `tracks=one`. Choose the running track with `buildTrack=nightly` (Beta), the selected track with `track=nightly`, or a failed selection with `save=failed`. Without an update state, the fixture has no updater.
 
-`pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. After an intended change, `pnpm visual:update` rewrites them; look at every changed image before committing it.
+`pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. A screenshot may differ from its baseline in 0.2% of its pixels, which a changed sentence can stay under, so each screenshot also compares the accessibility snapshot of what it shows, its words, names and states, exactly with the `.aria.yml` file beside the image. Specs get this from the `expect` that [`visual/fixture.ts`](../../visual/fixture.ts) exports. After an intended change, `pnpm visual:update` rewrites both; look at every changed image and text snapshot before committing it.
 
 ## The end-to-end tests
 

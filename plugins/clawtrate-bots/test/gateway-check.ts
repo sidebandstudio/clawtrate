@@ -262,9 +262,59 @@ try {
     },
   );
 
-  await check("F-536: the gateway received no writes to bot settings", async () => {
-    assert.deepEqual(await settings(op), before);
-  });
+  await check(
+    "F-536: with Apply disabled, the journal stays empty and Undo is refused; the gateway received no writes to bot settings",
+    async () => {
+      assert.deepEqual((await call<{ changes: Json[] }>(op, "changes.list")).changes, []);
+      assert.equal(
+        await outcome(call(op, "changes.undo", { id: `j:p_${"0".repeat(32)}:1:label` })),
+        "undo-unavailable",
+      );
+      assert.deepEqual(await settings(op), before);
+    },
+  );
+
+  await check(
+    "F-535: managers.set writes the manager grants by incarnation to the plugin's own config and reads them back; removal, an unknown bot and a write-only device",
+    async () => {
+      const managersOf = async () => {
+        const { config } = await op.request<{ config: Json }>("config.get", {});
+        const entry = (config.plugins as { entries: Record<string, { config?: Json }> }).entries[
+          PLUGIN
+        ];
+        return entry?.config?.managers;
+      };
+      const [first, second] = [at(bots, 0), at(bots, 1)];
+      const incarnations = before.bots.filter((b) => [first, second].includes(String(b.id)));
+      const set = await call<{ managers: Json[] }>(op, "managers.set", { bots: [first, second] });
+      assert.deepEqual(
+        set.managers,
+        incarnations.map((b) => ({ id: b.id, createdAt: b.createdAt })),
+      );
+      assert.deepEqual(await managersOf(), set.managers);
+      // The managers path is a dynamic read, so the plugin's instance is kept and keeps answering.
+      assert.equal((await call<Json>(op, "status")).plugin, PLUGIN);
+      const narrowed = await call<{ managers: Json[] }>(op, "managers.set", { bots: [second] });
+      assert.deepEqual(await managersOf(), narrowed.managers);
+      // The grant kept is the second bot's own incarnation, not merely one grant.
+      assert.deepEqual(
+        narrowed.managers,
+        set.managers.filter((m) => m.id === second),
+      );
+      assert.equal(narrowed.managers.length, 1);
+      assert.equal(await outcome(call(op, "managers.set", { bots: ["nobody"] })), "bot");
+      const writer = await openOperator(
+        a,
+        "Bots check write-only device",
+        ["operator.read", "operator.write"],
+        [],
+      );
+      sessions.push(writer);
+      await assert.rejects(call(writer, "managers.set", { bots: [] }), /scope|admin/i);
+      assert.deepEqual(await managersOf(), narrowed.managers);
+      assert.deepEqual((await settings(op)).bots, before.bots);
+    },
+  );
   console.log("clawtrate-bots gateway check: ok");
 } finally {
   for (const s of sessions) await s.close().catch(() => {});

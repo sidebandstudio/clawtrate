@@ -972,6 +972,9 @@ export function liveCommand(
     case "setTurnLimit":
       set({ ...get(), turnLimitMinutes: command.minutes });
       return Promise.resolve();
+    case "setShowChannelChats":
+      set({ ...get(), showChannelChats: command.on });
+      return Promise.resolve();
     case "readComposerMenu":
       // As the gateway lists them for Otto: its skills and commands, or the bots and a routine.
       return Promise.resolve(

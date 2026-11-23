@@ -1,0 +1,22 @@
+- dialog "Settings":
+  - region "Updates":
+    - button "Close settings"
+    - button "Back to settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - term: Version
+    - definition:
+      - text: Clawtrate 0.1.0
+      - paragraph: This copy is a Stable build.
+    - radiogroup "Update track":
+      - text: Update track
+      - radio "Stable" [checked]
+      - text: Stable
+      - radio "Beta"
+      - text: Beta
+    - group "Update status":
+      - term: Updates
+      - definition: Couldn't hand the update to the installer.
+      - button "Check for Updates"
+      - paragraph: Checks stable.updates.example for a newer build, only when you choose to.
+    - status: Couldn't hand the update to the installer.

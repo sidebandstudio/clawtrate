@@ -1,9 +1,10 @@
 // The live conversation's states (docs/design/conversation.md) match their
 // approved baselines in light and dark, at desktop width and at phone width:
 // the access bar on the read tier, and a run in each of its states.
-import { expect, test } from "@playwright/test";
+import { test } from "@playwright/test";
 import {
   contextFor,
+  expect,
   openFixture,
   OTTO_DISK,
   paintedFinal,
