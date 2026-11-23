@@ -21,6 +21,7 @@ const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
   "apps/desktop/src/main/mac-install.ts:RESULTS": "static, the helper's eight result lines",
+  "apps/desktop/src/main/mac-install.ts:HELPER_STEPS": "static, the helper's eleven step names",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
   "packages/core/src/computer.ts:BUSY_REASONS": "static, the plugin's five busy codes",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",

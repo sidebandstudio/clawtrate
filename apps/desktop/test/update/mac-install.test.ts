@@ -3,10 +3,11 @@ import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { chmod, lstat, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { holdMacArchive } from "../../src/main/mac-archive.ts";
-import { macInstaller, serveMacArchive } from "../../src/main/mac-install.ts";
+import { HELPER_STEPS, macInstaller, serveMacArchive } from "../../src/main/mac-install.ts";
 import { tempDir } from "./harness.ts";
 vi.mock(import("node:child_process"), async (original) => {
   const cp = { ...(await original()) };
@@ -314,6 +315,16 @@ it.skipIf(process.platform === "win32").each([
     },
     { exitCode: 0, output: "reported", helperStep: null },
   ],
+  [
+    "a path as the first line of standard error",
+    { out: "inspection-failed\n", err: "/private/var/folders/x/T/a 1\n" },
+    { exitCode: 0, output: "reported", helperStep: null },
+  ],
+  [
+    "a word and a number that aren't a step the helper names",
+    { out: "inspection-failed\n", err: "someone 501\n" },
+    { exitCode: 0, output: "reported", helperStep: null },
+  ],
 ] as const)("records the signature-only call's failure from %s", async (_, run, failure) => {
   await withHelpers([run], async () => {
     const file = await candidate();
@@ -465,3 +476,14 @@ it.skipIf(process.platform === "win32")(
     installer.retire?.();
   },
 );
+
+it("knows every step the helper names when one fails, and no other", () => {
+  const source = readFileSync(
+    join(import.meta.dirname, "../../packaging/mac/inspect-archive.m"),
+    "utf8",
+  );
+  const named = new Set(
+    [...source.matchAll(/(?:failedStep\(|call = )"([a-z-]+)"/g)].map((match) => match[1]!),
+  );
+  expect([...named].sort()).toEqual([...HELPER_STEPS].sort());
+});

@@ -45,10 +45,26 @@ export function systemVersion(): string {
   return version ? "macOS " + version : process.platform + " " + release();
 }
 
+/** The steps the helper names when one fails (packaging/mac/inspect-archive.m). */
+export const HELPER_STEPS = new Set([
+  "parent-code",
+  "parent-static-code",
+  "parent-signing-information",
+  "requirement",
+  "parent-validity",
+  "parent-static-validity",
+  "parent-designated-requirement",
+  "scratch",
+  "unpack",
+  "candidate-code",
+  "candidate-validity",
+]);
+
 /** The helper names the failed step on its error output as `<step> <status>`; anything else is dropped. */
 function helperStep(text: string): string | null {
   const step = text.split("\n")[0] ?? "";
-  return /^[a-z]+(?:-[a-z]+){0,3} -?\d{1,11}$/.test(step) ? step : null;
+  const match = /^([a-z-]{1,32}) -?\d{1,11}$/.exec(step);
+  return match && HELPER_STEPS.has(match[1]!) ? step : null;
 }
 
 async function runInspector(
