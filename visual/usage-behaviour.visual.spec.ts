@@ -4,7 +4,7 @@
 // and a read-only connection. The fixture answers the bridge's usage commands
 // as the engine does (apps/desktop/src/fixture/usage.ts).
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle } from "./fixture.ts";
+import { contextFor, NOW, openFixture, OTTO_DISK, settle } from "./fixture.ts";
 
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=write`;
 const PAGE = `${PANE}&uview=usage`;
@@ -724,4 +724,52 @@ test("the Usage row's value wraps rather than shortening at phone width", async 
   expect(shape.lines).toBeGreaterThan(1);
   expect(shape.hidden).toBeLessThanOrEqual(0);
   await context.close();
+});
+
+test.describe("Settings, Usage on a phone", () => {
+  test.use(contextFor({ name: "phone", width: 390, height: 844, phone: true }, "light"));
+
+  test("F-237: a Usage pane hidden behind the settings list asks for nothing, and asks again once shown (fixture)", async ({
+    page,
+  }) => {
+    await page.clock.install({ time: NOW });
+    await openFixture(page, `scene=main&${OTTO_DISK}&access=write&usage=busy`, "light");
+    // Paused, so only the check moves the clock: the busy host's retry every few seconds.
+    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    const settings = await settingsUsageWaiting(page);
+    await expect(settings.getByTestId("usage-waiting")).toBeVisible();
+    const before = await usageReads(page);
+    await page.clock.runFor(10_000);
+    expect(await usageReads(page)).toBeGreaterThan(before);
+    // Back to the list: the pane is hidden and sends nothing, however long it waits.
+    await settings.getByRole("button", { name: "Back to settings" }).click();
+    await expect(settings.getByTestId("usage-section")).toBeHidden();
+    const hidden = await usageReads(page);
+    await page.clock.runFor(30_000);
+    expect(await usageReads(page)).toBe(hidden);
+    // Shown again, it asks again.
+    await settings.getByRole("button", { name: "Usage", exact: true }).click();
+    await expect.poll(() => usageReads(page)).toBeGreaterThan(hidden);
+    // Hidden again, then the window widens: the pane is beside the list, and reads.
+    await settings.getByRole("button", { name: "Back to settings" }).click();
+    await expect(settings.getByTestId("usage-section")).toBeHidden();
+    const narrow = await usageReads(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(settings.getByTestId("usage-section")).toBeVisible();
+    await page.clock.runFor(10_000);
+    await expect.poll(() => usageReads(page)).toBeGreaterThan(narrow);
+  });
+});
+
+test("F-234: Raise budget over Otto's Account page, then Back, returns focus to the Account page (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&budget=reached`, "light");
+  const tab = page.getByTestId("bot-settings");
+  await tab.locator("[data-bs='account']").click();
+  await expect(tab.getByRole("heading", { name: "Account", exact: true })).toBeFocused();
+  await page.getByTestId("raise-from-composer").click();
+  await expect(page.getByTestId("budget-form")).toBeVisible();
+  await usage(page).getByRole("button", { name: "Back to settings" }).click();
+  await expect(tab.getByRole("heading", { name: "Account", exact: true })).toBeFocused();
 });

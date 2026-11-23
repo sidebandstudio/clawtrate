@@ -14,7 +14,7 @@ import {
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
@@ -33,6 +33,21 @@ import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import { useForget } from "./forget.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
+
+// The width below which a section replaces the list instead of sitting beside it (bots.css).
+const NARROW = "(max-width: 687px)";
+
+function onNarrowChange(listener: () => void): () => void {
+  const query = globalThis.matchMedia?.(NARROW);
+  query?.addEventListener("change", listener);
+  return () => query?.removeEventListener("change", listener);
+}
+
+const isNarrow = () => globalThis.matchMedia?.(NARROW).matches ?? false;
+
+function useNarrow(): boolean {
+  return useSyncExternalStore(onNarrowChange, isNarrow, () => false);
+}
 
 /** The connection's state, as the Gateway pane names it. */
 export function gatewayState(connection: ConnectionState): string {
@@ -252,6 +267,8 @@ export function Settings({
   );
   // On a phone the list comes first; a section replaces it.
   const [pane, setPane] = useState<"nav" | "section">(initialSection ? "section" : "nav");
+  const narrow = useNarrow();
+  const sectionShown = pane === "section" || !narrow;
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
@@ -366,7 +383,14 @@ export function Settings({
     announce,
     toNav,
   });
-  const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
+  const usageSection = useUsageSection({
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+    shown: sectionShown,
+  });
   const machinesSection = useMachinesSection({
     active: section === "machines",
     connection,

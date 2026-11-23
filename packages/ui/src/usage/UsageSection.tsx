@@ -336,11 +336,11 @@ function Budgets({
   );
 }
 
-/** Usage by bot and by source, for a period. */
-function ByBot({ bots }: { bots: readonly Bot[] }) {
+/** Usage by bot and by source, for a period. `shown`: whether the pane is in view. */
+function ByBot({ bots, shown }: { bots: readonly Bot[]; shown: boolean }) {
   const left = botsLeftOut(useClawtrateState().cut);
   const [period, setPeriod] = useState<UsagePeriod>("week");
-  const report = useUsageReport(null, period, true, true);
+  const report = useUsageReport(null, period, true, shown);
   const r = report.report;
   return (
     <>
@@ -409,18 +409,24 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
   );
 }
 
-/** The Usage section of Settings, in the frame the other sections use. */
+/**
+ * The Usage section of Settings, in the frame the other sections use. `shown`
+ * is false while the settings list covers it, on a narrow layout: it then asks
+ * the gateway for nothing.
+ */
 export function useUsageSection({
   bots,
   info,
   announce,
   toNav,
+  shown,
 }: {
   bots: readonly Bot[];
   connection: ConnectionState;
   info: HostInfo;
   announce: (text: string) => void;
   toNav: ReactNode;
+  shown: boolean;
 }): { title: string; back: ReactNode; body: ReactNode; foot: ReactNode } {
   const body = (
     <div className="c-usage" data-testid="usage-section">
@@ -430,7 +436,7 @@ export function useUsageSection({
       <Limits />
       <h4 className="b-group">Budgets</h4>
       <Budgets bots={bots} canSet={!info.readOnly} announce={announce} />
-      <ByBot bots={bots} />
+      <ByBot bots={bots} shown={shown} />
     </div>
   );
   return { title: "Usage", back: toNav, body, foot: null };
