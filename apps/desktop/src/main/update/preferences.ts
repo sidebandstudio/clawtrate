@@ -126,20 +126,33 @@ export function createUpdatePreferenceStore(path: string) {
         throw Error("Unknown update preference");
       const { prefs, invalid } = project({ ...(await load(path)).prefs, [key]: value });
       if (invalid.has(key)) throw Error("Invalid update preference");
-      const temp = path + ".next";
-      await rm(temp, { force: true });
-      const file = await open(temp, "wx", 0o600);
-      try {
-        try {
-          await file.writeFile(JSON.stringify(prefs));
-          await file.sync();
-        } finally {
-          await file.close();
-        }
-        await rename(temp, path);
-      } finally {
-        await rm(temp, { force: true });
+      await save(prefs);
+    },
+    /** Once the attempted version runs, the attempt and its quit record are done with. */
+    async forgetAttempt(): Promise<void> {
+      const { prefs } = await load(path);
+      if (prefs.attempt) {
+        delete prefs.attempt;
+        await save(prefs);
       }
+      await rm(path + ".quit", { force: true });
     },
   };
+
+  async function save(prefs: Preferences): Promise<void> {
+    const temp = path + ".next";
+    await rm(temp, { force: true });
+    const file = await open(temp, "wx", 0o600);
+    try {
+      try {
+        await file.writeFile(JSON.stringify(prefs));
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(temp, path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+  }
 }

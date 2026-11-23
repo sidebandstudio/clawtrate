@@ -35,6 +35,8 @@ export interface UpdateServiceOptions {
     /** Records, synchronously, that the app quit after a handoff. */
     markQuit?: (quit: UpdateQuit) => void;
     readQuit?: () => Promise<UpdateQuit | null>;
+    /** Drops the attempt and its quit record once the attempted version is running. */
+    forgetAttempt?: () => Promise<void>;
   };
   changed: (snapshot: DesktopUpdateSnapshot) => void;
   installer?: UpdateInstaller;
@@ -120,6 +122,10 @@ export class DesktopUpdateService {
             version ? formatVersion(version) : null,
             (await options.store.readQuit?.().catch(() => null)) ?? null,
           );
+        // Reported this once; a later start on another version, a downgrade by hand
+        // included, is not this attempt's result.
+        if (lastAttempt?.kind === "target-running")
+          await options.store.forgetAttempt?.().catch(() => {});
       } catch {
         preferenceIssue = "attempt-not-read";
       }
@@ -275,9 +281,10 @@ export class DesktopUpdateService {
   quitting(now = Date.now()): void {
     if (!this.handoff) return;
     const { time, quitAskedAt } = this.handoff;
+    // No quit time when nothing asked the app to quit for the update (an unconfirmed handoff).
     this.options.store.markQuit?.({
       attempt: time,
-      ms: quitAskedAt === null ? 0 : now - quitAskedAt,
+      ...(quitAskedAt !== null && { ms: now - quitAskedAt }),
     });
   }
 

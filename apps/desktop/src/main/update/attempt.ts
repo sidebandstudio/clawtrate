@@ -15,19 +15,17 @@ interface Attempt {
 /** Written as the app quits after handing an update off: which attempt, and how long it took. */
 export interface UpdateQuit {
   attempt: string;
-  ms: number;
+  /** From the handoff's request to quit; absent when nothing asked the app to quit for it. */
+  ms?: number;
 }
 
 export function readQuit(value: unknown): UpdateQuit | null {
-  if (!value || typeof value !== "object" || !("attempt" in value) || !("ms" in value)) return null;
-  const { attempt, ms } = value;
-  return typeof attempt === "string" &&
-    attempt.length <= 64 &&
-    typeof ms === "number" &&
-    Number.isSafeInteger(ms) &&
-    ms >= 0
-    ? { attempt, ms }
-    : null;
+  if (!value || typeof value !== "object" || !("attempt" in value)) return null;
+  const { attempt } = value;
+  const ms = "ms" in value ? value.ms : undefined;
+  if (typeof attempt !== "string" || attempt.length > 64) return null;
+  if (ms === undefined) return { attempt };
+  return typeof ms === "number" && Number.isSafeInteger(ms) && ms >= 0 ? { attempt, ms } : null;
 }
 
 export function readAttempt(value: unknown): Attempt {
@@ -78,7 +76,7 @@ export function attemptOutcome(
     kind === "target-running" || !marksQuit
       ? {}
       : quit?.attempt === time
-        ? { quit: "finished" as const, quitMs: quit.ms }
+        ? { quit: "finished" as const, ...(quit.ms !== undefined && { quitMs: quit.ms }) }
         : { quit: "not-finished" as const };
   return { kind, target, from, track, running, ...quitRecord };
 }

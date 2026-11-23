@@ -56,7 +56,7 @@ export interface UpdateInspectionFailure {
    * never ran.
    */
   output: "empty" | "no-line-ending" | "too-long" | "unrecognized" | "reported" | "complete" | null;
-  /** The helper's own words for the step that failed, such as `guest -67065`. */
+  /** The helper's own words for the step that failed, such as `parent-code -67065`. */
   helperStep: string | null;
   /** A system error code, such as ENOENT, never its message. */
   errorCode: string | null;

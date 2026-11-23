@@ -122,9 +122,9 @@ export function handoffLocked(state: DesktopUpdateState) {
 function quitLine(attempt: NonNullable<DesktopUpdateSnapshot["lastAttempt"]>) {
   if (attempt.quit === "not-finished")
     return " The app didn't finish quitting for the update, and macOS installs it only after that.";
-  if (attempt.quit === "finished")
-    return ` The app quit for the update after ${Math.max(1, Math.round((attempt.quitMs ?? 0) / 1000))} s, but macOS didn't install it.`;
-  return "";
+  if (attempt.quit !== "finished") return "";
+  if (attempt.quitMs === undefined) return " The app quit, but macOS didn't install the update.";
+  return ` The app quit for the update after ${Math.max(1, Math.round(attempt.quitMs / 1000))} s, but macOS didn't install it.`;
 }
 
 export function attemptLine(attempt: DesktopUpdateSnapshot["lastAttempt"]) {

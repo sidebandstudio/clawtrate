@@ -306,6 +306,11 @@ it.skipIf(process.platform === "win32").each([
     { out: "inspection-failed\n", err: "parent-code -67065\n/private/secret\n" },
     { exitCode: 0, output: "reported", helperStep: "parent-code -67065" },
   ],
+  [
+    "anything else on standard error",
+    { out: "inspection-failed\n", err: "/Users/someone/Library/x token=abc\n" },
+    { exitCode: 0, output: "reported", helperStep: null },
+  ],
 ] as const)("records the signature-only call's failure from %s", async (_, run, failure) => {
   await withHelpers([run], async () => {
     const file = await candidate();
@@ -422,5 +427,34 @@ it.skipIf(process.platform === "win32")(
       removal.folder = ".inspect-";
       error.mockRestore();
     }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "a superseded inspection's late records don't land on the next one",
+  async () => {
+    let calls = 0;
+    const installer = macInstaller("arm64", async (_held, _arch, signal, record, cleanupFailed) => {
+      if (calls++ > 0) return null;
+      await new Promise((resolve) => signal.addEventListener("abort", resolve));
+      record?.("archive", {
+        exitCode: null,
+        signal: "SIGKILL",
+        output: "empty",
+        helperStep: null,
+        errorCode: null,
+        durationMs: 1,
+      });
+      cleanupFailed?.("EBUSY");
+      return "inspection-failed";
+    });
+    const file = await candidate();
+    const first = installer.inspect(file);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await installer.inspect({ ...file, offerId: "two" })).toBeNull();
+    await first;
+    expect(installer.inspectionFailure).toBeNull();
+    expect(installer.cleanupFailure).toBeNull();
+    installer.retire?.();
   },
 );

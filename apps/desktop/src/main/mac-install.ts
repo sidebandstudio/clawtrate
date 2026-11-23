@@ -45,13 +45,10 @@ export function systemVersion(): string {
   return version ? "macOS " + version : process.platform + " " + release();
 }
 
-/** The helper names the failed step on its error output: letters, digits and a few marks. */
+/** The helper names the failed step on its error output as `<step> <status>`; anything else is dropped. */
 function helperStep(text: string): string | null {
-  const step = (text.split("\n")[0] ?? "")
-    .replace(/[^A-Za-z0-9 ._:-]/g, "")
-    .slice(0, 80)
-    .trim();
-  return step || null;
+  const step = text.split("\n")[0] ?? "";
+  return /^[a-z]+(?:-[a-z]+){0,3} -?\d{1,11}$/.test(step) ? step : null;
 }
 
 async function runInspector(
@@ -338,6 +335,13 @@ export function macInstaller(
       cleanup = null;
       inspection = new AbortController();
       const { signal } = inspection;
+      // retire() aborts a superseded inspection; nothing it records later belongs to this one.
+      const note: RecordFailure = (stage, helper) => {
+        if (!signal.aborted) record(stage, helper);
+      };
+      const lost = (copy: UpdateCleanupFailure["copy"]) => (errorCode: string) => {
+        if (!signal.aborted) cleanup = { copy, errorCode };
+      };
       if (!inspect) {
         // The signature-only invocation receives neither a descriptor nor a scratch path.
         const { reason, failure: helper } = await runInspector(
@@ -352,12 +356,10 @@ export function macInstaller(
       let held: HeldMacArchive;
       const holding = performance.now();
       try {
-        held = await holdMacArchive(file, signal, (errorCode) => {
-          cleanup = { copy: "held-copy", errorCode };
-        });
+        held = await holdMacArchive(file, signal, lost("held-copy"));
       } catch (error) {
         if (error instanceof ChangedMacArchive) return "artifact-changed";
-        record("hold-archive", {
+        note("hold-archive", {
           exitCode: null,
           signal: null,
           output: null,
@@ -373,17 +375,15 @@ export function macInstaller(
           held,
           arch,
           signal,
-          (stage, helper) => record(helper.output === null ? "start-helper" : stage, helper),
-          (errorCode) => {
-            cleanup = { copy: "checked-copy", errorCode };
-          },
+          (stage, helper) => note(helper.output === null ? "start-helper" : stage, helper),
+          lost("checked-copy"),
         );
         if (reason || signal.aborted) return reason ?? "artifact-changed";
         kept = held;
         return null;
       } catch (error) {
         // The scratch folder could not be made, or the call was stopped.
-        record("archive", {
+        note("archive", {
           exitCode: null,
           signal: null,
           output: null,

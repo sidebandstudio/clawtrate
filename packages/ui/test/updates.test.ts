@@ -501,6 +501,10 @@ it.each([
     { quit: "finished", quitMs: 23_400 },
     "Clawtrate 1.0.0 is running, not 1.1.0. The app quit for the update after 23 s, but macOS didn't install it. Check for updates to try again.",
   ],
+  [
+    { quit: "finished" },
+    "Clawtrate 1.0.0 is running, not 1.1.0. The app quit, but macOS didn't install the update. Check for updates to try again.",
+  ],
   [{}, "Clawtrate 1.0.0 is running, not 1.1.0. Check for updates to try again."],
 ] as const)(
   "F-231: after an update that didn't take, says whether the app finished quitting %#",

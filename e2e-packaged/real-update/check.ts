@@ -286,18 +286,23 @@ async function drive(page: Page, pid: number): Promise<boolean> {
   ]);
   const reopened = await until("the updated app to reopen", 60_000, mainPid).catch(() => null);
   result.reopened = reopened !== null;
+  // The reopened process runs the replacement's code, not a copy started before the swap.
+  const cdhash = (target: string) =>
+    /^CDHash=([0-9a-f]+)$/m.exec(run("/usr/bin/codesign", ["-dvvv", target]))?.[1] ?? null;
+  const running = reopened === null ? null : cdhash(String(reopened));
+  result.reopenedRunsReplacement = running !== null && running === cdhash(app);
   if (reopened !== null) {
     await sleep(5000);
     // A runner is discarded afterwards; still, stop only what this check started.
     for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
   }
   // Passing needs the replacement, its signature meeting the previous release's requirement,
-  // and the updated app open again.
+  // and the updated app open again, running the replacement's code.
   const ok =
     result.installedVersion === offered.state.version &&
     !!requirement &&
     (result.replacedSignature as string).includes("\nexit 0\n") &&
-    reopened !== null;
+    result.reopenedRunsReplacement === true;
   result.outcome = ok ? "updated in place" : "not updated in place";
   return ok;
 }

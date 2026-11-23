@@ -1064,13 +1064,16 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
     }
   }
   for (const [version, kind] of [
-    ["1.1.0", "target-running"],
     ["1.0.0", "old-version-running"],
     ["1.0.1", "unconfirmed"],
     ["invalid", "unconfirmed"],
+    // Last: once the attempted version runs, the attempt is done with.
+    ["1.1.0", "target-running"],
   ] as const) {
     const prefs = store();
     if (version === "1.1.0") {
+      // Each start clears the update folder; this one checks it reads before clearing.
+      mkdirSync(updates);
       const read = prefs.readPreferences;
       vi.spyOn(prefs, "readPreferences").mockImplementation(async () => {
         expect(existsSync(updates)).toBe(true);
@@ -1249,8 +1252,8 @@ it("retains the selected track and last check when an authorized write replaces 
     attempt,
   });
   for (const [version, kind] of [
-    ["1.2.0", "target-running"],
     ["1.0.0", "old-version-running"],
+    ["1.2.0", "target-running"],
   ] as const) {
     const next = await start({ version, store: prefs });
     expect(next.get().lastAttempt).toMatchObject({ kind, running: version });
@@ -1739,4 +1742,49 @@ it("a quit with no handoff in this run records nothing", async () => {
   service.quitting();
   service.shutdown();
   expect(markQuit).not.toHaveBeenCalled();
+});
+
+it("a later quit after an unconfirmed handoff records no quit time", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async (_file, _signal, _handed, submitted) => {
+      submitted?.();
+      return null;
+    },
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect((await service.restart(id)).snapshot.state.kind).toBe("handoff-unconfirmed");
+  // The person quits an hour later; nothing asked the app to quit for the update.
+  service.quitting(Date.now() + 3_600_000);
+  service.shutdown();
+  const attempt = (await start()).get().lastAttempt;
+  expect(attempt).toMatchObject({ kind: "old-version-running", quit: "finished" });
+  expect(attempt).not.toHaveProperty("quitMs");
+});
+
+it("forgets the attempt once the attempted version runs, so a later downgrade by hand reports none", async () => {
+  const prefs = store();
+  await prefs.set(
+    "attempt",
+    JSON.stringify({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      time: "2026-11-23T00:00:00.000Z",
+      phase: "handoff",
+      marksQuit: true,
+    }),
+  );
+  prefs.markQuit({ attempt: "2026-11-23T00:00:00.000Z", ms: 9000 });
+  expect((await start({ version: "1.1.0", store: prefs })).get().lastAttempt).toMatchObject({
+    kind: "target-running",
+  });
+  expect(await prefs.get("attempt")).toBeNull();
+  expect(existsSync(join(dir.path, "preferences.json.quit"))).toBe(false);
+  // The person reinstalls 1.0.0 by hand: nothing claims an update didn't take.
+  expect((await start({ version: "1.0.0", store: prefs })).get().lastAttempt).toBeNull();
 });
