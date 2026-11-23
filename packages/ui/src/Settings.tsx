@@ -36,16 +36,16 @@ import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
 // The width below which a section replaces the list instead of sitting beside it (bots.css).
 const NARROW = "(max-width: 687px)";
 
+function onNarrowChange(listener: () => void): () => void {
+  const query = globalThis.matchMedia?.(NARROW);
+  query?.addEventListener("change", listener);
+  return () => query?.removeEventListener("change", listener);
+}
+
+const isNarrow = () => globalThis.matchMedia?.(NARROW).matches ?? false;
+
 function useNarrow(): boolean {
-  return useSyncExternalStore(
-    (listener) => {
-      const query = globalThis.matchMedia?.(NARROW);
-      query?.addEventListener("change", listener);
-      return () => query?.removeEventListener("change", listener);
-    },
-    () => globalThis.matchMedia?.(NARROW).matches ?? false,
-    () => false,
-  );
+  return useSyncExternalStore(onNarrowChange, isNarrow, () => false);
 }
 
 /** The connection's state, as the Gateway pane names it. */
