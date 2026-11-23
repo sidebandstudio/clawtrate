@@ -717,27 +717,57 @@ export function Shell({
   // the task. A view the host doesn't count as holding it (its open was refused, or a reopen
   // after a reconnect was) is told so, and opens the task instead, unless it has left the task
   // by then: its close is sent, so an open would hold the task with nothing to let it go.
-  const reloading = useRef<string | null>(null);
+  const transcriptRef = useRef(transcript);
+  const reloading = useRef<{
+    key: string;
+    snapshot: typeof transcript;
+    inFlight: boolean;
+  } | null>(null);
+  useEffect(() => {
+    transcriptRef.current = transcript;
+    const active = reloading.current;
+    if (!active) return;
+    if (active.key !== taskKey || (!active.inFlight && transcript !== active.snapshot))
+      reloading.current = null;
+  }, [taskKey, transcript]);
   const reload = useCallback(() => {
     if (!taskKey) return;
     const key = taskKey;
-    // A second Try again while one is in flight is ignored: a second reloadSession for a held
-    // task can queue a read whose failure replaces the first read's success.
-    if (reloading.current === key) return;
-    reloading.current = key;
+    const snapshot = transcriptRef.current;
+    // A second Try again while one is in flight, or before the host's updated snapshot arrives,
+    // is ignored: a second reloadSession for a held task can queue a second read.
+    if (
+      reloading.current?.key === key &&
+      (reloading.current.inFlight || reloading.current.snapshot === snapshot)
+    )
+      return;
+    const attempt = { key, snapshot, inFlight: true };
+    reloading.current = attempt;
+    let keepUntilSnapshot = false;
     send({ type: "reloadSession", key })
-      .catch((error: unknown) => {
-        // The desktop's IPC puts its own words before the host's.
-        if (
-          shown.current === key &&
-          error instanceof Error &&
-          error.message.endsWith(NOT_OPEN_IN_VIEW)
-        )
-          // The guard stays set until this open has answered, as Try again stays shown till then.
-          return open(key);
-      })
+      .then(
+        () => {
+          if (snapshot !== undefined && transcriptRef.current === snapshot)
+            keepUntilSnapshot = true;
+        },
+        (error: unknown) => {
+          // The desktop's IPC puts its own words before the host's.
+          if (
+            shown.current === key &&
+            error instanceof Error &&
+            error.message.endsWith(NOT_OPEN_IN_VIEW)
+          )
+            // The guard stays set until this open has answered, as Try again stays shown till then.
+            return open(key);
+        },
+      )
       .finally(() => {
-        if (reloading.current === key) reloading.current = null;
+        attempt.inFlight = false;
+        if (
+          reloading.current === attempt &&
+          (!keepUntilSnapshot || transcriptRef.current !== snapshot)
+        )
+          reloading.current = null;
       });
   }, [taskKey, open, send]);
 

@@ -579,6 +579,14 @@ test.describe("a failed history", () => {
         ).length,
       key,
     );
+  const reloads = (page: Page, key = KEY) =>
+    page.evaluate(
+      (key) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.sent.filter(
+          (each) => each.type === "reloadSession" && each.key === key,
+        ).length,
+      key,
+    );
   /** What another view, such as a second web tab, asks of the same host. */
   const otherView = (page: Page, type: "openSession" | "closeSession") =>
     page.evaluate(
@@ -884,13 +892,7 @@ test.describe("a failed history", () => {
     await fail(page, true);
     const note = page.locator(".load-note");
     await expect(note).toContainText("Couldn't refresh this conversation.");
-    const reloadsBefore = await page.evaluate(
-      (key) =>
-        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.sent.filter(
-          (each) => each.type === "reloadSession" && each.key === key,
-        ).length,
-      KEY,
-    );
+    const reloadsBefore = await reloads(page);
 
     // The read is held, so a second click lands while the first reload is still in flight.
     await page.evaluate(() =>
@@ -908,14 +910,7 @@ test.describe("a failed history", () => {
       (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.release(),
     );
     await page.waitForTimeout(150);
-    const reloadsAfter = await page.evaluate(
-      (key) =>
-        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.sent.filter(
-          (each) => each.type === "reloadSession" && each.key === key,
-        ).length,
-      KEY,
-    );
-    expect(reloadsAfter).toBe(reloadsBefore + 1);
+    expect(await reloads(page)).toBe(reloadsBefore + 1);
     expect(await holds(page)).toBe(1);
   });
 
@@ -929,6 +924,7 @@ test.describe("a failed history", () => {
     const note = page.locator(".load-note");
     await expect(note).toContainText("Couldn't refresh this conversation.");
     const before = await reads(page);
+    const reloadsBefore = await reloads(page);
 
     // Hold both the read's answer and state snapshots so the first command settles while Try again
     // is still visible, then send a second click in a later turn.
@@ -948,6 +944,7 @@ test.describe("a failed history", () => {
     });
     await expect(note).toHaveCount(0);
     await expect.poll(() => reads(page)).toBe(before + 1);
+    expect(await reloads(page)).toBe(reloadsBefore + 1);
     await expect(page.getByTestId("transcript-turn")).toHaveCount(turns);
     expect(await holds(page)).toBe(1);
   });
