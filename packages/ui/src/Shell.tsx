@@ -304,10 +304,15 @@ export function Shell({
     },
     [send],
   );
+  const shown = useRef<string | null>(null);
   useEffect(() => {
     if (!taskKey) return;
+    shown.current = taskKey;
     open(taskKey);
-    return () => void send({ type: "closeSession", key: taskKey });
+    return () => {
+      shown.current = null;
+      void send({ type: "closeSession", key: taskKey });
+    };
   }, [taskKey, send, open]);
 
   // Opening a task reads it on the gateway too (F-022), and so do new replies while it
@@ -690,13 +695,19 @@ export function Shell({
     phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
   // Reading again keeps every hold: closing and opening would not read while another view holds
   // the task. A view the host doesn't count as holding it (its open was refused, or a reopen
-  // after a reconnect was) is told so, and opens the task instead.
+  // after a reconnect was) is told so, and opens the task instead, unless it has left the task
+  // by then: its close is sent, so an open would hold the task with nothing to let it go.
   const reload = useCallback(() => {
     if (!taskKey) return;
     const key = taskKey;
     send({ type: "reloadSession", key }).catch((error: unknown) => {
       // The desktop's IPC puts its own words before the host's.
-      if (error instanceof Error && error.message.endsWith(NOT_OPEN_IN_VIEW)) open(key);
+      if (
+        shown.current === key &&
+        error instanceof Error &&
+        error.message.endsWith(NOT_OPEN_IN_VIEW)
+      )
+        open(key);
     });
   }, [taskKey, open, send]);
 

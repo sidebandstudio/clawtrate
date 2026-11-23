@@ -45,6 +45,7 @@ type Fixture = {
   sent: Array<{ type: string; key?: string }>;
   send(command: { type: string; key?: string }): Promise<void>;
   getState(): ClawtrateState;
+  holds(key: string): number;
 };
 
 /** Hold the fixture's delayed answers and drop a task's loaded history, so opening it reads it again. */
@@ -379,6 +380,81 @@ test("F-033: Try again on a history that failed opens the message once the histo
   await expect(palette(page)).toHaveCount(0);
   await expect(page.locator(".title-pill-task")).toHaveText("Disk almost full on the media box");
   await expect(page.locator(".turn[data-search-focus]")).toBeFocused();
+});
+
+/** The host refuses the next reread of `key` after `afterMs`, as from a view that no longer holds it. */
+const refuseReread = (page: Page, key: string, afterMs: number) =>
+  page.evaluate(
+    ([key, afterMs]) => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      const send = fixture.send;
+      fixture.send = async (command) => {
+        if (command.type === "reloadSession" && command.key === key) {
+          fixture.send = send;
+          await new Promise((resolve) => setTimeout(resolve, afterMs));
+          throw new Error("That task isn't open in this view.");
+        }
+        return send(command);
+      };
+    },
+    [key, afterMs] as const,
+  );
+const holds = (page: Page, key: string) =>
+  page.evaluate(
+    (key) => (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.holds(key),
+    key,
+  );
+
+test("F-033: Try again in a view the host no longer counts opens the message once another view has read the history", async ({
+  page,
+}) => {
+  const key = "agent:otto:disk-space";
+  await search(page, "clear the transcode", `scene=main&${OTTO_DISK}&search=on`);
+  const user = options(page, "messages").filter({ hasText: "· User" });
+  await expect(user).toBeVisible();
+  await fail(page, key);
+  await user.click();
+  await expect(user).toContainText("Couldn't load this conversation");
+  await refuseReread(page, key, 1000);
+  await options(page, "messages")
+    .filter({ hasText: /^Try again$/ })
+    .click();
+  await expect(user).toContainText("Opening…");
+  // Another view reads the history again before the refusal comes, so this view's open
+  // finds it loaded and changes nothing.
+  await page.evaluate(
+    (key) =>
+      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.send({
+        type: "reloadSession",
+        key,
+      }),
+    key,
+  );
+  await expect(palette(page)).toHaveCount(0);
+  await expect(page.locator(".turn[data-search-focus]")).toBeFocused();
+});
+
+test("F-033: a refusal of Try again that comes after search closed opens nothing", async ({
+  page,
+}) => {
+  const key = "agent:otto:disk-space";
+  await search(page, "clear the transcode", `scene=main&${OTTO_DISK}&search=on`);
+  const user = options(page, "messages").filter({ hasText: "· User" });
+  await expect(user).toBeVisible();
+  await fail(page, key);
+  await user.click();
+  await expect(user).toContainText("Couldn't load this conversation");
+  await refuseReread(page, key, 1000);
+  await options(page, "messages")
+    .filter({ hasText: /^Try again$/ })
+    .click();
+  await expect(user).toContainText("Opening…");
+  await page.keyboard.press("Escape");
+  await expect(palette(page)).toHaveCount(0);
+  // Only the shell holds the task.
+  expect(await holds(page, key)).toBe(1);
+  await page.waitForTimeout(1500);
+  expect(await holds(page, key)).toBe(1);
 });
 
 test("F-033: Try again on the selected task's failed history leaves that task open after search closes", async ({

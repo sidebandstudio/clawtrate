@@ -253,6 +253,8 @@ export function SearchPalette({
   const lanes = useRef({ messages: Promise.resolve(), routines: Promise.resolve() });
   const pool = useRef<{ busy: number; queue: Array<() => void> }>({ busy: 0, queue: [] });
   const opened = useRef<string | null>(null);
+  /** The result last asked for: a late answer about any other opens and closes nothing. */
+  const asked = useRef<Opening | null>(null);
 
   /** Run `job` in the Files pool, at most four at once; queued work of an old generation is dropped. */
   const pooled = useCallback(<T,>(gen: number, job: () => Promise<T>): Promise<T | null> => {
@@ -621,14 +623,21 @@ export function SearchPalette({
               }
             : now,
         );
+      // An open finding the history loading or loaded, as another view read it again, changes
+      // nothing, so no state may follow it.
+      const reopened = () => {
+        if (latest.current.state.transcripts[open.key]?.status === "error") read();
+        else setOpening((now) => (now === open ? { ...open, reread: false } : now));
+      };
       bridge
         .send({ type: open.reread ? "reloadSession" : "openSession", key: open.key })
         .then(read, (error: unknown) => {
           if (!open.reread || !reason(error).endsWith(NOT_OPEN_IN_VIEW)) return failed(error);
+          if (open.gen !== generation.current || asked.current !== open) return;
           if (opened.current && opened.current !== open.key)
             void bridge.send({ type: "closeSession", key: opened.current });
           opened.current = open.key;
-          bridge.send({ type: "openSession", key: open.key }).then(read, failed);
+          bridge.send({ type: "openSession", key: open.key }).then(reopened, failed);
         });
     },
     [bridge],
@@ -663,6 +672,7 @@ export function SearchPalette({
         gen: generation.current,
       };
       setOpening(open);
+      asked.current = open;
       if (gone) return;
       // The conversation behind the palette stays as it was while this task's history loads.
       if (!latest.current.state.transcripts[hit.sessionKey]) {
@@ -1377,6 +1387,7 @@ export function SearchPalette({
                           reread: true,
                         };
                         setOpening(retry);
+                        asked.current = retry;
                         load(retry);
                       },
                     },

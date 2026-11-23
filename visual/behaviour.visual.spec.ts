@@ -724,6 +724,28 @@ test.describe("a failed history", () => {
     expect(errors).toEqual([]);
   });
 
+  test("F-105: a refusal of Try again that comes after the task was left doesn't open it again", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    await refuse(page, [
+      {
+        type: "reloadSession",
+        key: KEY,
+        error: "That task isn't open in this view.",
+        afterMs: 1500,
+      },
+    ]);
+    await fail(page, false);
+    await page.getByRole("button", { name: "Try again" }).click();
+    await otto(page, "Weekly backup check");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Weekly backup check");
+    await expect.poll(() => holds(page)).toBe(0);
+    await page.waitForTimeout(2000);
+    expect(await holds(page)).toBe(0);
+  });
+
   test("F-105: Try again reads a task again once the host reopened it after an open lost the host", async ({
     page,
   }) => {
