@@ -237,7 +237,7 @@ export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
  */
 export function screen(pointsWide: number): (x: number, y: number) => [number, number, number] {
   const file = join(OUTPUT, "screen.png");
-  simctl("io", env.device, "screenshot", file);
+  screenshot(file);
   const image = decodePng(readFileSync(file));
   const scale = image.width / pointsWide;
   return (x, y) => {
@@ -261,6 +261,15 @@ function simctl(...args: string[]) {
   const result = spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`simctl ${args.join(" ")}: ${result.stderr}`);
   return result.stdout;
+}
+
+/**
+ * The screen as a PNG. iPhone Duo has two displays, and simctl takes the inner
+ * one unless told otherwise, so there the picture is of the display in use.
+ */
+function screenshot(file: string) {
+  const active = process.env.CLAWTRATE_IOS_FORM === "duo" && displays().find((d) => d.active);
+  simctl("io", env.device, "screenshot", ...(active ? [`--display=${active.id}`] : []), file);
 }
 
 /**
@@ -391,7 +400,7 @@ export async function switcherSnapshot(after: number) {
 /** The screen now, whole, as pixels. */
 export function frame(): { width: number; data: Uint8Array } {
   const file = join(OUTPUT, "frame.png");
-  simctl("io", env.device, "screenshot", file);
+  screenshot(file);
   const image = decodePng(readFileSync(file));
   return { width: image.width, data: image.data };
 }
@@ -814,7 +823,14 @@ export function appLog(sinceSeconds: number): string {
 }
 
 /** One of the device's built-in displays, as CoreDevice reports it, in points. */
-export type Display = { name: string; active: boolean; on: boolean; width: number; height: number };
+export type Display = {
+  id: number;
+  name: string;
+  active: boolean;
+  on: boolean;
+  width: number;
+  height: number;
+};
 
 /**
  * The device's built-in displays and which one is in use. iPhone Duo has two:
@@ -843,6 +859,7 @@ export function displays(): Display[] {
   const report = JSON.parse(readFileSync(file, "utf8")) as {
     result: {
       displays: Array<{
+        displayId: number;
         name: string;
         active: boolean;
         backlightState: string;
@@ -855,6 +872,7 @@ export function displays(): Display[] {
   return report.result.displays
     .filter((d) => "integrated" in d.type)
     .map((d) => ({
+      id: d.displayId,
       name: d.name,
       active: d.active,
       on: d.backlightState !== "off",
@@ -907,7 +925,7 @@ export async function shoot(name: string) {
   for (const appearance of ["light", "dark"]) {
     simctl("ui", env.device, "appearance", appearance);
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    simctl("io", env.device, "screenshot", join(dir, `${name}-${appearance}.png`));
+    screenshot(join(dir, `${name}-${appearance}.png`));
   }
   simctl("ui", env.device, "appearance", "light");
   await new Promise((resolve) => setTimeout(resolve, 1000));
