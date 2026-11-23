@@ -48,7 +48,8 @@ export function NameCard({
       >
         <div className="name-card-words">
           <p className="name-card-title">
-            <bdi>{bot.name}</bdi> would like to be called “<bdi className="name-card-name">{name}</bdi>”
+            <bdi>{bot.name}</bdi> would like to be called “
+            <bdi className="name-card-name">{name}</bdi>”
           </p>
           <p className="name-card-line">
             {canRename
