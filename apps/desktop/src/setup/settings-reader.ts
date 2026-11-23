@@ -9,12 +9,13 @@
 // resource limits and a deadline, and the token found is held for one attempt
 // only (`HeldToken`).
 //
-// Nothing in a shipped host calls this yet: setup PR 2a-2 connects it, behind
-// a host option that is off.
+// Nothing in a shipped host reads settings yet. Local connect's proof
+// (local-prove.ts), behind a host option that is off, holds the home and runs
+// the helper as the reader does.
 
 import { spawn } from "node:child_process";
 import { constants, lstatSync, realpathSync } from "node:fs";
-import { lstat, open, stat, type FileHandle } from "node:fs/promises";
+import { lstat, open, type FileHandle } from "node:fs/promises";
 import { isAbsolute, normalize, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
@@ -227,7 +228,7 @@ async function readProfile(
 }
 
 /** The open flags every step needs; a platform without one of them reads nothing. */
-export function openFlags() {
+function openFlags() {
   const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK, O_NOCTTY } = constants;
   if ([O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK, O_NOCTTY].some((flag) => typeof flag !== "number"))
     return null;
@@ -266,11 +267,7 @@ export async function openSettingsFile(options: {
           [checked ? "read-private" : "read", folder, file],
           options.deadlineMs,
         )
-      : await withDeadline(
-          readThroughProc(held.handle, folder, file),
-          options.deadlineMs ?? READ_DEADLINE_MS,
-          refused("failed"),
-        );
+      : await readThroughProc(held.handle, folder, file);
   } finally {
     await held.handle.close();
   }
@@ -404,7 +401,7 @@ function helperAnswer(output: Buffer): Opened {
 }
 
 /** Why an open failed. A link opened as a folder fails as "not a folder", so it is told apart. */
-export async function openFailure(error: unknown, path: string): Promise<Opened> {
+async function openFailure(error: unknown, path: string): Promise<Opened> {
   const code = (error as NodeJS.ErrnoException).code;
   if (code === "ENOENT") return { kind: "refused", reason: "absent" };
   if (code === "ELOOP") return refused("link");
@@ -425,18 +422,13 @@ export async function openFailure(error: unknown, path: string): Promise<Opened>
  * file of exactly 0600 in a folder without group or other bits grants nothing
  * to another account.
  */
-export async function checkOpened(
-  handle: FileHandle,
-  folder: boolean,
-  /** The largest file read; 0 for a file that is only identified. */
-  limit = SETTINGS_LIMIT,
-): Promise<Opened | null> {
+export async function checkOpened(handle: FileHandle, folder: boolean): Promise<Opened | null> {
   const stat = await handle.stat();
   if (folder ? !stat.isDirectory() : !stat.isFile()) return refused("type");
   if (stat.uid !== process.geteuid?.()) return refused("owner");
   if (folder ? (stat.mode & 0o077) !== 0 : (stat.mode & 0o7777) !== 0o600) return refused("mode");
   if (!folder && stat.nlink !== 1) return refused("links");
-  if (!folder && limit > 0 && stat.size > limit)
+  if (!folder && stat.size > SETTINGS_LIMIT)
     return { kind: "refused", reason: "unreadable", why: "large" };
   return null;
 }
@@ -470,25 +462,6 @@ export async function preflight(path: string): Promise<Opened | null> {
   return entry.isFile() ? null : refused("type");
 }
 
-/** The answer, or `late` once the deadline passes: a file system call that hangs can't delay it. */
-export function withDeadline<T>(work: Promise<T>, deadlineMs: number, late: T): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const expired = new Promise<T>((done) => (timer = setTimeout(() => done(late), deadlineMs)));
-  return Promise.race([work.catch(() => late), expired]).finally(() => clearTimeout(timer));
-}
-
-/**
- * Linux: whether /proc/self/fd/<fd> is the held folder itself, by device and
- * inode. False when /proc is missing or masked, so that isn't read as absent.
- */
-export async function procHolds(handle: FileHandle): Promise<boolean> {
-  const [held, seen] = await Promise.all([
-    handle.stat({ bigint: true }),
-    stat(`/proc/self/fd/${handle.fd}`, { bigint: true }).catch(() => null),
-  ]);
-  return seen !== null && sameFolder(held, seen);
-}
-
 /**
  * Linux: the profile folder is opened through /proc/self/fd/<home>, which
  * resolves to the held home, and the file through the held profile folder,
@@ -497,7 +470,7 @@ export async function procHolds(handle: FileHandle): Promise<boolean> {
  */
 async function readThroughProc(home: FileHandle, folder: string, file: string): Promise<Opened> {
   const flags = openFlags();
-  if (!flags || !(await procHolds(home))) return refused("failed");
+  if (!flags) return refused("failed");
   let dir: FileHandle | null = null;
   let handle: FileHandle | null = null;
   try {

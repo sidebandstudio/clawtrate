@@ -1,6 +1,6 @@
 // The send gate's proof (docs/design/setup-effortless.md §3, checks (e) and
-// (f)) without a gateway: the native helper on macOS, or /proc on Linux,
-// against listeners and profile files of the test's own in temporary homes;
+// (f)) without a gateway: the native helper on macOS against listeners and
+// profile files of the test's own in temporary homes;
 // and stand-in helpers for what the host checks in the helper's answer. A
 // development gateway proves the passing case (setup-connect-boundaries.test.ts).
 
@@ -23,7 +23,6 @@ import { proveLocalGateway, type ProveOptions } from "../src/setup/local-prove.t
 import { FS_SAFE_NATIVE_SHA256, PINNED_OPENCLAW_VERSION } from "../src/setup/openclaw-pins.ts";
 
 const platform = process.platform;
-const posix = platform === "darwin" || platform === "linux";
 const FOLDER = ".openclaw-clawtrate";
 
 let scratch: string;
@@ -89,7 +88,7 @@ const options = (path: string, localPort: number, more: Partial<ProveOptions> = 
 });
 const refused = (why: string) => ({ proved: false, why });
 
-describe.skipIf(!posix)("the proof, against listeners of the test's own", () => {
+describe.skipIf(platform !== "darwin")("the proof, against listeners of the test's own", () => {
   it("F-492: a same-account holder that maps no OpenClaw module is refused", async () => {
     const { localPort, end } = await connection(port);
     try {
@@ -156,9 +155,11 @@ describe.skipIf(!posix)("the proof, against listeners of the test's own", () => 
       expect(await proveLocalGateway(options(path, 1, { folder })), folder).toEqual(
         refused("path"),
       );
-    expect(await proveLocalGateway(options(path, 1, { platform: "win32" }))).toEqual(
-      refused("platform"),
-    );
+    // Linux's walk through /proc is setup PR 2a-3's: until then nothing is proved there.
+    for (const other of ["win32", "linux"] as const)
+      expect(await proveLocalGateway(options(path, 1, { platform: other })), other).toEqual(
+        refused("platform"),
+      );
     // The reader's home rule: a test never proves against a home outside the temporary roots.
     expect(await proveLocalGateway(options("/usr", 1))).toEqual(refused("path"));
   });

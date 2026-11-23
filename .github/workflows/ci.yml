@@ -74,8 +74,6 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      # Local connect's proof, through /proc here, against development gateways of the tests' own.
-      - run: OPENCLAW_BIN="$(npm prefix --global)/bin/openclaw" CLAWTRATE_LOCAL_GATEWAY=1 pnpm exec vitest run apps/desktop/test/local-prove.test.ts apps/desktop/test/setup-connect-boundaries.test.ts
 
   # The suite runs one test at a time against one gateway, so it is split by file across three
   # runners, each with a gateway of its own.

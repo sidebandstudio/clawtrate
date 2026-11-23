@@ -506,8 +506,9 @@ describe("a saved pairing that went or came after the person agreed", () => {
   });
 });
 
+// The proof runs on macOS only: Linux's walk through /proc is setup PR 2a-3's.
 const platform = process.platform;
-const posix = platform === "darwin" || platform === "linux";
+const mac = platform === "darwin";
 let scratch: string;
 let helper: string | null = null;
 beforeAll(() => {
@@ -528,7 +529,7 @@ function profileFiles(home: string, folder: string, lock: object) {
   writeFileSync(join(home, folder, "state", "openclaw.sqlite"), "", { mode: 0o600 });
 }
 
-describe.skipIf(!posix)("local connect's send gate, with a listener of the test's own", () => {
+describe.skipIf(!mac)("local connect's send gate, with a listener of the test's own", () => {
   for (const mode of ["bootstrap", "saved-token"] as const) {
     it(`F-492: a same-account listener that isn't OpenClaw gets no byte of any setup socket (${mode})`, async () => {
       // This process holds the accepted end: (e) passes, and (f) refuses it.
@@ -612,7 +613,7 @@ async function refusedThrough(gateway: DevGateway, port: number, token: string) 
   return refused;
 }
 
-describe.skipIf(!BIN || !posix)(
+describe.skipIf(!BIN || !mac)(
   "F-492 on a development gateway: local connect's send gate",
   { timeout: 300_000 },
   () => {
@@ -670,25 +671,22 @@ describe.skipIf(!BIN || !posix)(
       }
     });
 
-    it.skipIf(platform !== "darwin")(
-      "F-492: a same-account proxy that a sandbox denies the profile's folder gets no upgrade and no credential",
-      async () => {
-        // The profile only denies: everything is allowed as without it, except reading the folder.
-        const profile = `(version 1)(allow default)(deny file-read* (subpath "${join(gateway.home, FOLDER)}"))`;
-        expect(profile).toMatch(
-          /^\(version 1\)\(allow default\)\(deny file-read\* \(subpath "[^"()]+"\)\)$/,
-        );
-        const port = await freePort();
-        const proxy = await standIn(port, gateway.port, ["/usr/bin/sandbox-exec", "-p", profile]);
-        try {
-          const refused = await refusedThrough(gateway, port, token);
-          expect(refused[0]).toBe("module");
-          expect(proxy.bytes()).toBe(0);
-        } finally {
-          await proxy.stop();
-        }
-      },
-    );
+    it("F-492: a same-account proxy that a sandbox denies the profile's folder gets no upgrade and no credential", async () => {
+      // The profile only denies: everything is allowed as without it, except reading the folder.
+      const profile = `(version 1)(allow default)(deny file-read* (subpath "${join(gateway.home, FOLDER)}"))`;
+      expect(profile).toMatch(
+        /^\(version 1\)\(allow default\)\(deny file-read\* \(subpath "[^"()]+"\)\)$/,
+      );
+      const port = await freePort();
+      const proxy = await standIn(port, gateway.port, ["/usr/bin/sandbox-exec", "-p", profile]);
+      try {
+        const refused = await refusedThrough(gateway, port, token);
+        expect(refused[0]).toBe("module");
+        expect(proxy.bytes()).toBe(0);
+      } finally {
+        await proxy.stop();
+      }
+    });
 
     it.skipIf(!process.env.CLAWTRATE_OTHER_ACCOUNT_LISTENER)(
       "F-492: another account's listener gets no upgrade and no credential (hosted runner)",
@@ -796,7 +794,7 @@ describe.skipIf(!BIN || !posix)(
   },
 );
 
-describe.skipIf(!BIN || !posix)(
+describe.skipIf(!BIN || !mac)(
   "local connect on a development gateway with local auto-approval off",
   { timeout: 300_000 },
   () => {
