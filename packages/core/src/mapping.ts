@@ -12,6 +12,7 @@ import type {
   TranscriptBlock,
   TranscriptItem,
   ChatPicture,
+  SentAttachment,
 } from "./types.ts";
 
 export type RawRecord = Record<string, unknown>;
@@ -300,6 +301,37 @@ function assistantPictures(content: unknown): ChatPicture[] {
   });
 }
 
+/** Most files one message may carry (`chat.send`'s own limit, as `attachments.ts` keeps it). */
+const MAX_SENT_ATTACHMENTS = 20;
+const MAX_SENT_NAME_CHARS = 255;
+
+/**
+ * The files a person's row carried: the gateway's `__openclaw.media` entries, in
+ * their order, by name, type and size. The `media://inbound` reference an entry
+ * names is the gateway's own and is never kept, so never used.
+ */
+function sentAttachments(info: RawRecord): SentAttachment[] {
+  return arr(info.media)
+    .slice(0, MAX_SENT_ATTACHMENTS)
+    .flatMap((entry) => {
+      const fact = asRecord(entry);
+      if (!fact) return [];
+      // An entry with no name is still a file the message carried.
+      const name = str(fact.fileName) ?? (fact.kind === "image" ? "Picture" : "File");
+      const size = num(fact.sizeBytes);
+      const type = str(fact.contentType);
+      return [
+        {
+          fileName:
+            name.length > MAX_SENT_NAME_CHARS ? `${name.slice(0, MAX_SENT_NAME_CHARS - 1)}…` : name,
+          mimeType:
+            type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null,
+          sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
+        },
+      ];
+    });
+}
+
 function assistantBlocks(content: unknown): TranscriptBlock[] {
   if (typeof content === "string") return content.trim() ? [{ kind: "text", text: content }] : [];
   const blocks: TranscriptBlock[] = [];
@@ -435,7 +467,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           });
           return;
         }
-        if (!text.trim()) return;
+        const attachments = sentAttachments(info);
+        // A message that is only files still shows: its files are what it said.
+        if (!text.trim() && attachments.length === 0) return;
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
@@ -443,8 +477,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           id,
           role: "user",
           timestamp,
-          blocks: [{ kind: "text", text }],
+          blocks: text.trim() ? [{ kind: "text", text }] : [],
           model: null,
+          ...(attachments.length > 0 ? { attachments } : {}),
           ...(cutByGateway ? { truncated: true } : {}),
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),

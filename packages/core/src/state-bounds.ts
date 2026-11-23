@@ -166,6 +166,7 @@ import type {
   TranscriptBlock,
   TranscriptItem,
   ChatPicture,
+  SentAttachment,
 } from "./types.ts";
 
 // Field caps, in JSON characters --------------------------------------------------
@@ -244,6 +245,9 @@ export const MAX_HISTORY_BLOCKS = 300;
 /** Pictures a bot's turn hands over, and across a task's history page (`ChatPicture`). */
 export const MAX_PICTURES_PER_ITEM = 8;
 export const MAX_HISTORY_PICTURES = 16;
+/** Files a person's message names (`SentAttachment`), and across a task's history page. */
+export const MAX_ATTACHMENTS_PER_ITEM = 20;
+export const MAX_HISTORY_ATTACHMENTS = 40;
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */
@@ -584,6 +588,11 @@ const picture = object<ChatPicture>()({
   height: NUMBER,
   sizeBytes: NUMBER,
 });
+const sentAttachment = object<SentAttachment>()({
+  fileName: text(MAX_FILE_NAME_CHARS),
+  mimeType: NAME,
+  sizeBytes: NUMBER,
+});
 const item = flagged<TranscriptItem>()({
   id: ID,
   role: ENUM,
@@ -591,6 +600,7 @@ const item = flagged<TranscriptItem>()({
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
   pictures: list(MAX_PICTURES_PER_ITEM, picture, { pool: "pictures" }),
+  attachments: list(MAX_ATTACHMENTS_PER_ITEM, sentAttachment, { pool: "attachments" }),
   truncated: FLAG,
   messageId: ID,
   replyTo: object<ReplyReference>()({
@@ -639,7 +649,11 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   sessionKey: ID,
   status: ENUM,
   items: list(MAX_HISTORY_ITEMS, item, {
-    pools: { blocks: MAX_HISTORY_BLOCKS, pictures: MAX_HISTORY_PICTURES },
+    pools: {
+      blocks: MAX_HISTORY_BLOCKS,
+      pictures: MAX_HISTORY_PICTURES,
+      attachments: MAX_HISTORY_ATTACHMENTS,
+    },
   }),
   error: text(MAX_MESSAGE_LINE_CHARS),
   hasMore: FLAG,

@@ -9,6 +9,7 @@
 // "Addresses a gateway hands the client"). The bytes are bounded, must be one
 // of a few picture types, and must start as that type does.
 
+import { fromBase64 } from "./bytes.ts";
 import { asRecord } from "./mapping.ts";
 import type { FileTransferStart, FileTransfers } from "./files.ts";
 import type { HttpFetch } from "./host.ts";
@@ -52,7 +53,52 @@ export type ChatPictureContext = {
   now: () => number;
 };
 
+/**
+ * A picture a person sent, read from this app's own copy (`readSentPicture`):
+ * the same answer as a bot's, or `not-kept` when this app holds no copy of it,
+ * which is the case on every other device and after the task was closed: the
+ * gateway gives none back (OpenClaw 2026.10.6 keeps a person's file only as a
+ * `media://inbound` reference that no method or route serves).
+ */
+export type SentPictureRead = ChatPictureRead | { status: "not-kept" };
+
 const failed = (message: string): ChatPictureRead => ({ status: "failed", message });
+
+const TOO_LARGE = "This picture is larger than Clawtrate shows: pictures up to 5 MB.";
+const NOT_SHOWN = "This file isn't a picture this app shows.";
+
+/** Whether a conversation draws pictures of this type (PNG, JPEG, GIF or WebP). */
+export function isShownPictureType(mimeType: string | null | undefined): boolean {
+  return typeof mimeType === "string" && Object.hasOwn(SIGNATURES, mimeType.toLowerCase());
+}
+
+/**
+ * A picture this app sent, from the copy it sent, held to the same rules as
+ * one the gateway gives: one of the types drawn, at most `MAX_PICTURE_BYTES`,
+ * starting as its type does. Nothing is fetched.
+ */
+export function ownPictureRead(
+  file: { mimeType: string; content: string },
+  start: (bytes: Uint8Array) => FileTransferStart,
+): ChatPictureRead {
+  const mimeType = file.mimeType.toLowerCase();
+  if (!isShownPictureType(mimeType)) return failed(NOT_SHOWN);
+  const bytes = fromBase64(file.content);
+  if (!bytes) return failed(NOT_SHOWN);
+  if (bytes.length > MAX_PICTURE_BYTES) return failed(TOO_LARGE);
+  if (!matchesType(mimeType, bytes)) return failed(NOT_SHOWN);
+  try {
+    return {
+      status: "content",
+      kind: "image",
+      mimeType,
+      bytes: bytes.length,
+      transfer: start(bytes),
+    };
+  } catch (error) {
+    return failed(error instanceof Error ? error.message : String(error));
+  }
+}
 
 /** The gateway's own HTTP origin, from the connection's address; null for anything else. */
 export function gatewayOrigin(gatewayUrl: string): string | null {
