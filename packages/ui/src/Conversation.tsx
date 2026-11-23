@@ -1076,9 +1076,10 @@ export function Conversation({
         liveOptions={{
           connected: caughtUp,
           interactive,
-          onRequestAccess: info.readOnly
-            ? null
-            : () => void send({ type: "requestAccess" }).catch(() => {}),
+          onRequestAccess:
+            info.readOnly || connection.fullPairing
+              ? null
+              : () => void send({ type: "requestAccess" }).catch(() => {}),
           onShowAction,
           onReview: review,
           leaving,

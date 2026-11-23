@@ -28,6 +28,7 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
+import { notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import { useForget } from "./forget.ts";
@@ -279,7 +280,14 @@ export function Settings({
     connection.status === "connected" &&
     INTERACTIVE_SCOPES.every((scope) => scopeSatisfied(connection.scopes, scope));
   const rePairing = upgrade.status === "requesting" || upgrade.status === "pending";
-  const canRePair = !info.readOnly && connection.status === "connected" && !holdsAll && !rePairing;
+  // A full pairing's grant is the gateway's limit: nothing asks for more (setup-effortless.md §2).
+  const canRePair =
+    !info.readOnly &&
+    connection.status === "connected" &&
+    !holdsAll &&
+    !rePairing &&
+    !connection.fullPairing;
+  const missing = notGranted(connection);
   const rePairProblem =
     upgrade.status === "rejected"
       ? "The gateway's owner rejected the new pairing. This device keeps its earlier access."
@@ -406,6 +414,14 @@ export function Settings({
               : "None while not connected"}
           </dd>
         </div>
+        {connection.status === "connected" && connection.fullPairing && (
+          <div>
+            <dt>Access</dt>
+            <dd data-testid="gateway-access">
+              {missing.length === 0 ? "Full control" : "Less than full control"}
+            </dd>
+          </div>
+        )}
         {connection.serverVersion && (
           <div>
             <dt>Gateway</dt>
@@ -416,6 +432,11 @@ export function Settings({
           </div>
         )}
       </dl>
+      {missing.length > 0 && (
+        <p className="settings-note" data-testid="narrower-grant">
+          {`OpenClaw granted less than full control. Not granted: ${missing.join(", ")}. This device keeps what was granted.`}
+        </p>
+      )}
       {problem && (
         <div className="form-error" role="alert" data-testid="gateway-problem">
           <strong>{problem.title}</strong>
@@ -486,13 +507,15 @@ export function Settings({
         <p className="settings-note">
           {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
           disconnected.{" "}
-          {connection.canAdmin
-            ? "This device holds admin access, which it asked for to change bots and accounts."
-            : holdsAll
-              ? "This device can send, stop and answer."
-              : info.readOnly
-                ? "This device asks for read access only."
-                : "This device reads. Re-pair to ask for sending, stopping and answering."}
+          {connection.fullPairing
+            ? ""
+            : connection.canAdmin
+              ? "This device holds admin access, which it asked for to change bots and accounts."
+              : holdsAll
+                ? "This device can send, stop and answer."
+                : info.readOnly
+                  ? "This device asks for read access only."
+                  : "This device reads. Re-pair to ask for sending, stopping and answering."}
         </p>
       )}
     </>
