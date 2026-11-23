@@ -509,6 +509,12 @@ partial. Both rows use the same field list (row 14).
     `channel` on a main row means "this session has a channel route on
     file", not "this chat is from a channel". Rows and `sessions.changed`
     say nothing about which turns of a shared session came from a channel.
+  - `lastMessagePreview` is the last user or assistant message flattened
+    to one line (`projectSessionDisplayMessage` with `flattenMarkdown`:
+    fenced blocks dropped, links reduced to their text, whitespace
+    collapsed), after only the envelope strip for a user message; a channel
+    turn's `<Label>: ⟦openclaw:ctx⟧` headers and its closing context block
+    stay in it (source).
   - `sessions.changed` payloads carry `channel`, `lastChannel`, `origin`
     and `deliveryContext` flat beside `sessionKey`, and not
     `classification`, `isMain` or `peerKind` (live).

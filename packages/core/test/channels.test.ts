@@ -174,6 +174,15 @@ describe("F-519: what the gateway wrote around a channel turn is not shown as it
     expect(stripChannelMetadata(code.join("\n"))).toBe(code.join("\n"));
   });
 
+  it("F-519: a preview the gateway flattened to one line loses what it wrote around the turn", () => {
+    expect(
+      plainPreview(
+        "Conversation info: ⟦openclaw:ctx⟧ Sender: ⟦openclaw:ctx⟧ hello there Context: ⟦openclaw:ctx⟧ thread stuff",
+      ),
+    ).toBe("hello there");
+    expect(plainPreview("hello there")).toBe("hello there");
+  });
+
   it("F-519: ordinary text, brackets and links included, is left as it is", () => {
     for (const text of ["[link](https://example.com) here", "[draft] notes", "Plain words"])
       expect(stripChannelMetadata(text)).toBe(text);

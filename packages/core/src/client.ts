@@ -7187,10 +7187,12 @@ export class ClawtrateClient {
   }
 
   private publishTasks(): void {
-    const tasksByBot = groupTasks(this.rows.values(), { showChannelChats: this.showChannelChats });
+    // Channel chats are grouped too: one that waits for the person stays listed while it waits,
+    // so an approval or question it asks is never out of sight (F-519).
+    const tasksByBot = groupTasks(this.rows.values(), { showChannelChats: true });
     // What waits for the person, and whose latest run was stopped (`waiting.ts`): a task the
     // engine follows by its runs, any other by the gateway's events.
-    for (const tasks of Object.values(tasksByBot)) {
+    for (const [botId, tasks] of Object.entries(tasksByBot)) {
       for (const [index, task] of tasks.entries()) {
         // A row with no active run ends what waited before it; a newer marker stays.
         if (task.status !== "running") this.waiting.settle(task.key, task.updatedAt);
@@ -7210,6 +7212,10 @@ export class ClawtrateClient {
           tasks[index] = { ...task, status: "stopped" };
         }
       }
+      if (this.showChannelChats) continue;
+      const shown = tasks.filter((task) => !task.channel || task.status === "waiting");
+      if (shown.length > 0) tasksByBot[botId] = shown;
+      else delete tasksByBot[botId];
     }
     this.store.update((state) => ({ ...state, tasksByBot }));
   }

@@ -124,6 +124,11 @@ export function stripChannelMetadata(text: string): string {
     kept
       .join("\n")
       .trim()
+      // 2026.10.6 sends previews flattened to one line with its JSON blocks already dropped
+      // (`projectSessionDisplayMessage`, `flattenMarkdown`): what is left of a block is its
+      // `<Label>: ⟦openclaw:ctx⟧` header, and the closing context block runs to the end.
+      .replace(/\s*Context: ⟦openclaw:ctx⟧[^\n]*$/, "")
+      .replace(/^(?:[^⟦\n]{1,80}?: ⟦openclaw:ctx⟧\s*)+/, "")
       // A bracket followed by `(` is a markdown link the person wrote, never an envelope.
       .replace(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\](?!\() */, "")
       .replace(/^\[([^\]]+)\](?!\()\s*/, (envelope, header: string) =>

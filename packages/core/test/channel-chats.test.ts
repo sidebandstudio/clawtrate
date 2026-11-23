@@ -7,8 +7,9 @@ import { parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
 import { listArchived, type TaskActionContext } from "../src/task-actions.ts";
-import { FAST, URL_A } from "./client-harness.ts";
-import { FakeGateway, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
+import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { FAST, grantingGateway, questionRecord, URL_A } from "./client-harness.ts";
+import { FakeGateway, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const DISCORD = "agent:pip:discord:channel:1234567890";
 const NATIVE = "agent:pip:dashboard:0f6c2a9e-1111";
@@ -44,20 +45,30 @@ const rows = () => [
   },
 ];
 
+/** A client on the gateway: paired at the read tier, or with `interactive` holding the scopes to answer. */
 async function connected(
   saved: Record<string, string> = {},
   listed: Record<string, unknown>[] = rows(),
+  interactive = false,
 ) {
-  const gateway = new FakeGateway();
+  const gateway = interactive ? grantingGateway() : new FakeGateway();
   gateway.handlers["sessions.subscribe"] = () => ({
     subscribed: true,
     list: { sessions: listed, hasMore: false },
   });
   gateway.handlers["sessions.list"] = () => ({ sessions: listed, hasMore: false });
-  const storage = memoryStorage(saved);
+  const paired = {
+    connection: JSON.stringify({ url: URL_A, token: null }),
+    [tokenKey(URL_A)]: JSON.stringify({
+      token: "device-token",
+      grantedScopes: INTERACTIVE_SCOPES,
+      heldScopes: INTERACTIVE_SCOPES,
+    }),
+  };
+  const storage = memoryStorage(interactive ? { ...paired, ...saved } : saved);
   const client = new ClawtrateClient(testHost(gateway, storage), FAST);
   await client.start();
-  await client.connect({ url: URL_A, token: "bootstrap" });
+  if (!interactive) await client.connect({ url: URL_A, token: "bootstrap" });
   await until(() => client.state.discovery.status === "ready");
   const keys = () => (client.state.tasksByBot.pip ?? []).map((task) => task.key);
   return { client, gateway, storage, keys };
@@ -244,6 +255,93 @@ describe("F-519: Show external channel chats", () => {
     // A task of the bot's own still is.
     gateway.emit("sessions.changed", { sessionKey: "agent:pip:dashboard:new-one", agentId: "pip" });
     await until(() => reads() > before);
+    client.stop();
+  });
+
+  it("F-519: at the cap with a channel chat among the rows held, a change in another channel chat reads the list again", async () => {
+    const native = Array.from({ length: MAX_LISTED_TASKS - 1 }, (_, index) => ({
+      key: `agent:pip:dashboard:${String(index).padStart(8, "0")}-0000`,
+      agentId: "pip",
+      updatedAt: 1_000 + index,
+    }));
+    const { client, gateway } = await connected({}, [
+      ...native,
+      { key: "agent:pip:discord:channel:1", agentId: "pip", channel: "discord", updatedAt: 1 },
+    ]);
+    const before = gateway.calls("sessions.list").length;
+    gateway.emit("sessions.changed", {
+      sessionKey: "agent:pip:discord:channel:2",
+      agentId: "pip",
+      channel: "discord",
+      updatedAt: 99_999,
+    });
+    await until(() => gateway.calls("sessions.list").length > before);
+    client.stop();
+  });
+
+  it("F-519: a hidden channel chat that asks the person something is listed while it waits", async () => {
+    const { client, gateway, keys } = await connected({}, rows(), true);
+    expect(keys()).toEqual([NATIVE, MAIN]);
+    gateway.emit("question.requested", {
+      id: "q1",
+      sessionKey: DISCORD,
+      runId: "r1",
+      createdAtMs: 400,
+    });
+    await until(() => keys().includes(DISCORD));
+    expect(client.state.tasksByBot.pip!.find((task) => task.key === DISCORD)?.status).toBe(
+      "waiting",
+    );
+    // Opened from the list, it shows the question to answer.
+    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: "r1" } });
+    gateway.handlers["question.list"] = () => ({
+      questions: [questionRecord("q1", "r1", DISCORD)],
+    });
+    for (const method of ["exec.approval.list", "plugin.approval.list", "openclaw.approval.list"])
+      gateway.handlers[method] = () => [];
+    client.openSession(DISCORD);
+    await until(() => client.state.transcripts[DISCORD]?.questions.length === 1);
+    client.closeSession(DISCORD);
+    gateway.handlers["question.list"] = () => ({ questions: [] });
+    gateway.emit("question.resolved", { id: "q1" });
+    await until(() => !keys().includes(DISCORD));
+    gateway.emit("agent", {
+      sessionKey: DISCORD,
+      runId: "r2",
+      stream: "lifecycle",
+      ts: 500,
+      data: { phase: "waiting-approval", approvalId: "ap1" },
+    });
+    await until(() => keys().includes(DISCORD));
+    // Opened, it shows the approval to decide.
+    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: "r2" } });
+    gateway.handlers["exec.approval.list"] = () => [
+      {
+        id: "ap1",
+        request: {
+          command: "uname -s",
+          host: "gateway",
+          agentId: "pip",
+          sessionKey: DISCORD,
+          runId: "r2",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 500,
+        expiresAtMs: 9_000_000_000_000,
+      },
+    ];
+    client.openSession(DISCORD);
+    await until(() => client.state.transcripts[DISCORD]?.approvals.length === 1);
+    client.closeSession(DISCORD);
+    gateway.handlers["exec.approval.list"] = () => [];
+    gateway.emit("agent", {
+      sessionKey: DISCORD,
+      runId: "r2",
+      stream: "lifecycle",
+      ts: 600,
+      data: { phase: "approval-resolved", approvalId: "ap1" },
+    });
+    await until(() => !keys().includes(DISCORD));
     client.stop();
   });
 
