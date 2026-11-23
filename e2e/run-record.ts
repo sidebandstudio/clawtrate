@@ -5,7 +5,15 @@
 // never authorises anything: the record and the temporary folders stay, and
 // the reason is reported.
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
@@ -82,11 +90,29 @@ export function readRecord(path: string): RunRecord | null {
   return null;
 }
 
-/** Records a newer build started on the run's data folder, so the run's cleanup stops it too. */
+/** Present once the run's cleanup has started: no newer build may start after it. */
+const closingPath = (path: string) => `${path}.closing`;
+
+/**
+ * Records a newer build started on the run's data folder, so the run's cleanup
+ * stops it too. The test that starts it runs in a worker and the cleanup in the
+ * runner, so each writes its mark before reading the other's
+ * (`successorAtCleanUp`): either this call sees that cleanup has started and
+ * throws, and the caller never releases the build, or the cleanup reads the
+ * build in the record and stops it.
+ */
 export function recordSuccessor(path: string, successor: Proc): void {
   const record = readRecord(path);
   if (!record) throw new Error(`${path} is not a run record`);
   saveRecord(dirname(path), { ...record, successor });
+  if (existsSync(closingPath(path)))
+    throw new Error("the run's cleanup has started, so the newer build may not start");
+}
+
+/** Starts the run's cleanup for newer builds, then returns the one a test recorded, if any. */
+export function successorAtCleanUp(path: string): Proc | undefined {
+  writeFileSync(closingPath(path), "");
+  return readRecord(path)?.successor;
 }
 
 /** A temporary folder a run may have created: directly in the system temp folder, with our prefix. */
@@ -149,7 +175,10 @@ export function cleanUp(
       problems.push(`reset ${name}: ${String(error)}`);
     }
   }
-  if (problems.length === 0) rmSync(recordPath(dir, record.run), { force: true });
+  if (problems.length === 0) {
+    rmSync(recordPath(dir, record.run), { force: true });
+    rmSync(closingPath(recordPath(dir, record.run)), { force: true });
+  }
   return problems;
 }
 

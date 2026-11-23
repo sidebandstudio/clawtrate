@@ -13,6 +13,7 @@ import {
   recordSuccessor,
   recoverDeadRuns,
   saveRecord,
+  successorAtCleanUp,
   TEMP_PREFIX,
   type RunRecord,
 } from "../../../e2e/run-record.ts";
@@ -160,6 +161,27 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     expect(processState(successor.pid, successor.identity, processIdentity)).toBe("dead");
     expect(processState(host.pid, host.identity, processIdentity)).toBe("dead");
     expect(run.gone()).toBe(true);
+  });
+
+  it("refuses a newer build recorded once the run's cleanup has started, and leaves it in the record for that cleanup", () => {
+    const run = aRun(liveProcess());
+    const path = recordPath(run.records, run.record.run);
+    expect(successorAtCleanUp(path)).toBeUndefined();
+    const late = liveProcess();
+    expect(() => recordSuccessor(path, late)).toThrow(/cleanup has started/);
+    expect(readRecord(path)?.successor).toEqual(late);
+  });
+
+  it("gives the run's cleanup the newer build a test recorded before it started", () => {
+    const run = aRun(liveProcess());
+    const path = recordPath(run.records, run.record.run);
+    const successor = liveProcess();
+    recordSuccessor(path, successor);
+    expect(successorAtCleanUp(path)).toEqual(successor);
+    const problems = cleanUp(run.records, { ...run.record, successor }, run.reset);
+    expect(problems).toEqual([]);
+    expect(processState(successor.pid, successor.identity, processIdentity)).toBe("dead");
+    expect(existsSync(`${path}.closing`)).toBe(false);
   });
 
   it("keeps the folders while the newer build has not exited, and says which process it is", async () => {
