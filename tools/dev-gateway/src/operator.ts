@@ -182,9 +182,14 @@ export class OperatorSession {
     // One limit for the whole call: the waits and the sends share it.
     const deadline = Date.now() + timeoutMs;
     const left = () => Math.max(deadline - Date.now(), 1);
+    // A hello can end a wait just as the time runs out: nothing is sent once it has.
+    const send = () =>
+      Date.now() >= deadline
+        ? Promise.reject(this.notReconnected(timeoutMs))
+        : client.request<T>(method, params, { timeoutMs: left() });
     await this.connected(timeoutMs, left());
     try {
-      return await client.request<T>(method, params, { timeoutMs: left() });
+      return await send();
     } catch (error) {
       // The client's own "not sent" is a plain Error; the gateway's refusal is a subclass,
       // whatever its words, and is never sent again.
@@ -195,8 +200,14 @@ export class OperatorSession {
       if (!unsent) throw error;
       // The socket is closing and its close has not reached the client yet.
       await this.connected(timeoutMs, left(), true);
-      return client.request<T>(method, params, { timeoutMs: left() });
+      return send();
     }
+  }
+
+  private notReconnected(timeoutMs: number): Error {
+    return new Error(
+      `not reconnected within ${timeoutMs} ms after the gateway closed (${this.lastClose || "no close seen"})`,
+    );
   }
 
   /** Resolves with the client connected: now, or at the next hello when `next`. Waits `waitMs` at most, the time the request's `timeoutMs` has left. */
@@ -209,11 +220,7 @@ export class OperatorSession {
       };
       const timer = setTimeout(() => {
         this.helloWaiters.delete(wake);
-        reject(
-          new Error(
-            `not reconnected within ${timeoutMs} ms after the gateway closed (${this.lastClose || "no close seen"})`,
-          ),
-        );
+        reject(this.notReconnected(timeoutMs));
       }, waitMs);
       this.helloWaiters.add(wake);
     });
