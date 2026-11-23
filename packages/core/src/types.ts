@@ -267,6 +267,11 @@ export type ChatPicture = {
   width: number | null;
   height: number | null;
   sizeBytes: number | null;
+  /**
+   * The row that carried it (`__openclaw.id`): a message the bot sent with its
+   * message tool is a row of its own, and the picture is drawn with that row's text.
+   */
+  messageId?: string;
 };
 
 export type TranscriptItem = {
