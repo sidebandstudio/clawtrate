@@ -31,7 +31,14 @@ export function AccessBar({
   let tone: "danger" | undefined;
   let body: ReactNode;
   let action: ReactNode = null;
-  if (info.readOnly) {
+  if (connection.fullPairing && !info.readOnly) {
+    // A full pairing the gateway granted less: its limit stands, and nothing asks again (§2).
+    body = (
+      <>
+        <b>OpenClaw granted less than full control.</b> You can follow {bot}'s work here.
+      </>
+    );
+  } else if (info.readOnly) {
     body = (
       <>
         <b>Read-only.</b> You can follow {bot}'s work here. Approvals and questions aren't shown on

@@ -295,6 +295,133 @@ test("F-472: a bot created with Let the gateway choose is stored with no account
   await page.keyboard.press("ControlOrMeta+\\");
 });
 
+/** A workspace file of a bot, as the gateway returns it. */
+async function workspaceFile(bot: string, name: string) {
+  const got = await admin.request<{ file: { missing: boolean; content?: string } }>(
+    "agents.files.get",
+    { agentId: bot, name },
+  );
+  return got.file;
+}
+
+/** Send a message as the admin client, wait for its end, and return the task's last reply. */
+async function lastReply(session: string, message: string): Promise<string> {
+  const sent = await admin.send(session, message);
+  await admin.terminal(String(sent.runId), 60_000);
+  const history = await admin.request<{
+    messages: Array<{ role: string; content: unknown }>;
+  }>("chat.history", { sessionKey: session, limit: 50 });
+  const replies = history.messages
+    .filter((each) => each.role === "assistant")
+    .map((each) =>
+      typeof each.content === "string"
+        ? each.content
+        : (each.content as Array<{ text?: string }>).map((part) => part.text ?? "").join(""),
+    );
+  return replies.at(-1) ?? "";
+}
+
+/**
+ * The workspace files a task's last run was given, from the gateway's own report of that run
+ * (`/context json`, its `injectedWorkspaceFiles`), each with whether it was there. The task's
+ * history cuts a long reply, so only that list, which comes early, is read.
+ */
+async function injected(session: string): Promise<Record<string, boolean>> {
+  const text = await lastReply(session, "/context json");
+  expect(text, "the report is of the run itself, not an estimate").toMatch(/"source": "run"/);
+  const start = text.indexOf("[", text.indexOf('"injectedWorkspaceFiles"'));
+  let depth = 0;
+  let quoted = false;
+  let end = -1;
+  for (let at = start; at < text.length && end < 0; at += 1) {
+    const char = text[at];
+    if (quoted) {
+      if (char === "\\") at += 1;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === "[" || char === "{") depth += 1;
+    else if ((char === "]" || char === "}") && --depth === 0) end = at;
+  }
+  expect(end, "the report lists the run's workspace files in full").toBeGreaterThan(start);
+  const files = JSON.parse(text.slice(start, end + 1)) as Array<{ name: string; missing: boolean }>;
+  return Object.fromEntries(files.map((file) => [file.name, !file.missing]));
+}
+
+test("F-520: a bot made in New bot starts as itself: no first-run sequence, its starting files kept, its name and picture its identity", async () => {
+  test.setTimeout(180_000);
+  await page.keyboard.press("ControlOrMeta+n");
+  const create = dialog("New bot");
+  await create.getByRole("textbox", { name: "Name" }).fill("Maple");
+  await create.getByRole("radio", { name: "Shellfolk" }).click();
+  await create.getByRole("radio", { name: "Turret" }).click();
+  await create.getByRole("radio", { name: "Sky" }).click();
+  await create.getByRole("button", { name: "Next" }).click();
+  const account = dialog("Account");
+  await account.getByRole("radio", { name: /^Let the gateway choose/ }).click();
+  await account.getByRole("button", { name: "Create" }).click();
+  await expect(account).toHaveCount(0, { timeout: 30_000 });
+
+  // Its identity carries the name and the picture chosen.
+  const identity = (entry(await config(), "maple")!.identity ?? {}) as Json;
+  expect(identity.name).toBe("Maple");
+  expect(choiceFromPicture(String(identity.avatar))).toEqual({
+    family: "shellfolk",
+    shell: "turret",
+    color: "sky",
+  });
+  const identityFile = await workspaceFile("maple", "IDENTITY.md");
+  expect(identityFile.content).toMatch(/^- \*\*Name:\*\* Maple$/m);
+  expect(identityFile.content).toMatch(/^- \*\*Picture:\*\* chosen in Clawtrate/m);
+  // The starting files are all there.
+  for (const name of ["AGENTS.md", "SOUL.md", "USER.md"])
+    expect((await workspaceFile("maple", name)).missing, name).toBe(false);
+
+  // Its first run, sent from the composer: the gateway gives it no first-run sequence.
+  await expect(botRow("Maple")).toHaveAttribute("aria-current", "true", { timeout: 20_000 });
+  const field = page.getByTestId("composer-input");
+  await expect(field).toBeVisible({ timeout: 20_000 });
+  await field.fill("Hi");
+  await field.press("Enter");
+  await expect
+    .poll(async () => (await requestsFor("agent:maple:main")).length, { timeout: 60_000 })
+    .toBeGreaterThan(0);
+  await expect
+    .poll(async () => (await workspaceFile("maple", "BOOTSTRAP.md")).missing, { timeout: 30_000 })
+    .toBe(true);
+  const given = await injected("agent:maple:main");
+  expect(given).toMatchObject({
+    "AGENTS.md": true,
+    "SOUL.md": true,
+    "IDENTITY.md": true,
+    "USER.md": true,
+  });
+  expect(given["BOOTSTRAP.md"] ?? false).toBe(false);
+  // The scripted model's reply is fixed, so it can't show what a real model would ask; no run of
+  // the task started image_generate or saved an identity.
+  const history = JSON.stringify(
+    await admin.request("chat.history", { sessionKey: "agent:maple:main", limit: 50 }),
+  );
+  expect(history).not.toContain("image_generate");
+  expect(history).not.toContain("set-identity");
+  // The picture is still the one chosen, and the files still there.
+  expect(
+    choiceFromPicture(String(((entry(await config(), "maple")!.identity ?? {}) as Json).avatar)),
+  ).toEqual({ family: "shellfolk", shell: "turret", color: "sky" });
+  for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"])
+    expect((await workspaceFile("maple", name)).missing, name).toBe(false);
+
+  // The same gateway gives a bot made without that step the first-run sequence: what this
+  // check reads tells the two apart.
+  const made = await admin.request<{ agentId: string }>("agents.create", {
+    name: "Unnamed check",
+    model: "scripted/dev-1",
+  });
+  const session = `agent:${made.agentId}:main`;
+  await lastReply(session, "Hi");
+  expect(await injected(session)).toMatchObject({ "BOOTSTRAP.md": true });
+  await admin.request("agents.delete", { agentId: made.agentId, deleteFiles: true });
+});
+
 /** Open Settings on Accounts, and the connect component. */
 async function connectFromSettings() {
   await page.keyboard.press("ControlOrMeta+,");
@@ -590,11 +717,13 @@ test("F-476 F-490: an account only another bot keeps is no account for this bot,
     agents: { entries: { second: { model: { primary: "acme/dev-1@acme:studio" } } } },
   });
   try {
+    // Opening the Account page reads Second's model again, after the patch above. No "Check now"
+    // here: that read can land first, and the No account page it brings has no such button.
     const settings = await accountPage();
-    await settings.getByRole("button", { name: "Check now" }).click();
+    // This instance isn't seeded, so Otto has no name of its own and is shown by its id.
     await expect(
       settings.getByText(
-        "No account. Second's account, Acme · Studio, is kept by Otto only, so Second can't use it.",
+        "No account. Second's account, Acme · Studio, is kept by otto only, so Second can't use it.",
         { exact: false },
       ),
     ).toBeVisible({ timeout: 20_000 });

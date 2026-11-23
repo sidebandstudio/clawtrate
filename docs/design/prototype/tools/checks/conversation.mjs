@@ -210,7 +210,9 @@ p = await open(run + '&chrome=0');
 await to(p, 'message-working');
 await q(p, () => demo.disconnect());
 await p.waitForTimeout(150);
-const moving = await q(p, () => document.getAnimations().filter((a) => a.playState === 'running' && a.effect?.target && !a.effect.target.closest('.status-strip, .rail-footer, .rail-status')).map((a) => a.animationName + ' ' + (a.effect.target.className || a.effect.pseudoElement)));
+// Work is shown by looping motion; a chevron turning or opened content fading in (--dur-quick) is the
+// person's own disclosure, ends by itself, and may still be running 150 ms after a click on a slow machine.
+const moving = await q(p, () => document.getAnimations().filter((a) => a.playState === 'running' && a.effect?.getTiming().iterations === Infinity && a.effect?.target && !a.effect.target.closest('.status-strip, .rail-footer, .rail-status')).map((a) => `${a.animationName || a.transitionProperty} ${a.effect.target.getAttribute('class') || a.effect.target.tagName.toLowerCase()}${a.effect.pseudoElement || ''}`));
 check('B4 nothing that stands for work is moving', moving.length === 0, JSON.stringify(moving));
 check('B4 what is left is marked last seen', await q(p, () => document.querySelector('#m-marlow .state').textContent === 'Last seen working' && document.querySelectorAll('#transcript-inner .run-line').length === 1 && document.querySelector('#rail-marlow .bot-preview').textContent.startsWith('Last seen:') && document.querySelector('.status-phrase').textContent.startsWith('Reconnecting. Last seen')));
 await p.click('.composer-input');

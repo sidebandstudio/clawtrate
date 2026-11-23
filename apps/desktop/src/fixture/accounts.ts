@@ -34,6 +34,7 @@ import {
   type ClawtrateState,
   type GatewayAccount,
   type LockEvidence,
+  type MissingStep,
   type SignInState,
 } from "@clawtrate/core";
 
@@ -1070,6 +1071,12 @@ export function accountCommand(
               .replace(/[^a-z0-9]+/g, "-")
               .replace(/^-|-$/g, "") || "new-bot";
           const ref = `${command.provider}/${command.model}${command.account ? `@${command.account}` : ""}`;
+          const missing: MissingStep[] =
+            params.create === "partial"
+              ? ["task"]
+              : params.create === "partial-identity"
+                ? ["identity"]
+                : [];
           const state = get();
           set({
             ...state,
@@ -1091,14 +1098,18 @@ export function accountCommand(
               creation: {
                 name,
                 // create=partial: the bot exists, and its first task was not made.
-                status: params.create === "partial" ? "partial" : "created",
+                // create=partial-identity: the bot exists, and its name was not written into
+                // its IDENTITY.md, so OpenClaw's first-run questions are still on.
+                status: missing.length > 0 ? "partial" : "created",
                 slow: false,
                 botId: id,
                 error:
                   params.create === "partial"
                     ? `${name} was created, but its first task was not made: the gateway did not answer.`
-                    : null,
-                missing: params.create === "partial" ? ["task"] : [],
+                    : params.create === "partial-identity"
+                      ? `${name} was created, but OpenClaw's first-run questions were not turned off: the gateway did not answer.`
+                      : null,
+                missing,
                 uncertain: false,
               },
               bindings: [
@@ -1107,7 +1118,7 @@ export function accountCommand(
               ],
             },
           });
-          resolve({ botId: id, missing: params.create === "partial" ? ["task"] : [] });
+          resolve({ botId: id, missing });
         }),
       );
     }

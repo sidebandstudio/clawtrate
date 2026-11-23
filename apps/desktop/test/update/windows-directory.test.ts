@@ -1,7 +1,11 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   checkWindowsDirectorySpelling,
+  prepareUpdateDirectory,
+  PRIVATE_DIRECTORIES_TIMEOUT_MS,
   runUpdatePowerShell,
   updatePowerShellEnv,
 } from "../../src/main/private-update-directory.ts";
@@ -100,4 +104,45 @@ it("starts Windows PowerShell without an inherited module path, whatever its cas
       { CLAWTRATE_UPDATE_FILE: "file" },
     ),
   ).toEqual({ Path: "C:\\Fixture", CLAWTRATE_UPDATE_FILE: "file" });
+});
+
+it("makes both Windows update folders in one PowerShell run that may take 20 seconds to start", async () => {
+  const parent = realpathSync.native(mkdtempSync(join(tmpdir(), "clawtrate-folders-")));
+  const root = join(parent, "updates");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  vi.useFakeTimers();
+  // A stand-in PowerShell that answers after 20 seconds, killed at its run's limit as execFile does.
+  execFile.mockReset();
+  // The folder's own checks run on the real file system first, for as long as they take.
+  let started!: () => void;
+  const called = new Promise<void>((resolve) => (started = resolve));
+  execFile.mockImplementation((_file, _args, { timeout }, done) => {
+    started();
+    const answer = setTimeout(() => {
+      clearTimeout(kill);
+      done(null, "");
+    }, 20_000);
+    const kill = setTimeout(() => {
+      clearTimeout(answer);
+      done(Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" }));
+    }, timeout);
+  });
+  try {
+    const prepared = expect(prepareUpdateDirectory(root, "stable-offer")).resolves.toBeUndefined();
+    await called;
+    await vi.advanceTimersByTimeAsync(20_000);
+    await prepared;
+    expect(execFile).toHaveBeenCalledOnce();
+    const [, , options] = execFile.mock.calls[0]!;
+    expect(options.timeout).toBe(PRIVATE_DIRECTORIES_TIMEOUT_MS);
+    expect(options.env.CLAWTRATE_PRIVATE_DIRECTORIES.split("\n")).toEqual([
+      root,
+      join(root, "stable-offer"),
+    ]);
+  } finally {
+    vi.useRealTimers();
+    Object.defineProperty(process, "platform", platform);
+    rmSync(parent, { recursive: true, force: true });
+  }
 });

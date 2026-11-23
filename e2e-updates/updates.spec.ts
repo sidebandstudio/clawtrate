@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
+import { PRIVATE_DIRECTORIES_TIMEOUT_MS } from "../apps/desktop/src/main/private-update-directory.ts";
 import { appEnv, debuggingPort } from "../e2e-packaged/desktop-driver.ts";
 import { askToClose, forceEnd } from "../e2e-packaged/windows.ts";
 
@@ -39,6 +40,9 @@ type TestApp = {
   manifest: Record<string, unknown>;
   rendererRequests: string[];
 };
+
+/** The app's own limit for making an offer's folders, and a moment to send the request. */
+const folderWait = PRIVATE_DIRECTORIES_TIMEOUT_MS + 5_000;
 
 type ProbeWindow = Window & {
   clawtrateHost: { desktopUpdates: DesktopUpdates };
@@ -261,8 +265,8 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await download.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("group", { name: "Update status" })).toBeFocused();
-  // Windows prepares two protected directories before it requests the first byte.
-  await expect.poll(() => server.requests, { timeout: 35_000 }).toContain(filePath);
+  // Windows makes the offer's protected folders before it requests the first byte.
+  await expect.poll(() => server.requests, { timeout: folderWait }).toContain(filePath);
   await expect
     .poll(async () => Number(await page.getByRole("progressbar").getAttribute("value")))
     .toBeGreaterThan(0);
@@ -433,7 +437,7 @@ for (const stage of ["check", "download"] as const) {
         });
         expect(id).not.toBe("");
         await download.click();
-        await expect.poll(() => server.requests, { timeout: 35_000 }).toContain(filePath);
+        await expect.poll(() => server.requests, { timeout: folderWait }).toContain(filePath);
         await expect
           .poll(async () => Number(await page.getByRole("progressbar").getAttribute("value")))
           .toBeGreaterThan(0);
@@ -494,7 +498,15 @@ for (const stage of ["check", "download"] as const) {
         await expect(stable).toBeChecked();
       }
       await check.click();
+      const fetched = server.requests.filter((path) => path === filePath).length;
       await download.click();
+      // Windows makes the offer's protected folders before it requests the file; checking it
+      // has a budget of its own after that.
+      await expect
+        .poll(() => server.requests.filter((path) => path === filePath).length, {
+          timeout: folderWait,
+        })
+        .toBeGreaterThan(fetched);
       await expect(status).toContainText("checksum match");
       expect(await page.evaluate(() => (window as unknown as ProbeWindow).seenUpdates)).toContain(
         "verified",
@@ -784,7 +796,14 @@ test.describe("installer refusals", () => {
     for (const reason of reasons) {
       writeFileSync(join(profile, "inspect-refusal"), reason);
       await page.evaluate(checkStable);
+      const fetched = server.requests.filter((path) => path === filePath).length;
       await page.getByRole("button", { name: "Download", exact: true }).click();
+      // The protected folders come first on Windows, then the file, then its checks.
+      await expect
+        .poll(() => server.requests.filter((path) => path === filePath).length, {
+          timeout: folderWait,
+        })
+        .toBeGreaterThan(fetched);
       await expect
         .poll(() =>
           page.evaluate(async () => {

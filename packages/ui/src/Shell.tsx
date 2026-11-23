@@ -828,7 +828,9 @@ export function Shell({
             onShowStep={showStep}
             onShowQuestion={showQuestion}
             onRequestAccess={
-              info.readOnly ? null : () => void send({ type: "requestAccess" }).catch(() => {})
+              info.readOnly || state.connection.fullPairing
+                ? null
+                : () => void send({ type: "requestAccess" }).catch(() => {})
             }
             onOpenMachines={() => onOpenSettings("machines")}
             drawer={drawerOpen}
