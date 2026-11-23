@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient, SETUP_ENDPOINT_CHANGED, type ProvedRoute } from "../src/client.ts";
-import type { KeyValueStore, WebSocketLike } from "../src/host.ts";
+import type { WebSocketLike } from "../src/host.ts";
 import { READ_SCOPE } from "../src/scopes.ts";
 import { FAST } from "./client-harness.ts";
 import {
@@ -39,8 +39,10 @@ function readGateway(events: string[] = []) {
   return gateway;
 }
 
+type Store = ReturnType<typeof memoryStorage>;
+
 /** The store, telling `events` of each read of the device token. */
-function watched(storage: KeyValueStore, events: string[]): KeyValueStore {
+function watched(storage: Store, events: string[]): Store {
   return {
     ...storage,
     get: async (key) => {
@@ -116,7 +118,7 @@ describe("the host's last proof of a setup socket", () => {
 
 describe("a gateway set up through local connect", () => {
   /** A host whose own sockets count, and must never be used for this gateway. */
-  function host(gateway: FakeGateway, storage: KeyValueStore) {
+  function host(gateway: FakeGateway, storage: Store) {
     const plain: WebSocketLike[] = [];
     const made = testHost(gateway, storage);
     made.createWebSocket = (url) => {
