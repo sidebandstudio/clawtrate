@@ -75,12 +75,12 @@ function setupGateway() {
   return gateway;
 }
 
-/** A gateway that asks every device at B to wait for pairing, and connects A. */
-function pairingAtB() {
+/** A gateway that asks every device at `target` to wait for pairing, and connects others. */
+function pairingAt(target: string) {
   const gateway = new FakeGateway();
   gateway.connectReply = (params, url) => {
     const { scopes, auth } = params as ConnectParams;
-    if (url === URL_B)
+    if (url === target)
       return {
         ok: false,
         error: {
@@ -93,6 +93,8 @@ function pairingAtB() {
   };
   return gateway;
 }
+
+const pairingAtB = () => pairingAt(URL_B);
 
 const setupCode = { url: URL_B, bootstrapToken: CODE, expiresAtMs: Date.now() + 600_000 };
 
@@ -868,7 +870,7 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     const client = new ClawtrateClient(testHost(pairingAtB(), storage), FAST);
     const other = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
     try {
-      const hold = holdRead(storage, "connection");
+      const hold = holdRead(storage, "show-channel-chats");
       const starting = client.start();
       await until(hold.waiting);
       await other.start({ resume: false });
@@ -883,6 +885,48 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       await client.disconnect(URL_B, selection);
       expect(saved(storage)).toBeNull();
     } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("setup's Back leaves gateway B, saved while startup's read returned a stale record", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: readToken("token-A"),
+    });
+    const gate = deferred<void>();
+    let waiting = false;
+    let held = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (!held && key === "connection") {
+        held = true;
+        const stale = await get(key);
+        waiting = true;
+        await gate.promise;
+        return stale;
+      }
+      return get(key);
+    };
+    const client = new ClawtrateClient(testHost(pairingAt(URL_C), storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-B"), storage), FAST);
+    try {
+      const starting = client.start();
+      await until(() => waiting);
+      await other.start({ resume: false });
+      await other.connect({ url: URL_B });
+      gate.resolve();
+      await starting;
+      await until(() => client.state.connection.status === "connected");
+      expect(client.state.connection.gatewayUrl).toBe(URL_A);
+      const selection = client.nextSelection();
+      await client.connectWithSetupCode({ ...setupCode, url: URL_C });
+      await until(() => client.state.connection.status === "pairing");
+      await client.disconnect(URL_C, selection);
+      expect(saved(storage)).toEqual({ url: URL_B, token: null });
+    } finally {
+      gate.resolve();
       other.stop();
       client.stop();
     }

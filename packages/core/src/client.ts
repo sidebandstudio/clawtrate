@@ -1607,13 +1607,15 @@ export class ClawtrateClient {
     }));
     if (options.resume === false) return;
     // Startup needs to open the socket without waiting for another client's credential write.
-    // The revision is taken with the record it read: a write that lands during the read is in it.
+    // A write that lands during the read may not be in the record it returned, so only an
+    // uncontended read claims the revision it saw.
+    const before = this.writes.settingsRevision;
     const settings = await this.savedSettings();
-    const revision = this.writes.settingsRevision;
+    const after = this.writes.settingsRevision;
     if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
       return;
     this.settings = settings;
-    this.seenRevision = revision;
+    this.seenRevision = before === after ? after : null;
     if (settings && (settings.suspended || options.resume === "disconnected")) {
       this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
