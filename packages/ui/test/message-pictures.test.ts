@@ -78,8 +78,8 @@ function entries(item: ReturnType<typeof mapHistory>[number]): FeedEntry<FeedRef
 }
 
 /** Each bubble's text and the pictures drawn under it. */
-const drawn = (list: FeedEntry<FeedRef>[]) =>
-  groupFeed<FeedRef>(list, {}).flatMap((group) =>
+const drawn = (list: FeedEntry<FeedRef>[]): Array<[string, Array<string | null>]> =>
+  groupFeed<FeedRef>(list, {}).flatMap((group): Array<[string, Array<string | null>]> =>
     group.type === "bubble" && group.ref.t === "text"
       ? [[group.ref.text, (group.ref.pictures ?? []).map((p: ChatPicture) => p.alt)]]
       : [],

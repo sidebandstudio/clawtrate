@@ -107,10 +107,10 @@ describe("F-535: a picture sent with the message tool, in history", () => {
       },
     ]);
     // The text the picture goes with is that row's bubble.
-    expect(
-      turn.blocks.find((block) => block.kind === "text" && block.text.startsWith("Here is"))
-        ?.messageId,
-    ).toBe(DELIVERED_ID);
+    const said = turn.blocks.find(
+      (block) => block.kind === "text" && block.text.startsWith("Here is"),
+    );
+    expect(said?.kind === "text" && said.messageId).toBe(DELIVERED_ID);
     expect(JSON.stringify(turn.pictures)).not.toContain("/api/chat/media");
     expect(JSON.stringify(turn.pictures)).not.toContain("pictures/trail-map.png");
   });
