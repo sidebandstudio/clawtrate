@@ -12,6 +12,7 @@ import {
   inspectionFailure,
   inspectionFailureDetails,
   inspectionFailureLine,
+  cleanupLine,
 } from "./update-restart.ts";
 import { WarnIcon } from "./icons.tsx";
 import "./styles/updates.css";
@@ -400,6 +401,7 @@ export function Updates({
           </div>
         </dl>
         {!failureInNotice && failureDetails}
+        {cleanupLine(s) && <p className="b-hint">{cleanupLine(s)}</p>}
         {notice && !pending && <p>{notice}</p>}
         {attempt && <p>{attempt}</p>}
         {message && <p>{message}</p>}

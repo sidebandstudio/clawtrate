@@ -14,10 +14,10 @@ vi.mock(import("node:child_process"), async (original) => {
   return cp;
 });
 // Removing the checked copy can fail, as Electron's fs did on its app.asar (#383).
-const removal = vi.hoisted(() => ({ fails: false }));
+const removal = vi.hoisted(() => ({ fails: false, folder: ".inspect-" }));
 function failingRemove<T extends (path: string, ...rest: never[]) => Promise<void>>(rm: T): T {
   return (async (path: string, ...rest: never[]) => {
-    if (removal.fails && path.includes(".inspect-"))
+    if (removal.fails && path.includes(removal.folder))
       throw Object.assign(Error("ENOTEMPTY"), { code: "ENOTEMPTY" });
     return rm(path, ...rest);
   }) as T;
@@ -230,6 +230,7 @@ it.skipIf(process.platform === "win32")(
       expect(error).toHaveBeenCalledWith(
         "Couldn't remove the checked copy of the update (ENOTEMPTY)",
       );
+      expect(installer.cleanupFailure).toEqual({ copy: "checked-copy", errorCode: "ENOTEMPTY" });
       installer.retire?.();
     } finally {
       removal.fails = false;
@@ -399,5 +400,27 @@ it.skipIf(process.platform === "win32")(
     );
     expect(await installer.inspect(await candidate())).toBe("inspection-failed");
     expect(installer.inspectionFailure).toMatchObject({ stage: "archive", errorCode: "ENOSPC" });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "a private copy whose folder can't be removed is logged and recorded, and the answer stands",
+  async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    removal.fails = true;
+    removal.folder = ".hold-";
+    try {
+      const installer = macInstaller("arm64", async () => null);
+      expect(await installer.inspect(await candidate())).toBeNull();
+      expect(error).toHaveBeenCalledWith(
+        "Couldn't remove the private copy of the update (ENOTEMPTY)",
+      );
+      expect(installer.cleanupFailure).toEqual({ copy: "held-copy", errorCode: "ENOTEMPTY" });
+      installer.retire?.();
+    } finally {
+      removal.fails = false;
+      removal.folder = ".inspect-";
+      error.mockRestore();
+    }
   },
 );

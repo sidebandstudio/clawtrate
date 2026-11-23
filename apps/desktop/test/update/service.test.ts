@@ -1649,3 +1649,21 @@ it("records no failure with a refusal other than inspection-failed", async () =>
   });
   service.shutdown();
 });
+
+it("carries a copy the installer couldn't remove with the install it offers", async () => {
+  const cleanup = { copy: "checked-copy", errorCode: "ENOTEMPTY" } as const;
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    cleanupFailure: cleanup,
+    inspect: async () => null,
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "restart-available",
+    offerId: id,
+    cleanup,
+  });
+  service.shutdown();
+});

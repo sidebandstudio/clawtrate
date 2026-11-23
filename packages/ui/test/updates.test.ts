@@ -8,7 +8,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { Updates, showUpdateFooter } from "../src/Updates.tsx";
-import { inspectionFailureDetails, inspectionFailureLine } from "../src/update-restart.ts";
+import {
+  cleanupLine,
+  inspectionFailureDetails,
+  inspectionFailureLine,
+} from "../src/update-restart.ts";
 
 const snapshot: DesktopUpdateSnapshot = {
   runningVersion: "1.0.0",
@@ -464,4 +468,25 @@ it("F-231: the details to copy are codes, counts and versions only", () => {
       "Duration: 84 ms",
     ].join("\n"),
   );
+});
+
+it("F-231: says when the check left a copy it couldn't remove, and that it tries again", () => {
+  const install = {
+    kind: "restart-available",
+    offerId: "shown",
+    cleanup: { copy: "checked-copy", errorCode: "ENOTEMPTY" },
+  } as const;
+  const line =
+    "Clawtrate couldn't remove the copy of the app it checked (ENOTEMPTY). It tries again at the next start or check.";
+  expect(cleanupLine({ ...snapshot, install })).toBe(line);
+  expect(render(verified, { install }).html).toContain(line);
+  expect(
+    cleanupLine({
+      ...snapshot,
+      install: { ...install, cleanup: { copy: "held-copy", errorCode: "EPERM" } },
+    }),
+  ).toContain("its private copy of the download (EPERM)");
+  expect(
+    render(verified, { install: { kind: "restart-available", offerId: "shown" } }).html,
+  ).not.toContain("couldn't remove");
 });

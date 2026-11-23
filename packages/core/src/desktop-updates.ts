@@ -65,15 +65,29 @@ export interface UpdateInspectionFailure {
   system: string;
 }
 
+/**
+ * A copy the Mac installer made to check a download that it then couldn't remove. It never
+ * changes the inspection's answer; the update folder is cleared again at the next start and
+ * the next check.
+ */
+export interface UpdateCleanupFailure {
+  /** `checked-copy`: the unpacked app the helper checked; `held-copy`: the private copy of the download. */
+  copy: "checked-copy" | "held-copy";
+  /** A system error code, such as ENOTEMPTY, never its message. */
+  errorCode: string;
+}
+
 export type UpdateInstallCapability =
   | {
       kind: "unavailable-in-this-build";
       reason: UpdateInstallRefusal;
       /** Set with `inspection-failed` when the installer recorded why. */
       failure?: UpdateInspectionFailure;
+      cleanup?: UpdateCleanupFailure;
     }
   | {
       kind: "restart-available";
+      cleanup?: UpdateCleanupFailure;
       offerId: string;
       /** Confirm that macOS installs on the next quit even if restart cannot finish. */ completesOnQuit?: true;
     };

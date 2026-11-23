@@ -62,6 +62,17 @@ export function inspectionFailureLine(f: UpdateInspectionFailure): string {
   return `The update checker stopped while checking ${what}: ${how}.`;
 }
 
+/** A copy the check made and couldn't remove, in plain words, or null. */
+export function cleanupLine(s: DesktopUpdateSnapshot): string | null {
+  const cleanup = s.install.cleanup;
+  if (!cleanup) return null;
+  const copy =
+    cleanup.copy === "checked-copy"
+      ? "the copy of the app it checked"
+      : "its private copy of the download";
+  return `Clawtrate couldn't remove ${copy} (${cleanup.errorCode}). It tries again at the next start or check.`;
+}
+
 /** The full record, for "Copy details": codes and counts only. */
 export function inspectionFailureDetails(
   f: UpdateInspectionFailure,

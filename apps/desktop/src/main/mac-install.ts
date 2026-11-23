@@ -1,4 +1,8 @@
-import type { UpdateInspectionFailure, UpdateInstallRefusal } from "@clawtrate/core";
+import type {
+  UpdateCleanupFailure,
+  UpdateInspectionFailure,
+  UpdateInstallRefusal,
+} from "@clawtrate/core";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
@@ -142,6 +146,7 @@ async function inspectBundle(
   arch: string,
   signal: AbortSignal,
   record?: RecordFailure,
+  cleanupFailed?: (code: string) => void,
 ): Promise<UpdateInstallRefusal | null> {
   signal.throwIfAborted();
   const scratch = await mkdtemp(join(dirname(archive.proof.path), ".inspect-"));
@@ -159,6 +164,7 @@ async function inspectBundle(
     // at the next start and the next check.
     await rm(scratch, { recursive: true, force: true }).catch((error: unknown) => {
       console.error(`Couldn't remove the checked copy of the update (${errorCode(error)})`);
+      cleanupFailed?.(errorCode(error));
     });
   }
 }
@@ -302,6 +308,7 @@ export function macInstaller(
   let inspection: AbortController | undefined;
   let unsigned = false;
   let failure: UpdateInspectionFailure | null = null;
+  let cleanup: UpdateCleanupFailure | null = null;
   function retire() {
     inspection?.abort();
     inspection = undefined;
@@ -318,6 +325,9 @@ export function macInstaller(
     get inspectionFailure() {
       return failure;
     },
+    get cleanupFailure() {
+      return cleanup;
+    },
     completesOnQuit: true,
     retire,
     async inspect(file) {
@@ -325,6 +335,7 @@ export function macInstaller(
         return null;
       retire();
       failure = null;
+      cleanup = null;
       inspection = new AbortController();
       const { signal } = inspection;
       if (!inspect) {
@@ -341,7 +352,9 @@ export function macInstaller(
       let held: HeldMacArchive;
       const holding = performance.now();
       try {
-        held = await holdMacArchive(file, signal);
+        held = await holdMacArchive(file, signal, (errorCode) => {
+          cleanup = { copy: "held-copy", errorCode };
+        });
       } catch (error) {
         if (error instanceof ChangedMacArchive) return "artifact-changed";
         record("hold-archive", {
@@ -356,8 +369,14 @@ export function macInstaller(
       }
       const inspecting = performance.now();
       try {
-        const reason = await (inspect ?? inspectBundle)(held, arch, signal, (stage, helper) =>
-          record(helper.output === null ? "start-helper" : stage, helper),
+        const reason = await (inspect ?? inspectBundle)(
+          held,
+          arch,
+          signal,
+          (stage, helper) => record(helper.output === null ? "start-helper" : stage, helper),
+          (errorCode) => {
+            cleanup = { copy: "checked-copy", errorCode };
+          },
         );
         if (reason || signal.aborted) return reason ?? "artifact-changed";
         kept = held;

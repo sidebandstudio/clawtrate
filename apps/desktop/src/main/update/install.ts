@@ -1,4 +1,9 @@
-import type { UpdateInspectionFailure, UpdateInstallRefusal, UpdateTrack } from "@clawtrate/core";
+import type {
+  UpdateCleanupFailure,
+  UpdateInspectionFailure,
+  UpdateInstallRefusal,
+  UpdateTrack,
+} from "@clawtrate/core";
 
 /** Host proof captured after the engine renamed, reopened and hashed the file. */
 export interface VerifiedArtifact {
@@ -18,6 +23,8 @@ export interface UpdateInstaller {
   retire?(): void;
   /** Why the last inspect() returned inspection-failed, when the installer recorded it. */
   readonly inspectionFailure?: UpdateInspectionFailure | null;
+  /** A copy the last inspect() made and couldn't remove; it never changes the answer. */
+  readonly cleanupFailure?: UpdateCleanupFailure | null;
   inspect(file: VerifiedArtifact): Promise<UpdateInstallRefusal | null>;
   /**
    * Recheck identity, bytes and signature under protection through launch. `submitted` runs once

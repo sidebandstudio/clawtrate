@@ -480,12 +480,19 @@ export class DesktopUpdateService {
               return downloadFailure("artifact-changed");
             }
             if (reason) this.retireFile();
+            const cleanup = installer.cleanupFailure;
             install = reason
-              ? { kind: "unavailable-in-this-build", reason, ...this.failureFor(reason) }
+              ? {
+                  kind: "unavailable-in-this-build",
+                  reason,
+                  ...this.failureFor(reason),
+                  ...(cleanup && { cleanup }),
+                }
               : {
                   kind: "restart-available",
                   offerId: id,
                   ...(installer.completesOnQuit && { completesOnQuit: true }),
+                  ...(cleanup && { cleanup }),
                 };
           }
           this.pendingInstall = install;
