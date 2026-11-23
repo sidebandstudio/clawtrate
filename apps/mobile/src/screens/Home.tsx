@@ -97,7 +97,7 @@ function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
         bot={row.bot}
         size={TOUCH.avatarRow}
         primary={row.primary}
-        state={row.state === "working" ? "working" : "idle"}
+        state={row.state === "done-with-failures" ? "done" : (row.state ?? "idle")}
       />
       {stack ? (
         <View style={{ flex: 1, gap: 4 }}>
@@ -155,7 +155,7 @@ function Tile({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
           bot={row.bot}
           size={S["avatar-pin"]}
           primary={row.primary}
-          state={row.state === "working" ? "working" : "idle"}
+          state={row.state === "done-with-failures" ? "done" : (row.state ?? "idle")}
         />
         {row.state && (
           <View
