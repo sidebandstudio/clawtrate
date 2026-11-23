@@ -1264,6 +1264,17 @@ export class ClawtrateClient {
   /** Tasks whose runs' `agent.wait` check is on its way, and the runs each last checked. */
   private readonly endChecking = new Set<string>();
   private readonly endChecked = new Map<string, string>();
+  /**
+   * What this connection's latest read of a task's history showed, for a steer: the session it
+   * named and the run it had in flight. Whatever this client hears of the key since that the read
+   * did not show (a removal, another session, another run starting) drops it (`dropSteerCheck`).
+   */
+  private readonly steerChecks = new Map<
+    string,
+    { generation: number; sessionId: string; runId: string }
+  >();
+  /** Counts the drops, so a read that was out when one happened confirms nothing. */
+  private steerDrops = 0;
   private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Runs of sessions no viewer has open, kept small, so a bot-to-bot card can
@@ -1979,6 +1990,7 @@ export class ClawtrateClient {
     this.retained.delete(key);
     this.incarnations.delete(key);
     this.endChecked.delete(key);
+    this.steerChecks.delete(key);
     this.loads.delete(key);
     // Drop the chat stream baselines this task held.
     this.streams.retire(key);
@@ -3222,11 +3234,16 @@ export class ClawtrateClient {
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
     // A message goes only to the session it was written for. One written before the task's session
-    // was known waits for this connection's read of the task, and so does a steer: the gateway does
-    // not check a steer's session, and after a reconnect the run shown active may have ended unseen,
-    // its task deleted with it. A run the read settles makes the steer a checked send below.
+    // was known waits for this connection's read of the task, and so does a steer, unless the
+    // latest read already showed its session and the run it joins: the gateway does not check a
+    // steer's session, and the run shown active may belong to a task made under the key since, or
+    // have ended unseen with its task. A run the read settles makes the steer a checked send below.
     if (message.mode === "steer" || message.sessionId === undefined) {
-      if (!this.readOnThisConnection(key)) await this.loadTranscript(key, false, null);
+      if (
+        !this.readOnThisConnection(key) ||
+        (message.mode === "steer" && !this.steerConfirmed(key, message.sessionId))
+      )
+        await this.loadTranscript(key, false, null);
       message = this.outgoing(key, messageId);
       if (!message || (message.status !== "sending" && message.status !== "awaiting-access"))
         return;
@@ -3287,7 +3304,9 @@ export class ClawtrateClient {
             this.now(),
           );
         });
-      } else if (active.state === "stopping") {
+      } else if (active.state === "stopping" || !this.steerConfirmed(key, message.sessionId)) {
+        // A run the latest read did not show in flight in this message's session is not steered:
+        // the message waits behind it, and goes as a checked send once it ends.
         this.updateActivity(key, (activity) => {
           const next = updateMessage(activity, messageId, {
             mode: "queue",
@@ -3545,6 +3564,28 @@ export class ClawtrateClient {
       if (id) return id;
     }
     return null;
+  }
+
+  /**
+   * Whether a steer written for `sessionId` may go into the run the task shows active: this
+   * connection's latest read named that session and had that run in flight, and nothing heard of
+   * the key since has dropped it (`steerChecks`).
+   */
+  private steerConfirmed(key: string, sessionId: string | undefined): boolean {
+    const check = this.steerChecks.get(key);
+    const active = activeRun(this.state.transcripts[key] ?? emptyActivity);
+    return (
+      check?.generation === this.generation &&
+      sessionId !== undefined &&
+      check.sessionId === sessionId &&
+      active?.id === check.runId
+    );
+  }
+
+  /** Something the latest read of the task did not show: a steer waits for the next read. */
+  private dropSteerCheck(key: string): void {
+    this.steerDrops += 1;
+    this.steerChecks.delete(key);
   }
 
   /** Whether a read of the task's history succeeded on this connection. */
@@ -6989,6 +7030,7 @@ export class ClawtrateClient {
     this.foreign.clear();
     this.foreignReads.clear();
     this.endChecked.clear();
+    this.steerChecks.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -7555,6 +7597,17 @@ export class ClawtrateClient {
       this.scheduleRefresh(generation);
       return;
     }
+    // The task removed, or its key holding a session other than the one known: a steer waits for
+    // the next read of the task.
+    const listed = sessionNamed(row);
+    if (
+      this.tracked(key) &&
+      (isSessionRemoval(payload) ||
+        (listed !== null &&
+          listed !==
+            (this.steerChecks.get(key)?.sessionId ?? this.state.transcripts[key]?.sessionId)))
+    )
+      this.dropSteerCheck(key);
     if (isSessionRemoval(payload)) {
       this.cancelAllQueued(key);
       this.retireForeign(key);
@@ -7741,6 +7794,8 @@ export class ClawtrateClient {
       generation !== this.generation ||
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation;
+    // A drop of the steer check while the read is out leaves the read unable to confirm a steer.
+    const drops = this.steerDrops;
     // Runs active when the read starts; one the gateway then no longer has has ended.
     const activeBefore = new Set(
       (this.state.transcripts[key]?.runs ?? [])
@@ -7848,6 +7903,10 @@ export class ClawtrateClient {
         loadedAt: this.now(),
       };
       this.retainTaskRaw(key, rebuilt);
+      // What a steer may join from now: the session this read named and the run it had in flight.
+      if (named && inFlightId && this.steerDrops === drops)
+        this.steerChecks.set(key, { generation, sessionId: named, runId: inFlightId });
+      else this.steerChecks.delete(key);
       this.setTranscript(key, () => withLive(rebuilt));
       // A read is news of its own: the runs it leaves active are asked again.
       this.endChecked.delete(key);
@@ -7942,8 +8001,15 @@ export class ClawtrateClient {
       this.updateForeign(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
       return;
     }
-    this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
     const phase = asRecord(payload.data)?.phase;
+    // A run starting that the latest read did not show in flight: a steer waits for the next read.
+    if (
+      payload.stream === "lifecycle" &&
+      phase === "start" &&
+      payload.runId !== this.steerChecks.get(key)?.runId
+    )
+      this.dropSteerCheck(key);
+    this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
     }

@@ -102,13 +102,15 @@ async function opening(row: Record<string, unknown> | null, history: Record<stri
 
 describe("a task deleted elsewhere (F-278)", () => {
   it("names the session its history came from on a send, and not on a steer", async () => {
-    const { client, transcript, sends } = await shown({ session: { sessionId: "s-1" } });
+    const { client, gateway, transcript, sends } = await shown({ session: { sessionId: "s-1" } });
     expect(transcript().sessionId).toBe("s-1");
     client.sendMessage(KEY, "first");
     await until(() => sends().length === 1);
     expect(sends()[0]).toMatchObject({ sessionId: "s-1", expectedLeafEntryId: null });
     // Its run is under way: the next message steers it, which the gateway does not guard.
     await until(() => transcript().runs.some((run) => run.bound && run.state === "running"));
+    const started = transcript().runs.find((run) => run.bound)!.id;
+    gateway.emit("agent", agentEvent(started, 1, "lifecycle", { phase: "start" }));
     client.sendMessage(KEY, "steer");
     await until(() => sends().length === 2);
     expect(sends()[1]).not.toHaveProperty("sessionId");
@@ -372,6 +374,7 @@ describe("a task deleted elsewhere (F-278)", () => {
     expect(transcript().outbox[0]).toMatchObject({ status: "queued", sessionId: "s-1" });
     // The task is deleted and another made under its key; this read names it, and the run is gone.
     history.sessionId = "s-2";
+    gateway.running.clear();
     gateway.handlers["chat.send"] = (params) => {
       if ((params as Send).sessionId !== "s-2") throw new GatewayError(MOVED);
       return { runId: "run-new", status: "started" };
@@ -441,6 +444,67 @@ describe("a task deleted elsewhere (F-278)", () => {
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
     expect(sends()).toHaveLength(0);
+    client.stop();
+  });
+
+  it.each(["the new task's row", "its run starting", "the removal"])(
+    "a steer written after this client hears of another task under the key (%s), before its history is read again, never goes unguarded: refused as deleted",
+    async (heard) => {
+      const { client, gateway, history, transcript, sends } = await shown({
+        session: { sessionId: "s-2" },
+      });
+      // A run of the task shown is under way, and a read on this connection showed it in flight.
+      gateway.emit("agent", agentEvent("run-a", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.state === "running"));
+      const reads = gateway.calls("chat.history").length;
+      client.reloadSession(KEY);
+      await until(() => gateway.calls("chat.history").length > reads);
+      await sleep(20);
+      // The task is deleted elsewhere and another made under its key; the end of its run never
+      // reaches this client, but this does.
+      history.sessionId = "s-2";
+      gateway.running.set(KEY, "run-b");
+      if (heard === "the new task's row")
+        gateway.emit("sessions.changed", { sessionKey: KEY, sessionId: "s-2", reason: "send" });
+      if (heard === "its run starting")
+        gateway.emit("agent", agentEvent("run-b", 1, "lifecycle", { phase: "start" }));
+      if (heard === "the removal")
+        gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
+      await sleep(20);
+      client.sendMessage(KEY, "Skip the photos folder.");
+      expect(transcript().outbox[0]).toMatchObject({ mode: "steer", sessionId: "s-1" });
+      await until(() => transcript().outbox[0]?.status === "failed");
+      expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
+      expect(sends()).toHaveLength(0);
+      client.stop();
+    },
+  );
+
+  it("a run the latest read did not show in flight is not steered: the message waits behind it and goes as a checked send once it ends", async () => {
+    const { client, gateway, history, transcript, sends } = await shown({
+      session: { sessionId: "s-1" },
+    });
+    gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    // History has a turn waiting, so the run stays shown active, but nothing in flight.
+    gateway.running.clear();
+    gateway.handlers["chat.history"] = () => ({
+      messages: history.messages,
+      hasMore: false,
+      sessionId: "s-1",
+      pendingInputs: { items: [{ id: "p-1", state: "queued" }], total: 1 },
+    });
+    client.sendMessage(KEY, "Skip the photos folder.");
+    await until(() => transcript().outbox[0]?.status === "queued");
+    expect(transcript().outbox[0]?.mode).toBe("queue");
+    expect(sends()).toHaveLength(0);
+    gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
+    await until(() => sends().length === 1);
+    expect(sends()[0]).toMatchObject({
+      queueMode: "followup",
+      sessionId: "s-1",
+      expectedLeafEntryId: null,
+    });
     client.stop();
   });
 });

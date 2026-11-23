@@ -170,6 +170,8 @@ describe("runs history alone cannot show (F-097, F-107)", () => {
     gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: false, runIds: [] });
     gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs.length === 1);
+    // It leaves the gateway, and nothing reaches this client.
+    gateway.running.clear();
     await client.stopRun(KEY, "run-x");
     // History has no row and no in-flight run: the run is over, but nothing says how.
     await until(() => transcript().runs[0]!.state !== "stopping");

@@ -28,6 +28,19 @@ function namingSession(payload: unknown, params: unknown): unknown {
   return typeof key === "string" ? { ...payload, sessionId: `session:${key}` } : payload;
 }
 
+/**
+ * OpenClaw 2026.10.6 names the run it has in flight under the key (`inFlightRun`) in the history of
+ * a task it holds. A history handler that says nothing of it is answered with the run a `start`
+ * this gateway emitted began, until its end; one that sets `inFlightRun` is answered as it says.
+ */
+function namingRun(payload: unknown, params: unknown, running: Map<string, string>): unknown {
+  if (!payload || typeof payload !== "object" || "inFlightRun" in payload) return payload;
+  const key = (params as { sessionKey?: unknown } | undefined)?.sessionKey;
+  const runId = typeof key === "string" ? running.get(key) : undefined;
+  if (!runId || !(payload as { sessionId?: unknown }).sessionId) return payload;
+  return { ...payload, inFlightRun: { runId } };
+}
+
 /** When this fake gateway "process" started; its hellos report their uptime from it. */
 const fakeStartedAt = Date.now();
 /** This fake gateway start's `server.bootId`, as a real gateway reports a random one per start. */
@@ -97,7 +110,9 @@ class FakeSocket implements WebSocketLike {
         return handler(frame.params);
       })
       .then((payload) =>
-        method === "chat.history" ? namingSession(payload, frame.params) : payload,
+        method === "chat.history"
+          ? namingRun(namingSession(payload, frame.params), frame.params, this.gateway.running)
+          : payload,
       )
       .then(
         (payload) => this.reply(id, { ok: true, payload }),
@@ -147,8 +162,32 @@ export class FakeGateway {
     return socket;
   };
 
+  /** The run each task has in flight, by the lifecycle events emitted, for its history. */
+  readonly running = new Map<string, string>();
+
   /** Deliver an event to every open socket. */
   emit(event: string, payload: unknown, frameSeq?: number): void {
+    const frame = payload as {
+      runId?: unknown;
+      sessionKey?: unknown;
+      stream?: unknown;
+      state?: unknown;
+      phase?: unknown;
+      data?: { phase?: unknown };
+    } | null;
+    if (typeof frame?.sessionKey === "string" && typeof frame.runId === "string") {
+      const phase = event === "agent" && frame.stream === "lifecycle" ? frame.data?.phase : null;
+      if (phase === "start") this.running.set(frame.sessionKey, frame.runId);
+      else if (
+        this.running.get(frame.sessionKey) === frame.runId &&
+        (phase === "end" ||
+          phase === "error" ||
+          (event === "chat" &&
+            (frame.state === "final" || frame.state === "error" || frame.state === "aborted")) ||
+          (event === "sessions.changed" && (frame.phase === "end" || frame.phase === "error")))
+      )
+        this.running.delete(frame.sessionKey);
+    }
     for (const socket of this.sockets) {
       socket.push({
         type: "event",
@@ -159,8 +198,9 @@ export class FakeGateway {
     }
   }
 
-  /** Drop every open connection, as a gateway restart would. */
+  /** Drop every open connection, as a gateway restart would: no run is in flight after it. */
   dropAll(): void {
+    this.running.clear();
     for (const socket of this.sockets) {
       if (socket.readyState !== 1) continue;
       socket.readyState = 3;
