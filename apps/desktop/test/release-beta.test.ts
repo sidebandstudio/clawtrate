@@ -1011,8 +1011,43 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     expect(checked).toBeGreaterThan(zipped);
   });
 
-  it("stops when the ZIP check does not build", async () => {
+  it("takes only the check's own ok as a pass, not a silent exit 0", async () => {
     const { runner } = tools(builds(place.appDir));
+    const silent: Run = (command, args, options) =>
+      basename(command) === "check-zip" ? ok() : runner(command, args, options);
+    expect(await stopped(() => prepare(silent, NOW, place))).toBe(
+      `${ZIPS[0]} would be refused by the Mac updater's ZIP check: the check exited 0. Nothing was published.`,
+    );
+  });
+
+  it.each<[string, RunResult, string]>([
+    [
+      "times out",
+      { status: null, stdout: "", stderr: "", signal: "SIGTERM", error: "ETIMEDOUT" },
+      "timed out",
+    ],
+    [
+      "crashes",
+      { status: null, stdout: "", stderr: "", signal: "SIGSEGV" },
+      "crashed (signal SIGSEGV)",
+    ],
+  ])("stops, saying so, when the check %s, and gives it a deadline", async (_, answer, said) => {
+    const { runner } = tools(builds(place.appDir));
+    const deadlines: Record<string, number | undefined> = {};
+    const ending: Run = (command, args, options) => {
+      if (command === "xcrun" && args[0] === "clang") deadlines.clang = options?.timeout;
+      if (basename(command) !== "check-zip") return runner(command, args, options);
+      deadlines.check = options?.timeout;
+      return answer;
+    };
+    expect(await stopped(() => prepare(ending, NOW, place))).toBe(
+      `${ZIPS[0]} would be refused by the Mac updater's ZIP check: the check ${said}. Nothing was published.`,
+    );
+    expect(deadlines).toEqual({ clang: 120_000, check: 60_000 });
+  });
+
+  it("stops when the ZIP check does not build, before the build, the keychain or notarization", async () => {
+    const { runner, calls } = tools(builds(place.appDir));
     const failing: Run = (command, args, options) =>
       command === "xcrun" && args[0] === "clang"
         ? fail("check-zip.m: error: no such file")
@@ -1020,6 +1055,34 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     expect(await stopped(() => prepare(failing, NOW, place))).toBe(
       "Could not build the update helper's ZIP check: check-zip.m: error: no such file. Nothing was published.",
     );
+    expect(calls.some((call) => [process.execPath, SECURITY, XCRUN].includes(call.command))).toBe(
+      false,
+    );
+  });
+
+  it("names what failed when xcrun cannot start", async () => {
+    const { runner } = tools(builds(place.appDir));
+    const missing: Run = (command, args, options) =>
+      command === "xcrun" && args[0] === "clang"
+        ? { status: null, stdout: "", stderr: "", error: "ENOENT" }
+        : runner(command, args, options);
+    expect(await stopped(() => prepare(missing, NOW, place))).toBe(
+      "Could not build the update helper's ZIP check: xcrun clang could not start (ENOENT). Nothing was published.",
+    );
+  });
+});
+
+describe("how a run ends", () => {
+  it("reports a timeout and a command that cannot start, which the ZIP check's messages name", () => {
+    expect(run("/bin/sleep", ["5"], { timeout: 200 })).toMatchObject({
+      status: null,
+      signal: "SIGTERM",
+      error: "ETIMEDOUT",
+    });
+    expect(run(join(tmpdir(), "clawtrate-no-such-tool"), [])).toMatchObject({
+      status: null,
+      error: "ENOENT",
+    });
   });
 });
 
@@ -1261,6 +1324,9 @@ function github(
     const line = [command, ...args].join(" ");
     for (const [start, answer] of Object.entries(answers))
       if (line.startsWith(start)) return answer;
+    // The ZIP check publishing builds and runs on the staged zips: it passes them.
+    if (command === "xcrun" && args[0] === "clang") return ok();
+    if (basename(command) === "check-zip") return ok("ok\n");
     if (command === "gh" && args.includes(siteRuns)) return ok();
     if (line === "gh auth status") return ok();
     if (line.startsWith(`gh api repos/sidebandstudio/clawtrate/compare/${COMMIT}...main`))
@@ -1364,6 +1430,35 @@ describe("publishing", () => {
     const create = hub.calls.find((call) => call[1] === "release" && call[2] === "create")!;
     expect(create).not.toContain("--notes-file");
     expect(create[create.indexOf("--notes") + 1]).toBe(readFileSync(join(dir, "notes.md"), "utf8"));
+  });
+
+  it("checks both staged zips with the update helper's ZIP check before anything reaches GitHub", async () => {
+    const hub = github(dir);
+    await publish(hub.runner, VERSION, record, net, place.staging);
+    const checks = hub.calls.flatMap((call, index) =>
+      basename(call[0]!) === "check-zip" ? [index] : [],
+    );
+    expect(checks.map((index) => hub.calls[index]![1])).toEqual(ZIPS.map((zip) => join(dir, zip)));
+    expect(hub.calls.findIndex((call) => call[0] === "gh")).toBeGreaterThan(checks.at(-1)!);
+  });
+
+  it("refuses a staged zip the ZIP check refuses, before any GitHub call, and removes the check", async () => {
+    const hub = github(dir);
+    let checker = "";
+    const refusing: Run = (command, args, options) => {
+      if (command === "xcrun" && args[0] === "clang") checker = args.at(-1)!;
+      if (basename(command) === "check-zip" && args[0]!.endsWith(ZIPS[1]!)) {
+        hub.calls.push([command, ...args]);
+        return fail("", "an archive comment\n");
+      }
+      return hub.runner(command, args, options);
+    };
+    expect(await stopped(() => publish(refusing, VERSION, record, net, place.staging))).toBe(
+      `${ZIPS[1]} would be refused by the Mac updater's ZIP check: an archive comment. Nothing was published.`,
+    );
+    expect(hub.calls.some((call) => call[0] === "gh")).toBe(false);
+    expect(checker).not.toBe("");
+    expect(existsSync(dirname(checker))).toBe(false);
   });
 
   it("checks the site against the feed it published, not the staging file read again", async () => {

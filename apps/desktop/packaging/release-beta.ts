@@ -44,7 +44,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { parseFeed } from "../src/main/update/feed.ts";
 import { isNewer, parseVersion } from "../src/main/update/version.ts";
@@ -87,6 +87,9 @@ export interface RunResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  /** The signal that ended it, and the code of an error that kept it from finishing. */
+  signal?: NodeJS.Signals | null | undefined;
+  error?: string | undefined;
 }
 export type Run = (
   command: string,
@@ -114,8 +117,22 @@ export const run: Run = (command, args, options = {}) => {
       options.inherit ? "inherit" : "pipe",
     ],
   });
-  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    signal: result.signal,
+    error: (result.error as NodeJS.ErrnoException | undefined)?.code,
+  };
 };
+
+/** How a run that gave no answer ended, for a message. */
+function ended(result: RunResult): string {
+  if (result.error === "ETIMEDOUT") return "timed out";
+  if (result.error) return `could not start (${result.error})`;
+  if (result.signal) return `crashed (signal ${result.signal})`;
+  return `exited ${result.status}`;
+}
 
 /** Each secret from the vault, or the names it does not have. Values are never printed. */
 export function readSecrets(
@@ -544,32 +561,38 @@ export function verifyApp(
 export function zipCheck(runner: Run, dir: string): (zip: string) => void {
   const checker = join(dir, "check-zip");
   const source = join(APP_DIR, "packaging/mac/check-zip.m");
-  const built = runner("xcrun", [
-    "clang",
-    "-fobjc-arc",
-    "-Wall",
-    "-Werror",
-    "-O2",
-    "-mmacosx-version-min=12.0",
-    "-framework",
-    "Foundation",
-    "-framework",
-    "Security",
-    "-larchive.2",
-    source,
-    "-o",
-    checker,
-  ]);
+  const built = runner(
+    "xcrun",
+    [
+      "clang",
+      "-fobjc-arc",
+      "-Wall",
+      "-Werror",
+      "-O2",
+      "-mmacosx-version-min=12.0",
+      "-framework",
+      "Foundation",
+      "-framework",
+      "Security",
+      "-larchive.2",
+      source,
+      "-o",
+      checker,
+    ],
+    { timeout: 120_000 },
+  );
   if (built.status !== 0)
     stop(
-      `Could not build the update helper's ZIP check: ${built.stderr.trim()}. Nothing was published.`,
+      `Could not build the update helper's ZIP check: ${built.stderr.trim() || `xcrun clang ${ended(built)}`}. Nothing was published.`,
     );
   return (zip) => {
-    const result = runner(checker, [zip]);
-    if (result.status !== 0)
-      stop(
-        `${basename(zip)} would be refused by the Mac updater's ZIP check: ${result.stdout.trim() || `the check exited ${result.status}`}. Nothing was published.`,
-      );
+    const result = runner(checker, [zip], { timeout: 60_000 });
+    // A pass is the check's own "ok", never a silent exit 0.
+    if (result.status === 0 && result.stdout === "ok\n") return;
+    const reason = (result.status === 1 && result.stdout.trim()) || `the check ${ended(result)}`;
+    stop(
+      `${basename(zip)} would be refused by the Mac updater's ZIP check: ${reason}. Nothing was published.`,
+    );
   };
 }
 
@@ -1095,6 +1118,8 @@ async function prepareLocked(
   process.on("SIGINT", interrupted);
   process.on("SIGTERM", interrupted);
   try {
+    // Built before the build, so a check that won't compile costs no build or notarization.
+    const checkZip = zipCheck(runner, temp);
     const signing = signingKeychain(runner, secrets, temp);
     for (const name of [CERTIFICATE_FILE, KEY_FILE])
       if (existsSync(join(temp, name))) stop(`${name} still exists. Nothing was built.`);
@@ -1120,7 +1145,6 @@ async function prepareLocked(
       );
     }
     let teamId: string | null = null;
-    const checkZip = zipCheck(runner, temp);
     for (const [arch, key] of Object.entries(MAC_ARCHITECTURES) as Array<
       [keyof typeof MAC_ARCHITECTURES, (typeof MAC_ARCHITECTURES)[keyof typeof MAC_ARCHITECTURES]]
     >) {
@@ -1481,6 +1505,14 @@ export async function publish(
 ): Promise<void> {
   const { plan, notes } = stagedRelease(staging, version, recordSha256);
   const dir = join(staging, version);
+  // Again before any upload: the folder may have been staged before this check existed.
+  const checking = mkdtempSync(join(tmpdir(), "clawtrate-zip-check-"));
+  try {
+    const checkZip = zipCheck(runner, checking);
+    for (const zip of plan.files.slice(0, 2)) checkZip(join(dir, zip.name));
+  } finally {
+    rmSync(checking, { recursive: true, force: true });
+  }
   if (runner("gh", ["auth", "status"]).status !== 0)
     stop("Sign in to GitHub with `gh auth login`.");
   // Asked of the repository the release goes to, not of this checkout's
