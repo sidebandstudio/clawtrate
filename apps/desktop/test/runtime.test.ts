@@ -314,11 +314,11 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
       while (!(await portFree(port))) port -= NAMED_PORT_BLOCK;
       const listener = new WebSocketServer({ host: "127.0.0.1", port });
       await new Promise((resolve) => listener.once("listening", resolve));
-      let connections = 0;
-      listener.on("connection", (socket) => {
-        connections += 1;
-        socket.terminate();
-      });
+      // The first socket stays open until the gateway is gone. Dropping it at once would let
+      // the one-second retry land while the proof still holds, on a machine slow to end the
+      // gateway, and that second connection would be allowed.
+      const sockets: WebSocket[] = [];
+      listener.on("connection", (socket) => sockets.push(socket));
       const proven = provenCheckout("alpha", { port });
       const devGateway = proven.read()!;
       expect(devGateway).not.toBeNull();
@@ -331,16 +331,17 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
         recheckDevGateway: proven.read,
         ...(mode === "token-free" ? { devOnly: true } : {}),
       });
-      await until(() => connections === 1);
+      await until(() => sockets.length === 1);
       // The gateway process is gone; the protocol's own retry must ask again.
       childFor(proven.gateway.pid).kill("SIGTERM");
       await new Promise((resolve) => childFor(proven.gateway.pid).once("exit", resolve));
+      sockets[0]!.terminate();
       await until(
         () => runtime.client.state.connection.error?.code === "GATEWAY_NOT_ALLOWED",
         8000,
       );
       await new Promise((resolve) => setTimeout(resolve, 2500));
-      expect(connections, mode).toBe(1);
+      expect(sockets.length, mode).toBe(1);
       expect(runtime.client.state.connection.retryAt).toBeNull();
       runtime.client.stop();
       await new Promise((resolve) => listener.close(resolve));
