@@ -57,6 +57,29 @@ test.describe("the turn time limit", () => {
       page.getByRole("dialog", { name: "Settings" }).getByLabel("Turn time limit"),
     ).toHaveValue("20");
   });
+
+  test("F-519: Settings has Show external channel chats, off by default, and a change reaches the host", async ({
+    page,
+  }) => {
+    const settings = await openPane(page);
+    const toggle = settings.getByRole("switch", { name: "Show external channel chats" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(toggle).toHaveAccessibleDescription(/main conversation always shows/);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                clawtrateFixture: { getState(): { showChannelChats?: boolean } };
+              }
+            ).clawtrateFixture.getState().showChannelChats,
+        ),
+      )
+      .toBe(true);
+  });
 });
 
 for (const size of SIZES) {

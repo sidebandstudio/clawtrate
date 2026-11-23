@@ -80,7 +80,7 @@ type Section = SettingsSection;
 export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["gateway", "Gateway", "The gateway, its address and this device"],
   ["accounts", "Accounts", "Provider accounts the bots run on"],
-  ["conversation", "Conversation", "How long a bot's turn may run, and channel chats"],
+  ["conversation", "Conversation", "How long a bot's turn may run"],
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
   ["checkins", "Check-ins", "When each bot checks in on its own"],
