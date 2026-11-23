@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { ClawtrateClient } from "../src/client.ts";
 import { readVoice, setVoice } from "../src/voice.ts";
+import { FakeGateway, helloOk, testHost, until } from "./fake-gateway.ts";
 
 describe("the plain voice setting", () => {
   it("asks nothing of a gateway whose hello does not list the plugin", async () => {
@@ -29,5 +31,34 @@ describe("the plain voice setting", () => {
     await expect(readVoice(async () => ({ plain: "yes" }), true)).rejects.toThrow(
       /did not say whether/,
     );
+  });
+
+  it("F-523: a view reading the setting as the connection is published connected reads this gateway's plugin", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: {
+        ...helloOk((params as { scopes: string[] }).scopes),
+        features: { methods: ["clawtrate-voice.get"], events: [] },
+      },
+    });
+    gateway.handlers["clawtrate-voice.get"] = () => ({
+      plain: true,
+      reachesBots: true,
+      guide: "g",
+    });
+    const client = new ClawtrateClient(testHost(gateway));
+    let read: Promise<unknown> | null = null;
+    const stop = client.store.subscribe(() => {
+      if (!read && client.state.connection.status === "connected") read = client.readVoice();
+    });
+    try {
+      await client.connect({ url: "ws://127.0.0.1:19001", token: "t" });
+      await until(() => read !== null);
+      expect(await read).toEqual({ plugin: true, plain: true, reachesBots: true });
+    } finally {
+      stop();
+      client.stop();
+    }
   });
 });

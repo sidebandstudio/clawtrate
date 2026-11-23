@@ -18,7 +18,7 @@ async function openPane(page: Page, theme: "light" | "dark" = "light") {
 }
 
 type VoiceFixture = {
-  voiceReaches(reaches: boolean): void;
+  voiceAnswer(change: { plain?: boolean; reachesBots?: boolean }): void;
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
 };
 
@@ -30,9 +30,9 @@ test.describe("the plain voice", () => {
   }) => {
     await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, "light");
     await page.evaluate(() =>
-      (window as unknown as { clawtrateFixture: VoiceFixture }).clawtrateFixture.voiceReaches(
-        false,
-      ),
+      (window as unknown as { clawtrateFixture: VoiceFixture }).clawtrateFixture.voiceAnswer({
+        reachesBots: false,
+      }),
     );
     await page.keyboard.press("ControlOrMeta+,");
     const settings = page.getByRole("dialog", { name: "Settings" });
@@ -41,6 +41,25 @@ test.describe("the plain voice", () => {
     await expect(settings.getByTestId("plain-voice-note")).toContainText("allowConversationAccess");
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await expect(toggle).toBeDisabled();
+  });
+
+  test("F-523: Plain voice turned off says so, and that it is on by default", async ({ page }) => {
+    await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, "light");
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: VoiceFixture }).clawtrateFixture.voiceAnswer({
+        plain: false,
+      }),
+    );
+    await page.keyboard.press("ControlOrMeta+,");
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.getByRole("button", { name: "Conversation", exact: true }).click();
+    await expect(settings.getByRole("switch", { name: "Plain voice" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    await expect(settings.getByTestId("plain-voice-note")).toHaveText(
+      "Off, so bots write the way OpenClaw tells them to. On by default.",
+    );
   });
 
   test("F-523: after the connection drops, Plain voice shows nothing until the gateway answers again", async ({

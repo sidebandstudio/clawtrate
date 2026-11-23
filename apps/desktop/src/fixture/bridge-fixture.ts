@@ -507,8 +507,8 @@ export function createFixtureBridge(
   reads: string[];
   /** How many views hold a task open. */
   holds(key: string): number;
-  /** From now on, answer as a gateway whose config does or does not let the voice plugin's hook run. */
-  voiceReaches(reaches: boolean): void;
+  /** From now on, answer as a gateway with this voice setting, or whose config blocks its hook. */
+  voiceAnswer(change: { plain?: boolean; reachesBots?: boolean }): void;
   /** The last unread count the interface gave for the dock badge. */
   badge: number | null;
   /** From now on, refuse the rail's commands of this type, as a gateway refuses a change. */
@@ -1094,7 +1094,7 @@ export function createFixtureBridge(
     sent,
     reads,
     holds: (key) => holds.get(key) ?? 0,
-    voiceReaches: (reaches) => void (voice = { ...voice, reachesBots: reaches }),
+    voiceAnswer: (change) => void (voice = { ...voice, ...change }),
     badge: null,
     refuse: (type: string) => void railRefused.add(type),
     raceArchive: () => void (railRace.archive = true),

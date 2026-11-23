@@ -6974,6 +6974,13 @@ export class ClawtrateClient {
       maxImageBytes: number(asRecord(policy?.attachments)?.maxImageBytes),
       maxFileBytes: number(asRecord(policy?.attachments)?.maxBytes),
     };
+    // Known before "connected" is published: a view that reads the voice setting on that news reads
+    // this gateway's answer, not the last one's.
+    const methods = asRecord(hello.features)?.methods;
+    const listed = Array.isArray(methods)
+      ? methods.filter((m): m is string => typeof m === "string")
+      : [];
+    this.voicePlugin = listed.includes(VOICE_GET_METHOD);
     this.setConnection({
       status: "connected",
       serverVersion: this.isSetup(this.settings?.url)
@@ -7011,11 +7018,6 @@ export class ClawtrateClient {
     // Whether the computer plugin is loaded comes from the hello's methods; panes that lost a
     // connection while control was held read the browser's leases again before offering anything.
     this.computer.reconnected();
-    const methods = asRecord(hello.features)?.methods;
-    const listed = Array.isArray(methods)
-      ? methods.filter((m): m is string => typeof m === "string")
-      : [];
-    this.voicePlugin = listed.includes(VOICE_GET_METHOD);
     this.computer.hello(listed);
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);

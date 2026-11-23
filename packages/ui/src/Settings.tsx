@@ -109,6 +109,8 @@ function PlainVoice({
   const connected = connection.status === "connected";
   const gateway = connection.gatewayUrl;
   const [voice, setVoice] = useState<VoiceSetting | null>(null);
+  // Bumped when the connection the setting was read on ends: a change's reply after that is stale.
+  const reads = useRef(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const message = (failure: unknown) =>
@@ -126,6 +128,7 @@ function PlainVoice({
     );
     return () => {
       live = false;
+      reads.current += 1;
       // What the gateway said before a drop or on another gateway is not what it says now.
       setVoice(null);
     };
@@ -136,14 +139,16 @@ function PlainVoice({
     if (voice?.plugin !== true || saving) return;
     setSaving(true);
     setError(null);
+    const at = reads.current;
     void bridge
       .invoke({ type: "setVoice", plain: !voice.plain })
       .then(
         (read) => {
+          if (at !== reads.current) return;
           setVoice(read);
           if (read.plugin) announce(read.plain ? "Plain voice is on" : "Plain voice is off");
         },
-        (failure: unknown) => setError(message(failure)),
+        (failure: unknown) => at === reads.current && setError(message(failure)),
       )
       .finally(() => setSaving(false));
   };
@@ -158,7 +163,9 @@ function PlainVoice({
         ? "Needs Clawtrate's voice plugin on the gateway. Without it, bots write the way OpenClaw tells them to."
         : !voice.reachesBots
           ? "The gateway keeps the voice plugin from adding to bots' instructions, so no bot is told this. To allow it, set plugins.entries.clawtrate-voice.hooks.allowConversationAccess to true in the gateway's config."
-          : "Every bot on this gateway is told to write to you plainly and warmly, with no em dashes. On by default.";
+          : voice.plain
+            ? "Every bot on this gateway is told to write to you plainly and warmly, with no em dashes. On by default."
+            : "Off, so bots write the way OpenClaw tells them to. On by default.";
   return (
     <>
       <div className="b-field">
