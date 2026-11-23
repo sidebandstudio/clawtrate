@@ -244,7 +244,7 @@ describe("full access behind a flag", () => {
       "wss://gateway.example",
       "wss://gateway.example:8443/openclaw",
       "wss://mac.tail1234.ts.net",
-      "wss://100.80.1.2",
+      "wss://203.0.113.9",
       "wss://[2001:db8::1]",
       " wss://GATEWAY.example. ",
     ])
