@@ -285,7 +285,7 @@ So a bot whose newest task has been read still shows the dot for an older unread
 
 ### Tasks under a bot
 
-Grok Bot gives a bot one conversation; a Clawtrate bot has many tasks. The arrangement keeps the single list and puts tasks inside it. Three things are tracked separately: the selected bot, the selected task, and which bots are unfolded.
+A bot has many tasks. The arrangement keeps a single list of bots and puts each bot's tasks inside it. Three things are tracked separately: the selected bot, the selected task, and which bots are unfolded.
 
 **A bot with one task** looks and behaves like a plain row. Clicking it opens the task, and the row takes the selection. No task rows are shown. A new bot starts this way, so the simple case stays simple.
 

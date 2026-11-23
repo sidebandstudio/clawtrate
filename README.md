@@ -8,7 +8,7 @@ Your OpenClaw agents, orchestrated.
 
 Clawtrate is a desktop and iOS app for [OpenClaw](https://github.com/openclaw/openclaw). It connects to a gateway you already run and puts your bots in a sidebar, with tasks under each bot, the conversation in the middle and the bot's work beside it. Each thing a bot does shows up as a short card in plain words, and the raw tool call is one click further.
 
-Clawtrate is an independent project and is not affiliated with OpenClaw or xAI.
+Clawtrate is an independent project and is not affiliated with OpenClaw.
 
 > [!NOTE]
 > Clawtrate is in early development and has no release yet. The desktop app works against a development gateway, and the iOS app is not on `main` yet.

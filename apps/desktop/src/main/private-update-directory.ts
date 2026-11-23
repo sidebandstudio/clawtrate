@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, realpath } from "node:fs/promises";
 import { dirname, join, resolve, win32 } from "node:path";
 import { promisify } from "node:util";
+import { rm } from "./update-tree-fs.ts";
 
 type DirectoryIdentity = {
   dev: bigint;
@@ -74,7 +75,8 @@ async function checkParents(root: string): Promise<void> {
 
 export async function clearUpdateDirectory(root: string): Promise<void> {
   await checkParents(root);
-  // rm removes a link at root itself without following it.
+  // rm removes a link at root itself without following it, and never reads an .asar file
+  // as a folder: a checked copy of the app left by an earlier build holds one (#383).
   await rm(root, { recursive: true, force: true });
 }
 

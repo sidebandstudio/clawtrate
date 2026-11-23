@@ -3,12 +3,14 @@
 // development gateway runs, the tests that need one are skipped.
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import {
   closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -18,6 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, createPublicKey, randomBytes } from "node:crypto";
+import { createServer, type AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -37,6 +40,7 @@ import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { debuggingPort } from "./desktop-driver.ts";
 import { quitWithin } from "./quit.ts";
+import { dictionaryRequests, requestsSoFar } from "./net-log.ts";
 import {
   CHECKOUT,
   bundleIdentifier,
@@ -46,6 +50,7 @@ import {
   processesUsing,
 } from "./global-setup.ts";
 import {
+  askToClose,
   integrityLevels,
   mainWindowTitle,
   taskbarOverlayDescription,
@@ -560,6 +565,152 @@ test("stays on its own content", async () => {
   // Paired on macOS, so the seeded bots are still shown; on Windows the connect screen is.
   expect(result).toEqual({ windowRefused: true, stayed: true, bots: WINDOWS ? 0 : 4 });
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
+});
+
+test("F-393: checking spelling asks for no dictionary", async () => {
+  // Windows checks spelling with its own checker. For a language it has no
+  // checker for, Chromium falls back to a Hunspell dictionary and downloads it
+  // the first time, in a request the browser process makes outside the
+  // session's request filter. Faroese has a Hunspell dictionary, and a
+  // Windows without Faroese installed has no checker for it, so a second copy
+  // of the app with Faroese as its spelling language would take that path as
+  // it starts. Its network log, complete once it has quit, shows every
+  // request, and none may be for a dictionary, from a host or from a file.
+  // macOS builds no Hunspell fallback, so nothing asks for one there either.
+  test.setTimeout(120_000);
+  // A new folder each time: one that already holds a dictionary never asks for it.
+  const spelling = realpathSync.native(
+    mkdtempSync(join(process.env.CLAWTRATE_PACKAGED_PLACE!, "spelling-")),
+  );
+  const netLog = join(spelling, "net-log.json");
+  // macOS keeps a sandboxed app's data in its sandbox's folder, so the copy gets
+  // a sandbox of its own, as the Keychain check's launches do. Windows reads no
+  // sandbox and keeps its data in the folder the launch names, so the copy names
+  // a new one and passes the run's sandbox, as the second launch does.
+  let data = join(spelling, "data");
+  let sandbox = SANDBOX;
+  if (WINDOWS) mkdirSync(data);
+  else {
+    const own = writeSandbox({ instance: INSTANCE, parent: spelling });
+    data = realpathSync.native(own.appData);
+    sandbox = own.file;
+  }
+  writeFileSync(
+    join(data, "Preferences"),
+    JSON.stringify({ spellcheck: { dictionaries: ["fo"] } }),
+  );
+  // A home, temporary folder and working folder of its own, as every packaged launch has.
+  const place = launchPlace(spelling);
+  // Straight to the pictures' port: a proxy the system names could be asked for them.
+  const copyFlags = [`--log-net-log=${netLog}`, "--no-proxy-server"];
+  let copy: ChildProcess;
+  if (WINDOWS) {
+    // Windows keeps no run record. Node puts the copy in a job object that
+    // Windows closes when this worker exits, so the copy ends with it.
+    copy = spawn(packagedExecutable(APP), [...launchArgs(data, sandbox, CHECKOUT), ...copyFlags], {
+      cwd: place.cwd,
+      env: place.env,
+      stdio: "ignore",
+    });
+  } else {
+    // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
+    const gated = gatedSpawn(
+      spawn,
+      packagedExecutable(APP),
+      [...launchArgs(data, sandbox, CHECKOUT), ...copyFlags],
+      { cwd: place.cwd, env: place.env, stdio: "ignore" },
+    );
+    copy = gated.child;
+    // Until the record names it, a failure aborts the gate, so the copy never starts.
+    try {
+      const found = processIdentity(copy.pid!);
+      if (found.state !== "alive") throw new Error("could not record the copy's process");
+      recordSuccessor(RECORD, { pid: copy.pid!, identity: found.identity });
+    } catch (error) {
+      gated.abort();
+      throw error;
+    }
+    gated.release();
+  }
+  // A copy that cannot start emits `error` and may never emit `exit`: either ends the wait.
+  const exited = new Promise((resolve) => {
+    copy.once("exit", resolve);
+    copy.once("error", resolve);
+  });
+  // Pictures for the copy's page to ask for, from a port on this machine that refuses them.
+  const pictures = createServer((socket) => socket.destroy());
+  const soFar = () => {
+    try {
+      return requestsSoFar(readFileSync(netLog, "utf8"));
+    } catch (error) {
+      // Chromium may not have created the file yet, or may hold it on Windows.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "EBUSY") throw error;
+      return [];
+    }
+  };
+  let view: Browser | undefined;
+  let left: number[];
+  try {
+    await once(pictures.listen(0, "127.0.0.1"), "listening");
+    const picturesAt = `https://127.0.0.1:${(pictures.address() as AddressInfo).port}/`;
+    view = await chromium.connectOverCDP(`http://127.0.0.1:${await debuggingPort(data, copy)}`);
+    await expect
+      .poll(() => view!.contexts().flatMap((context) => context.pages()).length)
+      .toBeGreaterThan(0);
+    const shown = view.contexts().flatMap((context) => context.pages())[0]!;
+    await expect(shown.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+    // Chromium writes events only once 15 are waiting, and an idle app logs
+    // none, so a request can sit unwritten until the app quits. Each picture
+    // the page asks for adds events, and events are written in the order they
+    // happen, so asking for one more picture until one shows brings every
+    // earlier event to disk, a dictionary request at startup included, and
+    // shows the log is being written.
+    let picture = 0;
+    await expect
+      .poll(
+        async () => {
+          await shown.evaluate((url) => {
+            new Image().src = url;
+          }, `${picturesAt}${picture++}.png`);
+          return soFar().some((url) => url.startsWith(picturesAt));
+        },
+        { timeout: 30_000, message: "the log on disk shows a picture's request" },
+      )
+      .toBe(true);
+    // Windows refuses the close message until the window is shown.
+    if (WINDOWS)
+      await expect.poll(() => mainWindowTitle(copy.pid!), { timeout: 20_000 }).toBe("Clawtrate");
+    const quit = await quitWithin(
+      () => {
+        if (WINDOWS) expect(askToClose(copy.pid!), "asking the copy to close").toBeNull();
+        else copy.kill("SIGTERM");
+      },
+      () => exited,
+      async () => view?.close(),
+      15_000,
+    );
+    expect(quit, "the copy quits within 15 seconds").toBe(true);
+    expect(copy.exitCode, "the copy's exit code").toBe(0);
+  } finally {
+    pictures.close();
+    // Whatever is left is ended by PID: nothing outlives the test.
+    if (copy.exitCode === null && copy.signalCode === null) {
+      // Only the copy: on Windows this ends its process alone, not its tree.
+      copy.kill("SIGKILL");
+      // Bounded: a copy that could not be ended never exits. The list below names it.
+      await Promise.race([exited, sleep(10_000)]);
+    }
+    // Its helpers end by themselves once it has. Any left fail the test, listed
+    // but not ended: only the copy was started here.
+    for (let i = 0; i < 50 && processesUsing(data).length > 0; i += 1) await sleep(200);
+    left = processesUsing(data);
+  }
+  expect(left, "the copy's processes end within 10 seconds of it").toEqual([]);
+  expect(
+    dictionaryRequests(readFileSync(netLog, "utf8")),
+    "the dictionaries the network log shows requests for",
+  ).toEqual([]);
 });
 
 test("opens with the same pairing and tasks after a newer build takes its place", async () => {

@@ -92,7 +92,7 @@ Keep your branch mergeable. When `main` moves under it and it conflicts, merge `
 
 ## Publication
 
-The repository is public, so every commit, pull request and issue is published. Commit no secrets or tokens, no private hostnames or IP addresses, no usernames or home-directory paths, no email addresses, no personal data, and no third-party images or copied assets. The same goes for pull request titles and bodies. Commits on your branch are small and describe the change.
+The repository is public, so every commit, pull request and issue is published. Commit no secrets or tokens, no private hostnames or IP addresses, no usernames or home-directory paths, no email addresses, no personal data, and no third-party images or copied assets. The same goes for pull request titles and bodies. Describe Clawtrate on its own terms: never describe a feature as matching, copying or improving on another product, whether that product is named or not. Naming what Clawtrate works with, such as OpenClaw, model providers and T3 Code, is fine. Never use another product's logos, icons or copied assets. Commits on your branch are small and describe the change.
 
 ## Security
 

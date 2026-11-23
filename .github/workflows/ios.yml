@@ -1,26 +1,23 @@
 name: iOS
 
+# A run holds a macOS runner for an hour or more, so pull requests run it only
+# when they change the iPhone app or this workflow. Most desktop pull requests
+# change the shared code the app builds from, so that is checked once a day on
+# main. Use workflow_dispatch to run it on a branch sooner.
 on:
   pull_request:
     paths:
       - ".github/workflows/ios.yml"
       - "apps/mobile/**"
-      - "apps/desktop/src/host/runtime.ts"
-      - "packages/core/**"
-      - "packages/ui/src/**"
-      - "plugins/**"
-      - "tools/brand/src/png.ts"
-      - "tools/dev-gateway/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
+  schedule:
+    - cron: "0 9 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ios-${{ github.event.pull_request.number || github.run_id }}
+  group: ios-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
