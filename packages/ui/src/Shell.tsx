@@ -25,6 +25,7 @@ import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { FullControlOffer } from "./FullControl.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
@@ -77,6 +78,23 @@ export function Shell({
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
+
+  // The one-time offer of full control (setup-effortless.md §6): it opens once per gateway in
+  // this window while it is unanswered, stays open while its request runs, and once closed
+  // lives on in Settings only.
+  const [offerFor, setOfferFor] = useState<string | null>(null);
+  const [offerOpen, setOfferOpen] = useState(false);
+  const offerUrl = state.connection.gatewayUrl;
+  if (
+    !inert &&
+    !info.readOnly &&
+    state.connection.status === "connected" &&
+    state.connection.fullOffer === "offer" &&
+    offerUrl !== offerFor
+  ) {
+    setOfferFor(offerUrl);
+    setOfferOpen(true);
+  }
 
   // When access arrives, the strip says so for four seconds; the conversation announces it.
   const connectedNow = state.connection.status === "connected";
@@ -845,6 +863,9 @@ export function Shell({
           />
         )}
       </div>
+      {offerOpen && (
+        <FullControlOffer connection={state.connection} onClose={() => setOfferOpen(false)} />
+      )}
       {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
       {searchOpen && (
         <SearchPalette

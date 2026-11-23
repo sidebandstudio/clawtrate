@@ -99,6 +99,13 @@ export type ConnectionState = {
    * narrower grant is kept, said, and never asked again by itself.
    */
   fullPairing: boolean;
+  /**
+   * The one-time offer of full control to a pairing made with less, at a protected address
+   * on a host with secure storage (setup-effortless.md §6): `offer` until the person answers
+   * it, `settings` once they have (it stays in Settings, Gateway, Access), null where it
+   * doesn't apply. Read again at each hello.
+   */
+  fullOffer: "offer" | "settings" | null;
   upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
@@ -502,6 +509,7 @@ export const initialConnectionState: ConnectionState = {
   canApprove: false,
   canAdmin: false,
   fullPairing: false,
+  fullOffer: null,
   upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,

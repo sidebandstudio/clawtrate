@@ -13,6 +13,7 @@ import {
   decisionText,
   endDecision,
   endReadback,
+  FULL_SCOPES,
   initialState,
   MAX_RAW_ENTRY_CHARS,
   noteSent,
@@ -119,6 +120,7 @@ export const SCENES = [
   "offline-down",
   "connect-full",
   "access-narrowed",
+  "access-offer",
   ...LIVE_SCENES,
   ...RAIL_SCENES,
   ...ACTION_SCENES,
@@ -280,6 +282,12 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
     case "access-narrowed":
       return {
         initial: withConnection(base, { gatewayUrl: "wss://gateway.example", fullPairing: true }),
+        steps: [],
+      };
+    // A device paired read-only before full control, offered it once (§6).
+    case "access-offer":
+      return {
+        initial: withConnection(base, { gatewayUrl: "wss://gateway.example", fullOffer: "offer" }),
         steps: [],
       };
     case "connect-error":
@@ -869,6 +877,24 @@ export function createFixtureBridge(
       }
       case "requestAccess":
         return;
+      // The offer's one request waits for the owner; `clawtrateFixture.setState` decides it.
+      case "requestFullControl":
+        set(
+          withConnection(state, {
+            fullOffer: "settings",
+            upgrade: {
+              ...initialState.connection.upgrade,
+              status: "pending",
+              scopes: [...FULL_SCOPES],
+              requestId: "up-full-0001",
+              approveCommand: "openclaw devices approve up-full-0001",
+            },
+          }),
+        );
+        return;
+      case "dismissFullControl":
+        set(withConnection(state, { fullOffer: "settings" }));
+        return;
       case "resolveApproval": {
         const { key, approvalId, decision } = command;
         const card = approval(key, approvalId);
@@ -1069,7 +1095,10 @@ export function createFixtureBridge(
       ? setupInfo(FIXTURE_INFO, setupName)
       : name === "access-pinned"
         ? { ...FIXTURE_INFO, readOnly: true }
-        : name === "connect-full" || name === "access-narrowed" || options.fullPairing
+        : name === "connect-full" ||
+            name === "access-narrowed" ||
+            name === "access-offer" ||
+            options.fullPairing
           ? { ...FIXTURE_INFO, fullControl: true }
           : FIXTURE_INFO,
     getState: () => state,

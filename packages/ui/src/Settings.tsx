@@ -28,7 +28,7 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
-import { notGranted } from "./FullControl.tsx";
+import { FullControlAsk, notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import { useForget } from "./forget.ts";
@@ -438,14 +438,17 @@ export function Settings({
               : "None while not connected"}
           </dd>
         </div>
-        {connection.status === "connected" && connection.fullPairing && (
-          <div>
-            <dt>Access</dt>
-            <dd data-testid="gateway-access">
-              {missing.length === 0 ? "Full control" : "Less than full control"}
-            </dd>
-          </div>
-        )}
+        {connection.status === "connected" &&
+          (connection.fullPairing || connection.fullOffer !== null) && (
+            <div>
+              <dt>Access</dt>
+              <dd data-testid="gateway-access">
+                {connection.fullPairing && missing.length === 0
+                  ? "Full control"
+                  : "Less than full control"}
+              </dd>
+            </div>
+          )}
         {connection.serverVersion && (
           <div>
             <dt>Gateway</dt>
@@ -460,6 +463,10 @@ export function Settings({
         <p className="settings-note" data-testid="narrower-grant">
           {`OpenClaw granted less than full control. Not granted: ${missing.join(", ")}. This device keeps what was granted.`}
         </p>
+      )}
+      {/* The one-time offer stays here once answered (setup-effortless.md §6). */}
+      {!info.readOnly && connection.status === "connected" && connection.fullOffer !== null && (
+        <FullControlAsk connection={connection} />
       )}
       {problem && (
         <div className="form-error" role="alert" data-testid="gateway-problem">

@@ -41,3 +41,44 @@ export function protectedGatewayUrl(raw: string): boolean {
   if (/^\[(::1?|::ffff:(7f[0-9a-f]{2}|0{1,4}):[0-9a-f]{1,4})\]$/.test(host)) return false;
   return true;
 }
+
+/**
+ * The endpoint an address dials, whatever its spelling: the host in lower case without a
+ * trailing dot, the port (a default one written out), the path and the query. The scheme
+ * isn't part of it, so `ws://` and `wss://` to one host and port are one gateway. Null for
+ * an address a Connect refuses.
+ */
+export function gatewayEndpoint(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(validateGatewayUrl(raw));
+  } catch {
+    return null;
+  }
+  const port = url.port || (url.protocol === "wss:" ? "443" : "80");
+  const path = url.pathname.replace(/\/$/, "");
+  return `${url.hostname.toLowerCase().replace(/\.$/, "")}:${port}${path}${url.search}`;
+}
+
+/**
+ * The other spellings of this address's endpoint (`gatewayEndpoint`) a pairing may be saved
+ * under: either scheme, with or without a trailing dot, each as a Connect saves it.
+ */
+export function endpointSpellings(raw: string): string[] {
+  const own = validateGatewayUrl(raw);
+  const endpoint = gatewayEndpoint(own);
+  const url = new URL(own);
+  const host = url.hostname.replace(/\.$/, "");
+  const port = url.port || (url.protocol === "wss:" ? "443" : "80");
+  const spellings = new Set<string>();
+  for (const scheme of ["wss:", "ws:"])
+    for (const name of [host, `${host}.`]) {
+      try {
+        const each = validateGatewayUrl(`${scheme}//${name}:${port}${url.pathname}${url.search}`);
+        if (each !== own && gatewayEndpoint(each) === endpoint) spellings.add(each);
+      } catch {
+        // A name that can't take a trailing dot (an IP address) has no such spelling.
+      }
+    }
+  return [...spellings];
+}
