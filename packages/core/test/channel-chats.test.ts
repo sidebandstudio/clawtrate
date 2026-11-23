@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
-import { listArchived, type TaskActionContext } from "../src/task-actions.ts";
+import { listArchived, MAX_ARCHIVED_LISTED, type TaskActionContext } from "../src/task-actions.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, questionRecord, URL_A } from "./client-harness.ts";
 import { FakeGateway, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -354,6 +354,31 @@ describe("F-519: Show external channel chats", () => {
     expect(
       (await listArchived(ctx, "pip", { showChannelChats: true })).tasks.map((task) => task.key),
     ).toEqual([DISCORD, NATIVE, MAIN]);
+  });
+
+  it("F-519: the Archived group reads on past a page of channel chats it leaves out", async () => {
+    const page = Array.from({ length: MAX_ARCHIVED_LISTED + 1 }, (_, index) => ({
+      key: `agent:pip:discord:channel:${index}`,
+      agentId: "pip",
+      sessionId: `d-${index}`,
+      channel: "discord",
+      archived: true,
+      archivedAt: 2000 + index,
+    }));
+    const native = { key: NATIVE, agentId: "pip", sessionId: "n", archived: true, archivedAt: 100 };
+    const offsets: unknown[] = [];
+    const ctx = {
+      request: async (_method: string, params: Record<string, unknown>) => {
+        offsets.push(params.offset);
+        return params.offset === page.length
+          ? { sessions: [native], hasMore: false }
+          : { sessions: page, hasMore: true, nextOffset: page.length };
+      },
+    } as unknown as TaskActionContext;
+    const listed = await listArchived(ctx, "pip");
+    expect(listed.tasks.map((task) => task.key)).toEqual([NATIVE]);
+    expect(listed.more).toBe(false);
+    expect(offsets).toEqual([undefined, page.length]);
   });
 
   it("F-519: the bridge takes the setting only as true or false", () => {

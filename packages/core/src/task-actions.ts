@@ -15,6 +15,8 @@ import { asRecord, mapSessionRow, plainPreview, type RawRecord } from "./mapping
 export const MAX_TASK_LABEL_CHARS = 512;
 /** Archived tasks one read lists; past it `more` is true. */
 export const MAX_ARCHIVED_LISTED = 50;
+/** Pages one Archived read takes at most, when the channel chats it leaves out thin them. */
+export const MAX_ARCHIVED_PAGES = 10;
 /** How long a stop may take before an archive or delete gives up waiting for it. */
 export const STOP_SETTLE_MS = 15_000;
 /** Between two reads of a task's row while a stop settles. */
@@ -186,14 +188,26 @@ export async function listArchived(
   botId: string,
   options: { showChannelChats?: boolean } = {},
 ): Promise<ArchivedList> {
-  const result = asRecord(await ctx.request("sessions.list", archivedListParams(botId)));
-  const rows = Array.isArray(result?.sessions) ? result.sessions : [];
   const tasks: ArchivedTask[] = [];
-  for (const entry of rows) {
-    const row = asRecord(entry);
-    if (row && options.showChannelChats !== true && externalChannelOf(row)) continue;
-    const task = row && mapArchivedRow(row, botId);
-    if (task) tasks.push(task);
+  let more: boolean;
+  // A page of channel chats left out lists nothing, so read on until the group is full.
+  for (let pages = 1, offset = 0; ; pages += 1) {
+    const params = archivedListParams(botId);
+    const result = asRecord(
+      await ctx.request("sessions.list", offset > 0 ? { ...params, offset } : params),
+    );
+    const rows = Array.isArray(result?.sessions) ? result.sessions : [];
+    for (const entry of rows) {
+      const row = asRecord(entry);
+      if (row && options.showChannelChats !== true && externalChannelOf(row)) continue;
+      const task = row && mapArchivedRow(row, botId);
+      if (task) tasks.push(task);
+    }
+    const next = result?.nextOffset;
+    more = result?.hasMore === true;
+    if (!more || tasks.length > MAX_ARCHIVED_LISTED || pages >= MAX_ARCHIVED_PAGES) break;
+    if (typeof next !== "number" || next <= offset) break;
+    offset = next;
   }
   tasks.sort(
     (a, b) =>
@@ -202,7 +216,7 @@ export async function listArchived(
   );
   return {
     tasks: tasks.slice(0, MAX_ARCHIVED_LISTED),
-    more: tasks.length > MAX_ARCHIVED_LISTED || result?.hasMore === true,
+    more: tasks.length > MAX_ARCHIVED_LISTED || more,
   };
 }
 

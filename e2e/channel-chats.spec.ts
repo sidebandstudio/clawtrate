@@ -145,7 +145,7 @@ test.beforeAll(async ({ browser }) => {
   await turn(key.native, "Please reply in plain text");
 
   const data = mkdtempSync(join(tmpdir(), "clawtrate-channels-"));
-  const started = startHost(INSTANCE, STATIC, data);
+  const started = startHost(INSTANCE, STATIC, data, { readOnly: true });
   started.gated.release();
   host = { child: started.host, data };
   const context = await browser.newContext({
