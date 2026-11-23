@@ -608,6 +608,46 @@ describe("connecting", () => {
       }
     });
 
+    it.each(["suspend", "disconnect"] as const)(
+      "F-457: stopping when startup shows the gateway keeps a queued %s from writing",
+      async (action) => {
+        const { storage, reading, release } = pausedRead();
+        const set = storage.set;
+        const remove = storage.delete;
+        let writes = 0;
+        storage.set = (key, value) => {
+          if (key === "connection") writes += 1;
+          return set(key, value);
+        };
+        storage.delete = (key) => {
+          if (key === "connection") writes += 1;
+          return remove(key);
+        };
+        const gateway = new FakeGateway();
+        const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+        const unsubscribe = client.store.subscribe(({ connection }) => {
+          if (connection.status !== "disconnected" || connection.gatewayUrl !== URL) return;
+          unsubscribe();
+          client.stop();
+        });
+        try {
+          const starting = client.start();
+          await reading;
+          const command = action === "suspend" ? client.suspend() : client.disconnect(URL);
+          release();
+          await Promise.all([starting, command]);
+          await sleep(50);
+          expect(writes).toBe(0);
+          expect(savedSettings(storage)).toEqual({ url: URL, token: null });
+          expect(gateway.sockets).toHaveLength(0);
+        } finally {
+          unsubscribe();
+          release();
+          client.stop();
+        }
+      },
+    );
+
     it("F-387: Retry opens the saved gateway offered as a choice", async () => {
       const { storage, reading, release } = pausedRead();
       const gateway = new FakeGateway();

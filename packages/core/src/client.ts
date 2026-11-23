@@ -1539,12 +1539,14 @@ export class ClawtrateClient {
    * A Disconnect, Suspend or Retry, queued. Sent while `start` reads the saved gateway, it waits
    * for that read and fails if the read did.
    */
-  private connectionCommand<T>(change: () => Promise<T>): Promise<T> {
+  private connectionCommand(change: (stops: number) => Promise<void>): Promise<void> {
+    const stops = this.stops;
     const restoring = this.restoring;
     const run = this.changeConnection(async () => {
       const failure = await restoring?.read;
+      if (stops !== this.stops) return;
       if (failure !== undefined) throw failure;
-      return change();
+      return change(stops);
     });
     restoring?.commands.push(run);
     return run;
@@ -1769,7 +1771,7 @@ export class ClawtrateClient {
    */
   async disconnect(gatewayUrl?: string, selection?: number): Promise<void> {
     const asked = ++this.selectionAsked;
-    return this.connectionCommand(async () => {
+    return this.connectionCommand(async (stops) => {
       if (!this.settings) return;
       if (gatewayUrl !== undefined && this.settings.url !== gatewayUrl) {
         throw new GatewayChangedError();
@@ -1781,7 +1783,9 @@ export class ClawtrateClient {
       // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
       // and stays the selection it was. Another client on this store may have saved a different
       // gateway since this one was chosen; that record is the other client's and stays.
-      if ((await this.savedSettings())?.url === this.settings.url) {
+      const saved = await this.savedSettings();
+      if (!this.settings || stops !== this.stops) return;
+      if (saved?.url === this.settings.url) {
         await this.host.storage.delete(SETTINGS_KEY);
       }
       this.connectionCommands += 1;
@@ -1811,18 +1815,18 @@ export class ClawtrateClient {
    * reconnects at once, keeping what is already on screen.
    */
   async retryNow(): Promise<void> {
-    const stops = this.stops;
+    let reload: number | null = null;
     // The reload runs outside the queue: it changes nothing saved.
-    const reload = await this.connectionCommand(async () => {
-      if (!this.settings || stops !== this.stops) return null;
-      if (this.setupIntent?.refusal === "pairing-changed") return null;
+    await this.connectionCommand(async (stops) => {
+      if (!this.settings) return;
+      if (this.setupIntent?.refusal === "pairing-changed") return;
       if (this.protocol?.connected && this.state.connection.status === "connected") {
-        return this.generation;
+        reload = this.generation;
+        return;
       }
       if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
       this.connectionCommands += 1;
       if (stops === this.stops) await this.open();
-      return null;
     });
     if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
   }
@@ -1833,15 +1837,16 @@ export class ClawtrateClient {
    */
   async suspend(): Promise<void> {
     const restoring = this.restoring !== null;
-    return this.connectionCommand(async () => {
+    return this.connectionCommand(async (stops) => {
       if (!this.settings) return;
       // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
       const url = this.settings.url;
       const typed = this.typedTokenEnds(url);
       const next = { ...this.settings, suspended: true, ...(typed ? { token: null } : {}) };
       // Read at startup, the record may be another client's by now: that one stays as it is.
-      const kept =
-        !restoring || JSON.stringify(await this.savedSettings()) === JSON.stringify(this.settings);
+      const saved = restoring ? await this.savedSettings() : null;
+      if (!this.settings || stops !== this.stops) return;
+      const kept = !restoring || JSON.stringify(saved) === JSON.stringify(this.settings);
       if (kept) await this.saveSettings(next);
       else this.settings = next;
       this.connectionCommands += 1;
