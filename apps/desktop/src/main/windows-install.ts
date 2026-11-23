@@ -10,14 +10,15 @@ const PENDING_TRIAL = "windows-install-pending-trial";
  * it while that handle is open, so the hash, the signatures and the version all come from the
  * same bytes. WinVerifyTrust checks one embedded signature at a time, picked by its index,
  * shows no prompt, skips revocation and downloads nothing: the chain is built from
- * certificates already on this machine and in the signature. Each line is a fact;
+ * certificates already on this machine and in the signature. The version comes from the
+ * file's own version resource, read through the handle: the version API opens the file again
+ * by path and can take its strings from a .mui file beside it. Each line is a fact;
  * `windowsRefusal` decides. */
 const inspectWindows = `
 $ErrorActionPreference='Stop'
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -138,6 +139,91 @@ public static class UpdateSignature {
     lines.Add(name + " " + found.Count);
     lines.AddRange(found);
   }
+  static byte[] Read(FileStream file, long at, long count) {
+    if (at < 0 || count < 0 || at + count > file.Length) throw new InvalidDataException();
+    var bytes = new byte[count];
+    file.Seek(at, SeekOrigin.Begin);
+    for (int done = 0; done < count; ) {
+      int read = file.Read(bytes, done, (int)count - done);
+      if (read <= 0) throw new IOException();
+      done += read;
+    }
+    return bytes;
+  }
+  static uint U32(byte[] bytes, long at) { return BitConverter.ToUInt32(bytes, (int)at); }
+  static int U16(byte[] bytes, long at) { return BitConverter.ToUInt16(bytes, (int)at); }
+  // The offsets an IMAGE_RESOURCE_DIRECTORY's entries point to: all of them, or the one whose
+  // number is id. The high bit marks another directory, which every level but the last holds.
+  static List<long> Entries(byte[] tree, long at, long id, bool directories) {
+    var found = new List<long>();
+    int named = U16(tree, at + 12), count = named + U16(tree, at + 14);
+    for (int i = 0; i < count; i++) {
+      long entry = at + 16 + 8 * i;
+      if (id >= 0 && (i < named || U32(tree, entry) != id)) continue;
+      uint target = U32(tree, entry + 4);
+      if (((target & 0x80000000) != 0) != directories) throw new InvalidDataException();
+      found.Add(target & 0x7fffffff);
+    }
+    return found;
+  }
+  // A version resource is a tree of nodes: a length, a value's length, a type (1 for text), a
+  // key, the value and then the children, each part on a four-byte boundary. ProductVersion is
+  // a string in a table under VS_VERSION_INFO's StringFileInfo.
+  static void ProductVersions(byte[] block, int at, int end, int depth, List<string> found) {
+    while (at < end) {
+      int length = U16(block, at), next = at + length, key = at + 6, keyEnd = key;
+      // Padding after the last node.
+      if (length == 0) break;
+      if (length < 6 || next > end) throw new InvalidDataException();
+      while (U16(block, keyEnd) != 0) keyEnd += 2;
+      string name = Encoding.Unicode.GetString(block, key, keyEnd - key);
+      int value = (keyEnd + 5) & ~3, valueEnd = value + U16(block, at + 2) * (U16(block, at + 4) == 1 ? 2 : 1);
+      if (valueEnd > next) throw new InvalidDataException();
+      if (depth == 3) {
+        if (name == "ProductVersion") found.Add(Encoding.Unicode.GetString(block, value, valueEnd - value).TrimEnd('\\0'));
+      } else if (depth == 2 || name == (depth == 0 ? "VS_VERSION_INFO" : "StringFileInfo")) {
+        ProductVersions(block, (valueEnd + 3) & ~3, next, depth + 1, found);
+      }
+      at = (next + 3) & ~3;
+    }
+  }
+  // The ProductVersion of every version resource in the file, through the held stream. Null
+  // unless they all say the same, or if the file is not one Windows could read them from.
+  static string Version(FileStream file) {
+    try {
+      long pe = U32(Read(file, 0x3c, 4), 0);
+      var head = Read(file, pe, 24);
+      if (U32(head, 0) != 0x4550) return null;
+      int sections = U16(head, 6), optionalSize = U16(head, 20);
+      var optional = Read(file, pe + 24, optionalSize);
+      var table = Read(file, pe + 24 + optionalSize, 40 * sections);
+      // The data directories follow their count; the third is the resource table.
+      int directories = U16(optional, 0) == 0x20b ? 112 : 96;
+      if (U32(optional, directories - 4) < 3) return null;
+      Func<uint, uint, byte[]> mapped = (rva, size) => {
+        for (int i = 0; i < sections; i++) {
+          uint start = U32(table, 40 * i + 12), raw = U32(table, 40 * i + 16);
+          if (rva >= start && rva - start < raw && size <= raw - (rva - start))
+            return Read(file, U32(table, 40 * i + 20) + (long)(rva - start), size);
+        }
+        throw new InvalidDataException();
+      };
+      var tree = mapped(U32(optional, directories + 16), U32(optional, directories + 20));
+      var found = new List<string>();
+      // RT_VERSION is type 16. Each of its names and languages leads to a data entry: an RVA and a size.
+      foreach (long type in Entries(tree, 0, 16, true))
+        foreach (long name in Entries(tree, type, -1, true))
+          foreach (long language in Entries(tree, name, -1, false)) {
+            var block = mapped(U32(tree, language), U32(tree, language + 4));
+            ProductVersions(block, 0, block.Length, 0, found);
+          }
+      return found.Count > 0 && found.TrueForAll(version => version == found[0]) ? found[0] : null;
+    } catch (InvalidDataException) {
+      return null;
+    } catch (ArgumentException) {
+      return null;
+    }
+  }
   public static string[] Inspect(string path, long expected, string running) {
     var lines = new List<string>();
     Signatures(lines, "running", running, null);
@@ -155,8 +241,9 @@ public static class UpdateSignature {
           using (var sha = SHA512.Create()) hash = Convert.ToBase64String(sha.ComputeHash(file));
         }
         lines.Add("file " + info.volume + "." + info.indexHigh + "." + info.indexLow + " " + file.Length + " " + hash);
+        string version = Encode(Version(file));
         Signatures(lines, "installer", final.ToString(), file);
-        lines.Add("version " + Encode(FileVersionInfo.GetVersionInfo(final.ToString()).ProductVersion));
+        lines.Add("version " + version);
       }
     }
     return lines.ToArray();
@@ -172,7 +259,7 @@ export type InspectWindowsFile = (
   signal: AbortSignal,
 ) => Promise<string>;
 
-const inspectWithPowerShell: InspectWindowsFile = async (file, runningApp, signal) =>
+export const inspectWithPowerShell: InspectWindowsFile = async (file, runningApp, signal) =>
   (
     await runUpdatePowerShell(
       inspectWindows,

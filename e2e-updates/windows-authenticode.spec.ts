@@ -1,12 +1,13 @@
 // Real Authenticode signatures, read by the helper the Windows installer uses. The checks
 // exist only on Windows. The first group signs nothing: it uses executables the machine already
-// has, Node's own and another publisher's. The second exists only when
+// has, Node's own, another publisher's and Windows' own. The second exists only when
 // CLAWTRATE_AUTHENTICODE_FILES names the files CI's windows job signs with certificates it makes
 // for the run.
 import { expect, test } from "@playwright/test";
 import {
   copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -15,11 +16,22 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectUpdateFile } from "../apps/desktop/src/main/inspect-update-file.ts";
+import { runUpdatePowerShell } from "../apps/desktop/src/main/private-update-directory.ts";
 import type { VerifiedArtifact } from "../apps/desktop/src/main/update/install.ts";
-import { windowsInstaller } from "../apps/desktop/src/main/windows-install.ts";
+import {
+  inspectWithPowerShell,
+  windowsInstaller,
+} from "../apps/desktop/src/main/windows-install.ts";
 
 const windows = process.platform === "win32";
 const files = process.env.CLAWTRATE_AUTHENTICODE_FILES;
+const system = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
+
+/** What Windows PowerShell's own cmdlets, which go through Windows' usual lookups, say of a file. */
+async function windowsSays(script: string, path: string) {
+  const { stdout } = await runUpdatePowerShell(script, { CLAWTRATE_CHECKED_FILE: path }, 60000);
+  return stdout.trim();
+}
 
 let dir = "";
 test.beforeEach(() => {
@@ -93,7 +105,6 @@ if (windows)
     });
 
     test("F-231: refuses a file Windows vouches for only through a catalog", async () => {
-      const system = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
       const path = place(
         "setup.exe",
         readFileSync(join(system, "WindowsPowerShell", "v1.0", "powershell.exe")),
@@ -101,6 +112,36 @@ if (windows)
       expect(await windowsInstaller(running).inspect(await proof(path, version))).toBe(
         "windows-signature",
       );
+    });
+
+    test("F-231: reads an installer's own version, not one from a .mui file beside it", async () => {
+      // cmd.exe's strings are in a .mui file, and the version lookup looks for one beside a copy too.
+      const path = place("setup.exe", readFileSync(join(system, "cmd.exe")));
+      const lookup = `[Diagnostics.FileVersionInfo]::GetVersionInfo($env:CLAWTRATE_CHECKED_FILE).ProductVersion`;
+      const read = async () => {
+        const output = await inspectWithPowerShell(
+          await proof(path, version),
+          running,
+          new AbortController().signal,
+        );
+        const line = output.split(/\r?\n/).find((fact) => fact.startsWith("version "));
+        return line && Buffer.from(line.slice("version ".length), "base64").toString("utf8");
+      };
+      const own = await read();
+      expect(own).toMatch(/^\d+\.\d+/);
+      // A copy of cmd.exe's .mui file, with its version rewritten.
+      const muiPath = join(system, "en-US", "cmd.exe.mui");
+      const text = await windowsSays(lookup, muiPath);
+      const rewritten = "9".repeat(text.length);
+      const mui = readFileSync(muiPath);
+      const from = Buffer.from(text, "utf16le");
+      for (let at = mui.indexOf(from); at >= 0; at = mui.indexOf(from, at + 1))
+        Buffer.from(rewritten, "utf16le").copy(mui, at);
+      mkdirSync(join(dir, "en-US"));
+      writeFileSync(join(dir, "en-US", "setup.exe.mui"), mui);
+      // Windows' version lookup now takes the copy's version from the .mui file. The check does not.
+      expect(await windowsSays(lookup, path)).toBe(rewritten);
+      expect(await read()).toBe(own);
     });
 
     test("F-231: refuses another publisher's signed executable", async () => {
