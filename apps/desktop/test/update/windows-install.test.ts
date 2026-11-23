@@ -83,16 +83,26 @@ it.each([
   ["a change after signing", [`80096010 ${sha256} ${publisher} ${root}`]],
   ["no signer", [`00000000 ${sha256} - -`]],
   ["only a SHA-1 signature", [oursSha1]],
-  ["two SHA-256 signatures", [ours, `00000000 ${sha256} ${other} ${root}`]],
+  ["two SHA-256 signatures with different subjects", [ours, `00000000 ${sha256} ${other} ${root}`]],
+  [
+    "two SHA-256 signatures under different roots",
+    [ours, `00000000 ${sha256} ${publisher} ${otherRoot}`],
+  ],
+  [
+    "a trusted SHA-256 signature and one changed after signing",
+    [ours, `80096010 ${sha256} ${publisher} ${root}`],
+  ],
 ])("F-231: refuses when the running app's signatures have %s", (_case, running) => {
   expect(windowsRefusal(facts({ running: signed("running", ...running) }), proof)).toBe(
     "running-signature-untrusted",
   );
 });
 
-it("F-231: reads the running app's publisher from its SHA-256 signature when SHA-1 comes first", () => {
-  const running = signed("running", `00000000 ${sha1} ${other} ${otherRoot}`, ours);
-  expect(windowsRefusal(facts({ running }), proof)).toBeNull();
+it.each([
+  ["SHA-1 first and SHA-256 second", [`00000000 ${sha1} ${other} ${otherRoot}`, ours]],
+  ["SHA-256 twice by the same publisher, as after signing again with a renewal", [ours, ours]],
+])("F-231: reads the running app's publisher from its signatures, %s", (_case, running) => {
+  expect(windowsRefusal(facts({ running: signed("running", ...running) }), proof)).toBeNull();
 });
 
 it.each([
@@ -115,7 +125,10 @@ it.each([
     "a trusted SHA-1 signature and a SHA-256 one changed after signing",
     [oursSha1, `80096010 ${sha256} ${publisher} ${root}`],
   ],
-  ["two SHA-256 signatures", [ours, ours]],
+  [
+    "the running app's SHA-256 signature and another SHA-256 one Windows does not trust",
+    [ours, `800b0109 ${sha256} ${publisher} ${otherRoot}`],
+  ],
 ])("F-231: refuses an installer with %s", (_case, installer) => {
   expect(windowsRefusal(facts({ installer: signed("installer", ...installer) }), proof)).toBe(
     "windows-signature",
@@ -129,6 +142,8 @@ it.each([
     [`00000000 ${sha1} ${other} ${otherRoot}`, ours],
   ],
   ["SHA-256 alone", [ours]],
+  // The same subject under the same root, from the original certificate and a renewal.
+  ["SHA-256 twice by the running app's publisher, as when signed again later", [ours, ours]],
 ])("F-231: accepts an installer signed %s", (_case, installer) => {
   expect(windowsRefusal(facts({ installer: signed("installer", ...installer) }), proof)).toBeNull();
 });
@@ -142,6 +157,14 @@ it.each([
   [
     "the running app's SHA-1 signature, and another publisher's SHA-256 one",
     [oursSha1, `00000000 ${sha256} ${other} ${root}`],
+  ],
+  [
+    "the running app's SHA-256 signature and another subject's appended after it",
+    [ours, `00000000 ${sha256} ${other} ${root}`],
+  ],
+  [
+    "the running app's SHA-256 signature and its subject's under another root",
+    [ours, `00000000 ${sha256} ${publisher} ${otherRoot}`],
   ],
 ])("F-231: refuses %s as another publisher", (_case, installer) => {
   expect(windowsRefusal(facts({ installer: signed("installer", ...installer) }), proof)).toBe(

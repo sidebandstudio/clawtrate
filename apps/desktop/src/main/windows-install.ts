@@ -307,22 +307,28 @@ function takeSignatures(lines: string[], name: string): Signature[] | null {
 }
 
 /**
- * The file's one SHA-256 signature, when Windows trusts it and it names a signer. A signature
- * with another digest, such as the SHA-1 one electron-builder puts first by default, does not
- * count. No build has two SHA-256 signatures, and with two there is no one signer to compare.
+ * The file's SHA-256 signatures, when it has one and Windows trusts each and each names a
+ * signer. A signature with another digest, such as the SHA-1 one electron-builder puts first by
+ * default, does not count. A build signed again later, with a renewed certificate, has two.
  */
-function sha256Signer(signatures: Signature[]) {
+function sha256Signatures(signatures: Signature[]) {
   const found = signatures.filter((signature) => signature.digest === SHA256);
-  const only = found.length === 1 ? found[0]! : null;
-  return only?.result === TRUSTED && only.subject !== "-" && only.root !== "-" ? only : null;
+  return found.length > 0 &&
+    found.every((one) => one.result === TRUSTED && one.subject !== "-" && one.root !== "-")
+    ? found
+    : null;
+}
+
+function samePublisher(one: Signature, other: Signature) {
+  return one.subject === other.subject && one.root === other.root;
 }
 
 /**
  * What the helper's facts mean for this download. The installer must have the running app's
- * publisher: a leaf certificate with the same subject whose chain ends at the same root, both
- * trusted by Windows, read from each file's SHA-256 signature. A renewed certificate, or one
- * from a new intermediate under that root, passes; a different root or subject does not.
- * Anything unexpected is `inspection-failed`, never a pass.
+ * publisher: every SHA-256 signature on each file trusted by Windows, with a leaf certificate of
+ * the same subject whose chain ends at the same root. A renewed certificate, or one from a new
+ * intermediate under that root, passes; a different root or subject does not. Anything
+ * unexpected is `inspection-failed`, never a pass.
  */
 export function windowsRefusal(
   output: string,
@@ -336,13 +342,13 @@ export function windowsRefusal(
   const version = /^version (-|[A-Za-z0-9+/]+={0,2})$/.exec(lines.shift() ?? "");
   if (lines.length || !running || !held || !installer || !version) return "inspection-failed";
   if (running[0]!.result === NOT_SIGNED) return "build-not-signed";
-  const app = sha256Signer(running);
-  if (!app) return "running-signature-untrusted";
+  const app = sha256Signatures(running);
+  if (!app?.every((one) => samePublisher(one, app[0]!))) return "running-signature-untrusted";
   if (held[1] !== file.identity || held[2] !== String(file.size) || held[3] !== file.sha512)
     return "artifact-changed";
-  const setup = sha256Signer(installer);
+  const setup = sha256Signatures(installer);
   if (!setup) return "windows-signature";
-  if (setup.subject !== app.subject || setup.root !== app.root) return "windows-publisher";
+  if (!setup.every((one) => samePublisher(one, app[0]!))) return "windows-publisher";
   if (decode(version[1]!) !== file.version) return "installer-version";
   return null;
 }
