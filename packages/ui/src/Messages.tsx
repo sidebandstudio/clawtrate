@@ -191,7 +191,10 @@ export function MessageActions({
     const onHover = (event: PointerEvent) => {
       if (!turn.dataset.hover && hovering(event)) onEnter(event);
     };
-    const onLeave = () => delete turn.dataset.hover;
+    // A finger lifting is no mouse leaving: a mouse still over the message keeps the actions.
+    const onLeave = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") delete turn.dataset.hover;
+    };
     turn.addEventListener("pointerenter", onEnter);
     turn.addEventListener("pointermove", onHover);
     turn.addEventListener("pointerleave", onLeave);

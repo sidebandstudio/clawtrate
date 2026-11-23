@@ -887,6 +887,20 @@ test.describe("message actions on a phone", () => {
     await expect.poll(() => shown(actions)).toBe(true);
   });
 
+  test("F-066: a finger lifting from a message leaves its actions to a mouse still over it", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    const finger = await fingerOn(turn);
+    // The mouse comes onto the message while the finger is down; the finger lifts before the hold.
+    await page.mouse.move(box.x + 120, box.y + 40);
+    await page.mouse.move(box.x + 160, box.y + 60);
+    await finger.lift();
+    // pointer-events changes at once, where the opacity fades.
+    await expect(turn.getByTestId("message-actions")).toHaveCSS("pointer-events", "auto");
+  });
+
   test("F-066: a tap on a message leaves its actions hidden", async ({ page }) => {
     await open(page);
     const turn = answer(page);
