@@ -8,6 +8,13 @@
 //             the retained namespace, so a decision can always be stored
 //   v:<id>    a version, written once: { body, digest, storedAt }, in a
 //             bounded namespace of its own that refuses new rows when full
+//   j:<change>:<attempt>:<field>
+//             a journal entry, written once, the same way, in a retained
+//             namespace of its own: evidence of a confirmed effect even
+//             before the ledger refers to it, so the orphan sweep, which
+//             scans only the versions, never sees it. Retention removes
+//             entries (journalRetention), and recovery attaches unreferenced
+//             ones first (settleAbandoned)
 //
 // Persist first, then publish: a version is written in full before the ledger
 // refers to it, and readers use only versions the ledger refers to, with a
@@ -23,7 +30,12 @@ import { isDeepStrictEqual } from "node:util";
 import { canonical, digestOf } from "./canonical.js";
 import {
   Refusal,
+  attach,
   clearAge,
+  journalExpired,
+  journalKey,
+  markJournal,
+  settleClaim,
   clearSweeping,
   emptyLedger,
   markSweeping,
@@ -35,6 +47,7 @@ import {
 export const NAMESPACE = "records";
 /** Versions are bounded; the sweep reclaims those nothing refers to any more. */
 export const VERSIONS = { namespace: "versions", maxEntries: 512, overflowPolicy: "reject-new" };
+export const JOURNAL = { namespace: "journal", retention: "retained" };
 const LEDGER = "ledger";
 const VERSION = "v:";
 /**
@@ -54,7 +67,12 @@ export class Records {
   constructor(
     store,
     versions,
-    { now = Date.now, monotonic = () => performance.now(), onChange = () => {} } = {},
+    {
+      now = Date.now,
+      monotonic = () => performance.now(),
+      onChange = () => {},
+      journal = null,
+    } = {},
   ) {
     for (const need of ["observe", "compareAndApply", "withCurrent"])
       if (typeof store[need] !== "function")
@@ -64,6 +82,7 @@ export class Records {
       if (typeof versions[need] !== "function")
         throw new Error(`clawtrate-bots needs the gateway's keyed store to offer ${need}.`);
     this.versions = versions;
+    this.journal = journal;
     this.now = now;
     this.onChange = onChange;
     this.sweepRunning = false;
@@ -136,16 +155,42 @@ export class Records {
 
   /** Writes a version once. Its digest covers every field of the body. */
   async persist(id, body) {
+    const { stored, digest } = await this.write(this.versions, VERSION + id, body);
+    if (!stored) throw new Error("A record with this id already exists.");
+    return digest;
+  }
+
+  /**
+   * Writes a version once, or finds the same one already written: an Undo is
+   * idempotent by id, so a retry stores nothing new.
+   */
+  async persistOnce(id, body) {
+    const { stored, digest } = await this.write(this.versions, VERSION + id, body);
+    if (!stored && !(await this.version(id, digest)))
+      throw new Refusal("unpublishable", "Clawtrate couldn't record this. Try again.");
+    return digest;
+  }
+
+  /** Writes a confirmed effect's journal entry once under its key; a retry under the same key with the same entry succeeds. */
+  async writeEntry(key, body) {
+    const { stored, digest } = await this.write(this.journal, key, body);
+    if (!stored && !(await this.entry(key, digest)))
+      throw new Error("A different journal entry has this key.");
+    return digest;
+  }
+
+  /** A journal entry, if it reads and matches its digest (any digest when none is given); null otherwise. */
+  async entry(key, digest) {
+    return read(this.journal, key, digest);
+  }
+
+  async write(store, key, body) {
     // The store takes only JSON values: the canonical form leaves out undefined.
     const clean = JSON.parse(canonical(body));
     const digest = digestOf(clean);
     let stored;
     try {
-      stored = await this.versions.registerIfAbsent(VERSION + id, {
-        body: clean,
-        digest,
-        storedAt: this.now(),
-      });
+      stored = await store.registerIfAbsent(key, { body: clean, digest, storedAt: this.now() });
     } catch (error) {
       if (error?.code !== "PLUGIN_STATE_LIMIT_EXCEEDED") throw error;
       throw new Refusal(
@@ -153,27 +198,18 @@ export class Records {
         "Clawtrate's request records on this gateway are full. Try again after the gateway clears older records.",
       );
     }
-    if (!stored) throw new Error("A record with this id already exists.");
-    return digest;
+    return { stored, digest };
   }
 
   /** A version, if it exists, reads and matches the digest the ledger holds; null otherwise. */
   async version(id, digest) {
-    let row;
-    try {
-      row = await this.versions.lookup(VERSION + id);
-    } catch (error) {
-      if (error?.code === "PLUGIN_STATE_CORRUPT") return null;
-      throw error;
-    }
-    if (!isObject(row) || !isObject(row.body) || row.digest !== digest) return null;
-    return digestOf(row.body) === digest ? row.body : null;
+    return read(this.versions, VERSION + id, digest);
   }
 
   /**
    * Publishes a stored version with `change`, checking after each observation
-   * that it still exists and reads. The change itself refuses the version
-   * cleanup is deleting; the same update clears the version's orphan age.
+   * that it still exists and reads. The same update refuses the version
+   * cleanup is deleting, and clears the version's orphan age.
    * @template R
    * @param {string} id
    * @param {string} digest
@@ -184,6 +220,8 @@ export class Records {
   publish(id, digest, change, deadline) {
     return this.transact(
       (ledger, now) => {
+        if (ledger.sweeping === id)
+          throw new Refusal("unpublishable", "Clawtrate couldn't record this. Try again.");
         const result = change(ledger, now);
         clearAge(ledger, id);
         return result;
@@ -297,9 +335,102 @@ export class Records {
     throw new Error("clawtrate-bots couldn't find the unreadable version's key.");
   }
 
+  /**
+   * Settles claims a stopped worker left `committing` (another epoch's: this
+   * Records' own claims belong to live workers). Each step's journal entry is
+   * looked up by its key and attached; a step with none is unknown when it may
+   * have been written (the first such step) and not applied after it, since a
+   * worker writes the next step only once the last is attached. `observe`, when
+   * given, reads what an unknown step now shows. Runs before retention.
+   */
+  async settleAbandoned(observe) {
+    const settled = [];
+    const ledger = await this.ledger();
+    for (const kind of ["proposal", "undo"])
+      for (const [id, entry] of Object.entries(
+        kind === "undo" ? (ledger.undos ?? {}) : ledger.proposals,
+      )) {
+        if (entry.state !== "committing" || entry.claim.epoch === this.epoch) continue;
+        const { attempt } = entry.claim;
+        const { steps } = entry.claim;
+        const found = [];
+        for (const step of steps) {
+          const key = journalKey(id, attempt, step);
+          const body = await this.entry(key);
+          if (!body) break;
+          found.push({ step, key, body });
+        }
+        const outcome = Object.fromEntries(
+          steps.map((step, i) => [
+            step,
+            i < found.length ? "applied" : i === found.length ? "unknown" : "not-applied",
+          ]),
+        );
+        const unknown = steps[found.length];
+        const observed =
+          unknown && observe ? { [unknown]: await observe(entry.bot, unknown) } : undefined;
+        settled.push(
+          await this.transact((l, at) => {
+            for (const { key, body } of found)
+              attach(l, kind, id, attempt, key, {
+                at: body.at,
+                target: body.target,
+                digest: digestOf(body),
+              });
+            return {
+              id,
+              ...settleClaim(l, kind, id, attempt, { outcome, observed }, at),
+            };
+          }),
+        );
+      }
+    return settled;
+  }
+
+  /**
+   * Journal retention: removes entries older than 90 days and, when `need`
+   * more spaces are wanted, the oldest whose Undo is no longer offered. Rows
+   * leave the index and are marked in one ledger update, then deleted, then
+   * the mark is cleared; a deletion an earlier run left marked is finished
+   * first. Returns the keys removed.
+   */
+  async journalRetention(need = 0) {
+    const removed = [];
+    const pending = (await this.ledger()).journalDeleting;
+    if (pending?.length) removed.push(...(await this.deleteJournal(pending)));
+    const marked = await this.transact((l, now) => {
+      const expired = journalExpired(l, now, need);
+      return markJournal(l, expired) ? expired : [];
+    });
+    if (marked.length) removed.push(...(await this.deleteJournal(marked)));
+    return removed;
+  }
+
+  async deleteJournal(keys) {
+    for (const key of keys) await this.journal.delete(key);
+    await this.transact((l) => {
+      delete l.journalDeleting;
+    });
+    return keys;
+  }
+
   async reclaim(id, removed) {
     await this.versions.delete(VERSION + id);
     await this.transact((l) => clearSweeping(l, id));
     removed.push(id);
   }
+}
+
+/** A stored row's body, if it reads and matches `digest` (or its own, when none is given); null otherwise. */
+async function read(store, key, digest) {
+  let row;
+  try {
+    row = await store.lookup(key);
+  } catch (error) {
+    if (error?.code === "PLUGIN_STATE_CORRUPT") return null;
+    throw error;
+  }
+  if (!isObject(row) || !isObject(row.body) || (digest !== undefined && row.digest !== digest))
+    return null;
+  return digestOf(row.body) === row.digest ? row.body : null;
 }
