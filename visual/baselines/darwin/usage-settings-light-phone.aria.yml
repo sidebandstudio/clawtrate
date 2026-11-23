@@ -4,8 +4,8 @@
     - button "Back to settings"
     - heading "Usage" [level=3]
     - heading "Provider limits" [level=4]
+    - text: OpenAI · Weekly · as of 5:38 PM 62% used resets Nov 17
     - 'meter "OpenAI''s Weekly limit: 62% used, as of 5:38 PM"'
-    - text: OpenAI · Weekly · 62% used · resets Nov 17 · as of 5:38 PM
     - paragraph: "xAI: no limits reported."
     - paragraph: The gateway doesn't say which of your accounts a limit is about, and a limit says nothing about what a run will do.
     - heading "Budgets" [level=4]
