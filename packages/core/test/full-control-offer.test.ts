@@ -183,7 +183,11 @@ describe("the one-time offer of full control (F-500)", () => {
     let again: Promise<unknown> | null = null;
     storage.set = async (key: string, value: string) => {
       await set(key, value);
-      if (key === offerKey() && value.includes("narrower")) again ??= accept(client);
+      if (key === offerKey() && value.includes("narrower"))
+        again ??= accept(client).then(
+          () => null,
+          (error: unknown) => error,
+        );
     };
     decide({
       status: "approved",
@@ -191,7 +195,8 @@ describe("the one-time offer of full control (F-500)", () => {
       scopes: ["operator.read", "operator.write"],
     });
     await until(() => again !== null);
-    await expect(again).rejects.toThrow();
+    // Refused at once, its outcome kept as it came, so no rejection goes unhandled.
+    expect(await again).toBeInstanceOf(Error);
     await until(() => client.state.connection.fullPairing);
     expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
     client.stop();
