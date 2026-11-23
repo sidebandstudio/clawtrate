@@ -6,6 +6,7 @@ import {
   isIosCheck,
   listPlaywright,
   listVitest,
+  listVitestJson,
   parityProblems,
   parseTable,
   playwrightChecks,
@@ -16,13 +17,15 @@ import {
 } from "./parity.ts";
 
 const ROOT = join(import.meta.dirname, "..");
-// Four listings, the iOS app's two among them, on a machine that may be busy.
-const LISTING = 120_000;
+// Five listings in parallel (Vitest once at the root, the Simulator suite, and three Playwright
+// configs). Collecting all ~250 Vitest files takes ~10 s idle and ~97 s at load ~110, so give
+// it room for heavier queues without racing a real assertion failure.
+const LISTING = 240_000;
 
 describe("the parity table", () => {
   it(
     "has a check that runs for every row marked done, and every check names a real row",
-    () => {
+    async () => {
       const rows = parseTable(readFileSync(join(ROOT, "docs/parity.md"), "utf8"));
       expect(rows.length).toBeGreaterThan(400);
       const configs = [
@@ -30,22 +33,22 @@ describe("the parity table", () => {
         "playwright.visual.config.ts",
         "playwright.updates.config.ts",
       ];
-      const listings = new Map(
-        configs.map((config) => [config, listPlaywright(ROOT, join(ROOT, config))]),
-      );
+      const [vitestJson, simulator, ...playwrightListings] = await Promise.all([
+        listVitestJson(ROOT),
+        listVitest(ROOT, join(ROOT, "apps/mobile/simulator")),
+        ...configs.map((config) => listPlaywright(ROOT, join(ROOT, config))),
+      ]);
+      const listings = new Map(configs.map((config, i) => [config, playwrightListings[i]!]));
       const desktopUpdates = listings.get("playwright.updates.config.ts") ?? [];
       expect(desktopUpdates.length).toBeGreaterThan(0);
       for (const titlePath of desktopUpdates) expect(checkIds([titlePath])).toContain("F-231");
       expect(checkIds(listings.get("playwright.visual.config.ts") ?? [])).toContain("F-030");
       const desktop = [
-        ...listVitest(ROOT, ROOT, (file) => !isIosCheck(file)),
-        ...[...listings.values()].flat(),
+        ...vitestChecks(vitestJson, (file) => !isIosCheck(file)),
+        ...playwrightListings.flat(),
       ];
       // The iOS app's unit tests, and its Simulator checks (`pnpm mobile:check`).
-      const ios = [
-        ...listVitest(ROOT, ROOT, isIosCheck),
-        ...listVitest(ROOT, join(ROOT, "apps/mobile/simulator")),
-      ];
+      const ios = [...vitestChecks(vitestJson, isIosCheck), ...simulator];
       expect(desktop.length).toBeGreaterThan(400);
       expect(ios.length).toBeGreaterThan(5);
       expect(parityProblems(rows, new Set(checkIds(desktop)), new Set(checkIds(ios)))).toEqual([]);
@@ -247,7 +250,11 @@ describe("the parity table does not count a check that never runs", () => {
   });
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  function problemsFor(name: string, vitestBody: string, playwrightBody: string): string[] {
+  async function problemsFor(
+    name: string,
+    vitestBody: string,
+    playwrightBody: string,
+  ): Promise<string[]> {
     const folder = join(dir, name);
     mkdirSync(folder);
     writeFileSync(
@@ -266,8 +273,10 @@ describe("the parity table does not count a check that never runs", () => {
       join(folder, "a.spec.ts"),
       `import { test } from "@playwright/test";\ntest("F-001: runs", () => {});\n${playwrightBody}\n`,
     );
-    const vitest = listVitest(ROOT, folder);
-    const playwright = listPlaywright(ROOT, join(folder, "playwright.config.mjs"));
+    const [vitest, playwright] = await Promise.all([
+      listVitest(ROOT, folder),
+      listPlaywright(ROOT, join(folder, "playwright.config.mjs")),
+    ]);
     // The check that runs is seen by both runners, so the listing works.
     expect(checkIds(vitest)).toEqual(["F-001"]);
     expect(checkIds(playwright)).toEqual(["F-001"]);
@@ -278,9 +287,9 @@ describe("the parity table does not count a check that never runs", () => {
 
   it(
     "a skipped, fixme or todo check",
-    () => {
+    async () => {
       expect(
-        problemsFor(
+        await problemsFor(
           "skipped",
           [
             'test.skip("F-004: no proof", () => {});',
@@ -300,26 +309,26 @@ describe("the parity table does not count a check that never runs", () => {
 
   it(
     "a check that is never reached",
-    () => {
+    async () => {
       const body = [
         "// eslint-disable-next-line no-constant-condition",
         'if (false) test("F-004: no proof", () => {});',
         'function never() { test("F-004: no proof", () => {}); }',
         "void never;",
       ].join("\n");
-      expect(problemsFor("unreachable", body, body)).toEqual(FAILS);
+      expect(await problemsFor("unreachable", body, body)).toEqual(FAILS);
     },
     LISTING,
   );
 
   it(
     "a check that is commented out",
-    () => {
+    async () => {
       const body = [
         '// test("F-004: no proof", () => {});',
         '/* test("F-004: no proof", () => {}); */',
       ].join("\n");
-      expect(problemsFor("commented", body, body)).toEqual(FAILS);
+      expect(await problemsFor("commented", body, body)).toEqual(FAILS);
     },
     LISTING,
   );
