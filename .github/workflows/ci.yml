@@ -413,6 +413,8 @@ jobs:
         run: |
           sudo -n sh -c 'eslogger exec exit > "$1/eslogger.jsonl" 2> "$1/eslogger.err" & echo $! > "$1/eslogger.pid"' \
             sh "$RUNNER_TEMP" || echo "eslogger did not start"
+          # Process accounting as well: it marks a process that a signal ended or that dumped core.
+          sudo -n touch /var/account/acct && sudo -n accton /var/account/acct || echo "accounting did not start"
           sleep 2
           cat "$RUNNER_TEMP/eslogger.err" || true
       - name: Run the real update check
@@ -429,6 +431,8 @@ jobs:
             cp "$RUNNER_TEMP/eslogger.err" "$OUT/" || true
             grep -E 'ClawtrateUpdateInspection|ShipIt' "$RUNNER_TEMP/eslogger.jsonl" > "$OUT/eslogger-update.jsonl" || true
           fi
+          sudo -n accton || true
+          lastcomm 2>/dev/null | grep -E '^(ClawtrateUpdat|Clawtrate|ShipIt)' > "$OUT/lastcomm.txt" || true
           log show --last 30m --info --debug --style compact --predicate \
             'process BEGINSWITH "Clawtrate" OR process == "ShipIt" OR process == "amfid" OR process == "syspolicyd" OR (process == "kernel" AND eventMessage CONTAINS[c] "clawtrate") OR eventMessage CONTAINS "ClawtrateUpdateInspection"' \
             > "$OUT/unified-log.txt" 2>&1 || true
