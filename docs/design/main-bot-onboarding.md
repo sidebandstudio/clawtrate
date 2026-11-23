@@ -697,6 +697,7 @@ Where these run, as the records PR (step 1) found them:
 - **F-535's refusals** need a bot's tool, so they are contract tests in step 2; step 1's second part unit-tests the rule and checks `managers.set` on a gateway.
 - **F-536 once the plugin may apply** runs as unit tests in step 1's second part; its gateway checks wait for the primitives in "Gated on missing gateway primitives".
 - **Step 1's second part, part one** adds the cleanup sweep with its deletion marker (reclaiming unpublished, replaced and retired versions) and grant updates that carry their generation, each with its test. The apply-path records (the claim, the journal, crash settling, Undo, `changes.*`, `managers.set`) follow in part two.
+- **Step 1's second part, part two** adds the claim with its journal reservation, the journal in a retained namespace of its own (so the orphan sweep, which scans only the versions, never sees an entry awaiting its reference), crash settling, Undo records, `changes.*` and `managers.set`. Apply and Undo need the conditional writes in "Gated on missing gateway primitives", so they run only in unit tests, through a stand-in for those writes: the shipped plugin is given none, and accept and Undo refuse with `apply-unavailable` and `undo-unavailable`. Every publication's deletion-marker check is in `Records.publish`.
 
 ### Not yet established
 

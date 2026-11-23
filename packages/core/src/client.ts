@@ -1043,7 +1043,7 @@ function sessionNamed(history: RawRecord | null): string | null {
  * words the gateway accepted that history has not confirmed, or a run this
  * client started. Cancelled messages are not work.
  */
-function hasUnsettledWork(activity: TaskActivity): boolean {
+export function hasUnsettledWork(activity: TaskActivity): boolean {
   return (
     activity.outbox.some(
       (message) => message.status !== "cancelled" && message.status !== "handled",
@@ -1909,7 +1909,11 @@ export class ClawtrateClient {
     }
     const count = this.openSessions.get(key) ?? 0;
     this.openSessions.set(key, count + 1);
-    if (count > 0) return;
+    if (count > 0) {
+      // A view coming to a task whose history failed asks for it, as a first open would.
+      if (this.state.transcripts[key]?.status === "error") this.reloadSession(key);
+      return;
+    }
     // A task closed with unsent work was kept: reopening shows the same queue.
     const kept = this.retained.delete(key);
     if (!kept || !this.incarnations.has(key))

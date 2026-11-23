@@ -1,5 +1,74 @@
-import { test, expect, type Page } from "@playwright/test";
-import { writeFileSync } from "node:fs";
+import {
+  test,
+  expect as baseExpect,
+  type Locator,
+  type Page,
+  type PageAssertionsToHaveScreenshotOptions,
+} from "@playwright/test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+
+/**
+ * `expect` for the visual specs. Its `toHaveScreenshot` also compares the accessibility
+ * snapshot of what was shot, its words, names and states, exactly, with a `.aria.yml` file
+ * kept beside the image. The pixel tolerance lets a changed sentence pass, since a few words
+ * move fewer pixels than it allows; the text comparison does not (#272).
+ */
+export const expect = baseExpect.extend({
+  async toHaveScreenshot(
+    target: Page | Locator,
+    name: string,
+    options?: PageAssertionsToHaveScreenshotOptions,
+  ) {
+    const failures: string[] = [];
+    try {
+      await baseExpect(target).toHaveScreenshot(name, options);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+    try {
+      await matchText("goto" in target ? target.locator("body") : target, name);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+    return {
+      pass: failures.length === 0,
+      name: "toHaveScreenshot",
+      message: () => failures.join("\n\n"),
+    };
+  },
+});
+
+// Playwright's own toMatchAriaSnapshot writes numbers, times and addresses as patterns, so a
+// changed duration or count would still match. This keeps the snapshot verbatim.
+async function matchText(region: Locator, name: string): Promise<void> {
+  const info = test.info();
+  if (info.project.ignoreSnapshots) return;
+  const path = info.snapshotPath(name, { kind: "screenshot" }).replace(/\.png$/, ".aria.yml");
+  const actual = `${await region.ariaSnapshot()}\n`;
+  const mode = info.config.updateSnapshots;
+  if (!existsSync(path)) {
+    if (mode === "all" || mode === "changed" || mode === "missing") {
+      writeFileSync(path, actual);
+      return;
+    }
+    // Only an update writes a baseline: one written here would let CI's retry pass.
+    await info.attach(basename(path), { body: actual, contentType: "text/plain" });
+    throw new Error(`No text snapshot at ${path}. \`pnpm visual:update\` writes it.`);
+  }
+  const expected = readFileSync(path, "utf8");
+  if (actual === expected) return;
+  if (mode === "all" || mode === "changed") {
+    writeFileSync(path, actual);
+    return;
+  }
+  // Polled, in case the text lags the frame the screenshot settled on.
+  await baseExpect
+    .poll(async () => `${await region.ariaSnapshot()}\n`, {
+      message: `the scene's text matches ${path}`,
+    })
+    .toBe(expected);
+}
 
 /** Where the fixture is served: 5341 unless `CLAWTRATE_FIXTURE_PORT` names another. */
 export const FIXTURE_PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);

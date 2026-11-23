@@ -8,6 +8,20 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "managers": {
+        "type": "array",
+        "maxItems": 64,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "createdAt"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "createdAt": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
   }
 }

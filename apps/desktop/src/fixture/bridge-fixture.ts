@@ -31,6 +31,8 @@ import {
   type RunRawRead,
   type TaskActivity,
   type Transcript,
+  hasUnsettledWork,
+  NOT_OPEN_IN_VIEW,
 } from "@clawtrate/core";
 import {
   CARD_SCENES,
@@ -500,6 +502,10 @@ export function createFixtureBridge(
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
   sent: BridgeCommand[];
+  /** The task of every history read, in order. */
+  reads: string[];
+  /** How many views hold a task open. */
+  holds(key: string): number;
   /** The last unread count the interface gave for the dock badge. */
   badge: number | null;
   /** From now on, refuse the rail's commands of this type, as a gateway refuses a change. */
@@ -603,6 +609,9 @@ export function createFixtureBridge(
   };
   let pairingChecks = 0;
   const sent: BridgeCommand[] = [];
+  // Each task's holds, and every history read, as the engine counts them.
+  const holds = new Map<string, number>();
+  const reads: string[] = [];
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   const timers = holdableTimers();
@@ -797,11 +806,20 @@ export function createFixtureBridge(
       case "reloadSession":
       case "openSession": {
         // A history the state no longer holds, or that failed since, is read again: loading at
-        // once, as the engine shows it, then loaded as a delayed answer a test can hold.
+        // once, as the engine shows it, then loaded as a delayed answer a test can hold. As in
+        // the engine, a reread needs a hold, and opening a task some view already holds reads
+        // nothing unless its history failed.
         const { key } = command;
         const history = histories[key];
         const current = state.transcripts[key];
+        const held = holds.get(key) ?? 0;
+        if (command.type === "reloadSession" && !held) throw new Error(NOT_OPEN_IN_VIEW);
+        if (command.type === "openSession") {
+          holds.set(key, held + 1);
+          if (held && current && current.status !== "error") return;
+        }
         if (!history || history === current || (current && current.status !== "error")) return;
+        reads.push(key);
         const reading = { ...history, status: "loading" as const, error: null };
         set({ ...state, transcripts: { ...state.transcripts, [key]: reading } });
         // Only onto the read it answers: a disconnect or a replacement since has the last word.
@@ -812,9 +830,25 @@ export function createFixtureBridge(
         );
         return;
       }
-      case "closeSession":
+      case "closeSession": {
+        const { key } = command;
+        const held = holds.get(key) ?? 0;
+        if (held > 1) holds.set(key, held - 1);
+        else if (held === 1) {
+          holds.delete(key);
+          // As the engine: the last view to leave releases the task, unless it holds work.
+          const current = state.transcripts[key];
+          if (current && !hasUnsettledWork(current)) {
+            // The gateway keeps what was read; opening the task again reads it back.
+            if (current.status === "ready") histories = { ...histories, [key]: current };
+            const transcripts = { ...state.transcripts };
+            delete transcripts[key];
+            set({ ...state, transcripts });
+          }
+        }
         // Answered as a delayed answer, so a test can hold a close while the page moves on.
         return new Promise<void>((resolve) => deferred(resolve, 0));
+      }
       case "requestAccess":
         return;
       case "resolveApproval": {
@@ -1040,6 +1074,8 @@ export function createFixtureBridge(
     },
     setState: (change) => set(change(state)),
     sent,
+    reads,
+    holds: (key) => holds.get(key) ?? 0,
     badge: null,
     refuse: (type: string) => void railRefused.add(type),
     raceArchive: () => void (railRace.archive = true),

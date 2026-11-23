@@ -1,0 +1,5 @@
+- alertdialog "Restart to update?":
+  - heading "Restart to update?" [level=2]
+  - paragraph: Restart asks Clawtrate to install version 0.2.0 and reopen. If macOS stages the update, it can install the next time Clawtrate quits.
+  - button "Cancel"
+  - button "Restart"

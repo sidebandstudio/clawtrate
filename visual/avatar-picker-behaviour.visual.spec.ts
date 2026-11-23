@@ -2,9 +2,9 @@
 // the chosen creature inside its picture and the new bot is drawn as it; the
 // person's own picture instead; and Edit picture from the Work pane on admin.
 import { AVATAR_COLORS, choiceFromPicture, defaultAvatar } from "../packages/core/src/avatar.ts";
-import { expect, test, type Page } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import type { ClawtrateBridge } from "../packages/core/src/bridge.ts";
-import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
+import { contextFor, expect, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const ADMIN = `scene=main&${OTTO_DISK}&access=admin`;

@@ -4,9 +4,9 @@
 // the dialog in each choice, with the default bot's note, a custom prompt's
 // note, and a save refused, in conflict or not confirmed. The fixture's check-ins are made
 // up (apps/desktop/src/fixture/check-ins.ts).
-import { expect, test, type Page } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import { checkIns } from "./check-ins-helpers.ts";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 type Scene = { name: string; query: string; ready: (page: Page) => Promise<void> };
 

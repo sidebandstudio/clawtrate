@@ -1,0 +1,16 @@
+- 'region "Otto asks: Which machines should the weekly check cover?"':
+  - heading "Which machines should the weekly check cover?" [level=3]
+  - button "Dismiss Otto's question"
+  - paragraph: Choose all that apply.
+  - group "Which machines should the weekly check cover?":
+    - listitem:
+      - checkbox "media-box"
+    - listitem:
+      - checkbox "garage-pi"
+    - listitem:
+      - checkbox "attic-nas"
+  - text: Type your own answer
+  - textbox "Type your own answer"
+  - button "Send answer" [disabled]
+  - text: Nothing chosen yet
+  - button "Raw"
