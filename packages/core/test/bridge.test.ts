@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession, MAX_OPAQUE_ID_CHARS, parseBridgeCommand } from "../src/bridge.ts";
 import type { ClawtrateClient } from "../src/client.ts";
 import { KEY, openTask } from "./client-harness.ts";
-import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
+import { deferred, GatewayError, until } from "./fake-gateway.ts";
 
 describe("parseBridgeCommand", () => {
   it("accepts the known commands", () => {
@@ -287,7 +287,10 @@ describe("openSession", () => {
       };
       refresh.resolve({ messages: [], hasMore: false });
       await until(() => client.state.transcripts[KEY]?.status !== "loading");
-      await sleep(50);
+      // A duplicate read would be queued from a listener that runs after the refresh drains, so
+      // wait on the read queue until it stays idle across a turn; a late one can't slip through.
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
       expect(gateway.calls("chat.history")).toHaveLength(before + 1);
       expect(client.state.transcripts[KEY]?.status).toBe("ready");
     } finally {
@@ -320,6 +323,63 @@ describe("openSession", () => {
     } finally {
       stop();
       first.dispose();
+      client.stop();
+    }
+  });
+
+  it("F-105: a read held from before a close-and-reopen queues no read for the reopened task", async () => {
+    const { client, gateway } = await openTask();
+    // Two views hold the task; the harness opened it once, a second open makes two.
+    client.openSession(KEY);
+    try {
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      client.reloadSession(KEY);
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      // A run ends and refreshes history; that read is held.
+      const refresh = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => refresh.promise;
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+
+      // A view arrives while the refresh is held: it schedules a reread for when the read ends.
+      client.openSession(KEY);
+      expect(client.state.transcripts[KEY]?.status).toBe("loading");
+
+      // Both views, and this one, close: the task is released and its incarnation forgotten.
+      client.closeSession(KEY);
+      client.closeSession(KEY);
+      client.closeSession(KEY);
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+
+      // The task is opened again. Its first read is held, so a new incarnation is loading.
+      const reopen = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => reopen.promise;
+      client.openSession(KEY);
+      await until(() => gateway.calls("chat.history").length >= before + 2);
+      const afterReopen = gateway.calls("chat.history").length;
+
+      // Any further read now fails and would put the reopened task back in error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      // The old refresh, from the closed task, finishes while the reopen's read is still held.
+      // A buggy reread rides on the reopen's read as its `again`.
+      refresh.resolve({ messages: [], hasMore: false });
+      // Let the old read's listeners run so any stale reread is queued before the reopen settles.
+      await Promise.resolve();
+      await Promise.resolve();
+      reopen.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status !== "loading");
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      // The reopen's read succeeded and no stale read followed it.
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+      expect(gateway.calls("chat.history")).toHaveLength(afterReopen);
+    } finally {
       client.stop();
     }
   });

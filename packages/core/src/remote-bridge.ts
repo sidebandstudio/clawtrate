@@ -60,13 +60,16 @@ export const ACCESS_REFUSED_CLOSE_CODE = 4401;
 export function createRemoteBridge(options: RemoteBridgeOptions): Promise<ClawtrateBridge> {
   const listeners = new Set<(state: ClawtrateState) => void>();
   const pending = new Map<string, Pending>();
-  // The tasks this viewer has open. The host forgets them with the socket; they are restored after each hello.
-  const wanted = new Set<string>();
+  // The tasks this viewer has open, each mapped to the generation of the latest open command for
+  // it. The host forgets them with the socket; they are restored after each hello. The generation
+  // lets a late refusal tell its own open from a newer one that re-added the task.
+  const wanted = new Map<string, number>();
   const reopenRefusals = new Set<(key: string, error: string) => void>();
   const now = options.now ?? (() => Date.now());
   let state: ClawtrateState | null = null;
   let socket: WebSocketLike | null = null;
   let counter = 0;
+  let generation = 0;
   let retryMs = 500;
 
   const emit = (next: ClawtrateState) => {
@@ -100,20 +103,25 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
           info = message.info;
           emit(message.state);
           // A new socket is a new viewer to the host: open this viewer's tasks again.
-          // One the host refuses now is not asked for again, and the view is told why.
+          // One the host refuses now is not asked for again, unless a newer open has
+          // re-added the task in the meantime, and the view is told why.
           if (!first)
-            for (const key of wanted)
+            for (const key of wanted.keys()) {
+              const mine = (generation += 1);
+              wanted.set(key, mine);
               write(
                 { type: "openSession", key },
                 {
                   resolve: () => {},
                   reject: () => {},
                   refused: (error) => {
+                    if (wanted.get(key) !== mine) return;
                     wanted.delete(key);
                     for (const listener of reopenRefusals) listener(key, error);
                   },
                 },
               );
+            }
           if (first) resolveBridge(bridge(message.info));
         } else if (message.type === "state") {
           emit(message.state);
@@ -157,16 +165,20 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
     const call = (command: BridgeCommand) =>
       new Promise<unknown>((resolve, reject) => {
         // Interest is recorded even while the host is unreachable, so the next hello restores it.
-        if (command.type === "openSession") wanted.add(command.key);
+        // Each fresh open takes a new generation; a late refusal of an earlier open for the same
+        // task then leaves this newer hold in place.
+        const mine = command.type === "openSession" ? (generation += 1) : 0;
+        if (command.type === "openSession") wanted.set(command.key, mine);
         if (command.type === "closeSession") wanted.delete(command.key);
         if (!socket || socket.readyState !== 1) {
           reject(new Error("Not connected to the preview host"));
           return;
         }
         // An open the host refuses (a viewer holds at most `MAX_VIEWER_OPEN_TASKS`) is not restored
-        // later; one whose socket was lost is.
+        // later, unless a newer open re-added the task; one whose socket was lost is restored.
         const refused = () => {
-          if (command.type === "openSession") wanted.delete(command.key);
+          if (command.type === "openSession" && wanted.get(command.key) === mine)
+            wanted.delete(command.key);
         };
         try {
           write(command, { resolve, reject, refused });

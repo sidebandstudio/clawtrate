@@ -1903,9 +1903,15 @@ export class ClawtrateClient {
       }
       this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
       // A read that published its failure while this view arrived (its listeners run before it
-      // ends) settles nothing more: still loading once it ends, the task is read again.
+      // ends) settles nothing more: still loading once it ends, the task is read again. A close
+      // and reopen between here and then is a different task, so its incarnation must still match.
+      const incarnation = this.incarnations.get(key);
       void load.done.then(() => {
-        if (this.openSessions.has(key) && this.state.transcripts[key]?.status === "loading")
+        if (
+          this.openSessions.has(key) &&
+          this.incarnations.get(key) === incarnation &&
+          this.state.transcripts[key]?.status === "loading"
+        )
           this.reloadSession(key);
       });
       return;
@@ -2347,6 +2353,14 @@ export class ClawtrateClient {
   /** Operations waiting for access, for tests and diagnostics. */
   get pendingAccessWaiters(): number {
     return this.accessWaiters.length;
+  }
+
+  /**
+   * Resolves once the task's current read queue is idle, or at once if none runs,
+   * for tests that need a late duplicate read to have been queued already.
+   */
+  historyReadsSettled(key: string): Promise<void> {
+    return this.loads.get(key)?.done ?? Promise.resolve();
   }
 
   /** Reject every operation waiting for access, without changing what is being asked for. */

@@ -717,18 +717,27 @@ export function Shell({
   // the task. A view the host doesn't count as holding it (its open was refused, or a reopen
   // after a reconnect was) is told so, and opens the task instead, unless it has left the task
   // by then: its close is sent, so an open would hold the task with nothing to let it go.
+  const reloading = useRef<string | null>(null);
   const reload = useCallback(() => {
     if (!taskKey) return;
     const key = taskKey;
-    send({ type: "reloadSession", key }).catch((error: unknown) => {
-      // The desktop's IPC puts its own words before the host's.
-      if (
-        shown.current === key &&
-        error instanceof Error &&
-        error.message.endsWith(NOT_OPEN_IN_VIEW)
-      )
-        open(key);
-    });
+    // A second Try again while one is in flight is ignored: a second reloadSession for a held
+    // task can queue a read whose failure replaces the first read's success.
+    if (reloading.current === key) return;
+    reloading.current = key;
+    send({ type: "reloadSession", key })
+      .catch((error: unknown) => {
+        // The desktop's IPC puts its own words before the host's.
+        if (
+          shown.current === key &&
+          error instanceof Error &&
+          error.message.endsWith(NOT_OPEN_IN_VIEW)
+        )
+          open(key);
+      })
+      .finally(() => {
+        if (reloading.current === key) reloading.current = null;
+      });
   }, [taskKey, open, send]);
 
   return (
