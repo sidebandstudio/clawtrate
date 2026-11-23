@@ -86,7 +86,7 @@ The rules that stay:
   | `operator.admin`     | Change gateway configuration, plugins or accounts, manage high-risk operations, and open the gateway terminal where allowed. Satisfies every operator scope, including pairing events. |
   | `operator.pairing`   | Receive pairing events and use pairing methods within the gateway's caller, device, role and scope rules. A pairing-only device token can't approve or remove another device.          |
 
-- **Clawtrate's ladder today** has three sources:
+- **Clawtrate's ladder today**, with full access off (#318 added the six behind `ClientOptions.fullAccess`, which no shipped host sets), has three sources:
   - Every connect asks for `operator.read` alone. That comes from `REQUESTED_SCOPES` in `packages/core/src/client.ts`, and `normalizeHeldScopes` in `packages/core/src/scopes.ts` drops admin and pairing.
   - Each later tier is a separate `device.scopes.requestUpgrade`, from the composer and cards, from `bots/parts.tsx` and from `machines/Machines.tsx`.
   - That request always waits, even on loopback (`<openclaw>/dist/devices-mOg4_HQd.mjs` lines 37-110).
@@ -240,8 +240,12 @@ A bounded, read-only reader. It never repairs a file or a permission, and runs n
   - Only `~/.openclaw/openclaw.json` (the default profile) and `~/.openclaw-clawtrate/openclaw.json`, under the home folder the operating system reports for this account.
   - `OPENCLAW_CONFIG_PATH` and `OPENCLAW_STATE_DIR` affect only processes started with them (`<openclaw>/dist/paths-BP0DYpE8.mjs` lines 117-140, 214-223).
   - If both profiles qualify, both are shown by name: "Choose the OpenClaw profile to connect to."
+- **Which home.** Every entry point of the reader requires a `sandboxed` option, and the choice is made before anything is opened.
+  - A production run reads only the home the operating system reports for this account, refuses any other home a caller names, and reads nothing when that home can't be determined.
+  - Any other run, including one with the option missing, reads only a private folder of this account's below one of this machine's temporary roots, away from the account's real home.
 - **Opening.**
-  - The profile folder is opened as a held directory descriptor beneath the home folder. Each untrusted component is walked without following links.
+  - The home folder is opened without following a link, held as a descriptor, and checked on what was opened. In production it must be this account's, with no group or other write bits, and no ACL entry that lets another account change its entries. In a sandboxed run it must be the very folder that was checked, by device and inode, and still private.
+  - The profile folder is opened as a held directory descriptor beneath the held home. Each untrusted component is walked without following links.
   - The file is opened relative to that descriptor: read-only, no-follow, nonblocking. A FIFO fails without blocking.
   - Node has no `openat`. The same native helper as the send gate does this, and checks ACLs (below).
 - **Checks on what was opened (`fstat`).**
@@ -260,15 +264,22 @@ A bounded, read-only reader. It never repairs a file or a permission, and runs n
   - It rejects:
     - duplicate keys;
     - the names `__proto__`, `constructor` and `prototype`;
-    - `$include` at the root or anywhere under `gateway`. A root include can change values inside a `gateway` block that looks complete.
+    - `$include` at the root or anywhere under `gateway` or `env`. A root include can change values inside a `gateway` block that looks complete, and an `env` include could add a password fallback.
   - It takes own properties of plain objects only. OpenClaw's format is JSON5 (`<openclaw>/dist/io.read-helpers-CMGXaUZA.mjs` lines 89-95, 119-156).
 - **What it extracts.** A local gateway's literal token, and nothing else.
   - `gateway.mode` must be `local` or absent.
   - `gateway.auth.mode` must be `token` or absent. An absent mode can mean password (`<openclaw>/dist/auth-resolve-2uQi6dqM.mjs` lines 21-59).
   - `gateway.auth.password` must be absent in both cases, explicit `token` mode included. A mixed-auth fixture (a token and a password, with and without a mode) checks that the reader never stages a token.
+  - With the mode absent, any password OpenClaw could resolve would put it in password mode, so a password fallback refuses implicit token mode too:
+    - a `gateway.remote.password`;
+    - an `OPENCLAW_GATEWAY_PASSWORD` key in `env` or `env.vars`;
+    - the login-shell fallback, which fills a missing `OPENCLAW_GATEWAY_PASSWORD` from the shell. It is on with `env.shellEnv.enabled`, or with an `OPENCLAW_LOAD_SHELL_ENV` in the file's `env` that OpenClaw reads as true.
+
+    Explicit `token` mode stays eligible beside these fallbacks.
+
   - The token is rejected when it is a SecretRef object, an unresolved `${…}`, the redaction sentinel, empty, longer than 4 KiB, or contains control characters. Ordinary punctuation is kept, with OpenClaw's own trimming.
   - Password and `none` modes are later routes, not this one.
-  - The port must be an integer from 1 to 65535. 18789 is used only when the port is absent. Either way it is a candidate: a running gateway can override it (`--port`, `OPENCLAW_GATEWAY_PORT`; `config-gateway.md` lines 135-146).
+  - The port must be an integer from 1 to 65535. When the file names none, it is the profile's own default: 18789 for the default profile, and 22768 for `clawtrate` (OpenClaw's `20000 + FNV-1a(name) % 40000`). A port that the file's own `env` could override is refused. Either way it is a candidate: a running gateway can override it (`--port`, `OPENCLAW_GATEWAY_PORT`; `config-gateway.md` lines 135-146).
 - **Using the credential.**
   - The look reads the token only to decide what the card says, and drops it.
   - Connect reads it afresh and keeps it in the host for that bounded attempt only. It is dropped on cancel, failure, timeout or pairing.
@@ -577,9 +588,9 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
     Replacement: "a setup code gives the device what it asks for, up to the code's ceiling: all six for a full code; read, write, approvals and questions for a limited one."
 
-**The change to `AGENTS.md`, approved by the product owner.** It is made in setup PR 1 (#318), not in this design branch. Today it says "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." It becomes:
+**The change to `AGENTS.md`, approved by the product owner.** It was made in setup PR 1 (#318), not in this design. It replaced "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." Because #318 puts full access behind a flag that is off, `AGENTS.md` now reads:
 
-> "On first pairing, ask once for the six standard operator scopes: read, write, approvals, questions, admin and pairing. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway."
+> "First pairings request read access by default. Ask once for the six standard operator scopes (read, write, approvals, questions, admin and pairing) only when the person starts an eligible first pairing and the host allows writes, reports secure credential storage and has full-access pairing enabled. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway."
 
 ## 11. Parity rows
 
