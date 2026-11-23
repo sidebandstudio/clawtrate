@@ -127,14 +127,27 @@ test("F-535: a picture the bot makes with image_generate shows in the conversati
 
 // A picture a person attaches (#451), sent through the composer of a host of this test's own,
 // with interactive access. The gateway keeps the file only as a `media://inbound` reference that
-// nothing serves, so the preview is the app's own copy while the task stays open; once the page
-// is reloaded the host has let the task go, and the message says plainly what was sent.
+// nothing serves, so the preview is the app's own copy while its host follows the task (a reload
+// of the page keeps it); another device's host has none, and its message says what was sent.
 test.describe("F-557: a picture you attach", () => {
   const OWN_TASK = "Your picture from the end-to-end run";
   const OWN_KEY = "agent:pip:e2e-own-picture";
   const WORDS = "can u add this to my calendar?";
   const MINE = "Your picture: shot.png";
   const own: { child: ChildProcess; data: string }[] = [];
+
+  /** A new device of this gateway: the page paired, its pairing approved by id. */
+  async function pair(on: Page, url: string): Promise<void> {
+    await on.goto(url);
+    await on.getByRole("button", { name: "Use the development gateway" }).click();
+    await expect(on.getByRole("heading", { name: "Approve this device" })).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect
+      .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+      .toMatch(/^Approved /m);
+    await expect(on.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+  }
 
   test.afterAll(async () => {
     for (const host of own.splice(0)) {
@@ -143,7 +156,7 @@ test.describe("F-557: a picture you attach", () => {
     }
   });
 
-  test("F-557 F-117: the picture shows on your message at once and after history holds it, opens larger, and after a reload says it was sent", async ({
+  test("F-557 F-117: the picture shows on your message at once and after history holds it, opens larger, still after a reload, and on another device says it was sent", async ({
     browser,
   }) => {
     test.setTimeout(180_000);
@@ -154,15 +167,7 @@ test.describe("F-557: a picture you attach", () => {
     started.gated.release();
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
-    await page.goto(await started.url);
-    await page.getByRole("button", { name: "Use the development gateway" }).click();
-    await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
-      timeout: 20_000,
-    });
-    await expect
-      .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-      .toMatch(/^Approved /m);
-    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+    await pair(page, await started.url);
     await openTask(page, "Pip", OWN_TASK);
     const bar = page.getByRole("region", { name: "Access" });
     await bar.getByRole("button", { name: "Request access" }).click();
@@ -211,17 +216,31 @@ test.describe("F-557: a picture you attach", () => {
     await expect(viewer).toHaveCount(0);
     await expect(turn.getByRole("button", { name: MINE })).toBeFocused();
 
-    // A reload lets the task go, and its copy with it: the message says what was sent.
+    // A reload of the page: the host still follows the task, so its copy still shows.
     await page.reload();
     await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
     await openTask(page, "Pip", OWN_TASK);
     const again = page.getByTestId("transcript-turn").filter({ hasText: WORDS });
-    await expect(again.getByTestId("sent-picture")).toHaveAttribute("data-state", "not-kept", {
+    await expect(again.getByRole("img", { name: MINE })).toBeVisible({ timeout: 20_000 });
+
+    // Another device has no copy, and the gateway gives none: the message says what was sent.
+    const otherData = mkdtempSync(join(tmpdir(), "clawtrate-own-picture-"));
+    const other = startHost(INSTANCE, process.env.CLAWTRATE_E2E_STATIC!, otherData);
+    own.push({ child: other.host, data: otherData });
+    other.gated.release();
+    const otherContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const second = await otherContext.newPage();
+    await pair(second, await other.url);
+    await openTask(second, "Pip", OWN_TASK);
+    const there = second.getByTestId("transcript-turn").filter({ hasText: WORDS });
+    await expect(there.getByTestId("sent-picture")).toHaveAttribute("data-state", "not-kept", {
       timeout: 20_000,
     });
-    await expect(again.getByTestId("sent-picture")).toContainText(
+    await expect(there.getByTestId("sent-picture")).toContainText(
       "shot.pngPicture sent with this message. The gateway doesn't give it back to show here.",
     );
+    await expect(there.locator(".bubble")).toHaveText(WORDS);
+    await otherContext.close();
     await context.close();
     await gatewayCall("sessions.delete", { key: OWN_KEY, deleteTranscript: true }).catch(() => {});
   });
