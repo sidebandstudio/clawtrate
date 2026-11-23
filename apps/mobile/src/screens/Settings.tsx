@@ -2,12 +2,14 @@
 // (`presentation/gateway-state.ts`): the address, the state and its dot, this
 // device, the scopes the connection can use, the gateway's version, the error when
 // there is one; Disconnect, which keeps the pairing, Reconnect, and Use another
-// gateway, which forgets this one.
+// gateway, which forgets this one. Then the desktop's Conversation section, which
+// here holds "Show external channel chats" alone (F-519).
 
 import type { ConnectionState } from "@clawtrate/core";
 import { isCleartext, scopeWords } from "../presentation/connect-words.ts";
 import {
   addressWords,
+  CHANNEL_CHATS_NOTE,
   GATEWAY_APPEARANCE,
   gatewayActions,
   gatewayProblem,
@@ -18,7 +20,7 @@ import {
   SETTINGS_WORDS as W,
 } from "../presentation/gateway-state.ts";
 import { useState, type ReactNode } from "react";
-import { Modal, ScrollView, View } from "react-native";
+import { Modal, ScrollView, Switch, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BackIcon, CloseIcon } from "../components/icons.tsx";
 import { FONT_LICENSES } from "../font-licenses.ts";
@@ -26,7 +28,7 @@ import { Cleartext, UseAnotherGateway } from "./Connect.tsx";
 import { Button, Dot, RoundButton, Txt } from "../components/ui.tsx";
 import { DEVICE_NAME } from "../host/index.ts";
 import { useRuntime } from "../runtime.ts";
-import { FONTS, S, useTheme } from "../theme/index.ts";
+import { FONTS, S, TOUCH, useTheme } from "../theme/index.ts";
 
 /** Where the embedded fonts' licenses are read. */
 const LICENSES_TITLE = "Font licenses";
@@ -67,11 +69,14 @@ function Fact({
 
 export function Settings({
   connection,
+  showChannelChats,
   visible,
   onClose,
   onForget,
 }: {
   connection: ConnectionState;
+  /** "Show external channel chats" as core reports it. */
+  showChannelChats: boolean;
   visible: boolean;
   onClose: () => void;
   /** After Use another gateway: the address screen. */
@@ -85,6 +90,20 @@ export function Settings({
   const actions = gatewayActions(connection);
   const server = serverWords(connection);
   const pairing = pairingNote(connection);
+  // The system's switch flips as it is tapped: it keeps the choice asked for until core
+  // reports it, and goes back when the choice could not be kept.
+  const [asked, setAsked] = useState<boolean | null>(null);
+  const [channelError, setChannelError] = useState<string | null>(null);
+  if (asked !== null && asked === showChannelChats) setAsked(null);
+  const channelChats = asked ?? showChannelChats;
+  const toggleChannelChats = (on: boolean) => {
+    setAsked(on);
+    setChannelError(null);
+    void send({ type: "setShowChannelChats", on }).catch((failure: unknown) => {
+      setAsked(null);
+      setChannelError(redact(failure instanceof Error ? failure.message : String(failure)));
+    });
+  };
   return (
     <Modal
       visible={visible}
@@ -237,6 +256,60 @@ export function Settings({
               <Txt size={S["text-sm"]} color="text-faint">
                 {redact(pairing)}
               </Txt>
+            )}
+            <Txt testID="settings-conversation" size={S["text-sm"]} color="text-faint">
+              {W.conversation}
+            </Txt>
+            <View
+              style={{
+                minHeight: TOUCH.taskRow,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: S["space-3"],
+                paddingVertical: 10,
+                paddingHorizontal: S["space-4"],
+                backgroundColor: c["bg-bubble"],
+                borderRadius: S["radius-lg"],
+              }}
+            >
+              {/* The switch carries the same name for VoiceOver. */}
+              <Txt
+                style={{ flex: 1 }}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+              >
+                {W.channelChats}
+              </Txt>
+              <Switch
+                testID="channel-chats"
+                accessibilityLabel={W.channelChats}
+                accessibilityHint={CHANNEL_CHATS_NOTE.join("")}
+                value={channelChats}
+                onValueChange={toggleChannelChats}
+                trackColor={{ false: c["border-strong"], true: c["bg-inverse"] }}
+                ios_backgroundColor={c["border-strong"]}
+                thumbColor={channelChats ? c["text-inverse"] : undefined}
+              />
+            </View>
+            <Txt testID="channel-chats-note" size={S["text-sm"]} color="text-faint">
+              {CHANNEL_CHATS_NOTE[0]}
+              <Txt size={S["text-sm"]} color="text-faint" style={{ fontFamily: FONTS.mono }}>
+                {CHANNEL_CHATS_NOTE[1]}
+              </Txt>
+              {CHANNEL_CHATS_NOTE[2]}
+            </Txt>
+            {channelError && (
+              <View
+                testID="channel-chats-error"
+                accessibilityRole="alert"
+                style={{
+                  backgroundColor: c["danger-soft"],
+                  borderRadius: S["radius-md"],
+                  padding: S["space-4"],
+                }}
+              >
+                <Txt size={S["text-md"]}>{channelError}</Txt>
+              </View>
             )}
             <Button
               label={LICENSES_TITLE}
