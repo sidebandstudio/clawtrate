@@ -1522,15 +1522,6 @@ export class ClawtrateClient {
   }
 
   /**
-   * Whether `saved` names a gateway other than `url` that another client on this store saved
-   * since this one last read or wrote the record. That record is the other client's latest
-   * choice, and this client's queued changes leave it as it is.
-   */
-  private recordTaken(saved: ConnectionSettings | null, url: string): boolean {
-    return saved !== null && saved.url !== url && !this.recordSeen();
-  }
-
-  /**
    * Run one change to the selected gateway, its saved settings or its device
    * token after the previous one has settled, so each reads and writes what the
    * last one left.
@@ -1786,12 +1777,8 @@ export class ClawtrateClient {
         // Reconnect is the person's latest choice, as Connect is; a record of this gateway another
         // client changed since keeps what it changed.
         const saved = await this.savedSettings();
-        const url = this.settings.url;
-        await this.writeRecord({
-          ...(saved?.url === url ? saved : this.settings),
-          suspended: false,
-        });
-        this.settings = { ...this.settings, suspended: false };
+        const changed = !this.recordSeen() && saved?.url === this.settings.url ? saved : null;
+        await this.saveSettings({ ...(changed ?? this.settings), suspended: false });
       }
       if (stops === this.stops) await this.open();
       return null;
@@ -1808,15 +1795,27 @@ export class ClawtrateClient {
       if (!this.settings) return;
       // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
       const url = this.settings.url;
-      const typed = this.typedTokenEnds(url);
-      const change = { suspended: true, ...(typed ? { token: null } : {}) };
-      // Another client's gateway saved since stays the one a restart opens, and a record of this
-      // gateway another client changed since keeps what it changed.
+      const typed = this.typedTokenEnds(url) ? this.settings.token : null;
       const saved = await this.savedSettings();
-      if (!this.recordTaken(saved, url)) {
-        await this.writeRecord({ ...(saved?.url === url ? saved : this.settings), ...change });
+      if (this.recordSeen()) {
+        await this.saveSettings({
+          ...this.settings,
+          suspended: true,
+          ...(typed ? { token: null } : {}),
+        });
+      } else if (saved?.url === url) {
+        // Another client changed this gateway's record since: only the suspension and the typed
+        // token, if it is still the one saved, change.
+        await this.saveSettings({
+          ...saved,
+          suspended: true,
+          ...(typed && saved.token === typed ? { token: null } : {}),
+        });
+      } else {
+        // Another client saved another gateway or forgot this one since, and a restart opens what
+        // it left.
+        this.settings = { ...this.settings, suspended: true, ...(typed ? { token: null } : {}) };
       }
-      this.settings = { ...this.settings, ...change };
       // Only once that is saved does the attempt end: a Disconnect that failed keeps it.
       this.endAttempt(url);
       // The connection stops: writes waiting for access fail, as on any lost connection.

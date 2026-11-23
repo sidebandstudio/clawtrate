@@ -587,4 +587,72 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("suspending after another client forgot gateway A leaves A forgotten", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: readToken("token-A"),
+    });
+    const client = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+    try {
+      await client.start();
+      await other.start();
+      await until(() => client.state.connection.status === "connected");
+      await until(() => other.state.connection.status === "connected");
+      await other.disconnect(URL_A);
+      await client.suspend();
+      expect(client.state.connection.status).toBe("disconnected");
+      expect(saved(storage)).toBeNull();
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("suspending a typed attempt keeps the token another client typed for A since", async () => {
+    const storage = memoryStorage();
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const client = new ClawtrateClient(
+      { ...testHost(closed, storage), credentialStatus: async () => "secure" },
+      FAST,
+    );
+    const other = new ClawtrateClient(testHost(closed, storage), FAST);
+    try {
+      await client.start({ resume: false });
+      await other.start({ resume: false });
+      await client.connect({ url: URL_A, token: "typed-1" });
+      await other.connect({ url: URL_A, token: "typed-2" });
+      await client.suspend();
+      expect(saved(storage)).toEqual({ url: URL_A, token: "typed-2", suspended: true });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("Reconnect after another client saved B leaves out the shared token cleared before the suspend", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
+    });
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("issued-A"), storage), FAST);
+    try {
+      await client.start();
+      // The other client pairs, which drops the shared token, and then chooses B.
+      await other.start();
+      await until(() => other.state.connection.status === "connected");
+      await until(() => saved(storage)?.token === null);
+      await client.suspend();
+      await other.connect({ url: URL_B });
+      await client.retryNow();
+      expect(saved(storage)).toEqual({ url: URL_A, token: null, suspended: false });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });
