@@ -1597,6 +1597,56 @@ describe("a delete that names only the task's key (F-278, F-420)", () => {
   });
 });
 
+describe("a delete that names only the key, its read of the key answered late (F-278, F-420)", () => {
+  /** A listed task in `s-1` with a message queued behind its run, deleted by key, its read held. */
+  async function deletedByKey() {
+    const gateway = grantingGateway();
+    const rows = [{ key: KEY, agentId: "otto", label: "Disk", sessionId: "s-1" }];
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: rows, hasMore: false },
+    });
+    gateway.handlers["sessions.list"] = () => ({ sessions: rows, hasMore: false });
+    gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-1" });
+    const answer = deferred<unknown>();
+    gateway.handlers["sessions.describe"] = () => answer.promise;
+    const opened = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+    await until(() => opened.transcript().runs.some((run) => run.state === "running"));
+    const first = opened.client.sendMessage(KEY, "Then send me a summary.", {
+      sessionId: "s-1",
+      mode: "queue",
+    });
+    gateway.emit("sessions.changed", { sessionKey: KEY, agentId: "otto", reason: "delete", ts: 2 });
+    await until(() => gateway.calls("sessions.describe").length === 1);
+    const status = (id: string) =>
+      opened.transcript().outbox.find((each) => each.id === id)?.status;
+    return { ...opened, rows, answer, first, status };
+  }
+
+  it("only the messages waiting when the delete was heard are settled by its read: one queued for the next session after it stays queued", async () => {
+    const { client, answer, first, status } = await deletedByKey();
+    const second = client.sendMessage(KEY, "And the logs.", { sessionId: "s-2", mode: "queue" });
+    answer.resolve({ session: null });
+    await until(() => status(first) === "failed");
+    await sleep(50);
+    expect(status(second)).toBe("queued");
+    client.stop();
+  });
+
+  it("an answer that came after the view showed the session that replaced it settles nothing", async () => {
+    const { client, gateway, transcript, rows, answer, first, status } = await deletedByKey();
+    rows[0]!.sessionId = "s-2";
+    gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-2" });
+    client.reloadSession(KEY);
+    await until(() => transcript().sessionId === "s-2");
+    answer.resolve({ session: null });
+    await sleep(100);
+    expect(status(first)).toBe("queued");
+    client.stop();
+  });
+});
+
 describe("Archive, Delete and their Stop act only on the session the person chose (F-277, F-278)", () => {
   /** A task the person chose in `s-1`, whose key holds `holds` by the time they act on it. */
   async function chosen(holds: Record<string, unknown> | null) {

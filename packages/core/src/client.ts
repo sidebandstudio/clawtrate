@@ -1110,8 +1110,8 @@ function sessionNamed(history: RawRecord | null): string | null {
  * The messages an archive or delete of `session` settles, by the session each was bound to: those
  * bound to it, and any bound to none; every one when it names none.
  */
-function ofSession(session: string | null): (bound: string | undefined) => boolean {
-  return (bound) => session === null || bound === undefined || bound === session;
+function ofSession(session: string | null): (message: { sessionId?: string }) => boolean {
+  return ({ sessionId }) => session === null || sessionId === undefined || sessionId === session;
 }
 
 /**
@@ -6426,9 +6426,11 @@ export class ClawtrateClient {
   /**
    * A delete that names only the task's key, as OpenClaw 2026.10.6's own does. This client's own,
    * once its request left, settles as `settleQueued` says. Otherwise the gateway's row of the key is
-   * read first, and only messages waiting for a session the key no longer holds are refused as
-   * deleted elsewhere: a late delete never refuses one written for the session that followed.
-   * Unread, they wait, and a send of one names its session, which the gateway refuses once gone.
+   * read first, and of the messages waiting when the delete was heard, only those for a session the
+   * key no longer holds are refused as deleted elsewhere: a late delete never refuses one written
+   * for the session that followed. An answer the view or the list has seen another session since
+   * the request settles nothing. Unread, they wait, and a send of one names its session, which the
+   * gateway refuses once gone.
    */
   private settleUnnamedDelete(key: string): void {
     if (
@@ -6439,12 +6441,23 @@ export class ClawtrateClient {
     }
     if (!this.tracked(key)) return;
     const generation = this.generation;
+    const waiting = new Set(this.waitingIn(key));
+    const sessions = () => [
+      this.state.transcripts[key]?.sessionId,
+      sessionNamed(this.rows.get(capId(key, MAX_ID_CHARS)) ?? null),
+    ];
+    const before = sessions();
     this.request("sessions.describe", { key }).then(
       (answer) => {
         if (generation !== this.generation || !this.tracked(key)) return;
+        if (sessions().some((session, index) => session !== before[index])) return;
         const holds = sessionNamed(asRecord(asRecord(answer)?.session));
-        this.refuseWaiting(key, "deleted", (bound) =>
-          bound === undefined ? holds === null : bound !== holds,
+        this.refuseWaiting(
+          key,
+          "deleted",
+          (message) =>
+            waiting.has(message.id) &&
+            (message.sessionId === undefined ? holds === null : message.sessionId !== holds),
         );
       },
       () => undefined,
@@ -6454,21 +6467,21 @@ export class ClawtrateClient {
   /**
    * Messages that wait in a task archived or deleted elsewhere, queued or parked Not sent by a stop
    * (the gateway ends a task's run as it archives or deletes it, and that end can come first): each
-   * keeps its words and files, refused as the gateway would refuse it. Only messages whose session
-   * the archive or delete settles (`of`): a late one never refuses a message written for the
-   * session that followed.
+   * keeps its words and files, refused as the gateway would refuse it. Only the messages the
+   * archive or delete settles (`of`): a late one never refuses a message written for the session
+   * that followed.
    */
   private refuseWaiting(
     key: string,
     how: "archived" | "deleted",
-    of: (sessionId: string | undefined) => boolean,
+    of: (message: OutgoingMessage) => boolean,
   ): void {
     const error = how === "deleted" ? new TaskDeletedError() : new TaskArchivedError();
     this.updateActivity(key, (activity, ctx) => {
       let next = activity;
       for (const message of activity.outbox) {
         if (message.status !== "queued" && message.status !== "not-sent") continue;
-        if (!of(message.sessionId)) continue;
+        if (!of(message)) continue;
         next = updateMessage(
           message.status === "queued"
             ? failRunStart(next, message.id, { message: error.message, kind: "not-started" }, ctx)
