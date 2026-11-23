@@ -99,31 +99,22 @@ const pairingAtB = () => pairingAt(URL_B);
 const setupCode = { url: URL_B, bootstrapToken: CODE, expiresAtMs: Date.now() + 600_000 };
 
 /**
- * Stop `client` if it reads the saved record once B's device token is saved, and note any save
- * of B to the record after that.
+ * Stop `client` right after B's device token is written, and note any save of B to the record
+ * after that.
  */
-function stopOnRecordRead(
-  storage: KeyValueStore & { data: Map<string, string> },
-  client: () => ClawtrateClient,
-) {
+function stopOnTokenWrite(storage: KeyValueStore, client: () => ClawtrateClient) {
   let stopped = false;
   let savedAfterStop = false;
-  const get = storage.get;
-  storage.get = async (key) => {
-    if (!stopped && key === "connection" && storage.data.has(tokenKey(URL_B))) {
-      stopped = true;
-      const value = await get(key);
-      client().stop();
-      return value;
-    }
-    return get(key);
-  };
   const set = storage.set;
   storage.set = async (key, value) => {
     if (stopped && key === "connection" && value.includes(URL_B)) savedAfterStop = true;
-    return set(key, value);
+    await set(key, value);
+    if (!stopped && key === tokenKey(URL_B)) {
+      stopped = true;
+      client().stop();
+    }
   };
-  return { savedAfterStop: () => savedAfterStop };
+  return { stopped: () => stopped, savedAfterStop: () => savedAfterStop };
 }
 
 describe("clients sharing a store keep each other's saved gateway", () => {
@@ -510,14 +501,16 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       [tokenKey(URL_A)]: readToken("token-A"),
     });
     const client = new ClawtrateClient(testHost(setupGateway(), storage), FAST);
-    const watch = stopOnRecordRead(storage, () => client);
+    const watch = stopOnTokenWrite(storage, () => client);
     try {
       await client.start();
       await until(() => client.state.connection.status === "connected");
       await client.connectWithSetupCode(setupCode);
-      await until(() => storage.data.has(tokenKey(URL_B)));
+      await until(watch.stopped);
       await sleep(30);
+      expect(watch.stopped()).toBe(true);
       expect(watch.savedAfterStop()).toBe(false);
+      expect(saved(storage)).toEqual({ url: URL_A, token: null });
     } finally {
       client.stop();
     }
@@ -534,10 +527,13 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     try {
       await client.start();
       await until(() => client.state.connection.status === "connected");
-      const watch = stopOnRecordRead(storage, () => client);
+      const watch = stopOnTokenWrite(storage, () => client);
       await client.connectForSetup(URL_B);
-      await sleep(50);
+      await until(watch.stopped);
+      await sleep(30);
+      expect(watch.stopped()).toBe(true);
       expect(watch.savedAfterStop()).toBe(false);
+      expect(saved(storage)).toEqual({ url: URL_A, token: null });
     } finally {
       client.stop();
     }
