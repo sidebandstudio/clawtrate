@@ -119,4 +119,71 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  describe("while one client is still reading the saved gateway at startup", () => {
+    /** A store whose read of `key` waits for `release`, before or after it reads the value. */
+    function pausedRead(key: string, when: "before" | "after") {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL_A, token: null }) });
+      const reading = deferred<void>();
+      const gate = deferred<void>();
+      const get = storage.get;
+      let paused = false;
+      storage.get = async (read) => {
+        if (read !== key || paused) return get(read);
+        paused = true;
+        const value = when === "after" ? await get(read) : null;
+        reading.resolve();
+        await gate.promise;
+        return when === "after" ? value : get(read);
+      };
+      return { storage, reading: reading.promise, release: () => gate.resolve() };
+    }
+
+    it("F-457: a Suspend sent then leaves gateway B, saved by another client after the read", async () => {
+      const { storage, reading, release } = pausedRead("connection", "after");
+      const gatewayA = pairingGateway("token-A");
+      const client = new ClawtrateClient(testHost(gatewayA, storage), FAST);
+      const other = new ClawtrateClient(testHost(pairingGateway("token-B"), storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        await other.start({ resume: false });
+        await other.connect({ url: URL_B });
+        expect(saved(storage)?.url).toBe(URL_B);
+        const suspending = client.suspend();
+        release();
+        await Promise.all([starting, suspending]);
+        await sleep(50);
+        expect(saved(storage)).toEqual({ url: URL_B, token: null });
+        expect(gatewayA.sockets, "the Suspend still keeps A offline").toHaveLength(0);
+        expect(client.state.connection.status).toBe("disconnected");
+      } finally {
+        release();
+        other.stop();
+        client.stop();
+      }
+    });
+
+    it("F-457: a stopped client's Suspend no longer holds another client's Connect", async () => {
+      const { storage, reading, release } = pausedRead("turn-limit-minutes", "before");
+      const client = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+      const other = new ClawtrateClient(testHost(pairingGateway("token-B"), storage), FAST);
+      try {
+        void client.start();
+        await reading;
+        const suspending = client.suspend();
+        client.stop();
+        await other.start({ resume: false });
+        let connected = false;
+        const connecting = other.connect({ url: URL_B }).then(() => (connected = true));
+        await until(() => connected);
+        expect(saved(storage)?.url).toBe(URL_B);
+        await Promise.all([suspending, connecting]);
+      } finally {
+        release();
+        other.stop();
+        client.stop();
+      }
+    });
+  });
 });

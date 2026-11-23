@@ -2,7 +2,7 @@
 import { PROTOCOL_VERSION } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
-import { ClawtrateClient } from "../src/client.ts";
+import { ClawtrateClient, GatewayChangedError } from "../src/client.ts";
 import { MAX_GATEWAY_URL_CHARS } from "../src/gateway-url.ts";
 import { pairingEnded, protocolMismatch } from "../src/connect-errors.ts";
 import {
@@ -558,6 +558,52 @@ describe("connecting", () => {
         restarted.stop();
       } finally {
         release();
+        client.stop();
+      }
+    });
+
+    it("F-457: a Disconnect of another gateway is refused, and the saved one still opens", async () => {
+      const { storage, reading, release } = pausedRead();
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const forgetting = client.disconnect(OTHER_URL);
+        release();
+        await expect(forgetting).rejects.toThrow(GatewayChangedError);
+        await starting;
+        await until(() => client.state.connection.status === "connected");
+        expect(gateway.sockets).toHaveLength(1);
+        expect(savedSettings(storage)?.url).toBe(URL);
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-457: a Disconnect fails when the saved gateway could not be read", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      const gate = deferred<void>();
+      const reading = deferred<void>();
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (key !== "connection") return get(key);
+        reading.resolve();
+        await gate.promise;
+        throw new Error("The disk could not be read.");
+      };
+      const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+      try {
+        const starting = client.start();
+        await reading.promise;
+        const forgetting = client.disconnect(URL);
+        gate.resolve();
+        await expect(starting).rejects.toThrow("The disk could not be read.");
+        await expect(forgetting).rejects.toThrow("The disk could not be read.");
+        expect(savedSettings(storage)?.url).toBe(URL);
+      } finally {
+        gate.resolve();
         client.stop();
       }
     });
