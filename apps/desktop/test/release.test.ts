@@ -204,15 +204,17 @@ describe("signing", () => {
     );
     expect(build).toContain("signer = expected.thumbprint;");
     expect(build.indexOf("windowsSigner(process.env")).toBeLessThan(build.indexOf("await build("));
-    // Then, still before signing, one line on the copies of the key signtool leaves, and where.
+    // Then, still before signing, one line on the copies of the key signtool can leave. It
+    // gives a count and a folder only for the setup that was tested.
     expect(build).toContain(
       "  signer = expected.thumbprint;\n  console.log(WINDOWS_KEY_COPIES);\n}",
     );
     expect(WINDOWS_KEY_COPIES).not.toContain("\n");
-    expect(WINDOWS_KEY_COPIES).toContain("a copy of the .pfx's private key");
+    expect(WINDOWS_KEY_COPIES).toContain("signtool can leave copies of the .pfx's private key");
     expect(WINDOWS_KEY_COPIES).toContain(
-      "for each file it signs, in %APPDATA%\\Microsoft\\Crypto\\Keys",
+      "On Windows Server 2025, winCodeSign 2.6.0's signtool left one per file signed in %APPDATA%\\Microsoft\\Crypto\\Keys, for a key from the Microsoft Software Key Storage Provider.",
     );
+    expect(WINDOWS_KEY_COPIES).not.toContain("for each file it signs");
     expect(build).toContain("projectDir: APP_DIR,");
     // The x64 installer by its expected name, not whichever .exe files the build lists.
     expect(build).toContain("const installer = `${PRODUCT_NAME}-${version}-win-x64.exe`;");

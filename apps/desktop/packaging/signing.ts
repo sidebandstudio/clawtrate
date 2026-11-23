@@ -170,12 +170,12 @@ export function signingSummary(plan: SigningPlan, target: "mac" | "win"): string
 }
 
 /**
- * What a Windows build that signs from a .pfx prints before electron-builder starts. As
- * tested, with electron-builder's default signtool and a key from the software key storage
- * provider; docs/development/packaging.md says more.
+ * What a Windows build that signs from a .pfx prints before electron-builder starts. The
+ * count and the folder are only those of the setup CI tested; docs/development/packaging.md
+ * says more.
  */
 export const WINDOWS_KEY_COPIES =
-  "Signing note: signtool leaves a copy of the .pfx's private key in this user's key store for each file it signs, in %APPDATA%\\Microsoft\\Crypto\\Keys for a CNG key, and the build does not delete them.";
+  "Signing note: signtool can leave copies of the .pfx's private key in this user's key store, and the build does not delete them. On Windows Server 2025, winCodeSign 2.6.0's signtool left one per file signed in %APPDATA%\\Microsoft\\Crypto\\Keys, for a key from the Microsoft Software Key Storage Provider.";
 
 /** What `codesign --display --verbose=2` (its error output) says of an app's signature. */
 export function macSignatureKind(codesignOutput: string): "ad hoc" | "certificate" | "none" {
