@@ -643,6 +643,12 @@ export type OutgoingMessage = {
    * known: it is then sent only once a read of the task names one.
    */
   sessionId?: string;
+  /**
+   * Sent by a caller that means to make the task when its key holds none (`SendOptions.newTask`):
+   * a read that names no session lets it go unguarded, as a first message to a new key. Without
+   * it such a read fails it as deleted, and nothing is sent.
+   */
+  newTask?: boolean;
   /** The task "Start a new task with this message" started with its words; its files stay here. */
   startedTask?: string;
   /**

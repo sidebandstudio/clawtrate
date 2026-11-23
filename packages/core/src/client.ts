@@ -16,7 +16,6 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
-import { isStopCommand } from "./stop-words.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
 import {
@@ -297,10 +296,12 @@ import {
   newMainTask,
   newTask,
   pinTask,
+  refusedElsewhere,
   renameTask,
   restoreTask,
   TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
+  TASK_RESET_ELSEWHERE,
   type ArchivedList,
   type ArchiveResult,
   type CreatedTask,
@@ -567,6 +568,18 @@ export type SendOptions = {
   attachments?: OutgoingAttachment[];
   /** The gateway's id of the message this one replies to (F-067). */
   replyToId?: string;
+  /**
+   * The session of the task as the screen showed it when the person sent: the message goes there
+   * only, whatever the task's state names by the time it is sent. Without it, the session the
+   * task's state names now.
+   */
+  sessionId?: string;
+  /**
+   * Make the task when its key holds none, as a first message to a new key does. Only for a
+   * caller that means it: without it, a message to a task with no known session waits for a read
+   * of the task, and one the read finds gone is refused as deleted, its words kept (F-278).
+   */
+  newTask?: boolean;
 };
 
 /**
@@ -901,10 +914,28 @@ export class TaskArchivedError extends Error {
 }
 
 /**
+ * The gateway refused a send because its task was reset elsewhere: the key holds the session that
+ * followed the one the message was written for.
+ */
+export class TaskResetError extends Error {
+  constructor() {
+    super(TASK_RESET_ELSEWHERE);
+    this.name = "TaskResetError";
+  }
+}
+
+/**
  * OpenClaw 2026.10.6's refusal of any work in an archived task, a steer too (`INVALID_REQUEST`, no
  * reason of its own): `Session "<key>" is archived. Restore it before starting new work.`
  */
 const ARCHIVED_REFUSAL = /^Session ".*" is archived\. Restore it before starting new work\.$/s;
+
+/**
+ * OpenClaw 2026.10.6's refusal of a send whose task was deleted while the gateway admitted it,
+ * before it checks the session the send names (`chat-send-admission.ts`; `INVALID_REQUEST`, no
+ * reason of its own): `Session "<key>" was deleted while starting work. Retry.`
+ */
+const DELETED_WHILE_STARTING = /^Session ".*" was deleted while starting work\. Retry\.$/s;
 
 /** A request that never left this client: nothing happened. */
 export class NotSentError extends Error {
@@ -2388,6 +2419,16 @@ export class ClawtrateClient {
       throw new SendTooLargeError(
         `${attachments.length} files; one message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE}.`,
       );
+    // Never cut or digested: a session id past the bound would name another session.
+    if (
+      options.sessionId !== undefined &&
+      (typeof options.sessionId !== "string" ||
+        !options.sessionId ||
+        options.sessionId.length > MAX_ID_CHARS)
+    )
+      throw new Error("That task's session can't be named.");
+    // The task as the screen showed it, or else as the state names it now.
+    const sessionId = options.sessionId ?? transcript.sessionId;
     // As it will be sent, its reply reference included; checked again at delivery.
     this.checkSize(
       this.sendParams(
@@ -2397,7 +2438,7 @@ export class ClawtrateClient {
         "followup",
         attachments,
         options.replyToId,
-        transcript.sessionId,
+        sessionId,
       ),
     );
     const bytes = attachments.reduce((sum, each) => sum + decodedBytes(each.content), 0);
@@ -2437,8 +2478,9 @@ export class ClawtrateClient {
         sizeBytes: decodedBytes(attachment.content),
       })),
       ...(replyToId ? { replyToId } : {}),
-      // The session of the task on screen now: whatever the key holds later, it goes there only.
-      ...(transcript.sessionId ? { sessionId: transcript.sessionId } : {}),
+      // The session of the task on screen: whatever the key holds later, it goes there only.
+      ...(sessionId ? { sessionId } : {}),
+      ...(options.newTask ? { newTask: true } : {}),
     };
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
@@ -2557,8 +2599,12 @@ export class ClawtrateClient {
    * Send a failed, unconfirmed or unknown message again, with the same idempotency key,
    * so the gateway delivers it at most once. It already counts against the
    * outbox bounds, so a retry is never refused for room.
+   *
+   * `sessionId` is the Resend of a message refused because its task was archived or reset
+   * elsewhere, once the task is live again: the session the screen shows now, which the message
+   * goes to from then on, by the person's choice. It is still checked there, as any send is.
    */
-  retryMessage(key: string, messageId: string): void {
+  retryMessage(key: string, messageId: string, options: { sessionId?: string } = {}): void {
     const message = this.outgoing(key, messageId);
     if (
       !message ||
@@ -2568,6 +2614,17 @@ export class ClawtrateClient {
         message.status !== "not-sent")
     )
       return;
+    if (options.sessionId !== undefined) {
+      if (
+        message.status !== "failed" ||
+        (message.error !== TASK_ARCHIVED_ELSEWHERE && message.error !== TASK_RESET_ELSEWHERE)
+      )
+        throw new Error("That message goes only to the task it was written in.");
+      if (!options.sessionId || options.sessionId.length > MAX_ID_CHARS)
+        throw new Error("That task's session can't be named.");
+      const sessionId = options.sessionId;
+      this.updateActivity(key, (activity) => updateMessage(activity, messageId, { sessionId }));
+    }
     // The gateway keeps a withdrawn steer's id as aborted and answers a send under it with that
     // abort: it goes again under a new key, in its place on the shelf, with its files.
     if (message.steer === "withdrawn") {
@@ -2700,7 +2757,8 @@ export class ClawtrateClient {
    * "Try again" on a turn that failed: the same words and files, sent now as
    * a new message with its own key, a reply to the same message when it was
    * one. The files must still be held for the message (until history holds
-   * it); otherwise it is refused, never sent without them.
+   * it); otherwise it is refused, never sent without them. It goes to the
+   * session the first was written for, never one the task holds since.
    */
   sendAgain(key: string, messageId: string): string {
     const message = this.outgoing(key, messageId);
@@ -2711,6 +2769,8 @@ export class ClawtrateClient {
     return this.sendMessage(key, message.text, {
       attachments: [...files],
       ...(message.replyToId ? { replyToId: message.replyToId } : {}),
+      ...(message.sessionId ? { sessionId: message.sessionId } : {}),
+      ...(message.newTask ? { newTask: true } : {}),
     });
   }
 
@@ -2720,7 +2780,10 @@ export class ClawtrateClient {
    * starts with its words, as "Start as new task" does. Task creation takes no files, and the new
    * task shows no reply. A message without files leaves this task. One with files keeps them here,
    * with its reply reference, and records the task its words went to, so they never go twice. The
-   * caller holds one interest in the new task, as `createTask` gives it.
+   * creation is this message's own: another message with the same words makes its own task, and
+   * asking again for this one while it is out joins it. However it settles, by its answer or by a
+   * check after the answer was lost, the message follows (`settleSourceMessage`). The caller holds
+   * one interest in the new task, as `createTask` gives it.
    */
   async startTaskFromMessage(
     key: string,
@@ -2729,23 +2792,25 @@ export class ClawtrateClient {
   ): Promise<string> {
     const message = this.outgoing(key, messageId);
     const botId = botIdFromSessionKey(key);
-    if (
-      !message ||
-      !botId ||
-      !message.text ||
-      message.status !== "failed" ||
-      (message.error !== TASK_DELETED_ELSEWHERE && message.error !== TASK_ARCHIVED_ELSEWHERE)
-    )
+    if (!message || !botId || !message.text || !refusedElsewhere(message))
       throw new Error("That message can't start a new task.");
     if (message.startedTask) throw new Error("Its words already went to a new task.");
-    // The same words asked again while the first is out join it: one task, never two.
-    const started = await this.createTask(botId, message.text, options);
-    if (message.attachments.length === 0) this.deleteMessage(key, messageId);
+    return this.createTask(botId, message.text, { ...options, source: { key, messageId } });
+  }
+
+  /**
+   * A refused message's new task was created: its words went there. Without files the message
+   * leaves its task; with files it stays with them and records where its words went.
+   */
+  private settleSourceMessage(creation: TaskCreation, started: string): void {
+    const source = creation.source;
+    const message = source && this.outgoing(source.key, source.messageId);
+    if (!source || !message || message.startedTask) return;
+    if (message.attachments.length === 0) this.deleteMessage(source.key, source.messageId);
     else
-      this.updateActivity(key, (activity) =>
-        updateMessage(activity, messageId, { startedTask: started }),
+      this.updateActivity(source.key, (activity) =>
+        updateMessage(activity, source.messageId, { startedTask: started }),
       );
-    return started;
   }
 
   /** "Send now" on a queued message's chip: a steer into the running or waiting run. */
@@ -2788,7 +2853,13 @@ export class ClawtrateClient {
   async createTask(
     botId: string,
     text: string,
-    options: { label?: string; owner?: object; retryUnknown?: boolean } = {},
+    options: {
+      label?: string;
+      owner?: object;
+      retryUnknown?: boolean;
+      /** The refused message whose words these are (`startTaskFromMessage`). */
+      source?: { key: string; messageId: string };
+    } = {},
   ): Promise<string> {
     const body = text.trim();
     if (!body) throw new Error("The message is empty.");
@@ -2802,9 +2873,13 @@ export class ClawtrateClient {
     )
       throw new Error("The bot id or label is too long.");
     // The same request whose earlier attempt the gateway refused is asked again with its own key;
-    // one still being checked is not asked twice.
-    const earlier = [...this.creations.values()].find(
-      (each) => each.botId === botId && each.text === body && each.label === label,
+    // one still being checked is not asked twice. A refused message's creation is that message's
+    // alone, never another's with the same words.
+    const source = options.source;
+    const earlier = [...this.creations.values()].find((each) =>
+      source
+        ? each.source?.key === source.key && each.source.messageId === source.messageId
+        : !each.source && each.botId === botId && each.text === body && each.label === label,
     );
     if (earlier && (earlier.status === "creating" || earlier.status === "checking")) {
       // Asked again while the first is out or being checked: the same request, so the same outcome.
@@ -2849,6 +2924,7 @@ export class ClawtrateClient {
             error: null,
             key: null,
             gatewayBootId: null,
+            ...(source ? { source } : {}),
           };
     this.putCreation(creation);
     let sent = false;
@@ -2958,6 +3034,8 @@ export class ClawtrateClient {
       }
       return next;
     });
+    // By its answer or by the check after a lost one: the refused message it came from follows.
+    this.settleSourceMessage(creation, key);
     if (byCaller) {
       this.creations.delete(id);
       this.releaseCheckingSlot(id);
@@ -3107,6 +3185,7 @@ export class ClawtrateClient {
     return this.createTask(creation.botId, creation.text, {
       ...(creation.label ? { label: creation.label } : {}),
       ...(options.owner ? { owner: options.owner } : {}),
+      ...(creation.source ? { source: creation.source } : {}),
       retryUnknown: true,
     });
   }
@@ -3160,17 +3239,21 @@ export class ClawtrateClient {
       }
       const named = this.state.transcripts[key]?.sessionId;
       if (message.sessionId === undefined) {
-        // It goes to the session the read names. A key no read, list or creation ever named one
-        // for holds no task this client knew, and the send makes one, as a first message does.
+        // It goes to the session the read names. A read that names none means the key holds no
+        // task: only a caller that meant to make one there sends it, as a first message to a new
+        // key; any other message, a task opened from a link included, is refused, its words kept.
         if (named) {
           this.updateActivity(key, (activity) =>
             updateMessage(activity, messageId, { sessionId: named }),
           );
           message = this.outgoing(key, messageId)!;
+        } else if (!message.newTask) {
+          this.failDelivery(key, messageId, new TaskDeletedError(), true);
+          return;
         }
       } else if (message.mode === "steer" && message.sessionId !== named) {
-        // The key holds another session now: the task the steer was written in is gone.
-        this.failDelivery(key, messageId, new TaskDeletedError(), true);
+        // The key holds another session now: the task the steer was written in was reset or is gone.
+        this.failDelivery(key, messageId, await this.sessionGone(key, message.sessionId), true);
         return;
       }
     }
@@ -3272,6 +3355,7 @@ export class ClawtrateClient {
         error instanceof GatewayProtocolRequestError ||
         error instanceof TaskDeletedError ||
         error instanceof TaskArchivedError ||
+        error instanceof TaskResetError ||
         error instanceof SendTooLargeError ||
         error instanceof NotSentError
       ) {
@@ -3365,27 +3449,30 @@ export class ClawtrateClient {
   }
 
   /**
-   * A send the gateway refused, read from its answer. OpenClaw 2026.10.6 refuses any work in an
-   * archived task, a steer too, with its own words (`ARCHIVED_REFUSAL`). A send that named its
-   * session is refused as no longer for it (`active-leaf-changed`, "active branch changed; review
-   * and retry"), and what the gateway has under the key then says why: no session, or another one,
-   * means the task was deleted and nothing was sent, since a task keeps its session through
-   * `sessions.reset`, `/new` and `/reset`; the same session marked archived means it was archived.
-   * The same session otherwise means the refusal was not about the task: the gateway checks a stop
-   * command (`isStopCommand`) against the task's latest row, which a guard naming none matches only
-   * in an empty task. A stop command goes again once, under the same idempotency key, naming the
-   * latest row this client read, which the gateway takes for that row or any before it, and refuses
-   * in any other session. Any other refusal stands.
+   * A send the gateway refused, read from its answer. OpenClaw 2026.10.6 gives no structured
+   * reason for an archived task or for a delete during admission, only its own words
+   * (`ARCHIVED_REFUSAL`, `DELETED_WHILE_STARTING`), and refuses any work in an archived task, a
+   * steer too. A send that named its session is refused as no longer for it
+   * (`active-leaf-changed`, "active branch changed; review and retry"), and what the gateway has
+   * under the key then says why: another session, or none, means the task was reset or deleted and
+   * nothing was sent (`sessionGone`); the same session marked archived means it was archived. The
+   * same session otherwise means the refusal was not about the task: the gateway checks a stop
+   * command, as it normalizes it, against the task's latest row, which a guard naming none matches
+   * only in an empty task. So such a refusal goes again once, under the same idempotency key and
+   * still naming the session, with the latest row read from that session, which the gateway takes
+   * for that row or any before it, and refuses in any other session. With no row read from it yet,
+   * the task is read first. Any other refusal stands.
    */
   private async afterSessionRefusal(
     key: string,
-    params: { message: string; sessionId?: string },
+    params: { sessionId?: string },
     error: unknown,
     again: ((leaf: string) => Promise<unknown>) | null,
   ): Promise<unknown> {
     if (!(error instanceof GatewayProtocolRequestError) || error.gatewayCode !== "INVALID_REQUEST")
       throw error;
     if (ARCHIVED_REFUSAL.test(error.message)) throw new TaskArchivedError();
+    if (DELETED_WHILE_STARTING.test(error.message)) throw new TaskDeletedError();
     if (params.sessionId === undefined || asRecord(error.details)?.reason !== "active-leaf-changed")
       throw error;
     let row: RawRecord | null;
@@ -3395,18 +3482,60 @@ export class ClawtrateClient {
       // What the gateway has under the key is not known: its refusal stands as it came.
       throw error;
     }
-    if (row?.sessionId !== params.sessionId) throw new TaskDeletedError();
+    if (row?.sessionId !== params.sessionId)
+      throw await this.sessionGone(key, params.sessionId, row);
     if (row?.archived === true) throw new TaskArchivedError();
-    const leaf = this.latestRowRead(key);
-    if (!again || !leaf || !isStopCommand(params.message)) throw error;
+    if (!again) throw error;
+    let leaf = this.rowReadFrom(key, params.sessionId);
+    if (!leaf) {
+      await this.loadTranscript(key, false, null);
+      leaf = this.readOnThisConnection(key) ? this.rowReadFrom(key, params.sessionId) : null;
+    }
+    if (!leaf) throw error;
     return again(leaf).catch((refused: unknown) =>
       this.afterSessionRefusal(key, params, refused, null),
     );
   }
 
-  /** The gateway's id of the latest row of a task's history this client read, when one has an id. */
-  private latestRowRead(key: string): string | null {
-    const items = this.state.transcripts[key]?.items ?? [];
+  /**
+   * Why the session a message was written for is no longer under its key: the gateway's row of
+   * what the key holds now (`row`, else read here) names it as its `previousSessionId`, the prior
+   * session under the same key, when the task was reset; anything else, no session included, means
+   * the task was deleted. After a reset the task is read again, so the screen shows the session the
+   * key holds now.
+   */
+  private async sessionGone(
+    key: string,
+    sessionId: string,
+    row?: RawRecord | null,
+  ): Promise<TaskResetError | TaskDeletedError> {
+    let current = row;
+    if (current === undefined) {
+      try {
+        current = asRecord(asRecord(await this.request("sessions.describe", { key }))?.session);
+      } catch {
+        current = null;
+      }
+    }
+    if (
+      typeof current?.sessionId === "string" &&
+      current.sessionId !== sessionId &&
+      current.previousSessionId === sessionId
+    ) {
+      this.scheduleHistory(key);
+      return new TaskResetError();
+    }
+    return new TaskDeletedError();
+  }
+
+  /**
+   * The gateway's id of the latest row of a task's history this client read from `sessionId`, when
+   * the history shown is that session's and a row has an id.
+   */
+  private rowReadFrom(key: string, sessionId: string): string | null {
+    const transcript = this.state.transcripts[key];
+    if (transcript?.sessionId !== sessionId) return null;
+    const items = transcript.items;
     for (let index = items.length - 1; index >= 0; index -= 1) {
       const id = items[index]!.messageId;
       if (id) return id;

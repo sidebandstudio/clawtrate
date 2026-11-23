@@ -114,6 +114,8 @@ export type BridgeCommand =
       attachmentIds: string[];
       /** The gateway's id of the message this one replies to (F-067). */
       replyToId?: string;
+      /** The task's session as the screen showed it when the person sent: it goes there only. */
+      sessionId?: string;
     }
   /** Add, or with `remove` take back, this person's reaction on a message the task shows (F-283). */
   | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
@@ -121,7 +123,11 @@ export type BridgeCommand =
   | { type: "setTurnLimit"; minutes: number }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
-  | { type: "retryMessage"; key: string; messageId: string }
+  /**
+   * Send a failed or unconfirmed message again. `sessionId`, on one refused because its task was
+   * archived or reset elsewhere and live again since: the session the screen shows now.
+   */
+  | { type: "retryMessage"; key: string; messageId: string; sessionId?: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
   | { type: "sendQueuedNow"; key: string; messageId: string }
@@ -1207,6 +1213,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         ...(command.replyToId !== undefined
           ? { replyToId: id(command.replyToId, "message id") }
           : {}),
+        ...(command.sessionId !== undefined
+          ? { sessionId: id(command.sessionId, "session id") }
+          : {}),
       };
     }
     case "setTurnLimit":
@@ -1229,6 +1238,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     }
     case "retryMessage":
+      return {
+        type: command.type,
+        key: sessionKey(command.key),
+        messageId: id(command.messageId, "message id"),
+        ...(command.sessionId !== undefined
+          ? { sessionId: id(command.sessionId, "session id") }
+          : {}),
+      };
     case "deleteMessage":
     case "cancelQueued":
     case "sendQueuedNow":
@@ -1891,6 +1908,7 @@ class ViewerSession implements BridgeSession {
             mode: command.mode,
             attachments: taken.attachments,
             ...(command.replyToId ? { replyToId: command.replyToId } : {}),
+            ...(command.sessionId ? { sessionId: command.sessionId } : {}),
           });
           return { messageId };
         } catch (error) {
@@ -1899,7 +1917,11 @@ class ViewerSession implements BridgeSession {
         }
       }
       case "retryMessage":
-        return client.retryMessage(this.mine(command.key), command.messageId);
+        return client.retryMessage(
+          this.mine(command.key),
+          command.messageId,
+          command.sessionId ? { sessionId: command.sessionId } : {},
+        );
       case "deleteMessage":
         return client.deleteMessage(this.mine(command.key), command.messageId);
       case "cancelQueued":

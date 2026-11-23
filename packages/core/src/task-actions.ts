@@ -14,6 +14,25 @@ import { asRecord, mapSessionRow, plainPreview, type RawRecord } from "./mapping
 export const TASK_DELETED_ELSEWHERE = "This task was deleted elsewhere.";
 /** A message the gateway did not take because the task it was written in was archived (F-277). */
 export const TASK_ARCHIVED_ELSEWHERE = "This task was archived elsewhere.";
+/**
+ * A message the gateway did not take because its task was reset elsewhere and now holds the next
+ * session under its key (`previousSessionId` names the one it was written for) (F-278).
+ */
+export const TASK_RESET_ELSEWHERE = "This task was reset elsewhere.";
+
+/**
+ * A message the gateway refused because its task was deleted, archived or reset elsewhere: sent
+ * again to the same session it would be refused the same way, so it offers a new task instead,
+ * and Resend only once its task is live again (F-278, F-277).
+ */
+export function refusedElsewhere(message: { status: string; error: string | null }): boolean {
+  return (
+    message.status === "failed" &&
+    (message.error === TASK_DELETED_ELSEWHERE ||
+      message.error === TASK_ARCHIVED_ELSEWHERE ||
+      message.error === TASK_RESET_ELSEWHERE)
+  );
+}
 /** The longest label the gateway takes (`SESSION_LABEL_MAX_LENGTH`). */
 export const MAX_TASK_LABEL_CHARS = 512;
 /** Archived tasks one read lists; past it `more` is true. */

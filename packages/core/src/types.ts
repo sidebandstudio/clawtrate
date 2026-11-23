@@ -468,6 +468,12 @@ export type TaskCreation = {
    * of that same start, which holds its idempotency record.
    */
   gatewayBootId: string | null;
+  /**
+   * The refused message "Start a new task with this message" took its words from: the creation
+   * is that message's alone, and once it is created the message records where its words went
+   * (F-278, F-277).
+   */
+  source?: { key: string; messageId: string };
 };
 
 export const initialScopeUpgrade: ScopeUpgradeState = {

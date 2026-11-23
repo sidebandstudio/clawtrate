@@ -431,6 +431,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
   replyToId: ID,
   sessionId: ID,
+  newTask: FLAG,
   startedTask: ID,
   steer: ENUM,
 });
@@ -807,6 +808,7 @@ export const CREATION: Bound = object<TaskCreation>()({
   error: text(MAX_ERROR_JSON_CHARS),
   key: ID,
   gatewayBootId: NAME,
+  source: object<NonNullable<TaskCreation["source"]>>()({ key: ID, messageId: ID }),
 });
 const retentionAlarm = object<ClawtrateState["retention"]>()({
   estimated: NUMBER,

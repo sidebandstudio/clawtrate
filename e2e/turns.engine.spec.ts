@@ -125,7 +125,8 @@ test("F-097: Stop pressed before the gateway has taken the send stops the turn o
   const { client, close } = await engine("early stop check");
   try {
     const key = await openNewTask(client, "early-stop");
-    const id = client.sendMessage(key, "Take your time. #slow 20");
+    // A key that holds no task yet: this first message is meant to make it.
+    const id = client.sendMessage(key, "Take your time. #slow 20", { newTask: true });
     // In the same turn of the event loop: the gateway cannot have answered the send yet.
     expect(runs(client, key)[0]).toMatchObject({ id, bound: false, state: "running" });
     await client.stopRun(key, id);
