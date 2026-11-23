@@ -56,14 +56,20 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   const bridge = useBridge();
   const [held, setHeld] = useState<{ key: string; parts: Partial<Placement> } | null>(null);
   const [tick, setTick] = useState(0);
+  // Bumped as soon as a reload is asked, so the reads started before it are dropped at once,
+  // not only once the reload's render ends them: a choice waiting for the read after a save
+  // must not be freed by a read from before it.
+  const asked = useRef(0);
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
   const key = `${botId}\n${connectionKey(connection)}`;
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
+    const at = asked.current;
     const keep = (part: Partial<Placement>) =>
       live &&
+      at === asked.current &&
       setHeld((was) => ({ key, parts: { ...(was?.key === key ? was.parts : {}), ...part } }));
     for (const part of PLACEMENT_PARTS)
       bridge.invoke({ type: "readPlacement", botId, part }).then(
@@ -80,7 +86,10 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
       live = false;
     };
   }, [bridge, botId, active, connected, key, tick]);
-  const reload = useCallback(() => setTick((n) => n + 1), []);
+  const reload = useCallback(() => {
+    asked.current += 1;
+    setTick((n) => n + 1);
+  }, []);
   // On a disconnect or another key, what was read is dropped before anything is derived.
   if (held && (!connected || held.key !== key)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>
