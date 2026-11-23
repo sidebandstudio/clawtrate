@@ -361,6 +361,13 @@ export const DRAFT_MOVED =
   "Not sent. This task was deleted or reset elsewhere after you started this message.";
 
 /**
+ * A draft, or a reply, whose task left the list while it was written: the task was deleted or
+ * archived elsewhere. It stays on screen with its words, and nothing is sent (F-278, F-277).
+ */
+export const DRAFT_GONE =
+  "Not sent. This task was deleted or archived elsewhere while you wrote this message.";
+
+/**
  * A draft whose words name no session Clawtrate knows they were written for: kept by an earlier
  * version, or before the view showed a session, or joined with words written for another. It goes
  * nowhere until the person starts a new task with it or sends it to the task shown (F-278).

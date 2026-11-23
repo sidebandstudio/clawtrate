@@ -773,6 +773,7 @@ export function Shell({
             <WorkLinksContext.Provider value={workLinks}>
               <Conversation
                 task={task}
+                gone={selection.taskGone}
                 bot={bot}
                 taskCount={selection.tasks.length}
                 discovery={state.discovery}

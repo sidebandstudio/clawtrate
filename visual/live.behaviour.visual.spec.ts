@@ -155,6 +155,47 @@ test.describe("sending", () => {
     expect((await commands()).filter((command) => command.type === "sendMessage")).toEqual([]);
   });
 
+  test("F-278 F-277: words being typed when the task leaves the list: the task stays on screen with them, Send sends nothing, and they offer a new task and Delete", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await recordCommands(page);
+    await field(page).fill("Clear the cache first.");
+    // Deleted or archived elsewhere while the person types: the task leaves the list.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        tasksByBot: {
+          ...state.tasksByBot,
+          otto: (state.tasksByBot.otto ?? []).filter(
+            (task) => task.key !== "agent:otto:disk-space",
+          ),
+        },
+      }));
+    });
+    const title = "Disk almost full on the media box";
+    await expect(page.getByTestId("task").filter({ hasText: title })).toHaveCount(0);
+    await expect(page.locator(".conversation-header")).toContainText(title);
+    await expect(field(page)).toHaveValue("Clear the cache first.");
+    const note = page.getByTestId("composer-waits");
+    await expect(note).toContainText(
+      "Not sent. This task was deleted or archived elsewhere while you wrote this message.",
+    );
+    await expect(page.getByTestId("send")).toBeDisabled();
+    await field(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(field(page)).toHaveValue("Clear the cache first.");
+    expect((await commands(page)).filter((command) => command.type === "sendMessage")).toEqual([]);
+    // Delete lets the words go, and the task with them.
+    await note.getByRole("button", { name: "Delete" }).click();
+    await expect(page.locator(".conversation-header")).not.toContainText(title);
+  });
+
   test("F-278: words typed while the task loads keep the first session the view shows, and go there", async ({
     page,
   }) => {

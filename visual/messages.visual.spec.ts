@@ -416,7 +416,7 @@ test.describe("message actions", () => {
     await expect(thread.getByRole("button", { name: "Send reply" })).toBeDisabled();
   });
 
-  test("F-278: Edit on a held reply takes it back only into words for its own session, and its words keep that session", async ({
+  test("F-278: Edit on a held reply gives its words back with their session, which words typed in the thread since keep too: the view showing another, they wait together", async ({
     page,
   }) => {
     await open(page, "message-thread-question");
@@ -428,14 +428,11 @@ test.describe("message actions", () => {
     const row = thread.getByTestId("shelf-row");
     await expect(row).toContainText("Held until you answer");
     await setSession(page, "otto-disk-space-2");
-    await input.fill("Words for the session shown now");
+    // Words of a reply belong with the message it answers, whatever the view shows now.
+    await input.fill("And the logs?");
     await row.getByRole("button", { name: "Edit" }).click();
-    await expect(thread.locator(".thread-error")).toContainText("Couldn't take this message back.");
-    await expect(input).toHaveValue("Words for the session shown now");
-    await expect(row).toHaveCount(1);
-    await input.fill("");
-    await row.getByRole("button", { name: "Edit" }).click();
-    await expect(input).toHaveValue("And the backups?");
+    await expect(input).toHaveValue("And the logs?\nAnd the backups?");
+    await expect(row).toHaveCount(0);
     await expect(thread.getByTestId("thread-waits")).toContainText(
       "Not sent. This task was deleted or reset elsewhere",
     );
@@ -492,6 +489,76 @@ test.describe("message actions", () => {
     await note.getByRole("button", { name: "Delete" }).click();
     await expect(input).toHaveValue("");
     await expect(note).toHaveCount(0);
+  });
+
+  test("F-278: a thread opened before the view showed another session keeps the session of the message it answers: words typed after that go nowhere, and offer a new task", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    const input = thread.getByTestId("thread-input");
+    // The task was replaced elsewhere before a word of the reply was typed.
+    await setSession(page, "otto-disk-space-2");
+    await input.fill("Keep the last three backups.");
+    const note = thread.getByTestId("thread-waits");
+    await expect(note).toContainText("Not sent. This task was deleted or reset elsewhere");
+    await expect(thread.getByRole("button", { name: "Send reply" })).toBeDisabled();
+    await input.focus();
+    await page.keyboard.press("Enter");
+    await expect(input).toHaveValue("Keep the last three backups.");
+    expect((await sent(page)).filter((command) => command.type === "sendMessage")).toEqual([]);
+    await note.getByRole("button", { name: "Start a new task with this message" }).click();
+    await expect(input).toHaveValue("");
+    expect((await sent(page)).filter((command) => command.type === "createTask")).toMatchObject([
+      { text: "Keep the last three backups." },
+    ]);
+    expect((await sent(page)).filter((command) => command.type === "sendMessage")).toEqual([]);
+  });
+
+  test("F-278 F-277: a reply being written when its task leaves the list: the task stays on screen with the thread and its words, which go nowhere and offer a new task", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    const input = thread.getByTestId("thread-input");
+    await input.fill("Keep the last three backups.");
+    // Deleted or archived elsewhere: the task leaves the list.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        tasksByBot: {
+          ...state.tasksByBot,
+          otto: (state.tasksByBot.otto ?? []).filter(
+            (task) => task.key !== "agent:otto:disk-space",
+          ),
+        },
+      }));
+    });
+    const title = "Disk almost full on the media box";
+    await expect(page.getByTestId("task").filter({ hasText: title })).toHaveCount(0);
+    await expect(page.locator(".conversation-header")).toContainText(title);
+    await expect(input).toHaveValue("Keep the last three backups.");
+    const note = thread.getByTestId("thread-waits");
+    await expect(note).toContainText(
+      "Not sent. This task was deleted or archived elsewhere while you wrote this message.",
+    );
+    await expect(thread.getByRole("button", { name: "Send reply" })).toBeDisabled();
+    await input.focus();
+    await page.keyboard.press("Enter");
+    expect((await sent(page)).filter((command) => command.type === "sendMessage")).toEqual([]);
+    await note.getByRole("button", { name: "Start a new task with this message" }).click();
+    expect((await sent(page)).filter((command) => command.type === "createTask")).toMatchObject([
+      { text: "Keep the last three backups." },
+    ]);
   });
 
   test("F-067: a reply refused after another thread was opened comes back to its own thread, not the one shown", async ({

@@ -677,6 +677,56 @@ test("F-278: a message sent in a task just deleted elsewhere does not start a ne
   expect(await describe(task.key)).toBeNull();
 });
 
+test("F-278: a task deleted elsewhere while the person is still typing stays on screen with the words, which go nowhere until the person starts a new task with them", async () => {
+  const task = await ownTask("pip", "Pip", "Deleted while typing");
+  const words = `Before you go, one more thing ${STAMP}`;
+  await unfold(page, "Pip");
+  await sendInTask(page, task.title, "Hello");
+  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
+  await expect(
+    page.getByTestId("transcript").first().getByRole("blockquote").getByText("Hello"),
+  ).toBeVisible();
+  const before = new Set((await listed("pip", "all")).map((row) => row.key));
+  // The person is still typing when the task is deleted from outside the app, and the page hears
+  // of it before they send.
+  const input = page.getByTestId("composer-input");
+  await input.fill(words);
+  await gatewayCall("sessions.delete", { key: task.key, deleteTranscript: true });
+  await expect(taskRow(page, task.title)).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator(".conversation-header")).toContainText(task.title);
+  await expect(input).toHaveValue(words);
+  const note = page.getByTestId("composer-waits");
+  await expect(note).toContainText(
+    "Not sent. This task was deleted or archived elsewhere while you wrote this message.",
+  );
+  await expect(page.getByTestId("send")).toBeDisabled();
+  await shot(page, "deleted-while-typing");
+  // Enter sends nothing, there or anywhere else.
+  await input.press("Enter");
+  await page.waitForTimeout(2_000);
+  await expect(input).toHaveValue(words);
+  expect(await describe(task.key)).toBeNull();
+  expect(
+    (await listed("pip", "all")).map((row) => row.key).filter((key) => !before.has(key)),
+  ).toEqual([]);
+  // "Start a new task with this message": one new task under the same bot, with the words.
+  await note.getByRole("button", { name: "Start a new task with this message" }).click();
+  let fresh: string[] = [];
+  await gateway
+    .poll(async () => {
+      fresh = (await listed("pip", "all")).map((row) => row.key).filter((key) => !before.has(key));
+      return fresh.length;
+    })
+    .toBe(1);
+  made.add(fresh[0]!);
+  await gateway
+    .poll(async () =>
+      JSON.stringify(await gatewayCall("chat.history", { sessionKey: fresh[0], limit: 50 })),
+    )
+    .toContain(words);
+  expect(await describe(task.key)).toBeNull();
+});
+
 test("F-277: a message sent in a task just archived elsewhere says the task was archived, keeps its words and the task on screen, and offers a new task", async () => {
   const task = await ownTask("pip", "Pip", "Archived elsewhere");
   const words = `One more thing ${STAMP}`;

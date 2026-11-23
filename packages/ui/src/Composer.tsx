@@ -24,10 +24,12 @@ import {
   type ReactNode,
 } from "react";
 import { useBridge } from "./bridge.tsx";
+import { useHoldsWords } from "./held-words.ts";
 import { ArrowUpIcon, ChevronIcon, CloseIcon, FileIcon, PlusIcon } from "./icons.tsx";
 import {
   composerFor,
   couldNotStart,
+  DRAFT_GONE,
   DRAFT_MOVED,
   DRAFT_UNBOUND,
   joinDrafts,
@@ -206,6 +208,7 @@ export function Composer({
   bot,
   gateway,
   taskKey,
+  gone = false,
   transcript,
   connected,
   notices,
@@ -222,6 +225,8 @@ export function Composer({
   /** The gateway's address: drafts are kept per gateway and per task. */
   gateway: string | null;
   taskKey: string;
+  /** The task left the list and stays on screen while this holds words (F-278, F-277). */
+  gone?: boolean;
   transcript: Transcript | undefined;
   connected: boolean;
   notices: Notice[];
@@ -335,6 +340,8 @@ export function Composer({
   const uploading = files.some(pending);
   const hasContent = text.trim().length > 0 || files.length > 0 || tokens.length > 0;
   const canSend = hasContent && !refused && !uploading;
+  // Its words keep the task on screen should it leave the list (`keptOnScreen`).
+  useHoldsWords(taskKey, hasContent);
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
   // Until the view shows the task's session the draft stays here: only a new task takes it.
   const waits = sendWaits(transcript);
@@ -351,12 +358,15 @@ export function Composer({
   // Words that name no session Clawtrate knows they were written for: once the view shows one,
   // the person chooses a new task for them or the task shown.
   const unbound = hasContent && draft.unbound === true;
-  const chooseSession = unbound && waits === null && shownSession !== undefined;
+  const chooseSession = unbound && waits === null && shownSession !== undefined && !gone;
   const binding = hasContent && !unbound ? (draft.sessionId ?? shownSession) : undefined;
   // A draft started while the view showed one session, and the view shows another now: that
   // session was deleted or reset elsewhere. The draft keeps its session, and nothing is sent until
-  // the person picks a new task for its words or deletes it.
-  const moved = binding !== undefined && shownSession !== undefined && binding !== shownSession;
+  // the person picks a new task for its words or deletes it. So with a task that left the list.
+  const moved = gone
+    ? hasContent
+    : binding !== undefined && shownSession !== undefined && binding !== shownSession;
+  const movedNote = gone ? DRAFT_GONE : DRAFT_MOVED;
 
   const stop = useCallback(
     (run: Run) => {
@@ -385,6 +395,10 @@ export function Composer({
             title: "This message is still in the composer.",
             reason: "Its files are still being added. Send it again when they finish.",
           });
+        return;
+      }
+      if (how !== "new-task" && gone) {
+        onNotice({ title: "This message is still in the composer.", reason: DRAFT_GONE });
         return;
       }
       if (how !== "new-task" && unbound && chosen === undefined) {
@@ -508,6 +522,7 @@ export function Composer({
       binding,
       unbound,
       moved,
+      gone,
       waits,
     ],
   );
@@ -1032,7 +1047,7 @@ export function Composer({
               data-testid="composer-waits"
               data-tone={moved || chooseSession ? "danger" : undefined}
             >
-              <span>{moved ? DRAFT_MOVED : chooseSession ? DRAFT_UNBOUND : waits}</span>
+              <span>{moved ? movedNote : chooseSession ? DRAFT_UNBOUND : waits}</span>
               <button type="button" className="link-button" onClick={() => void sendAs("new-task")}>
                 {moved || chooseSession
                   ? "Start a new task with this message"
@@ -1137,14 +1152,12 @@ export function Composer({
               className="icon-button send-button"
               aria-label={sendName(view.mode)}
               aria-description={
-                refusalReason ??
-                waits ??
-                (moved ? DRAFT_MOVED : unbound ? DRAFT_UNBOUND : undefined)
+                refusalReason ?? waits ?? (moved ? movedNote : unbound ? DRAFT_UNBOUND : undefined)
               }
               title={
                 refusalReason ??
                 waits ??
-                (moved ? DRAFT_MOVED : unbound ? DRAFT_UNBOUND : sendName(view.mode))
+                (moved ? movedNote : unbound ? DRAFT_UNBOUND : sendName(view.mode))
               }
               disabled={!canSend || waits !== null || moved || unbound}
               data-testid="send"

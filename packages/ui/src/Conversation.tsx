@@ -228,6 +228,7 @@ function useHoldPlace(
  */
 function TranscriptView({
   task,
+  gone,
   bot,
   transcript,
   note,
@@ -235,6 +236,8 @@ function TranscriptView({
   onAnnounce,
 }: {
   task: Task;
+  /** The task left the list and stays on screen for what it holds (F-278, F-277). */
+  gone: boolean;
   bot: Bot;
   transcript: Transcript;
   note: ReactNode;
@@ -249,6 +252,7 @@ function TranscriptView({
   const messageEnv = useMemo(
     () => ({
       taskKey: task.key,
+      gone,
       transcript,
       botName: bot.name,
       canWrite: liveOptions.interactive,
@@ -256,7 +260,15 @@ function TranscriptView({
       openThread: (messageId: string, from: HTMLElement | null) => setThread({ messageId, from }),
       announce: onAnnounce,
     }),
-    [task.key, transcript, bot.name, liveOptions.interactive, liveOptions.connected, onAnnounce],
+    [
+      task.key,
+      gone,
+      transcript,
+      bot.name,
+      liveOptions.interactive,
+      liveOptions.connected,
+      onAnnounce,
+    ],
   );
   // Without commands shown, the status line says the kind of work and what the bot thinks (7.11).
   const [commandsShown] = useShowCommands();
@@ -787,6 +799,7 @@ function lifecycleWords(bot: Bot, run: Run | undefined, last: Run | undefined): 
 
 export function Conversation({
   task,
+  gone = false,
   bot,
   taskCount,
   discovery,
@@ -810,6 +823,8 @@ export function Conversation({
   onShowComputer,
 }: {
   task: Task | null;
+  /** The task left the list and stays on screen for what it holds (`taskGone`, F-278, F-277). */
+  gone?: boolean;
   bot: Bot | undefined;
   taskCount: number;
   discovery: DiscoveryState;
@@ -1099,6 +1114,7 @@ export function Conversation({
       <TranscriptView
         key={task.key}
         task={task}
+        gone={gone}
         bot={bot}
         transcript={transcript}
         liveOptions={{
@@ -1202,6 +1218,7 @@ export function Conversation({
           bot={bot}
           gateway={connection.gatewayUrl}
           taskKey={task.key}
+          gone={gone}
           transcript={transcript}
           connected={caughtUp}
           limits={connection.sendLimits}

@@ -27,10 +27,12 @@ import {
 } from "react";
 import { useBridge } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
+import { useHoldsWords } from "./held-words.ts";
 import { ArrowUpIcon, CloseIcon, MoreIcon, ReplyIcon, SmileIcon } from "./icons.tsx";
 import { ShelfRow, takenBack } from "./Composer.tsx";
 import {
   currentRun,
+  DRAFT_GONE,
   DRAFT_MOVED,
   DRAFT_UNBOUND,
   joinDrafts,
@@ -58,6 +60,8 @@ const LONG_PRESS_MS = 500;
 
 type MessageEnv = {
   taskKey: string;
+  /** The task left the list and stays on screen for what it holds (F-278, F-277). */
+  gone: boolean;
   transcript: Transcript;
   botName: string;
   /** The connection may write: reacting and replying are offered. */
@@ -570,10 +574,22 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     unbound,
   } = drafts[messageId] ?? { text: "", error: null };
   const shownSession = env?.transcript.sessionId;
+  // The session each thread's message was shown in when the thread opened: a reply to it belongs
+  // there, whatever the view shows by its first word, and goes nowhere else.
+  const [parents, setParents] = useState<Record<string, string | undefined>>({});
+  if (!Object.hasOwn(parents, messageId) && shownSession)
+    setParents((all) => ({ ...all, [messageId]: shownSession }));
+  const parent = parents[messageId];
+  const bindTo = parent ?? shownSession;
+  // Its words keep the task on screen should it leave the list (`keptOnScreen`).
+  useHoldsWords(
+    env?.taskKey ?? "",
+    env !== null && Object.values(drafts).some((draft) => draft.text.trim()),
+  );
   /** One change to a thread's draft: its words, their session and its error together. */
   const change = (id: string, next: (now: ThreadDraft) => ThreadDraft) =>
     setDrafts((all) => ({ ...all, [id]: next(all[id] ?? { text: "", error: null }) }));
-  /** The person's words, bound at their first to the session the view shows; empty, to none. */
+  /** The person's words, bound at their first to the session of the message replied to. */
   const setText = (words: string) =>
     change(messageId, (now) =>
       !words.trim()
@@ -581,12 +597,10 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         : {
             ...now,
             text: words,
-            ...(now.sessionId === undefined && !now.unbound && shownSession
-              ? { sessionId: shownSession }
-              : {}),
+            ...(now.sessionId === undefined && !now.unbound && bindTo ? { sessionId: bindTo } : {}),
           },
     );
-  // Words typed before the view showed a session keep the first it shows.
+  // Words typed before the view showed a session keep the session of the message they reply to.
   const adopt = Object.entries(drafts).filter(
     ([, draft]) => draft.text.trim() && draft.sessionId === undefined && !draft.unbound,
   );
@@ -594,7 +608,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     setDrafts((all) => ({
       ...all,
       ...Object.fromEntries(
-        adopt.map(([id, draft]) => [id, { ...draft, sessionId: shownSession }]),
+        adopt.map(([id, draft]) => [id, { ...draft, sessionId: parents[id] ?? shownSession }]),
       ),
     }));
   const field = useRef<HTMLTextAreaElement>(null);
@@ -626,9 +640,21 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   // another session, they go nowhere until the person picks a new task for them or deletes them.
   // Words that name no session it knows of wait for the person's choice (`DRAFT_UNBOUND`).
   const waits = sendWaits(transcript);
-  const binding = unbound ? undefined : (session ?? (text.trim() ? shownSession : undefined));
-  const moved = binding !== undefined && shownSession !== undefined && binding !== shownSession;
-  const choose = Boolean(text.trim() && unbound && !waits && shownSession);
+  const binding = unbound ? undefined : (session ?? (text.trim() ? bindTo : undefined));
+  // So with a task that left the list: the reply's words stay, and go nowhere.
+  const moved = env.gone
+    ? Boolean(text.trim())
+    : binding !== undefined && shownSession !== undefined && binding !== shownSession;
+  const movedNote = env.gone ? DRAFT_GONE : DRAFT_MOVED;
+  // "Send to the task shown" only where the message replied to is.
+  const choose = Boolean(
+    text.trim() &&
+    unbound &&
+    !waits &&
+    shownSession &&
+    !env.gone &&
+    (parent === undefined || parent === shownSession),
+  );
   /**
    * The words, refused by the host, back in the thread they were written in, ahead of anything
    * typed since, with their session and the reason, in one change.
@@ -648,6 +674,8 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     const body = text.trim();
     const to = chosen ?? binding;
     if (!body || waits || (moved && !chosen) || (unbound && !chosen) || !to) return;
+    // A reply goes only to the session of the message it replies to.
+    if (env.gone || (parent !== undefined && to !== parent)) return;
     const back = chosen ? { text: body, sessionId: chosen } : asBound(body);
     change(messageId, () => ({ text: "", error: null }));
     try {
@@ -788,7 +816,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
               data-testid="thread-waits"
               data-tone={moved || choose ? "danger" : undefined}
             >
-              <span>{moved ? DRAFT_MOVED : choose ? DRAFT_UNBOUND : waits}</span>
+              <span>{moved ? movedNote : choose ? DRAFT_UNBOUND : waits}</span>
               {(moved || choose) && (
                 <button type="button" className="link-button" onClick={() => void startNew()}>
                   Start a new task with this message
@@ -831,10 +859,8 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
               type="button"
               className="icon-button send-button"
               aria-label="Send reply"
-              aria-description={
-                waits ?? (moved ? DRAFT_MOVED : unbound ? DRAFT_UNBOUND : undefined)
-              }
-              title={waits ?? (moved ? DRAFT_MOVED : unbound ? DRAFT_UNBOUND : "Send reply")}
+              aria-description={waits ?? (moved ? movedNote : unbound ? DRAFT_UNBOUND : undefined)}
+              title={waits ?? (moved ? movedNote : unbound ? DRAFT_UNBOUND : "Send reply")}
               disabled={!text.trim() || waits !== null || moved || unbound === true}
               onClick={() => void send()}
             >

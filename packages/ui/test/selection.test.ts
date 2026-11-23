@@ -165,6 +165,14 @@ describe("F-278 F-277: a task deleted or archived elsewhere while a message writ
     expect(keptOnScreen(gone, "otto", [other], unknown)).toBe(gone);
   });
 
+  it("stays on screen while its composer or a reply holds words not yet sent, with nothing out", () => {
+    expect(keptOnScreen(gone, "otto", [other], {}, true)).toBe(gone);
+    expect(keptOnScreen(gone, "otto", [other], holding(), true)).toBe(gone);
+    // Still listed, or another bot's: nothing to keep.
+    expect(keptOnScreen(gone, "otto", [gone, other], {}, true)).toBeNull();
+    expect(keptOnScreen(gone, "pip", [other], {}, true)).toBeNull();
+  });
+
   it("gives way otherwise: a task still listed, another bot's, or one with nothing out", () => {
     const out = holding({ status: "sending" });
     expect(keptOnScreen(gone, "otto", [gone, other], out)).toBeNull();

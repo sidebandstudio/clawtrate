@@ -1,5 +1,6 @@
 import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
 import { useCallback, useMemo, useState } from "react";
+import { useWordsHeld } from "./held-words.ts";
 import { readIdSet, readPreference, writeIdSet, writePreference } from "./preferences.ts";
 import { isUnread, markSeen, type SeenMap } from "./unread.ts";
 
@@ -131,17 +132,20 @@ export function visibleTasks<T extends { key: string }>(
 /**
  * The task on screen, when it left the list while a message written in it was on its way, queued
  * or held, or after the gateway refused one, for its task being deleted, archived or reset
- * elsewhere or for a reason Clawtrate does not know: it stays on screen with the message and its
- * words until the person leaves it, sends it again or deletes it (F-278, F-277). Null for a task
- * still listed, or any other.
+ * elsewhere or for a reason Clawtrate does not know, or while its composer or a reply holds words
+ * not yet sent (`holdsWords`): it stays on screen with the message or the words until the person
+ * leaves it, sends it again or deletes them (F-278, F-277). Null for a task still listed, or any
+ * other.
  */
 export function keptOnScreen(
   shown: Task | null,
   botId: string | undefined,
   tasks: Task[],
   transcripts: ClawtrateState["transcripts"],
+  holdsWords = false,
 ): Task | null {
   if (!shown || shown.botId !== botId || tasks.some((t) => t.key === shown.key)) return null;
+  if (holdsWords) return shown;
   const waits = transcripts[shown.key]?.outbox.some(
     (message) =>
       message.status === "sending" ||
@@ -213,17 +217,16 @@ export function useSelection(
     state.tasksByBot[linked.task.botId]?.some((t) => t.key === linked.task.key)
   )
     setLinked(null);
-  const kept = keptOnScreen(onScreen, bot?.id, tasks, state.transcripts);
-  const task =
+  const holdsWords = useWordsHeld(onScreen?.key ?? null);
+  const kept = keptOnScreen(onScreen, bot?.id, tasks, state.transcripts, holdsWords);
+  const chosen =
     tasks.find((t) => t.key === remembered) ??
     (linked?.gatewayId === gatewayId &&
     linked.task.key === remembered &&
     linked.task.botId === bot?.id
       ? linked.task
-      : null) ??
-    kept ??
-    tasks[0] ??
-    null;
+      : null);
+  const task = chosen ?? kept ?? tasks[0] ?? null;
   if (task !== onScreen) setOnScreen(task);
 
   // Leaving a task marks it read as of its latest activity, so its dot only
@@ -406,6 +409,8 @@ export function useSelection(
     bot,
     tasks,
     task,
+    /** The task on screen left the list and stays only for what it holds (`keptOnScreen`). */
+    taskGone: chosen === null && kept !== null,
     seen,
     unreadSeen: gatewayOwnsUnread ? NOTHING_SEEN : seen,
     showAll,
