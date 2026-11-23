@@ -348,11 +348,14 @@ export type BridgeCommand =
   | { type: "pinTask"; key: string; pinned: boolean }
   /** Mark unread or read; `opened` is the read of opening a task, made only while the connection writes. */
   | { type: "markTask"; key: string; unread: boolean; opened: boolean }
-  /** Archive; `stop` stops an active run first ("Stop and archive"). */
-  | { type: "archiveTask"; key: string; stop: boolean }
+  /**
+   * Archive; `stop` stops an active run first ("Stop and archive"). `sessionId`, the session of
+   * the row the person acted on: a key that holds another one by then is left alone.
+   */
+  | { type: "archiveTask"; key: string; stop: boolean; sessionId?: string }
   | { type: "restoreTask"; key: string }
-  /** Delete a task and its transcript, stopping an active run first. */
-  | { type: "deleteTask"; key: string }
+  /** Delete a task and its transcript, stopping an active run first; `sessionId` as for archive. */
+  | { type: "deleteTask"; key: string; sessionId?: string }
   /** A bot's archived tasks, read now. */
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
@@ -1486,10 +1489,24 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         opened: command.opened === undefined ? false : flag(command.opened),
       };
     case "archiveTask":
-      return { type: "archiveTask", key: sessionKey(command.key), stop: flag(command.stop) };
+      return {
+        type: "archiveTask",
+        key: sessionKey(command.key),
+        stop: flag(command.stop),
+        ...(command.sessionId !== undefined
+          ? { sessionId: id(command.sessionId, "session id") }
+          : {}),
+      };
     case "restoreTask":
-    case "deleteTask":
       return { type: command.type, key: sessionKey(command.key) };
+    case "deleteTask":
+      return {
+        type: command.type,
+        key: sessionKey(command.key),
+        ...(command.sessionId !== undefined
+          ? { sessionId: id(command.sessionId, "session id") }
+          : {}),
+      };
     case "computerShow":
       return { type: "computerShow", key: sessionKey(command.key) };
     case "computerLeave":
@@ -2103,11 +2120,18 @@ class ViewerSession implements BridgeSession {
       case "markTask":
         return client.markTask(command.key, command.unread, { owner, opened: command.opened });
       case "archiveTask":
-        return client.archiveTask(command.key, { stop: command.stop, owner });
+        return client.archiveTask(command.key, {
+          stop: command.stop,
+          owner,
+          ...(command.sessionId !== undefined ? { sessionId: command.sessionId } : {}),
+        });
       case "restoreTask":
         return client.restoreTask(command.key, { owner });
       case "deleteTask":
-        return client.deleteTask(command.key, { owner });
+        return client.deleteTask(command.key, {
+          owner,
+          ...(command.sessionId !== undefined ? { sessionId: command.sessionId } : {}),
+        });
       case "listArchived":
         return client.listArchived(command.botId);
       case "changeSidebar":

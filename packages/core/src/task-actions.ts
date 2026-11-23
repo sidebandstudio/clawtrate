@@ -248,6 +248,19 @@ async function describe(ctx: TaskActionContext, key: string): Promise<RawRecord 
   return asRecord(asRecord(await ctx.request("sessions.describe", { key }))?.session);
 }
 
+/**
+ * The key no longer holds the session of the task the person acted on: it was deleted or reset
+ * elsewhere, and nothing is done to whatever the key holds now.
+ */
+export const TASK_GONE =
+  "This task was already deleted or reset elsewhere, so nothing was done to it.";
+
+/** The row, when it is of `sessionId`, the session the person acted on, or no session was named. */
+function sameSession(row: RawRecord | null, sessionId: string | undefined): RawRecord | null {
+  if (sessionId !== undefined && row?.sessionId !== sessionId) throw new Error(TASK_GONE);
+  return row;
+}
+
 function isActive(row: RawRecord): boolean {
   return row.hasActiveRun === true || row.status === "running" || row.status === "queued";
 }
@@ -268,13 +281,18 @@ function sessionIdOf(row: RawRecord | null, key: string): string {
  * not named yet is aborted once it is named, and the follow-ups queued behind it
  * are parked when it stops, so none is sent into the task being archived. Only
  * when the engine follows no run of the task (another device's, or a task not open
- * here) does the gateway's own abort of the session's runs stop it.
+ * here) does the gateway's own abort of the session's runs stop it. With
+ * `sessionId`, a row of another session, or none, ends the wait, refused.
  */
-export async function stopAndSettle(ctx: TaskActionContext, key: string): Promise<RawRecord> {
+export async function stopAndSettle(
+  ctx: TaskActionContext,
+  key: string,
+  sessionId?: string,
+): Promise<RawRecord> {
   if ((await ctx.stopRuns(key)) === 0) await ctx.request("chat.abort", { sessionKey: key });
   const deadline = ctx.now() + STOP_SETTLE_MS;
   for (;;) {
-    const row = await describe(ctx, key);
+    const row = sameSession(await describe(ctx, key), sessionId);
     if (!row) throw new Error(`The gateway has no task ${key}.`);
     if (!isActive(row) && !ctx.runsActive(key)) return row;
     if (ctx.now() >= deadline)
@@ -397,19 +415,21 @@ export async function markTask(
 /**
  * Archive a task. One whose run is active is archived only with `stop`, after
  * the gateway confirms the run stopped ("Stop and archive"); without it, the
- * archive is refused with `ActiveRunError` and nothing is asked.
+ * archive is refused with `ActiveRunError` and nothing is asked. With
+ * `sessionId`, the session of the task the person chose, a key that holds
+ * another session or none is left alone: nothing is stopped or archived.
  */
 export async function archiveTask(
   ctx: TaskActionContext,
   key: string,
-  options: { stop: boolean },
+  options: { stop: boolean; sessionId?: string },
 ): Promise<ArchiveResult> {
   await ctx.ensureWrite();
   const mark = ctx.runMark(key);
-  let row = await describe(ctx, key);
+  let row = sameSession(await describe(ctx, key), options.sessionId);
   if (row && isActive(row)) {
     if (!options.stop) throw new ActiveRunError();
-    row = await stopAndSettle(ctx, key);
+    row = await stopAndSettle(ctx, key, options.sessionId);
   } else if (!options.stop && ctx.runMark(key) !== mark) {
     // A run started, or the row turned active, while the check was under way: archiving now
     // would stop it, so nothing is sent and the person is asked.
@@ -440,13 +460,21 @@ export async function restoreTask(ctx: TaskActionContext, key: string): Promise<
  * Delete a task and its transcript, after the person confirmed. An active run
  * is stopped first and the stop confirmed; the task is archived, then deleted
  * with `archivedOnly`, the only delete the write tier may make. What the bot
- * saved to memory during the task is the bot's, and stays.
+ * saved to memory during the task is the bot's, and stays. With `sessionId`,
+ * the session of the task the person chose, a key that holds another session
+ * is left alone: nothing is stopped, archived or deleted.
  */
-export async function deleteTask(ctx: TaskActionContext, key: string): Promise<void> {
+export async function deleteTask(
+  ctx: TaskActionContext,
+  key: string,
+  options: { sessionId?: string } = {},
+): Promise<void> {
   await ctx.ensureWrite();
   let row = await describe(ctx, key);
+  // Gone already: what the person asked for is done.
   if (!row) return;
-  if (isActive(row)) row = await stopAndSettle(ctx, key);
+  sameSession(row, options.sessionId);
+  if (isActive(row)) row = await stopAndSettle(ctx, key, options.sessionId);
   const sessionId = sessionIdOf(row, key);
   if (row.archived !== true) await call(ctx, "sessions.patch", archiveParams(key, sessionId, true));
   await call(ctx, "sessions.delete", deleteParams(key, sessionId));

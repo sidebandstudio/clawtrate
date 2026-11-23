@@ -777,7 +777,13 @@ export function Rail({
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     const act = async (stop: boolean) => {
-      const { stoppedRun } = await bridge.invoke({ type: "archiveTask", key: task.key, stop });
+      // The task the person chose: a key that holds another session by then is left alone.
+      const { stoppedRun } = await bridge.invoke({
+        type: "archiveTask",
+        key: task.key,
+        stop,
+        ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+      });
       setAnnouncement(`Archived ${task.title}.`);
       // The gateway's archive ends anything running in the task: a run that had just started,
       // seen to end as stopped on its own end event, is said here, with the way back.
@@ -818,7 +824,13 @@ export function Rail({
 
   const remove = (
     bot: Bot,
-    task: { key: string; title: string; status?: Task["status"]; archivedAt?: number | null },
+    task: {
+      key: string;
+      title: string;
+      sessionId: string | null;
+      status?: Task["status"];
+      archivedAt?: number | null;
+    },
     trigger: HTMLElement | null,
     listed: boolean,
   ) => {
@@ -838,7 +850,11 @@ export function Rail({
       ),
       confirm: { label: "Delete", tone: "danger" },
       onConfirm: async () => {
-        await bridge.invoke({ type: "deleteTask", key: task.key });
+        await bridge.invoke({
+          type: "deleteTask",
+          key: task.key,
+          ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+        });
         setAnnouncement(`Deleted ${task.title}.`);
         if (listed) await afterRemoval(bot, task as Task, remaining, next);
         else {

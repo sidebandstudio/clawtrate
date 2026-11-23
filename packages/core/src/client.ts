@@ -6298,6 +6298,13 @@ export class ClawtrateClient {
     }
   }
 
+  /** The messages waiting in a task: queued, or parked Not sent by a stop. */
+  private waitingIn(key: string): string[] {
+    return (this.state.transcripts[key]?.outbox ?? [])
+      .filter((message) => message.status === "queued" || message.status === "not-sent")
+      .map((message) => message.id);
+  }
+
   /** Whether this client's own archive or delete of the task, still out, holds the message back. */
   private removalHolds(key: string, messageId: string): boolean {
     return [...this.ownRemovals.values()].some(
@@ -8720,12 +8727,16 @@ export class ClawtrateClient {
     await markTask(this.actionContext(options.owner ?? null), key, unread);
   }
 
+  /** `sessionId`: the session of the task the person chose to archive; another is left alone. */
   async archiveTask(
     key: string,
-    options: { stop?: boolean; owner?: object } = {},
+    options: { stop?: boolean; owner?: object; sessionId?: string } = {},
   ): Promise<ArchiveResult> {
-    return this.removing(key, options.owner ?? null, (ctx) =>
-      archiveTask(ctx, key, { stop: options.stop === true }),
+    return this.removing(key, "archived", options.owner ?? null, (ctx) =>
+      archiveTask(ctx, key, {
+        stop: options.stop === true,
+        ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+      }),
     );
   }
 
@@ -8733,8 +8744,14 @@ export class ClawtrateClient {
     await restoreTask(this.actionContext(options.owner ?? null), key);
   }
 
-  async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
-    await this.removing(key, options.owner ?? null, (ctx) => deleteTask(ctx, key));
+  /** `sessionId`: the session of the task the person chose to delete; another is left alone. */
+  async deleteTask(
+    key: string,
+    options: { owner?: object; sessionId?: string } = {},
+  ): Promise<void> {
+    await this.removing(key, "deleted", options.owner ?? null, (ctx) =>
+      deleteTask(ctx, key, options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+    );
   }
 
   /**
@@ -8747,24 +8764,21 @@ export class ClawtrateClient {
    * named. With `MAX_TRACKED_TASKS` already out, it goes as any other request, holds nothing back,
    * and what it causes is settled as made elsewhere. Its archive or delete leaves within
    * `REMOVAL_HOLD_MS` of its start, the wait for write access included, or not at all: past it, it
-   * gives up, nothing more of it goes, and what it held goes on.
+   * gives up, nothing more of it goes, and what it held goes on, though its Stop may have gone. One
+   * that succeeds without sending an archive or delete found the task already so (`how`), made
+   * elsewhere, and settles what it held as such. A session id past the id bound, counted as JSON
+   * is, is neither kept nor sent.
    */
   private async removing<R>(
     key: string,
+    how: "archived" | "deleted",
     owner: object | null,
     act: (ctx: TaskActionContext) => Promise<R>,
   ): Promise<R> {
     const ctx = this.actionContext(owner);
     if (!this.tracked(key) || this.ownRemovals.size >= MAX_TRACKED_TASKS) return act(ctx);
     const id = (this.removals += 1);
-    const removal: OwnRemoval = {
-      key,
-      waiting: (this.state.transcripts[key]?.outbox ?? [])
-        .filter((message) => message.status === "queued" || message.status === "not-sent")
-        .map((message) => message.id),
-      sent: null,
-      heard: null,
-    };
+    const removal: OwnRemoval = { key, waiting: this.waitingIn(key), sent: null, heard: null };
     this.ownRemovals.set(id, removal);
     let expired = false;
     let giveUp: (error: Error) => void = () => undefined;
@@ -8789,8 +8803,11 @@ export class ClawtrateClient {
             if (
               (method === "sessions.patch" || method === "sessions.delete") &&
               typeof expected === "string"
-            )
+            ) {
+              if (sessionNamed({ sessionId: expected }) === null)
+                throw new Error("That task's session can't be named, so nothing was changed.");
               removal.sent = expected;
+            }
             return ctx.request(method, params);
           },
           ensureWrite: async () => {
@@ -8804,7 +8821,8 @@ export class ClawtrateClient {
         }),
         late,
       ]);
-      this.cancelWaiting(key, removal.waiting);
+      if (removal.sent === null) this.refuseWaiting(key, removal.heard ?? how, ofSession(null));
+      else this.cancelWaiting(key, removal.waiting);
       return result;
     } catch (error) {
       if (removal.heard) this.refuseWaiting(key, removal.heard, ofSession(removal.sent));

@@ -17,6 +17,7 @@ import { READ_SCOPES } from "../src/scopes.ts";
 import {
   TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
+  TASK_GONE,
   TASK_RESET_ELSEWHERE,
 } from "../src/task-actions.ts";
 import { agentEvent, grantingGateway, KEY, openTask, asShown } from "./client-harness.ts";
@@ -1339,6 +1340,31 @@ describe("a task's run ended by its removal before the removal is heard (F-277, 
     client.stop();
   });
 
+  it("found archived by this client's own archive's check, with no word of it otherwise: nothing is sent, and the queued message keeps its words and files, refused as archived elsewhere", async () => {
+    const { client, gateway, transcript, sends } = await shown({
+      session: { sessionId: "s-1", archived: true, hasActiveRun: false },
+    });
+    gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    const id = client.sendMessage(KEY, "Then send me a summary.", {
+      sessionId: "s-1",
+      mode: "queue",
+      attachments: [FILE],
+    });
+    const bytes = client.retainedAttachmentBytes;
+    await client.archiveTask(KEY);
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    expect(transcript().outbox[0]).toMatchObject({
+      id,
+      status: "failed",
+      error: TASK_ARCHIVED_ELSEWHERE,
+      attachments: [{ fileName: "notes.txt" }],
+    });
+    expect(client.retainedAttachmentBytes).toBe(bytes);
+    expect(sends()).toHaveLength(0);
+    client.stop();
+  });
+
   it("archived elsewhere while this client's own archive checks the task, before it sends anything: the queued message keeps its words and files, refused as archived elsewhere", async () => {
     const { client, gateway, transcript, sends } = await shown({ session: null });
     gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
@@ -1567,6 +1593,83 @@ describe("a delete that names only the task's key (F-278, F-420)", () => {
     await sleep(400);
     expect(transcript().outbox[0]).toMatchObject({ id, status: "queued", sessionId: "s-2" });
     expect(listed()).toBe(true);
+    client.stop();
+  });
+});
+
+describe("Archive, Delete and their Stop act only on the session the person chose (F-277, F-278)", () => {
+  /** A task the person chose in `s-1`, whose key holds `holds` by the time they act on it. */
+  async function chosen(holds: Record<string, unknown> | null) {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-1" });
+    gateway.handlers["sessions.describe"] = () => ({ session: holds });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    gateway.handlers["sessions.delete"] = () => ({ ok: true });
+    const opened = await openTask({ gateway });
+    const changes = () =>
+      ["sessions.patch", "sessions.delete", "chat.abort"].flatMap((method) =>
+        gateway.calls(method),
+      );
+    return { ...opened, changes };
+  }
+
+  it.each([
+    ["Archive", { sessionId: "s-2" }],
+    ["Stop and archive", { sessionId: "s-2", hasActiveRun: true }],
+    ["Delete", { sessionId: "s-2" }],
+    ["Delete, with its Stop", { sessionId: "s-2", hasActiveRun: true }],
+  ] as const)(
+    "%s of a task whose key holds another session by then: nothing is stopped, archived or deleted, and it says the task was already deleted or reset",
+    async (action, holds) => {
+      const { client, changes } = await chosen(holds);
+      const acted = action.startsWith("Delete")
+        ? client.deleteTask(KEY, { sessionId: "s-1" })
+        : client.archiveTask(KEY, { sessionId: "s-1", stop: action === "Stop and archive" });
+      await expect(acted).rejects.toThrow(TASK_GONE);
+      expect(changes()).toEqual([]);
+      client.stop();
+    },
+  );
+
+  it("a Stop after which the key's row names another session: the wait ends there, and nothing is archived", async () => {
+    const { client, gateway } = await chosen(null);
+    const rows = [
+      { sessionId: "s-1", hasActiveRun: true },
+      { sessionId: "s-2", hasActiveRun: false },
+    ];
+    gateway.handlers["sessions.describe"] = () => ({ session: rows.shift() ?? null });
+    await expect(client.archiveTask(KEY, { sessionId: "s-1", stop: true })).rejects.toThrow(
+      TASK_GONE,
+    );
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
+  it("the bridge carries the session of the row acted on, and refuses one that is not an id", () => {
+    expect(
+      parseBridgeCommand({ type: "archiveTask", key: KEY, stop: false, sessionId: "s-1" }),
+    ).toMatchObject({ sessionId: "s-1" });
+    expect(parseBridgeCommand({ type: "deleteTask", key: KEY, sessionId: "s-1" })).toMatchObject({
+      sessionId: "s-1",
+    });
+    expect(() => parseBridgeCommand({ type: "deleteTask", key: KEY, sessionId: "" })).toThrow();
+  });
+
+  it("a session id past the id bound, counted as JSON is: it is neither kept nor sent, and nothing is archived", async () => {
+    const { client, gateway, changes } = await chosen({
+      sessionId: String.fromCharCode(1).repeat(900),
+    });
+    const removals = (client as unknown as { ownRemovals: Map<number, { sent: unknown }> })
+      .ownRemovals;
+    const kept: unknown[] = [];
+    const patch = gateway.handlers["sessions.patch"]!;
+    gateway.handlers["sessions.patch"] = (params) => {
+      kept.push(...[...removals.values()].map((removal) => removal.sent));
+      return patch(params);
+    };
+    await expect(client.archiveTask(KEY)).rejects.toThrow(/can't be named/);
+    expect(changes()).toEqual([]);
+    expect(kept).toEqual([]);
     client.stop();
   });
 });
