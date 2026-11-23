@@ -13,6 +13,23 @@ vi.mock(import("node:child_process"), async (original) => {
   vi.spyOn(cp, "spawn");
   return cp;
 });
+// Removing the checked copy can fail, as Electron's fs did on its app.asar (#383).
+const removal = vi.hoisted(() => ({ fails: false }));
+function failingRemove<T extends (path: string, ...rest: never[]) => Promise<void>>(rm: T): T {
+  return (async (path: string, ...rest: never[]) => {
+    if (removal.fails && path.includes(".inspect-"))
+      throw Object.assign(Error("ENOTEMPTY"), { code: "ENOTEMPTY" });
+    return rm(path, ...rest);
+  }) as T;
+}
+vi.mock(import("node:fs/promises"), async (original) => {
+  const fs = await original();
+  return { ...fs, rm: failingRemove(fs.rm) };
+});
+vi.mock(import("../../src/main/update-tree-fs.ts"), async (original) => {
+  const fs = await original();
+  return { ...fs, rm: failingRemove(fs.rm) };
+});
 const dirs: ReturnType<typeof tempDir>[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) dir.remove();
@@ -184,3 +201,41 @@ it("a flagged ad hoc bundle reports build-not-signed before opening the archive 
     else Reflect.deleteProperty(process, "resourcesPath");
   }
 });
+
+it.skipIf(process.platform === "win32")(
+  "a checked copy that can't be removed leaves the helper's ok standing",
+  async () => {
+    const old = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/fixture/Contents/Resources",
+      configurable: true,
+    });
+    const ok = () => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new PassThrough(),
+        kill: vi.fn(),
+      });
+      queueMicrotask(() => {
+        child.stdout.end("ok\n");
+        child.emit("close", 0);
+      });
+      return child as unknown as ReturnType<typeof spawn>;
+    };
+    vi.mocked(spawn).mockImplementationOnce(ok).mockImplementationOnce(ok);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    removal.fails = true;
+    try {
+      const installer = macInstaller("arm64");
+      expect(await installer.inspect(await candidate())).toBeNull();
+      expect(error).toHaveBeenCalledWith(
+        "Couldn't remove the checked copy of the update (ENOTEMPTY)",
+      );
+      installer.retire?.();
+    } finally {
+      removal.fails = false;
+      error.mockRestore();
+      if (old) Object.defineProperty(process, "resourcesPath", old);
+      else Reflect.deleteProperty(process, "resourcesPath");
+    }
+  },
+);

@@ -1,0 +1,17 @@
+- group:
+  - text: Messaged T3 Code Call made
+  - list:
+    - listitem:
+      - text: Otto sent
+      - time: 5:38 PM
+      - text: In backup-scripts, make the weekly check skip machines that are asleep instead of failing, and add a test for it. Project backup-scripts Branch main
+    - listitem:
+      - text: T3 Code · the call returned
+      - time: 5:39 PM
+      - text: Started thread 18 in backup-scripts on main. Working on the change now.
+      - paragraph: This shows the call was made. It does not show that the work is finished.
+  - text: plan.md
+  - link "Open the T3 Code thread in your browser":
+    - /url: https://t3.example.test/projects/backup-scripts/threads/18
+    - text: Open thread
+  - button "Raw"

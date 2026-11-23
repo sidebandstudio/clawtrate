@@ -18,9 +18,12 @@
 // may not call `skip`, `fixme`, `todo` or `only` on its test or describe
 // objects in any form. If a check cannot run somewhere, its row is not done.
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export const STATUSES = ["todo", "done", "desktop done", "gap"] as const;
 
@@ -94,35 +97,37 @@ export function checkIds(checks: CheckPath[]): string[] {
 }
 
 /** Run a runner's listing from `root`'s packages in `cwd`, outside the Vitest worker this is called from. */
-function list(root: string, cwd: string, bin: string, args: string[]): string {
+async function list(root: string, cwd: string, bin: string, args: string[]): Promise<string> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith("VITEST")),
   );
-  return execFileSync(join(root, "node_modules/.bin", bin), args, {
+  const { stdout } = await execFileAsync(join(root, "node_modules/.bin", bin), args, {
     cwd,
     env,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  return stdout;
+}
+
+/** Raw JSON from Vitest's listing in `dir`, so one run can be split by file without re-collecting. */
+export function listVitestJson(root: string, dir = root): Promise<string> {
+  return list(root, dir, "vitest", ["list", "--json", "--staticParse=false", "--root", dir]);
 }
 
 /** The checks Vitest will run in `dir`, with the config found there; `keep` chooses by test file. */
-export function listVitest(
+export async function listVitest(
   root: string,
   dir = root,
   keep: (file: string) => boolean = () => true,
-): CheckPath[] {
-  return vitestChecks(
-    list(root, dir, "vitest", ["list", "--json", "--staticParse=false", "--root", dir]),
-    keep,
-  );
+): Promise<CheckPath[]> {
+  return vitestChecks(await listVitestJson(root, dir), keep);
 }
 
 /** The checks Playwright will run for a config. */
-export function listPlaywright(root: string, config: string): CheckPath[] {
+export async function listPlaywright(root: string, config: string): Promise<CheckPath[]> {
   return playwrightChecks(
-    list(root, root, "playwright", ["test", "--list", "--reporter=json", "-c", config]),
+    await list(root, root, "playwright", ["test", "--list", "--reporter=json", "-c", config]),
   );
 }
 

@@ -1,0 +1,38 @@
+- region "Otto wants to run a command. Needs approval.":
+  - heading "Otto wants to run a command" [level=3]
+  - text: Needs approval
+  - paragraph:
+    - text: Run
+    - code: mv /srv/media/transcode-cache /srv/scratch/transcode-cache
+    - text: on media-box.
+  - list:
+    - listitem: This can't be undone
+  - group: Show full request
+  - button "Allow once"
+  - button "Always allow…"
+  - button "Deny"
+  - paragraph: Expires in 28 minutes; the command is not run if it does.
+  - button "Raw" [expanded]
+  - region "What the gateway sent":
+    - paragraph: The request record, as the gateway sent it (exec.approval.requested or exec.approval.list)
+    - button "Copy the request record, as the gateway sent it (exec.approval.requested or exec.approval.list)"
+    - text: "{ \"id\": \"apr_5d2a\", \"request\": { \"command\": \"mv /srv/media/transcode-cache /srv/scratch/transcode-cache\", \"commandArgv\": [ \"mv\", \"/srv/media/transcode-cache\", \"/srv/scratch/transcode-cache\" ], \"cwd\": \"/srv/media\", \"host\": \"node\", \"nodeId\": \"media-box\", \"security\": \"allowlist\", \"ask\": \"on-miss\", \"agentId\": \"otto\", \"sessionKey\": \"agent:otto:transcode-cache\", \"runId\": \"run_7f3a91c2\", \"toolCallId\": \"call_mv\", \"allowedDecisions\": [ \"allow-once\", \"allow-always\", \"deny\" ], \"commandAnalysis\": { \"commandCount\": 1, \"nestedCommandCount\": 0, \"riskKinds\": [ \"filesystem-move\" ], \"warningLines\": [ \"This can't be undone\" ] }, \"warningText\": \"Moves a folder outside Otto's own workspace.\" }, \"createdAtMs\": 1794868680000, \"expiresAtMs\": 1794870480000 }"
+    - paragraph:
+      - button "Show all 38 lines"
+    - paragraph: Identifiers
+    - term: Approval
+    - definition:
+      - text: apr_5d2a
+      - button "Copy approval id"
+    - term: Tool call
+    - definition:
+      - text: call_mv
+      - button "Copy tool call id"
+    - term: Run
+    - definition:
+      - text: run_7f3a91c2
+      - button "Copy run id"
+    - term: Session
+    - definition:
+      - text: agent:otto:transcode-cache
+      - button "Copy session id"

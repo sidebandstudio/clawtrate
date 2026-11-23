@@ -1,0 +1,7 @@
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Looking on this computer is off here" [level=3]
+  - paragraph: This run can only look in a sandbox. Clawtrate couldn't use this sandbox because its description isn't in a private folder of yours under the system's temporary root, reached without links, or has the wrong shape. Use Advanced.
+  - button "Use Advanced"
+  - paragraph: On this computer

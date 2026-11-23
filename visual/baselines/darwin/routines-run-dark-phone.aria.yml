@@ -1,0 +1,14 @@
+- main "Routines":
+  - button "Back to Morning digest, all runs"
+  - heading "Morning digest" [level=1]
+  - paragraph: Marlow · Today 8:00 AM
+  - text: Scheduled message, as the gateway recorded it
+  - paragraph: "Summarise the notes I added yesterday, and list anything I need to answer today. Current time: Monday, November 16th, 2026 - 8:00 AM (America/New_York) This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have."
+  - paragraph: Used read
+  - paragraph: "Three notes from yesterday. The draft for Sam is ready to send. Two emails need an answer today: the venue's question about numbers and the printer's quote."
+  - text: This run has finished. A run can't be answered; to change what it does, edit the routine. Succeeded · 2.6 s · 200 tokens scripted/dev-1 · 120 in, 80 out tokens
+  - region "Access":
+    - text: Read-only. Creating and changing routines needs admin access.
+    - button "Request admin access"
+  - status
+- status

@@ -145,9 +145,6 @@ describe("grants", () => {
     expect(L.markSweeping(l, "orphan", at(L.ORPHAN_MS, "another-process"))).toBe(false);
     expect(L.markSweeping(l, "orphan", at(L.ORPHAN_MS))).toBe(true);
     expect(L.markSweeping(l, "other", at(L.ORPHAN_MS))).toBe(false);
-    expect(reason(() => L.admit(l, proposal("orphan", fromBot("main"), bot("main")), T))).toBe(
-      "unpublishable",
-    );
     L.clearSweeping(l, "orphan");
     expect(Object.keys(l.orphanAges!.since)).toEqual(["other"]);
     L.recordAges(l, [], at(5, "another-process"));

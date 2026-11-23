@@ -2,8 +2,8 @@
 // light and dark at 1440, 1100 and 800 px and at phone width: before anything
 // is typed, and with results from every kind of source. The fixture's
 // messages, files and routines are made up (apps/desktop/src/fixture/search.ts).
-import { expect, test } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const SCENES = [
   { name: "idle", text: "" },
