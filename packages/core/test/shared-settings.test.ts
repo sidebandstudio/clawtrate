@@ -1,6 +1,6 @@
 // Two clients that share one host store share one saved gateway. A client's queued
-// change to that record acts on what the record holds when the change runs, not on
-// what this client last saved, so it never removes or replaces another client's gateway.
+// Disconnect, and its clearing of the shared token after a pairing, check the record
+// as it is when they run, so neither removes nor replaces another client's gateway.
 
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
