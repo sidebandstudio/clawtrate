@@ -190,16 +190,17 @@ The tests and the unsigned launch check show the release files, the redirect rul
 
 ### Check that the previous release updates in place
 
-The `real-update` job in [ci.yml](../../.github/workflows/ci.yml) runs a real signed release through a whole update on GitHub-hosted Macs that are discarded afterwards: macOS 15, the newest generally available image and the newest preview image. It installs a published release into `/Applications` as `install.sh` does, opens it through Launch Services with its own data folder, and drives Settings → Updates over the Chrome DevTools protocol ([check.ts](../../e2e-packaged/real-update/check.ts)): check, download, inspection, Restart to Update. It passes only when the system updater replaces the bundle with the offered version and that copy's signature is valid. Never run `check.ts` on a person's Mac: the app writes to the login keychain and replaces itself.
+The [Real update](../../.github/workflows/real-update.yml) workflow runs a real signed release through a whole update on GitHub-hosted Macs that are discarded afterwards: macOS 15, the newest generally available image and the newest preview image. It installs the previous release into `/Applications` as `install.sh` does, opens it through Launch Services with its own data folder, and drives Settings → Updates over the Chrome DevTools protocol ([check.ts](../../e2e-packaged/real-update/check.ts)): check, download, inspection, Restart to Update. An image passes only when the system updater replaced the bundle with the candidate and that copy's signature is valid. Never run `check.ts` on a person's Mac: the app writes to the login keychain and replaces itself.
 
 ```sh
-gh workflow run ci.yml --ref main -f real_update=true \
-  -f real_update_previous=<the release before> -f real_update_expect=<the release just published>
+gh workflow run real-update.yml -f previous=<the release before> -f candidate=<the release just published>
 ```
 
-What it proves: that the previous Developer ID release, as the update helper's parent, accepts the offered build and that Squirrel.Mac installs it, on each image. Each image's artifact holds `result.json` (every snapshot, and why an inspection failed), the running app's signature as the helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), the unified log and any crash report.
+Both inputs are optional: empty ones take the two newest published releases. The candidate must be what the Beta feed offers. The run's conclusion is the answer, and its `real-update-summary` artifact holds it as JSON: `previous`, `candidate`, `passed`, and for each image its outcome, macOS version, offered and installed versions, and the install capability the app reported. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
 
-What it can't: the app reads only the update source compiled into it, over HTTPS checked against the roots bundled with it, so a released build can be offered only what the live Beta feed offers. The check therefore runs right after `--publish`, not before it. A failure there means the release must not stay on the feed: withdraw it (above). A preview image is not the newest macOS a person may run, and a hosted Mac is not a person's: if the check passes and a person's Mac still fails, Settings → Updates shows why the inspection failed, and "Copy details" gives the record to put in the issue.
+It can pass only when the previous release has the fix for [#383](https://github.com/sidebandstudio/clawtrate/issues/383): every earlier build fails at inspection, which is what the check showed on macOS 26 with `0.1.1-beta.20261122.4`. So it is meaningful from the second release after that fix.
+
+The app reads only the update source compiled into it, over HTTPS checked against the roots bundled with it, so a released build can be offered only what the live Beta feed offers. The check therefore runs right after `--publish`, not before it. A failure there means the release must not stay on the feed: withdraw it (above). A preview image is not the newest macOS a person may run, and a hosted Mac is not a person's Mac: if the check passes and a person's Mac still fails, Settings → Updates shows why the inspection failed, and "Copy details" gives the record for the issue.
 
 ### The owner's signed trial
 

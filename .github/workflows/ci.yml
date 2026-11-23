@@ -10,18 +10,6 @@ on:
         description: Run only the packaged Keychain check, on a discarded macOS runner
         type: boolean
         default: false
-      real_update:
-        description: Run only the real update check, on discarded macOS runners
-        type: boolean
-        default: false
-      real_update_previous:
-        description: The published release the real update check installs first
-        type: string
-        default: 0.1.1-beta.20261122.4
-      real_update_expect:
-        description: The version the Beta feed must offer it (empty takes whatever it offers)
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -49,12 +37,10 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           KEYCHAIN_ONLY: ${{ inputs.keychain == true }}
-          REAL_UPDATE_ONLY: ${{ inputs.real_update == true }}
         run: |
           code=true
-          # A run by hand for the Keychain check or the real update check runs no other
-          # end-to-end or packaging job.
-          if [ "$KEYCHAIN_ONLY" = "true" ] || [ "$REAL_UPDATE_ONLY" = "true" ]; then code=false; fi
+          # A run by hand for the Keychain check alone runs no other end-to-end or packaging job.
+          if [ "$KEYCHAIN_ONLY" = "true" ]; then code=false; fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # Without rename detection a file moved into docs/ also lists the path it left.
             files=$(git diff --name-only --no-renames "origin/$BASE...HEAD")
@@ -355,95 +341,3 @@ jobs:
           name: keychain-check-results
           path: test-results/
           retention-days: 3
-
-  # The real update check (docs/development/releases.md), by hand only: a published Developer ID
-  # release, opened through Launch Services on a runner that is discarded afterwards, downloads
-  # the Beta feed's offer, inspects it and restarts into it in place. It writes to the login
-  # keychain and replaces an app in /Applications, so it never runs on a person's Mac.
-  real-update:
-    if: github.event_name == 'workflow_dispatch' && inputs.real_update
-    strategy:
-      fail-fast: false
-      matrix:
-        # macOS 15, the newest generally available image, and the newest preview image.
-        runner: [macos-15, macos-26, xcode-27]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    env:
-      PREVIOUS: ${{ inputs.real_update_previous }}
-      EXPECT: ${{ inputs.real_update_expect }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 26
-      - run: sw_vers && uname -m && echo "OUT=$RUNNER_TEMP/real-update" >> "$GITHUB_ENV"
-      - name: Make a disposable keychain the default
-        run: |
-          path="$RUNNER_TEMP/clawtrate-check-$(openssl rand -hex 8).keychain-db"
-          password="$(openssl rand -hex 24)"
-          security create-keychain -p "$password" "$path"
-          security set-keychain-settings -lut 3600 "$path"
-          security unlock-keychain -p "$password" "$path"
-          # shellcheck disable=SC2046 # one keychain path per line, none with spaces
-          security list-keychains -d user -s "$path" $(security list-keychains -d user | tr -d '"')
-          security default-keychain -d user -s "$path"
-      - name: Install the previous release where install.sh puts it
-        run: |
-          case "$PREVIOUS" in *[!0-9A-Za-z.-]* | '') echo "bad version $PREVIOUS"; exit 1 ;; esac
-          case "$(uname -m)" in arm64) file=arm64 ;; *) file=x64 ;; esac
-          dir="$RUNNER_TEMP/previous"
-          mkdir -p "$dir"
-          curl -fsSL -o "$dir/Clawtrate.zip" \
-            "https://github.com/sidebandstudio/clawtrate/releases/download/v$PREVIOUS/Clawtrate-$PREVIOUS-mac-$file.zip"
-          ditto -x -k "$dir/Clawtrate.zip" "$dir/unpacked"
-          test ! -e /Applications/Clawtrate.app
-          ditto "$dir/unpacked/Clawtrate.app" /Applications/Clawtrate.app
-          codesign --verify --deep --strict --verbose=2 /Applications/Clawtrate.app
-          spctl --assess --type execute --verbose=2 /Applications/Clawtrate.app
-          mkdir -p "$OUT"
-          # The helper from a shell, as #383 ran it: expected running-signature-untrusted.
-          env -i PATH=/usr/bin:/bin /Applications/Clawtrate.app/Contents/Helpers/ClawtrateUpdateInspection \
-            --running-signature dev.clawtrate.desktop | tee "$OUT/helper-from-shell.txt"
-      - name: Build the running-signature probe
-        run: |
-          xcrun clang -fobjc-arc -Wall -Werror -O2 -framework Foundation -framework Security \
-            e2e-packaged/real-update/running-signature-probe.m -o "$RUNNER_TEMP/running-signature-probe"
-      - name: Record exec and exit events, where the runner allows it
-        run: |
-          sudo -n sh -c 'eslogger exec exit > "$1/eslogger.jsonl" 2> "$1/eslogger.err" & echo $! > "$1/eslogger.pid"' \
-            sh "$RUNNER_TEMP" || echo "eslogger did not start"
-          # Process accounting as well: it marks a process that a signal ended or that dumped core.
-          sudo -n touch /var/account/acct && sudo -n accton /var/account/acct || echo "accounting did not start"
-          sleep 2
-          cat "$RUNNER_TEMP/eslogger.err" || true
-      - name: Run the real update check
-        run: |
-          node e2e-packaged/real-update/check.ts --app /Applications/Clawtrate.app --out "$OUT" \
-            --probe "$RUNNER_TEMP/running-signature-probe" ${EXPECT:+--expect "$EXPECT"}
-      - name: Collect diagnostics
-        if: always()
-        run: |
-          mkdir -p "$OUT"
-          sw_vers > "$OUT/sw_vers.txt"
-          if [ -f "$RUNNER_TEMP/eslogger.pid" ]; then
-            sudo -n kill "$(cat "$RUNNER_TEMP/eslogger.pid")" || true
-            cp "$RUNNER_TEMP/eslogger.err" "$OUT/" || true
-            grep -E 'ClawtrateUpdateInspection|ShipIt' "$RUNNER_TEMP/eslogger.jsonl" > "$OUT/eslogger-update.jsonl" || true
-          fi
-          sudo -n accton || true
-          lastcomm 2>/dev/null | grep -E '^(ClawtrateUpdat|Clawtrate|ShipIt)' > "$OUT/lastcomm.txt" || true
-          log show --last 30m --info --debug --style compact --predicate \
-            'process BEGINSWITH "Clawtrate" OR process == "ShipIt" OR process == "amfid" OR process == "syspolicyd" OR (process == "kernel" AND eventMessage CONTAINS[c] "clawtrate") OR eventMessage CONTAINS "ClawtrateUpdateInspection"' \
-            > "$OUT/unified-log.txt" 2>&1 || true
-          for dir in "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
-            find "$dir" -iname '*Clawtrate*' -exec cp {} "$OUT/" \; 2>/dev/null || true
-          done
-          cat "$OUT/result.json" || true
-          cat "$OUT/running-signature.txt" || true
-      - if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: real-update-${{ matrix.runner }}
-          path: ${{ runner.temp }}/real-update/
-          retention-days: 7
