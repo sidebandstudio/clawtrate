@@ -181,10 +181,19 @@ describe("F-519: what the gateway wrote around a channel turn is not shown as it
       ),
     ).toBe("hello there");
     expect(plainPreview("hello there")).toBe("hello there");
+    // Nothing after the closing marker: the line ends with it, and is still not a header.
+    expect(
+      plainPreview("Conversation info: ⟦openclaw:ctx⟧ hello there Context: ⟦openclaw:ctx⟧"),
+    ).toBe("hello there");
   });
 
   it("F-519: ordinary text, brackets and links included, is left as it is", () => {
-    for (const text of ["[link](https://example.com) here", "[draft] notes", "Plain words"])
+    for (const text of [
+      "[link](https://example.com) here",
+      "[draft] notes",
+      "Plain words",
+      "Explain `Context: ⟦openclaw:ctx⟧`",
+    ])
       expect(stripChannelMetadata(text)).toBe(text);
   });
 });
