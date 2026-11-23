@@ -1,3 +1,4 @@
+- status
 - dialog "Settings":
   - navigation "Settings":
     - heading "Settings" [level=2]

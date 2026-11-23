@@ -1,3 +1,4 @@
+- status
 - dialog "Settings":
   - region "Anthropic · Pip's key":
     - button "Close settings"

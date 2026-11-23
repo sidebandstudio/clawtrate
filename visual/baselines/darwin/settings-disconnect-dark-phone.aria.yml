@@ -1,3 +1,4 @@
+- status
 - dialog "Settings":
   - region "OpenAI · Work":
     - button "Close settings"

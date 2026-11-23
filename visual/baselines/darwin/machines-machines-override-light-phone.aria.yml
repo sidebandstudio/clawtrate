@@ -1,3 +1,4 @@
+- status
 - dialog "Settings":
   - region "Machines":
     - button "Close settings"

@@ -1,3 +1,4 @@
+- status
 - region "Conversation":
   - status "Access granted · you can send, stop and answer":
     - strong: Access granted

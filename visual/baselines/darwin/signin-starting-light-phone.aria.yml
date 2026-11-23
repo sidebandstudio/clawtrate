@@ -1,3 +1,4 @@
+- status
 - region "Conversation":
   - button "Back to bots"
   - button "Otto, Disk almost full on the media box. Show details.": Otto

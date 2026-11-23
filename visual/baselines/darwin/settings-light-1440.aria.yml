@@ -1,3 +1,5 @@
+- banner: Clawtrate
+- status
 - dialog "Settings":
   - navigation "Settings":
     - heading "Settings" [level=2]
@@ -76,6 +78,7 @@
         - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, reconnecting. Open the gateway menu."
+  - button "Settings"
 - region "Conversation":
   - status "Reconnecting in 4s · showing saved messages":
     - strong: Reconnecting in 4s

@@ -1,3 +1,4 @@
+- status
 - dialog "Settings":
   - region "Check-ins":
     - button "Close settings"

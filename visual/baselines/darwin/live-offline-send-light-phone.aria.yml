@@ -1,3 +1,4 @@
+- status
 - region "Conversation":
   - status "Reconnecting in 4s · showing saved messages":
     - strong: Reconnecting in 4s

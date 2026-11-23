@@ -1,3 +1,4 @@
+- status
 - dialog "Settings":
   - region "Accounts":
     - button "Close settings"
