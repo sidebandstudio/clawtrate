@@ -324,6 +324,48 @@ export const DRAFT_MOVED =
   "Not sent. This task was deleted or reset elsewhere after you started this message.";
 
 /**
+ * A draft whose words name no session Clawtrate knows they were written for: kept by an earlier
+ * version, or before the view showed a session, or joined with words written for another. It goes
+ * nowhere until the person starts a new task with it or sends it to the task shown (F-278).
+ */
+export const DRAFT_UNBOUND =
+  "Not sent. Clawtrate can't tell which session of this task these words were written for.";
+
+/**
+ * An editor's words and where they go: the session the view showed when they were written
+ * (`sessionId`), or, with `unbound`, none known.
+ */
+export type Draft = { text: string; sessionId?: string; unbound?: boolean };
+
+/** Whether a draft holds anything: words, or a binding its files or chips keep. */
+const holds = (draft: Draft) =>
+  draft.text.trim().length > 0 || draft.sessionId !== undefined || draft.unbound === true;
+
+/**
+ * Two drafts as one, `first`'s words above `second`'s: words coming back to an editor (a refused
+ * handoff, Edit on a held message) and what it holds since. One draft has one session: the one
+ * both were bound to, else none known, so it waits for the person's choice (`DRAFT_UNBOUND`).
+ */
+export function joinDrafts(first: Draft, second: Draft): Draft {
+  if (!holds(first)) return second;
+  if (!holds(second)) return first;
+  const text = !first.text.trim()
+    ? second.text
+    : !second.text.trim()
+      ? first.text
+      : `${first.text}\n${second.text}`;
+  const session = first.sessionId;
+  if (
+    first.unbound !== true &&
+    second.unbound !== true &&
+    session !== undefined &&
+    session === second.sessionId
+  )
+    return { text, sessionId: session };
+  return { text, unbound: true };
+}
+
+/**
  * Where Resend sends a message refused because its task was archived or reset elsewhere, once the
  * gateway shows the task live again: listed, so not archived, and its history naming the session
  * the screen shows. Restored, that is the session the message was written for; reset, the one

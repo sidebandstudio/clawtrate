@@ -28,8 +28,17 @@ import {
 import { useBridge } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { ArrowUpIcon, CloseIcon, MoreIcon, ReplyIcon, SmileIcon } from "./icons.tsx";
-import { ShelfRow } from "./Composer.tsx";
-import { currentRun, DRAFT_MOVED, questionPending, sendWaits, shelfMessages } from "./live.ts";
+import { ShelfRow, takenBack } from "./Composer.tsx";
+import {
+  currentRun,
+  DRAFT_MOVED,
+  DRAFT_UNBOUND,
+  joinDrafts,
+  questionPending,
+  sendWaits,
+  shelfMessages,
+  type Draft,
+} from "./live.ts";
 import { OutgoingBubble } from "./LiveTurn.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
@@ -544,29 +553,50 @@ export function reconcileReplyReceipts(
  * its way shows as the main composer shows it: held, queued, not sent, failed or sent, with the
  * same recovery.
  */
+/** A reply's words, where they go, and why the last send of them was refused. */
+type ThreadDraft = Draft & { error: string | null };
+
 export function ThreadView({ messageId, onClose }: { messageId: string; onClose: () => void }) {
   const env = useMessages();
   const bridge = useBridge();
   // Each thread keeps its own words and error, so a send refused after another thread was opened
   // comes back to the thread it was typed in, not the one on screen. Each keeps the session it was
   // started in too, with the message it replies to: it goes there only (F-278).
-  const [drafts, setDrafts] = useState<
-    Record<string, { text: string; error: string | null; session?: string }>
-  >({});
-  const { text, error, session } = drafts[messageId] ?? { text: "", error: null };
+  const [drafts, setDrafts] = useState<Record<string, ThreadDraft>>({});
+  const {
+    text,
+    error,
+    sessionId: session,
+    unbound,
+  } = drafts[messageId] ?? { text: "", error: null };
   const shownSession = env?.transcript.sessionId;
-  const setText = (next: string | ((current: string) => string), id = messageId) =>
-    setDrafts((all) => {
-      const now = all[id] ?? { text: "", error: null };
-      const words = typeof next === "string" ? next : next(now.text);
-      const kept = words.trim() ? (now.session ?? shownSession) : undefined;
-      return {
-        ...all,
-        [id]: { text: words, error: now.error, ...(kept ? { session: kept } : {}) },
-      };
-    });
-  const setError = (next: string | null, id = messageId) =>
-    setDrafts((all) => ({ ...all, [id]: { text: all[id]?.text ?? "", error: next } }));
+  /** One change to a thread's draft: its words, their session and its error together. */
+  const change = (id: string, next: (now: ThreadDraft) => ThreadDraft) =>
+    setDrafts((all) => ({ ...all, [id]: next(all[id] ?? { text: "", error: null }) }));
+  /** The person's words, bound at their first to the session the view shows; empty, to none. */
+  const setText = (words: string) =>
+    change(messageId, (now) =>
+      !words.trim()
+        ? { text: words, error: now.error }
+        : {
+            ...now,
+            text: words,
+            ...(now.sessionId === undefined && !now.unbound && shownSession
+              ? { sessionId: shownSession }
+              : {}),
+          },
+    );
+  // Words typed before the view showed a session keep the first it shows.
+  const adopt = Object.entries(drafts).filter(
+    ([, draft]) => draft.text.trim() && draft.sessionId === undefined && !draft.unbound,
+  );
+  if (shownSession && adopt.length > 0)
+    setDrafts((all) => ({
+      ...all,
+      ...Object.fromEntries(
+        adopt.map(([id, draft]) => [id, { ...draft, sessionId: shownSession }]),
+      ),
+    }));
   const field = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const writable = env?.canWrite;
@@ -594,15 +624,32 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   const asking = questionPending(transcript, run);
   // Until the view shows the task's session the words stay in the field. Started while it showed
   // another session, they go nowhere until the person picks a new task for them or deletes them.
+  // Words that name no session it knows of wait for the person's choice (`DRAFT_UNBOUND`).
   const waits = sendWaits(transcript);
-  const binding = session ?? (text.trim() ? transcript.sessionId : undefined);
-  const moved =
-    binding !== undefined && transcript.sessionId !== undefined && binding !== transcript.sessionId;
-  const send = async () => {
+  const binding = unbound ? undefined : (session ?? (text.trim() ? shownSession : undefined));
+  const moved = binding !== undefined && shownSession !== undefined && binding !== shownSession;
+  const choose = Boolean(text.trim() && unbound && !waits && shownSession);
+  /**
+   * The words, refused by the host, back in the thread they were written in, ahead of anything
+   * typed since, with their session and the reason, in one change.
+   */
+  const restore = (back: Draft, failure: unknown) =>
+    change(messageId, (now) => ({
+      ...joinDrafts(back, now),
+      error: failure instanceof Error ? failure.message : String(failure),
+    }));
+  /** The words as they are bound now: their session, or none known. */
+  const asBound = (body: string): Draft => ({
+    text: body,
+    ...(binding ? { sessionId: binding } : unbound ? { unbound: true } : {}),
+  });
+  /** `chosen`: the session the person chose for words that name none. */
+  const send = async (chosen?: string) => {
     const body = text.trim();
-    if (!body || waits || moved || !binding) return;
-    setText("");
-    setError(null);
+    const to = chosen ?? binding;
+    if (!body || waits || (moved && !chosen) || (unbound && !chosen) || !to) return;
+    const back = chosen ? { text: body, sessionId: chosen } : asBound(body);
+    change(messageId, () => ({ text: "", error: null }));
     try {
       const answer = await bridge.invoke({
         type: "sendMessage",
@@ -611,15 +658,12 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         mode: "auto",
         attachmentIds: [],
         replyToId: messageId,
-        sessionId: binding,
+        sessionId: to,
       });
       sent.current.set(answer.messageId, { id: answer.messageId, mode: "new", runId: null });
       setAdded((count) => count + 1);
     } catch (failure) {
-      // The refused words come back, ahead of anything typed since, with their session.
-      setText((current) => (current.trim() ? `${body}\n${current}` : body));
-      setDrafts((all) => ({ ...all, [messageId]: { ...all[messageId]!, session: binding } }));
-      setError(failure instanceof Error ? failure.message : String(failure));
+      restore(back, failure);
     }
   };
   /** "Start a new task with this message", on a reply whose session is gone: its words only. */
@@ -627,15 +671,14 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     const body = text.trim();
     const botId = botIdFromSessionKey(env.taskKey);
     if (!body || !botId) return;
-    setText("");
-    setError(null);
+    const back = asBound(body);
+    change(messageId, () => ({ text: "", error: null }));
     try {
       const { key } = await bridge.invoke({ type: "createTask", botId, text: body, label: null });
       void bridge.send({ type: "closeSession", key });
       env.announce("Started as a new task");
     } catch (failure) {
-      setText((current) => (current.trim() ? `${body}\n${current}` : body));
-      setError(failure instanceof Error ? failure.message : String(failure));
+      restore(back, failure);
     }
   };
   const line = (item: { role: string; text: string; author?: string }, key: string) => (
@@ -702,10 +745,22 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
               stopping={stopping}
               asking={asking}
               act={act}
-              onTakenBack={(back) =>
-                setText((current) => (current.trim() ? `${current}\n${back.text}` : back.text))
+              // Words bound to another session than the reply's never join it (F-278).
+              canTakeBack={(held) =>
+                !text.trim() || (!unbound && binding !== undefined && binding === held.sessionId)
               }
-              onNotice={(notice) => setError(`${notice.title} ${notice.reason ?? ""}`.trim())}
+              onTakenBack={(back) =>
+                change(messageId, (now) => ({
+                  ...joinDrafts(now, takenBack(back)),
+                  error: now.error,
+                }))
+              }
+              onNotice={(notice) =>
+                change(messageId, (now) => ({
+                  ...now,
+                  error: `${notice.title} ${notice.reason ?? ""}`.trim(),
+                }))
+              }
               onAnnounce={env.announce}
             />
           ) : (
@@ -726,23 +781,33 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
               Couldn't send this reply: {error}
             </p>
           )}
-          {text.trim() && (waits || moved) && (
+          {text.trim() && (waits || moved || unbound) && (
             <div
               className="composer-note"
               role="status"
               data-testid="thread-waits"
-              data-tone={moved ? "danger" : undefined}
+              data-tone={moved || choose ? "danger" : undefined}
             >
-              <span>{moved ? DRAFT_MOVED : waits}</span>
+              <span>{moved ? DRAFT_MOVED : choose ? DRAFT_UNBOUND : waits}</span>
+              {(moved || choose) && (
+                <button type="button" className="link-button" onClick={() => void startNew()}>
+                  Start a new task with this message
+                </button>
+              )}
               {moved && (
-                <>
-                  <button type="button" className="link-button" onClick={() => void startNew()}>
-                    Start a new task with this message
-                  </button>
-                  <button type="button" className="link-button" onClick={() => setText("")}>
-                    Delete
-                  </button>
-                </>
+                <button type="button" className="link-button" onClick={() => setText("")}>
+                  Delete
+                </button>
+              )}
+              {choose && (
+                // Only by the person's choice, and named as such: the session the view shows.
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => void send(shownSession)}
+                >
+                  Send to the task shown
+                </button>
               )}
             </div>
           )}
@@ -766,9 +831,11 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
               type="button"
               className="icon-button send-button"
               aria-label="Send reply"
-              aria-description={waits ?? (moved ? DRAFT_MOVED : undefined)}
-              title={waits ?? (moved ? DRAFT_MOVED : "Send reply")}
-              disabled={!text.trim() || waits !== null || moved}
+              aria-description={
+                waits ?? (moved ? DRAFT_MOVED : unbound ? DRAFT_UNBOUND : undefined)
+              }
+              title={waits ?? (moved ? DRAFT_MOVED : unbound ? DRAFT_UNBOUND : "Send reply")}
+              disabled={!text.trim() || waits !== null || moved || unbound === true}
               onClick={() => void send()}
             >
               <ArrowUpIcon />

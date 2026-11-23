@@ -71,6 +71,7 @@ const shelf = (message: OutgoingMessage, shown = GONE) =>
       stopping: false,
       asking: false,
       act: () => undefined,
+      canTakeBack: () => true,
       onTakenBack: () => undefined,
       onNotice: () => undefined,
       onAnnounce: () => undefined,

@@ -77,8 +77,11 @@ async function setOutbox(page: Page, change: (message: OutgoingMessage) => Outgo
   }, change.toString());
 }
 
-/** The task's history now names another session under its key, as the host's next snapshot would. */
-async function setSession(page: Page, sessionId: string) {
+/**
+ * The task's history now names another session under its key, or none yet, as the host's next
+ * snapshot would.
+ */
+async function setSession(page: Page, sessionId: string | undefined) {
   await page.evaluate((id) => {
     const fixture = (
       window as unknown as {
@@ -87,13 +90,31 @@ async function setSession(page: Page, sessionId: string) {
     ).clawtrateFixture;
     fixture.setState((state) => {
       const key = "agent:otto:disk-space";
-      return {
-        ...state,
-        transcripts: { ...state.transcripts, [key]: { ...state.transcripts[key]!, sessionId: id } },
-      };
+      const transcript = { ...state.transcripts[key]! };
+      if (id) transcript.sessionId = id;
+      else delete transcript.sessionId;
+      return { ...state, transcripts: { ...state.transcripts, [key]: transcript } };
     });
-  }, sessionId);
+  }, sessionId ?? null);
 }
+
+/** Record every command the interface invokes through the bridge from now on. */
+async function recordCommands(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+      commands: Array<Record<string, unknown>>;
+    };
+    w.commands = [];
+    const original = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+    w.clawtrateFixture.invoke = (command: unknown) => {
+      w.commands.push(command as Record<string, unknown>);
+      return original(command);
+    };
+  });
+}
+const commands = (page: Page) =>
+  page.evaluate(() => (window as unknown as { commands: Array<Record<string, unknown>> }).commands);
 
 test.describe("sending", () => {
   test("F-278: a draft keeps the session it was started in: once the view shows another, Enter and Send send nothing, and it offers a new task with its words and Delete", async ({
@@ -132,6 +153,107 @@ test.describe("sending", () => {
       { text: "Clear the cache first." },
     ]);
     expect((await commands()).filter((command) => command.type === "sendMessage")).toEqual([]);
+  });
+
+  test("F-278: words typed while the task loads keep the first session the view shows, and go there", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await recordCommands(page);
+    await setSession(page, undefined);
+    await field(page).fill("Clear the cache first.");
+    await expect(page.getByTestId("send")).toBeDisabled();
+    await setSession(page, "otto-disk-space-3");
+    await expect(page.getByTestId("send")).toBeEnabled();
+    // The view moves on again: the words keep the session they took.
+    await setSession(page, "otto-disk-space-4");
+    await expect(page.getByTestId("composer-waits")).toContainText(
+      "Not sent. This task was deleted or reset elsewhere",
+    );
+    await setSession(page, "otto-disk-space-3");
+    await field(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(field(page)).toHaveValue("");
+    expect(
+      (await commands(page)).filter((command) => command.type === "sendMessage"),
+    ).toMatchObject([{ text: "Clear the cache first.", sessionId: "otto-disk-space-3" }]);
+  });
+
+  test("F-278: words an earlier version kept alone, with no session, wait after a reload for a new task or the task shown, named as such", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await field(page).fill("Clear the cache first.");
+    // What an earlier version kept: the words alone, under the old key.
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Object.keys(localStorage).some((key) => key.startsWith("clawtrate.composerDraft.")),
+        ),
+      )
+      .toBe(true);
+    await page.evaluate(() => {
+      const kept = Object.keys(localStorage).find((key) =>
+        key.startsWith("clawtrate.composerDraft."),
+      )!;
+      const draft = JSON.parse(localStorage.getItem(kept)!) as { text: string };
+      localStorage.removeItem(kept);
+      localStorage.setItem(
+        kept.replace("clawtrate.composerDraft.", "clawtrate.draft."),
+        draft.text,
+      );
+    });
+    await page.reload();
+    await expect(field(page)).toHaveValue("Clear the cache first.");
+    await recordCommands(page);
+    const note = page.getByTestId("composer-waits");
+    await expect(note).toContainText(
+      "Not sent. Clawtrate can't tell which session of this task these words were written for.",
+    );
+    await expect(page.getByTestId("send")).toBeDisabled();
+    await field(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(field(page)).toHaveValue("Clear the cache first.");
+    expect((await commands(page)).filter((command) => command.type === "sendMessage")).toEqual([]);
+    await expect(
+      note.getByRole("button", { name: "Start a new task with this message" }),
+    ).toBeVisible();
+    await note.getByRole("button", { name: "Send to the task shown" }).click();
+    await expect(field(page)).toHaveValue("");
+    expect(
+      (await commands(page)).filter((command) => command.type === "sendMessage"),
+    ).toMatchObject([{ text: "Clear the cache first.", sessionId: "otto-disk-space" }]);
+  });
+
+  test("F-278: words refused by the host come back with their session; joined with words typed since for another session, the draft waits for a choice", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        refuse?: () => void;
+      };
+      const original = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "sendMessage"
+          ? new Promise((_, reject) => {
+              w.refuse = () => reject(new Error("The host refused it."));
+            })
+          : original(command);
+    });
+    await field(page).fill("Clear the cache first.");
+    await page.keyboard.press("Enter");
+    await expect(field(page)).toHaveValue("");
+    // The task was replaced elsewhere while the words were on their way; new words follow.
+    await setSession(page, "otto-disk-space-2");
+    await field(page).fill("Then the logs.");
+    await page.evaluate(() => (window as unknown as { refuse: () => void }).refuse());
+    await expect(field(page)).toHaveValue("Clear the cache first.\nThen the logs.");
+    await expect(page.getByTestId("composer-waits")).toContainText(
+      "Not sent. Clawtrate can't tell which session of this task these words were written for.",
+    );
+    await expect(page.getByTestId("send")).toBeDisabled();
   });
 
   test("F-068 F-072: Enter sends and clears the draft, Shift+Enter adds a line, and an empty draft sends nothing", async ({
@@ -1486,6 +1608,33 @@ test.describe("steering, queueing and holding", () => {
     // Its file comes back with it, as one record.
     await expect(page.locator(".attachments .chip")).toHaveText([/keep-list\.txt/]);
     await expect(held).toHaveCount(1);
+  });
+
+  test("F-278: Edit takes a held message back only into a draft for its own session, and its words keep that session", async ({
+    page,
+  }) => {
+    await open(page, "run-question");
+    // The held message was written while the view showed the task's first session.
+    await setOutbox(page, (message) => ({ ...message, sessionId: "otto-disk-space" }));
+    await setSession(page, "otto-disk-space-2");
+    const held = page.getByTestId("shelf-row").filter({ hasText: "Held until you answer" });
+    await expect(held).toHaveCount(1);
+    await field(page).fill("Words for the session shown now");
+    await held.getByRole("button", { name: "Edit" }).click();
+    await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+      "Couldn't take this message back.",
+    );
+    await expect(field(page)).toHaveValue("Words for the session shown now");
+    await expect(held).toHaveCount(1);
+    // Into an empty composer it comes back, still for the session it was written for.
+    await field(page).fill("");
+    await held.getByRole("button", { name: "Edit" }).click();
+    await expect(field(page)).toHaveValue("Also keep anything from this month.");
+    await expect(held).toHaveCount(0);
+    await expect(page.getByTestId("composer-waits")).toContainText(
+      "Not sent. This task was deleted or reset elsewhere",
+    );
+    await expect(page.getByTestId("send")).toBeDisabled();
   });
 
   test("F-468: Alt+Enter while a question is pending holds the message too", async ({ page }) => {

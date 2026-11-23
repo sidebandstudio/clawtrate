@@ -2,7 +2,9 @@
 // the view shows the task's session, from its list row, its creation or its history, the composer
 // keeps the draft with Send disabled and says why, so a read that arrives later never decides where
 // the words go. A draft keeps the session it was started in: once the view shows another, nothing
-// is sent until the person starts a new task with its words or deletes it.
+// is sent until the person starts a new task with its words or deletes it. A draft is kept across
+// reloads as one record, its words with its session; words found without one, kept by an earlier
+// version, wait for the person's choice of a new task or the task shown.
 import {
   newRun,
   type ClawtrateBridge,
@@ -14,7 +16,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BridgeProvider } from "../src/bridge.tsx";
 import { Composer } from "../src/Composer.tsx";
-import { DRAFT_MOVED, sendWaits } from "../src/live.ts";
+import { DRAFT_MOVED, DRAFT_UNBOUND, sendWaits } from "../src/live.ts";
 import { RunEnding } from "../src/LiveTurn.tsx";
 
 const KEY = "agent:otto:disk-space";
@@ -31,15 +33,21 @@ const transcript = (change: Partial<Transcript>): Transcript =>
     ...change,
   }) as unknown as Transcript;
 
-/** The composer as drawn with a draft of the person's words, started in `started` when given. */
+/**
+ * The composer as drawn with a draft of the person's words kept from an earlier page: started in
+ * `started` when given, or, as `"earlier"`, kept by an earlier version with no session at all.
+ */
 const composer = (shown: Transcript | undefined, started?: string) => {
   const saved = globalThis.localStorage;
+  const words = "Is this still running?";
   globalThis.localStorage = {
     getItem: (key: string) =>
-      key.startsWith("clawtrate.draftSession.")
-        ? (started ?? null)
-        : key.startsWith("clawtrate.draft.")
-          ? "Is this still running?"
+      started === "earlier"
+        ? key.startsWith("clawtrate.draft.")
+          ? words
+          : null
+        : key.startsWith("clawtrate.composerDraft.")
+          ? JSON.stringify({ text: words, ...(started ? { sessionId: started } : {}) })
           : null,
     setItem: () => undefined,
     removeItem: () => undefined,
@@ -93,8 +101,8 @@ describe("F-278: a draft written before the view shows the task's session", () =
     expect(send(html)).toContain("disabled");
   });
 
-  it("once the view shows the session, from its row or its history: Send takes the words", () => {
-    const html = composer(transcript({ status: "loading", sessionId: "s-1" }));
+  it("once the view shows the session, from its row or its history: Send takes words bound to it", () => {
+    const html = composer(transcript({ status: "loading", sessionId: "s-1" }), "s-1");
     expect(html).not.toContain("Sending waits");
     expect(send(html)).not.toContain("disabled");
     expect(sendWaits(transcript({ status: "ready", sessionId: "s-1" }))).toBeNull();
@@ -115,6 +123,30 @@ describe("F-278: a draft keeps the session it was started in", () => {
     const html = composer(transcript({ status: "ready", sessionId: "s-1" }), "s-1");
     expect(html).not.toContain(DRAFT_MOVED);
     expect(send(html)).not.toContain("disabled");
+  });
+});
+
+describe("F-278: words kept with no session they were written for", () => {
+  it("kept by an earlier version, words alone: Send is disabled, and only a new task or the task shown, named as such, takes them", () => {
+    const html = composer(transcript({ status: "ready", sessionId: "s-2" }), "earlier");
+    expect(html).toContain("Is this still running?");
+    expect(html).toContain(DRAFT_UNBOUND);
+    expect(send(html)).toContain("disabled");
+    expect(html).toMatch(/<button[^>]*>Start a new task with this message<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Send to the task shown<\/button>/);
+  });
+
+  it("kept before the view showed a session: the same choice, never the session the view shows now", () => {
+    const html = composer(transcript({ status: "ready", sessionId: "s-2" }));
+    expect(html).toContain(DRAFT_UNBOUND);
+    expect(send(html)).toContain("disabled");
+  });
+
+  it("while the task loads: the words wait, with Start as new task, and no session to send them to", () => {
+    const html = composer(transcript({ status: "loading" }), "earlier");
+    expect(html).toContain("Sending waits until this task loads.");
+    expect(html).not.toContain("Send to the task shown");
+    expect(send(html)).toContain("disabled");
   });
 });
 

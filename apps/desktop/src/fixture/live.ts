@@ -502,6 +502,8 @@ export function liveScene(
             questions: [question(now)],
             outbox: [
               message("msg-2", "Also keep anything from this month.", now - 2 * SECOND, {
+                // Written while the view showed the task's session, as every viewer's message is.
+                sessionId: "otto-disk-space",
                 mode: "steer",
                 status: "held",
                 attachments: [
@@ -836,6 +838,7 @@ export function liveCommand(
             outbox: [
               ...transcript.outbox,
               message(id, command.text, now, {
+                sessionId: command.sessionId,
                 runId: id,
                 attachments,
                 ...(command.replyToId ? { replyToId: command.replyToId } : {}),
@@ -852,7 +855,12 @@ export function liveCommand(
             ...transcript,
             outbox: [
               ...transcript.outbox,
-              message(id, command.text, now, { mode: "queue", status: "queued", runId: null }),
+              message(id, command.text, now, {
+                sessionId: command.sessionId,
+                mode: "queue",
+                status: "queued",
+                runId: null,
+              }),
             ],
             runs: [
               ...transcript.runs,
@@ -865,6 +873,7 @@ export function liveCommand(
           outbox: [
             ...transcript.outbox,
             message(id, command.text, now, {
+              sessionId: command.sessionId,
               ...(command.replyToId ? { replyToId: command.replyToId } : {}),
               mode: command.mode === "queue" ? "queue" : "steer",
               status: asking ? "held" : "sent",
@@ -956,7 +965,11 @@ export function liveCommand(
         files.set(info.id, file);
         return info;
       });
-      return Promise.resolve({ text: taken.text, attachments });
+      return Promise.resolve({
+        text: taken.text,
+        attachments,
+        ...(taken.sessionId ? { sessionId: taken.sessionId } : {}),
+      });
     }
     case "sendAgain": {
       const original = get().transcripts[OPEN_TASK]?.outbox.find(

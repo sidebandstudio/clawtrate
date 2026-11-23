@@ -29,12 +29,15 @@ import {
   composerFor,
   couldNotStart,
   DRAFT_MOVED,
+  DRAFT_UNBOUND,
+  joinDrafts,
   questionPending,
   refusedElsewhere,
   sendName,
   sendWaits,
   shelfMessages,
   type ComposerView,
+  type Draft,
   type SendMode,
 } from "./live.ts";
 import { useResendElsewhere, useStartFromMessage } from "./LiveTurn.tsx";
@@ -141,44 +144,51 @@ function sentText(chips: MenuRow[], words: string): string {
   return [...chips.map((chip) => chip.insert), words.trim()].filter(Boolean).join(" ");
 }
 
-// Drafts are the person's unsent words: kept per gateway and task for this
-// viewer, in memory and, where the browser allows it, across reloads.
-const drafts = new Map<string, string>();
-function readDraft(key: string): string {
-  if (drafts.has(key)) return drafts.get(key)!;
-  try {
-    return localStorage.getItem(`clawtrate.draft.${key}`) ?? "";
-  } catch {
-    return "";
+// Drafts are the person's unsent words: kept per gateway and task for this viewer, in memory and,
+// where the browser allows it, across reloads. Each keeps the session it was started in, in one
+// record with its words, written in one write: it goes there only (F-278). Words found with none,
+// kept by an earlier version or before the view showed a session, wait for the person's choice.
+const drafts = new Map<string, Draft>();
+function readDraft(key: string): Draft {
+  let found = drafts.get(key);
+  if (!found) {
+    try {
+      found =
+        draftOf(localStorage.getItem(`clawtrate.composerDraft.${key}`)) ??
+        // An earlier version kept the words alone.
+        draftOf(JSON.stringify({ text: localStorage.getItem(`clawtrate.draft.${key}`) ?? "" }));
+    } catch {
+      // Storage may be unavailable; the draft starts empty.
+    }
   }
+  if (!found) return { text: "" };
+  return found.text.trim() && found.sessionId === undefined
+    ? { text: found.text, unbound: true }
+    : found;
 }
-function writeDraft(key: string, text: string): void {
-  drafts.set(key, text);
+function draftOf(raw: string | null): Draft | undefined {
   try {
-    if (text) localStorage.setItem(`clawtrate.draft.${key}`, text);
-    else localStorage.removeItem(`clawtrate.draft.${key}`);
-  } catch {
-    // Storage may be unavailable; the draft still lives for this page.
-  }
-}
-
-// The session each draft was started in, kept with it: the draft goes there only (F-278).
-const draftSessions = new Map<string, string | undefined>();
-function readDraftSession(key: string): string | undefined {
-  if (draftSessions.has(key)) return draftSessions.get(key);
-  try {
-    return localStorage.getItem(`clawtrate.draftSession.${key}`) ?? undefined;
+    const kept = JSON.parse(raw ?? "null") as Partial<Draft> | null;
+    if (typeof kept?.text !== "string") return undefined;
+    return {
+      text: kept.text,
+      ...(typeof kept.sessionId === "string" && kept.sessionId
+        ? { sessionId: kept.sessionId }
+        : {}),
+      ...(kept.unbound === true ? { unbound: true } : {}),
+    };
   } catch {
     return undefined;
   }
 }
-function writeDraftSession(key: string, session: string | undefined): void {
-  draftSessions.set(key, session);
+function writeDraft(key: string, draft: Draft): void {
+  drafts.set(key, draft);
   try {
-    if (session) localStorage.setItem(`clawtrate.draftSession.${key}`, session);
-    else localStorage.removeItem(`clawtrate.draftSession.${key}`);
+    if (draft.text) localStorage.setItem(`clawtrate.composerDraft.${key}`, JSON.stringify(draft));
+    else localStorage.removeItem(`clawtrate.composerDraft.${key}`);
+    localStorage.removeItem(`clawtrate.draft.${key}`);
   } catch {
-    // Storage may be unavailable; the draft keeps its session for this page.
+    // Storage may be unavailable; the draft still lives for this page.
   }
 }
 
@@ -229,13 +239,23 @@ export function Composer({
   const bridge = useBridge();
   // A draft belongs to one task on one gateway.
   const draftKey = `${gateway ?? ""}|${taskKey}`;
-  const [text, setTextState] = useState(() => readDraft(draftKey));
+  const [draft, setDraft] = useState(() => readDraft(draftKey));
+  const text = draft.text;
+  // Its words and session are one record, written whole whenever either changes.
+  useEffect(() => writeDraft(draftKey, draft), [draftKey, draft]);
+  // The task's session as drawn now.
+  const shownSession = transcript?.sessionId;
+  /** The person's words, bound at their first to the session the view shows, if it shows one. */
   const setText = useCallback(
-    (next: string) => {
-      setTextState(next);
-      writeDraft(draftKey, next);
-    },
-    [draftKey],
+    (next: string) =>
+      setDraft((current) => ({
+        ...current,
+        text: next,
+        ...(next.trim() && current.sessionId === undefined && !current.unbound && shownSession
+          ? { sessionId: shownSession }
+          : {}),
+      })),
+    [setDraft, shownSession],
   );
   const [files, setFiles] = useState<Attached[]>([]);
   // The skill or command chosen from the "/" menu: a chip sent before the words.
@@ -282,11 +302,6 @@ export function Composer({
   const sendRef = useRef<HTMLButtonElement>(null);
 
   const runId = transcript?.runs.find((run) => run.state !== "queued" && isLive(run))?.id ?? null;
-  // The task's session as drawn now.
-  const shownSession = transcript?.sessionId;
-  // The session the draft was started in, kept with it from its first word: it goes there only.
-  const [bound, setBound] = useState(() => readDraftSession(draftKey));
-  useEffect(() => writeDraftSession(draftKey, bound), [draftKey, bound]);
   const view: ComposerView = composerFor(transcript, {
     bot: bot.name,
     connected,
@@ -304,7 +319,7 @@ export function Composer({
       text: sentText(tokens, text),
       idempotencyKey: "x".repeat(36),
       queueMode: view.mode === "steer" ? "steer" : "followup",
-      sessionId: bound ?? shownSession ?? null,
+      sessionId: draft.sessionId ?? shownSession ?? null,
       files: files.map((file) => ({
         fileName: file.name,
         mimeType: file.mimeType,
@@ -323,11 +338,24 @@ export function Composer({
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
   // Until the view shows the task's session the draft stays here: only a new task takes it.
   const waits = sendWaits(transcript);
+  // The draft keeps the session the view showed at its first word, or, started before the view
+  // showed one, the first it shows; it lets go once it holds nothing.
+  const settled = !hasContent
+    ? draft.sessionId !== undefined || draft.unbound
+      ? { text: draft.text }
+      : draft
+    : draft.sessionId === undefined && !draft.unbound && shownSession !== undefined
+      ? { ...draft, sessionId: shownSession }
+      : draft;
+  if (settled !== draft) setDraft(settled);
+  // Words that name no session Clawtrate knows they were written for: once the view shows one,
+  // the person chooses a new task for them or the task shown.
+  const unbound = hasContent && draft.unbound === true;
+  const chooseSession = unbound && waits === null && shownSession !== undefined;
+  const binding = hasContent && !unbound ? (draft.sessionId ?? shownSession) : undefined;
   // A draft started while the view showed one session, and the view shows another now: that
   // session was deleted or reset elsewhere. The draft keeps its session, and nothing is sent until
   // the person picks a new task for its words or deletes it.
-  const binding = hasContent ? (bound ?? shownSession) : undefined;
-  if (binding !== bound) setBound(binding);
   const moved = binding !== undefined && shownSession !== undefined && binding !== shownSession;
 
   const stop = useCallback(
@@ -348,7 +376,8 @@ export function Composer({
    * refuses it, the words and files come back, ahead of anything typed since.
    */
   const sendAs = useCallback(
-    async (how: SendMode | "new-task") => {
+    /** `chosen`: the session the person chose for words that name none (`DRAFT_UNBOUND`). */
+    async (how: SendMode | "new-task", chosen?: string) => {
       if (!canSend) {
         // A refused file already says why beside it; a file on its way says nothing else.
         if (hasContent && uploading && !refused)
@@ -358,14 +387,19 @@ export function Composer({
           });
         return;
       }
-      if (how !== "new-task" && (waits || !binding)) {
+      if (how !== "new-task" && unbound && chosen === undefined) {
+        onNotice({ title: "This message is still in the composer.", reason: DRAFT_UNBOUND });
+        return;
+      }
+      const to = chosen ?? binding;
+      if (how !== "new-task" && (waits || !to)) {
         onNotice({
           title: "This message is still in the composer.",
           reason: waits ?? "Sending waits until this task loads.",
         });
         return;
       }
-      if (how !== "new-task" && moved) {
+      if (how !== "new-task" && moved && chosen === undefined) {
         onNotice({ title: "This message is still in the composer.", reason: DRAFT_MOVED });
         return;
       }
@@ -395,7 +429,7 @@ export function Composer({
           });
           return;
         }
-        setText("");
+        setDraft({ text: "" });
         stop(view.stoppable);
         return;
       }
@@ -406,8 +440,13 @@ export function Composer({
       const body = sentText(chips, words);
       const taken = files;
       const attachmentIds = taken.flatMap((file) => (file.info ? [file.info.id] : []));
-      const session = binding;
-      setText("");
+      const session = to;
+      // The words as they go back if the host refuses them: as they were bound, or as chosen.
+      const kept: Draft = {
+        text: words,
+        ...(session ? { sessionId: session } : unbound ? { unbound: true } : {}),
+      };
+      setDraft({ text: "" });
       setFiles([]);
       setTokens([]);
       setPicker(null);
@@ -436,15 +475,11 @@ export function Composer({
         if (view.mode === "hold") onAnnounce("Held until you answer");
         else if (how === "queue" || view.stopping) onAnnounce("Queued");
       } catch (error) {
-        setTextState((current) => {
-          const back = current.trim() ? `${words}\n${current}` : words;
-          writeDraft(draftKey, back);
-          return back;
-        });
+        // The words come back with the session they were bound to, ahead of anything typed since;
+        // words typed since for another session leave the draft bound to none.
+        setDraft((current) => joinDrafts(kept, current));
         setFiles((current) => [...taken, ...current]);
         setTokens((current) => [...chips, ...current]);
-        // The words come back with the session they were written for.
-        setBound(session);
         onNotice({
           title: how === "new-task" ? "Couldn't start a new task." : "Couldn't send this message.",
           reason: error instanceof Error ? error.message : String(error),
@@ -464,14 +499,14 @@ export function Composer({
       bridge,
       bot.id,
       taskKey,
-      draftKey,
-      setText,
+      setDraft,
       onAnnounce,
       onNotice,
       view,
       stop,
       runId,
       binding,
+      unbound,
       moved,
       waits,
     ],
@@ -481,7 +516,7 @@ export function Composer({
   const discard = () => {
     const held = files.flatMap((file) => (file.info ? [file.info.id] : []));
     if (held.length > 0) void bridge.send({ type: "releaseAttachments", attachmentIds: held });
-    setText("");
+    setDraft({ text: "" });
     setFiles([]);
     setTokens([]);
     setPicker(null);
@@ -729,13 +764,14 @@ export function Composer({
         stopping={view.stopping}
         asking={asking}
         act={act}
+        // Words bound to another session than the draft's never join it (F-278).
+        canTakeBack={(held) =>
+          !hasContent || (!unbound && binding !== undefined && binding === held.sessionId)
+        }
         onTakenBack={(back) => {
-          // Unsent words are never lost: an existing draft keeps its place above them.
-          setTextState((current) => {
-            const next = current.trim() ? `${current}\n${back.text}` : back.text;
-            writeDraft(draftKey, next);
-            return next;
-          });
+          // Unsent words are never lost: an existing draft keeps its place above them. They come
+          // back with the session they were bound to.
+          setDraft((current) => joinDrafts(current, takenBack(back)));
           setFiles((current) => [
             ...current,
             ...back.attachments.map((info) => ({
@@ -988,21 +1024,33 @@ export function Composer({
               {tooMuch && <p className="attachments-note">{refusalReason}</p>}
             </div>
           )}
-          {hasContent && (waits || moved) && (
+          {hasContent && (waits || moved || unbound) && (
             // Send waits, or will not send: the way to a new task stays in reach on touch too.
             <div
               className="composer-note"
               role="status"
               data-testid="composer-waits"
-              data-tone={moved ? "danger" : undefined}
+              data-tone={moved || chooseSession ? "danger" : undefined}
             >
-              <span>{moved ? DRAFT_MOVED : waits}</span>
+              <span>{moved ? DRAFT_MOVED : chooseSession ? DRAFT_UNBOUND : waits}</span>
               <button type="button" className="link-button" onClick={() => void sendAs("new-task")}>
-                {moved ? "Start a new task with this message" : "Start as new task"}
+                {moved || chooseSession
+                  ? "Start a new task with this message"
+                  : "Start as new task"}
               </button>
               {moved && (
                 <button type="button" className="link-button" onClick={discard}>
                   Delete
+                </button>
+              )}
+              {chooseSession && (
+                // Only by the person's choice, and named as such: the session the view shows.
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => void sendAs(view.mode, shownSession)}
+                >
+                  Send to the task shown
                 </button>
               )}
             </div>
@@ -1088,9 +1136,17 @@ export function Composer({
               type="button"
               className="icon-button send-button"
               aria-label={sendName(view.mode)}
-              aria-description={refusalReason ?? waits ?? (moved ? DRAFT_MOVED : undefined)}
-              title={refusalReason ?? waits ?? (moved ? DRAFT_MOVED : sendName(view.mode))}
-              disabled={!canSend || waits !== null || moved}
+              aria-description={
+                refusalReason ??
+                waits ??
+                (moved ? DRAFT_MOVED : unbound ? DRAFT_UNBOUND : undefined)
+              }
+              title={
+                refusalReason ??
+                waits ??
+                (moved ? DRAFT_MOVED : unbound ? DRAFT_UNBOUND : sendName(view.mode))
+              }
+              disabled={!canSend || waits !== null || moved || unbound}
               data-testid="send"
               onClick={() => {
                 // The release that ends a long press is not a send.
@@ -1164,6 +1220,18 @@ function isLive(run: Run): boolean {
   return run.state === "running" || run.state === "waiting" || run.state === "stopping";
 }
 
+/** Edit refused: the editor holds words bound to another session than the held message's. */
+export const EDIT_APART =
+  "The words you're writing are for another session of this task. Send or clear them first.";
+
+/** A taken-back message's words as a draft: with its session, or none known (F-278). */
+export function takenBack(back: { text: string; sessionId?: string }): Draft {
+  return {
+    text: back.text,
+    ...(back.sessionId ? { sessionId: back.sessionId } : { unbound: true }),
+  };
+}
+
 /**
  * One unsent message on the shelf, in the same words and with the same recovery wherever it
  * shows: "Not sent" (Send, Remove), "Couldn't start" (Try again, Delete; or, refused because its
@@ -1177,6 +1245,7 @@ export function ShelfRow({
   stopping,
   asking,
   act,
+  canTakeBack,
   onTakenBack,
   onNotice,
   onAnnounce,
@@ -1187,8 +1256,16 @@ export function ShelfRow({
   asking: boolean;
   /** Runs an action whose control then goes away, keeping focus somewhere useful. */
   act: (action: () => unknown) => void;
-  /** Edit: the held message's words and files, held again, back where it was written. */
-  onTakenBack: (back: { text: string; attachments: AttachmentInfo[] }) => void;
+  /**
+   * Whether the editor Edit puts the held message back into can take it: it holds no words, or
+   * words bound to the same session. Otherwise nothing is taken back.
+   */
+  canTakeBack: (message: OutgoingMessage) => boolean;
+  /**
+   * Edit: the held message's words and files, held again, back where it was written, with the
+   * session it was bound to.
+   */
+  onTakenBack: (back: { text: string; attachments: AttachmentInfo[]; sessionId?: string }) => void;
   onNotice: (notice: Omit<Notice, "id">) => void;
   onAnnounce: (text: string) => void;
 }) {
@@ -1294,8 +1371,12 @@ export function ShelfRow({
           type="button"
           className="button"
           data-size="sm"
-          onClick={() =>
-            // The message comes back as one record: its words and its files.
+          onClick={() => {
+            if (!canTakeBack(message)) {
+              onNotice({ title: "Couldn't take this message back.", reason: EDIT_APART });
+              return;
+            }
+            // The message comes back as one record: its words, its files and its session.
             act(() =>
               bridge
                 .invoke({ type: "takeBackMessage", key: taskKey, messageId: message.id })
@@ -1305,8 +1386,8 @@ export function ShelfRow({
                     reason: error instanceof Error ? error.message : String(error),
                   }),
                 ),
-            )
-          }
+            );
+          }}
         >
           Edit
         </button>
