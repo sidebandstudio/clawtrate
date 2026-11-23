@@ -586,7 +586,7 @@ describe.skipIf(!mac)("local connect's send gate, with a listener of the test's 
             expect(bytes).toBe(0);
             expect(gateway.sockets).toHaveLength(0);
             expect(lines[0]).toBe(
-              `[setup] couldn't verify what is listening at port ${port} (module)`,
+              `[setup] couldn't verify what is listening at port ${port} (lock)`,
             );
           },
           { pid: 4242 },
@@ -689,7 +689,8 @@ describe.skipIf(!BIN || !mac)(
       const proxy = await standIn(port, gateway.port);
       try {
         const refused = await refusedThrough(gateway, port, token);
-        expect(refused[0]).toBe("module");
+        // It can't hold the profile's lock open, so (f) refuses it before its program is opened.
+        expect(refused[0]).toBe("lock");
         expect(proxy.accepted()).toBeGreaterThanOrEqual(2);
         expect(proxy.bytes()).toBe(0);
       } finally {
@@ -709,7 +710,8 @@ describe.skipIf(!BIN || !mac)(
       });
       try {
         const refused = await refusedThrough(gateway, port, token);
-        expect(refused[0]).toBe("module");
+        // It can't hold the profile's lock open, so (f) refuses it before its program is opened.
+        expect(refused[0]).toBe("lock");
         expect(proxy.bytes()).toBe(0);
       } finally {
         await proxy.stop();

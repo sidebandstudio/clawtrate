@@ -53,59 +53,76 @@ export function proveFor(
 export type ProvedSockets = {
   /** A WebSocket to `ws://127.0.0.1:<port>` alone, on a socket proved before any byte goes. */
   createWebSocket: (url: string) => WebSocketLike;
-  /** The latest socket, proved again; false once it is closed or replaced. */
+  /**
+   * The socket the latest WebSocket carries, proved again; false once it is
+   * closed, or that WebSocket is replaced.
+   */
   verify: (signal: AbortSignal) => Promise<boolean>;
 };
 
+/** One WebSocket's socket: dialled once, and set only once its proof passed. */
+type Slot = { dialled: boolean; socket: Socket | null };
+
 export function provedSockets(port: number, prove: ProveSocket): ProvedSockets {
-  let latest: Socket | null = null;
-  const connect = (
-    options: { hostname: string; port: string; protocol: string },
-    callback: (...args: [null, Socket] | [Error, null]) => void,
-  ) => {
-    // Only the endpoint this was made for: no other host, port or scheme is ever dialled.
-    if (
-      options.hostname !== "127.0.0.1" ||
-      Number(options.port) !== port ||
-      options.protocol !== "http:"
-    ) {
-      callback(new Error("This connection may only go to OpenClaw on this computer."), null);
-      return;
-    }
-    const socket = dial({ host: "127.0.0.1", port });
-    let settled = false;
-    const settle = (proved: boolean) => {
-      if (settled) return;
-      settled = true;
-      if (proved && !socket.destroyed) {
-        latest = socket;
-        callback(null, socket);
+  let current: Slot | null = null;
+  const connectFor =
+    (slot: Slot) =>
+    (
+      options: { hostname: string; port: string; protocol: string },
+      callback: (...args: [null, Socket] | [Error, null]) => void,
+    ) => {
+      // Only the endpoint this was made for, one socket per WebSocket, and only for the
+      // latest one: no other host, port or scheme is ever dialled.
+      if (
+        options.hostname !== "127.0.0.1" ||
+        Number(options.port) !== port ||
+        options.protocol !== "http:" ||
+        slot.dialled ||
+        current !== slot
+      ) {
+        callback(new Error("This connection may only go to OpenClaw on this computer."), null);
         return;
       }
-      socket.destroy();
-      callback(new Error("Clawtrate couldn't verify what is listening at this port."), null);
+      slot.dialled = true;
+      const socket = dial({ host: "127.0.0.1", port });
+      let settled = false;
+      const settle = (proved: boolean) => {
+        if (settled) return;
+        settled = true;
+        // A proof that finishes after its WebSocket was replaced hands nothing over.
+        if (proved && !socket.destroyed && current === slot) {
+          slot.socket = socket;
+          callback(null, socket);
+          return;
+        }
+        socket.destroy();
+        callback(new Error("Clawtrate couldn't verify what is listening at this port."), null);
+      };
+      socket.once("error", () => settle(false));
+      socket.once("close", () => settle(false));
+      socket.once("connect", () => {
+        prove(socket.localPort!).then(settle, () => settle(false));
+      });
     };
-    socket.once("error", () => settle(false));
-    socket.once("close", () => settle(false));
-    socket.once("connect", () => {
-      prove(socket.localPort!).then(settle, () => settle(false));
-    });
-  };
   return {
     createWebSocket(url) {
       if (url !== `ws://127.0.0.1:${port}`)
         throw new Error("This connection may only go to OpenClaw on this computer.");
-      latest = null;
-      const agent = new Agent({ connections: 1, connect });
+      const slot: Slot = { dialled: false, socket: null };
+      current = slot;
+      const agent = new Agent({ connections: 1, connect: connectFor(slot) });
       const socket = new WebSocket(url, { dispatcher: agent });
       socket.addEventListener("close", () => void agent.destroy().catch(() => {}));
       return socket as unknown as WebSocketLike;
     },
     async verify(signal) {
-      const socket = latest;
-      if (!socket || socket.destroyed || signal.aborted) return false;
+      const slot = current;
+      const socket = slot?.socket;
+      if (!slot || !socket || socket.destroyed || signal.aborted) return false;
       const proved = await prove(socket.localPort!).catch(() => false);
-      return proved && !signal.aborted && latest === socket && !socket.destroyed;
+      return (
+        proved && !signal.aborted && current === slot && slot.socket === socket && !socket.destroyed
+      );
     },
   };
 }

@@ -239,8 +239,9 @@ static struct proc_fdinfo *descriptors(pid_t pid, int *count) {
  * refuses their descriptors), so a connection held only by one finds none.
  * An accepted connection may not be in its holder's table yet, so a scan that
  * finds nothing is repeated for up to 1.5 s, within the host's 2 s deadline.
+ * Each holder's start time is kept with its PID, as the scan saw it.
  */
-static int holders(int port, int localPort, pid_t *found, const char **why) {
+static int holders(int port, int localPort, pid_t *found, uint64_t *starts, const char **why) {
     uint64_t until = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 1500ull * 1000 * 1000;
     while (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < until) {
         int count = proc_listallpids(NULL, 0);
@@ -271,7 +272,10 @@ static int holders(int port, int localPort, pid_t *found, const char **why) {
                     continue;
                 if (info.pbi_uid != geteuid() || info.pbi_ruid != geteuid()) *why = "account";
                 else if (held == MAX_HOLDERS) *why = "holder";
-                else if (held == 0 || found[held - 1] != pids[i]) found[held++] = pids[i];
+                else if (held == 0 || found[held - 1] != pids[i]) {
+                    starts[held] = info.pbi_start_tvsec * 1000000ull + info.pbi_start_tvusec;
+                    found[held++] = pids[i];
+                }
             }
             free(fds);
         }
@@ -282,6 +286,17 @@ static int holders(int port, int localPort, pid_t *found, const char **why) {
     }
     *why = "holder";
     return 0;
+}
+
+/**
+ * The process the scan saw, by its PID and its start time to the microsecond:
+ * a PID another process took since is refused. Its kernel facts go to `info`.
+ */
+static const char *sameProcess(pid_t pid, uint64_t start, struct proc_bsdinfo *info) {
+    return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, info, sizeof *info) == sizeof *info &&
+                   info->pbi_start_tvsec * 1000000ull + info->pbi_start_tvusec == start
+               ? NULL
+               : "holder";
 }
 
 /** Whether the process holds a descriptor on exactly this file, by device and inode. */
@@ -438,9 +453,12 @@ static const char *profileFiles(int home, const char *folderName, struct stat *l
 /**
  * Checks (e) and (f) for the connection the host opened from <local port> to
  * <port>. Of the connection's holders, all this account's, the first that
- * runs Node, maps OpenClaw's module and holds the profile's gateway lock and
- * state database is written out with the facts the host checks: its start
- * time, the module's architecture and hash, the lock and the package.json.
+ * passes (f) is written out with the facts the host checks: its start time,
+ * the module's architecture and hash, the lock and the package.json. (f) runs
+ * in this order: the same process the scan saw, then the profile's gateway
+ * lock and state database held open, which opens nothing; only then the
+ * program it runs and its mapped module, which are opened and read. So a
+ * process that isn't this profile's gateway has nothing of its opened here.
  */
 static int prove(int home, int privateHome, const char *folderName, int port, int localPort) {
     static char lockBytes[LOCK_LIMIT + 1];
@@ -449,18 +467,17 @@ static int prove(int home, int privateHome, const char *folderName, int port, in
     const char *why = checkHome(home, privateHome);
     if (!why) why = profileFiles(home, folderName, &lock, &database, lockBytes, &lockLength);
     pid_t found[MAX_HOLDERS];
-    int count = why ? 0 : holders(port, localPort, found, &why);
-    if (!why) why = "node";
+    uint64_t starts[MAX_HOLDERS];
+    int count = why ? 0 : holders(port, localPort, found, starts, &why);
+    if (!why) why = "lock";
     for (int i = 0; i < count; ++i) {
         char root[PATH_MAX], hex[65], packagePath[PATH_MAX + 16];
-        const char *arch = NULL, *because = runsNode(found[i]) ? NULL : "node";
-        if (!because) because = mappedModule(found[i], root, &arch, hex);
+        struct proc_bsdinfo info;
+        const char *arch = NULL, *because = sameProcess(found[i], starts[i], &info);
         if (!because) because = holdsFile(found[i], &lock) ? NULL : "lock";
         if (!because) because = holdsFile(found[i], &database) ? NULL : "state";
-        struct proc_bsdinfo info;
-        if (!because && proc_pidinfo(found[i], PROC_PIDTBSDINFO, 0, &info, sizeof info) !=
-                            sizeof info)
-            because = "failed";
+        if (!because) because = runsNode(found[i]) ? NULL : "node";
+        if (!because) because = mappedModule(found[i], root, &arch, hex);
         char *package = NULL;
         size_t packageLength = 0;
         snprintf(packagePath, sizeof packagePath, "%s/package.json", because ? "" : root);

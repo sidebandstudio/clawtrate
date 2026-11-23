@@ -7,7 +7,9 @@
 import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   mkdirSync,
+  openSync,
   mkdtempSync,
   realpathSync,
   rmSync,
@@ -63,6 +65,12 @@ function home(options: { lock?: boolean; database?: boolean } = {}): string {
   return path;
 }
 
+/** The profile's lock and database in a home, as the gateway holds them open. */
+const held = (path: string) => [
+  join(path, FOLDER, "tmp", `openclaw-${process.geteuid!()}`, "gateway.state.lock"),
+  join(path, FOLDER, "state", "openclaw.sqlite"),
+];
+
 function lockFile(path: string, content: object): string {
   const file = join(path, FOLDER, "tmp", `openclaw-${process.geteuid!()}`, "gateway.state.lock");
   writeFileSync(file, JSON.stringify(content), { mode: 0o600 });
@@ -89,11 +97,20 @@ const options = (path: string, localPort: number, more: Partial<ProveOptions> = 
 const refused = (why: string) => ({ proved: false, why });
 
 describe.skipIf(platform !== "darwin")("the proof, against listeners of the test's own", () => {
-  it("F-492: a same-account holder that maps no OpenClaw module is refused", async () => {
+  it("F-492: a same-account holder is refused by the profile's files first, then by its module", async () => {
     const { localPort, end } = await connection(port);
+    const at = home();
     try {
-      // (e) passes: this process holds the server end. (f) refuses it.
-      expect(await proveLocalGateway(options(home(), localPort))).toEqual(refused("module"));
+      // (e) passes: this process holds the server end. (f) asks first for the profile's lock
+      // and database held open, which opens nothing of the holder's.
+      expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("lock"));
+      const files = held(at).map((file) => openSync(file, "r"));
+      try {
+        // Holding them, it runs Node, but maps no OpenClaw module.
+        expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("module"));
+      } finally {
+        for (const fd of files) closeSync(fd);
+      }
     } finally {
       end();
     }
@@ -121,12 +138,15 @@ describe.skipIf(platform !== "darwin")("the proof, against listeners of the test
   }, 15_000);
 
   it("refuses a holder of this account's that isn't Node", async () => {
+    const at = home();
+    // A Perl listener holding the profile's lock and database open, so the program is reached.
     const perl = spawn(
       "/usr/bin/perl",
       [
         "-MIO::Socket::INET",
         "-e",
-        '$|=1; my $s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 0, Listen => 4) or die; print $s->sockport, "\n"; my @held; while (my $c = $s->accept) { push @held, $c }',
+        'open(my $l, "<", $ARGV[0]) or die; open(my $d, "<", $ARGV[1]) or die; $|=1; my $s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 0, Listen => 4) or die; print $s->sockport, "\n"; my @held; while (my $c = $s->accept) { push @held, $c }',
+        ...held(at),
       ],
       { stdio: ["ignore", "pipe", "inherit"] },
     );
@@ -136,7 +156,7 @@ describe.skipIf(platform !== "darwin")("the proof, against listeners of the test
       );
       const { localPort, end } = await connection(listening);
       try {
-        const proof = await proveLocalGateway(options(home(), localPort, { port: listening }));
+        const proof = await proveLocalGateway(options(at, localPort, { port: listening }));
         expect(proof).toEqual(refused("node"));
       } finally {
         end();
@@ -144,6 +164,49 @@ describe.skipIf(platform !== "darwin")("the proof, against listeners of the test
     } finally {
       perl.kill("SIGKILL");
     }
+  });
+
+  it("refuses a PID whose start time isn't the one the scan saw", async () => {
+    // PID reuse can't be forced safely, so the helper's own check is driven directly: this
+    // process by its PID and the start the kernel reports, a microsecond off either way, and a
+    // PID whose process has exited.
+    const source = join(scratch, "same-process.c");
+    const binary = join(scratch, "same-process");
+    writeFileSync(
+      source,
+      `#define main helper_main
+#include "local-gateway.c"
+#undef main
+int main(int argc, char **argv) {
+  (void)argc;
+  pid_t pid = (pid_t)atoi(argv[1]);
+  struct proc_bsdinfo info;
+  uint64_t start = 1;
+  if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof info) == sizeof info)
+    start = info.pbi_start_tvsec * 1000000ull + info.pbi_start_tvusec;
+  const char *at[] = {sameProcess(pid, start, &info), sameProcess(pid, start + 1, &info),
+                      sameProcess(pid, start - 1, &info)};
+  for (int i = 0; i < 3; ++i) printf("%s ", at[i] ? at[i] : "ok");
+  return 0;
+}`,
+    );
+    execFileSync("/usr/bin/xcrun", [
+      "clang",
+      "-Wno-unused-function",
+      "-I",
+      join(import.meta.dirname, "../packaging/mac"),
+      source,
+      "-o",
+      binary,
+    ]);
+    expect(execFileSync(binary, [String(process.pid)], { encoding: "utf8" }).trim()).toBe(
+      "ok holder holder",
+    );
+    const gone = spawn("/usr/bin/true");
+    await new Promise((done) => gone.once("exit", done));
+    expect(execFileSync(binary, [String(gone.pid)], { encoding: "utf8" }).trim()).toBe(
+      "holder holder holder",
+    );
   });
 
   it("finds no holder for a connection that isn't there", async () => {

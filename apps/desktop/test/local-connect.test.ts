@@ -146,6 +146,31 @@ describe("local connect's connector", () => {
     second.close();
   });
 
+  it("proves again the socket its own WebSocket carries, never an earlier one's that passed late", async () => {
+    const server = await websocketServer();
+    const late = deferred<boolean>();
+    const proved: number[] = [];
+    const sockets = provedSockets(server.port, async (localPort) => {
+      proved.push(localPort);
+      // The first WebSocket's dial proof waits; every other proof passes.
+      return proved.length === 1 ? await late.promise : true;
+    });
+    const url = `ws://127.0.0.1:${server.port}`;
+    const first = sockets.createWebSocket(url);
+    await until(() => proved.length === 1);
+    const second = sockets.createWebSocket(url);
+    await new Promise<void>((done) => (second.onopen = () => done()));
+    // The earlier WebSocket's proof passes only now.
+    late.resolve(true);
+    await new Promise((done) => setTimeout(done, 50));
+    expect(await sockets.verify(new AbortController().signal)).toBe(true);
+    // The second proof was of the second WebSocket's socket; the first was never upgraded.
+    expect(proved[2]).toBe(proved[1]);
+    expect(server.peers).toEqual([proved[1]]);
+    first.close();
+    second.close();
+  });
+
   it("takes its home rule from mustSandbox", () => {
     const where = { home: "/nowhere", helper: null, platform: "darwin" as const };
     const none = () => false;
@@ -204,6 +229,13 @@ it("no shipped host turns local connect on", () => {
         say("computed");
       else if (ts.isCallExpression(node) && node.expression.getText(source) === "localConnectFor")
         say("call");
+      // The builder taken under another name, or through a namespace, is reported where it is taken.
+      else if (
+        (ts.isImportSpecifier(node) &&
+          (node.propertyName ?? node.name).getText(source) === "localConnectFor") ||
+        (ts.isPropertyAccessExpression(node) && node.name.text === "localConnectFor")
+      )
+        say("builder");
       ts.forEachChild(node, visit);
     };
     visit(source);
