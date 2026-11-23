@@ -121,6 +121,8 @@ export type BridgeCommand =
   | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
   /** The "Turn time limit", in minutes, for every run this client starts (F-100). */
   | { type: "setTurnLimit"; minutes: number }
+  /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
+  | { type: "setShowChannelChats"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   /**
@@ -593,6 +595,12 @@ export type HostInfo = {
    * more access and refuses every command that writes.
    */
   readOnly?: boolean;
+  /**
+   * Set when a first pairing over a protected address (`protectedGatewayUrl`) asks for full
+   * control: the packaged Mac app, which keeps credentials in the Keychain. Its address form
+   * shows the consent line above Connect.
+   */
+  fullControl?: boolean;
   /**
    * Set when the host offers setup on its own computer (docs/design/setup.md):
    * the first screen asks where OpenClaw runs. Absent on a host that keeps the
@@ -1222,6 +1230,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       if (typeof command.minutes !== "number" || !Number.isInteger(command.minutes))
         throw new Error("invalid turn limit");
       return { type: "setTurnLimit", minutes: command.minutes };
+    case "setShowChannelChats":
+      if (typeof command.on !== "boolean") throw new Error("invalid channel chats setting");
+      return { type: "setShowChannelChats", on: command.on };
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
@@ -1963,6 +1974,8 @@ class ViewerSession implements BridgeSession {
         return client.stopRun(this.mine(command.key), command.runId, { owner });
       case "setTurnLimit":
         return client.setTurnLimit(command.minutes);
+      case "setShowChannelChats":
+        return client.setShowChannelChats(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":

@@ -80,7 +80,7 @@ describe("the Keychain through safeStorage", () => {
     );
   });
 
-  it("no shipped host or interface turns full access on", () => {
+  it("only the packaged Mac app turns full access on, beside its Keychain box", () => {
     const shipped = [
       ...sources(join(ROOT, "apps/desktop/src")),
       ...sources(join(ROOT, "packages/ui/src")),
@@ -89,8 +89,13 @@ describe("the Keychain through safeStorage", () => {
     const allowed = [
       "packages/core/src/client.ts PropertySignature fullAccess?: boolean;",
       "packages/core/src/client.ts PropertyDeclaration private fullAccess = false;",
-      "packages/core/src/client.ts assignment this.fullAccess = full && secure",
+      "packages/core/src/client.ts assignment this.fullAccess = routed && secure",
       "packages/core/src/client.ts read this.options.fullAccess",
+      // The Mac app's main process, with its Keychain box; the runtime passes it on.
+      "apps/desktop/src/main/index.ts PropertyAssignment fullAccess: true",
+      "apps/desktop/src/host/runtime.ts PropertySignature fullAccess?: boolean;",
+      "apps/desktop/src/host/runtime.ts read options.fullAccess",
+      "apps/desktop/src/host/runtime.ts PropertyAssignment fullAccess: true",
     ];
     const found: string[] = [];
     const named = (name: ts.Node | undefined) =>
@@ -155,6 +160,17 @@ describe("the Keychain through safeStorage", () => {
     const client = readFileSync(join(ROOT, "packages/core/src/client.ts"), "utf8");
     expect(client).toContain(
       "const full = this.options.fullAccess === true && !this.options.readOnly;",
+    );
+    expect(client).toContain("const routed = full && protectedGatewayUrl(settings.url);");
+    // The main process sets it only in the branch that gives the host the Keychain box.
+    const main = readFileSync(join(ROOT, "apps/desktop/src/main/index.ts"), "utf8");
+    expect(main).toMatch(
+      /hasSwitch\(MOCK_KEYCHAIN_SWITCH\),\s*\)\s*\?\s*\{\s*secretBox: safeStorageBox\(safeStorage, process\.platform\),\s*(\/\/[^\n]*\n\s*)?fullAccess: true,\s*\}\s*:\s*\{\}/,
+    );
+    // The runtime forwards it only with a box, and never on a read-only host.
+    const runtime = readFileSync(join(ROOT, "apps/desktop/src/host/runtime.ts"), "utf8");
+    expect(runtime).toContain(
+      "const full = options.fullAccess === true && !!options.secretBox && !options.readOnly;",
     );
   });
 });
