@@ -5,7 +5,7 @@ Issue #292, revised for #434. The first run makes a new bot, the Main Bot, and y
 It builds on:
 
 - **Effortless setup** (the setup work's effortless-setup design, not yet on `main`). That design covers everything up to step 3 of its §7. This one is the autonomy step and the Main Bot's chat. Its PR 6 owns the measurement from pairing to the composer and to the first reply; section 3 adds one more.
-- **The avatar studio** (#302's design, not yet on `main`). The Main Bot can take the name's Claw of its §2 as its first picture, as an explicit edit. Its Describe route (§7) and its proposal records and commit (§9) are part of this plugin's contract (section 9).
+- **The avatar studio** (#302's design, not yet on `main`). The first run's card offers the name's Claw of its §2 first among Clawtrate's avatars, and "Make your own" opens the studio. Its Describe route (§7) and its proposal records and commit (§9) are part of this plugin's contract (section 9).
 - **What stays out of view** (#314, #433, #490, #491): channel chats, other tools' sessions and the gateway's own bot. The first run relies on these; section 4 says how.
 - **Bringing in what an existing OpenClaw has** (#487, its own design): a bot's memory, the person's profile and its skills, scheduled jobs, and context from another assistant. The first run offers it at one step (section 3) and that design covers the rest.
 - **#257 and #246** (the Approvals step and the Create sequence), and **#147** (the primary bot and a bot's identity). Section 16 says what is taken from each.
@@ -20,7 +20,7 @@ Until now the Main Bot was whichever bot the gateway called its default, set up 
 
 - **The first run makes the Main Bot.** On every gateway, including one that already has bots, Clawtrate makes a new bot and the person sets it up by chatting with it: its name, its picture from Clawtrate's avatars, and how it helps. No bot the gateway already has is adopted. The gateway a person already has is the usual path; a new gateway is only for someone who has none.
 - **One per gateway, made once.** Clawtrate makes it under one fixed id, and the gateway refuses a second bot with an id it already has, so two devices running the first run at once end with one Main Bot (R44). Every device of every person on that gateway finds it by that id.
-- **It knows it is the Main Bot** from two sentences Clawtrate writes into its identity file (section 4).
+- **It knows it is the Main Bot** from two sentences Clawtrate writes into its identity file, with one more about its picture (section 4).
 - **It looks like the Main Bot:** a gold star on its avatar and a tile of its own at the top of the sidebar, above the other bots.
 - **The gateway's own bot is not shown** once another bot exists (#490). It keeps running, and it keeps the channel messages and other traffic that reach the gateway without naming a bot. A switch under Settings → Advanced brings it back.
 - **Channels stay where they were.** The first run doesn't mention them and writes no binding. Making the Main Bot never makes it the bot an unbound channel message reaches: on a gateway that already had several bots the routing config reads back byte for byte the same, and on a gateway with one bot OpenClaw itself pins its channels to that bot (R42, R43).
@@ -136,9 +136,9 @@ The usual case: someone who already runs OpenClaw, with a few bots, opens Clawtr
 
 1. **Connect.** Clawtrate finds the OpenClaw on this Mac, or the person picks another computer, and pairs with full control (#393, #421). The bots load.
 2. **How bots run commands.** One question (section 2).
-3. **The Main Bot appears.** Clawtrate makes a new bot. A tile with the gold star appears at the top of the sidebar, reading "Clawtrate Main Bot", above the bots the person already has. The gateway's own bot leaves the sidebar at the same moment, because another bot now exists (#490). The person's other bots stay as they were, below the tile. No bot is renamed, moved or starred, and nothing about channels is shown or changed.
+3. **The Main Bot appears.** Clawtrate makes a new bot. A tile with the gold star appears at the top of the sidebar, reading "Clawtrate Main Bot", above the bots the person already has. The person's other bots stay as they were, below the tile; the gateway's own bot is already out of view, since other bots exist (#490). No bot is renamed, moved or starred, and nothing about channels is shown or changed.
 4. **Its chat opens.** Clawtrate's fixed first message is shown as the person's, with "Sent for you when setup finished.", and the Main Bot answers in its own words.
-5. **The person sets it up by chatting.** Under the greeting, Clawtrate's card asks for a name, a picture from Clawtrate's avatars (the name's own Claw first, "Make your own" for the studio) and how it should help. The person can answer on the card or in the composer; an answer in the composer fills the card (section 8). **Save** writes them. The tile, the header and the name follow the gateway's read-back.
+5. **The person sets it up by chatting.** Under the greeting, Clawtrate's card asks for a name, a picture from Clawtrate's avatars (the name's own Claw first, "Make your own" for the studio) and how it should help. The person can answer on the card or in the composer; an answer in the composer fills the card (below). **Save** writes them. The tile, the header and the name follow the gateway's read-back.
 6. **Starting from what it knows.** When the gateway has a bot with memory, a profile of the person or skills, one card offers "Start Maple from what Juniper knows", and the rest is #487's design. Nothing is copied unless the person chooses it, and conversations and channel links are never copied.
 7. **The first real request.** The Main Bot replies under its new name and the composer is the person's.
 
@@ -146,7 +146,7 @@ On a gateway whose only bot is its own one, step 3 is the moment the sidebar cha
 
 On a second device, or for a second person on the same gateway, the Main Bot is already there: its tile and its chat open, and nothing is made or sent.
 
-### Three things, kept apart
+### Four things, kept apart
 
 - **Setup is ready** when the gateway is paired, the bots are listed and the autonomy choice is written (or pending). That is effortless setup's composer point.
 - **The Main Bot is made** when `agents.create` answered with its id and the bot list shows it (section 4).
@@ -219,7 +219,7 @@ The composer opens as usual and the greeting comes. The guided card's Save is th
 
 ## 4. The Main Bot
 
-The Main Bot is the bot a person meets first and comes back to. It is always a bot Clawtrate made, in the first run, never one the gateway already had.
+The Main Bot is the bot a person meets first and comes back to. It starts as a bot Clawtrate made in the first run, never one the gateway already had; later the person can make another of their bots the Main Bot.
 
 ### What a person sees
 
