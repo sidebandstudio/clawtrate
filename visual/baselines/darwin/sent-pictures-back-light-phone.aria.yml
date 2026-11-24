@@ -1,0 +1,35 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:20 PM
+    - paragraph: the calendar from this morning
+    - figure:
+      - 'button "Your picture: calendar.png"':
+        - 'img "Your picture: calendar.png"'
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: the flyer from last month
+    - paragraph: flyer.png 1 KB The gateway no longer keeps this picture.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: my boarding pass
+    - paragraph:
+      - text: pass.png 1 KB The picture didn't load.
+      - button "Try again"
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: and the map
+    - figure: "Loading Your picture: map.png"
+    - toolbar "Message actions":
+      - button "More"
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status
