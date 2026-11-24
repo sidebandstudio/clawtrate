@@ -347,15 +347,17 @@ export class BotNames {
       return open?.name === name && open.status !== "renaming" && sameStamp(open.stamp, stamp);
     };
     if (!answers()) return false;
-    const gateway = this.ctx.gateway();
-    if (!gateway) {
-      this.drop(botId);
-      return true;
-    }
+    // Kept for the gateway that drew the card, as Rename is bound to it: its stamp names one, or
+    // it wouldn't answer. A connection that now answers as another gateway doesn't take it over.
+    const gateway = stamp.gatewayId!;
     // The card stays up while what is kept is read; then the Not now is in memory before the
-    // card goes, so a run that ends meanwhile doesn't bring the card back.
-    await this.loadDeclines();
-    if (!answers()) return false;
+    // card goes, so a run that ends meanwhile doesn't bring the card back. Awaited only when not
+    // read yet: a card is drawn only once they are, and a wait here would let a Rename sent just
+    // after this Not now take the card first (#512). After a wait, the card is looked at again.
+    if (this.declines === null) {
+      await this.loadDeclines();
+      if (!answers()) return false;
+    }
     // Changed as they are now, after the read, so two at once both keep their names.
     const declines = { ...this.declines };
     const key = declineKey(gateway, botId);
