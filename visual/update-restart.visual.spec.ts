@@ -45,12 +45,9 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone)) {
           "light",
         );
         await showList(page);
-        if (after) {
-          await page.keyboard.press("ControlOrMeta+,");
-          await page.getByRole("button", { name: "Updates", exact: true }).click();
-        } else {
-          await page.getByRole("button", { name: "Open Updates" }).click();
-        }
+        // Ready restarts from the title bar and Restarting can't be pressed, so Settings opens Updates.
+        await page.keyboard.press("ControlOrMeta+,");
+        await page.getByRole("button", { name: "Updates", exact: true }).click();
         if (state === "confirmation")
           await page.getByRole("button", { name: "Restart to Update", exact: true }).click();
         const panel = page.getByRole(state === "confirmation" ? "alertdialog" : "dialog");
@@ -113,8 +110,8 @@ for (const [scene, warning] of [
 ] as const) {
   test(`F-231: confirmation describes the outbox in ${scene}`, async ({ page }) => {
     await openFixture(page, `scene=${scene}&${OTTO_DISK}&updates=ready`, "light");
-    await page.getByRole("button", { name: "Open Updates" }).click();
-    await page.getByRole("button", { name: "Restart to Update" }).click();
+    // The title bar's Restart to Update asks with the same confirmation.
+    await page.getByRole("button", { name: /^Restart to Update/ }).click();
     await expect(page.getByRole("alertdialog")).toContainText(warning);
   });
 }
@@ -123,7 +120,7 @@ test("F-231: downloading an offered update enables restart for that version", as
   await openFixture(page, "scene=main&updates=offered", "light");
   await page.getByRole("button", { name: "Open Updates" }).click();
   await page.getByRole("button", { name: "Download", exact: true }).click();
-  const restart = page.getByRole("button", { name: "Restart to Update" });
+  const restart = page.getByRole("button", { name: "Restart to Update", exact: true });
   await expect(restart).toBeVisible();
   await restart.click();
   const confirmation = page.getByRole("alertdialog");
@@ -136,8 +133,9 @@ test("F-231: downloading an offered update enables restart for that version", as
 
 test("F-231: a retired offer closes its confirmation without restarting", async ({ page }) => {
   await openFixture(page, "scene=main&updates=ready", "light");
-  await page.getByRole("button", { name: "Open Updates" }).click();
-  await page.getByRole("button", { name: "Restart to Update" }).click();
+  await page.keyboard.press("ControlOrMeta+,");
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  await page.getByRole("button", { name: "Restart to Update", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.evaluate(() => {
     const host = window as unknown as {
@@ -146,7 +144,7 @@ test("F-231: a retired offer closes its confirmation without restarting", async 
     return host.clawtrateFixture.desktopUpdates.chooseTrack("nightly");
   });
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Restart to Update/ })).toHaveCount(0);
   const result = page.getByRole("group", { name: "Update status" });
   await expect(result).toContainText("Not checked yet.");
   await expect(result).toBeFocused();
@@ -196,8 +194,7 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
           },
           { tasks: MAX_TRACKED_TASKS, messages: MAX_OUTBOX_PER_TASK },
         );
-        await page.getByRole("button", { name: "Open Updates" }).click();
-        await page.getByRole("button", { name: "Restart to Update" }).click();
+        await page.getByRole("button", { name: /^Restart to Update/ }).click();
         const dialog = page.getByRole("alertdialog");
         const count = (MAX_TRACKED_TASKS * MAX_OUTBOX_PER_TASK) / 2;
         const description = dialog.locator("#b-confirm-details");

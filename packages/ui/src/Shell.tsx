@@ -10,7 +10,7 @@ import {
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
@@ -76,7 +76,7 @@ export function Shell({
   bubbles,
   onBubbles,
   onUnreadCount,
-  updateEntry,
+  railTop,
   onOpenSettings,
   inert = false,
   onCaughtUp,
@@ -88,7 +88,8 @@ export function Shell({
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
-  updateEntry: boolean;
+  /** The brand and the update button the one-pane layout shows at the top of the rail. */
+  railTop?: ReactNode;
   onOpenSettings: (section?: SettingsSection) => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
@@ -840,8 +841,9 @@ export function Shell({
           onTheme={onTheme}
           bubbles={bubbles}
           onBubbles={onBubbles}
-          updateEntry={updateEntry}
+          top={railTop}
           onOpenSettings={onOpenSettings}
+          settingsKeys={mac ? "⌘," : "Ctrl+,"}
           onNewBot={interactive ? openNewBot : null}
           routines={state.routines.routines}
           routinesOpen={routinesOpen}

@@ -26,6 +26,11 @@ import {
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_PENDING_ATTACHMENTS } from "./attachments.ts";
 import { jsonLength, worstCase } from "./bounds.ts";
 import {
+  MAX_GATEWAY_NAME_CHARS,
+  MAX_GATEWAY_NAMES,
+  MAX_NAMED_ADDRESS_CHARS,
+} from "./gateway-names.ts";
+import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
@@ -250,6 +255,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   accessWaiters: { max: MAX_ACCESS_WAITERS, each: SHORT, row: "bookkeeping" },
   // The scopes a device-access request keeps: those of the admin tier the connection held.
   heldBase: { max: ADMIN_SCOPES.length, each: SHORT, row: "bookkeeping" },
+  // The names given to gateways on this device (`gateway-names.ts`): an address and a name each.
+  gatewayNames: {
+    max: MAX_GATEWAY_NAMES,
+    each: MAX_NAMED_ADDRESS_CHARS + 2 * MAX_GATEWAY_NAME_CHARS + N,
+    row: "bookkeeping",
+  },
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
