@@ -1410,6 +1410,12 @@ export function ShelfRow({
           <b>Couldn't start</b> {message.error && <span>{message.error}</span>}{" "}
           {elsewhere && startNew.note && <span>{startNew.note} </span>}
           <span>{message.text}</span>
+          {message.attachments.length > 0 && (
+            <span className="shelf-filenames">
+              {" "}
+              {message.attachments.map((file) => file.fileName).join(", ")}
+            </span>
+          )}
           {startNew.error && <span role="alert"> Couldn't start a new task: {startNew.error}</span>}
         </span>
         {!elsewhere ? (

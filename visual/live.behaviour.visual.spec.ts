@@ -1628,6 +1628,27 @@ test.describe("steering, queueing and holding", () => {
     await expect(page.getByTestId("shelf-row")).toHaveCount(0);
   });
 
+  test("F-278: a refused file-only message names each file on the shelf without offering an empty task", async ({
+    page,
+  }) => {
+    await open(page, "queued-refused-deleted");
+    await setOutbox(page, (message) => ({
+      ...message,
+      text: "",
+      attachments: [
+        { fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 4 },
+        { fileName: "diagram.png", mimeType: "image/png", sizeBytes: 80 },
+      ],
+    }));
+    const row = page.getByTestId("shelf-row");
+    await expect(row).toContainText("notes.txt");
+    await expect(row).toContainText("diagram.png");
+    await expect(
+      row.getByRole("button", { name: "Start a new task with this message" }),
+    ).toHaveCount(0);
+    await expect(row.getByRole("button", { name: "Delete" })).toBeVisible();
+  });
+
   test("F-278: a queued message refused because its task was deleted elsewhere offers a new task with it and Delete, not Try again", async ({
     page,
   }) => {

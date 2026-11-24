@@ -624,6 +624,10 @@ div.status-line:hover {
   font-weight: var(--weight-medium);
 }
 
+.shelf-filenames {
+  overflow-wrap: anywhere;
+}
+
 .shelf-text span {
   color: var(--text-muted);
 }
