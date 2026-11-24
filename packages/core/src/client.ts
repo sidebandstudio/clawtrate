@@ -22,7 +22,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
-import { fromBase64 } from "./bytes.ts";
+import { fromBase64, toBase64 } from "./bytes.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -141,10 +141,12 @@ import {
   type CheckoutDiff,
   type FileRead,
   type FileReaderContext,
+  type FileTransferStart,
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
 import {
+  fetchInboundPicture,
   isDrawnPicture,
   isShownPictureType,
   MAX_PICTURE_BYTES,
@@ -170,6 +172,7 @@ import {
   isTaskSession,
   mapAgents,
   mapHistory,
+  sentSources,
   mergeSessionRow,
   sessionChangeRow,
   sessionRowKey,
@@ -479,12 +482,17 @@ export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
  * Messages history confirmed whose pictures this client keeps to show, from
  * the copy it sent, whenever their task is open on this device, until this
  * client disconnects from the gateway or the task or its bot is deleted (archiving keeps
- * them). Clawtrate doesn't load a person's picture from the gateway (#469).
- * Their bytes share
+ * them). Their bytes share
  * `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes' files and give way,
  * oldest first, to a new message's.
  */
 export const MAX_SENT_PICTURE_MESSAGES = 32;
+/**
+ * Pictures a person sent that this client read back from the gateway (#469), kept so a
+ * message scrolled to again isn't read again, until the same events as the copies above
+ * let them go. Their bytes share the same budget and give way first, oldest first.
+ */
+export const MAX_READ_BACK_PICTURES = 16;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
 
@@ -1542,6 +1550,17 @@ export class ClawtrateClient {
     }
   >();
   private sentPictureBytes = 0;
+  /**
+   * Each followed task's references to the files its person's rows carried (`sentSources`),
+   * from its last history read: what a picture with no copy here is read back by.
+   */
+  private readonly sentSources = new Map<string, Map<string, string>>();
+  /** Pictures read back from the gateway, by `task\0messageKey\0index`, oldest first (`MAX_READ_BACK_PICTURES`). */
+  private readonly readBackPictures = new Map<
+    string,
+    { task: string; mimeType: string; content: string; bytes: number }
+  >();
+  private readBackBytes = 0;
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /**
@@ -2603,8 +2622,10 @@ export class ClawtrateClient {
     for (const message of this.state.transcripts[key]?.outbox ?? []) {
       this.dropAttachments(message.id);
     }
-    // Pictures you sent stay (`sentPictures`): the task can be opened again on this device, and
-    // they show there once more. Their own bound lets them go.
+    // Pictures you sent stay (`sentPictures`, `readBackPictures`): the task can be opened again on
+    // this device, and they show there once more. Their own bound lets them go. Its references
+    // come back with its next history read.
+    this.sentSources.delete(key);
     this.recipients.delete(key);
     for (const readKey of [...this.approvalReads.keys()])
       if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
@@ -3266,7 +3287,8 @@ export class ClawtrateClient {
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
       this.attachmentBytes += bytes;
-      // Pictures kept only to be shown give way to files still to go out.
+      // Pictures kept only to be shown give way to files still to go out, read-back ones first.
+      this.makeRoomForPictures(0);
       for (const id of this.sentPictures.keys()) {
         if (this.attachmentBytes + this.sentPictureBytes <= MAX_RETAINED_ATTACHMENT_BYTES) break;
         this.dropSentPictures(id);
@@ -3325,6 +3347,7 @@ export class ClawtrateClient {
     const notPictures = named.filter((file) => !files.includes(file)).map((file) => file.index);
     const bytes = files.reduce((sum, file) => sum + decodedBytes(file.content), 0);
     if (named.length === 0 || this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) return;
+    this.makeRoomForPictures(bytes);
     for (const id of this.sentPictures.keys()) {
       if (
         this.sentPictures.size < MAX_SENT_PICTURE_MESSAGES &&
@@ -3347,6 +3370,47 @@ export class ClawtrateClient {
   /** Let go of every picture kept for one task, when the task itself is gone. */
   private dropTaskPictures(key: string): void {
     for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
+    for (const [id, kept] of this.readBackPictures)
+      if (kept.task === key) this.dropReadBackPicture(id);
+  }
+
+  /** Read-back pictures give way, oldest first, until `bytes` more fit in the shared budget. */
+  private makeRoomForPictures(bytes: number): void {
+    for (const id of this.readBackPictures.keys()) {
+      if (
+        this.attachmentBytes + this.sentPictureBytes + this.readBackBytes + bytes <=
+        MAX_RETAINED_ATTACHMENT_BYTES
+      )
+        break;
+      this.dropReadBackPicture(id);
+    }
+  }
+
+  private dropReadBackPicture(id: string): void {
+    const kept = this.readBackPictures.get(id);
+    if (!kept) return;
+    this.readBackPictures.delete(id);
+    this.readBackBytes -= kept.bytes;
+  }
+
+  /** Keep a picture read back, as the newest, when it fits beside everything else kept. */
+  private keepReadBack(id: string, task: string, mimeType: string, bytes: Uint8Array): void {
+    this.dropReadBackPicture(id);
+    if (this.readBackPictures.size >= MAX_READ_BACK_PICTURES)
+      this.dropReadBackPicture(this.readBackPictures.keys().next().value!);
+    this.makeRoomForPictures(bytes.length);
+    if (
+      this.attachmentBytes + this.sentPictureBytes + this.readBackBytes + bytes.length >
+      MAX_RETAINED_ATTACHMENT_BYTES
+    )
+      return;
+    this.readBackPictures.set(id, {
+      task,
+      mimeType,
+      content: toBase64(bytes),
+      bytes: bytes.length,
+    });
+    this.readBackBytes += bytes.length;
   }
 
   private dropSentPictures(messageId: string): void {
@@ -3359,6 +3423,11 @@ export class ClawtrateClient {
   /** Decoded bytes of pictures kept to show for messages history holds, for tests and diagnostics. */
   get keptPictureBytes(): number {
     return this.sentPictureBytes;
+  }
+
+  /** Decoded bytes of pictures read back from the gateway and kept, for tests and diagnostics. */
+  get readBackPictureBytes(): number {
+    return this.readBackBytes;
   }
 
   /** Decoded bytes of files held for outgoing messages, for tests and diagnostics. */
@@ -6493,6 +6562,9 @@ export class ClawtrateClient {
       if (outcome.kind === "answered")
         for (const [id, kept] of this.sentPictures)
           if (botIdFromSessionKey(kept.task) === request.botId) this.dropSentPictures(id);
+      if (outcome.kind === "answered")
+        for (const [id, kept] of this.readBackPictures)
+          if (botIdFromSessionKey(kept.task) === request.botId) this.dropReadBackPicture(id);
       return outcome;
     } finally {
       this.botDeletes.delete(key);
@@ -6901,23 +6973,28 @@ export class ClawtrateClient {
   }
 
   /**
-   * A picture a person sent with a message in this task, from this client's
-   * own copy: by the outgoing message's id while the outbox holds it, or by
-   * the key history stored its row under (`namesOutgoing`) once it is there.
-   * `index` is the file's place among the message's attachments. Nothing is
-   * asked of the gateway: without a copy here the answer is `not-kept`, and
-   * for a file whose bytes aren't the picture it is named as, `not-a-picture`.
+   * A picture a person sent with a message in this task. First from this client's own copy: by
+   * the outgoing message's id while the outbox holds it, or by the key history stored its row
+   * under (`namesOutgoing`) once it is there. Then from a picture this client read back before
+   * (`readBackPictures`). Then, only at a protected address, read back from the gateway by the
+   * reference the task's own row gave (`sentSources`, `fetchInboundPicture`), bound to the
+   * connection it was asked on and, with `stamp`, to that screen's gateway. `index` is the
+   * file's place among the message's attachments. A file whose bytes aren't the picture it is
+   * named as is `not-a-picture`; with no copy and no read back, `cannot-load`.
    */
   async readSentPicture(
     key: string,
     messageKey: string,
     index: number,
     options: FileReadOptions = {},
+    stamp?: GatewayStamp,
   ): Promise<SentPictureRead> {
     for (let waited = 0; this.fileTransfers.full() && waited < 300; waited += 1)
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
     // A viewer that left while the picture waited is given nothing.
     this.checkNotWithdrawn(options.owner);
+    const start = (bytes: Uint8Array) =>
+      this.fileTransfers.start(options.owner ?? DIRECT_CALLER, bytes, options.maxChars);
     const outgoing = this.state.transcripts[key]?.outbox.find((each) => each.id === messageKey);
     const sending = outgoing ? this.attachmentContent.get(outgoing.id) : undefined;
     const kept = sending
@@ -6929,10 +7006,80 @@ export class ClawtrateClient {
         )?.[1];
     if (kept?.notPictures.includes(index)) return { status: "not-a-picture" };
     const file = sending ? sending.files[index] : kept?.files.find((each) => each.index === index);
-    if (!file) return { status: "not-kept" };
-    return ownPictureRead(file, (bytes) =>
-      this.fileTransfers.start(options.owner ?? DIRECT_CALLER, bytes, options.maxChars),
+    if (file) return ownPictureRead(file, start);
+    const id = `${key}\u0000${messageKey}\u0000${index}`;
+    const readBack = this.readBackPictures.get(id);
+    if (readBack) {
+      // The newest again: the picture last shown gives way last.
+      this.readBackPictures.delete(id);
+      this.readBackPictures.set(id, readBack);
+      return ownPictureRead(readBack, start);
+    }
+    const ref = this.sentSources.get(key)?.get(`${messageKey}\u0000${index}`);
+    // Nothing is asked for at a loopback or `ws://` address, or without the row's own reference.
+    if (!ref || !this.host.fetch || !protectedGatewayUrl(this.state.connection.gatewayUrl ?? ""))
+      return { status: "cannot-load" };
+    return this.readBackPicture(key, id, ref, options, start, stamp);
+  }
+
+  /** `readSentPicture`'s read from the gateway, sharing the file reads' limit. */
+  private async readBackPicture(
+    key: string,
+    id: string,
+    ref: string,
+    options: FileReadOptions,
+    start: (bytes: Uint8Array) => FileTransferStart,
+    stamp: GatewayStamp | undefined,
+  ): Promise<SentPictureRead> {
+    const generation = this.generation;
+    // The connection it was asked on, and the gateway the screen was drawn for: never another.
+    const elsewhere = () =>
+      generation !== this.generation ||
+      (stamp !== undefined &&
+        (stamp.gatewayId === null ||
+          stamp.target !== this.target ||
+          this.state.connection.gatewayId !== stamp.gatewayId));
+    const changed = {
+      status: "failed",
+      message: "The connection changed while this picture was read.",
+    } as const;
+    if (elsewhere()) return changed;
+    for (let waited = 0; this.fileReads >= MAX_FILE_READS && waited < 300; waited += 1)
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+    if (elsewhere()) return changed;
+    this.checkNotWithdrawn(options.owner);
+    const gatewayUrl = this.state.connection.gatewayUrl ?? "";
+    const deviceId = this.state.connection.deviceId;
+    // This device's token for the gateway connected now, and no other gateway's.
+    const token =
+      deviceId && this.settings?.url === gatewayUrl
+        ? ((await this.loadToken(gatewayUrl, deviceId, "operator"))?.token ?? null)
+        : null;
+    if (elsewhere()) return changed;
+    const read = await this.fileRead(
+      (ctx) =>
+        fetchInboundPicture(
+          { fetch: this.host.fetch ?? null, gatewayUrl, token, now: ctx.now },
+          key,
+          ref,
+        ),
+      options,
     );
+    // Bytes that arrive after a switch are the old gateway's: none are kept or shown.
+    if (elsewhere()) return changed;
+    if (read.status !== "bytes") return read;
+    this.keepReadBack(id, key, read.mimeType, read.bytes);
+    try {
+      return {
+        status: "content",
+        kind: "image",
+        mimeType: read.mimeType,
+        bytes: read.bytes.length,
+        transfer: start(read.bytes),
+      };
+    } catch (error) {
+      return { status: "failed", message: errorMessage(error) };
+    }
   }
 
   /** The next part of a file on its way to this viewer. */
@@ -8332,6 +8479,9 @@ export class ClawtrateClient {
     this.attachmentContent.clear();
     this.sentPictures.clear();
     this.sentPictureBytes = 0;
+    this.readBackPictures.clear();
+    this.readBackBytes = 0;
+    this.sentSources.clear();
   }
 
   private invalidateCheckIns(): void {
@@ -9246,6 +9396,7 @@ export class ClawtrateClient {
       }
       const activity = markUnconfirmed(reconciled);
       const items = mapHistory(messages);
+      this.sentSources.set(key, sentSources(messages));
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(

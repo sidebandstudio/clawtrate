@@ -238,10 +238,18 @@ export type BridgeCommand =
   /** A picture the bot handed over in the task, by the id its message gave (`ChatPictureRead`). */
   | { type: "readChatPicture"; key: string; artifactId: string }
   /**
-   * A picture you sent, from this app's own copy (`SentPictureRead`): by the outgoing message's
-   * id, or the key history stored its row under, and its place among the message's files.
+   * A picture you sent (`SentPictureRead`): by the outgoing message's id, or the key history
+   * stored its row under, and its place among the message's files. From this app's own copy,
+   * or read back from the gateway; `stamp` is where the conversation was drawn, and a read
+   * back goes only to that gateway.
    */
-  | { type: "readSentPicture"; key: string; messageKey: string; index: number }
+  | {
+      type: "readSentPicture";
+      key: string;
+      messageKey: string;
+      index: number;
+      stamp?: GatewayStamp;
+    }
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
@@ -1590,6 +1598,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         messageKey: id(command.messageKey, "message key"),
         index: count(command.index, MAX_ATTACHMENTS_PER_MESSAGE - 1, "file index"),
+        ...(command.stamp === undefined ? {} : { stamp: gatewayStampOf(command.stamp) }),
       };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
@@ -2303,6 +2312,7 @@ class ViewerSession implements BridgeSession {
           command.messageKey,
           command.index,
           this.fileOptions(),
+          command.stamp,
         );
       case "listMemory":
         return client.listMemory(command.botId);
