@@ -171,6 +171,12 @@ export interface DesktopUpdateSnapshot {
   install: UpdateInstallCapability;
   lastAttempt: UpdateAttemptOutcome | null;
   /**
+   * The running build's own facts, for support: its UTC release date and the
+   * commit it was built from, each null when the build doesn't carry it. Absent
+   * when it carries neither.
+   */
+  build?: { readonly releaseDate: string | null; readonly commit: string | null };
+  /**
    * What the builds add (F-554), from the lists the site serves beside the feed,
    * read only inside a check the person started. Absent before a check, when the
    * check read no lists, and when they name nothing to show.
