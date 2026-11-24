@@ -2,7 +2,7 @@
 // Connect for a secure address, with "What this means" (docs/design/setup-effortless.md §2),
 // and a full pairing the gateway granted less says so and asks for nothing (§2, §8). In light
 // and dark, at 1440 px and the phone; reached by keyboard and named for a screen reader.
-import { test } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import { COMPUTER } from "./computer-helpers.ts";
 import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
@@ -132,6 +132,76 @@ test("F-522: when a reconnect narrows a full pairing's grant, Settings says so o
   await expect(dialog.getByTestId("b-announcer")).toHaveText(
     `Access: Less than full control. ${await note.textContent()}`,
   );
+});
+
+/** Everything the Settings announcer says from now on. */
+const heard = async (page: Page) => {
+  await page.getByTestId("b-announcer").evaluate((el) => {
+    const said: string[] = [];
+    Object.assign(window, { accessSaid: said });
+    new MutationObserver(() => {
+      if (el.textContent) said.push(el.textContent);
+    }).observe(el, { subtree: true, childList: true, characterData: true });
+  });
+  return () => page.evaluate(() => (window as unknown as { accessSaid: string[] }).accessSaid);
+};
+
+const setConnection = (page: Page, change: Record<string, unknown>) =>
+  page.evaluate((patch) => {
+    const { clawtrateFixture } = window as unknown as {
+      clawtrateFixture: { setState(f: (s: { connection: object }) => unknown): void };
+    };
+    clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...state.connection, ...patch },
+    }));
+  }, change);
+
+test("F-522: Disconnect and Reconnect with the same grant say nothing about it again", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=access-narrowed&${OTTO_DISK}&access=read`, "dark");
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const note = dialog.getByTestId("narrower-grant");
+  const before = await note.textContent();
+  const said = await heard(page);
+  await dialog.getByRole("button", { name: "Disconnect" }).click();
+  await expect(dialog.getByTestId("gateway-state")).toHaveText("Disconnected");
+  await expect(note).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Reconnect" }).click();
+  await expect(dialog.getByTestId("gateway-state")).toHaveText("Connected");
+  await expect(note).toHaveText(before!);
+  await settle(page);
+  expect(await said()).toEqual([]);
+});
+
+test("F-522: switching to another gateway clears what was said of the last one's access", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=access-narrowed&${OTTO_DISK}&access=write`, "dark");
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const announcer = dialog.getByTestId("b-announcer");
+  const note = dialog.getByTestId("narrower-grant");
+  const grant = { scopes: ["operator.read"], canWrite: false, canApprove: false, canAnswer: false };
+  await setConnection(page, grant);
+  await expect(announcer).toContainText("Not granted: sending and stopping");
+  // The host moves to another gateway, one with no Access row, while Settings is open.
+  await setConnection(page, {
+    ...grant,
+    status: "connecting",
+    gatewayUrl: "wss://second-gateway.example.test",
+    target: 57,
+    gatewayId: null,
+    fullPairing: false,
+    fullOffer: null,
+  });
+  await setConnection(page, { status: "connected", gatewayId: "second-gateway" });
+  await expect(dialog.getByTestId("gateway-facts")).toContainText("second-gateway.example.test");
+  await expect(note).toHaveCount(0);
+  await settle(page);
+  await expect(announcer).toHaveText("");
 });
 
 test("F-522: a full pairing granted read, write, approvals and questions is offered admin and device access nowhere", async ({

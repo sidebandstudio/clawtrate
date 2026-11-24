@@ -139,7 +139,8 @@ export function oldestPending(
         ref: { kind: "approval", id: card.id } as CardRef,
       })),
     ...input.questions
-      .filter((card) => may.canAnswer && card.status === "pending")
+      // A form Clawtrate can't answer stays readable in the transcript, but is no place to send anyone.
+      .filter((card) => may.canAnswer && card.status === "pending" && card.ordinary)
       .map((card) => ({
         at: card.createdAt ?? 0,
         ref: { kind: "question", id: card.id } as CardRef,

@@ -726,6 +726,56 @@ test.describe("the status line", () => {
     await expect(firstOption).toBeFocused();
   });
 
+  test("F-292: a form Clawtrate can't answer gets no Needs you, on a grant that answers questions", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=question-unanswerable", "light");
+    const card = page.getByTestId("question-card");
+    await expect(card).toHaveAttribute("data-state", "unanswerable");
+    // Questions granted, nothing else; older messages above, so the reader can scroll away.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const task = Object.values(state.transcripts).find((each) => each.questions.length > 0)!;
+        const first = task.items[0]!;
+        const older = Array.from({ length: 35 }, (_, index) => ({
+          ...first,
+          id: `older-${index}`,
+          blocks: [{ kind: "text" as const, text: `Older message ${index}` }],
+          timestamp: (first.timestamp ?? Date.now()) - (35 - index) * 1000,
+        }));
+        return {
+          ...state,
+          connection: {
+            ...state.connection,
+            fullPairing: true,
+            scopes: ["operator.read", "operator.questions"],
+            canWrite: false,
+            canApprove: false,
+            canAnswer: true,
+          },
+          transcripts: {
+            ...state.transcripts,
+            [task.sessionKey]: { ...task, items: [...older, ...task.items] },
+          },
+        };
+      });
+    });
+    await settle(page);
+    await page.getByTestId("transcript").evaluate((el) => {
+      el.scrollTop = 0;
+      el.dispatchEvent(new Event("scroll"));
+    });
+    await settle(page);
+    const jump = page.getByTestId("jump-latest");
+    await expect(jump).toBeVisible();
+    await expect(jump).not.toHaveAttribute("data-state", "needs-you");
+  });
+
   test("F-292: Review and Cmd/Ctrl+J go to the oldest pending card by arrival, questions and approvals mixed", async ({
     page,
   }) => {

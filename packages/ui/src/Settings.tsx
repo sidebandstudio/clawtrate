@@ -400,13 +400,22 @@ export function Settings({
         : "Less than full control"
       : null;
   // Said once when a reconnect changes the access shown, not each render nor when Settings opens.
+  // What a connected gateway showed is kept across a disconnect, so the same grant after
+  // Reconnect says nothing; another gateway, or one that shows no access, clears what was said.
   const accessSaid = [access && `Access: ${access}.`, narrower].filter(Boolean).join(" ");
-  const accessShown = useRef(accessSaid);
+  const gateway = connection.gatewayUrl;
+  const accessShown = useRef({ gateway, said: accessSaid });
   useEffect(() => {
-    if (accessShown.current === accessSaid) return;
-    accessShown.current = accessSaid;
-    if (accessSaid) announce(accessSaid);
-  }, [accessSaid, announce]);
+    const shown = accessShown.current;
+    if (shown.gateway !== gateway) {
+      accessShown.current = { gateway, said: accessSaid };
+      announce("");
+      return;
+    }
+    if (connection.status !== "connected" || shown.said === accessSaid) return;
+    accessShown.current = { gateway, said: accessSaid };
+    announce(accessSaid);
+  }, [gateway, connection.status, accessSaid, announce]);
   const rePairProblem =
     upgrade.status === "rejected"
       ? "The gateway's owner rejected the new pairing. This device keeps its earlier access."
