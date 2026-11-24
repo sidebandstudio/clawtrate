@@ -3,12 +3,17 @@ Add-Type -TypeDefinition @"
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32.SafeHandles;
 
 public static class PackagedJob {
+    private static void Forward(TextWriter output, string line) {
+        if (line == null) return;
+        try { output.WriteLine(line); } catch (IOException) { }
+    }
     [StructLayout(LayoutKind.Sequential)]
     private struct Limits {
         public long ProcessTime, JobTime;
@@ -73,7 +78,13 @@ public static class PackagedJob {
             start.UseShellExecute = false;
             start.CreateNoWindow = true;
             start.RedirectStandardInput = true;
+            start.RedirectStandardOutput = true;
+            start.RedirectStandardError = true;
             using (var child = Process.Start(start)) {
+                child.OutputDataReceived += (sender, data) => Forward(Console.Out, data.Data);
+                child.ErrorDataReceived += (sender, data) => Forward(Console.Error, data.Data);
+                child.BeginOutputReadLine();
+                child.BeginErrorReadLine();
                 if (!AssignProcessToJobObject(job, child.Handle)) {
                     var error = new Win32Exception();
                     child.StandardInput.Close();
@@ -81,6 +92,7 @@ public static class PackagedJob {
                     throw error;
                 }
                 child.StandardInput.BaseStream.WriteByte(1);
+                child.StandardInput.BaseStream.Flush();
                 child.StandardInput.Close();
                 while (!child.WaitForExit(50) && !cancelled.IsCompleted) { }
                 int status = cancelled.IsCompleted ? 130 : child.ExitCode;
@@ -90,8 +102,9 @@ public static class PackagedJob {
                     var survivors = WaitEmpty(job, 5000);
                     if (survivors.Length != 0) throw new Exception("Windows job still contains PIDs: " + string.Join(", ", survivors));
                     if (status == 0) status = 1;
-                    Console.Error.WriteLine("Drained Windows job PIDs: " + string.Join(", ", left));
+                    Forward(Console.Error, "Drained Windows job PIDs: " + string.Join(", ", left));
                 }
+                child.WaitForExit();
                 return status;
             }
         }
@@ -100,9 +113,9 @@ public static class PackagedJob {
 "@
 try {
     $status = [PackagedJob]::Run($env:CLAWTRATE_PACKAGED_NODE, (Join-Path $PSScriptRoot 'windows-worker.ts'))
-    Write-Output 'Verified the Windows packaged job has no remaining children'
     & $env:CLAWTRATE_PACKAGED_NODE (Join-Path $PSScriptRoot 'windows-gateway.ts')
     if ($LASTEXITCODE -ne 0) { throw 'Windows pairing cleanup did not finish' }
+    Write-Output "Verified the Windows packaged job has no remaining children; worker status $status"
     exit $status
 } catch {
     [Console]::Error.WriteLine("Keeping Windows pairing root: $(Split-Path -Parent $env:CLAWTRATE_PACKAGED_HOME). $_")

@@ -20,11 +20,15 @@ if (
 ) {
   await runCli(args);
 } else {
+  const powershell = join(
+    process.env.SystemRoot!,
+    "System32/WindowsPowerShell/v1.0/powershell.exe",
+  );
   const root = mkdtempSync(join(tmpdir(), "clawtrate-pairing-"));
   const home = join(root, "home");
   console.log(`Windows pairing root: ${root}`);
   const run = spawn(
-    "powershell.exe",
+    powershell,
     ["-NoProfile", "-NonInteractive", "-File", join(import.meta.dirname, "windows-job.ps1")],
     {
       env: {

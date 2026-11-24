@@ -38,6 +38,7 @@ if (process.platform === "win32") {
       const permit = Buffer.alloc(1);
       if (readSync(0, permit) !== 1 || permit[0] !== 1) process.exit(2);
       writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      console.log('worker stdout'); console.error('worker stderr');
       ${mode === "worker failure" ? "process.exit(23);" : "setTimeout(() => {}, 15000);"}
     `,
       );
@@ -60,6 +61,8 @@ if (process.platform === "win32") {
         if (mode === "worker failure") {
           expect((await exit)[0], output).toBe(23);
           expect(existsSync(root)).toBe(false);
+          expect(output).toContain("worker stdout");
+          expect(output).toContain("worker stderr");
         } else {
           const deadline = Date.now() + 10000;
           while (!existsSync(pidFile) && run.exitCode === null && Date.now() < deadline)

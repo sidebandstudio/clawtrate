@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { runCli } from "./run-cli.ts";
 
 const permit = Buffer.alloc(1);
-if (readSync(0, permit) !== 1 || permit[0] !== 1) process.exit(1);
+if (readSync(0, permit) !== 1 || permit[0] !== 1) throw new Error("No Windows job launch permit");
 const home = process.env.CLAWTRATE_PACKAGED_HOME!;
 const runtime = join(dirname(home), "runtime");
 for (const dir of [
