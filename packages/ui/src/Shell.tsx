@@ -2,14 +2,16 @@ import {
   isActive,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
+  type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
+  type Transcript,
 } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useCommand } from "./bridge.tsx";
+import { useBridge, useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import {
@@ -19,7 +21,7 @@ import {
   type ThemeChoice,
 } from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
-import { useSelection } from "./selection.ts";
+import { summarize, useSelection } from "./selection.ts";
 import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
@@ -27,12 +29,26 @@ import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
 import { SearchPalette, type SearchTarget } from "./search/SearchPalette.tsx";
 import { PlacementSavesProvider } from "./machines/RunsOn.tsx";
 import type { SettingsSection } from "./Settings.tsx";
+
+/**
+ * Command for Try again on an open task: carries the failure text this view is retrying so the
+ * host ignores a stale click once the history has recovered or moved to another failure.
+ */
+export function reloadCommand(
+  key: string,
+  transcript: Transcript | undefined,
+): Extract<BridgeCommand, { type: "reloadSession" }> {
+  return transcript?.status === "error" && transcript.error !== null
+    ? { type: "reloadSession", key, failed: transcript.error }
+    : { type: "reloadSession", key };
+}
 
 /** True on a Mac, where ⌘ is the command key; elsewhere Ctrl stands for it. */
 const isMac = () => /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? "");
@@ -191,6 +207,11 @@ export function Shell({
   );
   // New bot, from the "+" menu and ⌘N, where the connection may write (bots.md section 3).
   const [newBot, setNewBot] = useState(false);
+  // Delete bot…: the bot as it was when chosen, so the result stays after it leaves the rail.
+  const [deleting, setDeleting] = useState<{ id: string; name: string; isDefault: boolean } | null>(
+    null,
+  );
+  const deletingOpen = deleting !== null;
   const openNewBot = useCallback(() => setNewBot(true), []);
   const mac = isMac();
   useEffect(() => {
@@ -242,9 +263,10 @@ export function Shell({
         // ⌘[ in the conversation goes back to the file while "Back to <file>" is offered.
         event.preventDefault();
         backLinkRef.current();
-      } else if (event.key === "Escape" && drawerOpen) {
+      } else if (event.key === "Escape" && drawerOpen && !deletingOpen) {
         setPanel(false);
-      } else if (event.key === "Tab" && drawerOpen && panelRef.current) {
+      } else if (event.key === "Tab" && drawerOpen && !deletingOpen && panelRef.current) {
+        // (The delete dialog, opened from the drawer, keeps Tab and Escape to itself.)
         // The drawer keeps focus inside itself.
         const items = [
           ...panelRef.current.querySelectorAll<HTMLElement>("button, [tabindex]"),
@@ -266,7 +288,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel, drawerOpen, setPanel]);
+  }, [togglePanel, drawerOpen, setPanel, deletingOpen]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
   const unread = unreadCount(
@@ -286,37 +308,53 @@ export function Shell({
   const taskKey = task?.key ?? null;
   const [refusals, setRefusals] = useState<ReadonlyMap<string, string>>(() => new Map());
   const opens = useRef({ count: 0, latest: new Map<string, number>() });
+  const setRefusal = useCallback((key: string, error: string | null) => {
+    setRefusals((now) => {
+      if ((now.get(key) ?? null) === error) return now;
+      const next = new Map(now);
+      if (error === null) next.delete(key);
+      else next.set(key, error);
+      return next;
+    });
+  }, []);
   const open = useCallback(
-    (key: string) => {
+    (key: string): Promise<void> => {
       const asked = (opens.current.count += 1);
       opens.current.latest.set(key, asked);
       const settle = (error: string | null) => {
         if (opens.current.latest.get(key) !== asked) return;
-        setRefusals((now) => {
-          if ((now.get(key) ?? null) === error) return now;
-          const next = new Map(now);
-          if (error === null) next.delete(key);
-          else next.set(key, error);
-          return next;
-        });
+        // Settled: any answer still to come is to an earlier open, and is ignored without it.
+        opens.current.latest.delete(key);
+        setRefusal(key, error);
       };
-      void send({ type: "openSession", key }).then(
+      return send({ type: "openSession", key }).then(
         () => settle(null),
         (error: unknown) => settle(error instanceof Error ? error.message : String(error)),
       );
     },
-    [send],
+    [send, setRefusal],
   );
   const shown = useRef<string | null>(null);
   useEffect(() => {
     if (!taskKey) return;
     shown.current = taskKey;
-    open(taskKey);
+    void open(taskKey);
     return () => {
       shown.current = null;
       void send({ type: "closeSession", key: taskKey });
     };
   }, [taskKey, send, open]);
+  // The web bridge opens this view's tasks again after it reconnects to the host. One the host
+  // refuses then is no longer held here, and the task shown says why, as for a refused open,
+  // unless an open of it the Shell asked for since is still to answer.
+  const bridge = useBridge();
+  useEffect(
+    () =>
+      bridge.onReopenRefused?.((key, error) => {
+        if (shown.current === key && !opens.current.latest.has(key)) setRefusal(key, error);
+      }),
+    [bridge, setRefusal],
+  );
 
   // Opening a task reads it on the gateway too (F-022), and so do new replies while it
   // is open and leaving it. The engine makes that read only while the connection
@@ -702,18 +740,58 @@ export function Shell({
   // the task. A view the host doesn't count as holding it (its open was refused, or a reopen
   // after a reconnect was) is told so, and opens the task instead, unless it has left the task
   // by then: its close is sent, so an open would hold the task with nothing to let it go.
+  const transcriptRef = useRef(transcript);
+  const reloading = useRef<{
+    key: string;
+    snapshot: typeof transcript;
+    inFlight: boolean;
+  } | null>(null);
+  useEffect(() => {
+    transcriptRef.current = transcript;
+    const active = reloading.current;
+    if (!active) return;
+    if (active.key !== taskKey || (!active.inFlight && transcript !== active.snapshot))
+      reloading.current = null;
+  }, [taskKey, transcript]);
   const reload = useCallback(() => {
     if (!taskKey) return;
     const key = taskKey;
-    send({ type: "reloadSession", key }).catch((error: unknown) => {
-      // The desktop's IPC puts its own words before the host's.
-      if (
-        shown.current === key &&
-        error instanceof Error &&
-        error.message.endsWith(NOT_OPEN_IN_VIEW)
+    const snapshot = transcriptRef.current;
+    // A second Try again while one is in flight, or before the host's updated snapshot arrives,
+    // is ignored: a second reloadSession for a held task can queue a second read.
+    if (
+      reloading.current?.key === key &&
+      (reloading.current.inFlight || reloading.current.snapshot === snapshot)
+    )
+      return;
+    const attempt = { key, snapshot, inFlight: true };
+    reloading.current = attempt;
+    let keepUntilSnapshot = false;
+    send(reloadCommand(key, snapshot))
+      .then(
+        () => {
+          if (snapshot !== undefined && transcriptRef.current === snapshot)
+            keepUntilSnapshot = true;
+        },
+        (error: unknown) => {
+          // The desktop's IPC puts its own words before the host's.
+          if (
+            shown.current === key &&
+            error instanceof Error &&
+            error.message.endsWith(NOT_OPEN_IN_VIEW)
+          )
+            // The guard stays set until this open has answered, as Try again stays shown till then.
+            return open(key);
+        },
       )
-        open(key);
-    });
+      .finally(() => {
+        attempt.inFlight = false;
+        if (
+          reloading.current === attempt &&
+          (!keepUntilSnapshot || transcriptRef.current !== snapshot)
+        )
+          reloading.current = null;
+      });
   }, [taskKey, open, send]);
 
   return (
@@ -839,6 +917,9 @@ export function Shell({
                   : () => void send({ type: "requestAccess" }).catch(() => {})
               }
               onOpenMachines={() => onOpenSettings("machines")}
+              onDeleteBot={(each) =>
+                setDeleting({ id: each.id, name: each.name, isDefault: each.isDefault })
+              }
               drawer={drawerOpen}
               onClose={() => setPanel(false)}
               closeRef={closeRef}
@@ -874,6 +955,33 @@ export function Shell({
               requestAnimationFrame(() =>
                 document.querySelector<HTMLElement>(".composer-input")?.focus(),
               );
+            }}
+          />
+        )}
+        {deleting && (
+          <DeleteBot
+            bot={deleting}
+            connection={state.connection}
+            info={info}
+            onClose={(deleted) => {
+              setDeleting(null);
+              // The rail already follows the gateway's list; the app lands on the Main Bot's latest
+              // task, or the Main Bot alone when it has none.
+              const main = state.bots.find((each) => each.isDefault) ?? state.bots[0];
+              if (deleted && main) {
+                // The Work drawer closes first, so the conversation behind it can take focus.
+                if (drawerOpen) setPanel(false);
+                const latest = summarize(state.tasksByBot[main.id] ?? [], {}, null).latest;
+                if (latest) selection.selectTask(main.id, latest.key);
+                else selection.selectBot(main.id);
+                // The composer, or, for a Main Bot with no task to write in, the page's heading.
+                requestAnimationFrame(() =>
+                  (
+                    document.querySelector<HTMLElement>(".composer-input") ??
+                    document.querySelector<HTMLElement>(".conversation h1")
+                  )?.focus(),
+                );
+              }
             }}
           />
         )}
