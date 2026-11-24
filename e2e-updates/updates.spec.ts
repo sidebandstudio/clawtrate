@@ -196,7 +196,7 @@ const test = base.extend<{
         });
         return page;
       }
-      const page = await launch("0.1.0");
+      let page = await launch("0.1.0");
       const captureHostState = hostStateAtFailure(
         testInfo,
         profile,
@@ -209,7 +209,7 @@ const test = base.extend<{
       );
       await use({
         page,
-        relaunch: launch,
+        relaunch: async (version) => (page = await launch(version)),
         server,
         filePath,
         body,
@@ -758,6 +758,10 @@ for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
       ).toEqual([id]);
       expect(feedRequests(server)).toEqual(["/stable", filePath]);
       expect(rendererRequests).toEqual([]);
+      if (mode === "mac")
+        expect((await desktopApp.captureHostState()).reading).toMatchObject({
+          runningVersion: "1.2.0",
+        });
     });
   });
 }
