@@ -447,7 +447,7 @@ test("F-473: changing a locked bot's account: the note before saving, then the l
   await expect(page.getByRole("heading", { name: "Account", level: 3 })).toBeFocused();
 });
 
-test("F-478: changing to a provider that lacks the bot's model asks for a model before saving, and the effort follows it", async ({
+test("F-478: changing to another provider's account asks for one of its models before saving, and the effort follows it", async ({
   page,
 }) => {
   await openFixture(
@@ -458,9 +458,8 @@ test("F-478: changing to a provider that lacks the bot's model asks for a model 
   await page.getByRole("button", { name: /^Account: / }).click();
   await page.getByRole("button", { name: "Change account" }).click();
   await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
-  await expect(
-    page.getByText("xAI doesn't offer gpt-5.5. Choose one of its models."),
-  ).toBeVisible();
+  await expect(page.getByText("Choose one of xAI's models for Otto.")).toBeVisible();
+  await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: Choose");
   const save = page.getByRole("button", { name: "Save" });
   await expect(save).toBeDisabled();
   // Down opens the select's menu; Escape closes the menu alone.
@@ -732,6 +731,478 @@ test("F-472: Create and Save take only a choice the list shows now: a failed rea
     `return { ...state, accounts: { ...state.accounts, status: "error", error: "timed out" } };`,
   );
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+/** The open Model menu's rows: name, whether disabled, and the note under each. */
+const menuRows = (page: Page) =>
+  page
+    .getByRole("menu", { name: "Model" })
+    .locator(".menu-item")
+    .evaluateAll((items) =>
+      items.map((i) => [
+        i.getAttribute("aria-label") ?? i.textContent?.trim(),
+        i.getAttribute("aria-disabled") === "true",
+        i.getAttribute("aria-description") ?? "",
+      ]),
+    );
+const releaseCatalog = (page: Page) =>
+  page.evaluate(() => (window as unknown as { releaseCatalog: () => void }).releaseCatalog());
+
+/** New bot's Account step with OpenAI · Work chosen. */
+async function newBotOnWork(page: Page, query: string) {
+  await openFixture(page, query, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+}
+
+test("F-478: the Model menu is the gateway's picker, its unavailable models disabled as before, and View more reads the full list only when opened", async ({
+  page,
+}) => {
+  await newBotOnWork(page, `${ADMIN}&catalog=slow`);
+  const select = page.getByTestId("model-select");
+  await select.click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  // The picker as it was: the gateway's rows, the unavailable one disabled with its note.
+  expect(await menuRows(page)).toEqual([
+    ["gpt-5.5", false, ""],
+    ["gpt-5.5-mini", false, ""],
+    ["gpt-5.5-codex", false, "Not available"],
+    ["View more", false, ""],
+  ]);
+  await menu.getByRole("menuitemradio", { name: "gpt-5.5-codex" }).click();
+  await expect(menu).toBeVisible();
+  expect((await sent(page)).filter((each) => each.type === "loadModelCatalog")).toEqual([]);
+  // Opened: the full list is asked for, and View more says it is loading.
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  expect((await sent(page)).filter((each) => each.type === "loadModelCatalog")).toEqual([
+    { type: "loadModelCatalog", provider: "openai" },
+  ]);
+  const loading = menu.getByRole("menuitem", { name: "View more" });
+  await expect(loading).toHaveAccessibleDescription("Loading…");
+  await expect(loading).toHaveAttribute("aria-disabled", "true");
+  await releaseCatalog(page);
+  // A section of its own: one line, then the models the picker lacks, in the gateway's order,
+  // none of them disabled or marked, though the gateway marks gpt-5.5-pro unavailable.
+  await expect(
+    menu.getByText("Also listed for OpenAI. OpenAI decides which this account can use."),
+  ).toBeVisible();
+  await expect
+    .poll(() => menuRows(page))
+    .toEqual([
+      ["gpt-5.5", false, ""],
+      ["gpt-5.5-mini", false, ""],
+      ["gpt-5.5-codex", false, "Not available"],
+      ["gpt-5.4", false, ""],
+      ["gpt-5.4-mini", false, ""],
+      ["gpt-5.5-pro", false, ""],
+    ]);
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeFocused();
+  await menu.getByRole("menuitemradio", { name: "gpt-5.5-pro" }).click();
+  await expect(select).toHaveAccessibleName("Model: gpt-5.5-pro");
+  // Its own levels decide the effort.
+  await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
+  await page.getByTestId("create").click();
+  expect((await sent(page)).find((each) => each.type === "createBot")).toMatchObject({
+    account: "openai:work",
+    model: "gpt-5.5-pro",
+    effort: "medium",
+  });
+});
+
+test("F-478: no text says a model is absent or unavailable, beyond the picker's own note", async ({
+  page,
+}) => {
+  await newBotOnWork(page, ADMIN);
+  await page.getByTestId("model-select").click();
+  await page
+    .getByRole("menu", { name: "Model" })
+    .getByRole("menuitem", { name: "View more" })
+    .click();
+  await expect(page.getByRole("menuitemradio", { name: "gpt-5.5-pro" })).toBeVisible();
+  const text = await page.getByTestId("new-bot").innerText();
+  expect(text).not.toMatch(/isn't in|doesn't offer|not in the gateway|isn't available/i);
+  expect(text.match(/Not available/g) ?? []).toHaveLength(1);
+});
+
+test("F-478: View more that failed says so and tries again; a refused one isn't offered; a long list says how many it shows", async ({
+  page,
+}) => {
+  await newBotOnWork(page, `${ADMIN}&catalog=fail`);
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByText("Couldn't load more models.")).toBeVisible();
+  await menu.getByRole("menuitem", { name: "Try again" }).click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await newBotOnWork(page, `${ADMIN}&catalog=unsupported`);
+  await page.getByTestId("model-select").click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  // Refused: View more goes, and focus stays in the menu.
+  await expect(menu.getByRole("menuitem")).toHaveCount(0);
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.5", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("model-select").click();
+  await expect(menu.getByRole("menuitemradio")).toHaveCount(3);
+  await expect(menu.getByRole("menuitem")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await newBotOnWork(page, `${ADMIN}&catalog=big`);
+  await page.getByTestId("model-select").click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByRole("menuitem", { name: "1,024 of 1,500 shown" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await page.keyboard.press("Escape");
+
+  // A picker cut at its bound says the same.
+  await newBotOnWork(page, `${ADMIN}&catalog=pickercut`);
+  await page.getByTestId("model-select").click();
+  await expect(menu.getByRole("menuitem", { name: "3 of 140 shown" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});
+
+test("F-478: View more opened for one provider starts closed for the next, and reads that provider's list", async ({
+  page,
+}) => {
+  await newBotOnWork(page, ADMIN);
+  const select = page.getByTestId("model-select");
+  const menu = page.getByRole("menu", { name: "Model" });
+  await select.click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  await select.click();
+  const more = menu.getByRole("menuitem", { name: "View more" });
+  await expect(more).not.toHaveAttribute("aria-disabled", "true");
+  await more.click();
+  await expect(menu.getByText("The gateway lists no more models for xAI.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  // Back on OpenAI, whose list is still kept: View more starts closed, and opens on that list
+  // (the engine reads a list it has again only on a retry).
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await select.click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(0);
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeVisible();
+  expect(
+    (await sent(page))
+      .filter((each) => each.type === "loadModelCatalog")
+      .map((each) => each.provider),
+  ).toEqual(["openai", "xai", "openai"]);
+});
+
+test("F-478: View more's answer belongs to its dialog: closing the dialog drops it, and opening View more again reads again", async ({
+  page,
+}) => {
+  await newBotOnWork(page, ADMIN);
+  const select = page.getByTestId("model-select");
+  const menu = page.getByRole("menu", { name: "Model" });
+  await select.click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await expect(newBot(page)).toHaveCount(0);
+  // Opened again: nothing is kept from before, and View more reads the list again.
+  await page.keyboard.press("ControlOrMeta+n");
+  await select.click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(0);
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeVisible();
+  expect(
+    (await sent(page))
+      .filter((each) => each.type === "loadModelCatalog")
+      .map((each) => each.provider),
+  ).toEqual(["openai", "openai"]);
+});
+
+test("F-478: an answer still on its way when the Model page is left is never shown: coming back shows View more closed", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings&catalog=slow`, "light");
+  const select = page.getByTestId("model-select");
+  const menu = page.getByRole("menu", { name: "Model" });
+  await select.click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await releaseCatalog(page);
+  await page.getByRole("button", { name: "Back to settings" }).click();
+  await select.click();
+  const more = menu.getByRole("menuitem", { name: "View more" });
+  await expect(more).toBeVisible();
+  await expect(more).not.toHaveAttribute("aria-disabled", "true");
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(0);
+});
+
+for (const [route, away, back] of [
+  [
+    "the Computer tab",
+    (page: Page) => page.getByRole("tab", { name: "Computer" }).click(),
+    (page: Page) => page.getByRole("tab", { name: "Settings" }).click(),
+  ],
+  [
+    "Usage",
+    (page: Page) => page.getByTestId("usage-row").click(),
+    (page: Page) => page.getByRole("button", { name: "Back to settings" }).click(),
+  ],
+] as const)
+  test(`F-478: an answer that lands while ${route} hides Settings' Model pair is never shown there`, async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&panel=open&tab=settings&catalog=slow`, "light");
+    const select = page.getByTestId("model-select");
+    const menu = page.getByRole("menu", { name: "Model" });
+    await select.click();
+    await menu.getByRole("menuitem", { name: "View more" }).click();
+    await page.keyboard.press("Escape");
+    await away(page);
+    await expect(select).toBeHidden();
+    await releaseCatalog(page);
+    await back(page);
+    await select.click();
+    await expect(menu.getByRole("menuitem", { name: "View more" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(0);
+  });
+
+test("F-478: an answer asked on one connection is dropped after another, though its address and gateway are the same", async ({
+  page,
+}) => {
+  await newBotOnWork(page, `${ADMIN}&catalog=slow`);
+  const select = page.getByTestId("model-select");
+  const menu = page.getByRole("menu", { name: "Model" });
+  await select.click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await page.keyboard.press("Escape");
+  // A new connection to the same address and gateway: another target, connected again.
+  await change(
+    page,
+    `return { ...state, connection: { ...state.connection, target: state.connection.target + 1, connectedAt: (state.connection.connectedAt ?? 0) + 1 } };`,
+  );
+  await releaseCatalog(page);
+  await select.click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(0);
+  await expect(menu.getByRole("menuitem", { name: "View more" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});
+
+test("F-478: an answer that arrives after the provider or the gateway changed is dropped", async ({
+  page,
+}) => {
+  await newBotOnWork(page, `${ADMIN}&catalog=slow`);
+  const select = page.getByTestId("model-select");
+  const menu = page.getByRole("menu", { name: "Model" });
+  await select.click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await page.keyboard.press("Escape");
+  // OpenAI's list is out; another provider's account is chosen before it arrives.
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  await releaseCatalog(page);
+  await select.click();
+  await expect(menu.getByRole("menuitem", { name: "View more" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  // Back on OpenAI, a new read is out when the gateway changes: its answer is not shown.
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await select.click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await page.keyboard.press("Escape");
+  await change(
+    page,
+    `return { ...state, connection: { ...state.connection, gatewayId: "another-gateway" } };`,
+  );
+  await releaseCatalog(page);
+  await select.click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(0);
+  await expect(menu.getByRole("menuitem", { name: "View more" })).toBeVisible();
+});
+
+test("F-478: a full list the gateway hasn't finished says it may not be complete, and Check again reads it again", async ({
+  page,
+}) => {
+  await newBotOnWork(page, `${ADMIN}&catalog=partial`);
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(
+    menu.getByText(
+      "The gateway is still listing OpenAI's models, so this list may not be complete.",
+    ),
+  ).toBeVisible();
+  await expect(menu.getByText(/lists no more models/)).toHaveCount(0);
+  await menu.getByRole("menuitem", { name: "Check again" }).click();
+  await expect(menu.getByText(/^Also listed for OpenAI\./)).toBeVisible();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Check again" })).toHaveCount(0);
+});
+
+test("F-478: a full list cut short never says there are no more models: it says how many weren't shown", async ({
+  page,
+}) => {
+  await newBotOnWork(page, `${ADMIN}&catalog=trimmed`);
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(
+    menu.getByText("The gateway lists 70 more of OpenAI's models that can't be shown here."),
+  ).toBeVisible();
+  await expect(menu.getByText(/lists no more models/)).toHaveCount(0);
+  await expect(menu.getByRole("menuitem", { name: "3 of 73 shown" })).toBeVisible();
+});
+
+for (const size of [WIDE, PHONE])
+  test(`F-478: the Model menu stays inside New bot's dialog at ${size.name}, and scrolls`, async ({
+    browser,
+  }) => {
+    const context = await browser.newContext(contextFor(size, "light"));
+    const page = await context.newPage();
+    await newBotOnWork(page, ADMIN);
+    await page.getByTestId("model-select").click();
+    const menu = page.getByRole("menu", { name: "Model" });
+    await menu.getByRole("menuitem", { name: "View more" }).click();
+    await expect(menu.getByRole("menuitemradio", { name: "gpt-5.5-pro" })).toBeAttached();
+    const dialog = (await newBot(page).boundingBox())!;
+    const box = (await menu.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(dialog.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(dialog.y + dialog.height);
+    expect(box.x + box.width).toBeLessThanOrEqual(dialog.x + dialog.width);
+    // Every row is reachable by scrolling the menu.
+    await menu.getByRole("menuitemradio", { name: "gpt-5.5-pro" }).scrollIntoViewIfNeeded();
+    await expect(menu.getByRole("menuitemradio", { name: "gpt-5.5-pro" })).toBeInViewport();
+    await context.close();
+  });
+
+test("F-478: a bot's model neither list has keeps a checked row at the top, whatever arrives", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `${ADMIN}&panel=open&tab=settings&model=gpt-9-preview&catalog=fail`,
+    "light",
+  );
+  const select = page.getByTestId("model-select");
+  await expect(select).toHaveAccessibleName("Model: gpt-9-preview");
+  // No row has it, so no level is known for it.
+  await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Not offered");
+  await select.click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  const pinned = menu.getByRole("menuitemradio", { name: "gpt-9-preview" });
+  await expect(pinned).toHaveAttribute("aria-checked", "true");
+  expect((await menuRows(page))[0]![0]).toBe("gpt-9-preview");
+  // The full list fails, then arrives without it: the row stays, checked, once.
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByText("Couldn't load more models.")).toBeVisible();
+  await expect(pinned).toHaveAttribute("aria-checked", "true");
+  await menu.getByRole("menuitem", { name: "Try again" }).click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-9-preview" })).toHaveCount(1);
+  await expect(pinned).toHaveAttribute("aria-checked", "true");
+  await expect(select).toHaveAccessibleName("Model: gpt-9-preview");
+});
+
+test("F-478: a model only the full list has is checked in its section, never pinned twice, when the list arrives first", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `${ADMIN}&panel=open&tab=settings&model=gpt-5.4&catalog=latepicker`,
+    "light",
+  );
+  const select = page.getByTestId("model-select");
+  await select.click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByText(/^Also listed for OpenAI\./)).toBeVisible();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(1);
+  // Then the picker arrives: still one checked row.
+  await page.evaluate(() => (window as unknown as { releasePicker: () => void }).releasePicker());
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.5", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveCount(1);
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(select).toHaveAccessibleName("Model: gpt-5.4");
+  // Effort from the row the full list carries.
+  await expect(page.getByTestId("effort-select")).toBeEnabled();
+});
+
+test("F-478: a model chosen from View more stays when the bot moves to another account of its provider", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings`, "light");
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true }).click();
+  await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-5.4");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await expect(page.getByTestId("model-select")).toHaveCount(0);
+  await page.getByRole("button", { name: "Save" }).click();
+  expect((await sent(page)).find((each) => each.type === "changeBotAccount")).toMatchObject({
+    account: "openai:home",
+    model: "gpt-5.4",
+  });
+});
+
+test("F-478: a late list for the other provider never replaces the model the person chose there", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings&catalog=slow`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  const select = page.getByTestId("model-select");
+  await select.click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await menu.getByRole("menuitemradio", { name: "grok-4.7" }).click();
+  // xAI's full list arrives late, and it lists Otto's OpenAI model too.
+  await releaseCatalog(page);
+  await select.click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.5", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(select).toHaveAccessibleName("Model: grok-4.7");
+  await page.getByRole("button", { name: "Save" }).click();
+  expect((await sent(page)).find((each) => each.type === "changeBotAccount")).toMatchObject({
+    account: "xai:personal",
+    provider: "xai",
+    model: "grok-4.7",
+  });
+});
+
+test("F-034 F-478: an account chosen before its models arrive gets the menu's first model when they do, and Create is enabled", async ({
+  page,
+}) => {
+  await newBotOnWork(page, `${ADMIN}&catalog=latepicker`);
+  await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: Choose");
+  await expect(page.getByTestId("create")).toBeDisabled();
+  await page.evaluate(() => (window as unknown as { releasePicker: () => void }).releasePicker());
+  await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-5.5");
+  await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
+  await expect(page.getByTestId("create")).toBeEnabled();
 });
 
 /** New bot, connecting an account, on the sign-in methods. */

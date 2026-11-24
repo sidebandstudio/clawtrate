@@ -730,6 +730,12 @@ textarea {
   outline-offset: -2px;
 }
 
+/* Shown and reachable, but it can't be chosen. */
+.menu-item[aria-disabled="true"] {
+  color: var(--text-faint);
+  cursor: default;
+}
+
 .menu-item .icon {
   color: var(--text-muted);
 }

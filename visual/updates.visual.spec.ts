@@ -26,8 +26,23 @@ const states = [
   "refused",
   "other-current",
   "nightly-build",
+  // F-561: a Beta build numbered with three numbers, and the build's details for both forms:
+  // open in short-build and dated-details, closed, as they start, in short-offered.
+  "short-build",
+  "short-offered",
+  "dated-details",
 ];
-const actionable = new Set(["offered", "downloading", "verified", "failcheck", "nofile", "faildl"]);
+const actionable = new Set([
+  "offered",
+  "downloading",
+  "verified",
+  "failcheck",
+  "nofile",
+  "faildl",
+  "short-offered",
+]);
+/** The F-561 states, with one source only. */
+const shortStates = new Set(["short-build", "short-offered", "dated-details"]);
 
 for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
   for (const theme of THEMES) {
@@ -41,10 +56,11 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
             tracks === "two"
           )
             continue;
-          if (state === "nightly-build" && tracks === "two") continue;
+          if ((state === "nightly-build" || shortStates.has(state)) && tracks === "two") continue;
           if (tracks === "one" && ["refused", "other-current"].includes(state)) continue;
           if (tracks === "two" && ["dev", "no-source", "no-updater"].includes(state)) continue;
-          test(`F-231 F-030: Updates ${state} ${tracks} tracks`, async ({ page }) => {
+          const ids = shortStates.has(state) ? "F-231 F-030 F-561" : "F-231 F-030";
+          test(`${ids}: Updates ${state} ${tracks} tracks`, async ({ page }) => {
             const query =
               state === "only-nightly"
                 ? "not-checked"
@@ -54,11 +70,17 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
                     ? "nothing-newer&lastTrack=nightly"
                     : state === "nightly-build"
                       ? "not-checked&buildTrack=nightly"
-                      : state === "refused"
-                        ? "not-checked&save=failed"
-                        : state === "other-current"
-                          ? "nothing-newer&track=nightly"
-                          : state;
+                      : state === "short-build"
+                        ? "not-checked&buildTrack=nightly&short=1&build=1"
+                        : state === "short-offered"
+                          ? "offered&buildTrack=nightly&short=1&build=1"
+                          : state === "dated-details"
+                            ? "not-checked&buildTrack=nightly&build=1"
+                            : state === "refused"
+                              ? "not-checked&save=failed"
+                              : state === "other-current"
+                                ? "nothing-newer&track=nightly"
+                                : state;
             await openFixture(
               page,
               `scene=main&updates=${query}&tracks=${state === "only-nightly" ? "nightly" : tracks}`,
@@ -95,6 +117,11 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
                 "Couldn't save the track. Stable is still selected.",
               );
             }
+            if (state === "short-build" || state === "dated-details")
+              // Opened as a person would leave it, with no pointer resting on its summary.
+              await page
+                .getByTestId("build-details")
+                .evaluate((details: HTMLDetailsElement) => (details.open = true));
             await settle(page);
             expect(
               await page

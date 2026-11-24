@@ -58,6 +58,7 @@ Every document in the repository, by what you want to do.
 - [Bots that manage themselves](research/bot-self-management.md): what an OpenClaw plugin can do to change bots, with whose authority, with no tools, and over MCP, from OpenClaw's source and a development instance.
 - `research/bot-self-management/`: a gateway-free stand-in for the contract that note leads to.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
+- [The model list](research/model-catalog.md): where a bot's model list comes from, what the gateway's picker leaves out, what OpenClaw 2026.10.6 and 2026.11.6 know about OpenAI's models, model ids the catalogue doesn't list, using a model newer than the list, and the gateway's update signals.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs

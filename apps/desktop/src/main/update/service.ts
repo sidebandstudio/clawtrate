@@ -20,7 +20,7 @@ import { readAttempt, attemptOutcome, type UpdateQuit } from "./attempt.ts";
 import { readCheck, type StoredUpdatePreferences } from "./preferences.ts";
 import { whatsNewView, type BuildNotes } from "./whats-new.ts";
 import { readWhatsNew } from "./whats-new-read.ts";
-import { fileKeyFor } from "./feed.ts";
+import { fileKeyFor, parseReleaseDate } from "./feed.ts";
 import { formatVersion, parseVersion, versionTrack } from "./version.ts";
 
 export interface UpdateServiceOptions {
@@ -32,6 +32,8 @@ export interface UpdateServiceOptions {
   downloadDir: string;
   feeds: Record<UpdateTrack, string | null>;
   releaseDate: string | null;
+  /** The commit the build was made from, for the details under Settings → Updates. */
+  commit?: string | null;
   store: Pick<KeyValueStore, "get" | "set"> & {
     readPreferences?: () => Promise<StoredUpdatePreferences>;
     /** Records, synchronously, that the app quit after a handoff. */
@@ -65,6 +67,13 @@ function unavailable(
   if (!fileKeyFor(options.platform, options.arch)) return failed("unsupported-system");
   if (!track) return failed("not-configured");
   return null;
+}
+
+/** The build's date and commit, for support (F-561); absent when the build carries neither. */
+function buildFacts(options: UpdateServiceOptions): Pick<DesktopUpdateSnapshot, "build"> {
+  const releaseDate = options.releaseDate ? parseReleaseDate(options.releaseDate) : null;
+  const commit = options.commit && /^[0-9a-f]{40}$/.test(options.commit) ? options.commit : null;
+  return releaseDate || commit ? { build: { releaseDate, commit } } : {};
 }
 
 export class DesktopUpdateService {
@@ -159,6 +168,7 @@ export class DesktopUpdateService {
       },
       install: idleCapability(options.installer),
       lastAttempt,
+      ...buildFacts(options),
     });
   }
 

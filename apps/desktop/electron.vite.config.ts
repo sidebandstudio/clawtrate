@@ -1,12 +1,15 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "electron-vite";
-import { updateDefines } from "./packaging/update-defines.ts";
+import { updateDefines, withCommit } from "./packaging/update-defines.ts";
+
+const buildEnv = withCommit(process.env, process.cwd());
 
 export default defineConfig({
   main: {
     // The update feed's address and the build's own release date, fixed here
     // for the update engine; docs/decisions.md, "Updates and release signing".
-    define: updateDefines(process.env, new Date()),
+    // The commit, for support, is this checkout's unless the build names one.
+    define: updateDefines(buildEnv, new Date()),
     // Workspace packages ship TypeScript source, so they are bundled rather than required;
     // so are `ws`, which setup's synthetic gateway uses, `undici`, whose connector local
     // connect dials through, and `json5`, which the settings reader's parse worker runs:

@@ -33,6 +33,7 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
+import type { ModelList } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -5986,6 +5987,11 @@ export class ClawtrateClient {
     return this.accounts.load();
   }
 
+  /** Read one provider's full list for "View more"; the answer is kept nowhere. */
+  loadModelCatalog(provider: string): Promise<ModelList> {
+    return this.accounts.readModelList(provider);
+  }
+
   /** Read one bot's stored order and model again: the lock's evidence. */
   checkLock(botId: string): Promise<void> {
     if (this.state.connection.status !== "connected") return Promise.resolve();
@@ -6089,8 +6095,13 @@ export class ClawtrateClient {
   }
 
   /** Not now on a name card: kept on this device for that bot and that name. */
-  declineBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
-    return this.botNames.decline(botId, name, stamp);
+  /** Not now, with whether it answered the card shown now. */
+  async declineBotName(
+    botId: string,
+    name: string,
+    stamp: GatewayStamp,
+  ): Promise<{ declined: boolean }> {
+    return { declined: await this.botNames.decline(botId, name, stamp) };
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */

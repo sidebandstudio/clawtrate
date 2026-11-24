@@ -38,10 +38,30 @@ export const FIXTURE_BETA_NOTES: Array<{ version: string; items: string[] }> = [
   },
 ];
 
+/**
+ * The same lists for Beta builds numbered with three numbers (F-561, `short=1`):
+ * the offered build, one skipped, and the running build.
+ */
+export const FIXTURE_SHORT_NOTES: Array<{ version: string; items: string[] }> = [
+  { version: "0.2.4", items: ["Settings shows the build's date and commit (#438)"] },
+  { version: "0.2.3", items: ["The download page lists what each beta added (#456)"] },
+  { version: "0.2.2", items: ["Pictures a bot makes appear in the conversation (#364)"] },
+];
+
+/** A build's date and commit, for `build=1` (F-561); an invented commit. */
+export const FIXTURE_BUILD = {
+  releaseDate: "2026-12-01T10:00:00.000Z",
+  commit: "0123456789abcdef0123456789abcdef01234567",
+} as const;
+
 /** A fixed host reading for the screenshot fixture. No transfer or clock runs here. */
 export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
   const runningTrack = params.get("buildTrack") === "nightly" ? "nightly" : "stable";
-  const runningVersion = runningTrack === "nightly" ? "0.1.0-beta.20261115.1" : "0.1.0";
+  // Beta builds numbered with three numbers (F-561).
+  const short = params.get("short") === "1";
+  const notes = short ? FIXTURE_SHORT_NOTES : FIXTURE_BETA_NOTES;
+  const runningVersion =
+    runningTrack === "nightly" ? (short ? "0.2.2" : "0.1.0-beta.20261115.1") : "0.1.0";
   const selection = params.get("track") ?? runningTrack;
   const selectedTrack =
     params.get("tracks") === "nightly"
@@ -52,7 +72,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           ? "nightly"
           : "stable";
   const versionFor = (track: UpdateTrack | null) =>
-    track === "nightly" ? "0.2.0-beta.20261116.1" : "0.2.0";
+    track === "nightly" ? (short ? "0.2.4" : "0.2.0-beta.20261116.1") : "0.2.0";
   const version = versionFor(selectedTrack);
   const offer = { version, releaseDate: "2026-11-01T00:00:00Z", offerId: "fixture-offer" };
   const states = {
@@ -172,6 +192,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           }
         : null,
     install: installFor(initialState),
+    ...(params.get("build") === "1" && { build: FIXTURE_BUILD }),
   };
   /**
    * What the lists show for `next` (F-554): only once a check has run, only from
@@ -190,12 +211,11 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       (state.kind === "failed" && state.stage === "check")
     )
       return rest;
-    const [offered, skipped] = FIXTURE_BETA_NOTES;
+    const [offered, skipped] = notes;
     const coming =
       "version" in state && state.version === offered!.version ? [offered!, skipped!] : [];
     // The running build's own list, whichever build that is: after an update, the one installed.
-    const own =
-      FIXTURE_BETA_NOTES.find((build) => build.version === next.runningVersion)?.items ?? null;
+    const own = notes.find((build) => build.version === next.runningVersion)?.items ?? null;
     return coming.length || own ? { ...rest, whatsNew: { coming, running: own } } : rest;
   }
   snapshot = withNotes(snapshot);
