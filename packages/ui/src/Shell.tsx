@@ -35,6 +35,7 @@ import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
 import { SearchPalette, type SearchTarget } from "./search/SearchPalette.tsx";
+import { PlacementSavesProvider } from "./machines/RunsOn.tsx";
 import type { SettingsSection } from "./Settings.tsx";
 
 /**
@@ -817,211 +818,213 @@ export function Shell({
   }, [taskKey, open, send]);
 
   return (
-    <div
-      className="shell"
-      ref={shellRef}
-      data-panel={panelOpen && !routines ? "open" : "closed"}
-      data-view={view}
-      inert={inert}
-    >
-      <Rail
-        bots={state.bots}
-        tasksByBot={state.tasksByBot}
-        discovery={state.discovery}
-        connection={state.connection}
-        catchingUp={catchingUp}
-        selection={selection}
-        onePane={onePane}
-        onOpen={openDetail}
-        onShowList={showList}
-        theme={theme}
-        onTheme={onTheme}
-        bubbles={bubbles}
-        onBubbles={onBubbles}
-        updateEntry={updateEntry}
-        onOpenSettings={onOpenSettings}
-        onNewBot={interactive ? openNewBot : null}
-        routines={state.routines.routines}
-        routinesOpen={routinesOpen}
-        onOpenRoutines={() => openRoutines(ROUTINES_HOME)}
-        onOpenRoutineRun={(id, runAt) =>
-          openRoutines({ ...ROUTINES_HOME, routine: id, run: runAt === null ? null : { runAt } })
-        }
-        onOpenPalette={openPalette}
-        paletteKeys={mac ? "⌘K" : "Ctrl+K"}
-        inert={drawerOpen || inert || searchOpen}
-        interactive={interactive}
-        sidebar={state.sidebar}
-        newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
-      />
-      <div className="main-pane" ref={mainRef}>
-        {routines ? (
-          <RoutinesView
-            state={state}
-            info={info}
-            nav={routines}
-            onNav={setRoutines}
-            onClose={closeRoutines}
-            onOpenTask={(botId, key) => {
-              selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
-              openDetail();
-            }}
-            narrow={onePane || (mainWidth !== null && mainWidth < 520)}
-            phone={onePane}
-          />
-        ) : (
-          <OpenTaskContext.Provider value={selection.selectTask}>
-            <WorkLinksContext.Provider value={workLinks}>
-              <Conversation
-                task={task}
-                bot={bot}
-                taskCount={selection.tasks.length}
-                discovery={state.discovery}
-                transcript={transcript}
-                openError={taskKey ? (refusals.get(taskKey) ?? null) : null}
-                panelOpen={panelOpen}
-                onTogglePanel={togglePanel}
-                onOpenPanel={() => setPanel(true)}
-                onBack={backToList}
-                onReload={reload}
-                strip={
-                  strip && (
-                    <StatusStrip
-                      strip={strip}
-                      retryAt={state.connection.retryAt}
-                      onRetry={() => void send({ type: "retry" })}
-                      onReload={reload}
-                    />
-                  )
-                }
-                refreshNote={phase !== "dropped" && refreshFailed(transcript)}
-                interactive={interactive}
-                connection={state.connection}
-                info={info}
-                granted={granted}
-                online={state.connection.status === "connected"}
-                caughtUp={caughtUp}
-                toggleRef={toggleRef}
-                inert={drawerOpen || inert}
-                onShowComputer={showComputer}
-              />
-            </WorkLinksContext.Provider>
-          </OpenTaskContext.Provider>
-        )}
-        <button
-          type="button"
-          className="drawer-scrim"
-          aria-label="Close work panel"
-          tabIndex={-1}
-          onClick={() => setPanel(false)}
+    <PlacementSavesProvider connection={state.connection}>
+      <div
+        className="shell"
+        ref={shellRef}
+        data-panel={panelOpen && !routines ? "open" : "closed"}
+        data-view={view}
+        inert={inert}
+      >
+        <Rail
+          bots={state.bots}
+          tasksByBot={state.tasksByBot}
+          discovery={state.discovery}
+          connection={state.connection}
+          catchingUp={catchingUp}
+          selection={selection}
+          onePane={onePane}
+          onOpen={openDetail}
+          onShowList={showList}
+          theme={theme}
+          onTheme={onTheme}
+          bubbles={bubbles}
+          onBubbles={onBubbles}
+          updateEntry={updateEntry}
+          onOpenSettings={onOpenSettings}
+          onNewBot={interactive ? openNewBot : null}
+          routines={state.routines.routines}
+          routinesOpen={routinesOpen}
+          onOpenRoutines={() => openRoutines(ROUTINES_HOME)}
+          onOpenRoutineRun={(id, runAt) =>
+            openRoutines({ ...ROUTINES_HOME, routine: id, run: runAt === null ? null : { runAt } })
+          }
+          onOpenPalette={openPalette}
+          paletteKeys={mac ? "⌘K" : "Ctrl+K"}
+          inert={drawerOpen || inert || searchOpen}
+          interactive={interactive}
+          sidebar={state.sidebar}
+          newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
         />
-        {panelOpen && !routines && (
-          <WorkPanel
-            bot={bot}
-            task={task}
-            transcript={transcript}
-            tab={workTab}
-            onTab={setWorkTab}
-            online={state.connection.status === "connected"}
-            connectedAt={state.connection.connectedAt}
-            fileRequest={fileRequest}
-            onShowInChat={showInChat}
-            onFilePath={setOpenFilePath}
-            computer={state.computer}
+        <div className="main-pane" ref={mainRef}>
+          {routines ? (
+            <RoutinesView
+              state={state}
+              info={info}
+              nav={routines}
+              onNav={setRoutines}
+              onClose={closeRoutines}
+              onOpenTask={(botId, key) => {
+                selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
+                openDetail();
+              }}
+              narrow={onePane || (mainWidth !== null && mainWidth < 520)}
+              phone={onePane}
+            />
+          ) : (
+            <OpenTaskContext.Provider value={selection.selectTask}>
+              <WorkLinksContext.Provider value={workLinks}>
+                <Conversation
+                  task={task}
+                  bot={bot}
+                  taskCount={selection.tasks.length}
+                  discovery={state.discovery}
+                  transcript={transcript}
+                  openError={taskKey ? (refusals.get(taskKey) ?? null) : null}
+                  panelOpen={panelOpen}
+                  onTogglePanel={togglePanel}
+                  onOpenPanel={() => setPanel(true)}
+                  onBack={backToList}
+                  onReload={reload}
+                  strip={
+                    strip && (
+                      <StatusStrip
+                        strip={strip}
+                        retryAt={state.connection.retryAt}
+                        onRetry={() => void send({ type: "retry" })}
+                        onReload={reload}
+                      />
+                    )
+                  }
+                  refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+                  interactive={interactive}
+                  connection={state.connection}
+                  info={info}
+                  granted={granted}
+                  online={state.connection.status === "connected"}
+                  caughtUp={caughtUp}
+                  toggleRef={toggleRef}
+                  inert={drawerOpen || inert}
+                  onShowComputer={showComputer}
+                />
+              </WorkLinksContext.Provider>
+            </OpenTaskContext.Provider>
+          )}
+          <button
+            type="button"
+            className="drawer-scrim"
+            aria-label="Close work panel"
+            tabIndex={-1}
+            onClick={() => setPanel(false)}
+          />
+          {panelOpen && !routines && (
+            <WorkPanel
+              bot={bot}
+              task={task}
+              transcript={transcript}
+              tab={workTab}
+              onTab={setWorkTab}
+              online={state.connection.status === "connected"}
+              connectedAt={state.connection.connectedAt}
+              fileRequest={fileRequest}
+              onShowInChat={showInChat}
+              onFilePath={setOpenFilePath}
+              computer={state.computer}
+              connection={state.connection}
+              interactive={interactive}
+              onShowStep={showStep}
+              onShowQuestion={showQuestion}
+              onRequestAccess={
+                info.readOnly || state.connection.fullPairing
+                  ? null
+                  : () => void send({ type: "requestAccess" }).catch(() => {})
+              }
+              onOpenMachines={() => onOpenSettings("machines")}
+              onDeleteBot={(each) =>
+                setDeleting({ id: each.id, name: each.name, isDefault: each.isDefault })
+              }
+              drawer={drawerOpen}
+              onClose={() => setPanel(false)}
+              closeRef={closeRef}
+              panelRef={panelRef}
+              accounts={state.accounts}
+              bots={state.bots}
+              tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
+              transcripts={state.transcripts}
+              info={info}
+            />
+          )}
+        </div>
+        {offerOpen && (
+          <FullControlOffer
+            // Each gateway's offer is its own: a switch shows that gateway's choices afresh.
+            key={offerFor ?? ""}
             connection={state.connection}
-            interactive={interactive}
-            onShowStep={showStep}
-            onShowQuestion={showQuestion}
-            onRequestAccess={
-              info.readOnly || state.connection.fullPairing
-                ? null
-                : () => void send({ type: "requestAccess" }).catch(() => {})
-            }
-            onOpenMachines={() => onOpenSettings("machines")}
-            onDeleteBot={(each) =>
-              setDeleting({ id: each.id, name: each.name, isDefault: each.isDefault })
-            }
-            drawer={drawerOpen}
-            onClose={() => setPanel(false)}
-            closeRef={closeRef}
-            panelRef={panelRef}
+            onClose={() => setOfferOpen(false)}
+          />
+        )}
+        {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
+        {searchOpen && (
+          <SearchPalette
+            state={state}
+            mac={mac}
+            onOpen={openFromSearch}
+            onClose={() => closePalette(true)}
+          />
+        )}
+        {newBot && (
+          <NewBot
             accounts={state.accounts}
             bots={state.bots}
-            tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
-            transcripts={state.transcripts}
+            connection={state.connection}
             info={info}
+            onClose={() => setNewBot(false)}
+            onCreated={(id) => {
+              setNewBot(false);
+              selection.selectBot(id);
+              openDetail();
+              requestAnimationFrame(() =>
+                document.querySelector<HTMLElement>(".composer-input")?.focus(),
+              );
+            }}
           />
         )}
+        {deleting && (
+          <DeleteBot
+            bot={deleting}
+            connection={state.connection}
+            info={info}
+            onClose={(deleted) => {
+              setDeleting(null);
+              // The rail already follows the gateway's list; the app lands on the Main Bot's latest
+              // task, or the Main Bot alone when it has none.
+              const main = state.bots.find((each) => each.isDefault) ?? state.bots[0];
+              if (deleted && main) {
+                // The Work drawer closes first, so the conversation behind it can take focus.
+                if (drawerOpen) setPanel(false);
+                const latest = summarize(state.tasksByBot[main.id] ?? [], {}, null).latest;
+                if (latest) selection.selectTask(main.id, latest.key);
+                else selection.selectBot(main.id);
+                // The composer, or, for a Main Bot with no task to write in, the page's heading.
+                requestAnimationFrame(() =>
+                  (
+                    document.querySelector<HTMLElement>(".composer-input") ??
+                    document.querySelector<HTMLElement>(".conversation h1")
+                  )?.focus(),
+                );
+              }
+            }}
+          />
+        )}
+        <p
+          className="visually-hidden"
+          role="status"
+          aria-live="polite"
+          data-testid="chat-link-announcer"
+        >
+          {chatNote}
+        </p>
       </div>
-      {offerOpen && (
-        <FullControlOffer
-          // Each gateway's offer is its own: a switch shows that gateway's choices afresh.
-          key={offerFor ?? ""}
-          connection={state.connection}
-          onClose={() => setOfferOpen(false)}
-        />
-      )}
-      {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
-      {searchOpen && (
-        <SearchPalette
-          state={state}
-          mac={mac}
-          onOpen={openFromSearch}
-          onClose={() => closePalette(true)}
-        />
-      )}
-      {newBot && (
-        <NewBot
-          accounts={state.accounts}
-          bots={state.bots}
-          connection={state.connection}
-          info={info}
-          onClose={() => setNewBot(false)}
-          onCreated={(id) => {
-            setNewBot(false);
-            selection.selectBot(id);
-            openDetail();
-            requestAnimationFrame(() =>
-              document.querySelector<HTMLElement>(".composer-input")?.focus(),
-            );
-          }}
-        />
-      )}
-      {deleting && (
-        <DeleteBot
-          bot={deleting}
-          connection={state.connection}
-          info={info}
-          onClose={(deleted) => {
-            setDeleting(null);
-            // The rail already follows the gateway's list; the app lands on the Main Bot's latest
-            // task, or the Main Bot alone when it has none.
-            const main = state.bots.find((each) => each.isDefault) ?? state.bots[0];
-            if (deleted && main) {
-              // The Work drawer closes first, so the conversation behind it can take focus.
-              if (drawerOpen) setPanel(false);
-              const latest = summarize(state.tasksByBot[main.id] ?? [], {}, null).latest;
-              if (latest) selection.selectTask(main.id, latest.key);
-              else selection.selectBot(main.id);
-              // The composer, or, for a Main Bot with no task to write in, the page's heading.
-              requestAnimationFrame(() =>
-                (
-                  document.querySelector<HTMLElement>(".composer-input") ??
-                  document.querySelector<HTMLElement>(".conversation h1")
-                )?.focus(),
-              );
-            }
-          }}
-        />
-      )}
-      <p
-        className="visually-hidden"
-        role="status"
-        aria-live="polite"
-        data-testid="chat-link-announcer"
-      >
-        {chatNote}
-      </p>
-    </div>
+    </PlacementSavesProvider>
   );
 }

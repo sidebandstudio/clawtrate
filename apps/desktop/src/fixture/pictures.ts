@@ -10,12 +10,18 @@ import {
   RawTable,
   runsFromHistory,
   type ChatPictureRead,
+  type SentPictureRead,
   type ClawtrateState,
   type EngineContext,
 } from "@clawtrate/core";
 import { OPEN_TASK } from "./data.ts";
 
-export const PICTURE_SCENES = ["pictures", "pictures-failed", "pictures-message"] as const;
+export const PICTURE_SCENES = [
+  "pictures",
+  "pictures-failed",
+  "pictures-message",
+  "pictures-sent",
+] as const;
 export type PictureScene = (typeof PICTURE_SCENES)[number];
 
 export const isPictureScene = (value: string): value is PictureScene =>
@@ -182,9 +188,73 @@ function messageRows(start: number) {
   ];
 }
 
+/** A picture the fixture's person sent (#451): made here, 240 × 160. */
+const SENT_PICTURE =
+  "iVBORw0KGgoAAAANSUhEUgAAAPAAAACgCAIAAAC9uXYyAAACNklEQVR42u3csQ2EMBBFQRdGQFnU5DacuAiKcOKcAoi9wstIP3/SMtJd5HJet1maFScwoM2ANgPaDGgD2gxoM6DNgDYD2oA2A9oMaDOgzYA2oM2ANgPaDGgzoA1oM6DNgDYD2gxoA9oMaDOgzYA2A9qANtsAdO/NLM2Atoyg5xzB09VdMaB1gXZoXaB9YF2gdXWB1gXaoXWBdmhdoH1gXaB1dYHWBdqhdYF2aF2gfWBdoHV1gdYF2qF1gXZoXaB1dYHW1QVaF2iH1gXaoXWB1tUFWlcXaF2gHVoXaIfWBVpXF2hd3TdoM+9Dm3kf+hs/haMeYfOXw39ooIEGGmiggQYaaKCBBhpooIEGGmiggQYaaKCBBhpooIEGGmiggQYaaKCBBhpooIEGGmiggQYaaKCBBhpooIEGGmiggQYaaKCBBhpooIEGGmiggQYaaKCBBhpooIEGGmiggQYaaO9Dm3kf2sz70Lr+Qzu0LtAOrQu0ri7QurpA6wLt0LpAO7Qu0Lq6QOsC7dC6QDu0LtA+sC7QurpA6wLt0LpAO7Qu0D6wLtC6ukDrAu3QukA7tC7QurpA6+oCrQu0Q+sC7dC6QOvqAq2rC7Tun0CbeR/azPvQfoJ1/YfW1QVaF2iH1gXaoXWB9oF1gdbVBVoXaIfWBdqhdYHW1QVaVxdoXaAdWhdoh9YFWlcXaF1doHWBdmhdoB1aF2hdXaB1dYHWBdqhdYF2aF2gdXWB1tUFWhdoh9YF2qF1g/YAenFpZ9y1lUgAAAAASUVORK5CYII=";
+const SENT_PICTURE_BYTES = 623;
+
+/**
+ * Your messages with files (#451), as the gateway keeps them (`__openclaw.media`): one with a
+ * picture this app sent and still holds, one with a text file, and one sent from another device,
+ * whose picture this app has no copy of.
+ */
+function sentRows(start: number) {
+  const user = (id: string, text: string, media: unknown[], seq: number) => ({
+    role: "user",
+    content: text,
+    timestamp: start + seq * SECOND,
+    idempotencyKey: `${id}:user`,
+    __openclaw: { id: `row-${seq}`, seq, idempotencyKey: `${id}:user`, media },
+  });
+  const bot = (text: string, runId: string, seq: number) => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: start + seq * SECOND,
+    model: "scripted/dev-1",
+    __openclaw: { id: `row-${seq}`, seq, runId },
+  });
+  const media = (name: string, contentType: string, sizeBytes: number) => ({
+    // Never loaded or kept: Clawtrate doesn't load a person's picture from the gateway (#469).
+    url: `media://inbound/${name.replace(/\.[^.]+$/, "")}---7d0e1a3c-5b2f-4c9e-8a61-0f3b2d4c6e81${name.slice(name.lastIndexOf("."))}`,
+    contentType,
+    kind: contentType.startsWith("image/") ? "image" : "document",
+    fileName: name,
+    sizeBytes,
+  });
+  return [
+    user(
+      "sent-1",
+      "can u add this to my calendar?",
+      [media("calendar.png", "image/png", SENT_PICTURE_BYTES)],
+      1,
+    ),
+    bot("Added: Thursday, 4 pm, dentist.", "sent-1", 2),
+    user(
+      "sent-2",
+      "here are my notes",
+      // scan.png is named as a picture, but the app found its bytes aren't one.
+      [media("notes.txt", "text/plain", 2_310), media("scan.png", "image/png", 3_072)],
+      3,
+    ),
+    bot("Got them. Milk, eggs and bread are on the list.", "sent-2", 4),
+    user(
+      "elsewhere-1",
+      "and this one, from my phone",
+      [media("receipt.jpg", "image/jpeg", 48_211)],
+      5,
+    ),
+    bot("I can see you sent a picture.", "elsewhere-1", 6),
+  ];
+}
+
 export function pictureScene(base: ClawtrateState, now: number, name: string): ClawtrateState {
   const start = now - 20 * 60 * SECOND;
-  const history = name === "pictures-message" ? messageRows(start) : rows(start);
+  const history =
+    name === "pictures-message"
+      ? messageRows(start)
+      : name === "pictures-sent"
+        ? sentRows(start)
+        : rows(start);
   const ctx: EngineContext = { sessionKey: OPEN_TASK, now, raw: new RawTable() };
   const transcript = base.transcripts[OPEN_TASK]!;
   return {
@@ -200,6 +270,20 @@ export function pictureScene(base: ClawtrateState, now: number, name: string): C
         questions: [],
       },
     },
+  };
+}
+
+/** The host's answer for a picture you sent: the one this app sent and holds, and no other. */
+export function sentPictureAnswer(command: { messageKey: string; index: number }): SentPictureRead {
+  if (command.messageKey === "sent-2:user" && command.index === 1)
+    return { status: "not-a-picture" };
+  if (command.messageKey !== "sent-1:user" || command.index !== 0) return { status: "not-kept" };
+  return {
+    status: "content",
+    kind: "image",
+    mimeType: "image/png",
+    bytes: SENT_PICTURE_BYTES,
+    transfer: { id: null, chunks: 1, data: SENT_PICTURE },
   };
 }
 

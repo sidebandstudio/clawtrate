@@ -307,6 +307,18 @@ export type ChatPicture = {
   messageId?: string;
 };
 
+/**
+ * A file a person sent with their message, as the gateway's history names it
+ * (`__openclaw.media`, OpenClaw 2026.10.6): its name, type and size, never the
+ * reference the gateway keeps it under. Clawtrate loads none from the gateway
+ * (#469); a picture is shown only from the sending app's own copy (`readSentPicture`).
+ */
+export type SentAttachment = {
+  fileName: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+};
+
 export type TranscriptItem = {
   /** Stable display key. */
   id: string;
@@ -316,6 +328,8 @@ export type TranscriptItem = {
   model: string | null;
   /** The pictures the bot's messages of this item hand over, in their order. Absent when none. */
   pictures?: ChatPicture[];
+  /** The files a person's message carried, in the order sent. Absent when none. */
+  attachments?: SentAttachment[];
   /**
    * The gateway cut a row of this item to its display length
    * (`__openclaw.truncated`): present and true only then. Its text, here or

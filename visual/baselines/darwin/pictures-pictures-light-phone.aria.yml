@@ -14,7 +14,8 @@
       - button "More"
     - paragraph: Here is the picture you asked for.
     - figure:
-      - 'img "Picture made from the description: A sun over a green hill, in flat solid colours"'
+      - 'button "Picture made from the description: A sun over a green hill, in flat solid colours"':
+        - 'img "Picture made from the description: A sun over a green hill, in flat solid colours"'
     - toolbar "Message actions":
       - button "More"
     - group: Worked 1 action
