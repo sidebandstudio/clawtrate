@@ -1274,4 +1274,52 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("Reconnect keeps a shared gateway token when it is this gateway's only credential on a plain-file store", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "shared-secret" }),
+    });
+    const gatewayA = new FakeGateway();
+    gatewayA.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      if (auth?.token !== "shared-secret")
+        return {
+          ok: false,
+          error: {
+            code: "UNAUTHORIZED",
+            message: "token required",
+            details: { code: "AUTH_TOKEN_MISMATCH" },
+          },
+        };
+      return { ok: true, payload: helloOk(scopes) };
+    };
+    const client = new ClawtrateClient(testHost(gatewayA, storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-B"), storage), FAST);
+    try {
+      await client.start();
+      await until(() => client.state.connection.status === "connected");
+      expect(storage.data.has(tokenKey(URL_A))).toBe(false);
+      await other.start({ resume: false });
+      await other.connect({ url: URL_B });
+      await client.suspend();
+      await client.retryNow();
+      expect(saved(storage)).toEqual({ url: URL_A, token: "shared-secret", suspended: false });
+      await until(() => client.state.connection.status === "connected");
+      other.stop();
+      client.stop();
+      // A fresh store after restart still connects to A with the shared gateway token.
+      const fresh = memoryStorage(Object.fromEntries(storage.data));
+      const restarted = new ClawtrateClient(testHost(gatewayA, fresh), FAST);
+      try {
+        await restarted.start();
+        await until(() => restarted.state.connection.status === "connected");
+        expect(restarted.state.connection.gatewayUrl).toBe(URL_A);
+      } finally {
+        restarted.stop();
+      }
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });

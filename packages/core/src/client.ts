@@ -1619,17 +1619,22 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
-  /** Read the saved gateway, or abandon the read if `stop()` runs first. */
-  private async readSavedSettings(stops: number): Promise<ConnectionSettings | null> {
-    if (stops !== this.stops) return null;
+  /** Run a storage read, or abandon it with `fallback` if `stop()` runs first. */
+  private async raceStop<T>(stops: number, read: () => Promise<T>, fallback: T): Promise<T> {
+    if (stops !== this.stops) return fallback;
     let stop!: () => void;
-    const stopped = new Promise<null>((resolve) => (stop = () => resolve(null)));
+    const stopped = new Promise<T>((resolve) => (stop = () => resolve(fallback)));
     this.stopWaiters.add(stop);
     try {
-      return await Promise.race([this.savedSettings(), stopped]);
+      return await Promise.race([read(), stopped]);
     } finally {
       this.stopWaiters.delete(stop);
     }
+  }
+
+  /** Read the saved gateway, or abandon the read if `stop()` runs first. */
+  private readSavedSettings(stops: number): Promise<ConnectionSettings | null> {
+    return this.raceStop(stops, () => this.savedSettings(), null);
   }
 
   /** Written first: settings the host could not save are never the ones in use. */
@@ -2072,12 +2077,21 @@ export class ClawtrateClient {
         } else if (this.recordSeen(saved)) {
           await this.saveChoice({ ...this.settings, suspended: false });
         } else {
-          // Another client saved another gateway or forgot this one since. This client's token
-          // was never read back from the record, and may be one cleared since: it stays out of
-          // the record, and only this attempt uses it.
-          const { token } = this.settings;
-          await this.saveChoice({ ...this.settings, token: null, suspended: false });
-          this.settings = { ...this.settings, token };
+          // Another client saved another gateway or forgot this one since. Drop this client's
+          // token when a device token has already replaced it (or on a secure store, where
+          // switching retired any migrated token and typed tokens stay in memory only). Keep it
+          // when it is still this gateway's only credential on a plain-file store.
+          const { token, url } = this.settings;
+          const dropToken =
+            token !== null &&
+            (this.host.credentialStatus !== undefined ||
+              (await this.raceStop(stops, () => this.hasDeviceToken(url), true)));
+          if (!this.settings || stops !== this.stops) return;
+          await this.saveChoice({
+            ...this.settings,
+            ...(dropToken ? { token: null } : {}),
+            suspended: false,
+          });
         }
       }
       if (stops !== this.stops) return;
