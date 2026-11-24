@@ -1,6 +1,6 @@
 import type { ClawtrateState, Transcript } from "@clawtrate/core";
 import { useEffect, useState } from "react";
-import { gatewayLabel } from "./format.ts";
+import { gatewayTitle } from "./format.ts";
 
 /**
  * Where the shell is after a connection problem: "dropped" from the moment the
@@ -90,7 +90,7 @@ export function stripFor(
     case "error":
       return {
         tone: "danger",
-        text: `Can't reach ${gatewayLabel(connection.gatewayUrl)}`,
+        text: `Can't reach ${gatewayTitle(connection)}`,
         short: "Can't reach the gateway",
         more: connection.error?.message ?? "showing saved messages",
         action: "retry",

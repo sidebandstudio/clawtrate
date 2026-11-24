@@ -119,6 +119,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   search: searchParams(params),
   voice: voiceParams(params),
   fullPairing: params.get("full") === "1",
+  gatewayName: params.get("gatewayName"),
 });
 if (params.has("hold")) bridge.hold();
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.

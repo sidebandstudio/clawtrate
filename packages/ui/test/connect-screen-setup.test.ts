@@ -77,3 +77,35 @@ describe("the setup card after a change of this device's saved pairing", () => {
     expect(html).not.toContain('placeholder="Gateway address"');
   });
 });
+
+describe("pairing with a gateway named on this device", () => {
+  it("F-526: the steps keep the address beside the name, since a name is kept by address alone", () => {
+    const connection = {
+      ...initialState.connection,
+      status: "pairing" as const,
+      gatewayUrl: URL,
+      gatewayName: "Devbox",
+      pairing: {
+        requestId: "request",
+        deviceId: "device",
+        message: "pairing required",
+        approveCommand: "openclaw devices approve request",
+        approveNote: null,
+        requestedScopes: ["operator.read"],
+      },
+    };
+    const html = renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { info } as ClawtrateBridge,
+        children: createElement(ConnectScreen, {
+          info,
+          setup: initialSetupState,
+          connection,
+          discovery: initialState.discovery,
+        }),
+      }),
+    );
+    expect(html).toContain("Connected to Devbox (127.0.0.1:19940)");
+    expect(html).not.toContain("Connected to Devbox<");
+  });
+});

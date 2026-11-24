@@ -191,6 +191,23 @@ export type ModelList =
   /** `unsupported`: the gateway refused `view: "all"`. */
   | { status: "unsupported" | "error"; error: string };
 
+/** The longest model id Clawtrate sends. */
+export const MAX_MODEL_ID_CHARS = 512;
+
+/**
+ * Why a model id can't be sent, or null when it can: one rule for the field that takes a typed
+ * id and for the bridge that carries every model id to the gateway.
+ */
+export function modelIdProblem(id: string): "empty" | "long" | "space" | "control" | null {
+  if (id.length === 0) return "empty";
+  if (id.length > MAX_MODEL_ID_CHARS) return "long";
+  if ([...id].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f))
+    return "control";
+  // A space would split it, and an `@` would name an account.
+  if (/[\s@]/.test(id)) return "space";
+  return null;
+}
+
 /** A row of a full list: only what the Model menu uses of it. */
 export type ListedModel = Pick<CatalogModel, "id" | "levels" | "defaultLevel">;
 
