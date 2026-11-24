@@ -36,13 +36,13 @@
         - time: 5:24 PM
         - text: Ask these five, and get the answers in writing.
     - listitem:
-      - button "Marlow, 1 task, editing":
+      - button "Marlow, working, 1 task, editing":
         - text: Marlow editing
         - time: 4:58 PM
-        - text: Tightened the intro and cut about 80 words.
+        - text: Running Morning digest
       - list "Marlow's tasks":
         - listitem:
-          - button "Morning digest, routine run": Morning digest
+          - button "Morning digest, routine run, running": Morning digest
     - listitem:
       - button "Pip, a run failed, 4 tasks, unread, planning":
         - text: Pip planning
@@ -64,7 +64,7 @@
   - button "Pause"
   - button "Edit"
   - button "More"
-  - status: Runs weekdays at 8:00 AM, New York.
+  - status: Running since today 5:40 PM
   - heading "Instruction" [level=3]
   - paragraph: Summarise the notes I added yesterday, and list anything I need to answer today.
   - heading "When to run" [level=3]
@@ -83,8 +83,7 @@
   - region "Runs":
     - heading "Runs" [level=3]
     - list "Runs":
-      - listitem:
-        - button "today 5:40 PM, started by hand, Succeeded · 2.6 s · 200 tokens": Today 5:40 PM · started by hand Succeeded · 2.6 s · 200 tokens
+      - listitem: today 5:40 PM Running…
       - listitem:
         - button "today 8:00 AM, Succeeded · 2.6 s · 200 tokens": Today 8:00 AM Succeeded · 2.6 s · 200 tokens
       - listitem:
