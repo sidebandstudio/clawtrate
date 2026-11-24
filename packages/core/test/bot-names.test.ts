@@ -1268,6 +1268,23 @@ describe("F-552: a bot that takes a name", () => {
     expect(storage.data.get(NAME_DECLINES_KEY)).toBeUndefined();
   });
 
+  it("F-552: Not now is kept for the gateway that drew the card, though the connection now answers as another (#512)", async () => {
+    const storage = memoryStorage();
+    let gateway = "gw-a";
+    const names = engine({
+      storage,
+      gateway: () => gateway,
+      request: async () => ({
+        file: { content: identityFile("Johnny", false), hash: "a".repeat(64) },
+      }),
+    });
+    await names.ctxRun();
+    // A reconnect at the same address reaches a gateway with another id; the card is still open.
+    gateway = "gw-b";
+    expect(await names.engine.decline("new-bot", "Johnny", STAMP)).toBe(true);
+    expect(JSON.parse(storage.data.get(NAME_DECLINES_KEY)!)).toEqual({ "gw-a\nnew-bot": "Johnny" });
+  });
+
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
     // Emphasis marks at an end go, as the gateway drops them when it reads the line back.
     const cut = plainName(`${"A".repeat(39)}*B`)!;
