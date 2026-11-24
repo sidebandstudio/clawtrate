@@ -23,6 +23,14 @@ const sent = (page: Page) =>
 const preview = (page: Page) => page.getByRole("button", { name: MINE });
 const viewer = (page: Page) => page.getByRole("dialog", { name: MINE });
 
+/** A click on the backdrop halfway between the window's left edge and the picture, never the gutter. */
+async function clickBeside(page: Page) {
+  const box = (await viewer(page).getByRole("img", { name: MINE }).boundingBox())!;
+  const x = box.x / 2;
+  expect(x).toBeGreaterThan(40);
+  await page.mouse.click(x, box.y + box.height / 2);
+}
+
 async function drawn(page: Page, name: string) {
   await expect
     .poll(() =>
@@ -83,12 +91,16 @@ test.describe("sent pictures behaviour", () => {
     // The bubble holds exactly the words typed.
     await expect(mine.locator(".bubble")).toHaveText("can u add this to my calendar?");
     const notes = page.getByTestId("transcript-turn").filter({ hasText: "here are my notes" });
-    await expect(notes.getByTestId("sent-file")).toHaveText(/notes\.txt\s*2 KB/);
+    // A text file, and a file named as a picture whose bytes aren't one: each a named file.
+    await expect(notes.getByTestId("sent-file")).toHaveText([
+      /notes\.txt\s*2 KB/,
+      /scan\.png\s*3 KB/,
+    ]);
     await expect(notes.getByRole("img")).toHaveCount(0);
     const elsewhere = page.getByTestId("transcript-turn").filter({ hasText: "from my phone" });
     await expect(elsewhere.getByTestId("sent-picture")).toHaveAttribute("data-state", "not-kept");
     await expect(elsewhere.getByTestId("sent-picture")).toContainText(
-      "receipt.jpg47 KBPicture sent with this message. The gateway doesn't give it back to show here.",
+      "receipt.jpg47 KBPicture sent with this message. It shows only on the device that sent it, while the task is open.",
     );
     expect(await sent(page)).toEqual([
       {
@@ -96,6 +108,12 @@ test.describe("sent pictures behaviour", () => {
         key: "agent:otto:disk-space",
         messageKey: "sent-1:user",
         index: 0,
+      },
+      {
+        type: "readSentPicture",
+        key: "agent:otto:disk-space",
+        messageKey: "sent-2:user",
+        index: 1,
       },
       {
         type: "readSentPicture",
@@ -136,10 +154,49 @@ test.describe("sent pictures behaviour", () => {
     await expect(viewer(page)).toHaveCount(0);
     await expect(preview(page)).toBeFocused();
     await preview(page).click();
-    await page.getByTestId("picture-viewer").click({ position: { x: 8, y: 400 } });
+    await clickBeside(page);
     await expect(viewer(page)).toHaveCount(0);
     // Opening it larger asks for nothing more.
-    expect((await sent(page)).length).toBe(2);
+    expect((await sent(page)).length).toBe(3);
+  });
+
+  test("F-117: a click on the picture keeps the view open, and Escape still closes it back to the preview", async ({
+    page,
+  }) => {
+    await open(page, "pictures-sent", "dark");
+    await drawn(page, MINE);
+    await preview(page).click();
+    await viewer(page).getByRole("img", { name: MINE }).click();
+    await expect(viewer(page)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(viewer(page)).toHaveCount(0);
+    await expect(preview(page)).toBeFocused();
+  });
+
+  test("F-117: a click on the backdrop beside the picture closes the view", async ({ page }) => {
+    await open(page, "pictures-sent", "dark");
+    await drawn(page, MINE);
+    await preview(page).click();
+    await expect(viewer(page)).toBeVisible();
+    await clickBeside(page);
+    await expect(viewer(page)).toHaveCount(0);
+    await expect(preview(page)).toBeFocused();
+  });
+
+  test("F-117: a small picture is shown at its own size, not enlarged", async ({ page }) => {
+    await open(page, "pictures-sent", "dark");
+    await drawn(page, MINE);
+    await preview(page).click();
+    const img = viewer(page).getByRole("img", { name: MINE });
+    await expect(img).toBeVisible();
+    expect(
+      await img.evaluate((element: HTMLImageElement) => [
+        element.clientWidth,
+        element.clientHeight,
+        element.naturalWidth,
+        element.naturalHeight,
+      ]),
+    ).toEqual([240, 160, 240, 160]);
   });
 
   test("F-117: a bot's picture opens larger the same way", async ({ page }) => {

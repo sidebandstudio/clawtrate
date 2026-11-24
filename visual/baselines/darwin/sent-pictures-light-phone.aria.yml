@@ -17,13 +17,14 @@
       - button "More"
     - paragraph: here are my notes
     - paragraph: notes.txt 2 KB
+    - paragraph: scan.png 3 KB
     - toolbar "Message actions":
       - button "More"
     - paragraph: Got them. Milk, eggs and bread are on the list.
     - toolbar "Message actions":
       - button "More"
     - paragraph: and this one, from my phone
-    - paragraph: receipt.jpg 47 KB Picture sent with this message. The gateway doesn't give it back to show here.
+    - paragraph: receipt.jpg 47 KB Picture sent with this message. It shows only on the device that sent it, while the task is open.
     - toolbar "Message actions":
       - button "More"
     - paragraph: I can see you sent a picture.

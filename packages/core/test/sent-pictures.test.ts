@@ -123,15 +123,26 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("F-557: another device has no copy, says so, and asks the gateway for nothing", async () => {
-    const { client, gateway } = await task();
-    const row = sentRow("sent-elsewhere", "can u add this to my calendar?", [SHOT]);
-    gateway.handlers["chat.history"] = () => ({ messages: [row] });
-    client.reloadSession(KEY);
-    await until(() => client.state.transcripts[KEY]!.items.length === 1);
-    expect(await client.readSentPicture(KEY, "sent-elsewhere:user", 0)).toEqual({
-      status: "not-kept",
+  it("F-557: a picture kept for one task shows in no other, even under the same row key, and nothing is asked of the gateway", async () => {
+    const { client, gateway, confirm } = await task();
+    const id = client.sendMessage(KEY, "can u add this to my calendar?", {
+      attachments: [picture(RED, "shot.png")],
     });
+    const row = sentRow(id, "can u add this to my calendar?", [SHOT]);
+    await confirm([row]);
+    expect((await client.readSentPicture(KEY, `${id}:user`, 0)).status).toBe("content");
+    // Another task whose history holds a row under the same key: as another device sees it.
+    const OTHER = "agent:otto:elsewhere";
+    const answer = gateway.handlers["chat.history"]!;
+    gateway.handlers["chat.history"] = (params: unknown) =>
+      (params as { sessionKey?: string }).sessionKey === OTHER
+        ? { messages: [row] }
+        : answer(params);
+    client.openSession(OTHER);
+    await until(() => client.state.transcripts[OTHER]?.items.length === 1);
+    const asked = gateway.requests.length;
+    expect(await client.readSentPicture(OTHER, `${id}:user`, 0)).toEqual({ status: "not-kept" });
+    expect(gateway.requests.length).toBe(asked);
     expect(gateway.calls("artifacts.download")).toEqual([]);
     client.stop();
   });
@@ -152,7 +163,7 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("F-557: a picture over 5 MB, a type not drawn, and bytes that aren't their type's are refused and not kept", async () => {
+  it("F-557: a picture over 5 MB, a type not drawn, and bytes that aren't their type's are refused and not kept, and mislabelled bytes stay a file", async () => {
     const { client, confirm } = await task();
     const large = new Uint8Array(MAX_PICTURE_BYTES + 1);
     large.set(RED.subarray(0, 8));
@@ -168,14 +179,14 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
       message: "This picture is larger than Clawtrate shows: pictures up to 5 MB.",
     });
     for (const index of [1, 2])
-      expect(await client.readSentPicture(KEY, id, index)).toEqual({
-        status: "failed",
-        message: "This file isn't a picture this app shows.",
-      });
+      expect(await client.readSentPicture(KEY, id, index)).toEqual({ status: "not-a-picture" });
     await confirm([sentRow(id, "these", [SHOT, SHOT, SHOT])]);
-    expect(client.keptPictureBytes).toBe("not a png".length);
+    // None is kept: bytes that aren't the picture they are named as are never drawn.
+    expect(client.keptPictureBytes).toBe(0);
     expect(await client.readSentPicture(KEY, `${id}:user`, 0)).toEqual({ status: "not-kept" });
     expect(await client.readSentPicture(KEY, `${id}:user`, 1)).toEqual({ status: "not-kept" });
+    // The mislabelled one is still a file on your message, not a picture said to be elsewhere.
+    expect(await client.readSentPicture(KEY, `${id}:user`, 2)).toEqual({ status: "not-a-picture" });
     client.stop();
   });
 

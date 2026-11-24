@@ -55,21 +55,28 @@ export type ChatPictureContext = {
 
 /**
  * A picture a person sent, read from this app's own copy (`readSentPicture`):
- * the same answer as a bot's, or `not-kept` when this app holds no copy of it,
- * which is the case on every other device and after the task was closed: the
- * gateway gives none back (OpenClaw 2026.10.6 keeps a person's file only as a
- * `media://inbound` reference that no method or route serves).
+ * the same answer as a bot's; `not-a-picture` when its bytes aren't one of the
+ * types drawn, whatever it was named; or `not-kept` when this app holds no copy
+ * of it, which is the case on every other device and after the task was closed:
+ * Clawtrate doesn't load a person's picture from the gateway (#469).
  */
-export type SentPictureRead = ChatPictureRead | { status: "not-kept" };
+export type SentPictureRead =
+  ChatPictureRead | { status: "not-kept" } | { status: "not-a-picture" };
 
 const failed = (message: string): ChatPictureRead => ({ status: "failed", message });
 
 const TOO_LARGE = "This picture is larger than Clawtrate shows: pictures up to 5 MB.";
-const NOT_SHOWN = "This file isn't a picture this app shows.";
 
 /** Whether a conversation draws pictures of this type (PNG, JPEG, GIF or WebP). */
 export function isShownPictureType(mimeType: string | null | undefined): boolean {
   return typeof mimeType === "string" && Object.hasOwn(SIGNATURES, mimeType.toLowerCase());
+}
+
+/** A file's bytes are one of the picture types drawn, as it is named. */
+export function isDrawnPicture(mimeType: string, bytes: Uint8Array | null): boolean {
+  return (
+    isShownPictureType(mimeType) && bytes !== null && matchesType(mimeType.toLowerCase(), bytes)
+  );
 }
 
 /**
@@ -80,13 +87,11 @@ export function isShownPictureType(mimeType: string | null | undefined): boolean
 export function ownPictureRead(
   file: { mimeType: string; content: string },
   start: (bytes: Uint8Array) => FileTransferStart,
-): ChatPictureRead {
+): SentPictureRead {
   const mimeType = file.mimeType.toLowerCase();
-  if (!isShownPictureType(mimeType)) return failed(NOT_SHOWN);
   const bytes = fromBase64(file.content);
-  if (!bytes) return failed(NOT_SHOWN);
+  if (!bytes || !isDrawnPicture(mimeType, bytes)) return { status: "not-a-picture" };
   if (bytes.length > MAX_PICTURE_BYTES) return failed(TOO_LARGE);
-  if (!matchesType(mimeType, bytes)) return failed(NOT_SHOWN);
   try {
     return {
       status: "content",

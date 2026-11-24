@@ -1907,15 +1907,26 @@ Live and source agree on these ceilings:
   contentType, kind: "image" | "document", fileName, sizeBytes}`, with
   `mediaImageLayout.slots` naming the pictures (`offloaded` for the
   text-only scripted model). There is no `image` block and no
-  `artifactId`; `artifacts.list` for the task is empty; and no method or
-  HTTP route serves a `media://inbound` reference (the only media route is
-  `/api/chat/media/outgoing/…`, for a bot's managed media). The gateway's
-  own Control UI shows only the file name from the reference. From source,
+  `artifactId`; `artifacts.list` for the task is empty; and no WebSocket
+  method returns the file or a download for it (`chat.message.get` gives the
+  same row). The gateway keeps the file and its HTTP route
+  `/__openclaw__/assistant-media` does serve it (live, in the review of
+  #458): `GET ?meta=1&source=<the media://inbound reference>&sessionKey=<key>`
+  with `Authorization: Bearer <the device's operator token>` answers
+  `{available, mimeType, sizeBytes, mediaTicket}`, a five-minute ticket bound
+  to that source and task, and `GET ?source=…&sessionKey=…&mediaTicket=…`
+  with no credential answers the bytes. It needs only `operator.read` (method
+  scope `assistant.media.get`) and is served whether or not the Control UI
+  is on (source: `control-ui` `handleControlUiAssistantMediaRequest`,
+  `media-reference` `resolveInboundMediaReference`, `local-roots`
+  `buildMediaLocalRoots` allowing `<state>/media`). From source,
   a model that accepts pictures makes the slot `inline` and can put `image`
   blocks on the row, whose data the history projection removes (`omitted`,
   a byte count); still no artifact id (`chat-send-user-turn`,
-  `user-turn-transcript.message`, `chat-display-projection.core`). So a
-  person's picture can be shown only from the sending app's own copy.
+  `user-turn-transcript.message`, `chat-display-projection.core`).
+  Clawtrate doesn't use that route yet, since it would send the device's
+  credential over HTTP: a person's picture shows only from the sending app's
+  own copy (#469).
 
 ### 20. Side panel and per-bot controls
 

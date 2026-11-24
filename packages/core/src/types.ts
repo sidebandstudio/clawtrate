@@ -303,8 +303,8 @@ export type ChatPicture = {
 /**
  * A file a person sent with their message, as the gateway's history names it
  * (`__openclaw.media`, OpenClaw 2026.10.6): its name, type and size, never the
- * reference the gateway keeps it under. The gateway gives no download for it;
- * a picture is shown only from the sending app's own copy (`readSentPicture`).
+ * reference the gateway keeps it under. Clawtrate loads none from the gateway
+ * (#469); a picture is shown only from the sending app's own copy (`readSentPicture`).
  */
 export type SentAttachment = {
   fileName: string;

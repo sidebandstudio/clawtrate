@@ -15,6 +15,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
+import { fromBase64 } from "./bytes.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -125,6 +126,7 @@ import {
   type WorkspacePage,
 } from "./files.ts";
 import {
+  isDrawnPicture,
   isShownPictureType,
   MAX_PICTURE_BYTES,
   ownPictureRead,
@@ -421,8 +423,8 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /**
  * Messages history confirmed whose pictures this client keeps to show, from
- * the copy it sent, while their task stays open (the gateway gives none
- * back). Their bytes share `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes'
+ * the copy it sent, while their task stays open (Clawtrate doesn't load a
+ * person's picture from the gateway, #469). Their bytes share `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes'
  * files and give way, oldest first, to a new message's.
  */
 export const MAX_SENT_PICTURE_MESSAGES = 32;
@@ -1386,6 +1388,8 @@ export class ClawtrateClient {
       mode: OutgoingMessage["mode"];
       runId: string | null;
       files: { index: number; mimeType: string; content: string }[];
+      /** Its files named as pictures whose bytes aren't one: never drawn, so not kept. */
+      notPictures: number[];
       bytes: number;
     }
   >();
@@ -2754,13 +2758,16 @@ export class ClawtrateClient {
     const kept = this.attachmentContent.get(message.id);
     this.dropAttachments(message.id);
     if (!kept) return;
-    const files = kept.files.flatMap((file, index) =>
+    const named = kept.files.flatMap((file, index) =>
       isShownPictureType(file.mimeType) && decodedBytes(file.content) <= MAX_PICTURE_BYTES
         ? [{ index, mimeType: file.mimeType, content: file.content }]
         : [],
     );
+    // Bytes that aren't the picture they are named as would never be drawn: not kept.
+    const files = named.filter((file) => isDrawnPicture(file.mimeType, fromBase64(file.content)));
+    const notPictures = named.filter((file) => !files.includes(file)).map((file) => file.index);
     const bytes = files.reduce((sum, file) => sum + decodedBytes(file.content), 0);
-    if (files.length === 0 || this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) return;
+    if (named.length === 0 || this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) return;
     for (const id of this.sentPictures.keys()) {
       if (
         this.sentPictures.size < MAX_SENT_PICTURE_MESSAGES &&
@@ -2774,6 +2781,7 @@ export class ClawtrateClient {
       mode: message.mode,
       runId: message.runId,
       files,
+      notPictures,
       bytes,
     });
     this.sentPictureBytes += bytes;
@@ -5873,8 +5881,8 @@ export class ClawtrateClient {
    * own copy: by the outgoing message's id while the outbox holds it, or by
    * the key history stored its row under (`namesOutgoing`) once it is there.
    * `index` is the file's place among the message's attachments. Nothing is
-   * asked of the gateway, which gives no copy back: without one here the
-   * answer is `not-kept`.
+   * asked of the gateway: without a copy here the answer is `not-kept`, and
+   * for a file whose bytes aren't the picture it is named as, `not-a-picture`.
    */
   async readSentPicture(
     key: string,
@@ -5888,15 +5896,15 @@ export class ClawtrateClient {
     this.checkNotWithdrawn(options.owner);
     const outgoing = this.state.transcripts[key]?.outbox.find((each) => each.id === messageKey);
     const sending = outgoing ? this.attachmentContent.get(outgoing.id) : undefined;
-    const file = sending
-      ? sending.files[index]
-      : [...this.sentPictures.entries()]
-          .find(
-            ([id, kept]) =>
-              kept.task === key &&
-              namesOutgoing(messageKey, { id, mode: kept.mode, runId: kept.runId }),
-          )?.[1]
-          .files.find((each) => each.index === index);
+    const kept = sending
+      ? undefined
+      : [...this.sentPictures.entries()].find(
+          ([id, each]) =>
+            each.task === key &&
+            namesOutgoing(messageKey, { id, mode: each.mode, runId: each.runId }),
+        )?.[1];
+    if (kept?.notPictures.includes(index)) return { status: "not-a-picture" };
+    const file = sending ? sending.files[index] : kept?.files.find((each) => each.index === index);
     if (!file) return { status: "not-kept" };
     return ownPictureRead(file, (bytes) =>
       this.fileTransfers.start(options.owner ?? DIRECT_CALLER, bytes, options.maxChars),

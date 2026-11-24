@@ -1,9 +1,10 @@
 // The files a person sent, on their own message (#451), in the order sent. A
 // picture shows from this app's own copy (`readSentPicture`), as long as this
-// app holds it: the gateway gives none back, so on another device, or once
-// the task was closed, the message says plainly that a picture was sent and
-// isn't shown. Any other file, a picture of a type not drawn or one over 5 MB,
-// is its name and size.
+// app holds it. Clawtrate doesn't load a person's picture from the gateway
+// (#469), so on another device, or once the task was closed, the message says
+// plainly that a picture was sent and isn't shown. Any other file, a picture of
+// a type not drawn, one over 5 MB, or one whose bytes aren't the picture it is
+// named as, is its name and size.
 
 import {
   isShownPictureType,
@@ -22,6 +23,7 @@ type Shown =
   | { status: "loading" }
   | { status: "shown"; url: string }
   | { status: "not-kept" }
+  | { status: "not-a-picture" }
   | { status: "failed"; message: string };
 
 const sizeOf = (file: SentAttachment) => (file.sizeBytes === null ? "" : size(file.sizeBytes));
@@ -50,7 +52,6 @@ function SentPicture({
     const set = (next: Shown) => current && setShown(next);
     bridge.invoke({ type: "readSentPicture", key: taskKey, messageKey, index }).then(
       async (read) => {
-        if (read.status === "not-kept") return set(read);
         if (read.status !== "content") return set(read);
         const data = await collectBytes(bridge, read.transfer, read.bytes);
         if (!(data instanceof Uint8Array)) return set({ status: "failed", message: data.message });
@@ -76,6 +77,8 @@ function SentPicture({
         />
       </figure>
     );
+  // Named as a picture, but its bytes aren't one: a file, by its name and size.
+  if (shown.status === "not-a-picture") return <SentFile file={file} />;
   return (
     <p className="sent-file" data-testid="sent-picture" data-state={shown.status}>
       <FileIcon aria-hidden="true" />
@@ -85,7 +88,7 @@ function SentPicture({
         {shown.status === "loading"
           ? "Loading the picture…"
           : shown.status === "not-kept"
-            ? "Picture sent with this message. The gateway doesn't give it back to show here."
+            ? "Picture sent with this message. It shows only on the device that sent it, while the task is open."
             : `Couldn't show the picture. ${shown.message}`}
       </span>
     </p>

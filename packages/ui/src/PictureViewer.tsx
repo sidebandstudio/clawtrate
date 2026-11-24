@@ -28,6 +28,8 @@ function PictureViewer({ url, alt, onClose }: { url: string; alt: string; onClos
       role="dialog"
       aria-modal="true"
       aria-label={alt}
+      // A click on the picture keeps focus inside, so Escape still closes it.
+      tabIndex={-1}
       data-testid="picture-viewer"
       onKeyDown={onKey}
     >

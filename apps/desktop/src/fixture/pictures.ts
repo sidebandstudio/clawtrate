@@ -214,7 +214,7 @@ function sentRows(start: number) {
     __openclaw: { id: `row-${seq}`, seq, runId },
   });
   const media = (name: string, contentType: string, sizeBytes: number) => ({
-    // Never loaded or kept: the gateway serves no such reference.
+    // Never loaded or kept: Clawtrate doesn't load a person's picture from the gateway (#469).
     url: `media://inbound/${name.replace(/\.[^.]+$/, "")}---7d0e1a3c-5b2f-4c9e-8a61-0f3b2d4c6e81${name.slice(name.lastIndexOf("."))}`,
     contentType,
     kind: contentType.startsWith("image/") ? "image" : "document",
@@ -229,7 +229,13 @@ function sentRows(start: number) {
       1,
     ),
     bot("Added: Thursday, 4 pm, dentist.", "sent-1", 2),
-    user("sent-2", "here are my notes", [media("notes.txt", "text/plain", 2_310)], 3),
+    user(
+      "sent-2",
+      "here are my notes",
+      // scan.png is named as a picture, but the app found its bytes aren't one.
+      [media("notes.txt", "text/plain", 2_310), media("scan.png", "image/png", 3_072)],
+      3,
+    ),
     bot("Got them. Milk, eggs and bread are on the list.", "sent-2", 4),
     user(
       "elsewhere-1",
@@ -269,6 +275,8 @@ export function pictureScene(base: ClawtrateState, now: number, name: string): C
 
 /** The host's answer for a picture you sent: the one this app sent and holds, and no other. */
 export function sentPictureAnswer(command: { messageKey: string; index: number }): SentPictureRead {
+  if (command.messageKey === "sent-2:user" && command.index === 1)
+    return { status: "not-a-picture" };
   if (command.messageKey !== "sent-1:user" || command.index !== 0) return { status: "not-kept" };
   return {
     status: "content",

@@ -185,9 +185,10 @@ test("F-535: a picture the bot sends with its message tool shows under that mess
 });
 
 // A picture a person attaches (#451), sent through the composer of a host of this test's own,
-// with interactive access. The gateway keeps the file only as a `media://inbound` reference that
-// nothing serves, so the preview is the app's own copy while its host follows the task (a reload
-// of the page keeps it); another device's host has none, and its message says what was sent.
+// with interactive access. History names the file by a `media://inbound` reference, and Clawtrate
+// doesn't load a person's picture from the gateway (#469), so the preview is the app's own copy
+// while its host follows the task (a reload of the page keeps it); another device's host has
+// none, and its message says what was sent.
 test.describe("F-557: a picture you attach", () => {
   const OWN_TASK = "Your picture from the end-to-end run";
   const OWN_KEY = "agent:pip:e2e-own-picture";
@@ -284,7 +285,7 @@ test.describe("F-557: a picture you attach", () => {
     const again = page.locator(YOURS).filter({ hasText: WORDS });
     await expect(again.getByRole("img", { name: MINE })).toBeVisible({ timeout: 20_000 });
 
-    // Another device has no copy, and the gateway gives none: the message says what was sent.
+    // Another device has no copy, and asks the gateway for none: the message says what was sent.
     const otherData = mkdtempSync(join(tmpdir(), "clawtrate-own-picture-"));
     const other = startHost(INSTANCE, process.env.CLAWTRATE_E2E_STATIC!, otherData);
     own.push({ child: other.host, data: otherData });
@@ -299,7 +300,7 @@ test.describe("F-557: a picture you attach", () => {
     });
     await expect(there.getByTestId("sent-picture")).toContainText(
       // Its name and size as the gateway recorded them, then the plain line.
-      `shot.png${Math.round(shot.length / 1024)} KBPicture sent with this message. The gateway doesn't give it back to show here.`,
+      `shot.png${Math.round(shot.length / 1024)} KBPicture sent with this message. It shows only on the device that sent it, while the task is open.`,
     );
     await expect(there.locator(".bubble")).toHaveText(WORDS);
     await otherContext.close();

@@ -2,7 +2,7 @@
 // development gateway: Clawtrate's web client attached the files and sent them
 // with `chat.send` (#451). The row's text is a plain string; each file is a
 // `__openclaw.media` entry, in the order sent, naming a `media://inbound`
-// reference that no method or route serves. `artifacts.list` for these tasks
+// reference. `artifacts.list` for these tasks
 // was empty. The same row arrived in the live `session.message` event. Sender
 // fields and other values unrelated to the files are left out; ids are the
 // development gateway's own.
