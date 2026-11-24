@@ -30,7 +30,14 @@ import {
   startHost,
   stopChild,
 } from "./global-setup.ts";
-import { cleanUp, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
+import {
+  cleanUp,
+  readRecord,
+  recordPath,
+  saveRecord,
+  TEMP_PREFIX,
+  type RunRecord,
+} from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
@@ -188,6 +195,12 @@ test.beforeAll(async ({ browser }) => {
   record.dirs.push(data);
   saveRecord(RECORDS, record);
   host = { ...(await startRecordedHost(data)), data };
+  // What a later run's clean-up would read: the instance, the host by PID, and its folder.
+  expect(readRecord(recordPath(RECORDS, record.run))).toMatchObject({
+    instances: [{ name: INSTANCE, runId }],
+    host: { pid: host.child.pid },
+    dirs: [data],
+  });
   page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
   await page.goto(host.url);
   await page.getByRole("button", { name: "Use the development gateway" }).click();
