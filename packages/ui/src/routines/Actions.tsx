@@ -21,7 +21,9 @@ import { Dialog } from "../bots/Dialog.tsx";
 import { Note } from "../bots/parts.tsx";
 import { ChevronIcon } from "../icons.tsx";
 import { type MenuEntry } from "../Menu.tsx";
+import { screenStamp, type ShownStamp } from "../stamp.ts";
 import { draftOf } from "./draft.ts";
+import { notSentDelete, notSentNote } from "./refusals.ts";
 import { viewerZone, when, zoneCity } from "./schedule.ts";
 
 export function canAdmin(connection: ConnectionState, info: HostInfo): boolean {
@@ -42,14 +44,17 @@ function assign<T>(all: Record<string, T>, id: string, value: T | null): Record<
 
 /** What the admin actions are doing now, by routine. */
 /**
- * `listedOn` is the list the rows on screen came from: each action sends it,
- * so one from a row of an earlier connection's list is refused, not sent.
+ * `listedOn` is the list the rows on screen came from, and `shown` where it was drawn: each
+ * action sends both (`GatewayStamp`), so one from a row of an earlier connection's list, or of
+ * another gateway's, is refused, not sent.
  */
 export function useRoutineActions(
   announce: (text: string) => void,
   routines: Routine[],
   listedOn: number,
+  shown: ShownStamp,
 ) {
+  const { gatewayId, target, connectedAt } = shown;
   const bridge = useBridge();
   /** A switch turned and not yet confirmed: the value it shows meanwhile. */
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -90,6 +95,7 @@ export function useRoutineActions(
           id: routine.id,
           enabled,
           listedOn,
+          stamp: await screenStamp(bridge, { gatewayId, target, connectedAt }),
         });
         if (result.status === "saved")
           announce(`${enabled ? "Resumed" : "Paused"} ${routine.name}`);
@@ -102,7 +108,7 @@ export function useRoutineActions(
                 : result.status === "deleted"
                   ? "it was deleted."
                   : result.status === "not-sent"
-                    ? "nothing was sent."
+                    ? notSentNote(result.reason)
                     : "it changed meanwhile."
             }`,
           );
@@ -112,7 +118,7 @@ export function useRoutineActions(
         putPending(routine.id, null);
       }
     },
-    [bridge, announce, listedOn],
+    [bridge, announce, listedOn, gatewayId, target, connectedAt],
   );
 
   const runNow = useCallback(
@@ -120,7 +126,12 @@ export function useRoutineActions(
       putRun(routine.id, { status: "starting" });
       let result: RoutineRunNow;
       try {
-        result = await bridge.invoke({ type: "runRoutineNow", id: routine.id, listedOn });
+        result = await bridge.invoke({
+          type: "runRoutineNow",
+          id: routine.id,
+          listedOn,
+          stamp: await screenStamp(bridge, { gatewayId, target, connectedAt }),
+        });
       } catch (error) {
         result = { status: "unknown", error: errorText(error) };
       }
@@ -138,7 +149,7 @@ export function useRoutineActions(
               status: "failed",
               error:
                 result.status === "not-sent"
-                  ? "nothing was sent."
+                  ? notSentNote(result.reason)
                   : result.status === "unknown"
                     ? `the gateway didn't answer (${result.error}).`
                     : result.error,
@@ -152,7 +163,7 @@ export function useRoutineActions(
         );
       }
     },
-    [bridge, announce, listedOn],
+    [bridge, announce, listedOn, gatewayId, target, connectedAt],
   );
 
   return { pending, notes, runs, setEnabled, runNow };
@@ -267,16 +278,20 @@ export function RunNoteLine({ note, paused }: { note: RunNote | undefined; pause
 export function DeleteRoutine({
   routine,
   listedOn,
+  shown,
   onCancel,
   onDeleted,
 }: {
   routine: Routine;
   /** The list the routine was shown from (`RoutinesState.listedOn`). */
   listedOn: number;
+  /** Where that list was drawn: the confirmation keeps the one it opened with. */
+  shown: ShownStamp;
   onCancel: () => void;
   onDeleted: () => void;
 }) {
   const bridge = useBridge();
+  const [opened] = useState(shown);
   const [status, setStatus] = useState<"idle" | "deleting" | "unknown" | "checking" | "present">(
     "idle",
   );
@@ -295,14 +310,15 @@ export function DeleteRoutine({
     setStatus("deleting");
     setError(null);
     try {
-      const result = await bridge.invoke({ type: "removeRoutine", id: routine.id, listedOn });
+      const result = await bridge.invoke({
+        type: "removeRoutine",
+        id: routine.id,
+        listedOn,
+        stamp: await screenStamp(bridge, opened),
+      });
       if (result.status === "removed") return onDeleted();
       if (result.status === "unknown") return setStatus("unknown");
-      setError(
-        result.status === "not-sent"
-          ? "Nothing was sent: this connection can't change routines."
-          : result.error,
-      );
+      setError(result.status === "not-sent" ? notSentDelete(result.reason) : result.error);
       setStatus("idle");
     } catch {
       setStatus("unknown");

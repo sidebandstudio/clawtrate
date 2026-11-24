@@ -12,7 +12,6 @@ import {
   deferred,
   FakeGateway,
   helloOk,
-  sleep,
   testHost,
   until,
 } from "../../../packages/core/test/fake-gateway.ts";
@@ -22,6 +21,8 @@ const URL_B = "ws://127.0.0.1:19002";
 const URL_C = "ws://127.0.0.1:19003";
 const CODE = "setup-bootstrap-0123456789abcdefghijklmnopqrstuvw";
 const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
+/** Tries once and then not again for longer than any test here runs. */
+const ONCE = { reconnect: { initialMs: 600_000, maxMs: 600_000 } };
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -33,14 +34,6 @@ const box: SecretBox = {
   encrypt: async (text) => flip(new TextEncoder().encode(text)),
   decrypt: async (data) => new TextDecoder().decode(flip(data)),
 };
-
-async function untilAsync(check: () => Promise<boolean>, timeoutMs = 4_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("condition not met in time");
-    await sleep(10);
-  }
-}
 
 describe("clients sharing a secure store", () => {
   it("suspending after another client's pairing retired the earlier build's gateway token leaves it retired", async () => {
@@ -67,17 +60,21 @@ describe("clients sharing a secure store", () => {
       ok: true,
       payload: helloOk((params as { scopes: string[] }).scopes, "issued-A"),
     });
-    const client = new ClawtrateClient(host(closed), FAST);
+    // Both clients are this device at the same address on one store, so a socket either opens
+    // takes the store's token write from the other's earlier socket: a hello on a socket that
+    // isn't the newest saves no token. This client tries once and stays waiting, so it opens
+    // nothing while the other pairs.
+    const client = new ClawtrateClient(host(closed), ONCE);
     const other = new ClawtrateClient(host(pairing), FAST);
     try {
       await client.start();
+      await until(() => client.state.connection.retryAt !== null);
       expect(await record()).toEqual({ url: URL_A, token: "legacy-bootstrap" });
-      // The other client pairs: saving its device token retires the earlier token in the store.
+      // The other client pairs: saving its device token retires the earlier token in the store,
+      // and its hello is reported only once that save has finished, so nothing is left to wait for.
       await other.start();
       await until(() => other.state.connection.status === "connected");
-      await untilAsync(
-        async () => ((await record()) as { token: string | null } | null)?.token === null,
-      );
+      expect(closed.sockets).toHaveLength(1);
       expect(await record()).toEqual({ url: URL_A, token: null });
       await client.suspend();
       expect(await record()).toEqual({ url: URL_A, token: null, suspended: true });

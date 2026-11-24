@@ -23,6 +23,8 @@ export const stampOn = (
   target: typeof from === "number" ? from : from.state.connection.target,
 });
 export const FAST: ClientOptions = { reconnect: { initialMs: 20, maxMs: 40 } };
+/** Tries once and then not again for longer than any test runs. */
+export const ONCE: ClientOptions = { reconnect: { initialMs: 600_000, maxMs: 600_000 } };
 
 type ConnectParams = { scopes: string[]; auth?: { deviceToken?: string } };
 
