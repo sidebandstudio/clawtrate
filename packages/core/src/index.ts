@@ -17,6 +17,7 @@ export * from "./attachments.ts";
 export * from "./files.ts";
 export * from "./pictures.ts";
 export * from "./bot-names.ts";
+export * from "./gateway-bot.ts";
 export * from "./computer.ts";
 export * from "./machine.ts";
 export * as computerWords from "./computer-words.ts";

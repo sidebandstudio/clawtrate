@@ -1,4 +1,11 @@
-import { mapSessionRow, type Bot, type ClawtrateState, type Task } from "@clawtrate/core";
+import {
+  gatewayBotHidden,
+  listedBots,
+  mapSessionRow,
+  type Bot,
+  type ClawtrateState,
+  type Task,
+} from "@clawtrate/core";
 import { useCallback, useMemo, useState } from "react";
 import { readIdSet, readPreference, writeIdSet, writePreference } from "./preferences.ts";
 import { isUnread, markSeen, type SeenMap } from "./unread.ts";
@@ -187,7 +194,52 @@ export function useSelection(
   /** Tasks marked unread while open: leaving them does not mark them read again. */
   const [keptUnread, setKeptUnread] = useState<Set<string>>(() => new Set());
 
-  const bot = state.bots.find((b) => b.id === botId) ?? state.bots[0];
+  const showGatewayBot = state.showGatewayBot === true;
+  /** The bots the rule lists: the gateway's own bot only when shown or waiting (F-562). */
+  const byRule = useMemo(
+    () => listedBots({ bots: state.bots, tasksByBot: state.tasksByBot, showGatewayBot }),
+    [state.bots, state.tasksByBot, showGatewayBot],
+  );
+  // The gateway's own bot, while out of view by the rule, is open only when the person opened it:
+  // from a link or a search result, or from the rail while it waited. A bot starting to wait never
+  // takes the selection. One the person opened stays open, and in the rail, until they open
+  // another bot: after its wait ends, and when the switch is turned off while it waits.
+  const [keptOpen, setKeptOpen] = useState<string | null>(null);
+  /** The bot on screen in the last render. */
+  const [onScreen, setOnScreen] = useState<string | null>(null);
+  const shownByRule = (each: Bot) => !gatewayBotHidden(each, state.bots, showGatewayBot);
+  const chosen = state.bots.find((b) => b.id === botId);
+  // On screen and still listed because it waits, though the rule now leaves it out (the switch
+  // was turned off): the person's choice, kept.
+  const stays =
+    chosen !== undefined &&
+    onScreen === chosen.id &&
+    !shownByRule(chosen) &&
+    byRule.includes(chosen);
+  const kept = stays ? chosen.id : keptOpen;
+  if (kept !== keptOpen) setKeptOpen(kept);
+  /** The bots the rail lists, with the one the person keeps open. */
+  const listed =
+    kept === null
+      ? byRule
+      : listedBots({ bots: state.bots, tasksByBot: state.tasksByBot, showGatewayBot }, kept);
+  const bot =
+    chosen && (kept === chosen.id || (shownByRule(chosen) && listed.includes(chosen)))
+      ? chosen
+      : (listed.find(shownByRule) ?? listed[0]);
+  // A saved bot out of view gives way, and the bot opened in its place becomes the saved one.
+  if (chosen && bot && bot !== chosen) {
+    setBotId(bot.id);
+    writePreference("bot", bot.id);
+  }
+  if ((bot?.id ?? null) !== onScreen) setOnScreen(bot?.id ?? null);
+  const keepIfLeftOut = useCallback(
+    (id: string) => {
+      const target = state.bots.find((each) => each.id === id);
+      setKeptOpen(target && gatewayBotHidden(target, state.bots, showGatewayBot) ? id : null);
+    },
+    [state.bots, showGatewayBot],
+  );
   const tasks = useMemo(
     () => (bot ? (state.tasksByBot[bot.id] ?? []) : []),
     [bot, state.tasksByBot],
@@ -281,11 +333,12 @@ export function useSelection(
     (id: string) => {
       if (id === bot?.id) return;
       markRead();
+      keepIfLeftOut(id);
       setBotId(id);
       writePreference("bot", id);
       setFolded(false);
     },
-    [bot, markRead, setFolded],
+    [bot, markRead, setFolded, keepIfLeftOut],
   );
 
   /** Open a task under any bot: one operation for the bot, the task and what is read. */
@@ -293,6 +346,7 @@ export function useSelection(
     (id: string, key: string, linkedTask: Task | null = null) => {
       const linkedTo = linkTarget(state.tasksByBot[id], id, key, linkedTask);
       setLinked(linkedTo && { task: linkedTo, gatewayId });
+      keepIfLeftOut(id);
       // The task shown may be only the bot's newest, nothing chosen: choosing it remembers it,
       // so a newer task of the bot does not take its place.
       if (id === bot?.id && key === remembered) return;
@@ -317,7 +371,7 @@ export function useSelection(
         return next;
       });
     },
-    [bot, task, remembered, gatewayId, markRead, setFolded, state.tasksByBot],
+    [bot, task, remembered, gatewayId, markRead, setFolded, state.tasksByBot, keepIfLeftOut],
   );
 
   const isOpen = useCallback(
@@ -389,6 +443,9 @@ export function useSelection(
 
   return {
     bot,
+    listed,
+    /** The gateway's own bot the person keeps open, listed until they open another (F-562). */
+    kept,
     tasks,
     task,
     seen,
