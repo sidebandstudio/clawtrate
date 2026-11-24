@@ -4,6 +4,7 @@ import type {
   DesktopUpdateState,
   UpdateInspectionFailure,
 } from "@clawtrate/core";
+import { versionLabel } from "./version-label.ts";
 
 type Reason = Extract<DesktopUpdateState, { kind: "handoff-failed" }>["reason"];
 const reasons: Record<Exclude<Reason, "no-verified-download">, string> = {
@@ -127,13 +128,20 @@ function quitLine(attempt: NonNullable<DesktopUpdateSnapshot["lastAttempt"]>) {
   return ` The app quit for the update after ${Math.max(1, Math.round(attempt.quitMs / 1000))} s, but macOS didn't install it.`;
 }
 
-export function attemptLine(attempt: DesktopUpdateSnapshot["lastAttempt"]) {
+export function attemptLine(
+  attempt: DesktopUpdateSnapshot["lastAttempt"],
+  runningTrack: DesktopUpdateSnapshot["runningTrack"],
+) {
   if (!attempt) return null;
   if (attempt.running) {
-    if (attempt.kind === "target-running") return `Clawtrate ${attempt.running} is running.`;
+    // Each version on its own track (F-561): the running build's, and the attempt's for
+    // the build it was updating to. A Stable build that tried a Beta one stays Stable.
+    const running = versionLabel(attempt.running, runningTrack);
+    const target = versionLabel(attempt.target, attempt.track);
+    if (attempt.kind === "target-running") return `Clawtrate ${running} is running.`;
     if (attempt.kind === "old-version-running")
-      return `Clawtrate ${attempt.running} is running, not ${attempt.target}.${quitLine(attempt)} Check for updates to try again.`;
-    return `Clawtrate ${attempt.running} is running. Clawtrate couldn't confirm that it restarted into ${attempt.target}.${quitLine(attempt)}`;
+      return `Clawtrate ${running} is running, not ${target}.${quitLine(attempt)} Check for updates to try again.`;
+    return `Clawtrate ${running} is running. Clawtrate couldn't confirm that it restarted into ${target}.${quitLine(attempt)}`;
   }
   return "Clawtrate couldn't read the running version.";
 }
