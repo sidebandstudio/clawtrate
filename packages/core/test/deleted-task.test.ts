@@ -1650,7 +1650,7 @@ describe("a delete that names only the key, its read of the key answered late (F
   });
 });
 
-describe("Archive, Delete and their Stop act only on the session the person chose (F-277, F-278)", () => {
+describe("Archive and Delete check the selected session before Stop (F-277, F-278)", () => {
   /** A task the person chose in `s-1`, whose key holds `holds` by the time they act on it. */
   async function chosen(holds: Record<string, unknown> | null) {
     const gateway = grantingGateway();
@@ -1684,7 +1684,7 @@ describe("Archive, Delete and their Stop act only on the session the person chos
     },
   );
 
-  it("a Stop after which the key's row names another session: the wait ends there, and nothing is archived", async () => {
+  it("F-277: a session change after a key-only Stop refuses the archive without claiming nothing happened", async () => {
     const { client, gateway } = await chosen(null);
     const rows = [
       { sessionId: "s-1", hasActiveRun: true },
@@ -1692,8 +1692,9 @@ describe("Archive, Delete and their Stop act only on the session the person chos
     ];
     gateway.handlers["sessions.describe"] = () => ({ session: rows.shift() ?? null });
     await expect(client.archiveTask(KEY, { sessionId: "s-1", stop: true })).rejects.toThrow(
-      TASK_GONE,
+      /^This task was already deleted or reset elsewhere\.$/,
     );
+    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY }]);
     expect(gateway.calls("sessions.patch")).toEqual([]);
     client.stop();
   });

@@ -777,7 +777,7 @@ export function Rail({
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     const act = async (stop: boolean) => {
-      // The task the person chose: a key that holds another session by then is left alone.
+      // Use the session shown in the row when it has one.
       const { stoppedRun } = await bridge.invoke({
         type: "archiveTask",
         key: task.key,

@@ -249,16 +249,14 @@ export async function listArchived(
 async function describe(ctx: TaskActionContext, key: string): Promise<RawRecord | null> {
   const row = asRecord(asRecord(await ctx.request("sessions.describe", { key }))?.session);
   if (typeof row?.sessionId === "string" && jsonTextLength(row.sessionId) > MAX_ID_CHARS)
-    throw new Error("That task's session can't be named, so nothing was changed.");
+    throw new Error("That task's session can't be named.");
   return row;
 }
 
 /**
- * The key no longer holds the session of the task the person acted on: it was deleted or reset
- * elsewhere, and nothing is done to whatever the key holds now.
+ * The key no longer holds the selected session. A Stop may already have been sent.
  */
-export const TASK_GONE =
-  "This task was already deleted or reset elsewhere, so nothing was done to it.";
+export const TASK_GONE = "This task was already deleted or reset elsewhere.";
 
 /** The row, when it is of `sessionId`, the session the person acted on, or no session was named. */
 function sameSession(row: RawRecord | null, sessionId: string | undefined): RawRecord | null {
@@ -421,8 +419,8 @@ export async function markTask(
  * Archive a task. One whose run is active is archived only with `stop`, after
  * the gateway confirms the run stopped ("Stop and archive"); without it, the
  * archive is refused with `ActiveRunError` and nothing is asked. With
- * `sessionId`, the session of the task the person chose, a key that holds
- * another session or none is left alone: nothing is stopped or archived.
+ * `sessionId`, a missing or different session at the first check prevents Stop and Archive.
+ * A key-only Stop can still reach a replacement after that check.
  */
 export async function archiveTask(
   ctx: TaskActionContext,
@@ -466,8 +464,7 @@ export async function restoreTask(ctx: TaskActionContext, key: string): Promise<
  * is stopped first and the stop confirmed; the task is archived, then deleted
  * with `archivedOnly`, the only delete the write tier may make. What the bot
  * saved to memory during the task is the bot's, and stays. With `sessionId`,
- * the session of the task the person chose, a key that holds another session
- * is left alone: nothing is stopped, archived or deleted.
+ * a different session at the first check prevents Stop, Archive and Delete.
  */
 export async function deleteTask(
   ctx: TaskActionContext,

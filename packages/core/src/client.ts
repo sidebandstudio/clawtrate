@@ -8834,7 +8834,7 @@ export class ClawtrateClient {
               typeof expected === "string"
             ) {
               if (sessionNamed({ sessionId: expected }) === null)
-                throw new Error("That task's session can't be named, so nothing was changed.");
+                throw new Error("That task's session can't be named.");
               removal.sent = expected;
             }
             return ctx.request(method, params);
