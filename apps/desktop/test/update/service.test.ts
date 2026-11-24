@@ -208,6 +208,50 @@ it("reports the running version when the selected track offers an older build", 
     state: { kind: "nothing-newer" },
   });
 });
+it("F-559: a Beta build, dated or three-numbered, takes the next Beta build and never an older one", async () => {
+  const beta = { stable: null, nightly: server.origin + "/nightly" };
+  const check = async (version: string, offered: string) => {
+    server.route("/nightly", json(document(offered, "nightly")));
+    const service = await start({ version, feeds: beta });
+    expect(service.get()).toMatchObject({ runningTrack: "nightly", selectedTrack: "nightly" });
+    return (await service.check("nightly", service.get().revision)).snapshot.state;
+  };
+  // Old to new, new to new, old to old.
+  for (const [version, offered] of [
+    ["0.1.1-beta.20261124.2", "0.2.0"],
+    ["0.2.0", "0.2.1"],
+    ["0.1.1-beta.20261124.1", "0.1.1-beta.20261124.2"],
+  ] as const)
+    expect(await check(version, offered), `${version} to ${offered}`).toMatchObject({
+      kind: "offered",
+      version: offered,
+    });
+  // Never the same build or an older one.
+  for (const [version, offered] of [
+    ["0.2.0", "0.2.0"],
+    ["0.2.0", "0.1.1-beta.20261124.2"],
+    ["0.2.1", "0.2.0"],
+    ["0.1.1-beta.20261124.2", "0.1.1-beta.20261124.2"],
+    ["0.1.1-beta.20261124.2", "0.1.1-beta.20261124.1"],
+  ] as const)
+    expect(await check(version, offered), `${version} to ${offered}`).toEqual({
+      kind: "nothing-newer",
+    });
+  // A three-numbered build with a Stable feed is still a Stable build, as before.
+  for (const feeds of [
+    { stable: server.origin + "/stable", nightly: server.origin + "/nightly" },
+    { stable: server.origin + "/stable", nightly: null },
+  ])
+    expect((await start({ version: "0.2.0", feeds })).get()).toMatchObject({
+      runningTrack: "stable",
+      selectedTrack: "stable",
+    });
+  // A dated build is a Beta build whatever feeds it has.
+  expect((await start({ version: "0.1.1-beta.20261124.2" })).get()).toMatchObject({
+    runningTrack: "nightly",
+    selectedTrack: "nightly",
+  });
+});
 it("describes a single source, development copies and invalid running versions", async () => {
   const single = await start({ feeds: { stable: server.origin + "/stable", nightly: null } });
   expect(single.get().tracks).toHaveLength(1);
@@ -776,10 +820,10 @@ it("bounds the packaged and displayed hostname to 253 characters", async () => {
   expect(server.requests).toEqual([]);
 });
 
-it("a nightly-only build stays idle and checks only its one configured source", async () => {
+it("F-559: a nightly-only build is a Beta build, stays idle and checks only its one configured source", async () => {
   const service = await start({ feeds: { stable: null, nightly: server.origin + "/nightly" } });
   expect(service.get()).toMatchObject({
-    runningTrack: "stable",
+    runningTrack: "nightly",
     selectedTrack: "nightly",
     tracks: [{ track: "nightly", source: "127.0.0.1" }],
   });
@@ -789,7 +833,7 @@ it("a nightly-only build stays idle and checks only its one configured source", 
   expect(checked).toMatchObject({
     outcome: "accepted",
     snapshot: {
-      runningTrack: "stable",
+      runningTrack: "nightly",
       selectedTrack: "nightly",
       lastCheck: { track: "nightly", readAt: expect.stringMatching(/Z$/) },
       state: { kind: "offered" },
@@ -1985,4 +2029,21 @@ it("F-554: the lists arriving after a check never make the next Check stale", as
   const again = await service.check("stable", shown);
   expect(again.outcome).toBe("accepted");
   expect(server.requests.filter((path) => path === "/stable")).toHaveLength(2);
+});
+it("F-561: reports the build's own date and commit, for support, and nothing it doesn't carry", async () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  expect((await start({ releaseDate: "2026-12-01T10:00:00.000Z", commit })).get().build).toEqual({
+    releaseDate: "2026-12-01T10:00:00.000Z",
+    commit,
+  });
+  expect((await start({ releaseDate: "2026-12-01T10:00:00.000Z" })).get().build).toEqual({
+    releaseDate: "2026-12-01T10:00:00.000Z",
+    commit: null,
+  });
+  expect((await start({ commit: "not a commit" })).get()).not.toHaveProperty("build");
+  expect((await start()).get()).not.toHaveProperty("build");
+  // It stays through a check.
+  const service = await start({ commit });
+  await service.check(service.get().selectedTrack, service.get().revision);
+  expect(service.get().build).toEqual({ releaseDate: null, commit });
 });

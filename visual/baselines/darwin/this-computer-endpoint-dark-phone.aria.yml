@@ -1,3 +1,4 @@
+- status
 - main:
   - button "Back"
   - heading "On this computer" [level=2]

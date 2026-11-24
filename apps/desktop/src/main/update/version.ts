@@ -19,8 +19,18 @@ export function parseVersion(text: unknown): Version | null {
   return [...base, Number(date), Number(match[5])];
 }
 
+/** The track a version's shape names: three numbers Stable, the dated five-part form Beta. */
 export function versionTrack(version: Version): UpdateTrack {
   return version.length === 3 ? "stable" : "nightly";
+}
+
+/**
+ * Whether a version can be a build on `track`. A dated five-part version is
+ * only ever a Beta build. Three numbers can be either, because the track is
+ * not part of the number: Beta builds move to three numbers (issue #438).
+ */
+export function fitsTrack(version: Version, track: UpdateTrack): boolean {
+  return version.length === 3 || track === "nightly";
 }
 
 export function isNewer(candidate: Version, current: Version): boolean {

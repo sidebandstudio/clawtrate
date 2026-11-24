@@ -52,7 +52,11 @@ export async function startDesktopUpdates(
       },
     },
     packaged: true,
-    feeds: { stable: origin + "/stable", nightly: origin + "/nightly" },
+    // A beta build has only the Beta feed; a test asks for that with this file.
+    feeds: {
+      stable: existsSync(join(profile, "beta-feed-only")) ? null : origin + "/stable",
+      nightly: origin + "/nightly",
+    },
     releaseDate: null,
     loopbackHttpForTests: { port: __TEST_FEED_PORT__ },
   });

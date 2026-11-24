@@ -3,6 +3,13 @@
 
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
+  readVoice,
+  setVoice,
+  VOICE_CHANGED_EVENT,
+  VOICE_GET,
+  type BotVoiceAnswer,
+} from "./voice.ts";
+import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
   GatewayProtocolClient,
@@ -26,6 +33,7 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
+import type { ModelList } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -62,6 +70,7 @@ import {
 } from "./machines.ts";
 import {
   deleteBot,
+  rosterIds,
   wholeRoster,
   readBotDelete,
   type BotDeleteContext,
@@ -154,6 +163,7 @@ import { externalChannelOf } from "./channels.ts";
 import {
   asRecord,
   botIdFromSessionKey,
+  rowBotOf,
   groupTasks,
   isExcludedSessionKey,
   isSessionRemoval,
@@ -279,6 +289,14 @@ import {
   validateGatewayUrl,
 } from "./gateway-url.ts";
 import {
+  GATEWAY_NAMES_KEY,
+  gatewayNameFor,
+  readGatewayNames,
+  withGatewayName,
+  writeGatewayNames,
+  type GatewayNames,
+} from "./gateway-names.ts";
+import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
   CREATION,
@@ -287,6 +305,7 @@ import {
   MAX_ID_CHARS,
   MAX_LINKED_RUNS,
   MAX_MCP_TOOLS,
+  MAX_BOTS,
   MAX_BUILTIN_TOOLS,
   MAX_LISTED_TASKS,
   MAX_MESSAGE_JSON_CHARS,
@@ -1185,9 +1204,23 @@ export class ClawtrateClient {
    */
   readonly store: Store<ClawtrateState> = createStore(initialState, (next) =>
     withAlarm(
-      enforceState(next.setup === this.setupSlice ? next : withSetup(next, this.setupSlice)),
+      enforceState(
+        this.withGatewayName(
+          next.setup === this.setupSlice ? next : withSetup(next, this.setupSlice),
+        ),
+      ),
     ),
   );
+  /** The names given to gateways on this device, from the host's storage (`gateway-names.ts`). */
+  private gatewayNames: GatewayNames = [];
+  /** The current address's name, on every state written, so no reset of the connection loses it. */
+  private withGatewayName(next: ClawtrateState): ClawtrateState {
+    // The store normalises its first value before this field is set.
+    const name = gatewayNameFor(this.gatewayNames ?? [], next.connection.gatewayUrl);
+    return next.connection.gatewayName === name
+      ? next
+      : { ...next, connection: { ...next.connection, gatewayName: name } };
+  }
   /**
    * The host's setup slice (`setup.ts`), kept through every reset of the
    * state, since the host alone writes it (`setSetup`).
@@ -1348,6 +1381,8 @@ export class ClawtrateClient {
   private turnLimitMs = DEFAULT_TURN_LIMIT_MS;
   /** "Show external channel chats": the person's choice, off until they turn it on. */
   private showChannelChats = false;
+  /** How often the person set each preference: a startup read begun before a change doesn't undo it. */
+  private readonly preferenceSets = { turnLimit: 0, channelChats: 0 };
   /**
    * The person this connection acts for, as the gateway names them (`users.self` profile id):
    * which reactions are this person's own. Read once per connection; null until then, or when
@@ -1365,6 +1400,8 @@ export class ClawtrateClient {
   /** Reads of the bot list in the order they were asked, and the latest shown. */
   private botsIssued = 0;
   private botsShown = 0;
+  /** Coalesced bot-list reread for `config.changed`: at most one in flight plus one queued. */
+  private botsRefresh: { generation: number; again: boolean } | null = null;
   /** Deletes under way, by gateway and bot: a second one waits for no answer, it is refused. */
   private readonly botDeletes = new Set<string>();
   /** Open transcripts, counted, so several viewers can share one. */
@@ -1411,7 +1448,7 @@ export class ClawtrateClient {
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
-  private discoveryRead: { sessionsChanged: boolean } | null = null;
+  private discoveryRead: { sessionsChanged: boolean; botsChanged: boolean } | null = null;
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
   private readonly writes: ConnectionWrites;
@@ -1679,6 +1716,20 @@ export class ClawtrateClient {
   private readonly listings = new Set<Map<string, RawRecord>>();
   private refreshing = false;
   private refreshAgain = false;
+  /**
+   * Bots the gateway stopped listing while the task read now out was asked: that read's rows for
+   * them are dropped, so a stale answer can't bring a deleted bot's tasks back.
+   */
+  private readonly removedDuringRead = new Set<string>();
+  /** A removal that didn't fit in `removedDuringRead`: the task read now out is dropped whole. */
+  private readOutdated = false;
+  /**
+   * The last whole roster on this connection: its ids, at most `MAX_BOTS` of them, and whether
+   * that was all of them (`none` before one). A bot that leaves it, or joins it, is known
+   * against it.
+   */
+  private readonly lastRosterIds = new Set<string>();
+  private lastRoster: "none" | "all" | "some" = "none";
 
   /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
   private readonly trackedLimit: number;
@@ -1688,6 +1739,8 @@ export class ClawtrateClient {
    * views and the control. Tickets, streams, frames, generations and queued
    * input stay in it; only codes and plain facts reach the state.
    */
+  /** Whether the latest hello's `features.methods` lists the voice plugin's read, or null when it listed none. */
+  private voiceAdvertised: boolean | null = null;
   private readonly computer: ComputerViews = new ComputerViews({
     request: (method, params) => this.request(method, params),
     openStream: (url) => {
@@ -1746,7 +1799,7 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
-  /** Run a storage read, or abandon it with `fallback` if `stop()` runs first. */
+  /** Run a read, or abandon it with `fallback` if `stop()` runs first. */
   private async raceStop<T>(stops: number, read: () => Promise<T>, fallback: T): Promise<T> {
     if (stops !== this.stops) return fallback;
     let stop!: () => void;
@@ -1893,12 +1946,29 @@ export class ClawtrateClient {
         if (stops !== this.stops) return;
         this.setConnection({ deviceId: identity.deviceId });
         // A turn limit the person chose earlier, unless the host was given one.
-        if (this.options.turnLimitMs === undefined) {
-          const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
-          if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
-        }
-        this.showChannelChats =
+        const sets = { ...this.preferenceSets };
+        const limit =
+          this.options.turnLimitMs === undefined
+            ? Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null))
+            : null;
+        const channelChats =
           (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
+        const names = readGatewayNames(
+          await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null),
+        );
+        // A startup stopped while it read keeps nothing: the next one reads again. A preference
+        // the person set meanwhile is newer than what was read.
+        if (stops !== this.stops) return;
+        if (
+          sets.turnLimit === this.preferenceSets.turnLimit &&
+          limit !== null &&
+          validTurnLimit(limit)
+        )
+          this.turnLimitMs = limit * 60_000;
+        if (sets.channelChats === this.preferenceSets.channelChats)
+          this.showChannelChats = channelChats;
+        // A name given meanwhile is newer than what was read.
+        if (this.gatewayNames.length === 0) this.gatewayNames = names;
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
@@ -2230,8 +2300,10 @@ export class ClawtrateClient {
       }
       if (stops !== this.stops) return;
       // Counted once it opens: one whose open failed, or was stopped, leaves startup to open the
-      // saved gateway.
-      await this.open();
+      // saved gateway. A stop frees the queue at once: the open, still reading this device's
+      // token, gives up at its next check and writes nothing, so another client's change needn't
+      // wait for that read.
+      await this.raceStop(stops, () => this.open(), undefined);
       if (stops !== this.stops) return;
       this.connectionCommands += 1;
     });
@@ -5934,6 +6006,11 @@ export class ClawtrateClient {
     return this.accounts.load();
   }
 
+  /** Read one provider's full list for "View more"; the answer is kept nowhere. */
+  loadModelCatalog(provider: string): Promise<ModelList> {
+    return this.accounts.readModelList(provider);
+  }
+
   /** Read one bot's stored order and model again: the lock's evidence. */
   checkLock(botId: string): Promise<void> {
     if (this.state.connection.status !== "connected") return Promise.resolve();
@@ -6037,8 +6114,13 @@ export class ClawtrateClient {
   }
 
   /** Not now on a name card: kept on this device for that bot and that name. */
-  declineBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
-    return this.botNames.decline(botId, name, stamp);
+  /** Not now, with whether it answered the card shown now. */
+  async declineBotName(
+    botId: string,
+    name: string,
+    stamp: GatewayStamp,
+  ): Promise<{ declined: boolean }> {
+    return { declined: await this.botNames.decline(botId, name, stamp) };
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
@@ -6306,7 +6388,7 @@ export class ClawtrateClient {
         const issued = ++this.botsIssued;
         const result = await link.request("agents.list", {});
         const shown = wholeRoster(result) && link.alive() && this.newestBots(issued);
-        if (shown) this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+        if (shown) this.applyBots(result);
         // Asked again whenever it matters: a newer list shown since, or another connection, ends it.
         return { result, current: () => shown && link.alive() && this.botsShown === issued };
       },
@@ -6351,14 +6433,99 @@ export class ClawtrateClient {
     }
   }
 
-  /** Read the bot list again, after a bot was created. */
+  /** Read the bot list again, after a bot was created or changed here. */
   private async refreshBots(): Promise<void> {
     const generation = this.generation;
     const issued = ++this.botsIssued;
     const result = await this.request("agents.list", {});
     if (generation !== this.generation || !this.newestBots(issued)) return;
+    this.applyBots(result);
+  }
+
+  /**
+   * Read the bot list again after the gateway reports its config changed: at most
+   * one read in flight and one more queued for any burst of signals.
+   */
+  private async refreshBotsOnChange(generation: number): Promise<void> {
+    if (generation !== this.generation) return;
+    const running = this.botsRefresh;
+    if (running && running.generation === generation) {
+      running.again = true;
+      return;
+    }
+    const read = { generation, again: false };
+    this.botsRefresh = read;
+    try {
+      do {
+        read.again = false;
+        const issued = ++this.botsIssued;
+        try {
+          const result = await this.request("agents.list", {});
+          if (generation !== this.generation || !this.newestBots(issued)) continue;
+          this.applyBots(result);
+        } catch (error) {
+          if (generation === this.generation) this.logFailure("warn", "agents.list", error);
+        }
+      } while (read.again && generation === this.generation && this.botsRefresh === read);
+    } finally {
+      if (this.botsRefresh === read) this.botsRefresh = null;
+    }
+  }
+
+  /**
+   * Publish the bot list. A whole roster also says which bots this connection no longer sees,
+   * shown or not: their cached task rows go. Their unsent messages stay, since the gateway can
+   * hide a bot it still has; only its answer to a delete cancels them (`dropQueuedFor`).
+   */
+  private applyBots(result: unknown): void {
+    const shownBefore = this.state.bots;
     this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
     this.botNames.onBots(this.state.bots);
+    // Every id the gateway lists, system agents and bots past the display cap included.
+    const listed = rosterIds(result);
+    if (listed === null) return;
+    const before = this.lastRoster;
+    // Kept and compared within the host's id bound, as the other id maps are.
+    const capped = new Set([...listed].map((id) => capId(id, MAX_ID_CHARS)));
+    const added = [...capped].some((id) => !this.lastRosterIds.has(id));
+    const removed = new Set<string>();
+    for (const id of this.lastRosterIds) if (!capped.has(id)) removed.add(id);
+    this.lastRosterIds.clear();
+    for (const id of [...capped].slice(0, MAX_BOTS)) this.lastRosterIds.add(id);
+    this.lastRoster = listed.size <= MAX_BOTS ? "all" : "some";
+    for (const id of listed) this.removedDuringRead.delete(id);
+    for (const bot of shownBefore) if (!listed.has(bot.id)) removed.add(bot.id);
+    for (const [key, row] of this.rows) {
+      const botId = rowBotOf(key, row);
+      if (botId && !listed.has(botId)) removed.add(botId);
+    }
+    // Past what the last roster kept, a bot may have left that nothing here can name.
+    const unnamed = before === "some";
+    // A task read already out can still list the removed bots' tasks: its rows for them are
+    // dropped when it lands, or the whole answer when they can't all be named, and the tasks are
+    // read once more after it.
+    if (this.refreshing && (removed.size > 0 || unnamed)) {
+      this.refreshAgain = true;
+      if (unnamed) this.readOutdated = true;
+      for (const id of removed) {
+        if (this.removedDuringRead.size < MAX_BOTS) this.removedDuringRead.add(id);
+        else this.readOutdated = true;
+      }
+    }
+    // A bot the last roster on this connection didn't have: its tasks are read, since a bot hidden
+    // from the list and shown again still has them. The connection's first read has its own.
+    if (before === "some" || (before === "all" && added))
+      void this.refreshSessions(this.generation);
+    if (removed.size === 0) return;
+    let pruned = false;
+    for (const [key, row] of [...this.rows]) {
+      const botId = rowBotOf(key, row);
+      if (!botId || !removed.has(botId)) continue;
+      this.rows.delete(key);
+      this.retireForeign(key);
+      pruned = true;
+    }
+    if (pruned) this.publishTasks();
   }
 
   /**
@@ -6437,6 +6604,70 @@ export class ClawtrateClient {
       expectedHash,
       content,
     );
+  }
+
+  /**
+   * Whether the voice guide is added to the bots' prompts, read now from the gateway's voice
+   * plugin, stamped with where it was read. The identity is null when the gateway names none or
+   * the connection changed during the read, so it is never shown as another's.
+   */
+  async readBotVoice(): Promise<BotVoiceAnswer> {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === target &&
+      this.state.connection.status === "connected";
+    const gatewayId = await this.readGatewayIdentity();
+    this.confirmGatewayIdentity(gatewayId, alive);
+    const voice = await readVoice(
+      (method, params) => this.request(method, params),
+      this.voiceAdvertised,
+    );
+    return { ...voice, stamp: { gatewayId: alive() ? gatewayId : null, target } };
+  }
+
+  /** Settings reads the voice setting again (`state.voiceChanges`). */
+  private voiceChanged(): void {
+    this.store.update((state) => ({ ...state, voiceChanges: (state.voiceChanges ?? 0) + 1 }));
+  }
+
+  /**
+   * Turn the voice guide on or off for the bots on the gateway (operator.write). `stamp` is where
+   * the setting on screen was read: unless that gateway and target still hold, nothing is sent.
+   * Nor is it sent once `owner`, the viewer that asked, is withdrawn.
+   */
+  async setBotVoice(
+    on: boolean,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<BotVoiceAnswer> {
+    if (this.options.readOnly || !this.state.connection.canWrite)
+      throw new Error("Changing how the bots talk needs write access.");
+    // The connection the guard checks is the one the change goes out on: captured first,
+    // checked again after the guard, and the request refused if it closed or moved on.
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === stamp.target &&
+      this.state.connection.status === "connected";
+    await this.requireSameGateway(stamp);
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
+    this.checkNotWithdrawn(owner);
+    const voice = await setVoice(
+      (method, params) =>
+        protocol && alive()
+          ? protocol.request(method, params)
+          : Promise.reject(new Error(CONNECTION_CHANGED)),
+      on,
+    );
+    return { ...voice, stamp };
   }
 
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
@@ -6902,6 +7133,19 @@ export class ClawtrateClient {
   }
 
   /**
+   * Name the selected gateway on this device, or remove its name with an empty
+   * one. Only the address the person saw: another viewer may have changed it.
+   * Kept in the host's storage first; the gateway is never told.
+   */
+  async nameGateway(gatewayUrl: string, name: string): Promise<void> {
+    if (this.state.connection.gatewayUrl !== gatewayUrl) throw new GatewayChangedError();
+    const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
+    await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
+    this.gatewayNames = next;
+    this.store.update((state) => ({ ...state }));
+  }
+
+  /**
    * Set the "Turn time limit" (F-100), in whole minutes, and keep it for the next start. Runs
    * already going are timed against the new limit from when they started.
    */
@@ -6912,6 +7156,7 @@ export class ClawtrateClient {
       );
     // Kept first: a limit the host could not keep is not taken, and the old one and its timers stay.
     await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
+    this.preferenceSets.turnLimit += 1;
     this.turnLimitMs = minutes * 60_000;
     this.store.update((state) => ({ ...state, turnLimitMinutes: minutes }));
     for (const [timerKey, timer] of this.turnTimers) {
@@ -6929,6 +7174,7 @@ export class ClawtrateClient {
   async setShowChannelChats(on: boolean): Promise<void> {
     // Kept first: a choice the host could not keep is not taken.
     await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
+    this.preferenceSets.channelChats += 1;
     this.showChannelChats = on;
     this.store.update((state) => ({ ...state, showChannelChats: on }));
     this.publishTasks();
@@ -7812,6 +8058,9 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.epoch += 1;
         this.discoveryRead = null;
+        // The next socket's first roster is its own, as after an explicit close.
+        this.lastRosterIds.clear();
+        this.lastRoster = "none";
         this.selectionReady = -1;
         this.streams.clear();
         this.computer.connectionLost();
@@ -7944,6 +8193,9 @@ export class ClawtrateClient {
     if (this.reopenTimer !== null) clearTimeout(this.reopenTimer);
     this.reopenTimer = null;
     this.discoveryRead = null;
+    this.botsRefresh = null;
+    this.lastRosterIds.clear();
+    this.lastRoster = "none";
     this.selectionReady = -1;
     this.endSocketReads();
     this.endSocketReads = () => {};
@@ -8226,9 +8478,11 @@ export class ClawtrateClient {
     // connection while control was held read the browser's leases again before offering anything.
     this.computer.reconnected();
     const methods = asRecord(hello.features)?.methods;
-    this.computer.hello(
-      Array.isArray(methods) ? methods.filter((m): m is string => typeof m === "string") : [],
-    );
+    const listed = Array.isArray(methods)
+      ? methods.filter((m): m is string => typeof m === "string")
+      : null;
+    this.voiceAdvertised = listed === null ? null : listed.includes(VOICE_GET);
+    this.computer.hello(listed ?? []);
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;
@@ -8296,7 +8550,7 @@ export class ClawtrateClient {
     const selection = this.selectionApplied;
     // Closing the socket or starting another discovery retires this read.
     const epoch = this.epoch;
-    const read = { sessionsChanged: false };
+    const read = { sessionsChanged: false, botsChanged: false };
     this.discoveryRead = read;
     const sameSocket = () => generation === this.generation && epoch === this.epoch;
     const current = () =>
@@ -8322,12 +8576,12 @@ export class ClawtrateClient {
           const newest = this.newestBots(botsIssued);
           // Only a read that found the identity writes it: an older refresh whose
           // read failed must not clear what a newer one on this connection confirmed.
-          this.store.update((state) => ({
-            ...state,
-            ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
-            ...(newest ? { bots: mapAgents(result) } : {}),
-          }));
-          if (newest) this.botNames.onBots(this.state.bots);
+          if (id !== null)
+            this.store.update((state) => ({
+              ...state,
+              connection: { ...state.connection, gatewayId: id },
+            }));
+          if (newest) this.applyBots(result);
         }
         return result;
       }),
@@ -8336,9 +8590,7 @@ export class ClawtrateClient {
     if (!current()) return;
 
     const failures: string[] = [];
-    if (agents.status !== "fulfilled") {
-      failures.push(`bots: ${errorMessage(agents.reason)}`);
-    }
+    if (agents.status !== "fulfilled") failures.push(`bots: ${errorMessage(agents.reason)}`);
     if (sessions.status === "fulfilled") {
       this.replaceRows(sessions.value.rows);
       if (read.sessionsChanged) await this.refreshSessions(generation);
@@ -8359,6 +8611,9 @@ export class ClawtrateClient {
     // reconnect included, asks for read alone; Back or another gateway ends it.
     if (!current()) return;
     this.discoveryRead = null;
+    // After the last wait above, so a change reported during the task catch-up is read too, and
+    // also when the first bot read failed: the change it missed is read now.
+    if (read.botsChanged) void this.refreshBotsOnChange(generation);
     const setup = this.isSetup(this.settings?.url);
     if (setup && failures.length === 0) this.setupIntent = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
@@ -8481,9 +8736,18 @@ export class ClawtrateClient {
     try {
       do {
         this.refreshAgain = false;
+        // A read asked from here on lists only the bots the gateway has now.
+        this.removedDuringRead.clear();
+        this.readOutdated = false;
         try {
           const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
           if (generation !== this.generation) return;
+          // The read after it, already asked for, is the one kept.
+          if (this.readOutdated) continue;
+          for (const [key, row] of rows) {
+            const botId = rowBotOf(key, row);
+            if (botId && this.removedDuringRead.has(botId)) rows.delete(key);
+          }
           this.replaceRows(rows);
           this.setDiscovery({ partial });
         } catch (error) {
@@ -8492,6 +8756,8 @@ export class ClawtrateClient {
       } while (this.refreshAgain && generation === this.generation);
     } finally {
       this.refreshing = false;
+      this.removedDuringRead.clear();
+      this.readOutdated = false;
     }
   }
 
@@ -8932,11 +9198,21 @@ export class ClawtrateClient {
       case "sessions.changed":
         this.handleSessionsChanged(event.payload, generation);
         return;
+      case "config.changed":
+        if (this.discoveryRead) this.discoveryRead.botsChanged = true;
+        else void this.refreshBotsOnChange(generation);
+        return;
       case "plugins.changed":
         // Tool-server tools come from the gateway's bundle-mcp plugin: read each task's map again.
         for (const key of Object.keys(this.state.transcripts)) {
           if (this.tracked(key)) void this.readToolMap(key, generation);
         }
+        // The voice plugin may have come or gone, so the hello's list no longer says.
+        this.voiceAdvertised = null;
+        this.voiceChanged();
+        return;
+      case VOICE_CHANGED_EVENT:
+        this.voiceChanged();
         return;
       case "session.message": {
         const key = asRecord(event.payload)?.sessionKey;

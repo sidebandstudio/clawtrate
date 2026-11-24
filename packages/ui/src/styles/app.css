@@ -349,8 +349,8 @@ textarea {
   --presence-surface: var(--bg-rail);
 }
 
-/* new: search and new, top right. The empty left part drags the window and
-   leaves room for the macOS window controls. */
+/* new: search and new, top right. The empty left part drags the window. In the
+   one-pane layout it starts with the brand and the update button (titlebar.css). */
 .rail-top {
   display: flex;
   flex: none;
@@ -359,23 +359,10 @@ textarea {
   gap: 8px;
   /* The same band the conversation's floating controls sit in, so the two panes
      share one top edge. On a read-only connection it holds no controls (no
-     search, no "+"), and the design keeps the product's name out of the rail. */
+     search, no "+"). */
   height: var(--header-height);
   padding: 0 12px;
   -webkit-app-region: drag;
-}
-
-.rail-top .rail-status {
-  position: relative;
-  display: none;
-  margin-right: auto;
-}
-
-.rail-status .status-dot {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  box-shadow: 0 0 0 2px var(--bg-rail);
 }
 
 .bot-list {
@@ -741,6 +728,12 @@ textarea {
 /* The ring sits inside the menu, so it is not clipped by the menu's edge. */
 .menu-item:focus-visible {
   outline-offset: -2px;
+}
+
+/* Shown and reachable, but it can't be chosen. */
+.menu-item[aria-disabled="true"] {
+  color: var(--text-faint);
+  cursor: default;
 }
 
 .menu-item .icon {
@@ -1964,19 +1957,6 @@ textarea {
     display: grid;
   }
 
-  .rail-footer {
-    display: none;
-  }
-
-  .rail-top .rail-status {
-    display: grid;
-  }
-
-  .gateway-menu {
-    top: var(--header-height);
-    bottom: auto;
-  }
-
   .work-panel {
     width: 100%;
     border-radius: 0;
@@ -2098,11 +2078,6 @@ textarea {
 [data-input="touch"] .menu-item {
   min-height: var(--tap-min);
   font-size: var(--text-base);
-}
-
-/* macOS desktop: leave room for the window controls in the hidden title bar. */
-[data-host="desktop"][data-platform="darwin"] .rail-top {
-  padding-left: 84px;
 }
 
 /* Bot search: a floating pill that takes the rail's top band while it is open.
@@ -2711,6 +2686,49 @@ textarea {
   flex-wrap: wrap;
   gap: var(--space-2);
   margin-top: var(--space-4);
+}
+
+/* Conversation: Bot voice (F-527), below the turn time limit. */
+.bot-voice {
+  margin-top: var(--space-6);
+}
+
+/* Whether the gateway permits the prompt hook: a short fact, then where the guide doesn't reach. */
+.bot-voice .bot-voice-hook {
+  margin-top: var(--space-3);
+}
+
+.bot-voice .bot-voice-hook dd {
+  white-space: normal;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.bot-voice .bot-voice-limits {
+  margin-top: var(--space-2);
+}
+
+.bot-voice [data-testid="bot-voice-freshness"] {
+  margin-bottom: var(--space-3);
+}
+
+.bot-voice [data-testid="bot-voice-blocked"] ul {
+  margin: var(--space-2) 0;
+  padding-left: 1.25em;
+}
+
+.bot-voice-guide {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .settings-actions > .form-error {

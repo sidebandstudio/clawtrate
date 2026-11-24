@@ -8,6 +8,7 @@
 import {
   ADMIN_SCOPES,
   gatewayStamp,
+  sameStamp,
   mapHistory,
   RawTable,
   runsFromHistory,
@@ -175,18 +176,30 @@ export function botNameScene(
   };
 }
 
-/** Rename names the bot as the gateway's bot list then would; Not now drops the card. */
+/**
+ * Rename names the bot as the gateway's bot list then would; Not now drops the card, and, as the
+ * engine does, says it declined only when it answers the card open now, from this connection.
+ */
 export function botNameCommand(
   command: BridgeCommand,
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
-): Promise<void> | undefined {
+): Promise<unknown> | undefined {
   if (command.type !== "acceptBotName" && command.type !== "declineBotName") return undefined;
   const state = get();
   const botNames = (state.botNames ?? []).filter((each) => each.botId !== command.botId);
   if (command.type === "declineBotName") {
-    set({ ...state, botNames });
-    return Promise.resolve();
+    const open = (state.botNames ?? []).find((each) => each.botId === command.botId);
+    const stamp = gatewayStamp(state.connection);
+    // As the engine decides: the open card's name, not being renamed, and stamps that match and
+    // name a gateway (`sameStamp`), the card's and this connection's.
+    const declined =
+      open?.name === command.name &&
+      open.status !== "renaming" &&
+      sameStamp(open.stamp, command.stamp) &&
+      sameStamp(stamp, command.stamp);
+    if (declined) set({ ...state, botNames });
+    return Promise.resolve({ declined });
   }
   set({
     ...state,

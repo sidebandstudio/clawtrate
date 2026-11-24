@@ -13,6 +13,7 @@ import {
 import { buildAddressProblem, checkFeedAddress } from "../../src/main/update/address.ts";
 import { parseReleaseDate } from "../../src/main/update/feed.ts";
 import {
+  fitsTrack,
   formatVersion,
   isNewer,
   parseVersion,
@@ -227,6 +228,28 @@ describe("versions", () => {
     ["0.9.0", "1.0.0", false],
   ] as const)("%s against %s is newer: %s", (a, b, expected) => {
     expect(isNewer(v(a), v(b))).toBe(expected);
+  });
+
+  it("F-559: every dated 0.1.x beta comes before 0.2.0, and three numbers compare as numbers", () => {
+    for (const dated of [
+      "0.1.1-beta.20261122.1",
+      "0.1.1-beta.20261124.2",
+      "0.1.1-beta.99991231.9",
+    ]) {
+      expect(isNewer(v("0.2.0"), v(dated)), dated).toBe(true);
+      expect(isNewer(v(dated), v("0.2.0")), dated).toBe(false);
+    }
+    expect(isNewer(v("0.2.1"), v("0.2.0"))).toBe(true);
+    expect(isNewer(v("0.2.10"), v("0.2.9"))).toBe(true);
+    expect(isNewer(v("0.3.0"), v("0.2.10"))).toBe(true);
+    expect(isNewer(v("0.2.0"), v("0.2.1"))).toBe(false);
+  });
+
+  it("F-559: a dated version is only ever a Beta build; three numbers can be on either track", () => {
+    expect(fitsTrack(v("0.1.1-beta.20261124.2"), "nightly")).toBe(true);
+    expect(fitsTrack(v("0.1.1-beta.20261124.2"), "stable")).toBe(false);
+    expect(fitsTrack(v("0.2.0"), "nightly")).toBe(true);
+    expect(fitsTrack(v("0.2.0"), "stable")).toBe(true);
   });
 
   it("round trips the longest beta version and the first supported year", () => {

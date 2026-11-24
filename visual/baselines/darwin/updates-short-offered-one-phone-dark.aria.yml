@@ -1,0 +1,21 @@
+- dialog "Settings":
+  - region "Updates":
+    - button "Close settings"
+    - button "Back to settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - term: Version
+    - definition: Clawtrate Beta · 0.2.2
+    - group: Build details
+    - group: What's new in this build
+    - group "Update status":
+      - term: Updates
+      - definition: Clawtrate Beta · 0.2.4 is offered by the update source.
+      - button "Download"
+      - paragraph: Downloads Clawtrate Beta · 0.2.4, only when you choose to.
+    - group:
+      - text: What's new in Beta · 0.2.4
+      - list:
+        - listitem: Settings shows the build's date and commit (#438)
+    - group: What's new in Beta · 0.2.3
+    - status: Clawtrate Beta · 0.2.4 is offered by the update source.

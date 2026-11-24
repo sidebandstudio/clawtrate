@@ -1,5 +1,6 @@
 export * from "./types.ts";
 export * from "./store.ts";
+export * from "./gateway-names.ts";
 export * from "./host.ts";
 export * from "./mapping.ts";
 export * from "./avatar.ts";
@@ -110,3 +111,4 @@ export {
   type MemoryFile,
   type MemoryList,
 } from "./memory.ts";
+export { type BotVoice, type BotVoiceAnswer, type VoiceHook } from "./voice.ts";

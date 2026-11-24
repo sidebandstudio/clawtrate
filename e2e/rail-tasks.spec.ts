@@ -771,6 +771,28 @@ async function railShowsBot(on: Page, name: string, shown: boolean): Promise<voi
     .toBe(shown);
 }
 
+test("F-558: a bot another client makes, renames and deletes shows, takes its new name and leaves on both devices without a reread", async () => {
+  test.setTimeout(240_000);
+  const name = `Follow${STAMP}`;
+  const renamed = `Renamed${STAMP}`;
+  // Each device follows the gateway's config.changed alone: neither is asked to read its bots again.
+  const shows = (on: Page, bot: string, count: number) =>
+    gateway.poll(() => botRow(on, bot).count(), { timeout: 60_000 }).toBe(count);
+  const botId = await ownBot(name);
+  try {
+    for (const on of [page, second]) await shows(on, name, 1);
+    await (await adminClient()).request("agents.update", { agentId: botId, name: renamed });
+    for (const on of [page, second]) {
+      await shows(on, renamed, 1);
+      await shows(on, name, 0);
+    }
+    await removeBot(botId);
+    for (const on of [page, second]) await shows(on, renamed, 0);
+  } finally {
+    await removeBot(botId);
+  }
+});
+
 test("F-424: a bot's canonical main stays and offers neither Archive nor Delete; a bot without one gets exactly one empty Main, selected, when its last task is archived or deleted, however many clients act", async () => {
   // Two bots of its own are made and removed; each step waits on the gateway with its own deadline.
   test.setTimeout(300_000);

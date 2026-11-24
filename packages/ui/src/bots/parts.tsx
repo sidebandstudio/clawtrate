@@ -159,25 +159,62 @@ export function CodeBlock({ code }: { code: string }) {
   );
 }
 
+type Choice = { value: string; label: string; disabled?: boolean; note?: string };
+
+/** A row of a select's menu that does something other than choose. */
+export type SelectRow = {
+  label: string;
+  note?: string;
+  disabled?: boolean;
+  /** Whether the menu closes before it runs. */
+  close?: boolean;
+  /** It shows a second section in place: focus moves to that section's first choice. */
+  expands?: boolean;
+  onSelect: () => void;
+};
+
+/** A second section of a select's menu, under a rule: one line, then its choices and rows. */
+export type SelectSection = { line: string; choices: Choice[]; rows: SelectRow[] };
+
+/** The tallest a select's menu grows before it scrolls. */
+const MENU_MAX_HEIGHT = 360;
+/** The height of one row of a select's menu, with its padding. */
+const MENU_ROW = 36;
+
 /** A select: a label over its value and a chevron, opening a `.menu` of choices under it. */
 export function Select({
   label,
   value,
   choices,
+  rows = [],
+  section,
   onChoose,
   disabled,
   testId,
 }: {
   label: string;
   value: string;
-  choices: Array<{ value: string; label: string; disabled?: boolean; note?: string }>;
+  choices: Choice[];
+  /** Rows after the choices. */
+  rows?: SelectRow[];
+  /** A second section after them. */
+  section?: SelectSection;
   onChoose: (value: string) => void;
   disabled?: boolean;
   testId?: string;
 }) {
   // Where the menu opens: the select's own box, taken when it opens.
   const [anchor, setAnchor] = useState<{ rect: DOMRect; element: HTMLButtonElement } | null>(null);
-  const open = anchor !== null;
+  // Nothing to choose, or not allowed: an open menu closes, and none opens (#406). The rows after
+  // the choices ("View more", a typed id) and the second section count as something to choose.
+  const unavailable =
+    Boolean(disabled) ||
+    choices.length + rows.length + (section?.choices.length ?? 0) + (section?.rows.length ?? 0) ===
+      0;
+  if (unavailable && anchor !== null) setAnchor(null);
+  const open = !unavailable && anchor !== null;
+  // A row that shows the second section was chosen in this opening of the menu.
+  const [expanding, setExpanding] = useState(false);
   const close = useCallback(
     (refocus: boolean) => {
       const element = anchor?.element;
@@ -186,21 +223,62 @@ export function Select({
     },
     [anchor],
   );
-  const openFrom = (element: HTMLButtonElement) =>
+  const openFrom = (element: HTMLButtonElement) => {
+    if (unavailable) return;
+    setExpanding(false);
     setAnchor({ rect: element.getBoundingClientRect(), element });
-  const entries: MenuEntry[] = choices.map((choice) => ({
+  };
+  const radio = (choice: Choice): MenuEntry => ({
     kind: "radio",
     label: choice.label,
     checked: choice.value === value,
     ...(choice.note ? { note: choice.note } : {}),
     onSelect: () => {
-      if (choice.disabled) return;
+      if (unavailable || choice.disabled) return;
       close(true);
       onChoose(choice.value);
     },
-  }));
-  const shown = choices.find((choice) => choice.value === value)?.label ?? value;
+  });
+  const row = (each: SelectRow): MenuEntry => ({
+    kind: "item",
+    label: each.label,
+    ...(each.note ? { note: each.note } : {}),
+    ...(each.disabled ? { disabled: true } : {}),
+    onSelect: () => {
+      if (unavailable) return;
+      if (each.close) close(false);
+      if (each.expands) setExpanding(true);
+      each.onSelect();
+    },
+  });
+  const entries: MenuEntry[] = [...choices.map(radio), ...rows.map(row)];
+  // After a row that shows the second section, focus moves to its first choice.
+  const focusAt =
+    expanding && section && section.choices.length > 0
+      ? entries.filter((entry) => entry.kind !== "label" && entry.kind !== "rule").length
+      : undefined;
+  if (section)
+    entries.push(
+      { kind: "rule" },
+      { kind: "label", text: section.line },
+      ...section.choices.map(radio),
+      ...section.rows.map(row),
+    );
+  const shown =
+    [...choices, ...(section?.choices ?? [])].find((choice) => choice.value === value)?.label ??
+    value;
   const rect = anchor?.rect ?? null;
+  // The menu stays inside the dialog it opens in (or the window): under the select when it fits,
+  // else above it where there is more room, and it scrolls past that height.
+  const box = anchor?.element.closest("dialog")?.getBoundingClientRect() ?? null;
+  const floor = Math.min(innerHeight, box?.bottom ?? innerHeight) - 8;
+  const ceiling = Math.max(0, box?.top ?? 0) + 8;
+  const wanted = Math.min(MENU_MAX_HEIGHT, 10 + MENU_ROW * entries.length);
+  const below = rect ? floor - (rect.bottom + 6) : wanted;
+  const above = rect ? rect.top - 6 - ceiling : 0;
+  const under = below >= wanted || below >= above;
+  const height = Math.max(MENU_ROW, Math.min(wanted, under ? below : above));
+  const top = rect ? (under ? rect.bottom + 6 : rect.top - 6 - height) : 0;
   return (
     <>
       <button
@@ -209,7 +287,7 @@ export function Select({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`${label}: ${shown}`}
-        disabled={disabled || choices.length === 0}
+        disabled={unavailable}
         data-testid={testId}
         onClick={(event) => (open ? setAnchor(null) : openFrom(event.currentTarget))}
         onKeyDown={(event) => {
@@ -230,11 +308,14 @@ export function Select({
           onClose={close}
           trigger={anchor.element}
           className="b-menu"
+          {...(focusAt !== undefined ? { focusAt } : {})}
           style={{
             position: "fixed",
             left: Math.max(8, Math.min(rect.left, innerWidth - 228)),
-            top: Math.min(rect.bottom + 6, innerHeight - 8 - 36 * choices.length),
+            top,
             minWidth: Math.max(200, rect.width),
+            maxHeight: height,
+            overflowY: "auto",
           }}
         />
       )}

@@ -246,6 +246,36 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     }
   });
 
+  it("F-457: a Retry stopped while it reads its device token doesn't hold another client's Disconnect", async () => {
+    const storage = memoryStorage({ connection: JSON.stringify({ url: URL_A, token: null }) });
+    let armed = false;
+    const hold = holdRead(storage, tokenKey(URL_A), () => armed);
+    const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+    const other = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+    try {
+      await client.start({ resume: "disconnected" });
+      await other.start({ resume: "disconnected" });
+      armed = true;
+      const retrying = client.retryNow();
+      await until(hold.waiting);
+      client.stop();
+      await retrying;
+      // The other client's Disconnect goes through while that read is still out.
+      let forgotten = false;
+      const forgetting = other.disconnect().then(() => (forgotten = true));
+      await until(() => forgotten);
+      expect(saved(storage)).toBeNull();
+      hold.release();
+      await forgetting;
+      await sleep(30);
+      expect(saved(storage)).toBeNull();
+    } finally {
+      hold.release();
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("a typed token ending after another client saved gateway B leaves B saved", async () => {
     const storage = memoryStorage();
     const gateway = new FakeGateway();

@@ -566,6 +566,25 @@ button.b-choice:hover {
   min-width: 200px;
 }
 
+/* A select's section line wraps rather than widening the menu past its dialog. */
+.b-menu .menu-label {
+  max-width: 260px;
+  white-space: normal;
+}
+
+/* The field for a model id typed in (section 9), under the pair. */
+.b-model-typed {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.b-model-typed .b-field,
+.b-model-typed .b-hint,
+.b-model-typed .b-field-error {
+  margin: 0;
+}
+
 .b-menu .menu-item small {
   margin-left: auto;
   padding-left: 12px;

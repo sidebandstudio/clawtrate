@@ -23,12 +23,24 @@ import { ChevronIcon } from "./icons.tsx";
 // The dialog -----------------------------------------------------------------------
 
 export type DialogSpec = {
+  /** The bot this dialog acts on: if it leaves the gateway's list, the dialog closes. */
+  botId?: string;
   title: string;
   body: ReactNode;
   /** The confirming action. */
   confirm: { label: string; tone?: "danger" };
-  /** A name to type (a new section). */
-  field?: { label: string; placeholder?: string; maxLength: number };
+  /**
+   * A name to type (a new section). `initial` fills it, selected; `optional`
+   * lets it be confirmed empty; `hint` is said under it.
+   */
+  field?: {
+    label: string;
+    placeholder?: string;
+    maxLength: number;
+    initial?: string;
+    optional?: boolean;
+    hint?: string;
+  };
   /** Runs the action; a refusal stays in the dialog as its error. */
   onConfirm: (value: string) => Promise<void>;
   /** Where focus goes when the dialog closes without acting. */
@@ -49,16 +61,15 @@ export function RailDialog({
   onClose: (acted: boolean) => void;
 }) {
   const ref = useRef<HTMLElement>(null);
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(spec.field?.initial ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const dialog = ref.current;
-    (
-      dialog?.querySelector<HTMLElement>(".rail-dialog-field input") ??
-      dialog?.querySelector<HTMLElement>('[data-role="cancel"]')
-    )?.focus();
+    const field = dialog?.querySelector<HTMLInputElement>(".rail-dialog-field input");
+    (field ?? dialog?.querySelector<HTMLElement>('[data-role="cancel"]'))?.focus();
+    field?.select();
   }, []);
 
   const cancel = () => {
@@ -69,7 +80,7 @@ export function RailDialog({
 
   const confirm = async () => {
     if (busy) return;
-    if (spec.field && !value.trim()) {
+    if (spec.field && !spec.field.optional && !value.trim()) {
       setError(`${spec.field.label} is empty.`);
       return;
     }
@@ -148,8 +159,14 @@ export function RailDialog({
               spellCheck={false}
               disabled={busy}
               aria-invalid={error ? true : undefined}
+              aria-describedby={spec.field.hint ? "rail-dialog-hint" : undefined}
               onChange={(event) => setValue(event.target.value)}
             />
+            {spec.field.hint && (
+              <span id="rail-dialog-hint" className="rail-dialog-hint">
+                {spec.field.hint}
+              </span>
+            )}
           </label>
         )}
         {error && (

@@ -30,7 +30,7 @@ import {
 } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
-import { ModelPair } from "./ModelPair.tsx";
+import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
 import { ManageGroup } from "./DeleteBot.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
@@ -40,7 +40,7 @@ import {
   bindingWord,
   clock,
   defaultRef,
-  firstEffort,
+  effortFor,
   firstModel,
   gatewayCli,
   kindWord,
@@ -48,7 +48,6 @@ import {
   LOCK_OLD_MS,
   lockClaim,
   lockText,
-  modelsOf,
   providerName,
   stateWord,
 } from "./words.ts";
@@ -112,6 +111,24 @@ export function BotSettings({
   const granted = useGranted(connection);
   const admin = connection.canAdmin;
   const binding = accounts.bindings.find((each) => each.botId === bot.id) ?? null;
+  // "View more" for the bot's model, and for Change account's provider: each read when opened
+  // and held by this screen only.
+  const mainProvider = binding?.provider ?? defaultRef(accounts)?.provider ?? null;
+  const changeChosen =
+    pick ?? (binding?.mode === "gateway" ? GATEWAY_CHOICE : (binding?.account ?? null));
+  const changeProvider =
+    changeChosen === GATEWAY_CHOICE
+      ? mainProvider
+      : (accounts.accounts.find((a) => a.id === changeChosen)?.provider ?? null);
+  // Each pair counts as shown only while its page is on screen: Settings is the tab in view, and
+  // Usage isn't standing in for the page.
+  const onScreen = visible && usagePage === null;
+  const mainModels = useModelList(mainProvider ?? "", connection, onScreen && view === "main");
+  const changeModels = useModelList(
+    changeProvider ?? "",
+    connection,
+    onScreen && view === "change",
+  );
   const account = binding?.account
     ? (accounts.accounts.find((a) => a.id === binding.account) ?? null)
     : null;
@@ -216,6 +233,9 @@ export function BotSettings({
           botName={name}
           read={placement.read}
           reload={placement.reload}
+          begin={placement.begin}
+          beginWorkspace={placement.beginWorkspace}
+          commandsCurrent={placement.commandsCurrent}
           nameOf={nameOf}
           connection={connection}
           info={info}
@@ -396,14 +416,15 @@ export function BotSettings({
               <ModelPair
                 accounts={accounts}
                 provider={provider}
+                anyAccount={binding.mode !== "account"}
                 model={model}
-                effort={binding.effort ?? firstEffort(accounts, provider, model)}
+                list={mainModels}
+                effort={effortFor(rowFor(accounts, provider, model, mainModels), binding.effort)}
                 disabled={!admin}
-                onModel={(next) => {
-                  const levels =
-                    modelsOf(accounts, provider).find((m) => m.id === next)?.levels ?? [];
+                onModel={(next, row) => {
+                  const levels = row?.levels ?? [];
                   const was = binding.effort;
-                  const effort = firstEffort(accounts, provider, next, was);
+                  const effort = effortFor(row, was);
                   if (was && levels.length > 0 && !levels.includes(was) && effort) {
                     setEffortNote(
                       `Effort is now ${levelWord(effort)}: ${next} doesn't offer ${levelWord(was)}.`,
@@ -493,16 +514,19 @@ export function BotSettings({
       ? (binding.provider ?? defaultRef(accounts)?.provider ?? null)
       : (target?.provider ?? null);
     const changed = chosen !== current && chosen !== null;
-    const offersModel = targetProvider
-      ? modelsOf(accounts, targetProvider).some((m) => m.id === binding.model)
-      : false;
-    const needModel = changed && !toGateway && targetProvider !== null && !offersModel;
+    // Another account of the same provider keeps the model, one chosen through "View more"
+    // included. Another provider's never keeps or infers one: the person chooses one of its models.
+    const sameProvider = targetProvider !== null && targetProvider === binding.provider;
+    const needModel = changed && !toGateway && targetProvider !== null && !sameProvider;
     const model = needModel
       ? pickModel
       : (binding.model ?? (targetProvider ? firstModel(accounts, targetProvider) : null));
     const effort =
       targetProvider && model
-        ? (pickEffort ?? firstEffort(accounts, targetProvider, model, binding.effort))
+        ? effortFor(
+            rowFor(accounts, targetProvider, model, changeModels),
+            pickEffort ?? binding.effort,
+          )
         : null;
     const running = tasks.some((task) =>
       transcripts[task.key]?.runs.some((run) => run.state === "running" || run.state === "waiting"),
@@ -592,18 +616,18 @@ export function BotSettings({
               accounts={accounts}
               provider={targetProvider}
               model={pickModel}
+              list={changeModels}
               effort={effort}
               disabled={!admin}
               placeholder="Choose"
-              onModel={(next) => {
+              onModel={(next, row) => {
                 setPickModel(next);
-                setPickEffort(firstEffort(accounts, targetProvider, next, binding.effort));
+                setPickEffort(effortFor(row, binding.effort));
               }}
               onEffort={setPickEffort}
             />
             <p className="b-hint">
-              {providerName(targetProvider)} doesn't offer {binding.model ?? "the current model"}.
-              Choose one of its models.
+              Choose one of {providerName(targetProvider)}'s models for {name}.
             </p>
           </>
         )}

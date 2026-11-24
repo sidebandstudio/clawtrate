@@ -48,6 +48,13 @@
 // in cli.ts): the browser tool for those bots only, one profile per bot on
 // ports of the instance's own block, headless, and every connection the
 // browser makes mapped to the instance's scripted pages on loopback.
+//
+// Conversation hooks. OpenClaw registers a plugin's prompt and conversation
+// hooks (`before_prompt_build` and the like) only when its entry sets
+// `hooks.allowConversationAccess: true`. A plugin that needs them says so,
+// and that is the only hook policy an addition may set:
+//
+//   "hooks": { "allowConversationAccess": true }
 
 import { createHash } from "node:crypto";
 import {
@@ -149,6 +156,8 @@ export type DevPlugin = {
   tools: string[];
   /** The bots it gives a browser of their own, or null. */
   botBrowsers: BotBrowsers | null;
+  /** Whether its entry lets its conversation hooks register. */
+  conversationHooks: boolean;
   /** The scripted account providers its manifest declares sign-ins for. */
   providers: string[];
 };
@@ -291,7 +300,7 @@ export function additionProblems(
   if (!isPlainObject(addition)) return ["the addition must be an object"];
   const problems: string[] = [];
   for (const key of Object.keys(addition)) {
-    if (!["plugin", "settings", "tools", "botBrowsers"].includes(key)) {
+    if (!["plugin", "settings", "tools", "botBrowsers", "hooks"].includes(key)) {
       problems.push(`the addition may not set ${key}`);
     }
   }
@@ -332,6 +341,16 @@ export function additionProblems(
   }
   if (addition.botBrowsers !== undefined) {
     problems.push(...botBrowsersProblems(addition.botBrowsers, options.seedBots));
+  }
+  if (
+    addition.hooks !== undefined &&
+    !(
+      isPlainObject(addition.hooks) &&
+      Object.keys(addition.hooks).join() === "allowConversationAccess" &&
+      addition.hooks.allowConversationAccess === true
+    )
+  ) {
+    problems.push('hooks must be exactly { "allowConversationAccess": true }');
   }
   return problems;
 }
@@ -439,6 +458,7 @@ function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
     settings?: Record<string, Setting>;
     tools?: { name: string }[];
     botBrowsers?: BotBrowsers;
+    hooks?: { allowConversationAccess: true };
   };
   return {
     name,
@@ -448,6 +468,7 @@ function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
     settings: checked.settings ?? {},
     tools: (checked.tools ?? []).map((tool) => tool.name),
     botBrowsers: checked.botBrowsers ?? null,
+    conversationHooks: checked.hooks?.allowConversationAccess === true,
     providers: declared.providers,
   };
 }
@@ -515,7 +536,11 @@ export function pluginEntry(
   plugin: DevPlugin,
   stateDir: string,
   providerPort: number,
-): { enabled: true; config: Record<string, unknown> } {
+): {
+  enabled: true;
+  config: Record<string, unknown>;
+  hooks?: { allowConversationAccess: true };
+} {
   const base = pluginData(stateDir, plugin.name);
   const config: Record<string, unknown> = {};
   for (const [key, { kind, value }] of Object.entries(plugin.settings)) {
@@ -537,7 +562,11 @@ export function pluginEntry(
     }
     config[key] = path;
   }
-  return { enabled: true, config };
+  return {
+    enabled: true,
+    config,
+    ...(plugin.conversationHooks ? { hooks: { allowConversationAccess: true as const } } : {}),
+  };
 }
 
 /** Plugins are for named instances only; the default instance never loads any. */

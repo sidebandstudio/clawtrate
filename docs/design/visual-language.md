@@ -246,7 +246,7 @@ Two containers carry the layout, so the same rules serve a narrow window, a spli
 ### Structure
 
 ```
-rail-top        search and new, top right; the left part drags the window
+rail-top        search and new, top right; the left part drags the window (the one-pane layout leads with the brand)
 bot-list
   pin-grid      pinned bots as large tiles, three per row (when any are pinned)
   pin-tasks     the grid's one task block: its owner's name, then that bot's tasks
@@ -255,10 +255,10 @@ bot-list
     bot
     bot-toggle  folds or unfolds the tasks without opening the bot
     task-list
-rail-footer     the gateway: a status dot, its name, its state; opens the gateway menu
+rail-footer     the gateway: a status dot, its name, its address or state; opens the gateway menu. Then the Settings gear
 ```
 
-There is no product name in the rail and no heading above the bots.
+There is no heading above the bots. The product's mark and name are in the title row above the shell, or at the start of `.rail-top` in the one-pane layout ([titlebar.md](titlebar.md)).
 
 **Order.** Bots keep the order the shell has today: the gateway's default bot first, then the gateway's order. They are not re-sorted by activity, so a row never moves while it is being read. Tasks under a bot are ordered by latest activity, newest first, which is also what the shell does today. A sort control for bots (recent activity, name, manual) belongs to the later sidebar flow; when it lands, "recent activity" becomes its default.
 
@@ -369,18 +369,19 @@ Both are `.menu` surfaces, 232 px wide, `--bg-raised` with `--shadow-pop`, radiu
 
 ### Footer and the gateway menu
 
-One row: a status dot, the gateway's name (14/500) with its state under it (12, faint). The dot is `--accent-line` when connected, `--warn` and pulsing while connecting or reconnecting, `--danger` when the gateway cannot be reached. The row reports the gateway's presence and nothing else. It always agrees with the status strip about the connection (section 11); a task that failed to sync is the strip's news, and leaves this dot green because the gateway is connected.
+One row: a status dot, the gateway's name (14/500) with a second line under it (12, faint), then the Settings gear, a 32 px icon button. The name is the one given on this device, or else the address; the second line is the address while a named gateway is connected, and the state otherwise ([titlebar.md](titlebar.md), section 4). The dot is `--accent-line` when connected, `--warn` and pulsing while connecting or reconnecting, `--danger` when the gateway cannot be reached. The row reports the gateway's presence and nothing else. It always agrees with the status strip about the connection (section 11); a task that failed to sync is the strip's news, and leaves this dot green because the gateway is connected.
 
 The row is a menu button. It opens the **gateway menu**, which replaces the shell's theme and disconnect icon buttons until Settings exists:
 
-| Part       | Content                                                                                                                   |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Head       | The gateway's name; under it the state, the address and, when known, the gateway's version                                |
-| Theme      | Three radio items: "Match the system", "Light", "Dark". Dark carries the note "The default". The current one has a check. |
-| Disconnect | One item in `--danger`. It disconnects and returns to the connection screen.                                              |
+| Part       | Content                                                                                                                     |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Head       | The gateway's name; under it the state, the address and, when known, the gateway's version                                  |
+| Rename     | "Rename gateway…", or "Name this gateway…" with no name: a dialog that names it on this device ([titlebar.md](titlebar.md)) |
+| Theme      | Three radio items: "Match the system", "Light", "Dark". Dark carries the note "The default". The current one has a check.   |
+| Disconnect | One item in `--danger`. It disconnects and returns to the connection screen.                                                |
 
-- Surface: `.menu`, 256 px, `--bg-raised` with `--shadow-pop`, radius 14, items 34 px (44 on touch). It opens upward from the row. In the one-pane layout it opens downward from the round button at the top left, which carries the same status dot.
-- Keyboard: Enter, Space, Up or Down on either trigger (the footer row, or the round button in the one-pane layout) opens it and puts focus on the checked theme. Inside, Up and Down move between items, wrapping; Home and End go to the ends; Enter or Space chooses. Escape closes it and returns focus to the trigger that opened it; Tab or a click outside closes it.
+- Surface: `.menu`, 256 px, `--bg-raised` with `--shadow-pop`, radius 14, items 34 px (44 on touch). It opens upward from the row, in the one-pane layout too.
+- Keyboard: Enter, Space, Up or Down on the footer row opens it and puts focus on the checked theme. Inside, Up and Down move between items, wrapping; Home and End go to the ends; Enter or Space chooses. Escape closes it and returns focus to the trigger that opened it; Tab or a click outside closes it.
 - Roles: `menu`, with `menuitemradio` for the themes and `menuitem` for Disconnect; the row has `aria-haspopup="menu"` and `aria-expanded`. The row's accessible name carries the state: "Home gateway, connected. Open the gateway menu."
 
 ## 8. The conversation
@@ -557,7 +558,7 @@ The shell stays mounted with its cached content when the connection drops. One c
 
 **One pane (a window narrower than 688).** The rail is the list and the main pane is the detail.
 
-- The list fills the width. The footer row is replaced by a round button at the top left: the Settings icon with the connection dot on it, which opens the gateway menu. Search and New stay top right.
+- The list fills the width. The footer row and its gear stay at the foot of the list. The top band starts with the mark, the Beta pill on a Beta build and the round update button; Routines, Sort, Search and New stay top right.
 - Rows are 68 px with 44 px avatars; task rows are 44 px; text is one step larger (17 px names and messages).
 - Tasks unfold in place, as in section 7. A pinned tile with several tasks gives the pin grid's one block to its bot when tapped and folds it when tapped again; the block's label says whose tasks they are (section 7, "Pinned bots").
 - A bot's menu opens with touch and hold. "+" opens the same menu as on the desktop.

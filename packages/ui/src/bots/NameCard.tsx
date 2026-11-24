@@ -4,7 +4,7 @@
 
 import type { Bot, ConnectionState } from "@clawtrate/core";
 import { useState } from "react";
-import { useClawtrateState, useCommand } from "../bridge.tsx";
+import { useBridge, useClawtrateState, useCommand } from "../bridge.tsx";
 
 export function NameCard({
   bot,
@@ -17,6 +17,7 @@ export function NameCard({
 }) {
   const state = useClawtrateState();
   const send = useCommand();
+  const bridge = useBridge();
   const [busy, setBusy] = useState(false);
   const proposal = state.botNames?.find((each) => each.botId === bot.id);
   if (!proposal || proposal.name === bot.name) return null;
@@ -29,8 +30,15 @@ export function NameCard({
     setBusy(true);
     try {
       // Both carry the stamp of the read the card came from, so neither acts on another gateway's card.
-      await send({ type, botId: bot.id, name, stamp: proposal.stamp });
-      onAnnounce(type === "acceptBotName" ? `Renamed to ${name}` : `${bot.name} keeps its name`);
+      const stamp = proposal.stamp;
+      if (type === "acceptBotName") {
+        await send({ type, botId: bot.id, name, stamp });
+        onAnnounce(`Renamed to ${name}`);
+      } else {
+        const { declined } = await bridge.invoke({ type, botId: bot.id, name, stamp });
+        // A Not now for a card that's gone, as after a switch of gateway, did nothing to say.
+        if (declined) onAnnounce(`${bot.name} keeps its name`);
+      }
     } catch (error) {
       onAnnounce(`Not renamed. ${error instanceof Error ? error.message : String(error)}`);
     } finally {

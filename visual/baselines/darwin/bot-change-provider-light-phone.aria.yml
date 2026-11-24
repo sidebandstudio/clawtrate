@@ -1,3 +1,4 @@
+- status
 - region "Conversation":
   - button "Back to bots"
   - button "Otto, Disk almost full on the media box. Show details.": Otto
@@ -107,7 +108,7 @@
     - heading "Model" [level=4]
     - 'button "Model: Choose"': Model Choose
     - 'button "Effort: Not offered" [disabled]': Effort Not offered
-    - paragraph: xAI doesn't offer gpt-5.5. Choose one of its models.
+    - paragraph: Choose one of xAI's models for Otto.
     - paragraph: A run in progress finishes on OpenAI · Work. The next run uses xAI · Personal.
     - button "Save" [disabled]
     - button "Cancel"

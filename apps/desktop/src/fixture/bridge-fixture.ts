@@ -21,6 +21,8 @@ import {
   resolveRequest,
   markQuestion,
   PAIRING_ENDED,
+  GATEWAY_CHANGED_MESSAGE,
+  cleanGatewayName,
   type ApprovalCard,
   type BridgeCommand,
   type BridgeResultFor,
@@ -83,6 +85,7 @@ import {
 import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
+import { voiceCommands, type VoiceParams } from "./voice.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 import { NO_SEARCH_PARAMS, searchCommands, withMessageIds, type SearchParams } from "./search.ts";
 
@@ -537,8 +540,11 @@ export function createFixtureBridge(
     computer?: ComputerParams;
     checkIns?: CheckInParams;
     search?: SearchParams;
+    voice?: VoiceParams;
     /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
     fullPairing?: boolean;
+    /** A name given to the fixture gateway on this device (`?gatewayName=`). */
+    gatewayName?: string | null;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -616,6 +622,8 @@ export function createFixtureBridge(
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
+  if (options.gatewayName && state.connection.gatewayUrl)
+    state = withConnection(state, { gatewayName: cleanGatewayName(options.gatewayName) || null });
   // The Computer scenes: a connection that may send and answer (unless read-only is asked for),
   // Juniper's research run that uses the browser, and the engine answered by a scripted plugin.
   const computerParams = options.computer ?? {
@@ -734,6 +742,12 @@ export function createFixtureBridge(
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const botDeleteCommand = botDeleteCommands(options.botDelete ?? NO_BOT_DELETE_PARAMS);
   const memory = memoryCommands(now);
+  const voice = voiceCommands(
+    options.voice ?? { voice: null, save: null },
+    () => state.connection.canWrite,
+    () => gatewayStamp(state.connection),
+    now,
+  );
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
@@ -746,6 +760,10 @@ export function createFixtureBridge(
     if (checkIn) {
       sent.push(command);
       return checkIn;
+    }
+    if (command.type === "readBotVoice" || command.type === "setBotVoice") {
+      sent.push(command);
+      return voice(command);
     }
     if (
       command.type === "listMemory" ||
@@ -881,6 +899,11 @@ export function createFixtureBridge(
         return;
       case "disconnect":
         set(idle());
+        return;
+      case "nameGateway":
+        if (command.gatewayUrl !== state.connection.gatewayUrl)
+          throw new Error(GATEWAY_CHANGED_MESSAGE);
+        set(withConnection(state, { gatewayName: cleanGatewayName(command.name) || null }));
         return;
       case "suspend":
         set(withConnection(state, { status: "disconnected", retryAt: null, error: null }));

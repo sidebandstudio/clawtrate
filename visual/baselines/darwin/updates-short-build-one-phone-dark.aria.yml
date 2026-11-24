@@ -1,0 +1,22 @@
+- dialog "Settings":
+  - region "Updates":
+    - button "Close settings"
+    - button "Back to settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - paragraph: This build can't install updates itself.
+    - term: Version
+    - definition: Clawtrate Beta · 0.2.2
+    - group:
+      - text: Build details
+      - term: Built
+      - definition: 2026-12-01 10:00 UTC
+      - term: Commit
+      - definition:
+        - code: 0123456789abcdef0123456789abcdef01234567
+    - group "Update status":
+      - term: Updates
+      - definition: Not checked yet.
+      - button "Check for Updates"
+      - paragraph: Checks beta.updates.example for a newer build, only when you choose to.
+    - status: Not checked yet. This build can't install updates itself.

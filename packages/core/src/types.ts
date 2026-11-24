@@ -80,6 +80,11 @@ export type ConnectionState = {
    */
   gatewayId: string | null;
   /**
+   * The name the person gave this address on this device (`gateway-names.ts`),
+   * or null. Local only: never sent to the gateway.
+   */
+  gatewayName: string | null;
+  /**
    * The host's target: raised whenever the host is pointed at a gateway anew (a Connect, a
    * Disconnect, a switch of saved gateway, a new pairing), kept across a reconnect to the same
    * one. With `gatewayId` it is what a screen read is stamped with (`GatewayStamp`).
@@ -483,6 +488,11 @@ export type ClawtrateState = {
    */
   showChannelChats?: boolean;
   /**
+   * Counts the times the gateway said the voice plugin's setting may have changed: its
+   * `changed` event, or `plugins.changed`. Settings reads `readBotVoice` again when it moves.
+   */
+  voiceChanges?: number;
+  /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
    * does not read it.
@@ -586,6 +596,7 @@ export const initialConnectionState: ConnectionState = {
   status: "idle",
   gatewayUrl: null,
   gatewayId: null,
+  gatewayName: null,
   target: 0,
   serverVersion: null,
   protocol: null,

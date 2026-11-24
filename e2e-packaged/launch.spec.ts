@@ -495,6 +495,32 @@ test("sends a key typed into it to the gateway, and keeps it in none of its logs
   expect(await page.content()).not.toContain(TYPED_KEY);
 });
 
+test("F-561: carries the build's date and commit, and shows them under Settings → Updates", async () => {
+  const updates = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+    ).clawtrateHost.desktopUpdates.get(),
+  );
+  // The commit this checkout's build was made from, and the build's own date.
+  const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  expect(updates.build).toEqual({
+    releaseDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+    commit,
+  });
+  // Settings opens once the app is paired, which needs the development gateway.
+  if (WINDOWS) return;
+  await page.keyboard.press("Meta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Updates", exact: true }).click();
+  const details = settings.getByTestId("build-details");
+  await details.locator("summary").click();
+  await expect(details).toContainText(commit);
+  await expect(details).toContainText(
+    `${updates.build!.releaseDate!.slice(0, 16).replace("T", " ")} UTC`,
+  );
+  await page.keyboard.press("Escape");
+});
+
 /** The label macOS shows on the app's dock icon, as Launch Services reports it; null for none. */
 function dockBadge(pid: number): string | null {
   const out = execFileSync("lsappinfo", ["info", "-only", "StatusLabel", String(pid)], {

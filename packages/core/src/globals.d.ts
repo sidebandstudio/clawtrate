@@ -24,5 +24,6 @@ declare class URL {
   readonly username: string;
   readonly password: string;
   readonly hash: string;
+  readonly pathname: string;
   toString(): string;
 }

@@ -100,6 +100,71 @@ test.describe("bot name behaviour", () => {
     await expect(page.locator(".title-pill-name")).toHaveText("New bot");
   });
 
+  test("F-552: a Not now for a card read on an earlier connection announces nothing", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark");
+    await expect(card(page)).toBeVisible();
+    // The connection moves on while the card is still on screen: the engine ignores its answer.
+    await page.evaluate(() => {
+      const { clawtrateFixture } = window as unknown as {
+        clawtrateFixture: {
+          setState(f: (s: { connection: { target: number } }) => unknown): void;
+        };
+      };
+      clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, target: state.connection.target + 1 },
+      }));
+    });
+    await card(page).getByRole("button", { name: "Not now" }).click();
+    await expect.poll(async () => (await sent(page)).length).toBe(1);
+    await expect(card(page).getByRole("button", { name: "Not now" })).toBeEnabled();
+    await expect(page.getByTestId("announcer")).not.toHaveText(/keeps its name/);
+  });
+
+  test("F-552: the fixture's Not now refuses a card being renamed and stamps that name no gateway, as the engine does (#512)", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark");
+    await expect(card(page)).toBeVisible();
+    const notNow = (change: { status?: string; gatewayId?: null }) =>
+      page.evaluate((change) => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: {
+              getState(): ClawtrateState;
+              setState(f: (s: ClawtrateState) => ClawtrateState): void;
+              invoke(command: unknown): Promise<{ declined: boolean }>;
+            };
+          }
+        ).clawtrateFixture;
+        fixture.setState((state) => {
+          const gatewayId = "gatewayId" in change ? null : state.connection.gatewayId;
+          const stamp = { gatewayId, target: state.connection.target };
+          return {
+            ...state,
+            connection: { ...state.connection, gatewayId },
+            botNames: state.botNames!.map((each) => ({
+              ...each,
+              stamp,
+              status: (change.status ?? "open") as "open",
+            })),
+          };
+        });
+        const state = fixture.getState();
+        return fixture.invoke({
+          type: "declineBotName",
+          botId: "new-bot",
+          name: "Johnny",
+          stamp: { gatewayId: state.connection.gatewayId, target: state.connection.target },
+        });
+      }, change);
+    expect(await notNow({ status: "renaming" })).toEqual({ declined: false });
+    expect(await notNow({ gatewayId: null })).toEqual({ declined: false });
+    await expect(card(page)).toBeVisible();
+  });
+
   test("F-552: without admin the card says so and offers no Rename and no access request", async ({
     page,
   }) => {
