@@ -242,6 +242,30 @@ describe("the plugin opening", () => {
       ).toEqual([]);
     });
 
+    it("lets a plugin's conversation hooks register only through the one closed hooks form", () => {
+      const hooks = { allowConversationAccess: true };
+      expect(check({ ...base, hooks })).toEqual([]);
+      for (const bad of [
+        { allowConversationAccess: false },
+        { allowConversationAccess: "true" },
+        { allowConversationAccess: true, allowPromptInjection: true },
+        { allowPromptInjection: false },
+        { timeoutMs: { before_prompt_build: 1 } },
+        [],
+        true,
+      ]) {
+        refused({ ...base, hooks: bad }, /hooks must be exactly/);
+      }
+      const entry = pluginEntry(
+        { ...plugin(), conversationHooks: true } as never,
+        stateFolder(),
+        19230,
+      );
+      expect(entry.hooks).toEqual(hooks);
+      expect(pluginEntry(plugin(), stateFolder(), 19230)).not.toHaveProperty("hooks");
+      expect(plugin().conversationHooks).toBe(false);
+    });
+
     it("gives a scripted-model-url only as a plain path on the instance's own scripted model", () => {
       for (const value of [
         "scripted/signin",

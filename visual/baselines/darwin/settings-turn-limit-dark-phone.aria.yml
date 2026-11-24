@@ -6,6 +6,14 @@
     - text: Turn time limit
     - spinbutton "Turn time limit": "50"
     - paragraph: Minutes. 50 by default. At the limit Clawtrate asks the gateway to stop the turn so it does not hang, and once the gateway confirms, the turn ends with a note naming the limit. Send a message to pick up where it left off. It applies to turns this device starts.
+    - text: Bot voice On, as the gateway reads it, by default.
+    - switch "Bot voice" [checked]
+    - paragraph: While it's on, a voice guide is added to a bot's system prompt each time the gateway runs the plugin's hook, if its config permits the hook. The guide asks the bots to talk plainly and kindly, with no em dashes. Turned off, each bot talks the way its own instructions say.
+    - term: Prompt hook permitted
+    - definition: "Yes"
+    - link "Where the guide doesn't reach":
+      - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach
+    - group: What the guide asks the bots to do
   - status
 - region "Conversation":
   - button "Back to bots"

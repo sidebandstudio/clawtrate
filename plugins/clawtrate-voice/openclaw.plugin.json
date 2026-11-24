@@ -1,0 +1,12 @@
+{
+  "id": "clawtrate-voice",
+  "name": "Clawtrate voice",
+  "description": "Asks the bots to talk in a plain, friendly voice with no em dashes, in the system prompt of each run whose runner invokes its hook, until a person turns it off. Needs plugins.entries.clawtrate-voice.hooks.allowConversationAccess set to true. Not made by or affiliated with OpenClaw.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
