@@ -18,6 +18,7 @@
 // clicking, as a person would; the address only decides the plugin's answers.
 
 import {
+  TASK_GONE,
   ComputerViews,
   RawTable,
   browserUse,
@@ -474,7 +475,8 @@ export function computerFixture(
     },
     // The conversation's Stop, played: each run stopping, then its own end (or, for
     // `stuck-refused`, the gateway's refusal, which puts it back as it was).
-    stopTask: async (key) => {
+    stopTask: async (key, sessionId) => {
+      if (get().transcripts[key]?.sessionId !== sessionId) throw new Error(TASK_GONE);
       const runIds = (get().transcripts[key]?.runs ?? [])
         .filter((run) => run.state === "running" || run.state === "waiting")
         .map((run) => run.id);

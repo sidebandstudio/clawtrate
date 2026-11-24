@@ -6,7 +6,14 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import type { ComputerViews } from "../src/computer.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
-import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
+import {
+  agentEvent,
+  grantingGateway,
+  KEY,
+  SESSION,
+  openTask,
+  questionRecord,
+} from "./client-harness.ts";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 const PEER = "agent:marlow:main";
@@ -37,8 +44,45 @@ const runEnded = agentEvent("run-s", 9, "lifecycle", {
 });
 
 describe("the Computer tab's Stop", () => {
+  it("F-145: confirming a Stop for the old session never aborts the replacement run", async () => {
+    const { client, gateway } = await openTask();
+    const viewer = createBridgeSession(client);
+    try {
+      await viewer.apply({ type: "openSession", key: KEY });
+      await viewer.apply({ type: "computerShow", key: KEY });
+      gateway.handlers["sessions.describe"] = () => ({
+        session: {
+          key: KEY,
+          sessionId: "replacement",
+          hasActiveRun: true,
+          activeRunIds: ["run-b"],
+        },
+      });
+      gateway.emit("agent", agentEvent("run-b", 1, "lifecycle", { phase: "start" }));
+      await until(
+        () => client.state.transcripts[KEY]?.runs.some((run) => run.id === "run-b") === true,
+      );
+      await viewer.apply({ type: "computerStopTask", key: KEY, sessionId: SESSION });
+      expect(client.state.computer?.panes[viewer.computerViewer()!]?.stop?.error).toContain(
+        "already deleted or reset",
+      );
+      expect(gateway.calls("chat.abort")).toEqual([]);
+    } finally {
+      viewer.dispose();
+      client.stop();
+    }
+  });
+
   it("F-145: with two runs active and nothing naming the current one, asks the gateway to stop each", async () => {
     const gateway = grantingGateway();
+    gateway.handlers["sessions.describe"] = () => ({
+      session: {
+        key: KEY,
+        sessionId: SESSION,
+        hasActiveRun: true,
+        activeRunIds: ["original", "current"],
+      },
+    });
     // A reconnect missed the original run's end; the gateway has another run in flight.
     gateway.handlers["chat.history"] = () => ({
       messages: [
@@ -69,7 +113,7 @@ describe("the Computer tab's Stop", () => {
     await until(() => transcript().runs.filter((each) => each.state === "running").length === 2);
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
-    await viewer.apply({ type: "computerStopTask" });
+    await viewer.apply({ type: "computerStopTask", key: KEY, sessionId: SESSION });
     const id = viewer.computerViewer()!;
     expect(client.state.computer?.panes[id]?.stop).toMatchObject({
       sending: false,
@@ -93,9 +137,9 @@ describe("the Computer tab's Stop", () => {
     await viewer.apply({ type: "computerShow", key: KEY });
     await viewer.apply({ type: "computerLeave" });
     await viewer.apply({ type: "closeSession", key: KEY });
-    await expect(viewer.apply({ type: "computerStopTask" })).rejects.toThrow(
-      "This task is not open in this view.",
-    );
+    await expect(
+      viewer.apply({ type: "computerStopTask", key: KEY, sessionId: SESSION }),
+    ).rejects.toThrow("This task is not open in this view.");
     expect(gateway.calls("chat.abort")).toEqual([]);
   });
 
@@ -115,7 +159,7 @@ describe("the Computer tab's Stop", () => {
     await until(() => transcript().runs.some((each) => each.state === "running"));
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
-    const stopping = viewer.apply({ type: "computerStopTask" });
+    const stopping = viewer.apply({ type: "computerStopTask", key: KEY, sessionId: SESSION });
     await until(() => client.state.connection.upgrade.status === "pending");
     viewer.dispose();
     wait.resolve({
@@ -148,7 +192,7 @@ describe("the Computer tab's Stop", () => {
     await other.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
-    const stopping = viewer.apply({ type: "computerStopTask" });
+    const stopping = viewer.apply({ type: "computerStopTask", key: KEY, sessionId: SESSION });
     await until(() => client.state.connection.upgrade.status === "pending");
     await viewer.apply({ type: "closeSession", key: KEY });
     wait.resolve({
@@ -179,10 +223,9 @@ describe("the Computer tab's Stop", () => {
     await until(() => transcript().linkedRuns["run-r"]?.state === "running");
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
-    await viewer.apply({ type: "computerStopTask" });
+    await viewer.apply({ type: "computerStopTask", key: KEY, sessionId: SESSION });
     await until(() => transcript().runs[0]?.state === "stopped");
     // The run's end is where the conversation's Stop asks its recipients: nothing was asked.
-    expect(transcript().runs[0]!.stoppedWith?.recipientsAsked).toBe(true);
     expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-s" }]);
   });
 
@@ -205,7 +248,7 @@ describe("the Computer tab's Stop", () => {
     await until(() => transcript().linkedRuns["run-r"]?.state === "running");
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
-    await viewer.apply({ type: "computerStopTask" });
+    await viewer.apply({ type: "computerStopTask", key: KEY, sessionId: SESSION });
     await until(() => transcript().runs[0]?.state === "running");
     refuse = false;
     await client.stopRun(KEY, "run-s");
@@ -236,6 +279,14 @@ describe("the Computer tab's Stop", () => {
 
   it("F-145: asks the gateway to stop every run at once, not one after another's answer", async () => {
     const gateway = grantingGateway();
+    gateway.handlers["sessions.describe"] = () => ({
+      session: {
+        key: KEY,
+        sessionId: SESSION,
+        hasActiveRun: true,
+        activeRunIds: ["run-1", "run-2"],
+      },
+    });
     const slow = deferred<unknown>();
     gateway.handlers["chat.abort"] = (params) =>
       (params as { runId?: string }).runId === "run-1"
@@ -253,7 +304,7 @@ describe("the Computer tab's Stop", () => {
     await until(() => transcript().runs.filter((each) => each.state === "running").length === 2);
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
-    const stopping = viewer.apply({ type: "computerStopTask" });
+    const stopping = viewer.apply({ type: "computerStopTask", key: KEY, sessionId: SESSION });
     // The first run's answer hasn't come: the second run's Stop has gone anyway.
     await until(() => gateway.calls("chat.abort").length === 2);
     slow.resolve({ ok: true, aborted: true, runIds: [] });

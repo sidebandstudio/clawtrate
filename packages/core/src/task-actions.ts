@@ -74,14 +74,6 @@ export type TaskActionContext = {
   runMark: (key: string) => string;
   /** Moves each time a run of the task is seen to end as stopped (`WaitingIndex.stopMark`). */
   stopMark: (key: string) => number;
-  /**
-   * The engine's own Stop (`ClawtrateClient.stopRun`) for each run of the task it
-   * follows that is running or waiting. Answers how many of its runs are now
-   * running, waiting or stopping: 0 when it follows none.
-   */
-  stopRuns: (key: string, sessionId?: string) => Promise<number>;
-  /** Whether a run of the task the engine follows is still running, waiting or stopping. */
-  runsActive: (key: string) => boolean;
 };
 
 /** How long an archive waits for the end of a run that started while its request was out. */
@@ -258,9 +250,20 @@ async function describe(ctx: TaskActionContext, key: string): Promise<RawRecord 
  */
 export const TASK_GONE = "This task was already deleted or reset elsewhere.";
 
-/** The row, when it is of `sessionId`, the session the person acted on, or no session was named. */
-function sameSession(row: RawRecord | null, sessionId: string | undefined): RawRecord | null {
-  if (sessionId !== undefined && row?.sessionId !== sessionId) throw new Error(TASK_GONE);
+export const OPEN_TASK_FIRST = "Open the task first so its session can be confirmed.";
+
+export async function describeSelected(
+  ctx: TaskActionContext,
+  key: string,
+  sessionId: string,
+): Promise<RawRecord> {
+  if (!sessionId || sessionId.trim() !== sessionId) throw new Error(OPEN_TASK_FIRST);
+  return selectedRow(await describe(ctx, key), key, sessionId);
+}
+
+function selectedRow(row: RawRecord | null, key: string, sessionId: string): RawRecord {
+  if (!row || row.sessionId !== sessionId || (row.key !== undefined && row.key !== key))
+    throw new Error(TASK_GONE);
   return row;
 }
 
@@ -274,31 +277,40 @@ function sessionIdOf(row: RawRecord | null, key: string): string {
   return id;
 }
 
-/**
- * Stop whatever runs in a task, then wait, within `STOP_SETTLE_MS`, until the
- * gateway's own row says nothing does and the engine's runs of it have ended.
- * Returns the row it last read.
- *
- * A run the engine follows is stopped by the engine's Stop, as the Stop button
- * does: it is `stopping` until the gateway says how it ended, one the gateway has
- * not named yet is aborted once it is named, and the follow-ups queued behind it
- * are parked when it stops, so none is sent into the task being archived. Only
- * when the engine follows no run of the task (another device's, or a task not open
- * here) does the gateway's own abort of the session's runs stop it. With
- * `sessionId`, a row of another session, or none, ends the wait, refused.
- */
-export async function stopAndSettle(
+export async function stopNamedRuns(
   ctx: TaskActionContext,
   key: string,
-  sessionId?: string,
+  row: RawRecord,
+): Promise<string[]> {
+  const ids = row.activeRunIds;
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    !ids.every(
+      (id): id is string =>
+        typeof id === "string" &&
+        id.length > 0 &&
+        id.trim() === id &&
+        jsonTextLength(id) <= MAX_ID_CHARS,
+    )
+  )
+    throw new Error("Couldn't stop this task. The gateway didn't name its active runs.");
+  const runIds = [...new Set(ids)];
+  await Promise.all(runIds.map((runId) => ctx.request("chat.abort", { sessionKey: key, runId })));
+  return runIds;
+}
+
+async function stopAndSettle(
+  ctx: TaskActionContext,
+  key: string,
+  sessionId: string,
+  row: RawRecord,
 ): Promise<RawRecord> {
-  if ((await ctx.stopRuns(key, sessionId)) === 0)
-    await ctx.request("chat.abort", { sessionKey: key });
+  await stopNamedRuns(ctx, key, row);
   const deadline = ctx.now() + STOP_SETTLE_MS;
   for (;;) {
-    const row = sameSession(await describe(ctx, key), sessionId);
-    if (!row) throw new Error(`The gateway has no task ${key}.`);
-    if (!isActive(row) && !ctx.runsActive(key)) return row;
+    const current = await describeSelected(ctx, key, sessionId);
+    if (!isActive(current)) return current;
     if (ctx.now() >= deadline)
       throw new Error("The task's run did not stop in time. Nothing was archived or deleted.");
     await ctx.sleep(STOP_POLL_MS);
@@ -338,6 +350,11 @@ async function call(ctx: TaskActionContext, method: string, params: unknown): Pr
       return await ctx.request(method, params);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (
+        asRecord(params)?.expectedSessionId &&
+        /^Session .+ changed before (patch|deletion)\. Retry\.$/s.test(message)
+      )
+        throw new Error(TASK_GONE, { cause: error });
       if (!repeatable || attempt >= ROUTING_ATTEMPTS || !ROUTING_CHANGED.test(message))
         throw actionError(error);
       await ctx.sleep(ROUTING_RETRY_MS);
@@ -421,19 +438,18 @@ export async function markTask(
  * the gateway confirms the run stopped ("Stop and archive"); without it, the
  * archive is refused with `ActiveRunError` and nothing is asked. With
  * `sessionId`, a missing or different session at the first check prevents Stop and Archive.
- * A key-only Stop can still reach a replacement after that check.
  */
 export async function archiveTask(
   ctx: TaskActionContext,
   key: string,
-  options: { stop: boolean; sessionId?: string },
+  options: { stop: boolean; sessionId: string },
 ): Promise<ArchiveResult> {
   await ctx.ensureWrite();
   const mark = ctx.runMark(key);
-  let row = sameSession(await describe(ctx, key), options.sessionId);
-  if (row && isActive(row)) {
+  let row = await describeSelected(ctx, key, options.sessionId);
+  if (isActive(row)) {
     if (!options.stop) throw new ActiveRunError();
-    row = await stopAndSettle(ctx, key, options.sessionId);
+    row = await stopAndSettle(ctx, key, options.sessionId, row);
   } else if (!options.stop && ctx.runMark(key) !== mark) {
     // A run started, or the row turned active, while the check was under way: archiving now
     // would stop it, so nothing is sent and the person is asked.
@@ -441,7 +457,7 @@ export async function archiveTask(
   }
   if (row?.archived === true) return { stoppedRun: false };
   const sent = { run: ctx.runMark(key), stop: ctx.stopMark(key) };
-  await call(ctx, "sessions.patch", archiveParams(key, sessionIdOf(row, key), true));
+  await call(ctx, "sessions.patch", archiveParams(key, options.sessionId, true));
   if (options.stop) return { stoppedRun: false };
   // The gateway's archive ends anything running in the task (its drain), and has no guard
   // against a run that starts while the request is out. When a run started meanwhile, its own
@@ -470,15 +486,25 @@ export async function restoreTask(ctx: TaskActionContext, key: string): Promise<
 export async function deleteTask(
   ctx: TaskActionContext,
   key: string,
-  options: { sessionId?: string } = {},
+  options: { sessionId: string },
 ): Promise<void> {
   await ctx.ensureWrite();
-  let row = await describe(ctx, key);
-  // Gone already: what the person asked for is done.
-  if (!row) return;
-  sameSession(row, options.sessionId);
-  if (isActive(row)) row = await stopAndSettle(ctx, key, options.sessionId);
-  const sessionId = sessionIdOf(row, key);
+  const { sessionId } = options;
+  if (!sessionId || sessionId.trim() !== sessionId) throw new Error(OPEN_TASK_FIRST);
+  const first = await describe(ctx, key);
+  if (!first) return;
+  let row = selectedRow(first, key, sessionId);
+  if (isActive(row)) row = await stopAndSettle(ctx, key, options.sessionId, row);
   if (row.archived !== true) await call(ctx, "sessions.patch", archiveParams(key, sessionId, true));
-  await call(ctx, "sessions.delete", deleteParams(key, sessionId));
+  try {
+    await call(ctx, "sessions.delete", deleteParams(key, sessionId));
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === `Session ${key} is not archived. Archive it first, then delete it.`
+    ) {
+      await describeSelected(ctx, key, sessionId);
+    }
+    throw error;
+  }
 }

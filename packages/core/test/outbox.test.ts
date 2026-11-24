@@ -450,7 +450,7 @@ describe("queued messages (F-421, F-420)", () => {
       gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
       return { ok: true };
     };
-    await client.deleteTask(KEY);
+    await client.deleteTask(KEY, { sessionId: SESSION });
     await until(() => transcript().outbox[0]?.status === "cancelled");
     client.stop();
   });

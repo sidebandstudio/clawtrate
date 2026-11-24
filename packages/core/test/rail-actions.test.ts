@@ -17,7 +17,7 @@ import {
   URL_A,
   asShown,
 } from "./client-harness.ts";
-import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const PIP_TASK = "agent:pip:dashboard:2cc23cbf-30e2-4416-837a-56d92c983588";
 
@@ -315,8 +315,12 @@ describe("the rail's actions through the client", () => {
     const { client, gateway } = await connected(INTERACTIVE_SCOPES, { readOnly: true });
     await expect(client.newTask("pip")).rejects.toThrow(/only reads/);
     await expect(client.renameTask("agent:pip:main", "x")).rejects.toThrow(/only reads/);
-    await expect(client.archiveTask("agent:pip:main")).rejects.toThrow(/only reads/);
-    await expect(client.deleteTask("agent:pip:main")).rejects.toThrow(/only reads/);
+    await expect(client.archiveTask("agent:pip:main", { sessionId: "s-1" })).rejects.toThrow(
+      /only reads/,
+    );
+    await expect(client.deleteTask("agent:pip:main", { sessionId: "s-1" })).rejects.toThrow(
+      /only reads/,
+    );
     await expect(
       client.changeSidebar({ op: "pin", botId: "pip", pinned: true }, null),
     ).rejects.toThrow(/only reads/);
@@ -395,53 +399,47 @@ describe("the rail's actions through the client", () => {
   });
 });
 
-describe("Stop and archive, and delete, through the engine's own Stop", () => {
-  it("F-277 F-278: a run stopped before the gateway named it is stopped by its id once named, its follow-up stays not sent, and only then is the task archived", async () => {
+describe("Stop and archive, and delete, by the gateway's named runs", () => {
+  it("F-277: opening a listed row without a session lets its next rail action name the loaded session", async () => {
+    const gateway = grantingGateway();
+    const sessions = [{ key: KEY, agentId: "otto", updatedAt: 1 }];
+    gateway.handlers["sessions.list"] = () => ({ sessions, hasMore: false });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions, hasMore: false },
+    });
+    const { client } = await openTask({ gateway });
+    try {
+      expect(client.state.tasksByBot.otto?.find((row) => row.key === KEY)?.sessionId).toBe(SESSION);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-277 F-278: an unconfirmed run cannot arm a later abort or archive", async () => {
     const gateway = grantingGateway();
     const answer = deferred<unknown>();
     gateway.handlers["chat.send"] = () => answer.promise;
-    gateway.handlers["chat.history"] = () => ({ messages: [] });
-    let active = true;
     gateway.handlers["sessions.describe"] = () => ({
-      session: { key: KEY, sessionId: SESSION, hasActiveRun: active },
+      session: { key: KEY, sessionId: SESSION, hasActiveRun: true },
     });
-    // What the engine shows of the run and its follow-up when the archive reaches the gateway.
-    let atArchive: unknown = null;
-    gateway.handlers["sessions.patch"] = () => {
-      atArchive = {
-        run: transcript().runs.find((run) => run.id === id)?.state,
-        followUp: transcript().outbox.find((m) => m.id === later)?.status,
-      };
-      return { ok: true };
-    };
     const { client, transcript } = await openTask({ gateway });
-    const id = client.sendMessage(KEY, "Take your time", asShown(client));
-    await until(() => gateway.calls("chat.send").length === 1);
-    const later = client.sendMessage(KEY, "Then this", { ...asShown(client), mode: "queue" });
-    const archived = client.archiveTask(KEY, { stop: true });
-    await until(() => transcript().runs.find((run) => run.id === id)?.state === "stopping");
-    await sleep(600);
-    // An abort before the gateway has taken the send stops nothing: none is sent yet,
-    // and nothing is archived while the run may still start.
-    expect(gateway.calls("chat.abort")).toEqual([]);
-    expect(gateway.calls("sessions.patch")).toEqual([]);
-    answer.resolve({ runId: id, status: "started" });
-    await until(() => gateway.calls("chat.abort").length === 1);
-    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: id }]);
-    active = false;
-    await expect(archived).resolves.toEqual({ stoppedRun: false });
-    expect(gateway.calls("sessions.patch")).toEqual([
-      { key: KEY, archived: true, expectedSessionId: SESSION },
-    ]);
-    // Archived only once the engine's Stop had settled: the run stopped, its follow-up parked.
-    expect(atArchive).toEqual({ run: "stopped", followUp: "not-sent" });
-    // The archive succeeded: the follow-up its own stop parked never runs, as confirmed (F-420).
-    expect(transcript().outbox.find((m) => m.id === later)?.status).toBe("cancelled");
-    expect(gateway.calls("chat.send")).toHaveLength(1);
-    client.stop();
+    try {
+      const id = client.sendMessage(KEY, "Take your time", asShown(client));
+      await until(() => gateway.calls("chat.send").length === 1);
+      await expect(client.archiveTask(KEY, { stop: true, sessionId: SESSION })).rejects.toThrow(
+        /didn't name/,
+      );
+      answer.resolve({ runId: id, status: "started" });
+      await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
+      expect(gateway.calls("chat.abort")).toEqual([]);
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+    } finally {
+      client.stop();
+    }
   });
 
-  it("F-277 F-278: with two runs active and nothing naming the current one, Stop and archive still stops them, then archives", async () => {
+  it("F-277 F-278: with two local runs, Stop and archive asks only for the one the gateway names", async () => {
     const gateway = grantingGateway();
     let current = true;
     // A reconnect missed the original run's end: its rows stop at a tool call, and the gateway
@@ -464,7 +462,12 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
       ...(current ? { inFlightRun: { runId: "current" } } : {}),
     });
     gateway.handlers["sessions.describe"] = () => ({
-      session: { key: KEY, sessionId: "s-1", hasActiveRun: current },
+      session: {
+        key: KEY,
+        sessionId: "s-1",
+        hasActiveRun: current,
+        activeRunIds: current ? ["current"] : [],
+      },
     });
     gateway.handlers["chat.abort"] = (params) => {
       const { runId } = params as { runId?: string };
@@ -484,7 +487,7 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
     gateway.emit("agent", agentEvent("current", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs.filter((each) => each.state === "running").length === 2);
     const started = Date.now();
-    await expect(client.archiveTask(KEY, { stop: true })).resolves.toBeDefined();
+    await expect(client.archiveTask(KEY, { stop: true, sessionId: "s-1" })).resolves.toBeDefined();
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(gateway.calls("chat.abort")).toContainEqual({ sessionKey: KEY, runId: "current" });
     expect(gateway.calls("sessions.patch")).toEqual([

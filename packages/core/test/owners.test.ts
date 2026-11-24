@@ -265,13 +265,15 @@ describe("the registry of what the host keeps", () => {
     gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
     await until(() => client.state.transcripts[KEY]!.runs.some((run) => run.state === "running"));
     client.sendMessage(KEY, "later", { ...asShown(client), mode: "queue" });
-    const out = [KEY, ...keys].map((key) => client.archiveTask(key).catch(() => undefined));
+    const out = [KEY, ...keys].map((key) =>
+      client.archiveTask(key, { sessionId: "s-1" }).catch(() => undefined),
+    );
     await until(() => gateway.calls("sessions.patch").length === 8);
     // One task leaves while its archive is out, and another is followed and archived.
     client.closeSession(keys[0]!);
     client.openSession("agent:otto:ninth");
     await until(() => client.state.transcripts["agent:otto:ninth"]?.status === "ready");
-    out.push(client.archiveTask("agent:otto:ninth").catch(() => undefined));
+    out.push(client.archiveTask("agent:otto:ninth", { sessionId: "s-1" }).catch(() => undefined));
     await until(() => gateway.calls("sessions.patch").length === 9);
     expectRegistered(client, CLIENT_OWNERS, CLIENT_NOT_WALKED);
     patched.resolve({ ok: true });

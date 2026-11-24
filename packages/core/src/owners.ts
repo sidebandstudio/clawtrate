@@ -149,7 +149,6 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "ownRemovals.*.waiting": { max: MAX_OUTBOX, each: ID, row: null },
   // Computer Stops whose first abort waits for the gateway to name the run: task and run ids, and
   // the task's opening that asked (an empty object); gone once sent, settled or withdrawn.
-  unsentStops: { max: T * MAX_RUN_LIST, each: 2 * ID + 1, row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },

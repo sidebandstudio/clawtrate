@@ -622,7 +622,7 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
         if (order === "before") archived();
         return { ok: true };
       };
-      await client.archiveTask(KEY);
+      await client.archiveTask(KEY, { sessionId: SESSION });
       if (order === "after") archived();
       await until(() => transcript().outbox[0]?.status === "cancelled");
       expect(transcript().runs[1]!.state).toBe("cancelled");

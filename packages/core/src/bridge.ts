@@ -382,10 +382,10 @@ export type BridgeCommand =
    * Archive; `stop` stops an active run first ("Stop and archive"). `sessionId`, the session of
    * the row the person acted on: a key that holds another one by then is left alone.
    */
-  | { type: "archiveTask"; key: string; stop: boolean; sessionId?: string }
+  | { type: "archiveTask"; key: string; stop: boolean; sessionId: string }
   | { type: "restoreTask"; key: string }
   /** Delete a task and its transcript, stopping an active run first; `sessionId` as for archive. */
-  | { type: "deleteTask"; key: string; sessionId?: string }
+  | { type: "deleteTask"; key: string; sessionId: string }
   /** A bot's archived tasks, read now. */
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
@@ -415,7 +415,7 @@ export type BridgeCommand =
     }
   | { type: "computerCheck" }
   | { type: "computerDismiss" }
-  | { type: "computerStopTask" }
+  | { type: "computerStopTask"; key: string; sessionId: string }
   /** Where a task's bot runs its commands, and the named nodes' records, read now. */
   | { type: "readMachine"; key: string; nodes: string[]; probe: boolean }
   /** A bot's usage, or every bot's (`botId` null), for a period in this person's time zone; read now. */
@@ -1625,9 +1625,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "archiveTask",
         key: sessionKey(command.key),
         stop: flag(command.stop),
-        ...(command.sessionId !== undefined
-          ? { sessionId: id(command.sessionId, "session id") }
-          : {}),
+        sessionId: id(command.sessionId, "session id"),
       };
     case "restoreTask":
       return { type: command.type, key: sessionKey(command.key) };
@@ -1635,9 +1633,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: command.type,
         key: sessionKey(command.key),
-        ...(command.sessionId !== undefined
-          ? { sessionId: id(command.sessionId, "session id") }
-          : {}),
+        sessionId: id(command.sessionId, "session id"),
       };
     case "computerShow":
       return { type: "computerShow", key: sessionKey(command.key) };
@@ -1649,8 +1645,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "computerCancelTake":
     case "computerCheck":
     case "computerDismiss":
-    case "computerStopTask":
       return { type: command.type };
+    case "computerStopTask":
+      return {
+        type: command.type,
+        sessionId: id(command.sessionId, "session id"),
+        key: sessionKey(command.key),
+      };
     case "computerChoose":
       return { type: "computerChoose", targetId: id(command.targetId, "tab id") };
     case "computerFrame":
@@ -2279,14 +2280,14 @@ class ViewerSession implements BridgeSession {
         return client.archiveTask(command.key, {
           stop: command.stop,
           owner,
-          ...(command.sessionId !== undefined ? { sessionId: command.sessionId } : {}),
+          sessionId: command.sessionId,
         });
       case "restoreTask":
         return client.restoreTask(command.key, { owner });
       case "deleteTask":
         return client.deleteTask(command.key, {
           owner,
-          ...(command.sessionId !== undefined ? { sessionId: command.sessionId } : {}),
+          sessionId: command.sessionId,
         });
       case "listArchived":
         return client.listArchived(command.botId);
@@ -2322,10 +2323,11 @@ class ViewerSession implements BridgeSession {
       case "computerStopTask": {
         // Only the task of this viewer's pane, while this viewer has that task open.
         const key = this.viewerId ? client.state.computer?.panes[this.viewerId]?.key : undefined;
-        if (key) this.mine(key);
+        this.mine(command.key);
+        if (key !== command.key) throw new Error("This task is not open in this view.");
         // Asked for this opening of the task: closing it withdraws a Stop not yet sent.
-        return client.computerStopTask(this.viewer, {
-          owner: (key && this.open.get(key)) || owner,
+        return client.computerStopTask(this.viewer, command.sessionId, {
+          owner: this.open.get(key) ?? owner,
         });
       }
       case "readMachine":

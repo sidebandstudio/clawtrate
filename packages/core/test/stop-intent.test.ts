@@ -5,7 +5,7 @@
 import { describe, expect, it, onTestFinished } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import { agentEvent, grantingGateway, KEY, openTask, asShown } from "./client-harness.ts";
-import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
+import { deferred, sleep, until } from "./fake-gateway.ts";
 
 describe("a Stop pressed before the gateway named the run, when the send's answer is missing", () => {
   it("F-097: the send times out: history names the run in flight, and that run is stopped", async () => {
@@ -108,7 +108,7 @@ describe("a Computer Stop of a run the gateway has not named yet, when its task 
     onTestFinished(() => viewer.dispose());
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
-    await viewer.apply({ type: "computerStopTask" });
+    await viewer.apply({ type: "computerStopTask", key: KEY, ...asShown(client) });
     await viewer.apply({ type: "closeSession", key: KEY });
   }
 
@@ -130,7 +130,7 @@ describe("a Computer Stop of a run the gateway has not named yet, when its task 
     expect(transcript().runs.find((run) => run.id === id)?.state).toBe("running");
   });
 
-  it("F-145: closing and reopening the task retires a first abort even after its outcome became unknown", async () => {
+  it("F-145: a refused unnamed Stop stays refused after the task reopens and history names the run", async () => {
     const gateway = grantingGateway();
     const answer = deferred<unknown>();
     gateway.handlers["chat.send"] = () => answer.promise;
@@ -146,10 +146,11 @@ describe("a Computer Stop of a run the gateway has not named yet, when its task 
     await viewer.apply({ type: "computerShow", key: KEY });
     const id = client.sendMessage(KEY, "Take your time", asShown(client));
     await until(() => gateway.calls("chat.send").length === 1);
-    await viewer.apply({ type: "computerStopTask" });
+    await viewer.apply({ type: "computerStopTask", key: KEY, ...asShown(client) });
     answer.resolve({ status: "accepted" });
-    await until(() => transcript().runs.find((r) => r.id === id)?.state === "stopped");
-    expect(transcript().runs.find((r) => r.id === id)?.outcomeKnown).toBe(false);
+    expect(client.state.computer?.panes[viewer.computerViewer()!]?.stop?.error).toMatch(
+      /didn't name/,
+    );
     expect(gateway.calls("chat.abort")).toEqual([]);
     await viewer.apply({ type: "closeSession", key: KEY });
     await viewer.apply({ type: "openSession", key: KEY });
@@ -171,89 +172,6 @@ describe("a Computer Stop of a run the gateway has not named yet, when its task 
     await stopThenClose(client);
     gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
     await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
-    expect(gateway.calls("chat.abort")).toEqual([]);
-  });
-});
-
-describe("a Computer Stop's first abort, while it waits for the run to be named", () => {
-  const pending = (client: object) =>
-    (client as unknown as { unsentStops: Map<string, object> }).unsentStops.size;
-
-  async function computerStop(client: Parameters<typeof createBridgeSession>[0]) {
-    const viewer = createBridgeSession(client);
-    onTestFinished(() => viewer.dispose());
-    await viewer.apply({ type: "openSession", key: KEY });
-    await viewer.apply({ type: "computerShow", key: KEY });
-    await viewer.apply({ type: "computerStopTask" });
-    return viewer;
-  }
-
-  it("F-145: a run event before the send acknowledgment keeps its unsent Stop with the viewer", async () => {
-    const gateway = grantingGateway();
-    const answer = deferred<unknown>();
-    gateway.handlers["chat.send"] = () => answer.promise;
-    const { client, transcript } = await openTask({ gateway });
-    onTestFinished(() => {
-      answer.resolve({ status: "accepted" });
-      client.stop();
-    });
-    const id = client.sendMessage(KEY, "Take your time", asShown(client));
-    await until(() => gateway.calls("chat.send").length === 1);
-    const viewer = await computerStop(client);
-    gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }));
-    await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
-    expect(gateway.calls("chat.abort")).toEqual([]);
-    await viewer.apply({ type: "closeSession", key: KEY });
-    await viewer.apply({ type: "openSession", key: KEY });
-    answer.resolve({ runId: id, status: "started" });
-    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "sent");
-    expect(gateway.calls("chat.abort")).toEqual([]);
-  });
-
-  it("F-145: closing the task after the first abort still allows a retry if its reply is lost", async () => {
-    const gateway = grantingGateway();
-    const answer = deferred<unknown>();
-    gateway.handlers["chat.send"] = () => answer.promise;
-    const firstAbort = deferred<unknown>();
-    gateway.handlers["chat.abort"] = () => firstAbort.promise;
-    const { client } = await openTask({ gateway });
-    onTestFinished(() => {
-      answer.resolve({ runId: "never", status: "started" });
-      firstAbort.resolve({ aborted: true });
-      client.stop();
-    });
-    const id = client.sendMessage(KEY, "Take your time", asShown(client));
-    await until(() => gateway.calls("chat.send").length === 1);
-    const viewer = await computerStop(client);
-    expect(pending(client)).toBe(1);
-    answer.resolve({ runId: id, status: "started" });
-    await until(() => gateway.calls("chat.abort").length === 1);
-    expect(pending(client)).toBe(0);
-    await viewer.apply({ type: "closeSession", key: KEY });
-    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
-    gateway.handlers["chat.abort"] = () => ({ aborted: true });
-    gateway.dropAll();
-    await until(() => gateway.calls("chat.abort").length === 2);
-    expect(gateway.calls("chat.abort")).toEqual([
-      { sessionKey: KEY, runId: id },
-      { sessionKey: KEY, runId: id },
-    ]);
-  });
-
-  it("F-145: is kept no longer once its run settles without it", async () => {
-    const gateway = grantingGateway();
-    const answer = deferred<unknown>();
-    gateway.handlers["chat.send"] = () => answer.promise;
-    const { client, transcript } = await openTask({ gateway });
-    onTestFinished(() => client.stop());
-    const id = client.sendMessage(KEY, "Take your time", asShown(client));
-    await until(() => gateway.calls("chat.send").length === 1);
-    await computerStop(client);
-    expect(pending(client)).toBe(1);
-    // The gateway refuses the send: the run never started, and nothing is left to abort.
-    answer.reject(new GatewayError({ code: "INVALID_REQUEST", message: "refused" }));
-    await until(() => !transcript().runs.some((run) => run.id === id && run.state === "stopping"));
-    expect(pending(client)).toBe(0);
     expect(gateway.calls("chat.abort")).toEqual([]);
   });
 });

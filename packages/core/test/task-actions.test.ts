@@ -150,9 +150,6 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
     },
     runMark: () => mark,
     stopMark: () => stops,
-    // By default the engine follows no run of the task.
-    stopRuns: async () => 0,
-    runsActive: () => false,
   };
   return {
     ctx,
@@ -242,7 +239,7 @@ describe("the rail's task actions", () => {
 
   it("F-277: archiving names the session it is meant for", async () => {
     const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
-    await archiveTask(ctx, KEY, { stop: false });
+    await archiveTask(ctx, KEY, { stop: false, sessionId: "s-1" });
     expect(calls.at(-1)).toEqual({
       method: "sessions.patch",
       params: { key: KEY, archived: true, expectedSessionId: "s-1" },
@@ -258,15 +255,17 @@ describe("the rail's task actions", () => {
       if (method === "sessions.describe") gateway.setMark("run-2");
       return answer;
     };
-    await expect(archiveTask(gateway.ctx, KEY, { stop: false })).rejects.toBeInstanceOf(
-      ActiveRunError,
-    );
+    await expect(
+      archiveTask(gateway.ctx, KEY, { stop: false, sessionId: "s-1" }),
+    ).rejects.toBeInstanceOf(ActiveRunError);
     expect(gateway.calls.map((call) => call.method)).toEqual(["sessions.describe"]);
   });
 
   it("an idle archive that stops nothing says so, without waiting", async () => {
     const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
-    expect(await archiveTask(ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
+    expect(await archiveTask(ctx, KEY, { stop: false, sessionId: "s-1" })).toEqual({
+      stoppedRun: false,
+    });
     expect(calls.map((call) => call.method)).toEqual(["sessions.describe", "sessions.patch"]);
   });
 
@@ -286,7 +285,9 @@ describe("the rail's task actions", () => {
       // The run's end event, read as stopped, arrives just after the answer.
       if ((polls += 1) === 2) gateway.stop();
     };
-    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: true });
+    expect(await archiveTask(gateway.ctx, KEY, { stop: false, sessionId: "s-1" })).toEqual({
+      stoppedRun: true,
+    });
   });
 
   it("a run that starts while the archive request is out but is not seen to stop is not reported, after a bounded wait", async () => {
@@ -298,7 +299,9 @@ describe("the rail's task actions", () => {
       return answer;
     };
     const started = gateway.ctx.now();
-    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
+    expect(await archiveTask(gateway.ctx, KEY, { stop: false, sessionId: "s-1" })).toEqual({
+      stoppedRun: false,
+    });
     expect(gateway.ctx.now() - started).toBeGreaterThanOrEqual(ARCHIVE_STOP_WAIT_MS);
   });
 
@@ -308,21 +311,27 @@ describe("the rail's task actions", () => {
       const sessionId = String.fromCharCode(1).repeat(900);
       const { ctx, calls } = fakeGateway({ [KEY]: { sessionId, hasActiveRun: true } });
       const result =
-        action === "archive" ? archiveTask(ctx, KEY, { stop: true }) : deleteTask(ctx, KEY);
+        action === "archive"
+          ? archiveTask(ctx, KEY, { stop: true, sessionId: "s-1" })
+          : deleteTask(ctx, KEY, { sessionId: "s-1" });
       await expect(result).rejects.toThrow(/can't be named/);
       expect(calls.map((call) => call.method)).toEqual(["sessions.describe"]);
     },
   );
 
   it("F-277: a task whose run is active is not archived without Stop, and nothing is asked of it", async () => {
-    const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: true } });
-    await expect(archiveTask(ctx, KEY, { stop: false })).rejects.toBeInstanceOf(ActiveRunError);
+    const { ctx, calls } = fakeGateway({
+      [KEY]: { sessionId: "s-1", hasActiveRun: true, activeRunIds: ["run-a"] },
+    });
+    await expect(archiveTask(ctx, KEY, { stop: false, sessionId: "s-1" })).rejects.toBeInstanceOf(
+      ActiveRunError,
+    );
     expect(calls.map((call) => call.method)).toEqual(["sessions.describe"]);
   });
 
   it("F-277: Stop and archive stops the run, waits for the gateway to say it stopped, then archives", async () => {
     const rows: Record<string, Record<string, unknown>> = {
-      [KEY]: { sessionId: "s-1", hasActiveRun: true },
+      [KEY]: { sessionId: "s-1", hasActiveRun: true, activeRunIds: ["run-a"] },
     };
     const { ctx, calls } = fakeGateway(rows);
     let reads = 0;
@@ -331,7 +340,7 @@ describe("the rail's task actions", () => {
       if (method === "sessions.describe" && ++reads === 3) rows[KEY]!.hasActiveRun = false;
       return request(method, params);
     };
-    await archiveTask(ctx, KEY, { stop: true });
+    await archiveTask(ctx, KEY, { stop: true, sessionId: "s-1" });
     expect(calls.map((call) => call.method)).toEqual([
       "sessions.describe",
       "chat.abort",
@@ -339,66 +348,42 @@ describe("the rail's task actions", () => {
       "sessions.describe",
       "sessions.patch",
     ]);
-    expect(calls[1]!.params).toEqual({ sessionKey: KEY });
+    expect(calls[1]!.params).toEqual({ sessionKey: KEY, runId: "run-a" });
   });
 
-  it("F-277 F-278: a run the engine follows is stopped by the engine's Stop, and the task is archived only once that run has ended", async () => {
-    const rows: Record<string, Record<string, unknown>> = {
-      [KEY]: { sessionId: "s-1", hasActiveRun: true },
-    };
-    const { ctx, calls } = fakeGateway(rows);
-    const order: string[] = [];
-    let engineActive = false;
-    ctx.stopRuns = async (key) => {
-      order.push(`engine stop ${key}`);
-      // The gateway's row is idle at once, but the engine's run is still stopping
-      // (a run it has not named yet, or whose end has not come) for two more reads.
-      rows[KEY]!.hasActiveRun = false;
-      engineActive = true;
-      return 1;
-    };
-    let reads = 0;
-    ctx.runsActive = () => {
-      if (engineActive && ++reads === 3) engineActive = false;
-      return engineActive;
-    };
-    const request = ctx.request;
-    ctx.request = async (method, params) => {
-      order.push(method);
-      return request(method, params);
-    };
-    await archiveTask(ctx, KEY, { stop: true });
-    expect(order).toEqual([
-      "sessions.describe",
-      `engine stop ${KEY}`,
-      "sessions.describe",
-      "sessions.describe",
-      "sessions.describe",
-      "sessions.patch",
-    ]);
-    expect(calls.some((call) => call.method === "chat.abort")).toBe(false);
-  });
+  it.each([undefined, null, [], ["valid", ""]])(
+    "F-277: a live session without a complete run list cannot be stopped: %j",
+    async (activeRunIds) => {
+      const { ctx, calls } = fakeGateway({
+        [KEY]: { sessionId: "s-1", hasActiveRun: true, activeRunIds },
+      });
+      await expect(archiveTask(ctx, KEY, { stop: true, sessionId: "s-1" })).rejects.toThrow(
+        /didn't name/,
+      );
+      expect(calls.map(({ method }) => method)).toEqual(["sessions.describe"]);
+    },
+  );
 
-  it("F-278: delete of a task whose run the engine follows goes through the engine's Stop too", async () => {
-    const rows: Record<string, Record<string, unknown>> = {
-      [KEY]: { sessionId: "s-1", hasActiveRun: true },
-    };
-    const { ctx, calls } = fakeGateway(rows);
-    let stopped = 0;
-    ctx.stopRuns = async () => {
-      stopped += 1;
-      rows[KEY]!.hasActiveRun = false;
-      return 1;
-    };
-    await deleteTask(ctx, KEY);
-    expect(stopped).toBe(1);
-    expect(calls.map((call) => call.method)).toEqual([
-      "sessions.describe",
-      "sessions.describe",
-      "sessions.patch",
-      "sessions.delete",
-    ]);
-  });
+  it.each(["original", "replacement"])(
+    "F-278: an unarchived %s at deletion is reported without a second write",
+    async (sessionId) => {
+      const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "original", archived: true } });
+      const request = ctx.request;
+      let deleted = false;
+      ctx.request = async (method, params) => {
+        if (method === "sessions.delete") {
+          deleted = true;
+          throw new Error(`Session ${KEY} is not archived. Archive it first, then delete it.`);
+        }
+        if (deleted && method === "sessions.describe") return { session: { key: KEY, sessionId } };
+        return request(method, params);
+      };
+      await expect(deleteTask(ctx, KEY, { sessionId: "original" })).rejects.toThrow(
+        sessionId === "original" ? /not archived/ : /already deleted or reset/,
+      );
+      expect(calls.map((call) => call.method)).toEqual(["sessions.describe"]);
+    },
+  );
 
   it("F-278 F-424: a delete the gateway asks to retry, because its routing changed meanwhile, is sent again and completes", async () => {
     const rows: Record<string, Record<string, unknown>> = { [KEY]: { sessionId: "s-1" } };
@@ -415,7 +400,7 @@ describe("the rail's task actions", () => {
       }
       return request(method, params);
     };
-    await deleteTask(ctx, KEY);
+    await deleteTask(ctx, KEY, { sessionId: "s-1" });
     expect(calls.map((call) => call.method)).toEqual([
       "sessions.describe",
       "sessions.patch",
@@ -445,8 +430,12 @@ describe("the rail's task actions", () => {
   });
 
   it("F-278: a run that does not stop within its deadline leaves the task as it was", async () => {
-    const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: true } });
-    await expect(deleteTask(ctx, KEY)).rejects.toThrow("did not stop in time");
+    const { ctx, calls } = fakeGateway({
+      [KEY]: { sessionId: "s-1", hasActiveRun: true, activeRunIds: ["run-a"] },
+    });
+    await expect(deleteTask(ctx, KEY, { sessionId: "s-1" })).rejects.toThrow(
+      "did not stop in time",
+    );
     expect(calls.some((call) => call.method === "sessions.patch")).toBe(false);
     expect(calls.some((call) => call.method === "sessions.delete")).toBe(false);
     expect(calls.filter((call) => call.method === "sessions.describe").length).toBeGreaterThan(
@@ -456,7 +445,7 @@ describe("the rail's task actions", () => {
 
   it("F-278: delete stops an active run first, archives, then deletes with its transcript", async () => {
     const rows: Record<string, Record<string, unknown>> = {
-      [KEY]: { sessionId: "s-1", hasActiveRun: true },
+      [KEY]: { sessionId: "s-1", hasActiveRun: true, activeRunIds: ["run-a"] },
     };
     const { ctx, calls } = fakeGateway(rows);
     const request = ctx.request;
@@ -464,7 +453,7 @@ describe("the rail's task actions", () => {
       if (method === "chat.abort") rows[KEY]!.hasActiveRun = false;
       return request(method, params);
     };
-    await deleteTask(ctx, KEY);
+    await deleteTask(ctx, KEY, { sessionId: "s-1" });
     expect(calls.map((call) => call.method)).toEqual([
       "sessions.describe",
       "chat.abort",
@@ -482,9 +471,9 @@ describe("the rail's task actions", () => {
 
   it("F-278: an archived task is deleted without archiving again; a gone one is left alone", async () => {
     const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", archived: true } });
-    await deleteTask(ctx, KEY);
+    await deleteTask(ctx, KEY, { sessionId: "s-1" });
     expect(calls.map((call) => call.method)).toEqual(["sessions.describe", "sessions.delete"]);
-    await deleteTask(ctx, KEY);
+    await deleteTask(ctx, KEY, { sessionId: "s-1" });
     expect(calls.at(-1)!.method).toBe("sessions.describe");
   });
 
@@ -516,8 +505,6 @@ describe("the rail's task actions", () => {
       sleep: async () => {},
       runMark: () => "",
       stopMark: () => 0,
-      stopRuns: async () => 0,
-      runsActive: () => false,
     };
     const listed = await listArchived(ctx, "pip");
     expect(listed.tasks).toHaveLength(MAX_ARCHIVED_LISTED);

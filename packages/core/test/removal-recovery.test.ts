@@ -66,13 +66,7 @@ it("F-278: an empty list before the key-only delete answer leaves the parked mes
   }
 });
 
-it.each([
-  "archive",
-  "delete",
-  "already archived",
-  "already archived without a chosen session",
-  "already deleted",
-] as const)(
+it.each(["archive", "delete", "already archived", "already deleted"] as const)(
   "F-420 F-278: %s of B leaves A's parked message and file alone on the same key",
   async (action) => {
     const { client, gateway, transcript, queue, rows, park } = await listedTask();
@@ -107,11 +101,7 @@ it.each([
       gateway.handlers["sessions.delete"] = () => ({ ok: true });
       if (action === "delete" || action === "already deleted")
         await client.deleteTask(KEY, { sessionId: "session-b" });
-      else
-        await client.archiveTask(
-          KEY,
-          action === "already archived without a chosen session" ? {} : { sessionId: "session-b" },
-        );
+      else await client.archiveTask(KEY, { sessionId: "session-b" });
       const message = (id: string) => transcript().outbox.find((item) => item.id === id);
       expect(message(first)).toMatchObject({
         status: "not-sent",

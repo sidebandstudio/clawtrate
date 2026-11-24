@@ -1322,7 +1322,7 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     await ready(h);
     let answer!: (value: StopAnswer) => void;
     h.ctx.stopTask = vi.fn(() => new Promise<StopAnswer>((resolve) => (answer = resolve)));
-    const stopping = h.views.stopTask(h.viewer);
+    const stopping = h.views.stopTask(h.viewer, "selected");
     expect(h.pane().stop).toMatchObject({ sending: true });
     h.views.reset();
     expect(h.pane().stop).toBeNull();
@@ -1403,8 +1403,8 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     const h = harness();
     h.ctx.stopTask = vi.fn(async () => ({ runIds: ["run-1"], aborted: null }));
     await ready(h);
-    await h.views.stopTask(h.viewer);
-    expect(h.ctx.stopTask).toHaveBeenCalledWith(KEY, null);
+    await h.views.stopTask(h.viewer, "selected");
+    expect(h.ctx.stopTask).toHaveBeenCalledWith(KEY, "selected", null);
     expect(h.pane().stop).toEqual({
       sending: false,
       runIds: ["run-1"],
@@ -1417,7 +1417,7 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
       throw refused("FORBIDDEN", "not_allowed");
     });
     await ready(refusedStop);
-    await refusedStop.views.stopTask(refusedStop.viewer);
+    await refusedStop.views.stopTask(refusedStop.viewer, "selected");
     expect(refusedStop.pane().stop).toMatchObject({
       sending: false,
       error: "refused: not_allowed",
@@ -2102,7 +2102,7 @@ describe("bounds at the engine and what a settled state says", () => {
     const h = harness();
     await ready(h);
     h.ctx.stopTask = vi.fn(async () => ({ runIds: ids, aborted: null }));
-    await h.views.stopTask(h.viewer);
+    await h.views.stopTask(h.viewer, "selected");
     expect(h.pane().stop).toMatchObject({ runIds: ids.slice(0, 8), runsOmitted: 1 });
     // The eight kept all stopped; the ninth is not known here.
     const runs = ids.map((id) => ({

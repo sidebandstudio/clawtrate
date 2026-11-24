@@ -5,6 +5,7 @@
 // commands. Words come from the engine's catalogue (`computerWords`).
 
 import {
+  OPEN_TASK_FIRST,
   approvalTarget,
   browserUse,
   callFromStep,
@@ -288,8 +289,10 @@ export function ComputerTab(props: ComputerTabProps) {
       <StuckLine
         name={name}
         progress={stopped}
+        key={taskKey}
+        sessionId={transcript?.sessionId ?? null}
         canStop={running}
-        onStop={() => send({ type: "computerStopTask" })}
+        onStop={(sessionId) => send({ type: "computerStopTask", key: taskKey, sessionId })}
       />
     ) : null;
 
@@ -449,17 +452,19 @@ function StuckLine({
   name,
   progress,
   canStop,
+  sessionId,
   onStop,
 }: {
   name: string;
   progress: ReturnType<typeof stopProgress>;
   /** A run of the task is in progress: only then is there something to stop. */
   canStop: boolean;
-  onStop: () => void;
+  sessionId: string | null;
+  onStop: (sessionId: string) => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
   // Nothing to stop: the confirmation closes, and a run started later needs it opened again.
-  if (confirming && !canStop) setConfirming(false);
+  if (confirming && !canStop) setConfirming(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
@@ -497,13 +502,14 @@ function StuckLine({
       <p className="files-alert" role="alert" data-testid="computer-stuck">
         {progress.kind === "refused" && <>{words.stopRefusedLine(name, progress.error)} </>}
         {words.stuckLine(name)}
-        {canStop && (
+        {canStop && !sessionId && ` ${OPEN_TASK_FIRST}`}
+        {canStop && sessionId && (
           <button
             ref={openerRef}
             type="button"
             className="button"
             data-size="sm"
-            onClick={() => setConfirming(true)}
+            onClick={() => setConfirming(sessionId)}
           >
             Stop {name} in this task
           </button>
@@ -526,7 +532,7 @@ function StuckLine({
               className="button"
               data-size="sm"
               onClick={() => {
-                setConfirming(false);
+                setConfirming(null);
                 openerRef.current?.focus();
               }}
             >
@@ -538,8 +544,8 @@ function StuckLine({
               data-size="sm"
               data-tone="danger"
               onClick={() => {
-                setConfirming(false);
-                onStop();
+                setConfirming(null);
+                onStop(confirming);
               }}
             >
               Stop

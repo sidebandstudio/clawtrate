@@ -7,7 +7,7 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE, avatarFor } from "@clawtrate/core";
+import { ACTIVE_RUN_MESSAGE, OPEN_TASK_FIRST, avatarFor } from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -773,16 +773,17 @@ export function Rail({
   };
 
   const archive = (bot: Bot, task: Task, trigger: HTMLElement | null) => {
+    const sessionId = task.sessionId;
+    if (!sessionId) return runner.tell({ tone: "info", text: OPEN_TASK_FIRST });
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     const act = async (stop: boolean) => {
-      // Use the session shown in the row when it has one.
       const { stoppedRun } = await bridge.invoke({
         type: "archiveTask",
         key: task.key,
         stop,
-        ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+        sessionId,
       });
       setAnnouncement(`Archived ${task.title}.`);
       // The gateway's archive ends anything running in the task: a run that had just started,
@@ -834,6 +835,8 @@ export function Rail({
     trigger: HTMLElement | null,
     listed: boolean,
   ) => {
+    const sessionId = task.sessionId;
+    if (!sessionId) return runner.tell({ tone: "info", text: OPEN_TASK_FIRST });
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
@@ -853,7 +856,7 @@ export function Rail({
         await bridge.invoke({
           type: "deleteTask",
           key: task.key,
-          ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+          sessionId,
         });
         setAnnouncement(`Deleted ${task.title}.`);
         if (listed) await afterRemoval(bot, task as Task, remaining, next);

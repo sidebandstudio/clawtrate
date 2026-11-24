@@ -846,7 +846,7 @@ export function createFixtureBridge(
         case "computerDismiss":
           return e.dismiss(v);
         case "computerStopTask":
-          return e.stopTask(v);
+          return e.stopTask(v, command.sessionId);
       }
     }
     if (command.type === "readMachine") {

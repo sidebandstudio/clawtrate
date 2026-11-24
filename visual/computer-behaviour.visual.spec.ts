@@ -755,7 +755,11 @@ test.describe("the computer button, recovery and the machine", () => {
     expect(await questionStatus()).toBe("pending");
     await page.evaluate(() => {
       const { clawtrateFixture } = window as unknown as { clawtrateFixture: ClawtrateBridge };
-      return clawtrateFixture.send({ type: "computerStopTask" });
+      return clawtrateFixture.send({
+        type: "computerStopTask",
+        key: "agent:main:ebook-apps",
+        sessionId: clawtrateFixture.getState().transcripts["agent:main:ebook-apps"]!.sessionId!,
+      });
     });
     await expect.poll(questionStatus).toBe("closed");
   });
@@ -795,6 +799,50 @@ test.describe("the computer button, recovery and the machine", () => {
       .click();
     await controlBar(page).getByRole("button", { name: "Try again" }).click();
     await expect(controlBar(page)).toContainText("You have control");
+  });
+
+  test("F-145: a Computer Stop dialog keeps the session that opened it after a replacement starts", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=active`, "light");
+    await openFull(page);
+    await take(page);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(controlBar(page)).toContainText("Juniper is still acting");
+      await controlBar(page).getByRole("button", { name: "Try again" }).click();
+    }
+    await expect(controlBar(page)).toContainText("Juniper is still acting");
+    await page.keyboard.press("Escape");
+    await expect(fullView(page)).toHaveCount(0);
+    await computerPanel(page).getByRole("button", { name: "Stop Juniper in this task" }).click();
+    const original = await page.evaluate(() => {
+      const { clawtrateFixture } = window as unknown as {
+        clawtrateFixture: ClawtrateBridge & {
+          setState(change: (state: ClawtrateState) => ClawtrateState): void;
+        };
+      };
+      const key = "agent:main:ebook-apps";
+      const original = clawtrateFixture.getState().transcripts[key]!.sessionId;
+      clawtrateFixture.setState((state) => ({
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...state.transcripts[key]!,
+            sessionId: "replacement",
+            runs: state.transcripts[key]!.runs.map((run) => ({ ...run, id: "run-b" })),
+          },
+        },
+      }));
+      return original;
+    });
+    await page.getByRole("alertdialog").getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(computerPanel(page).getByTestId("computer-stuck")).toContainText(
+      "already deleted or reset",
+    );
+    expect(await sentOf(page, "computerStopTask")).toEqual([
+      { type: "computerStopTask", key: "agent:main:ebook-apps", sessionId: original },
+    ]);
   });
 
   test("F-149: a stop the gateway refuses says so, keeps the run as it was and offers Stop again; it never says Stopped", async ({

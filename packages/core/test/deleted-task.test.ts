@@ -1225,7 +1225,7 @@ describe("every steer reads its task first, and nothing else decides where it go
       await reading.promise;
       return { messages: [], hasMore: false, sessionId: "s-1", inFlightRun: { runId: "run-a" } };
     };
-    const archive = task.client.archiveTask(KEY).catch(() => undefined);
+    const archive = task.client.archiveTask(KEY, { sessionId: "s-1" }).catch(() => undefined);
     task.gateway.emit("session.message", { sessionKey: KEY });
     await until(() => task.describes() === 1);
     await sleep(200);
@@ -1355,7 +1355,7 @@ describe("a task's run ended by its removal before the removal is heard (F-277, 
       attachments: [FILE],
     });
     const bytes = client.retainedAttachmentBytes;
-    await client.archiveTask(KEY);
+    await client.archiveTask(KEY, { sessionId: "s-1" });
     expect(gateway.calls("sessions.patch")).toEqual([]);
     expect(transcript().outbox[0]).toMatchObject({
       id,
@@ -1385,7 +1385,7 @@ describe("a task's run ended by its removal before the removal is heard (F-277, 
       });
       return { session: { key: KEY, sessionId: "s-1", archived: true } };
     };
-    await client.archiveTask(KEY);
+    await client.archiveTask(KEY, { sessionId: "s-1" });
     expect(gateway.calls("sessions.patch")).toEqual([]);
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]).toMatchObject({
@@ -1463,7 +1463,7 @@ describe("this client's own archive holds back what it will cancel until it sett
     });
     const patched = deferred<unknown>();
     gateway.handlers["sessions.patch"] = () => patched.promise;
-    const archived = client.archiveTask(KEY);
+    const archived = client.archiveTask(KEY, { sessionId: "s-1" });
     await until(() => gateway.calls("sessions.patch").length === 1);
     // The run ends on its own while the archive is out.
     gateway.emit("agent", agentEvent("run-on", 2, "lifecycle", { phase: "end" }));
@@ -1698,7 +1698,10 @@ describe("Archive and Delete check the selected session before Stop (F-277, F-27
       expect(transcript().runs).toContainEqual(
         expect.objectContaining({ id: "run-b", state: "running" }),
       );
-      const rows = [{ sessionId: "s-1", hasActiveRun: true }, { sessionId: "s-2" }];
+      const rows = [
+        { sessionId: "s-1", hasActiveRun: true, activeRunIds: ["run-a"] },
+        { sessionId: "s-2" },
+      ];
       gateway.handlers["sessions.describe"] = () => ({ session: rows.shift() });
       try {
         const acted =
@@ -1706,27 +1709,149 @@ describe("Archive and Delete check the selected session before Stop (F-277, F-27
             ? client.archiveTask(KEY, { sessionId: "s-1", stop: true })
             : client.deleteTask(KEY, { sessionId: "s-1" });
         await expect(acted).rejects.toThrow(TASK_GONE);
-        expect(changes()).toEqual([]);
+        expect(changes()).toEqual([{ sessionKey: KEY, runId: "run-a" }]);
       } finally {
         client.stop();
       }
     },
   );
 
-  it("F-277: a session change after a key-only Stop refuses the archive without claiming nothing happened", async () => {
+  it.each(["archive", "delete"] as const)(
+    "F-278: %s uses only the runs named in the held gateway read, even if a new run starts locally",
+    async (action) => {
+      const { client, gateway, transcript } = await chosen(null);
+      const read = deferred<unknown>();
+      const abort = deferred<unknown>();
+      gateway.handlers["sessions.describe"] = () => read.promise;
+      gateway.handlers["chat.abort"] = () => abort.promise;
+      const acted =
+        action === "archive"
+          ? client.archiveTask(KEY, { stop: true, sessionId: "s-1" })
+          : client.deleteTask(KEY, { sessionId: "s-1" });
+      try {
+        await until(() => gateway.calls("sessions.describe").length > 0);
+        gateway.emit("agent", agentEvent("run-b", 1, "lifecycle", { phase: "start" }));
+        await until(() => transcript().runs.some((run) => run.id === "run-b"));
+        read.resolve({
+          session: { sessionId: "s-1", hasActiveRun: true, activeRunIds: ["run-a"] },
+        });
+        await until(() => gateway.calls("chat.abort").length > 0);
+        expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-a" }]);
+        gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-2" } });
+        abort.resolve({ aborted: false });
+        await expect(acted).rejects.toThrow(TASK_GONE);
+        expect(gateway.calls("chat.abort")).toHaveLength(1);
+        expect(gateway.calls("sessions.patch")).toEqual([]);
+        expect(gateway.calls("sessions.delete")).toEqual([]);
+      } finally {
+        abort.resolve({ aborted: false });
+        void acted.catch(() => {});
+        client.stop();
+      }
+    },
+  );
+
+  it("F-277: a session change after an exact Stop refuses the archive without claiming nothing happened", async () => {
     const { client, gateway } = await chosen(null);
     const rows = [
-      { sessionId: "s-1", hasActiveRun: true },
+      { sessionId: "s-1", hasActiveRun: true, activeRunIds: ["run-a"] },
       { sessionId: "s-2", hasActiveRun: false },
     ];
     gateway.handlers["sessions.describe"] = () => ({ session: rows.shift() ?? null });
     await expect(client.archiveTask(KEY, { sessionId: "s-1", stop: true })).rejects.toThrow(
       /^This task was already deleted or reset elsewhere\.$/,
     );
-    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY }]);
+    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-a" }]);
     expect(gateway.calls("sessions.patch")).toEqual([]);
     client.stop();
   });
+
+  it.each(["archive", "delete"] as const)(
+    "F-278: %s stops a named unopened task and pins both writes",
+    async (action) => {
+      const { client, gateway } = await chosen(null);
+      const key = "agent:otto:unopened";
+      let active = true;
+      gateway.handlers["sessions.describe"] = () => ({
+        session: {
+          key,
+          sessionId: "selected",
+          hasActiveRun: active,
+          activeRunIds: active ? ["elsewhere"] : [],
+        },
+      });
+      gateway.handlers["chat.abort"] = () => {
+        active = false;
+        return { aborted: true };
+      };
+      try {
+        expect(client.state.transcripts[key]).toBeUndefined();
+        if (action === "archive")
+          await client.archiveTask(key, { stop: true, sessionId: "selected" });
+        else await client.deleteTask(key, { sessionId: "selected" });
+        expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: key, runId: "elsewhere" }]);
+        expect(gateway.calls("sessions.patch")).toEqual([
+          { key, archived: true, expectedSessionId: "selected" },
+        ]);
+        expect(gateway.calls("sessions.delete")).toEqual(
+          action === "delete"
+            ? [{ key, archivedOnly: true, deleteTranscript: true, expectedSessionId: "selected" }]
+            : [],
+        );
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
+  it("F-278: a run ending while its exact abort is pending never sends another abort by key", async () => {
+    const { client, gateway, transcript } = await chosen({
+      sessionId: "s-1",
+      hasActiveRun: true,
+      activeRunIds: ["run-a"],
+    });
+    const abort = deferred<unknown>();
+    gateway.handlers["chat.abort"] = () => abort.promise;
+    gateway.emit("agent", agentEvent("run-a", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === "run-a"));
+    const acted = client.archiveTask(KEY, { stop: true, sessionId: "s-1" });
+    try {
+      await until(() => gateway.calls("chat.abort").length === 1);
+      gateway.emit("agent", agentEvent("run-a", 2, "lifecycle", { phase: "end", aborted: true }));
+      await until(() =>
+        transcript().runs.some((run) => run.id === "run-a" && run.state === "stopped"),
+      );
+      gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-2" } });
+      abort.resolve({ aborted: true });
+      await expect(acted).rejects.toThrow(TASK_GONE);
+      expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-a" }]);
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+    } finally {
+      abort.resolve({ aborted: true });
+      void acted.catch(() => {});
+      client.stop();
+    }
+  });
+
+  it.each(["sessions.patch", "sessions.delete"])(
+    "F-278: %s refuses a changed session without retrying",
+    async (method) => {
+      const { client, gateway } = await chosen({ sessionId: "s-1" });
+      gateway.handlers[method] = () => {
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: `Session ${KEY} changed before ${method === "sessions.patch" ? "patch" : "deletion"}. Retry.`,
+        });
+      };
+      try {
+        await expect(client.deleteTask(KEY, { sessionId: "s-1" })).rejects.toThrow(TASK_GONE);
+        expect(gateway.calls(method)).toHaveLength(1);
+        expect(gateway.calls(method)[0]).toMatchObject({ expectedSessionId: "s-1" });
+      } finally {
+        client.stop();
+      }
+    },
+  );
 
   it("the bridge carries the session of the row acted on, and refuses one that is not an id", () => {
     expect(
@@ -1735,7 +1860,14 @@ describe("Archive and Delete check the selected session before Stop (F-277, F-27
     expect(parseBridgeCommand({ type: "deleteTask", key: KEY, sessionId: "s-1" })).toMatchObject({
       sessionId: "s-1",
     });
-    expect(() => parseBridgeCommand({ type: "deleteTask", key: KEY, sessionId: "" })).toThrow();
+    for (const command of [
+      { type: "deleteTask", key: KEY },
+      { type: "archiveTask", key: KEY, stop: true },
+      { type: "computerStopTask" },
+    ]) {
+      expect(() => parseBridgeCommand(command)).toThrow(/session id/);
+      expect(() => parseBridgeCommand({ ...command, sessionId: "" })).toThrow(/session id/);
+    }
   });
 
   it("a session id past the id bound, counted as JSON is: it is neither kept nor sent, and nothing is archived", async () => {
@@ -1750,7 +1882,7 @@ describe("Archive and Delete check the selected session before Stop (F-277, F-27
       kept.push(...[...removals.values()].map((removal) => removal.sent));
       return patch(params);
     };
-    await expect(client.archiveTask(KEY)).rejects.toThrow(/can't be named/);
+    await expect(client.archiveTask(KEY, { sessionId: "s-1" })).rejects.toThrow(/can't be named/);
     expect(changes()).toEqual([]);
     expect(kept).toEqual([]);
     client.stop();
@@ -1767,7 +1899,7 @@ describe("this client's own archive holds its messages wherever they are sent fr
     const id = await start(task);
     const patched = deferred<unknown>();
     task.gateway.handlers["sessions.patch"] = () => patched.promise;
-    const archived = task.client.archiveTask(KEY);
+    const archived = task.client.archiveTask(KEY, { sessionId: "s-1" });
     await until(() => task.gateway.calls("sessions.patch").length === 1);
     return { ...task, id, patched, archived };
   }
@@ -1833,7 +1965,7 @@ describe("this client's own archive holds its messages wherever they are sent fr
     const removals = (client as unknown as { ownRemovals: Map<number, unknown> }).ownRemovals;
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const failed = client.archiveTask(KEY).then(
+      const failed = client.archiveTask(KEY, { sessionId: "s-1" }).then(
         () => null,
         (error: unknown) => error,
       );

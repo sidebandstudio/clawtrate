@@ -234,7 +234,6 @@ import {
   throughRunAliases,
   removeMessage,
   requestStop,
-  retireStopIntent,
   revertStop,
   runsFromHistory,
   settleMissingQuestions,
@@ -335,7 +334,8 @@ import {
   restoreTask,
   TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
-  TASK_GONE,
+  describeSelected,
+  stopNamedRuns,
   TASK_RESET_ELSEWHERE,
   type ArchivedList,
   type ArchiveResult,
@@ -1613,12 +1613,6 @@ export class ClawtrateClient {
   private sentPictureBytes = 0;
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
-  /**
-   * Computer Stops whose first abort has not gone (`task\0run`), and who asked: it goes once the
-   * send's answer or history names the run, unless the owner is withdrawn first. Removed when it
-   * goes, when the run settles, or with its owner.
-   */
-  private readonly unsentStops = new Map<string, object>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
   private readonly creations = new Map<string, TaskCreation>();
   private readonly creationTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1836,7 +1830,7 @@ export class ClawtrateClient {
       this.state.transcripts[key]?.questions.find((q) => q.id === id)?.status ?? null,
     answer: (key, id, answers, owner) => this.answerQuestion(key, id, answers, { owner }),
     withdraw: (owner) => this.withdraw(owner),
-    stopTask: (key, owner) => this.stopTask(key, owner),
+    stopTask: (key, sessionId, owner) => this.stopTask(key, sessionId, owner),
     log: (level, message) => this.log(level, message),
   });
 
@@ -3136,16 +3130,6 @@ export class ClawtrateClient {
     this.withdrawnOwners.add(owner);
     this.fileTransfers.release(owner);
     for (const readers of this.approvalReads.values()) readers.delete(owner);
-    // A Computer Stop whose first abort has not gone goes with it; one already sent is left as it is.
-    for (const [id, asker] of [...this.unsentStops]) {
-      if (asker !== owner) continue;
-      this.unsentStops.delete(id);
-      const [key, runId] = id.split("\u0000") as [string, string];
-      if (this.state.transcripts[key])
-        this.updateActivity(key, (activity) =>
-          retireStopIntent(activity, runId, new WithdrawnError().message),
-        );
-    }
     const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
     if (withdrawn.length === 0) return;
     this.accessWaiters = this.accessWaiters.filter((waiter) => waiter.owner !== owner);
@@ -4388,7 +4372,6 @@ export class ClawtrateClient {
     if (runId && !command && message.mode !== "steer") {
       const run = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
       if (run?.state === "stopping") {
-        this.unsentStops.delete(`${key}\u0000${runId}`);
         void this.abortRun(key, runId);
       }
     }
@@ -4542,38 +4525,16 @@ export class ClawtrateClient {
   /**
    * Stop a running or waiting run with `chat.abort`. The run is `stopping`
    * until the gateway reports how it ended: `stopped` when the abort took,
-   * `completed` with `finishedBeforeStop` when the run finished first. With `taskOnly` (the
-   * Computer tab's Stop), the runs of other bots this run's messages started are not stopped.
+   * `completed` with `finishedBeforeStop` when the run finished first.
    */
-  async stopRun(
-    key: string,
-    asked: string,
-    options: { owner?: object; everyRun?: boolean; taskOnly?: boolean } = {},
-  ): Promise<void> {
+  async stopRun(key: string, asked: string, options: { owner?: object } = {}): Promise<void> {
     const transcript = this.state.transcripts[key];
-    const runId = transcript
-      ? (runningRunId(transcript, asked) ??
-        // Archive and delete stop every active run of the task, so each is aborted by its own
-        // id even when none of them is established as the current one.
-        (options.everyRun
-          ? (transcript.steerAliases[asked] ?? transcript.queueAliases[asked] ?? asked)
-          : null))
-      : asked;
+    const runId = transcript ? runningRunId(transcript, asked) : asked;
     // No one current run is established: Stop is withheld until the gateway identifies it.
     if (runId === null) return;
     const run = transcript && findRun(transcript, runId);
     if (!run || (run.state !== "running" && run.state !== "waiting")) return;
-    this.updateActivity(key, (activity) => {
-      const stopping = requestStop(activity, runId, this.now());
-      // A task-only Stop leaves the recipients alone, as if already asked (`stopRecipients`); a
-      // later Stop of the conversation's own, after that one was refused, asks them again.
-      if (options.taskOnly || run.stoppedWith?.recipientsAsked)
-        return noteStoppedWith(stopping, runId, (now) => ({
-          ...now,
-          recipientsAsked: options.taskOnly === true,
-        }));
-      return stopping;
-    });
+    this.updateActivity(key, (activity) => requestStop(activity, runId, this.now()));
     try {
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       this.checkNotWithdrawn(options.owner);
@@ -4583,11 +4544,7 @@ export class ClawtrateClient {
       // has taken the send stops nothing, with or without the run's id, and the turn then runs
       // in full. So a run the gateway has not named yet is aborted once the send's answer
       // names it (`deliver`); an answer that says it is over already needs no abort.
-      if (!current.bound) {
-        if (options.taskOnly && options.owner)
-          this.unsentStops.set(`${key}\u0000${runId}`, options.owner);
-        return;
-      }
+      if (!current.bound) return;
       await this.abortRun(key, current.id);
     } catch (error) {
       this.noteMissingScope(error);
@@ -7200,16 +7157,6 @@ export class ClawtrateClient {
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
     void this.settleEndedRuns(key);
-    // A run event can name the run before the send reply dispatches its first abort.
-    for (const id of this.unsentStops.keys()) {
-      const [task, runId] = id.split("\u0000") as [string, string];
-      if (task !== key) continue;
-      const run = findRun(transcript, runId);
-      const waiting =
-        run?.stopRequestedAt != null &&
-        (run.state === "stopping" || (run.state === "stopped" && !run.outcomeKnown));
-      if (!waiting) this.unsentStops.delete(id);
-    }
     for (const run of transcript.runs) {
       // A run this client stopped has ended as stopped: stop what its messages started (F-296).
       if (
@@ -8495,7 +8442,6 @@ export class ClawtrateClient {
       for (const waiter of waiters) waiter.reject(new Error("Switched to another gateway."));
     }
     this.creationWaiters.clear();
-    this.unsentStops.clear();
     this.approvalOutcomes.clear();
     this.waiting.clear();
     this.unrouted.clear();
@@ -9325,6 +9271,7 @@ export class ClawtrateClient {
       generation !== this.generation ||
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation;
+    const listed = this.rows.get(key);
     // Runs active when the read starts; one the gateway then no longer has has ended.
     const activeBefore = new Set(
       (this.state.transcripts[key]?.runs ?? [])
@@ -9403,6 +9350,10 @@ export class ClawtrateClient {
       );
       // The session this history came from: only messages bound to it can be settled by its rows.
       const named = sessionNamed(history);
+      if (named && listed && listed === this.rows.get(key) && !listed.sessionId) {
+        this.rows.set(key, { ...listed, sessionId: named });
+        this.publishTasks();
+      }
       const reconciled = reconcileOutbox(
         parkAfterStop(current, { ...current, runs }, this.now()),
         messages,
@@ -9441,7 +9392,6 @@ export class ClawtrateClient {
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
       for (const run of toStop) {
-        this.unsentStops.delete(`${key}\u0000${run.id}`);
         void this.abortRun(key, run.id);
       }
       void this.readRecipients(key, generation);
@@ -9700,36 +9650,15 @@ export class ClawtrateClient {
     return out;
   }
 
-  /**
-   * "Stop <Bot> in this task": the conversation's Stop, for every run of the task still going,
-   * each by its own id as archive and delete stop them, even when none is established as the
-   * current one. Asked for `owner`, it is withdrawn with it while it waits for write access.
-   */
-  private async stopTask(key: string, owner: object | null): Promise<StopAnswer> {
-    const runs = (this.state.transcripts[key]?.runs ?? []).filter(
-      (run) => run.state === "running" || run.state === "waiting",
-    );
-    if (runs.length === 0) {
-      await this.ensureScope(WRITE_SCOPE, owner);
-      this.checkNotWithdrawn(owner);
-      const result = asRecord(await this.request("chat.abort", { sessionKey: key }));
-      // As the gateway said it: `aborted` true or false, or null when its answer didn't say.
-      return { runIds: [], aborted: typeof result?.aborted === "boolean" ? result.aborted : null };
-    }
-    // Each as the conversation's Stop: stopping until the run's end, back to running with the
-    // gateway's refusal (`revertStop`).
-    // All at once: one run's slow answer never holds another's Stop back.
-    await Promise.all(
-      runs.map((run) =>
-        this.stopRun(
-          key,
-          run.id,
-          // "The request affects only this task": nothing these runs' messages started is stopped.
-          owner ? { owner, everyRun: true, taskOnly: true } : { everyRun: true, taskOnly: true },
-        ),
-      ),
-    );
-    return { runIds: runs.map((run) => run.id), aborted: null };
+  private async stopTask(
+    key: string,
+    sessionId: string,
+    owner: object | null,
+  ): Promise<StopAnswer> {
+    const ctx = this.actionContext(owner);
+    await ctx.ensureWrite();
+    const row = await describeSelected(ctx, key, sessionId);
+    return { runIds: await stopNamedRuns(ctx, key, row), aborted: null };
   }
 
   /** A viewer id for a bridge session: its pane in `state.computer.panes`. */
@@ -9781,8 +9710,12 @@ export class ClawtrateClient {
   computerDismiss(viewer: string): void {
     this.computer.dismiss(viewer);
   }
-  computerStopTask(viewer: string, options: { owner?: object } = {}): Promise<void> {
-    return this.computer.stopTask(viewer, options.owner ?? null);
+  computerStopTask(
+    viewer: string,
+    sessionId: string,
+    options: { owner?: object } = {},
+  ): Promise<void> {
+    return this.computer.stopTask(viewer, sessionId, options.owner ?? null);
   }
 
   /** Where the task's bot runs its commands, and the named nodes' records, read now. */
@@ -9839,24 +9772,6 @@ export class ClawtrateClient {
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       stopMark: (key) => this.waiting.stopMark(key),
-      stopRuns: async (key, sessionId) => {
-        const sessionRuns = () => {
-          const transcript = this.state.transcripts[key];
-          if (sessionId !== undefined && transcript?.sessionId !== sessionId)
-            throw new Error(TASK_GONE);
-          return transcript?.runs ?? [];
-        };
-        await Promise.all(
-          sessionRuns()
-            .filter((run) => run.state === "running" || run.state === "waiting")
-            .map((run) =>
-              this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true }),
-            ),
-        );
-        return sessionRuns().filter((run) => isActive(run.state)).length;
-      },
-      runsActive: (key) =>
-        (this.state.transcripts[key]?.runs ?? []).some((run) => isActive(run.state)),
       runMark: (key) => {
         const row = this.rows.get(capId(key, MAX_ID_CHARS));
         const active = row?.hasActiveRun === true || row?.status === "running";
@@ -9929,12 +9844,12 @@ export class ClawtrateClient {
   /** `sessionId`: the session of the task the person chose to archive; another is left alone. */
   async archiveTask(
     key: string,
-    options: { stop?: boolean; owner?: object; sessionId?: string } = {},
+    options: { stop?: boolean; owner?: object; sessionId: string },
   ): Promise<ArchiveResult> {
     return this.removing(key, "archived", options.sessionId, options.owner ?? null, (ctx) =>
       archiveTask(ctx, key, {
         stop: options.stop === true,
-        ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+        sessionId: options.sessionId,
       }),
     );
   }
@@ -9944,12 +9859,9 @@ export class ClawtrateClient {
   }
 
   /** `sessionId`: the session of the task the person chose to delete; another is left alone. */
-  async deleteTask(
-    key: string,
-    options: { owner?: object; sessionId?: string } = {},
-  ): Promise<void> {
+  async deleteTask(key: string, options: { owner?: object; sessionId: string }): Promise<void> {
     await this.removing(key, "deleted", options.sessionId, options.owner ?? null, (ctx) =>
-      deleteTask(ctx, key, options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+      deleteTask(ctx, key, { sessionId: options.sessionId }),
     );
   }
 
@@ -9961,7 +9873,7 @@ export class ClawtrateClient {
    * settled as one made elsewhere; with none heard, they go on as they would have. An archive or
    * delete heard is its own only once its request left, and only of the session that request
    * named. With `MAX_TRACKED_TASKS` already out, it goes as any other request, holds nothing back,
-   * and what it causes is settled as made elsewhere. Its archive or delete leaves within
+   * and what it causes is settled as made elsewhere. Its first archive or delete write leaves within
    * `REMOVAL_HOLD_MS` of its start, the wait for write access included, or not at all: past it, it
    * gives up, nothing more of it goes, and what it held goes on, though its Stop may have gone. One
    * that succeeds without sending an archive or delete found the task already so (`how`), made
@@ -9971,7 +9883,7 @@ export class ClawtrateClient {
   private async removing<R>(
     key: string,
     how: "archived" | "deleted",
-    sessionId: string | undefined,
+    sessionId: string,
     owner: object | null,
     act: (ctx: TaskActionContext) => Promise<R>,
   ): Promise<R> {
@@ -9979,7 +9891,7 @@ export class ClawtrateClient {
     if (!this.tracked(key) || this.ownRemovals.size >= MAX_TRACKED_TASKS) return act(ctx);
     const id = (this.removals += 1);
     const removal: OwnRemoval = { key, waiting: this.waitingIn(key), sent: null, heard: null };
-    let target = sessionNamed({ sessionId });
+    const target = sessionNamed({ sessionId });
     this.ownRemovals.set(id, removal);
     let expired = false;
     let giveUp: (error: Error) => void = () => undefined;
@@ -9999,12 +9911,6 @@ export class ClawtrateClient {
           ...ctx,
           request: (method, params) => {
             inTime();
-            if (method === "sessions.describe" && sessionId === undefined) {
-              return ctx.request(method, params).then((answer) => {
-                target = sessionNamed(asRecord(asRecord(answer)?.session));
-                return answer;
-              });
-            }
             // From here an archive or delete heard of the session it names is this request's own.
             const expected = asRecord(params)?.expectedSessionId;
             if (
@@ -10020,10 +9926,6 @@ export class ClawtrateClient {
           ensureWrite: async () => {
             await ctx.ensureWrite();
             inTime();
-          },
-          stopRuns: async (task, selectedSession) => {
-            inTime();
-            return ctx.stopRuns(task, selectedSession);
           },
         }),
         late,

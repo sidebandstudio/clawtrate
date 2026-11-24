@@ -1,6 +1,7 @@
 // The rail's task actions in the fixture: keyboard paths, where focus goes
 // after each action, what the host is asked, and that a read-only connection
 // offers none of them.
+import type { ClawtrateState } from "../packages/core/src/types.ts";
 import type { BridgeCommand } from "../packages/core/src/bridge.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
@@ -517,6 +518,35 @@ test("F-277: a task whose run is active asks Stop and archive or Cancel; Cancel 
     },
   ]);
 });
+
+for (const action of ["Stop and archive", "Delete"]) {
+  test(`F-278: ${action} asks to open a row without a session and sends nothing`, async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+    await page.evaluate(() => {
+      const { clawtrateFixture } = window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      };
+      clawtrateFixture.setState((state) => ({
+        ...state,
+        tasksByBot: {
+          ...state.tasksByBot,
+          otto: state.tasksByBot.otto!.map((row) =>
+            row.key === "agent:otto:rotate-logs" ? { ...row, sessionId: null } : row,
+          ),
+        },
+      }));
+    });
+    await taskMenu(page, "Rotate the logs");
+    await page.getByRole("menuitem", { name: new RegExp(action) }).click();
+    await expect(
+      page.getByText("Open the task first so its session can be confirmed.").first(),
+    ).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(await sent(page, action === "Delete" ? "deleteTask" : "archiveTask")).toEqual([]);
+  });
+}
 
 test("F-278: Delete asks first, with Cancel focused; Delete removes the task and focus goes to the next row", async ({
   page,
