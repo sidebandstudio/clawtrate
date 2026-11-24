@@ -7,6 +7,7 @@
 // ids kept.
 
 import { describe, expect, it } from "vitest";
+import { toBase64 } from "../src/bytes.ts";
 import { isTooLargeToSave, MAX_CHAT_FILE_BYTES } from "../src/chat-files.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { parseBridgeCommand } from "../src/bridge.ts";
@@ -332,7 +333,7 @@ describe("F-115: the preview of a task whose last message is only a file", () =>
 });
 
 describe("F-115: a file a bot attaches, read", () => {
-  const BYTES = new TextEncoder().encode("%PDF-1.4\nthe two reviews\n%%EOF\n");
+  const BYTES = Uint8Array.from("%PDF-1.4\nthe two reviews\n%%EOF\n", (char) => char.charCodeAt(0));
   const ISSUED = `${outgoing(PDF)}?mediaTicket=v1.eyJzY29wZSI6Im1hbmFnZWQifQ.wvFYVx-PH9Ic`;
 
   function response(status: number, headers: Record<string, string>, body: Uint8Array) {
@@ -389,7 +390,7 @@ describe("F-115: a file a bot attaches, read", () => {
       status: "content",
       mimeType: "application/pdf",
       bytes: BYTES.length,
-      transfer: { id: null, chunks: 1, data: Buffer.from(BYTES).toString("base64") },
+      transfer: { id: null, chunks: 1, data: toBase64(BYTES) },
     });
     expect(gateway.calls("artifacts.download")).toEqual([{ sessionKey: KEY, artifactId: PDF }]);
     expect(fetched).toEqual([`http://${new URL(URL_A).host}${ISSUED}`]);
