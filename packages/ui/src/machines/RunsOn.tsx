@@ -86,9 +86,10 @@ const resolveScope = (state: SavesState, scope: string) => state.redirects[scope
 
 function promoteScope(state: SavesState, fallback: string, confirmed: string): SavesState {
   const carried = state.entries[fallback];
-  if (!carried && state.redirects[fallback] === confirmed) return state;
-  const redirects = { ...state.redirects, [fallback]: confirmed };
-  if (!carried) return { ...state, redirects };
+  if (!carried) return state;
+  // Only a save still out under the fallback finishes through it; each connection has its own.
+  const redirects =
+    carried.pending > 0 ? { ...state.redirects, [fallback]: confirmed } : state.redirects;
   const existing = state.entries[confirmed] ?? EMPTY_SAVE;
   const botSeqs: Record<string, number> = { ...existing.botSeqs };
   for (const [botId, seq] of Object.entries(carried.botSeqs)) {
