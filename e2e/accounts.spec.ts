@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { choiceFromPicture } from "../packages/core/src/avatar.ts";
 import { ACCOUNT_CLIENTS, SIGNIN_CHOICES } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
-import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { TERMINAL_CHAT_STATES, type OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_E2E_ACCOUNTS!;
@@ -385,6 +385,16 @@ test("F-520: a bot made in New bot starts as itself: no first-run sequence, its 
   await expect
     .poll(async () => (await requestsFor("agent:maple:main")).length, { timeout: 60_000 })
     .toBeGreaterThan(0);
+  // The run ends before this check sends anything of its own: a message queued as a turn
+  // settles can meet the gateway's "placement authority changed" race (see scenario-check.ts).
+  await admin.waitFor(
+    "the end of Maple's first run",
+    (event) =>
+      event.event === "chat" &&
+      (event.payload as { sessionKey?: string }).sessionKey === "agent:maple:main" &&
+      TERMINAL_CHAT_STATES.includes(String((event.payload as { state?: string }).state)),
+    60_000,
+  );
   await expect
     .poll(async () => (await workspaceFile("maple", "BOOTSTRAP.md")).missing, { timeout: 30_000 })
     .toBe(true);

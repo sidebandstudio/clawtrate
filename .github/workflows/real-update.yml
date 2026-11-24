@@ -8,8 +8,10 @@ name: Real update
 #
 #   gh workflow run real-update.yml [-f previous=<version>] [-f candidate=<version>]
 #
-# Empty inputs take the two newest published releases. The run passes only when every image
-# updated in place; the `real-update-summary` artifact holds the summary as JSON.
+# Empty inputs take the two newest published releases. The `real-update-summary` artifact holds
+# the answer as JSON: `verdict` is passed, failed or inconclusive (the feed offered a newer release
+# than the candidate, such as a release published while the run went). The run fails only when an
+# image failed.
 
 on:
   workflow_dispatch:
@@ -140,13 +142,21 @@ jobs:
           path: ${{ runner.temp }}/real-update/
           retention-days: 7
 
-  # One machine-readable answer for the release job: each image's outcome, and whether all passed.
+  # One machine-readable answer for the release job: each image's verdict, and the run's. The
+  # job fails only when an image failed; an inconclusive run (the feed offered a newer release
+  # than the candidate) passes it, and the summary's `verdict` says so.
   summary:
     needs: [versions, update]
     if: always() && needs.versions.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
       - uses: actions/download-artifact@v7
         with:
           pattern: real-update-*
@@ -155,38 +165,7 @@ jobs:
         env:
           PREVIOUS: ${{ needs.versions.outputs.previous }}
           CANDIDATE: ${{ needs.versions.outputs.candidate }}
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib, re
-          images = {}
-          for image in ("macos-15", "macos-26", "xcode-27"):
-              path = pathlib.Path("results", f"real-update-{image}", "result.json")
-              result = json.loads(path.read_text()) if path.exists() else {}
-              install = (result.get("downloaded") or {}).get("install") or {}
-              system = re.search(r"ProductVersion:\s*(\S+)", result.get("system") or "")
-              images[image] = {
-                  "passed": result.get("outcome") == "updated in place",
-                  "outcome": result.get("outcome") or result.get("error") or "no result",
-                  "system": system and system.group(1),
-                  "offered": result.get("offeredVersion"),
-                  "installed": result.get("installedVersion"),
-                  "install": install,
-              }
-          summary = {
-              "previous": os.environ["PREVIOUS"],
-              "candidate": os.environ["CANDIDATE"],
-              "passed": all(each["passed"] for each in images.values()),
-              "images": images,
-          }
-          pathlib.Path("real-update-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
-              out.write(f"Real update {summary['previous']} to {summary['candidate']}: "
-                        f"{'passed' if summary['passed'] else 'FAILED'}\n\n")
-              for image, each in images.items():
-                  out.write(f"- {image} ({each['system']}): {each['outcome']}\n")
-          print(json.dumps(summary, indent=2))
-          raise SystemExit(0 if summary["passed"] else 1)
-          PY
+        run: node e2e-packaged/real-update/summary.ts results macos-15 macos-26 xcode-27
       - if: always()
         uses: actions/upload-artifact@v7
         with:

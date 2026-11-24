@@ -177,7 +177,9 @@ export function Select({
 }) {
   // Where the menu opens: the select's own box, taken when it opens.
   const [anchor, setAnchor] = useState<{ rect: DOMRect; element: HTMLButtonElement } | null>(null);
-  const open = anchor !== null;
+  const unavailable = Boolean(disabled) || choices.length === 0;
+  if (unavailable && anchor !== null) setAnchor(null);
+  const open = !unavailable && anchor !== null;
   const close = useCallback(
     (refocus: boolean) => {
       const element = anchor?.element;
@@ -186,15 +188,17 @@ export function Select({
     },
     [anchor],
   );
-  const openFrom = (element: HTMLButtonElement) =>
+  const openFrom = (element: HTMLButtonElement) => {
+    if (unavailable) return;
     setAnchor({ rect: element.getBoundingClientRect(), element });
+  };
   const entries: MenuEntry[] = choices.map((choice) => ({
     kind: "radio",
     label: choice.label,
     checked: choice.value === value,
     ...(choice.note ? { note: choice.note } : {}),
     onSelect: () => {
-      if (choice.disabled) return;
+      if (unavailable || choice.disabled) return;
       close(true);
       onChoose(choice.value);
     },
@@ -209,7 +213,7 @@ export function Select({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`${label}: ${shown}`}
-        disabled={disabled || choices.length === 0}
+        disabled={unavailable}
         data-testid={testId}
         onClick={(event) => (open ? setAnchor(null) : openFrom(event.currentTarget))}
         onKeyDown={(event) => {

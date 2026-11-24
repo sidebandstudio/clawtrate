@@ -216,6 +216,9 @@ export function BotSettings({
           botName={name}
           read={placement.read}
           reload={placement.reload}
+          begin={placement.begin}
+          beginWorkspace={placement.beginWorkspace}
+          commandsCurrent={placement.commandsCurrent}
           nameOf={nameOf}
           connection={connection}
           info={info}
