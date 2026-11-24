@@ -302,6 +302,18 @@ describe("the rail's task actions", () => {
     expect(gateway.ctx.now() - started).toBeGreaterThanOrEqual(ARCHIVE_STOP_WAIT_MS);
   });
 
+  it.each(["archive", "delete"] as const)(
+    "F-277 F-278: %s refuses an oversized session id before stopping an untracked task",
+    async (action) => {
+      const sessionId = String.fromCharCode(1).repeat(900);
+      const { ctx, calls } = fakeGateway({ [KEY]: { sessionId, hasActiveRun: true } });
+      const result =
+        action === "archive" ? archiveTask(ctx, KEY, { stop: true }) : deleteTask(ctx, KEY);
+      await expect(result).rejects.toThrow(/can't be named/);
+      expect(calls.map((call) => call.method)).toEqual(["sessions.describe"]);
+    },
+  );
+
   it("F-277: a task whose run is active is not archived without Stop, and nothing is asked of it", async () => {
     const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: true } });
     await expect(archiveTask(ctx, KEY, { stop: false })).rejects.toBeInstanceOf(ActiveRunError);

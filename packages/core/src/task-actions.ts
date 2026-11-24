@@ -8,8 +8,10 @@
 // again each time, and the task list itself is the client's, updated by the
 // gateway's `sessions.changed`.
 
+import { jsonTextLength } from "./bounds.ts";
 import { externalChannelOf } from "./channels.ts";
 import { asRecord, mapSessionRow, plainPreview, type RawRecord } from "./mapping.ts";
+import { MAX_ID_CHARS } from "./state-bounds.ts";
 
 /** A message the gateway did not take because the task it was written in is gone (F-278). */
 export const TASK_DELETED_ELSEWHERE = "This task was deleted elsewhere.";
@@ -245,7 +247,10 @@ export async function listArchived(
 
 /** One task's row as the gateway has it now, or null when it has none. */
 async function describe(ctx: TaskActionContext, key: string): Promise<RawRecord | null> {
-  return asRecord(asRecord(await ctx.request("sessions.describe", { key }))?.session);
+  const row = asRecord(asRecord(await ctx.request("sessions.describe", { key }))?.session);
+  if (typeof row?.sessionId === "string" && jsonTextLength(row.sessionId) > MAX_ID_CHARS)
+    throw new Error("That task's session can't be named, so nothing was changed.");
+  return row;
 }
 
 /**
