@@ -3,25 +3,30 @@
 //   node apps/desktop/packaging/site-feed.ts <site source> <output folder>
 //
 // It refuses a missing site source, which has to hold index.html, one that has
-// its own updates/beta/, which is only ever the generated feed, and an output
-// folder that is not empty. It copies the source, reads the repository's
-// releases from GitHub's API, takes
-// the newest published beta that carries both Mac zips, feed.json and
-// latest-mac.json, checks the two files against GitHub's digest of each, each
-// other and the release's tag, and each zip against GitHub's size and digest,
-// reads each zip from its release address, following only the redirect the app
-// follows, to check the SHA-512 the app will check and the SHA-256
-// install.sh will check, both of the same download, and writes them to
-// <output>/updates/beta/. From the same beta it fills the Mac download page
-// (download/mac/index.html, a template) and requires install.sh to pin that
-// beta's team. The page's "What's new" section is the newest betas' own lists:
-// the "- " lines under "What's new:" on each release's page, as plain text, and
-// the same lists go beside the feed as updates/beta/whats-new.json, which the app
-// reads inside a check (F-554). With no published beta, a template token left or another
-// team pinned, it fails, so the workflow deploys nothing and the last
-// deployment stays; it assembles in a temporary folder and copies the result
-// to <output> only once every check has passed. The Site workflow runs it on every deploy, from main
-// only; docs/development/releases.md has the flow.
+// its own updates/channel/beta/ or updates/beta/, which only ever hold the
+// generated feeds, and an output folder that is not empty. It copies the
+// source, reads the repository's releases from GitHub's API, takes the newest
+// published beta that carries both Mac zips, feed.json and latest-mac.json,
+// checks the two files against GitHub's digest of each, each other and the
+// release's tag, and each zip against GitHub's size and digest, reads each zip
+// from its release address, following only the redirect the app follows, to
+// check the SHA-512 the app will check and the SHA-256 install.sh will check,
+// both of the same download, and writes them to <output>/updates/channel/beta/,
+// the folder builds read. It writes the same files to <output>/updates/beta/,
+// the folder betas published before that one read, or, while LEGACY_BETA_PIN
+// names a beta, that beta's files, checked the same way, and only when its
+// feed records that its build reads the new folder. From the newest beta it
+// fills the Mac download page (download/mac/index.html, a template) and
+// requires install.sh to pin that beta's team. The page's "What's new" section
+// is the newest betas' own lists: the "- " lines under "What's new:" on each
+// release's page, as plain text, and the same lists go beside each feed as
+// whats-new.json, which the app reads inside a check (F-554); beside a pinned
+// legacy feed they stop at the pinned beta. With no published beta, a template
+// token left, another team pinned or a pin it can't serve, it fails, so the
+// workflow deploys nothing and the last deployment stays; it assembles in a
+// temporary folder and copies the result to <output> only once every check has
+// passed. The Site workflow runs it on every deploy, from main only;
+// docs/development/releases.md has the flow.
 
 import { createHash } from "node:crypto";
 import {
@@ -46,7 +51,11 @@ import {
   WHATS_NEW_FORMAT,
 } from "../src/main/update/whats-new.ts";
 import {
+  BETA_FEED_URL,
+  BETA_FOLDER,
   checkBetaFiles,
+  LEGACY_BETA_FOLDER,
+  LEGACY_BETA_PIN,
   releaseFolder,
   FEED_NAME,
   LATEST_MAC_NAME,
@@ -282,23 +291,11 @@ export function whatsNewHtml(
 }
 
 /**
- * Writes the files and returns the tag they came from, or null when there is no
- * beta. `rows` are the releases already read, when the caller has them.
+ * A beta's feed.json and latest-mac.json, read from its release and checked:
+ * against GitHub's digest of each, each other and the tag, and each zip they
+ * name against GitHub's size and digest and the bytes it serves.
  */
-export async function writeSiteFeed(
-  site: string,
-  get: Get,
-  token: string | undefined,
-  rows?: readonly ReleaseRow[],
-): Promise<string | null> {
-  const folder = join(site, "updates", "beta");
-  if (existsSync(folder))
-    throw new Error(
-      "updates/beta/ is the generated Beta feed's folder; the site may not have one.",
-    );
-  const all = rows ?? (await releaseRows(get, token));
-  const release = newestBeta(all);
-  if (!release) return null;
+async function checkedFiles(get: Get, release: ReleaseRow) {
   const tag = release.tag_name;
   const version = tag.slice(1);
   const asset = (name: string) => release.assets.find((candidate) => candidate.name === name)!;
@@ -331,13 +328,71 @@ export async function writeSiteFeed(
     if (served.size !== entry.size || served.sha512 !== entry.sha512 || served.sha256 !== sha256)
       throw new Error(mismatch);
   }
+  return files;
+}
+
+/** The generated folders, which a site source may not hold. */
+const FEED_FOLDERS = [BETA_FOLDER, LEGACY_BETA_FOLDER] as const;
+
+/** One Beta feed folder: a beta's two files as its release holds them, and the lists beside them. */
+function writeFeedFolder(
+  folder: string,
+  files: { feed: string; latest: string },
+  whatsNew: string,
+) {
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, FEED_NAME), files.feed);
   writeFileSync(join(folder, LATEST_MAC_NAME), files.latest);
   // What the newest betas add, for the app to read inside a check (F-554); the
-  // two files above are written exactly as before.
-  writeFileSync(join(folder, WHATS_NEW_FILE), whatsNewFile(all));
-  return tag;
+  // two files above are written exactly as the release holds them.
+  writeFileSync(join(folder, WHATS_NEW_FILE), whatsNew);
+}
+
+/**
+ * Writes both Beta feed folders and returns the newest beta's tag, or null
+ * when there is no beta. `rows` are the releases already read, when the caller
+ * has them. The new folder serves the newest beta. The legacy folder, which
+ * betas published before it read, serves the same files, or the pinned beta's
+ * when `pin` names one; its lists then stop at that beta.
+ */
+export async function writeSiteFeed(
+  site: string,
+  get: Get,
+  token: string | undefined,
+  rows?: readonly ReleaseRow[],
+  pin: string | null = LEGACY_BETA_PIN,
+): Promise<string | null> {
+  for (const name of FEED_FOLDERS)
+    if (existsSync(join(site, name)))
+      throw new Error(`${name}/ is a generated Beta feed's folder; the site may not have one.`);
+  const all = rows ?? (await releaseRows(get, token));
+  const release = newestBeta(all);
+  if (!release) return null;
+  const files = await checkedFiles(get, release);
+  const whatsNew = whatsNewFile(all);
+  writeFeedFolder(join(site, BETA_FOLDER), files, whatsNew);
+  if (pin === null) {
+    writeFeedFolder(join(site, LEGACY_BETA_FOLDER), files, whatsNew);
+    return release.tag_name;
+  }
+  const pinned = newestBeta(all.filter((row) => row.tag_name === `v${pin}`));
+  if (!pinned)
+    throw new Error(
+      `The legacy Beta feed is pinned to ${pin}, which is not a published beta with its files, so nothing deploys.`,
+    );
+  const ceiling = parseVersion(pin)!;
+  const upToPin = all.filter((row) => {
+    const version = parseVersion(row.tag_name.slice(1));
+    return version !== null && !isNewer(version, ceiling);
+  });
+  const pinnedFiles = await checkedFiles(get, pinned);
+  // The beta old copies update to must read the new folder, or they would stay here.
+  if ((JSON.parse(pinnedFiles.feed) as { buildFeed?: unknown }).buildFeed !== BETA_FEED_URL)
+    throw new Error(
+      `The legacy Beta feed is pinned to ${pin}, whose release does not record that its build reads ${BETA_FEED_URL}, so nothing deploys.`,
+    );
+  writeFeedFolder(join(site, LEGACY_BETA_FOLDER), pinnedFiles, whatsNewFile(upToPin));
+  return release.tag_name;
 }
 
 /** The Mac download page, a template the assembly fills from the beta it serves. */
@@ -359,7 +414,7 @@ function filesUnder(dir: string, prefix = ""): string[] {
 /**
  * Copies the site source into `output`, adds the Beta feed, and fills the Mac
  * download page from the same beta. Refuses, so nothing deploys, a missing
- * source, a source with its own updates/beta/, an output that is not empty, no
+ * source, a source with either feed folder of its own, an output that is not empty, no
  * beta to fill the page from, a template token left anywhere, and an install
  * script whose pinned team is the placeholder or not the beta's.
  */
@@ -368,11 +423,13 @@ export async function assembleSite(
   output: string,
   get: Get,
   token: string | undefined,
+  pin: string | null = LEGACY_BETA_PIN,
 ): Promise<string> {
   if (!existsSync(join(source, "index.html")))
     throw new Error(`${source}/index.html does not exist: there is no site to deploy.`);
-  if (existsSync(join(source, "updates", "beta")))
-    throw new Error(`${source}/updates/beta/ is reserved for the generated Beta feed.`);
+  for (const name of FEED_FOLDERS)
+    if (existsSync(join(source, name)))
+      throw new Error(`${source}/${name}/ is reserved for a generated Beta feed.`);
   for (const required of [DOWNLOAD_PAGE, INSTALL_SCRIPT])
     if (!existsSync(join(source, required)))
       throw new Error(`${source}/${required} does not exist: there is no site to deploy.`);
@@ -385,11 +442,11 @@ export async function assembleSite(
     cpSync(source, work, { recursive: true });
     // Read once: the feed comes from the newest beta, the page's list from the newest few.
     const rows = await releaseRows(get, token);
-    const tag = await writeSiteFeed(work, get, token, rows);
+    const tag = await writeSiteFeed(work, get, token, rows, pin);
     if (!tag)
       throw new Error("No published beta: the download page cannot be filled, so nothing deploys.");
     const latest = JSON.parse(
-      readFileSync(join(work, "updates", "beta", LATEST_MAC_NAME), "utf8"),
+      readFileSync(join(work, BETA_FOLDER, LATEST_MAC_NAME), "utf8"),
     ) as LatestMac;
 
     const page = join(work, DOWNLOAD_PAGE);
@@ -441,16 +498,22 @@ export async function main(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
   get: Get,
+  pin: string | null = LEGACY_BETA_PIN,
 ): Promise<number> {
   const [source, output] = argv;
   if (!source || !output) {
     console.error("usage: node apps/desktop/packaging/site-feed.ts <site source> <output folder>");
     return 2;
   }
-  const tag = await assembleSite(source, output, get, env.GITHUB_TOKEN);
-  // The deploy job checks this beta is still published before deploying it.
-  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `tag=${tag}\n`);
-  console.log(`The site, its Beta feed and its download page are from ${tag}.`);
+  const tag = await assembleSite(source, output, get, env.GITHUB_TOKEN, pin);
+  const pinned = pin === null ? "" : `v${pin}`;
+  // The deploy job checks both betas are still published before deploying them.
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `tag=${tag}\npinned=${pinned}\n`);
+  console.log(
+    pinned
+      ? `The site, its Beta feed and its download page are from ${tag}. The legacy Beta feed is pinned to ${pinned}.`
+      : `The site, both Beta feeds and its download page are from ${tag}.`,
+  );
   return 0;
 }
 

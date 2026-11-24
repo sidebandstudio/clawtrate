@@ -4,9 +4,11 @@
 // script does with their answers, which process is given each secret, and
 // what reaches the output, the staging folder or a leftover file.
 
+import { createPackage } from "@electron/asar";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -73,6 +75,7 @@ import { signingPlan, signingProblems } from "../packaging/signing.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
 import {
   BETA_FEED_URL,
+  LEGACY_BETA_FEED_URL,
   checkBetaFiles,
   makeLatestMac,
   releaseFolder,
@@ -440,6 +443,11 @@ describe("the build's environment", () => {
       CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: BETA_FEED_URL,
       SOURCE_DATE_EPOCH: "1790000000",
     });
+    // F-559: a beta reads the new folder alone; the legacy one is only for earlier betas.
+    expect(env.CLAWTRATE_NIGHTLY_UPDATE_FEED_URL).toBe(
+      "https://clawtrate.dev/updates/channel/beta/feed.json",
+    );
+    expect(Object.values(env)).not.toContain(LEGACY_BETA_FEED_URL);
     expect(signingPlan(env)).toEqual({
       mac: "developer-id",
       notarize: "keychain-profile",
@@ -559,6 +567,19 @@ describe("checking an app as it ships", () => {
 });
 
 /** The beta these tests prepare: the remote has run 1 of the day. */
+/** An app.asar whose main bundle names `feed` as its Beta feed, as a beta build's does. */
+async function compiledAsar(feed: string): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), "clawtrate-asar-"));
+  mkdirSync(join(dir, "app", "out", "main"), { recursive: true });
+  writeFileSync(
+    join(dir, "app", "out", "main", "index.js"),
+    `const BUILD_NIGHTLY_FEED_ADDRESS = ${JSON.stringify(feed)};\n`,
+  );
+  await createPackage(join(dir, "app"), join(dir, "app.asar"));
+  return join(dir, "app.asar");
+}
+const BUILT_ASAR = await compiledAsar(BETA_FEED_URL);
+
 const VERSION = "0.1.1-beta.20261120.2";
 const TAG = `v${VERSION}`;
 const NOW = new Date("2026-11-20T18:00:00Z");
@@ -579,6 +600,8 @@ function places(): Places & { root: string } {
 function tools(
   build: (out: string, version: string, env: NodeJS.ProcessEnv) => RunResult,
   overrides: Record<string, RunResult> = {},
+  /** The app.asar each unpacked app holds. */
+  asar = BUILT_ASAR,
 ) {
   const calls: Call[] = [];
   let current = "";
@@ -610,7 +633,11 @@ function tools(
     if (basename(command) === "check-zip") return overrides["check-zip"] ?? ok("ok\n");
     if (command === "ditto" && overrides[`ditto ${args[0]}`]) return overrides[`ditto ${args[0]}`]!;
     if (command === "ditto") {
-      if (args[0] === "-x") mkdirSync(join(args.at(-1)!, "Clawtrate.app"), { recursive: true });
+      if (args[0] === "-x") {
+        const resources = join(args.at(-1)!, "Clawtrate.app", "Contents", "Resources");
+        mkdirSync(resources, { recursive: true });
+        copyFileSync(asar, join(resources, "app.asar"));
+      }
       return ok();
     }
     return mac(command, args, options);
@@ -698,6 +725,8 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
       track: "nightly",
       version: VERSION,
       releaseDate: "2026-11-20T18:00:00.000Z",
+      // F-559: the address both apps were checked to read.
+      buildFeed: BETA_FEED_URL,
     });
     const record = sha256(readFileSync(join(out, "release.json")));
     expect(stagedRelease(place.staging, VERSION, record).plan).toMatchObject({
@@ -713,6 +742,34 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
       ...readdirSync(out).map((name) => readFileSync(join(out, name), "utf8")),
     ].join("\n");
     for (const secret of SECRET_TEXTS) expect(everything).not.toContain(secret);
+  });
+
+  const unread = `is not built to read ${BETA_FEED_URL} alone.`;
+  it.each<[string, () => Promise<string>, string]>([
+    ["the legacy feed address", () => compiledAsar(LEGACY_BETA_FEED_URL), unread],
+    [
+      "both feed addresses",
+      () => compiledAsar(`${BETA_FEED_URL}" "${LEGACY_BETA_FEED_URL}`),
+      unread,
+    ],
+    [
+      "no main bundle",
+      async () => {
+        const dir = mkdtempSync(join(tmpdir(), "clawtrate-asar-"));
+        mkdirSync(join(dir, "app"));
+        writeFileSync(join(dir, "app", "package.json"), "{}");
+        await createPackage(join(dir, "app"), join(dir, "app.asar"));
+        return join(dir, "app.asar");
+      },
+      ": its main bundle could not be read from app.asar.",
+    ],
+  ])("F-559: stages nothing from an app built with %s", async (_case, asar, ending) => {
+    const { runner } = tools(builds(place.appDir), {}, await asar());
+    const text = await stopped(() => prepare(runner, NOW, place));
+    expect(text.endsWith(`Clawtrate.app${ending.startsWith(":") ? "" : " "}${ending}`), text).toBe(
+      true,
+    );
+    expect(existsSync(join(place.staging, VERSION, "release.json"))).toBe(false);
   });
 
   it("prepares with the stand-ins whatever system the tests run on", async () => {
@@ -1261,12 +1318,15 @@ describe("what publishing accepts as the prepared release", () => {
     // Another arm64 zip, and the feed, latest-mac.json, notes and record all made to agree with it.
     writeFileSync(join(dir, ZIPS[0]!), "plain text, not an app");
     const plan = JSON.parse(readFileSync(join(dir, "release.json"), "utf8"));
-    const feed = makeFeed({
-      version: VERSION,
-      releaseDate: plan.releaseDate,
-      folder: releaseFolder(TAG),
-      dir,
-    });
+    const feed = {
+      ...makeFeed({
+        version: VERSION,
+        releaseDate: plan.releaseDate,
+        folder: releaseFolder(TAG),
+        dir,
+      }),
+      buildFeed: BETA_FEED_URL,
+    };
     const feedText = `${JSON.stringify(feed, null, 2)}\n`;
     const zips = ZIPS.map((name) => {
       const bytes = readFileSync(join(dir, name));
@@ -1373,7 +1433,11 @@ function github(
   return { runner, calls, releases, answers, digests };
 }
 
-/** The site and public downloads: each exact address answers from `pages`, or 404. */
+/**
+ * The site and public downloads: each exact address answers from `pages`, or
+ * 404. The legacy feed address answers as the new one does unless `pages`
+ * names it, as the Site workflow serves it while the legacy feed is not pinned.
+ */
 function site(
   pages: Record<string, () => Promise<Response> | Response>,
   asked: Array<[string, boolean]> = [],
@@ -1381,7 +1445,7 @@ function site(
   return {
     get: async (url, _signal, follow) => {
       asked.push([url, follow]);
-      const page = pages[url];
+      const page = pages[url] ?? (url === LEGACY_BETA_FEED_URL ? pages[BETA_FEED_URL] : undefined);
       return page ? page() : new Response("", { status: 404 });
     },
     requestMs: 1_000,
@@ -1464,17 +1528,168 @@ describe("publishing", () => {
   it("checks the site against the feed it published, not the staging file read again", async () => {
     const hub = github(dir);
     const published = readFileSync(join(dir, "feed.json"));
+    let reads = 0;
     // The site serves the published feed, while someone edits the staging copy.
     const editing: Net = {
       ...net,
       get: async (url, signal, follow) => {
-        if (url !== BETA_FEED_URL) return net.get(url, signal, follow);
-        writeFileSync(join(dir, "feed.json"), "edited afterwards");
+        if (url !== BETA_FEED_URL && url !== LEGACY_BETA_FEED_URL)
+          return net.get(url, signal, follow);
+        // Edited once the release is public: after the two reads before publishing.
+        if (++reads > 2) writeFileSync(join(dir, "feed.json"), "edited afterwards");
         return new Response(published);
       },
     };
     await publish(hub.runner, VERSION, record, editing, place.staging);
     expect(output).toContain(`The Beta feed offers ${VERSION}.`);
+    expect(output).toContain(`The legacy Beta feed offers ${VERSION}.`);
+  });
+
+  /** The release's public files, and each feed address as `pages` says. */
+  const serving = (pages: Record<string, () => Response>) =>
+    site({
+      ...Object.fromEntries(
+        [...ZIPS, "feed.json", "latest-mac.json"].map((name) => [
+          `${releaseFolder(TAG)}${name}`,
+          () => new Response(readFileSync(join(dir, name))),
+        ]),
+      ),
+      ...pages,
+    });
+  const older = "0.1.1-beta.20261119.1";
+  const olderFeed = () =>
+    new Response(readFileSync(join(dir, "feed.json"), "utf8").replaceAll(VERSION, older));
+  const missing = () => new Response("", { status: 404 });
+  const fix = `Run the Site workflow on main (gh workflow run site.yml --repo sidebandstudio/clawtrate --ref main), wait for it to finish, and publish again. Nothing was published.`;
+
+  it.each<[string, Record<string, () => Response>, string]>([
+    [
+      "the new address serves nothing",
+      { [BETA_FEED_URL]: missing, [LEGACY_BETA_FEED_URL]: olderFeed },
+      `${BETA_FEED_URL} does not serve a Beta feed (it answers 404). ${fix}`,
+    ],
+    [
+      "the legacy address serves nothing",
+      { [BETA_FEED_URL]: olderFeed, [LEGACY_BETA_FEED_URL]: missing },
+      `${LEGACY_BETA_FEED_URL} does not serve the feed of ${older} (it answers 404). ${fix}`,
+    ],
+    [
+      "the legacy address serves another beta",
+      {
+        [BETA_FEED_URL]: olderFeed,
+        [LEGACY_BETA_FEED_URL]: () => new Response(readFileSync(join(dir, "feed.json"))),
+      },
+      `${LEGACY_BETA_FEED_URL} does not serve the feed of ${older} (it offers ${VERSION}). ${fix}`,
+    ],
+  ])("F-559: publishes nothing while %s", async (_case, pages, message) => {
+    // An earlier beta with its four files, so this one is not the first.
+    const previous: ReleaseRow = {
+      tag_name: `v${older}`,
+      draft: false,
+      prerelease: true,
+      assets: [
+        ...["feed.json", ...ZIPS.map((zip) => zip.replaceAll(VERSION, older))].map((name) => ({
+          name,
+          browser_download_url: `${releaseFolder(`v${older}`)}${name}`,
+        })),
+        { id: 7, name: "latest-mac.json", state: "uploaded", browser_download_url: "unused" },
+      ],
+    };
+    const hub = github(dir, { earlier: [previous], teams: { 7: TEAM } });
+    expect(
+      await stopped(() => publish(hub.runner, VERSION, record, serving(pages), place.staging)),
+    ).toBe(message);
+    expect(hub.calls.some((call) => call[1] === "release")).toBe(false);
+  });
+
+  it("F-559: before the first beta, neither address need serve a feed", async () => {
+    await publish(
+      github(dir).runner,
+      VERSION,
+      record,
+      // Nothing at either address until this beta's own Site run deploys it.
+      (() => {
+        let reads = 0;
+        const later = () =>
+          ++reads > 2 ? new Response(readFileSync(join(dir, "feed.json"))) : missing();
+        return serving({ [BETA_FEED_URL]: later, [LEGACY_BETA_FEED_URL]: later });
+      })(),
+      place.staging,
+    );
+    expect(output.slice(-2)).toEqual([
+      `The Beta feed offers ${VERSION}.`,
+      `The legacy Beta feed offers ${VERSION}.`,
+    ]);
+  });
+
+  it("F-559: after publishing, stops when the legacy address falls behind the new one", async () => {
+    let legacyReads = 0;
+    const net = serving({
+      [BETA_FEED_URL]: () => new Response(readFileSync(join(dir, "feed.json"))),
+      // Right before publishing; then still the earlier beta after it.
+      [LEGACY_BETA_FEED_URL]: () =>
+        ++legacyReads === 1 ? new Response(readFileSync(join(dir, "feed.json"))) : olderFeed(),
+    });
+    expect(
+      await stopped(() => publish(github(dir).runner, VERSION, record, net, place.staging)),
+    ).toBe(
+      `The site does not serve what ${BETA_FEED_URL} serves at ${LEGACY_BETA_FEED_URL} yet (it offers ${older}). Look at the Site workflow's run on main, then check it.`,
+    );
+    expect(output).toContain(`The Beta feed offers ${VERSION}.`);
+  });
+
+  it("F-559: pinned, the legacy address must serve the pinned beta's own feed, by GitHub's digest", async () => {
+    const pin = "0.1.1-beta.20261119.1";
+    const pinnedFeed = readFileSync(join(dir, "feed.json"), "utf8").replaceAll(VERSION, pin);
+    const pinnedRow: ReleaseRow = {
+      tag_name: `v${pin}`,
+      draft: false,
+      prerelease: true,
+      assets: [
+        {
+          name: "feed.json",
+          digest: `sha256:${sha256(pinnedFeed)}`,
+          browser_download_url: `${releaseFolder(`v${pin}`)}feed.json`,
+        },
+        // Signed by the same team, as publishing requires of every earlier beta.
+        { id: 7, name: "latest-mac.json", state: "uploaded", browser_download_url: "unused" },
+      ],
+    };
+    const serve = (legacy: string) =>
+      site({
+        ...Object.fromEntries(
+          [...ZIPS, "feed.json", "latest-mac.json"].map((name) => [
+            `${releaseFolder(TAG)}${name}`,
+            () => new Response(readFileSync(join(dir, name))),
+          ]),
+        ),
+        [BETA_FEED_URL]: () => new Response(readFileSync(join(dir, "feed.json"))),
+        [LEGACY_BETA_FEED_URL]: () => new Response(legacy),
+      });
+    const hub = () => github(dir, { earlier: [pinnedRow], teams: { 7: TEAM } }).runner;
+    // Serving the new beta at the legacy address is wrong once it is pinned:
+    // refused before publishing.
+    const refused = github(dir, { earlier: [pinnedRow], teams: { 7: TEAM } });
+    expect(
+      await stopped(() =>
+        publish(
+          refused.runner,
+          VERSION,
+          record,
+          serve(readFileSync(join(dir, "feed.json"), "utf8")),
+          place.staging,
+          pin,
+        ),
+      ),
+    ).toBe(
+      `${LEGACY_BETA_FEED_URL} does not serve the feed of ${pin} (it offers ${VERSION}). ${fix}`,
+    );
+    expect(refused.calls.some((call) => call[1] === "release")).toBe(false);
+    await publish(hub(), VERSION, record, serve(pinnedFeed), place.staging, pin);
+    expect(output.slice(-2)).toEqual([
+      `The Beta feed offers ${VERSION}.`,
+      `The legacy Beta feed offers ${pin}.`,
+    ]);
   });
 
   it("leaves the draft unpublished when its notes are not the checked notes", async () => {
@@ -1739,6 +1954,50 @@ describe("withdrawing", () => {
   };
   const serving = (answer: () => Promise<Response> | Response) => site({ [BETA_FEED_URL]: answer });
 
+  it("F-559: never withdraws the beta the legacy feed is pinned to", async () => {
+    const made = hub(true);
+    expect(
+      await stopped(() =>
+        withdraw(
+          made.runner,
+          older,
+          serving(() => new Response("")),
+          older,
+        ),
+      ),
+    ).toBe(
+      `${older} is the beta the legacy Beta feed is pinned to, so it is never withdrawn: copies from before ${BETA_FEED_URL} update through it. Nothing was changed.`,
+    );
+    expect(made.calls).toEqual([]);
+  });
+
+  it("F-559: after a withdrawal, the pinned legacy feed must still be the pinned beta's", async () => {
+    const pinnedFeed = () => new Response(feed(older));
+    await withdraw(
+      hub(true).runner,
+      VERSION,
+      site({ [BETA_FEED_URL]: pinnedFeed, [LEGACY_BETA_FEED_URL]: pinnedFeed }),
+      older,
+    );
+    expect(output.at(-1)).toBe(`The legacy Beta feed offers ${older}.`);
+    // The withdrawn beta still served at the legacy address is caught.
+    expect(
+      await stopped(() =>
+        withdraw(
+          hub(true).runner,
+          VERSION,
+          site({
+            [BETA_FEED_URL]: pinnedFeed,
+            [LEGACY_BETA_FEED_URL]: () => new Response(feed(VERSION)),
+          }),
+          older,
+        ),
+      ),
+    ).toBe(
+      `The site does not serve the feed of ${older} at ${LEGACY_BETA_FEED_URL} yet (it offers ${VERSION}). Look at the Site workflow's run on main, then check it.`,
+    );
+  });
+
   it("waits for Site runs on main before accepting the public feed", async () => {
     const made = hub(false);
     const events: string[] = [];
@@ -1754,7 +2013,8 @@ describe("withdrawing", () => {
       return new Response("", { status: 404 });
     });
     await withdraw(runner, VERSION, { ...net, pollMs: 1 });
-    expect(events).toEqual(["list", "list", "read"]);
+    // One read of each feed address.
+    expect(events).toEqual(["list", "list", "read", "read"]);
   });
 
   it("stops before reading the feed if the final Site run list arrives late", async () => {
@@ -1790,7 +2050,10 @@ describe("withdrawing", () => {
     };
     const net = serving(() => new Response(feed(newer)));
     await withdraw(runner, VERSION, { ...net, pollMs: 1 });
-    expect(output.at(-1)).toBe(`The Beta feed offers ${newer}.`);
+    expect(output.slice(-2)).toEqual([
+      `The Beta feed offers ${newer}.`,
+      `The legacy Beta feed offers ${newer}.`,
+    ]);
   });
 
   it("stops without judging the feed while a Site run on main stays unfinished", async () => {
@@ -1827,6 +2090,7 @@ describe("withdrawing", () => {
       "Started the Site workflow on main.",
       `Waiting for ${BETA_FEED_URL} to offer ${older}…`,
       `The Beta feed offers ${older}.`,
+      `The legacy Beta feed offers ${older}.`,
     ]);
   });
 
@@ -1868,7 +2132,10 @@ describe("withdrawing", () => {
       VERSION,
       serving(() => new Response("", { status: 404 })),
     );
-    expect(output.at(-1)).toBe("The site serves no Beta feed, and GitHub lists no published beta.");
+    expect(output.slice(-2)).toEqual([
+      "The site serves no Beta feed, and GitHub lists no published beta.",
+      "The legacy Beta feed serves no feed either.",
+    ]);
     expect(
       await stopped(() =>
         withdraw(

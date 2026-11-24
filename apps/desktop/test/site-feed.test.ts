@@ -15,7 +15,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkBetaFiles, makeLatestMac, releaseFolder } from "../packaging/beta-files.ts";
+import {
+  BETA_FEED_URL,
+  BETA_FOLDER,
+  BETA_LATEST_MAC_URL,
+  checkBetaFiles,
+  LEGACY_BETA_FEED_URL,
+  LEGACY_BETA_FOLDER,
+  LEGACY_BETA_PIN,
+  makeLatestMac,
+  releaseFolder,
+} from "../packaging/beta-files.ts";
 import {
   assembleSite,
   betaNotes,
@@ -29,13 +39,15 @@ import {
   type ReleaseRow,
 } from "../packaging/site-feed.ts";
 import { MAX_WHATS_NEW_BYTES, parseWhatsNew } from "../src/main/update/whats-new.ts";
+import { engineFor, feedServer, json, type FeedServer } from "./update/harness.ts";
 
 /** Each zip as GitHub serves it here: 100 bytes. */
 const ZIP = "z".repeat(100);
 const SHA512 = createHash("sha512").update(ZIP).digest("base64");
 const SHA256 = createHash("sha256").update(ZIP).digest("hex");
 
-function files(version: string) {
+/** A beta's two files; `buildFeed` is the address its release records its build reads, if any. */
+function files(version: string, buildFeed?: string) {
   const tag = `v${version}`;
   const url = (key: string) => `${releaseFolder(tag)}Clawtrate-${version}-${key}.zip`;
   const feed = JSON.stringify({
@@ -47,6 +59,7 @@ function files(version: string) {
       "mac-arm64": { url: url("mac-arm64"), size: 100, sha512: SHA512 },
       "mac-x64": { url: url("mac-x64"), size: 100, sha512: SHA512 },
     },
+    ...(buildFeed && { buildFeed }),
   });
   const latest = JSON.stringify(
     makeLatestMac(version, "TEAMID1234", {
@@ -313,7 +326,7 @@ describe("writing the site's feed", () => {
     return { get, asked };
   }
 
-  it("writes the newest beta's feed and latest-mac.json under updates/beta", async () => {
+  it("writes the newest beta's feed and latest-mac.json under both Beta feed folders", async () => {
     const version = "0.1.1-beta.20261120.2";
     const { tag, feed, latest } = files(version);
     const { get, asked } = github([row("0.1.1-beta.20261120.1"), row(version)], {
@@ -321,8 +334,10 @@ describe("writing the site's feed", () => {
       [`${releaseFolder(tag)}latest-mac.json`]: latest,
     });
     expect(await writeSiteFeed(site, get, "made-up-token")).toBe(tag);
-    expect(readFileSync(join(site, "updates/beta/feed.json"), "utf8")).toBe(feed);
-    expect(readFileSync(join(site, "updates/beta/latest-mac.json"), "utf8")).toBe(latest);
+    for (const folder of ["updates/channel/beta", "updates/beta"]) {
+      expect(readFileSync(join(site, folder, "feed.json"), "utf8")).toBe(feed);
+      expect(readFileSync(join(site, folder, "latest-mac.json"), "utf8")).toBe(latest);
+    }
     expect(asked).toEqual([
       "https://api.github.com/repos/sidebandstudio/clawtrate/releases?per_page=100&page=1",
       `${releaseFolder(tag)}feed.json`,
@@ -501,14 +516,17 @@ describe("writing the site's feed", () => {
     });
   });
 
-  it("refuses a site that has its own updates/beta, even with no beta to write", async () => {
-    mkdirSync(join(site, "updates/beta"), { recursive: true });
-    writeFileSync(join(site, "updates/beta/feed.json"), "an old feed");
-    const { get } = github([], {});
-    await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(
-      "updates/beta/ is the generated Beta feed's folder",
-    );
-  });
+  it.each(["updates/beta", "updates/channel/beta"])(
+    "refuses a site that has its own %s, even with no beta to write",
+    async (folder) => {
+      mkdirSync(join(site, folder), { recursive: true });
+      writeFileSync(join(site, folder, "feed.json"), "an old feed");
+      const { get } = github([], {});
+      await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(
+        `${folder}/ is a generated Beta feed's folder`,
+      );
+    },
+  );
 });
 
 describe("assembling the site", () => {
@@ -568,14 +586,17 @@ describe("assembling the site", () => {
     expect(existsSync(output)).toBe(false);
   });
 
-  it("refuses a site source with its own updates/beta", async () => {
-    fixture();
-    mkdirSync(join(source, "updates/beta"), { recursive: true });
-    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
-      "updates/beta/ is reserved for the generated Beta feed.",
-    );
-    expect(existsSync(output)).toBe(false);
-  });
+  it.each(["updates/beta", "updates/channel/beta"])(
+    "refuses a site source with its own %s",
+    async (folder) => {
+      fixture();
+      mkdirSync(join(source, folder), { recursive: true });
+      await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+        `${folder}/ is reserved for a generated Beta feed.`,
+      );
+      expect(existsSync(output)).toBe(false);
+    },
+  );
 
   it.each([join("download", "mac", "index.html"), "install.sh"])(
     "refuses a site source without %s",
@@ -826,7 +847,7 @@ describe("assembling the site", () => {
     const outputs = join(root, "github-output");
     writeFileSync(outputs, "earlier=1\n");
     expect(await main([source, output], { GITHUB_OUTPUT: outputs }, oneBeta)).toBe(0);
-    expect(readFileSync(outputs, "utf8")).toBe(`earlier=1\ntag=${tag}\n`);
+    expect(readFileSync(outputs, "utf8")).toBe(`earlier=1\ntag=${tag}\npinned=\n`);
   });
 
   it("leaves the output as it was when it refuses, so a rerun into it works", async () => {
@@ -852,5 +873,170 @@ describe("assembling the site", () => {
     await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
       "install.sh must pin CLAWTRATE_TEAM_ID exactly once, so nothing deploys.",
     );
+  });
+});
+
+// Betas published before the new folder read the legacy one, and it stays
+// served (docs/decisions.md, "Moving betas to three numbers"). Until the switch
+// both folders carry the newest beta; after it the legacy one carries the
+// pinned beta, which reads the new folder.
+describe("F-559: the two Beta feed folders", () => {
+  let root: string;
+  let source: string;
+  let output: string;
+  let server: FeedServer;
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), "clawtrate-site-"));
+    source = join(root, "site");
+    output = join(root, "_site");
+    mkdirSync(join(source, "download/mac"), { recursive: true });
+    writeFileSync(join(source, "index.html"), "<!doctype html><title>Clawtrate</title>");
+    writeFileSync(join(source, "download/mac/index.html"), "<p>__CLAWTRATE_BETA_VERSION__</p>");
+    writeFileSync(
+      join(source, "install.sh"),
+      '#!/bin/sh\nCLAWTRATE_TEAM_ID="TEAMID1234"\nmain() { :; }\nmain "$@"\n',
+    );
+    server = await feedServer();
+  });
+  afterEach(async () => {
+    await server.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const OLD = "0.1.1-beta.20261119.1";
+  const PINNED = "0.1.1-beta.20261120.1";
+  const NEWEST = "0.1.1-beta.20261120.2";
+  /**
+   * GitHub with three published betas, each listing what it adds, and their
+   * files. The pinned candidate's feed records `recorded` as the address its
+   * build reads; the others record none, as betas from before the new folder.
+   */
+  const github =
+    (
+      change: (row: ReleaseRow) => ReleaseRow | null = (each) => each,
+      recorded: string | null = BETA_FEED_URL,
+    ): Get =>
+    async (url) => {
+      const versions = [OLD, PINNED, NEWEST];
+      const own = (version: string) =>
+        files(version, version === PINNED ? (recorded ?? undefined) : undefined);
+      if (url.startsWith("https://api.github.com/"))
+        return new Response(
+          JSON.stringify(
+            versions.flatMap(
+              (version) =>
+                change(
+                  row(
+                    version,
+                    { body: `What's new:\n\n- In ${version}\n` },
+                    { feed: own(version).feed },
+                  ),
+                ) ?? [],
+            ),
+          ),
+        );
+      for (const version of versions) {
+        const { tag, feed, latest } = own(version);
+        if (url === `${releaseFolder(tag)}feed.json`) return new Response(feed);
+        if (url === `${releaseFolder(tag)}latest-mac.json`) return new Response(latest);
+      }
+      if (url.endsWith(".zip")) return new Response(ZIP);
+      return new Response("", { status: 404 });
+    };
+  const read = (folder: string, name: string) => readFileSync(join(output, folder, name), "utf8");
+  /** The update engine of a build running `version`, reading the assembled `folder`. */
+  const check = (folder: string, version: string) => {
+    for (const name of ["feed.json", "whats-new.json"])
+      server.route(`/${folder}/${name}`, json(JSON.parse(read(folder, name))));
+    return engineFor(server, join(root, "updates"), {
+      feedAddress: `${server.origin}/${folder}/feed.json`,
+      currentVersion: version,
+      track: "nightly",
+    }).engine.check();
+  };
+
+  it("the app reads the new folder, and the install script reads its latest-mac.json", () => {
+    expect(BETA_FEED_URL).toBe(`https://clawtrate.dev/${BETA_FOLDER}/feed.json`);
+    expect(BETA_FOLDER).toBe("updates/channel/beta");
+    expect(LEGACY_BETA_FEED_URL).toBe("https://clawtrate.dev/updates/beta/feed.json");
+    const script = readFileSync(join(import.meta.dirname, "../../../site/install.sh"), "utf8");
+    expect(script).toContain(`\nFEED_URL="${BETA_LATEST_MAC_URL}"\n`);
+    // Off until betas move to three numbers.
+    expect(LEGACY_BETA_PIN).toBeNull();
+  });
+
+  it("until the switch, both folders hold the same bytes, made from one read of the releases", async () => {
+    const asked: string[] = [];
+    const get = github();
+    await assembleSite(
+      source,
+      output,
+      (url, headers) => (asked.push(url), get(url, headers)),
+      "t",
+      null,
+    );
+    const names = ["feed.json", "latest-mac.json", "whats-new.json"];
+    for (const folder of [BETA_FOLDER, LEGACY_BETA_FOLDER])
+      expect(readdirSync(join(output, folder)).sort()).toEqual(names);
+    for (const name of names) expect(read(LEGACY_BETA_FOLDER, name)).toBe(read(BETA_FOLDER, name));
+    expect(read(BETA_FOLDER, "feed.json")).toBe(files(NEWEST).feed);
+    // GitHub's list once, and the newest beta's two files and two zips once each.
+    expect(asked.filter((url) => url.startsWith("https://api.github.com/"))).toHaveLength(1);
+    expect(asked.filter((url) => url.startsWith(releaseFolder(`v${NEWEST}`)))).toHaveLength(4);
+    // A reader of either folder is offered the newest beta.
+    for (const folder of [BETA_FOLDER, LEGACY_BETA_FOLDER])
+      expect(await check(folder, OLD)).toMatchObject({ kind: "available", version: NEWEST });
+  });
+
+  it("pinned, the legacy folder offers the pinned beta and nothing newer; the new one offers every beta", async () => {
+    const outputs = join(root, "github-output");
+    expect(await main([source, output], { GITHUB_OUTPUT: outputs }, github(), PINNED)).toBe(0);
+    // The deploy job rechecks both betas.
+    expect(readFileSync(outputs, "utf8")).toBe(`tag=v${NEWEST}\npinned=v${PINNED}\n`);
+    expect(read(LEGACY_BETA_FOLDER, "feed.json")).toBe(files(PINNED, BETA_FEED_URL).feed);
+    expect(read(LEGACY_BETA_FOLDER, "latest-mac.json")).toBe(files(PINNED).latest);
+    expect(read(BETA_FOLDER, "feed.json")).toBe(files(NEWEST).feed);
+    // Fresh installs and the download page take the newest beta.
+    expect(read(BETA_FOLDER, "latest-mac.json")).toBe(files(NEWEST).latest);
+    expect(read("download/mac", "index.html")).toBe(`<p>${NEWEST}</p>`);
+    // Each folder's lists stop at the beta it serves.
+    const listed = (folder: string) =>
+      parseWhatsNew(read(folder, "whats-new.json"))!.map((build) => build.version);
+    expect(listed(LEGACY_BETA_FOLDER)).toEqual([PINNED, OLD]);
+    expect(listed(BETA_FOLDER)).toEqual([NEWEST, PINNED, OLD]);
+    // An old copy reaches the pinned beta, and from there, reading the new folder, the newest.
+    expect(await check(LEGACY_BETA_FOLDER, OLD)).toMatchObject({
+      kind: "available",
+      version: PINNED,
+    });
+    expect(await check(LEGACY_BETA_FOLDER, PINNED)).toEqual({ kind: "up-to-date", latest: PINNED });
+    expect(await check(LEGACY_BETA_FOLDER, NEWEST)).toEqual({ kind: "up-to-date", latest: PINNED });
+    expect(await check(BETA_FOLDER, PINNED)).toMatchObject({ kind: "available", version: NEWEST });
+    expect(await check(BETA_FOLDER, OLD)).toMatchObject({ kind: "available", version: NEWEST });
+  });
+
+  const pinned = (change: (row: ReleaseRow) => ReleaseRow | null) => (each: ReleaseRow) =>
+    each.tag_name === `v${PINNED}` ? change(each) : each;
+  it.each([
+    ["withdrawn", pinned((each) => ({ ...each, draft: true }))],
+    ["without its files", pinned((each) => ({ ...each, assets: each.assets.slice(2) }))],
+    ["not listed", pinned(() => null)],
+  ])("refuses to deploy while the pinned beta is %s", async (_state, change) => {
+    await expect(assembleSite(source, output, github(change), "t", PINNED)).rejects.toThrow(
+      `The legacy Beta feed is pinned to ${PINNED}, which is not a published beta with its files, so nothing deploys.`,
+    );
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it.each([
+    ["records no address, as every beta from before the new folder", null],
+    ["records the legacy address", LEGACY_BETA_FEED_URL],
+  ])("refuses to deploy a pin whose release %s", async (_case, recorded) => {
+    await expect(
+      assembleSite(source, output, github(undefined, recorded), "t", PINNED),
+    ).rejects.toThrow(
+      `The legacy Beta feed is pinned to ${PINNED}, whose release does not record that its build reads ${BETA_FEED_URL}, so nothing deploys.`,
+    );
+    expect(existsSync(output)).toBe(false);
   });
 });
