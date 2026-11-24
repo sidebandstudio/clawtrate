@@ -190,10 +190,12 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       (state.kind === "failed" && state.stage === "check")
     )
       return rest;
-    const [offered, skipped, running] = FIXTURE_BETA_NOTES;
+    const [offered, skipped] = FIXTURE_BETA_NOTES;
     const coming =
       "version" in state && state.version === offered!.version ? [offered!, skipped!] : [];
-    const own = next.runningVersion === running!.version ? running!.items : null;
+    // The running build's own list, whichever build that is: after an update, the one installed.
+    const own =
+      FIXTURE_BETA_NOTES.find((build) => build.version === next.runningVersion)?.items ?? null;
     return coming.length || own ? { ...rest, whatsNew: { coming, running: own } } : rest;
   }
   snapshot = withNotes(snapshot);

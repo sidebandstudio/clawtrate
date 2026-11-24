@@ -252,6 +252,10 @@ describe("F-554: the fixture shows what the app would", () => {
     expect((await read(`updates=nothing-newer&${beta}`)).whatsNew).toEqual(
       whatsNewView(FIXTURE_BETA_NOTES, "0.1.0-beta.20261115.1", null),
     );
+    // After an update, the running build is the one installed, and its list is the one shown.
+    expect((await read(`updates=nothing-newer&${beta}&after=target-running`)).whatsNew).toEqual(
+      whatsNewView(FIXTURE_BETA_NOTES, "0.2.0-beta.20261116.1", null),
+    );
     // After a failed download the check had read its lists, so this build's shows; after a
     // failed check there were none.
     expect((await read(`updates=faildl&${beta}`)).whatsNew).toEqual(
