@@ -4,7 +4,7 @@
 // target, and the host sends nothing once its target moved on. A reconnect to the same target
 // keeps it. Two test gateways at two addresses, with made-up bots and files.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import {
   ClawtrateClient,
@@ -324,6 +324,23 @@ describe("the host's target", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
     unsubscribe();
     expect(b.gateway.connects).toEqual([]);
+  });
+
+  it("a host started again at the same clock value, or an earlier one, starts at another number", () => {
+    const targets: number[] = [];
+    for (const clock of [1_800_000_000_000, 1_800_000_000_000, 1_700_000_000_000]) {
+      const now = vi.spyOn(Date, "now").mockReturnValue(clock);
+      try {
+        const host = testHost(new FakeGateway(), memoryStorage());
+        targets.push((new ClawtrateClient(host, FAST) as unknown as { target: number }).target);
+      } finally {
+        now.mockRestore();
+      }
+    }
+    expect(new Set(targets).size).toBe(3);
+    for (const target of targets) {
+      expect(Number.isSafeInteger(target) && target > 0).toBe(true);
+    }
   });
 
   it("never comes back to a number an earlier screen holds", async () => {
@@ -867,6 +884,38 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     expect(a.gateway.calls("users.prefs.set")).toEqual([]);
     client.stop();
   });
+
+  for (const what of ["account", "model", "fallbacks"] as const)
+    it(`A bot's ${what}: a change whose gateway goes during its last answer is not shown as saved`, async () => {
+      const { client, a } = await twoGateways();
+      await client.refreshAccounts();
+      // The last request each change waits for: the account's record, or the config read back.
+      const last = what === "account" ? "users.prefs.set" : "config.get";
+      let gone = false;
+      const answer = a.gateway.handlers[last]!;
+      a.gateway.handlers[last] = async (params) => {
+        const value = await answer(params);
+        if (a.gateway.calls("config.patch").length > 0) gone = true;
+        return value;
+      };
+      const check = (sent: boolean) => {
+        if (gone) throw new Error(sent ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED);
+      };
+      const accounts = (client as unknown as { accounts: AccountsEngine }).accounts;
+      const change =
+        what === "account"
+          ? accounts.changeAccount("otto", "acme:home", "acme", "dev-1", null, check)
+          : what === "model"
+            ? accounts.setModel("otto", "dev-1", "high", check)
+            : accounts.removeFallbacks("otto", check);
+      const failure = await change.then(
+        () => "saved",
+        (error: Error) => error.message,
+      );
+      expect(failure).toBe(CONNECTION_CHANGED_AFTER_SEND);
+      expect(client.state.accounts.write).toMatchObject({ what, status: "failed" });
+      client.stop();
+    });
 
   it("A bot's account: when its gateway goes after the patch is confirmed, the account is not recorded or shown as saved", async () => {
     const { client, a } = await twoGateways();

@@ -293,7 +293,14 @@ function TaskRows({
     gone: ReadonlyMap<string, number | null>;
     open: boolean;
     onToggle: () => void;
-    onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
+    onMenu: (
+      task: ArchivedTask,
+      trigger: HTMLElement,
+      x: number,
+      y: number,
+      shown: ShownStamp,
+    ) => void;
+    shown: ShownStamp;
   };
   /** Rows shown before "Show all": fewer in one pane, so the rest of the list stays in view. */
   cap: number;
@@ -460,6 +467,7 @@ function TaskRows({
           open={archived.open}
           onToggle={archived.onToggle}
           onMenu={archived.onMenu}
+          shown={archived.shown}
           now={now}
         />
       )}
@@ -921,9 +929,15 @@ export function Rail({
     );
   };
 
-  const openArchivedMenu = (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => {
+  const openArchivedMenu = (
+    task: ArchivedTask,
+    trigger: HTMLElement,
+    x: number,
+    y: number,
+    shown: ShownStamp,
+  ) => {
     setTip(null);
-    setMenu({ kind: "archived", task, trigger, x, y, shown: shownStamp(connection) });
+    setMenu({ kind: "archived", task, trigger, x, y, shown });
   };
 
   const archivedProps = (bot: Bot) => ({
@@ -931,6 +945,7 @@ export function Rail({
     open: archivedOpen.has(bot.id),
     onToggle: () => toggleArchived(bot.id),
     onMenu: openArchivedMenu,
+    shown: shownStamp(connection),
   });
 
   const clickBot = (bot: Bot, count: number) => {

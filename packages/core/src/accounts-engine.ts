@@ -1900,6 +1900,8 @@ export class AccountsEngine {
         account ? { mode: "account", account } : { mode: "gateway" },
         ctx,
       );
+      // After the last answer: a change whose gateway has gone meanwhile is not shown as saved.
+      check();
       this.setWrite({
         what: "account",
         target: botId,
@@ -1938,13 +1940,16 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
+      const { ctx, check } = this.checked(beforeSend);
       await this.writeModel(
         botId,
         { provider: binding.provider, model, account: binding.account },
         effort,
         false,
-        this.checked(beforeSend).ctx,
+        ctx,
       );
+      // After the last answer: a change whose gateway has gone meanwhile is not shown as saved.
+      check();
       this.setWrite({
         what: "model",
         target: botId,
@@ -1976,11 +1981,13 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
+      const { ctx, check } = this.checked(beforeSend);
       await this.patch(
         { agents: { entries: { [botId]: { model: { fallbacks: [] } } } } },
         [`agents.entries.${botId}.model.fallbacks`],
-        this.checked(beforeSend).ctx,
+        ctx,
       );
+      check();
       this.unwritten.delete(botId);
       this.setWrite({
         what: "fallbacks",

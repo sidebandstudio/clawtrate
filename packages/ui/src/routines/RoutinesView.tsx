@@ -938,10 +938,12 @@ export function RoutinesView({
   if (!admin && deleting) setDeleting(null);
   // A row's menu and the delete confirmation hold a routine from the list they were
   // opened on; actions send the list now shown. When another connection's list
-  // arrives they close in this render, so an old row never goes out with the new list.
-  const [openedOn, setOpenedOn] = useState(store.listedOn);
-  if (openedOn !== store.listedOn) {
-    setOpenedOn(store.listedOn);
+  // arrives, or the host's target moves (a restarted host can keep the list's number),
+  // they close in this render, so an old row never goes out with the new list.
+  const listKey = `${store.listedOn}:${state.connection.target}`;
+  const [openedOn, setOpenedOn] = useState(listKey);
+  if (openedOn !== listKey) {
+    setOpenedOn(listKey);
     setMenu(null);
     setDeleting(null);
   }

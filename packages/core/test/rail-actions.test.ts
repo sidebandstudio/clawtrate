@@ -3,7 +3,8 @@
 
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
-import { ClawtrateClient } from "../src/client.ts";
+import { ClawtrateClient, CONNECTION_CHANGED_AFTER_SEND } from "../src/client.ts";
+import { gatewayStamp } from "../src/types.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
@@ -481,4 +482,109 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
     ]);
     client.stop();
   }, 20_000);
+});
+
+// #450: an archive's own Stop of a run this host follows, and the access grant an archive waits
+// for, as the action's connection sees them.
+describe("an archive or a delete bound to the connection it began on", () => {
+  /** A host following a run in KEY on a gateway that names itself `id()`; the task stays active. */
+  async function following(id: { value: string }) {
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    gateway.handlers["sessions.delete"] = () => ({ ok: true });
+    // The gateway names the run by the send's own id, so the host follows it as that run.
+    gateway.handlers["chat.send"] = (params) => ({
+      runId: (params as { idempotencyKey: string }).idempotencyKey,
+      status: "started",
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === id.value);
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => transcript().runs.find((each) => each.id === run)?.bound === true);
+    return { client, gateway, stamp: gatewayStamp(client.state.connection) };
+  }
+  const outcome = (pending: Promise<unknown>) =>
+    pending.then(
+      () => "done",
+      (error: Error) => error.message,
+    );
+
+  it("a Stop and archive whose connection drops after this host stopped the run says the change is unconfirmed", async () => {
+    const id = { value: "gateway-a" };
+    const { client, gateway, stamp } = await following(id);
+    gateway.handlers["chat.abort"] = () => {
+      // The same gateway drops just after taking the Stop, and comes back.
+      setTimeout(() => gateway.dropAll(), 0);
+      return { ok: true, aborted: true, runIds: [] };
+    };
+    const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    expect(await archived).toBe(CONNECTION_CHANGED_AFTER_SEND);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
+  it("a Stop whose answer the drop lost is not sent again to another gateway answering at the same address", async () => {
+    const id = { value: "gateway-a" };
+    const { client, gateway, stamp } = await following(id);
+    gateway.handlers["chat.abort"] = () => {
+      // The abort's answer never comes: the connection drops, and gateway-x answers the reconnect.
+      id.value = "gateway-x";
+      setTimeout(() => gateway.dropAll(), 0);
+      return new Promise(() => {});
+    };
+    const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    await sleep(600);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    expect(await archived).not.toBe("done");
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
+  /** A read-tier host whose archive waits for an access grant the gateway approves. */
+  async function granted(after: string) {
+    const { client, gateway } = await connected(READ_SCOPES);
+    let id = "gateway-a";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: "agent:pip:main", sessionId: "s-main" },
+    });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => {
+      // The grant's reconnect is answered by `after`.
+      id = after;
+      return {
+        requestId: "req-1",
+        status: "approved",
+        deviceToken: "token-W",
+        scopes: [...INTERACTIVE_SCOPES],
+      };
+    };
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    return { client, gateway, stamp: gatewayStamp(client.state.connection) };
+  }
+
+  it("an archive that waits for an access grant goes through once the same gateway grants it", async () => {
+    const { client, gateway, stamp } = await granted("gateway-a");
+    const target = stamp.target;
+    expect(await outcome(client.archiveTask("agent:pip:main", { stamp }))).toBe("done");
+    expect(client.state.connection.target).toBe(target);
+    expect(gateway.calls("sessions.patch")).toEqual([
+      { key: "agent:pip:main", archived: true, expectedSessionId: "s-main" },
+    ]);
+    client.stop();
+  });
+
+  it("an archive that waits for an access grant is refused when another gateway answers the grant's reconnect", async () => {
+    const { client, gateway, stamp } = await granted("gateway-x");
+    expect(await outcome(client.archiveTask("agent:pip:main", { stamp }))).toBe(
+      "This change was made for another gateway, so nothing was sent.",
+    );
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
 });

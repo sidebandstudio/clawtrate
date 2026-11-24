@@ -226,6 +226,27 @@ test("F-278: a confirmed delete of an archived task removes its row and its menu
   await expect(page.getByRole("menu")).toHaveCount(0);
 });
 
+test("#450: an archived row read before the host's target moved acts with the stamp of its read, and the list is read again", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  await page.getByRole("button", { name: "Archived" }).click();
+  const archived = page.getByRole("list", { name: "Otto's archived tasks" });
+  await expect(archived.getByTestId("archived-task")).toHaveCount(2);
+  // The next read fails, so the rows shown stay the ones read before the move.
+  await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { refuse: (type: string) => void } }
+    ).clawtrateFixture.refuse("listArchived"),
+  );
+  const before = await moveTarget(page);
+  await expect.poll(async () => (await sent(page, "listArchived")).length).toBe(2);
+  await archived.getByTestId("archived-task").filter({ hasText: "Old printer driver" }).click();
+  await page.getByRole("menuitem", { name: "Delete…" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => sentStamp(page, "deleteTask")).toEqual(before);
+});
+
 type Fixture = {
   setState: (change: (state: Record<string, unknown>) => Record<string, unknown>) => void;
   invoke: (command: Record<string, unknown>) => Promise<unknown>;

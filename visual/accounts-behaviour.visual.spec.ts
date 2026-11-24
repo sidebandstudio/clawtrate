@@ -621,6 +621,41 @@ test("#450: disconnecting the account a failed sign-in left sends the stamp Conn
   );
 });
 
+test("#450: a Disconnect confirmation is refused when another gateway names itself on the same target", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
+  await settings.getByRole("button", { name: "Disconnect…" }).click();
+  // A reconnect answered by another gateway at the same address: same target, another identity.
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: "another-gateway" },
+    })),
+  );
+  await page
+    .getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" })
+    .getByRole("button", { name: "Disconnect" })
+    .click();
+  await expect(settings.getByTestId("b-announcer")).toHaveText(
+    "This change was made for another gateway, so nothing was sent.",
+  );
+  const accounts = await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { getState: () => ClawtrateState } }).clawtrateFixture
+      .getState()
+      .accounts.accounts.map((each) => each.id),
+  );
+  expect(accounts).toContain("openai:work");
+});
+
 test("F-476: Disconnect asks first, with focus on Cancel; Escape closes the confirmation alone", async ({
   page,
 }) => {
