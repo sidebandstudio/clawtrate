@@ -1113,11 +1113,14 @@ describe("every steer reads its task first, and nothing else decides where it go
     ],
     [
       "`sessions.search` hits in the session that replaced it",
-      ({ client, gateway }) => {
+      async ({ client, gateway }) => {
         gateway.handlers["sessions.search"] = () => ({
-          results: [{ key: KEY, sessionKey: KEY, sessionId: "s-2", snippet: "disk" }],
+          results: [
+            { sessionKey: KEY, sessionId: "s-2", messageId: "m-2", role: "user", snippet: "disk" },
+          ],
         });
-        return client.searchMessages("disk", null).catch(() => undefined);
+        const { hits } = await client.searchMessages("disk", null);
+        expect(hits).toMatchObject([{ sessionKey: KEY, sessionId: "s-2", messageId: "m-2" }]);
       },
       replace,
     ],
