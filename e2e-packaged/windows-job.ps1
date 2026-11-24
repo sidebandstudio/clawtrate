@@ -91,8 +91,7 @@ public static class PackagedJob {
                     child.WaitForExit();
                     throw error;
                 }
-                child.StandardInput.BaseStream.WriteByte(1);
-                child.StandardInput.BaseStream.Flush();
+                child.StandardInput.WriteLine("start");
                 child.StandardInput.Close();
                 while (!child.WaitForExit(50) && !cancelled.IsCompleted) { }
                 int status = cancelled.IsCompleted ? 130 : child.ExitCode;
