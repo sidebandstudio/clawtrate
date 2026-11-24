@@ -25,8 +25,12 @@ if [ -z "$image" ]; then
 fi
 mkdir -p visual/baselines/linux test-results/visual
 # The checkout as it stands, without node_modules (the image installs Linux ones) and without
-# the baselines (the Linux ones are mounted, so updates land in the checkout).
+# the baselines (the Linux ones are mounted, so updates land in the checkout). A tracked file
+# deleted without staging the deletion is still listed, and is left out: tar would fail on it.
 git ls-files -z --cached --others --exclude-standard -- ':!:visual/baselines' |
+  while IFS= read -r -d '' path; do
+    if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\0' "$path"; fi
+  done |
   tar --null -T - -cf - |
   docker run --rm -i --init --ipc=host ${platform:+--platform "$platform"} \
     -e CI -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
