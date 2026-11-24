@@ -1893,12 +1893,16 @@ export class ClawtrateClient {
         if (stops !== this.stops) return;
         this.setConnection({ deviceId: identity.deviceId });
         // A turn limit the person chose earlier, unless the host was given one.
-        if (this.options.turnLimitMs === undefined) {
-          const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
-          if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
-        }
-        this.showChannelChats =
+        const limit =
+          this.options.turnLimitMs === undefined
+            ? Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null))
+            : null;
+        const channelChats =
           (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
+        // A startup stopped while it read keeps nothing: the next one reads again.
+        if (stops !== this.stops) return;
+        if (limit !== null && validTurnLimit(limit)) this.turnLimitMs = limit * 60_000;
+        this.showChannelChats = channelChats;
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
