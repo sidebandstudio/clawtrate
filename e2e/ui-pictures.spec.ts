@@ -193,6 +193,8 @@ test.describe("F-557: a picture you attach", () => {
   const OWN_KEY = "agent:pip:e2e-own-picture";
   const WORDS = "can u add this to my calendar?";
   const MINE = "Your picture: shot.png";
+  // Your own turn: the scripted reply quotes your words, so a text filter alone finds its turn too.
+  const YOURS = '[data-testid="transcript-turn"][data-role="user"]';
   const own: { child: ChildProcess; data: string }[] = [];
 
   /** A new device of this gateway: the page paired, its pairing approved by id. */
@@ -263,7 +265,7 @@ test.describe("F-557: a picture you attach", () => {
       .toEqual([WORDS, ["shot.png"]]);
     // History holds it now: the message is history's row, and its picture still shows.
     await expect(page.getByTestId("outgoing")).toHaveCount(0, { timeout: 30_000 });
-    const turn = page.getByTestId("transcript-turn").filter({ hasText: WORDS });
+    const turn = page.locator(YOURS).filter({ hasText: WORDS });
     await expect(turn.getByRole("img", { name: MINE })).toBeVisible();
     await expect(turn.locator(".bubble")).toHaveText(WORDS);
 
@@ -279,7 +281,7 @@ test.describe("F-557: a picture you attach", () => {
     await page.reload();
     await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
     await openTask(page, "Pip", OWN_TASK);
-    const again = page.getByTestId("transcript-turn").filter({ hasText: WORDS });
+    const again = page.locator(YOURS).filter({ hasText: WORDS });
     await expect(again.getByRole("img", { name: MINE })).toBeVisible({ timeout: 20_000 });
 
     // Another device has no copy, and the gateway gives none: the message says what was sent.
@@ -291,7 +293,7 @@ test.describe("F-557: a picture you attach", () => {
     const second = await otherContext.newPage();
     await pair(second, await other.url);
     await openTask(second, "Pip", OWN_TASK);
-    const there = second.getByTestId("transcript-turn").filter({ hasText: WORDS });
+    const there = second.locator(YOURS).filter({ hasText: WORDS });
     await expect(there.getByTestId("sent-picture")).toHaveAttribute("data-state", "not-kept", {
       timeout: 20_000,
     });
