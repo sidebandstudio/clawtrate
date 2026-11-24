@@ -189,6 +189,52 @@ describe("the bot list follows gateway config changes", () => {
     }
   });
 
+  it("F-558: a task read already out keeps none of a removed bot's tasks, past the removals it can record", async () => {
+    const bot = (id: string) => ({ id, identity: { name: id } });
+    // As many bots as the client keeps: main and b1 to b31.
+    let agents = [bot("main"), ...Array.from({ length: 31 }, (_, i) => bot(`b${i + 1}`))];
+    const gateway = new FakeGateway();
+    gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: {
+        sessions: [{ key: "agent:main:main", agentId: "main", updatedAt: 10 }],
+        hasMore: false,
+      },
+    });
+    const client = await connect(gateway);
+    const answers: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> =
+      [];
+    gateway.handlers["sessions.list"] = () =>
+      new Promise((resolve, reject) => answers.push({ resolve, reject }));
+    try {
+      gateway.emit("sessions.changed", {});
+      await until(() => answers.length === 1);
+      // While that read is out, b1 to b31 go and b32 and b33 come, then those two go as well.
+      agents = [bot("main"), bot("b32"), bot("b33")];
+      gateway.emit("config.changed", { hash: "h1", ts: 1 });
+      await until(() => client.state.bots.some((each) => each.id === "b33"));
+      agents = [bot("main")];
+      gateway.emit("config.changed", { hash: "h2", ts: 2 });
+      await until(() => client.state.bots.length === 1);
+      // The stale answer lists b33's task; it is not shown.
+      answers[0]!.resolve({
+        sessions: [
+          { key: "agent:main:main", agentId: "main", updatedAt: 10 },
+          { key: "agent:b33:main", agentId: "b33", updatedAt: 20 },
+        ],
+        hasMore: false,
+      });
+      await until(() => answers.length === 2);
+      expect(Object.keys(client.state.tasksByBot)).toEqual(["main"]);
+      answers[1]!.reject(new GatewayError({ code: "UNAVAILABLE", message: "busy" }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(Object.keys(client.state.tasksByBot)).toEqual(["main"]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-558: coalesces bursts of config.changed into at most one read in flight plus one queued, and drops stale reads after reconnect", async () => {
     const gateway = new FakeGateway();
     const client = await connect(gateway);

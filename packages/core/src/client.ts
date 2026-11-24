@@ -1550,6 +1550,8 @@ export class ClawtrateClient {
    * them are dropped, so a stale answer can't bring a deleted bot's tasks back.
    */
   private readonly removedDuringRead = new Set<string>();
+  /** A removal that didn't fit in `removedDuringRead`: the task read now out is dropped whole. */
+  private readOutdated = false;
 
   /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
   private readonly trackedLimit: number;
@@ -5873,8 +5875,10 @@ export class ClawtrateClient {
     // dropped when it lands, and the tasks are read once more after it.
     if (this.refreshing) {
       this.refreshAgain = true;
-      for (const id of removed)
+      for (const id of removed) {
         if (this.removedDuringRead.size < MAX_BOTS) this.removedDuringRead.add(id);
+        else this.readOutdated = true;
+      }
     }
     let pruned = false;
     for (const [key, row] of [...this.rows]) {
@@ -7945,9 +7949,12 @@ export class ClawtrateClient {
         this.refreshAgain = false;
         // A read asked from here on lists only the bots the gateway has now.
         this.removedDuringRead.clear();
+        this.readOutdated = false;
         try {
           const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
           if (generation !== this.generation) return;
+          // The read after it, already asked for, is the one kept.
+          if (this.readOutdated) continue;
           for (const [key, row] of rows) {
             const botId = rowBotId(key, row);
             if (botId && this.removedDuringRead.has(botId)) rows.delete(key);
@@ -7961,6 +7968,7 @@ export class ClawtrateClient {
     } finally {
       this.refreshing = false;
       this.removedDuringRead.clear();
+      this.readOutdated = false;
     }
   }
 
