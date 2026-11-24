@@ -613,6 +613,7 @@ const item = flagged<TranscriptItem>()({
     sender: NAME,
   }),
   idempotencyKey: ID,
+  skillNote: FLAG,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({

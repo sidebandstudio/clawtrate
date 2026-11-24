@@ -56,6 +56,8 @@ export type FakeProviderOptions = {
   pagesOrigin?: string;
   /** The iOS checks write their task key here while they need its stream to stay open. */
   streamHoldFile?: string;
+  /** The instance was started with `--with-skill-review`: answer the gateway's skill reviews. */
+  skillReview?: boolean;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -376,6 +378,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
         }
         const steps = planReply(messages, new Set(toolNames), {
           pagesOrigin: options.pagesOrigin ?? null,
+          skillReview: options.skillReview === true,
         });
         if (
           session &&
@@ -432,9 +435,11 @@ export function startFakeProvider(options: FakeProviderOptions) {
   });
   // An HTTPS request through the proxy asks for a tunnel first, and gets none.
   server.on("connect", (req: IncomingMessage, socket: Duplex) => {
+    // A client may reset the tunnel before or while the refusal is written. That ends this socket
+    // alone: Node hands a tunnel's socket over with no 'error' listener, and an error on it would
+    // otherwise end the whole scripted model, and every check after it with "fetch failed".
+    socket.on("error", () => socket.destroy());
     log(`refused a request beyond loopback: CONNECT ${req.url ?? ""}`);
-    // A client that resets the refused tunnel must not take the scripted model down with it.
-    socket.on("error", () => {});
     socket.end("HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
   });
   server.listen(options.port, options.host ?? "127.0.0.1");
