@@ -43,6 +43,7 @@ import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, TaskThreads } from "./Messages.tsx";
+import { SentFiles } from "./SentFiles.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 
@@ -86,6 +87,11 @@ function Turn({
               </div>
             ) : null,
           )}
+          <SentFiles
+            taskKey={taskKey}
+            messageKey={item.idempotencyKey ?? null}
+            files={item.attachments ?? []}
+          />
         </MessageUnit>
       )}
       {item.steered && (

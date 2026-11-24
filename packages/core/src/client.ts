@@ -15,6 +15,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
+import { fromBase64 } from "./bytes.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -134,7 +135,15 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
-import { readChatPicture, type ChatPictureRead } from "./pictures.ts";
+import {
+  isDrawnPicture,
+  isShownPictureType,
+  MAX_PICTURE_BYTES,
+  ownPictureRead,
+  readChatPicture,
+  type ChatPictureRead,
+  type SentPictureRead,
+} from "./pictures.ts";
 import type {
   ApprovalInstructions,
   ClawtrateHost,
@@ -213,6 +222,7 @@ import {
   queueLocalRun,
   requeueLocalRun,
   RawTable,
+  namesOutgoing,
   reconcileOutbox,
   historyQueuePairs,
   MAX_QUEUE_ALIASES,
@@ -434,6 +444,13 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
  * content the host keeps.
  */
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+/**
+ * Messages history confirmed whose pictures this client keeps to show, from
+ * the copy it sent, while their task stays open (Clawtrate doesn't load a
+ * person's picture from the gateway, #469). Their bytes share `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes'
+ * files and give way, oldest first, to a new message's.
+ */
+export const MAX_SENT_PICTURE_MESSAGES = 32;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
 
@@ -1578,6 +1595,20 @@ export class ClawtrateClient {
     { task: string; files: OutgoingAttachment[]; bytes: number }
   >();
   private attachmentBytes = 0;
+  /** Pictures of messages history confirmed, by message id, oldest first (`MAX_SENT_PICTURE_MESSAGES`). */
+  private readonly sentPictures = new Map<
+    string,
+    {
+      task: string;
+      mode: OutgoingMessage["mode"];
+      runId: string | null;
+      files: { index: number; mimeType: string; content: string }[];
+      /** Its files named as pictures whose bytes aren't one: never drawn, so not kept. */
+      notPictures: number[];
+      bytes: number;
+    }
+  >();
+  private sentPictureBytes = 0;
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /**
@@ -2597,6 +2628,7 @@ export class ClawtrateClient {
     for (const message of this.state.transcripts[key]?.outbox ?? []) {
       this.dropAttachments(message.id);
     }
+    for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
     this.recipients.delete(key);
     for (const readKey of [...this.approvalReads.keys()])
       if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
@@ -3281,6 +3313,11 @@ export class ClawtrateClient {
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
       this.attachmentBytes += bytes;
+      // Pictures kept only to be shown give way to files still to go out.
+      for (const id of this.sentPictures.keys()) {
+        if (this.attachmentBytes + this.sentPictureBytes <= MAX_RETAINED_ATTACHMENT_BYTES) break;
+        this.dropSentPictures(id);
+      }
     }
     this.updateActivity(key, (activity) => {
       const withMessage = { ...activity, outbox: [...activity.outbox, message] };
@@ -3314,6 +3351,56 @@ export class ClawtrateClient {
     if (!kept) return;
     this.attachmentContent.delete(messageId);
     this.attachmentBytes -= kept.bytes;
+  }
+
+  /**
+   * Once history holds a message, keep the pictures it carried that a
+   * conversation draws, from the copy sent, so its own message can still show
+   * them; its other files are let go. Room is made by dropping the oldest kept.
+   */
+  private keepSentPictures(message: OutgoingMessage): void {
+    const kept = this.attachmentContent.get(message.id);
+    this.dropAttachments(message.id);
+    if (!kept) return;
+    const named = kept.files.flatMap((file, index) =>
+      isShownPictureType(file.mimeType) && decodedBytes(file.content) <= MAX_PICTURE_BYTES
+        ? [{ index, mimeType: file.mimeType, content: file.content }]
+        : [],
+    );
+    // Bytes that aren't the picture they are named as would never be drawn: not kept.
+    const files = named.filter((file) => isDrawnPicture(file.mimeType, fromBase64(file.content)));
+    const notPictures = named.filter((file) => !files.includes(file)).map((file) => file.index);
+    const bytes = files.reduce((sum, file) => sum + decodedBytes(file.content), 0);
+    if (named.length === 0 || this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) return;
+    for (const id of this.sentPictures.keys()) {
+      if (
+        this.sentPictures.size < MAX_SENT_PICTURE_MESSAGES &&
+        this.attachmentBytes + this.sentPictureBytes + bytes <= MAX_RETAINED_ATTACHMENT_BYTES
+      )
+        break;
+      this.dropSentPictures(id);
+    }
+    this.sentPictures.set(message.id, {
+      task: kept.task,
+      mode: message.mode,
+      runId: message.runId,
+      files,
+      notPictures,
+      bytes,
+    });
+    this.sentPictureBytes += bytes;
+  }
+
+  private dropSentPictures(messageId: string): void {
+    const kept = this.sentPictures.get(messageId);
+    if (!kept) return;
+    this.sentPictures.delete(messageId);
+    this.sentPictureBytes -= kept.bytes;
+  }
+
+  /** Decoded bytes of pictures kept to show for messages history holds, for tests and diagnostics. */
+  get keptPictureBytes(): number {
+    return this.sentPictureBytes;
   }
 
   /** Decoded bytes of files held for outgoing messages, for tests and diagnostics. */
@@ -6871,6 +6958,41 @@ export class ClawtrateClient {
     return read;
   }
 
+  /**
+   * A picture a person sent with a message in this task, from this client's
+   * own copy: by the outgoing message's id while the outbox holds it, or by
+   * the key history stored its row under (`namesOutgoing`) once it is there.
+   * `index` is the file's place among the message's attachments. Nothing is
+   * asked of the gateway: without a copy here the answer is `not-kept`, and
+   * for a file whose bytes aren't the picture it is named as, `not-a-picture`.
+   */
+  async readSentPicture(
+    key: string,
+    messageKey: string,
+    index: number,
+    options: FileReadOptions = {},
+  ): Promise<SentPictureRead> {
+    for (let waited = 0; this.fileTransfers.full() && waited < 300; waited += 1)
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+    // A viewer that left while the picture waited is given nothing.
+    this.checkNotWithdrawn(options.owner);
+    const outgoing = this.state.transcripts[key]?.outbox.find((each) => each.id === messageKey);
+    const sending = outgoing ? this.attachmentContent.get(outgoing.id) : undefined;
+    const kept = sending
+      ? undefined
+      : [...this.sentPictures.entries()].find(
+          ([id, each]) =>
+            each.task === key &&
+            namesOutgoing(messageKey, { id, mode: each.mode, runId: each.runId }),
+        )?.[1];
+    if (kept?.notPictures.includes(index)) return { status: "not-a-picture" };
+    const file = sending ? sending.files[index] : kept?.files.find((each) => each.index === index);
+    if (!file) return { status: "not-kept" };
+    return ownPictureRead(file, (bytes) =>
+      this.fileTransfers.start(options.owner ?? DIRECT_CALLER, bytes, options.maxChars),
+    );
+  }
+
   /** The next part of a file on its way to this viewer. */
   readFileChunk(id: string, index: number, owner: object = DIRECT_CALLER): { data: string } {
     return this.fileTransfers.chunk(owner, id, index);
@@ -8380,6 +8502,8 @@ export class ClawtrateClient {
     this.approvalReads.clear();
     for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
     this.attachmentContent.clear();
+    this.sentPictures.clear();
+    this.sentPictureBytes = 0;
   }
 
   private invalidateCheckIns(): void {
@@ -9276,10 +9400,10 @@ export class ClawtrateClient {
         messages,
         named,
       );
-      // History holds these now: their files are no longer needed.
+      // History holds these now: only their pictures are kept, to be shown.
       for (const message of current.outbox) {
         if (!reconciled.outbox.some((each) => each.id === message.id))
-          this.dropAttachments(message.id);
+          this.keepSentPictures(message);
       }
       const activity = markUnconfirmed(reconciled);
       const items = mapHistory(messages);

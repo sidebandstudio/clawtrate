@@ -13,7 +13,7 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
-import type { ChatPictureRead } from "./pictures.ts";
+import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
 import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
@@ -246,6 +246,11 @@ export type BridgeCommand =
   | { type: "readCheckoutDiff"; key: string; path: string }
   /** A picture the bot handed over in the task, by the id its message gave (`ChatPictureRead`). */
   | { type: "readChatPicture"; key: string; artifactId: string }
+  /**
+   * A picture you sent, from this app's own copy (`SentPictureRead`): by the outgoing message's
+   * id, or the key history stored its row under, and its place among the message's files.
+   */
+  | { type: "readSentPicture"; key: string; messageKey: string; index: number }
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
@@ -639,7 +644,11 @@ type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage"
                                                                                                           type: "readChatPicture";
                                                                                                         }
                                                                                                       ? ChatPictureRead
-                                                                                                      : void;
+                                                                                                      : C extends {
+                                                                                                            type: "readSentPicture";
+                                                                                                          }
+                                                                                                        ? SentPictureRead
+                                                                                                        : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -1517,6 +1526,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         artifactId: id(command.artifactId, "picture id"),
       };
+    case "readSentPicture":
+      return {
+        type: "readSentPicture",
+        key: sessionKey(command.key),
+        messageKey: id(command.messageKey, "message key"),
+        index: count(command.index, MAX_ATTACHMENTS_PER_MESSAGE - 1, "file index"),
+      };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
     case "readMemory":
@@ -2208,6 +2224,13 @@ class ViewerSession implements BridgeSession {
         return client.readChatPicture(
           this.mine(command.key),
           command.artifactId,
+          this.fileOptions(),
+        );
+      case "readSentPicture":
+        return client.readSentPicture(
+          this.mine(command.key),
+          command.messageKey,
+          command.index,
           this.fileOptions(),
         );
       case "listMemory":
