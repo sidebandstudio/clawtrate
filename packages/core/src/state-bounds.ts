@@ -1284,6 +1284,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   checkIns: CHECK_INS,
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
+  voiceChanges: NUMBER,
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
 });

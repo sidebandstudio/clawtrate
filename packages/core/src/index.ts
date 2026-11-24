@@ -110,3 +110,4 @@ export {
   type MemoryFile,
   type MemoryList,
 } from "./memory.ts";
+export { type BotVoice, type BotVoiceAnswer, type VoiceHook } from "./voice.ts";

@@ -1,4 +1,5 @@
 import { request, type Server } from "node:http";
+import { connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { devConfig, sandboxProblems } from "../src/cli.ts";
 import { startFakeProvider } from "../src/fake-provider.ts";
@@ -44,6 +45,19 @@ describe("nothing beyond loopback", () => {
     });
     expect(status).toBe(403);
     expect(log).toContain("refused a request beyond loopback: CONNECT catalog.example:443");
+  });
+
+  it("keeps answering after a client resets a refused tunnel", async () => {
+    const log: string[] = [];
+    const port = await provider(log);
+    const client = connect(port, "127.0.0.1");
+    await new Promise((resolve) => client.once("connect", resolve));
+    client.write("CONNECT telemetry.example:443 HTTP/1.1\r\nhost: telemetry.example:443\r\n\r\n");
+    await expect.poll(() => log.length).toBeGreaterThan(0);
+    client.resetAndDestroy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const health = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(await health.json()).toEqual({ ok: true });
   });
 
   it("refuses a proxied plain request and logs it without its query", async () => {

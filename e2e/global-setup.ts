@@ -218,6 +218,7 @@ export default async function globalSetup() {
   // when this run can include them.
   const computer = `e2e-${run}-computer`;
   const withComputer = runIncludes(process.argv, join(ROOT, "e2e/work-computer.spec.ts"));
+  // Bot voice's check starts its own instance, in e2e/bot-voice.spec.ts: only where it runs.
   const own = [name, sentinel, accounts, computer];
   // The spec's own dev-gateway calls address this run's instance.
   process.env.CLAWTRATE_DEV_INSTANCE = name;
@@ -366,7 +367,8 @@ export default async function globalSetup() {
         "--renew-timeout-ms",
         "20000",
       );
-    for (const instance of withComputer ? [name, accounts, computer] : [name, accounts]) {
+    const instances = [name, accounts, ...(withComputer ? [computer] : [])];
+    for (const instance of instances) {
       const mine = listInstances().find((row) => row.name === instance);
       if (!mine?.gatewayRunning) throw new Error(`instance ${instance} is not running`);
       for (const port of [mine.gatewayPort, mine.providerPort]) {

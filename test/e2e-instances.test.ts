@@ -1,5 +1,6 @@
 // The end-to-end run starts the instance with the computer plugin only when it can run the
 // Computer tab's checks: every run with no file filter, and a run whose filters match them.
+import { readFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runIncludes } from "../e2e/run-record.ts";
@@ -60,5 +61,26 @@ describe("which end-to-end runs start the computer instance", () => {
     expect(runIncludes(argv("e2e/work-computer.spec.ts:42"), FILE)).toBe(true);
     expect(runIncludes(argv("work-computer.spec.ts:42:7"), FILE)).toBe(true);
     expect(runIncludes(argv("e2e/preview.spec.ts:42"), FILE)).toBe(false);
+  });
+});
+
+describe("which end-to-end runs start the bot voice instance", () => {
+  const source = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+
+  it("only the shard that runs its spec: the spec starts it, and global setup never does", () => {
+    // CI names no file, only a shard, so every shard's command line may include any spec.
+    expect(runIncludes(argv("--shard=3/3"), "e2e/bot-voice.spec.ts")).toBe(true);
+    // So global setup can't tell, and starts no voice instance at all.
+    expect(source("e2e/global-setup.ts")).not.toMatch(/clawtrate-voice|-voice`/);
+    // The spec's beforeAll starts it, recorded first, and its afterAll resets it.
+    const spec = source("e2e/bot-voice.spec.ts");
+    const before = spec.slice(spec.indexOf("test.beforeAll("), spec.indexOf("test.afterAll("));
+    const after = spec.slice(spec.indexOf("test.afterAll("));
+    expect(spec).toMatch(/const INSTANCE = `e2e-\$\{record\.run\}-voice`;/);
+    expect(before.indexOf("saveRecord(RECORDS, record)")).toBeGreaterThan(-1);
+    expect(before.indexOf("saveRecord(RECORDS, record)")).toBeLessThan(
+      before.indexOf('"--with-plugin", "clawtrate-voice"'),
+    );
+    expect(after).toContain("cleanUp(RECORDS, record, resetInstance)");
   });
 });
