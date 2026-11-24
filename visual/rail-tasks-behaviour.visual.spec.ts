@@ -226,25 +226,67 @@ test("F-278: a confirmed delete of an archived task removes its row and its menu
   await expect(page.getByRole("menu")).toHaveCount(0);
 });
 
-test("#450: an archived row read before the host's target moved acts with the stamp of its read, and the list is read again", async ({
+test("#450: an archived row read before the host's target moved acts with the stamp of its read; a failed read again shows no stale rows", async ({
   page,
 }) => {
+  type Rail = {
+    clawtrateFixture: {
+      refuse(type: string): void;
+      allow(type: string): void;
+      holdRail(type: string): void;
+      releaseRail(): void;
+      getState(): { connection: { gatewayId: string | null; target: number } };
+    };
+  };
+  /** One of the fixture's rail hooks, with the command type it is for. */
+  const rail = (hook: "refuse" | "allow" | "holdRail" | "releaseRail", type = "listArchived") =>
+    page.evaluate(
+      ([hook, type]) => {
+        const fixture = (window as unknown as Rail).clawtrateFixture;
+        if (hook === "releaseRail") fixture.releaseRail();
+        else fixture[hook](type);
+      },
+      [hook, type] as const,
+    );
+  const stampNow = () =>
+    page.evaluate(() => {
+      const { gatewayId, target } = (window as unknown as Rail).clawtrateFixture.getState()
+        .connection;
+      return { gatewayId, target };
+    });
   await openFixture(page, `scene=rail-write&${OTTO}`, "light");
   await page.getByRole("button", { name: "Archived" }).click();
   const archived = page.getByRole("list", { name: "Otto's archived tasks" });
-  await expect(archived.getByTestId("archived-task")).toHaveCount(2);
-  // The next read fails, so the rows shown stay the ones read before the move.
-  await page.evaluate(() =>
-    (
-      window as unknown as { clawtrateFixture: { refuse: (type: string) => void } }
-    ).clawtrateFixture.refuse("listArchived"),
-  );
+  const rows = archived.getByTestId("archived-task");
+  await expect(rows).toHaveCount(2);
+
+  // The host is pointed at a gateway anew; until the list is read again, the rows shown are the
+  // ones read before, and a row's Delete carries the stamp of that read.
+  await rail("holdRail");
   const before = await moveTarget(page);
   await expect.poll(async () => (await sent(page, "listArchived")).length).toBe(2);
-  await archived.getByTestId("archived-task").filter({ hasText: "Old printer driver" }).click();
+  await rows.filter({ hasText: "Old printer driver" }).click();
   await page.getByRole("menuitem", { name: "Delete…" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
   await expect.poll(() => sentStamp(page, "deleteTask")).toEqual(before);
+  await rail("releaseRail");
+
+  // When that read again fails, the list says so and shows no rows to act on.
+  await rail("refuse");
+  await moveTarget(page);
+  await expect(archived.getByRole("alert")).toContainText("Couldn't read the archived tasks.");
+  await expect(rows).toHaveCount(0);
+
+  // A later read that works brings the rows back, and they act with the stamp of that read.
+  await rail("allow");
+  await page.getByRole("button", { name: "Archived" }).click();
+  await page.getByRole("button", { name: "Archived" }).click();
+  await expect(rows.filter({ hasText: "Flush the DNS cache" })).toHaveCount(1);
+  const now = await stampNow();
+  await rows.filter({ hasText: "Flush the DNS cache" }).click();
+  await page.getByRole("menuitem", { name: "Delete…" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => sentStamp(page, "deleteTask")).toEqual(now);
 });
 
 type Fixture = {
