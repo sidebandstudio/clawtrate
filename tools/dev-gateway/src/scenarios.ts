@@ -14,6 +14,13 @@ import type { ReplyStep } from "./scripts.ts";
 import { MESSAGING_PAIR, messagingPartner, SEED_BOTS } from "./seed-data.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { PICTURE_PATH } from "./seed-files.ts";
+import {
+  ATTACH_NOTE,
+  ATTACH_PDF_PATH,
+  ATTACH_TEXT,
+  ATTACH_TEXT_PATH,
+  reviewsDraftPdf,
+} from "./scripted-files.ts";
 
 /** What a scenario may look at: who is answering, and what its tools returned so far. */
 export type PlanContext = {
@@ -590,6 +597,16 @@ export const SCENARIOS: Scenario[] = [
           ),
         ];
       },
+    ],
+  },
+  {
+    name: "attach",
+    phrase: "attach the reviews",
+    summary: `Writes a two-page PDF (${ATTACH_PDF_PATH}) and a text note (${ATTACH_TEXT_PATH}) in the bot's workspace, then ends its answer with a \`MEDIA:\` line for each: the gateway hands both over as files on the reply.`,
+    steps: () => [
+      tool("write", { path: ATTACH_PDF_PATH, content: reviewsDraftPdf() }),
+      tool("write", { path: ATTACH_TEXT_PATH, content: ATTACH_NOTE }),
+      say(`${ATTACH_TEXT}\nMEDIA:./${ATTACH_PDF_PATH}\nMEDIA:./${ATTACH_TEXT_PATH}`),
     ],
   },
   {
