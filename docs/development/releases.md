@@ -202,7 +202,37 @@ The [Real update](../../.github/workflows/real-update.yml) workflow runs a real 
 gh workflow run real-update.yml -f previous=<the release before> -f candidate=<the release just published>
 ```
 
-Both inputs are optional: empty ones take the two newest published releases. The candidate must be what the Beta feed offers. The run's conclusion is the answer, and its `real-update-summary` artifact holds it as JSON: `previous`, `candidate`, `passed`, and for each image its outcome, macOS version, offered and installed versions, and the install capability the app reported. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
+Both inputs are optional: empty ones take the two newest published releases. The app reads the live Beta feed, so the candidate must be what the feed offers when each image checks.
+
+Each image ends with one of three verdicts, and so does the run ([verdict.ts](../../e2e-packaged/real-update/verdict.ts)):
+
+- **passed**: the image updated in place.
+- **failed**: it didn't: no offer, a refused inspection, no restart offered, or a replacement that doesn't meet the checks above; also an image that left no result.
+- **inconclusive**: the feed offered another version than the candidate, so the run couldn't test it. That happens when a release is published while the run goes, or when an explicit `candidate` is no longer the feed's offer. It is never a pass. Run the check again with the versions the feed now offers.
+
+The run is failed if any image failed, otherwise inconclusive if any image was, otherwise passed. Its conclusion is red only when it failed, so read the verdict from the `real-update-summary` artifact, `real-update-summary.json`:
+
+```json
+{
+  "previous": "0.1.1-beta.20261123.6",
+  "candidate": "0.1.1-beta.20261123.7",
+  "verdict": "passed",
+  "passed": true,
+  "images": {
+    "macos-15": {
+      "verdict": "passed",
+      "passed": true,
+      "outcome": "updated in place",
+      "system": "15.7.2",
+      "offered": "0.1.1-beta.20261123.7",
+      "installed": "0.1.1-beta.20261123.7",
+      "install": { "kind": "restart-available", "offerId": "…" }
+    }
+  }
+}
+```
+
+`images` has one entry per image (`macos-15`, `macos-26`, `xcode-27`), so a caller can weigh the preview image apart. The run's step summary gives the same answer in one line per image. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
 
 It can pass only when the previous release has the fix for [#383](https://github.com/sidebandstudio/clawtrate/issues/383): every earlier build fails at inspection, which is what the check showed on macOS 26 with `0.1.1-beta.20261122.4`. So it is meaningful from the second release after that fix.
 
