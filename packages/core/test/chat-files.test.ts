@@ -243,7 +243,7 @@ describe("F-115: a file a bot attaches, in history", () => {
 });
 
 describe("F-115: a file a bot attaches, live", () => {
-  it("F-115: the live events name no file; the history read when the run ends gives the row its files", async () => {
+  it("F-115: the live events name no file; the row's files come when the gateway says the message changed and history is read again", async () => {
     const gateway = grantingGateway();
     let history: unknown[] = run([{ type: "text", text: "Earlier." }]).slice(0, 1);
     gateway.handlers["chat.history"] = () => ({ messages: history });
@@ -270,7 +270,9 @@ describe("F-115: a file a bot attaches, live", () => {
         __openclaw: { runId: "probe-attach", id: ROW, seq: 4 },
       },
     });
-    history = run(ATTACHED);
+    // At the run's end the row holds only its text: the history read then shows no file.
+    history = run([{ type: "text", text: TEXT }]);
+    const reads = gateway.calls("chat.history").length;
     gateway.emit("chat", {
       runId: "probe-attach",
       sessionKey: KEY,
@@ -283,6 +285,16 @@ describe("F-115: a file a bot attaches, live", () => {
         openclawDisplayContent: [],
       },
     });
+    await until(() => gateway.calls("chat.history").length > reads);
+    await until(() =>
+      client.state.transcripts[KEY]!.items.some((item) =>
+        item.blocks.some((block) => block.kind === "text" && block.text === TEXT),
+      ),
+    );
+    expect(client.state.transcripts[KEY]!.items.some((item) => item.files)).toBe(false);
+    // Just after, the gateway writes the files into the row and says the message changed.
+    history = run(ATTACHED);
+    gateway.emit("sessions.changed", { sessionKey: KEY, phase: "message" });
     await until(() => client.state.transcripts[KEY]!.items.some((item) => item.files?.length));
     const turn = client.state.transcripts[KEY]!.items.find((item) => item.files)!;
     expect(turn.files!.map((file) => file.name)).toEqual(["reviews-draft.pdf", "reviews.txt"]);

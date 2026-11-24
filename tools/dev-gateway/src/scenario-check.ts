@@ -3583,8 +3583,9 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
               texts[0]!.startsWith(`Successfully wrote ${content.length} bytes`),
             `${where} text: ${texts.join(" ")}`,
           ),
+        // A repeated run finds the file already there, so only that a change was reported is checked.
         details: (details: JsonRecord | undefined, where: string) =>
-          same(details?.created, true, `${where} created`),
+          same(typeof details?.changed, "boolean", `${where} changed`),
         title: `Write to ${path} (${content.length} chars)`,
       });
       view.expectCalls([
@@ -3599,11 +3600,17 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "the PDF on disk",
       );
       // The gateway takes the MEDIA: lines out of the text and gives the row a block for each file.
-      const history = await h
-        .op("plain")
-        .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key });
-      const last = history.messages.at(-1)!;
-      const content = last.content as JsonRecord[];
+      // It writes the blocks into the row just after the run ends: history is read until they are there.
+      let content: JsonRecord[] = [];
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const history = await h
+          .op("plain")
+          .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key });
+        const last = history.messages.at(-1);
+        content = Array.isArray(last?.content) ? (last.content as JsonRecord[]) : [];
+        if (content.some((part) => part.type === "attachment")) break;
+        await sleep(500);
+      }
       same(content[0], { type: "text", text: ATTACH_TEXT }, "the answer's text");
       const files = content.slice(1).map((block) => rec(block.attachment));
       same(
