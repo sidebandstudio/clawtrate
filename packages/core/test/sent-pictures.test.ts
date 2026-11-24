@@ -96,6 +96,30 @@ describe("F-557: what history says a person's message carried", () => {
 });
 
 describe("F-557: a picture you sent, from this app's own copy", () => {
+  it("F-557: a replacement session reusing the history key cannot show the original picture", async () => {
+    const { client, gateway, confirm, transcript } = await task();
+    try {
+      const id = client.sendMessage(KEY, "Picture", {
+        ...asShown(client),
+        attachments: [picture(RED, "shot.png")],
+      });
+      const row = sentRow(id, "Picture", [SHOT]);
+      await confirm([row]);
+      const key = transcript().items[0]!.idempotencyKey!;
+      expect((await client.readSentPicture(KEY, key, 0)).status).toBe("content");
+      gateway.handlers["chat.history"] = () => ({ sessionId: "replacement", messages: [row] });
+      gateway.emit("sessions.changed", { sessionKey: KEY, phase: "message", updatedAt: 3 });
+      await until(() => transcript().sessionId === "replacement");
+      expect(transcript().items[0]!.idempotencyKey).toBe(key);
+      expect(await client.readSentPicture(KEY, key, 0)).toEqual({ status: "not-kept" });
+      expect(await client.readSentPicture(KEY, key, 0, { sessionId: "replacement" })).toEqual({
+        status: "not-kept",
+      });
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-557: shows at once from the copy sent, and still after history holds the message and is read again", async () => {
     const { client, gateway, confirm, history } = await task();
     const id = client.sendMessage(KEY, "can u add this to my calendar?", {

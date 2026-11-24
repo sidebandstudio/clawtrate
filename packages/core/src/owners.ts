@@ -266,7 +266,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
   sentPictures: {
     max: MAX_SENT_PICTURE_MESSAGES,
-    each: 3 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
+    each: 4 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
     row: "outboxFiles",
   },
   "sentPictures.*.files": {

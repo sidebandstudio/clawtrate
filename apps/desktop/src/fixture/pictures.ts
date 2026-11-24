@@ -274,7 +274,13 @@ export function pictureScene(base: ClawtrateState, now: number, name: string): C
 }
 
 /** The host's answer for a picture you sent: the one this app sent and holds, and no other. */
-export function sentPictureAnswer(command: { messageKey: string; index: number }): SentPictureRead {
+export function sentPictureAnswer(command: {
+  messageKey: string;
+  index: number;
+  sessionId?: string;
+}): SentPictureRead {
+  if (command.sessionId !== undefined && command.sessionId !== "otto-disk-space")
+    return { status: "not-kept" };
   if (command.messageKey === "sent-2:user" && command.index === 1)
     return { status: "not-a-picture" };
   if (command.messageKey !== "sent-1:user" || command.index !== 0) return { status: "not-kept" };

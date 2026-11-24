@@ -1601,6 +1601,7 @@ export class ClawtrateClient {
     string,
     {
       task: string;
+      sessionId: string;
       mode: OutgoingMessage["mode"];
       runId: string | null;
       files: { index: number; mimeType: string; content: string }[];
@@ -3359,10 +3360,10 @@ export class ClawtrateClient {
    * conversation draws, from the copy sent, so its own message can still show
    * them; its other files are let go. Room is made by dropping the oldest kept.
    */
-  private keepSentPictures(message: OutgoingMessage): void {
+  private keepSentPictures(message: OutgoingMessage, sessionId: string | null): void {
     const kept = this.attachmentContent.get(message.id);
     this.dropAttachments(message.id);
-    if (!kept) return;
+    if (!kept || !sessionId) return;
     const named = kept.files.flatMap((file, index) =>
       isShownPictureType(file.mimeType) && decodedBytes(file.content) <= MAX_PICTURE_BYTES
         ? [{ index, mimeType: file.mimeType, content: file.content }]
@@ -3383,6 +3384,7 @@ export class ClawtrateClient {
     }
     this.sentPictures.set(message.id, {
       task: kept.task,
+      sessionId,
       mode: message.mode,
       runId: message.runId,
       files,
@@ -6971,19 +6973,24 @@ export class ClawtrateClient {
     key: string,
     messageKey: string,
     index: number,
-    options: FileReadOptions = {},
+    options: FileReadOptions & { sessionId?: string } = {},
   ): Promise<SentPictureRead> {
+    const sessionId = options.sessionId ?? this.state.transcripts[key]?.sessionId;
     for (let waited = 0; this.fileTransfers.full() && waited < 300; waited += 1)
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
     // A viewer that left while the picture waited is given nothing.
     this.checkNotWithdrawn(options.owner);
-    const outgoing = this.state.transcripts[key]?.outbox.find((each) => each.id === messageKey);
+    const transcript = this.state.transcripts[key];
+    if (!transcript || transcript.sessionId !== sessionId) return { status: "not-kept" };
+    const outgoing =
+      options.sessionId === undefined && transcript.outbox.find((each) => each.id === messageKey);
     const sending = outgoing ? this.attachmentContent.get(outgoing.id) : undefined;
     const kept = sending
       ? undefined
       : [...this.sentPictures.entries()].find(
           ([id, each]) =>
             each.task === key &&
+            each.sessionId === sessionId &&
             namesOutgoing(messageKey, { id, mode: each.mode, runId: each.runId }),
         )?.[1];
     if (kept?.notPictures.includes(index)) return { status: "not-a-picture" };
@@ -9404,7 +9411,7 @@ export class ClawtrateClient {
       // History holds these now: only their pictures are kept, to be shown.
       for (const message of current.outbox) {
         if (!reconciled.outbox.some((each) => each.id === message.id))
-          this.keepSentPictures(message);
+          this.keepSentPictures(message, named);
       }
       const activity = markUnconfirmed(reconciled);
       const items = mapHistory(messages);

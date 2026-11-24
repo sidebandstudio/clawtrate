@@ -33,11 +33,13 @@ export const sentPictureAlt = (file: SentAttachment) => `Your picture: ${file.fi
 
 function SentPicture({
   taskKey,
+  sessionId,
   messageKey,
   index,
   file,
 }: {
   taskKey: string;
+  sessionId: string | undefined;
   messageKey: string | null;
   index: number;
   file: SentAttachment;
@@ -50,20 +52,32 @@ function SentPicture({
     if (!messageKey) return;
     let current = true;
     const set = (next: Shown) => current && setShown(next);
-    bridge.invoke({ type: "readSentPicture", key: taskKey, messageKey, index }).then(
-      async (read) => {
-        if (read.status !== "content") return set(read);
-        const data = await collectBytes(bridge, read.transfer, read.bytes);
-        if (!(data instanceof Uint8Array)) return set({ status: "failed", message: data.message });
-        set({ status: "shown", url: `data:${read.mimeType};base64,${toBase64(data)}` });
-      },
-      (error: unknown) =>
-        set({ status: "failed", message: error instanceof Error ? error.message : String(error) }),
-    );
+    bridge
+      .invoke({
+        type: "readSentPicture",
+        key: taskKey,
+        messageKey,
+        index,
+        ...(sessionId ? { sessionId } : {}),
+      })
+      .then(
+        async (read) => {
+          if (read.status !== "content") return set(read);
+          const data = await collectBytes(bridge, read.transfer, read.bytes);
+          if (!(data instanceof Uint8Array))
+            return set({ status: "failed", message: data.message });
+          set({ status: "shown", url: `data:${read.mimeType};base64,${toBase64(data)}` });
+        },
+        (error: unknown) =>
+          set({
+            status: "failed",
+            message: error instanceof Error ? error.message : String(error),
+          }),
+      );
     return () => {
       current = false;
     };
-  }, [bridge, taskKey, messageKey, index]);
+  }, [bridge, taskKey, sessionId, messageKey, index]);
 
   if (shown.status === "shown")
     return (
@@ -112,10 +126,12 @@ function SentFile({ file }: { file: SentAttachment }) {
  */
 export function SentFiles({
   taskKey,
+  sessionId,
   messageKey,
   files,
 }: {
   taskKey: string;
+  sessionId?: string | undefined;
   messageKey: string | null;
   files: readonly SentAttachment[];
 }) {
@@ -128,6 +144,7 @@ export function SentFiles({
           <SentPicture
             key={index}
             taskKey={taskKey}
+            sessionId={sessionId}
             messageKey={messageKey}
             index={index}
             file={file}

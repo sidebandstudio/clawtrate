@@ -5,6 +5,7 @@
 // gateway's own shapes (apps/desktop/src/fixture/pictures.ts); the live check is
 // e2e/ui-pictures.spec.ts.
 import { test, type Page } from "@playwright/test";
+import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -107,22 +108,52 @@ test.describe("sent pictures behaviour", () => {
         type: "readSentPicture",
         key: "agent:otto:disk-space",
         messageKey: "sent-1:user",
+        sessionId: "otto-disk-space",
         index: 0,
       },
       {
         type: "readSentPicture",
         key: "agent:otto:disk-space",
         messageKey: "sent-2:user",
+        sessionId: "otto-disk-space",
         index: 1,
       },
       {
         type: "readSentPicture",
         key: "agent:otto:disk-space",
         messageKey: "elsewhere-1:user",
+        sessionId: "otto-disk-space",
         index: 0,
       },
     ]);
     expect(media).toEqual([]);
+  });
+
+  test("F-557: replacing the session drops the drawn picture even when the history row has the same id", async ({
+    page,
+  }) => {
+    await open(page, "pictures-sent", "dark");
+    await drawn(page, MINE);
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (change: (state: ClawtrateState) => ClawtrateState) => void;
+          };
+        }
+      ).clawtrateFixture;
+      const key = "agent:otto:disk-space";
+      fixture.setState((state) => ({
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: { ...state.transcripts[key]!, sessionId: "replacement" },
+        },
+      }));
+    });
+    const picture = page.getByTestId("sent-picture").filter({ hasText: "calendar.png" });
+    await expect(picture).toHaveAttribute("data-state", "not-kept");
+    await expect(page.getByRole("img", { name: MINE })).toHaveCount(0);
   });
 
   test("F-117: Tab reaches the preview, Enter opens it over the app with its text, focus stays inside, and Escape closes it back to the preview", async ({

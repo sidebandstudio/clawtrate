@@ -53,10 +53,12 @@ import { useShowCommands, useShowThinking } from "./preferences.ts";
  */
 function Turn({
   taskKey,
+  sessionId,
   item,
   incomplete = false,
 }: {
   taskKey: string;
+  sessionId: string | undefined;
   item: TranscriptItem;
   incomplete?: boolean;
 }) {
@@ -88,8 +90,10 @@ function Turn({
             ) : null,
           )}
           <SentFiles
+            key={sessionId}
             taskKey={taskKey}
-            messageKey={item.idempotencyKey ?? null}
+            sessionId={sessionId}
+            messageKey={sessionId ? (item.idempotencyKey ?? null) : null}
             files={item.attachments ?? []}
           />
         </MessageUnit>
@@ -439,7 +443,12 @@ function TranscriptView({
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
         ) : live.echoes.has(item.id) ? null : (
-          <Turn taskKey={task.key} item={item} incomplete={live.incomplete.has(item.id)} />
+          <Turn
+            taskKey={task.key}
+            sessionId={transcript.sessionId}
+            item={item}
+            incomplete={live.incomplete.has(item.id)}
+          />
         )}
       </CardSlot>,
     );

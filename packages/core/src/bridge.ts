@@ -250,7 +250,7 @@ export type BridgeCommand =
    * A picture you sent, from this app's own copy (`SentPictureRead`): by the outgoing message's
    * id, or the key history stored its row under, and its place among the message's files.
    */
-  | { type: "readSentPicture"; key: string; messageKey: string; index: number }
+  | { type: "readSentPicture"; key: string; messageKey: string; index: number; sessionId?: string }
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
@@ -1532,6 +1532,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         messageKey: id(command.messageKey, "message key"),
         index: count(command.index, MAX_ATTACHMENTS_PER_MESSAGE - 1, "file index"),
+        ...(command.sessionId !== undefined
+          ? { sessionId: id(command.sessionId, "session id") }
+          : {}),
       };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
@@ -2227,12 +2230,10 @@ class ViewerSession implements BridgeSession {
           this.fileOptions(),
         );
       case "readSentPicture":
-        return client.readSentPicture(
-          this.mine(command.key),
-          command.messageKey,
-          command.index,
-          this.fileOptions(),
-        );
+        return client.readSentPicture(this.mine(command.key), command.messageKey, command.index, {
+          ...this.fileOptions(),
+          ...(command.sessionId ? { sessionId: command.sessionId } : {}),
+        });
       case "listMemory":
         return client.listMemory(command.botId);
       case "readMemory":
