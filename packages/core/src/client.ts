@@ -405,6 +405,9 @@ const IDENTITY_RETRY_MS = 500;
 /** Why a write stamped on an earlier connection target is not sent (`requireSameGateway`). */
 export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
+/** Why a file a bot handed over isn't read: its row came from another gateway (`readChatFile`). */
+export const FILE_FROM_ANOTHER_GATEWAY =
+  "This file was listed by another gateway, so it wasn't read. Look again, then try again.";
 /** Why a write that had already sent part of itself stopped: what the gateway did is not known. */
 export const CONNECTION_CHANGED_AFTER_SEND =
   "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
@@ -6875,12 +6878,28 @@ export class ClawtrateClient {
     return this.readHandedOver("picture", options, (ctx) => readChatPicture(ctx, key, artifactId));
   }
 
-  /** A file the bot handed over in the task that isn't a picture (`chat-files.ts`), the same way. */
+  /**
+   * A file the bot handed over in the task that isn't a picture (`chat-files.ts`), the same way.
+   * It is read when the person asks, which can be long after its row was drawn: with `stamp`
+   * (the gateway that drew the row), nothing is asked unless the host still has that gateway.
+   */
   async readChatFile(
     key: string,
     artifactId: string,
     options: FileReadOptions = {},
+    stamp?: GatewayStamp,
   ): Promise<ChatFileRead> {
+    if (stamp !== undefined) {
+      try {
+        await this.requireSameGateway(stamp);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          status: "failed",
+          message: /another gateway/.test(message) ? FILE_FROM_ANOTHER_GATEWAY : message,
+        };
+      }
+    }
     return this.readHandedOver("file", options, (ctx) => readChatFile(ctx, key, artifactId));
   }
 

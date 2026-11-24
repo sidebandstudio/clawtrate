@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { toBase64 } from "../src/bytes.ts";
 import { utf8Length } from "../src/encoding.ts";
 import { isTooLargeToSave, MAX_CHAT_FILE_BYTES } from "../src/chat-files.ts";
-import { ClawtrateClient } from "../src/client.ts";
+import { ClawtrateClient, CONNECTION_CHANGED, FILE_FROM_ANOTHER_GATEWAY } from "../src/client.ts";
 import { parseBridgeCommand } from "../src/bridge.ts";
 import type { HttpFetch, HttpResponseLike } from "../src/host.ts";
 import {
@@ -415,6 +415,7 @@ describe("F-115: a file a bot attaches, read", () => {
     const gateway = grantingGateway();
     gateway.handlers["chat.history"] = () => ({ messages: run(ATTACHED) });
     gateway.handlers["artifacts.download"] = download;
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL_A, token: null }),
       [tokenKey(URL_A)]: JSON.stringify({
@@ -496,12 +497,33 @@ describe("F-115: a file a bot attaches, read", () => {
     refused.client.stop();
   });
 
-  it("F-115: the bridge takes a file read only with a task key and an id", () => {
-    expect(parseBridgeCommand({ type: "readChatFile", key: KEY, artifactId: PDF })).toEqual({
+  it("F-115: the bridge takes a file read only with a task key, an id and the stamp of the gateway that drew it", () => {
+    const stamp = { gatewayId: "gateway-a", target: 3 };
+    expect(parseBridgeCommand({ type: "readChatFile", key: KEY, artifactId: PDF, stamp })).toEqual({
       type: "readChatFile",
       key: KEY,
       artifactId: PDF,
+      stamp,
     });
-    expect(() => parseBridgeCommand({ type: "readChatFile", key: KEY })).toThrow();
+    expect(() => parseBridgeCommand({ type: "readChatFile", key: KEY, stamp })).toThrow();
+    expect(() => parseBridgeCommand({ type: "readChatFile", key: KEY, artifactId: PDF })).toThrow();
+  });
+
+  it("F-115: a file is read only while the host still has the gateway whose history drew its row", async () => {
+    const { client, gateway } = await open(async () => response(200, {}, BYTES));
+    const target = client.state.connection.target;
+    expect(await client.readChatFile(KEY, PDF, {}, { gatewayId: "gateway-b", target })).toEqual({
+      status: "failed",
+      message: FILE_FROM_ANOTHER_GATEWAY,
+    });
+    expect(
+      await client.readChatFile(KEY, PDF, {}, { gatewayId: "gateway-a", target: target - 1 }),
+    ).toEqual({ status: "failed", message: CONNECTION_CHANGED });
+    expect(gateway.calls("artifacts.download")).toEqual([]);
+    expect(
+      await client.readChatFile(KEY, PDF, {}, { gatewayId: "gateway-a", target }),
+    ).toMatchObject({ status: "content", bytes: BYTES.length });
+    expect(gateway.calls("artifacts.download")).toHaveLength(1);
+    client.stop();
   });
 });

@@ -28,12 +28,16 @@ const refused: ChatFile = {
   mimeType: "application/octet-stream",
   sizeBytes: null,
 };
+/** The gateway the rows were drawn from. */
+const SHOWN = { gatewayId: "gateway-a", target: 1, connectedAt: 1 };
 const BYTES = new TextEncoder().encode("%PDF-1.4\n%%EOF\n");
 
 function render(files: ChatFile[]) {
   const html = renderToStaticMarkup(
     createElement(BridgeProvider, {
-      bridge: {} as ClawtrateBridge,
+      bridge: {
+        getState: () => ({ connection: { gatewayId: "gateway-a", target: 1, connectedAt: 1 } }),
+      } as unknown as ClawtrateBridge,
       children: createElement(BotFiles, { taskKey: KEY, files }),
     }),
   );
@@ -76,7 +80,7 @@ const content: ChatFileRead = {
 
 async function phases(bridge: ClawtrateBridge, file = pdf): Promise<Phase[]> {
   const seen: Phase[] = [];
-  await saveChatFile(bridge, KEY, file, (phase) => seen.push(phase));
+  await saveChatFile(bridge, KEY, file, (phase) => seen.push(phase), SHOWN);
   return seen;
 }
 
@@ -95,7 +99,10 @@ describe("F-115: the row of a file a bot handed over", () => {
       "The gateway didn&#x27;t hand this file over, so it can&#x27;t be saved.",
     );
     // What it says is in a live region, so it is announced.
+    // One live region per row, always there, with one role: the ready row's is empty.
     expect(html.match(/role="status"/g)).toHaveLength(3);
+    expect(html).not.toContain('role="alert"');
+    expect(html).toContain('<span class="bot-file-note" role="status"></span>');
   });
 
   it("F-115: a message with no files draws nothing for them", () => {
@@ -124,7 +131,12 @@ describe("F-115: Save", () => {
     });
     expect(await phases(bridge)).toEqual([{ status: "saving" }, { status: "saved" }]);
     expect(invoked).toEqual([
-      { type: "readChatFile", key: KEY, artifactId: "artifact_managed_media_pdf" },
+      {
+        type: "readChatFile",
+        key: KEY,
+        artifactId: "artifact_managed_media_pdf",
+        stamp: { gatewayId: "gateway-a", target: 1 },
+      },
     ]);
     expect(handed).toEqual([{ name: "reviews-draft.pdf", data: BYTES }]);
   });

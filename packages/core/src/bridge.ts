@@ -239,7 +239,13 @@ export type BridgeCommand =
   /** A picture the bot handed over in the task, by the id its message gave (`ChatPictureRead`). */
   | { type: "readChatPicture"; key: string; artifactId: string }
   /** A file that isn't a picture the bot handed over, by the id its message gave (`ChatFileRead`). */
-  | { type: "readChatFile"; key: string; artifactId: string }
+  | {
+      type: "readChatFile";
+      key: string;
+      artifactId: string;
+      /** The gateway whose history drew the row: the file is read only while it is still that one. */
+      stamp: GatewayStamp;
+    }
   /**
    * A picture you sent, from this app's own copy (`SentPictureRead`): by the outgoing message's
    * id, or the key history stored its row under, and its place among the message's files.
@@ -1596,6 +1602,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "readChatFile",
         key: sessionKey(command.key),
         artifactId: id(command.artifactId, "file id"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "readSentPicture":
       return {
@@ -2311,7 +2318,12 @@ class ViewerSession implements BridgeSession {
           this.fileOptions(),
         );
       case "readChatFile":
-        return client.readChatFile(this.mine(command.key), command.artifactId, this.fileOptions());
+        return client.readChatFile(
+          this.mine(command.key),
+          command.artifactId,
+          this.fileOptions(),
+          command.stamp,
+        );
       case "readSentPicture":
         return client.readSentPicture(
           this.mine(command.key),

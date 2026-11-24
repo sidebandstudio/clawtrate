@@ -135,33 +135,47 @@ test.describe("bot files behaviour", () => {
   }) => {
     await open(page, "dark");
     const pdf = row(page, "reviews-draft.pdf");
+    // Each row's live region is in the page before anything is said, with one role throughout.
+    const status = pdf.getByRole("status");
+    await expect(status).toHaveText("");
+    expect(await status.evaluate((element) => getComputedStyle(element).display)).not.toBe("none");
     await hold(page);
     const save = pdf.getByRole("button", { name: "Save reviews-draft.pdf" });
     await save.focus();
     await page.keyboard.press("Enter");
-    await expect(pdf.getByRole("status")).toHaveText("Saving…");
-    await expect(save).toBeDisabled();
+    await expect(status).toHaveText("Saving…");
+    // Not disabled, so it keeps the focus; pressing it again does nothing.
+    await expect(save).toHaveAttribute("aria-disabled", "true");
+    await expect(save).toBeFocused();
+    await page.keyboard.press("Enter");
     expect(await saved(page)).toEqual([]);
     await release(page);
-    await expect(pdf.getByRole("status")).toHaveText("Saved.");
+    await expect(status).toHaveText("Saved.");
+    await expect(save).toBeFocused();
+    await expect(save).not.toHaveAttribute("aria-disabled");
     expect(await reads(page)).toEqual([
       {
         type: "readChatFile",
         key: "agent:otto:disk-space",
         artifactId: "artifact_managed_media_470797d5-f45d-444a-901d-21a6bd2c2f96",
+        stamp: { gatewayId: expect.any(String), target: expect.any(Number) },
       },
     ]);
     const [file] = await saved(page);
     expect(file!.name).toBe("reviews-draft.pdf");
     expect(Buffer.from(file!.data, "base64").toString("latin1")).toBe(reviewsDraftPdf());
 
-    // A read that fails says why, as an alert, and Save stays to try again.
+    // A read that fails says why in the same live region, and Save keeps the focus to try again.
     const notes = row(page, "reviews.txt");
-    await notes.getByRole("button", { name: "Save reviews.txt" }).click();
-    await expect(notes.getByRole("alert")).toHaveText(
+    const retry = notes.getByRole("button", { name: "Save reviews.txt" });
+    await retry.focus();
+    await page.keyboard.press("Enter");
+    await expect(notes.getByRole("status")).toHaveText(
       "Couldn't save it. The gateway answered 404 for this file.",
     );
-    await expect(notes.getByRole("button", { name: "Save reviews.txt" })).toBeEnabled();
+    await expect(notes.getByRole("alert")).toHaveCount(0);
+    await expect(retry).toBeFocused();
+    await expect(retry).toBeEnabled();
     expect((await saved(page)).map((each) => each.name)).toEqual(["reviews-draft.pdf"]);
   });
 });

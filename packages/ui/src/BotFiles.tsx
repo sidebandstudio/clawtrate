@@ -4,6 +4,7 @@
 // download the gateway issues (`readChatFile`) and hands them to the host to
 // save, the desktop app's save dialog or the browser's download. Nothing is
 // opened or run. "Saved" is said only once the host says the bytes are there.
+// The file is read only while the host still has the gateway that drew the row.
 
 import {
   isTooLargeToSave,
@@ -11,10 +12,11 @@ import {
   type ChatFile,
   type ClawtrateBridge,
 } from "@clawtrate/core";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useBridge } from "./bridge.tsx";
 import { size } from "./Composer.tsx";
 import { FileIcon } from "./icons.tsx";
+import { screenStamp, shownStamp, type ShownStamp } from "./stamp.ts";
 import { collectBytes } from "./work/content.ts";
 import { downloadBytes } from "./work/download.ts";
 
@@ -58,13 +60,15 @@ export async function saveChatFile(
   taskKey: string,
   file: ChatFile,
   set: (phase: Phase) => void,
+  shown: ShownStamp,
 ): Promise<void> {
   const artifactId = file.artifactId;
   if (artifactId === null) return;
   set({ status: "saving" });
   const fail = (message: string) => set({ status: "failed", message });
   try {
-    const read = await bridge.invoke({ type: "readChatFile", key: taskKey, artifactId });
+    const stamp = await screenStamp(bridge, shown);
+    const read = await bridge.invoke({ type: "readChatFile", key: taskKey, artifactId, stamp });
     if (read.status === "too-large") return set({ status: "too-large" });
     if (read.status !== "content") return fail(read.message);
     const data = await collectBytes(bridge, read.transfer, read.bytes);
@@ -80,7 +84,11 @@ export async function saveChatFile(
 
 function BotFile({ taskKey, file }: { taskKey: string; file: ChatFile }) {
   const bridge = useBridge();
+  // The gateway this row was drawn from: Save reads the file only while the host still has it.
+  const [shown] = useState(() => shownStamp(bridge.getState().connection));
   const [phase, setPhase] = useState<Phase>({ status: "ready" });
+  const row = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   const artifactId = file.artifactId;
   const state =
     artifactId === null
@@ -90,14 +98,29 @@ function BotFile({ taskKey, file }: { taskKey: string; file: ChatFile }) {
         : phase.status;
   const savable = state !== "unreadable" && state !== "too-large";
 
-  const save = () => void saveChatFile(bridge, taskKey, file, setPhase);
+  const save = () => {
+    // Pressed again while saving: nothing. The button stays focusable, so focus stays on it.
+    if (phase.status === "saving") return;
+    void saveChatFile(
+      bridge,
+      taskKey,
+      file,
+      (next) => {
+        // The button goes once the file turns out too large: focus stays in the row.
+        if (next.status === "too-large" && document.activeElement === button.current)
+          row.current?.focus();
+        setPhase(next);
+      },
+      shown,
+    );
+  };
 
   const note = fileNote(file, phase);
   const details = [file.sizeBytes === null ? null : size(file.sizeBytes), file.mimeType]
     .filter(Boolean)
     .join(" · ");
   return (
-    <div className="bot-file" data-testid="bot-file" data-state={state}>
+    <div className="bot-file" data-testid="bot-file" data-state={state} ref={row} tabIndex={-1}>
       <FileIcon aria-hidden="true" />
       <span className="bot-file-text">
         <span className="bot-file-name">{file.name}</span>
@@ -105,20 +128,18 @@ function BotFile({ taskKey, file }: { taskKey: string; file: ChatFile }) {
       </span>
       {savable && (
         <button
+          ref={button}
           type="button"
           className="button"
           aria-label={`Save ${file.name}`}
-          disabled={phase.status === "saving"}
+          aria-disabled={phase.status === "saving" ? true : undefined}
           onClick={save}
         >
           Save
         </button>
       )}
-      <span
-        className="bot-file-note"
-        role={phase.status === "failed" ? "alert" : "status"}
-        data-empty={note === null ? "" : undefined}
-      >
+      {/* One live region, always in the page with the same role: each state's words are announced. */}
+      <span className="bot-file-note" role="status">
         {note}
       </span>
     </div>

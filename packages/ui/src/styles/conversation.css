@@ -1834,8 +1834,17 @@ button.reaction {
   color: var(--text-muted);
 }
 
-.bot-file-note[data-empty] {
-  display: none;
+/* Empty, it stays in the page (and the accessibility tree) without taking room. */
+.bot-file-note:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.bot-file {
+  position: relative;
 }
 
 .bot-file[data-state="failed"] .bot-file-note {
