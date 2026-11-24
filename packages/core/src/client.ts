@@ -59,6 +59,15 @@ import {
   type PlacementParts,
 } from "./machines.ts";
 import {
+  deleteBot,
+  wholeRoster,
+  readBotDelete,
+  type BotDeleteContext,
+  type BotDeleteOutcome,
+  type BotDeleteRead,
+  type DeleteRequest,
+} from "./bot-delete.ts";
+import {
   admitApproval,
   applyApprovalRequested,
   applyApprovalResolved,
@@ -199,7 +208,9 @@ import {
   parkAfterStop,
   markQuestion,
   mergeHistoryRuns,
+  gatewayRunning,
   queueLocalRun,
+  requeueLocalRun,
   RawTable,
   reconcileOutbox,
   historyQueuePairs,
@@ -415,6 +426,10 @@ export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 export const MAX_ACCESS_WAITERS = 128;
 /** Reads on opening a task on their way at once; past it, one more waits for the next opening. */
 export const MAX_OPENED_READS = 16;
+/** Bot deletes under way at once, from every viewer. */
+export const MAX_BOT_DELETES = 8;
+/** One bot on one gateway, as the delete's bookkeeping keys it. */
+const deleteKey = (gatewayId: string, botId: string) => `${gatewayId}\u0000${botId}`;
 /**
  * Approval outcomes the gateway reported, kept by id apart from the visible
  * cards so a request or list entry that arrives after its resolution can never
@@ -1274,6 +1289,8 @@ export class ClawtrateClient {
   /** Reads of the bot list in the order they were asked, and the latest shown. */
   private botsIssued = 0;
   private botsShown = 0;
+  /** Deletes under way, by gateway and bot: a second one waits for no answer, it is refused. */
+  private readonly botDeletes = new Set<string>();
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -2811,6 +2828,14 @@ export class ClawtrateClient {
       return this.retryMessage(key, id);
     }
     const transcript = this.state.transcripts[key]!;
+    // The gateway is running a run under this message's own id: the message is out, and nothing
+    // goes again (as when a held one is released).
+    if (gatewayRunning(transcript, messageId)) {
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { status: "sent", error: null, runId: messageId }),
+      );
+      return;
+    }
     const active = activeRun(transcript);
     // A message that came from the queue keeps that origin through every attempt, until
     // it starts or is removed: it starts now with no run active, and otherwise waits
@@ -2828,11 +2853,16 @@ export class ClawtrateClient {
     const held = active?.state !== "stopping" && questionPending(transcript, active);
     const status = held ? "held" : mode === "queue" && active ? "queued" : "sending";
     this.updateActivity(key, (activity) => {
-      // A run the gateway refused never started; the retry is a new attempt.
+      // A run the gateway refused never started, and one under this id that ended is over: the
+      // retry is a new attempt, and its id names one run.
       const cleared = {
         ...activity,
         runs: activity.runs.filter(
-          (run) => !(run.id === messageId && run.origin === "local" && !run.bound),
+          (run) =>
+            !(
+              run.id === messageId &&
+              ((run.origin === "local" && !run.bound) || isTerminal(run.state))
+            ),
         ),
       };
       const next = updateMessage(cleared, messageId, {
@@ -3309,6 +3339,14 @@ export class ClawtrateClient {
 
   /** Deliver one outgoing message with `chat.send`, once write access is held. */
   private async deliver(key: string, messageId: string): Promise<void> {
+    // A message cancelled while it waited its turn (its bot deleted, say) stays cancelled.
+    const waiting = () => {
+      const status = this.outgoing(key, messageId)?.status;
+      return status === "sending" || status === "awaiting-access";
+    };
+    // Every delivery is enqueued while its message is sending; one cancelled meanwhile asks for
+    // nothing, not even access.
+    if (!waiting()) return;
     if (!this.state.connection.canWrite) {
       this.updateActivity(key, (activity) =>
         updateMessage(activity, messageId, { status: "awaiting-access" }),
@@ -3317,7 +3355,7 @@ export class ClawtrateClient {
     try {
       await this.ensureScope(WRITE_SCOPE);
     } catch (error) {
-      this.failDelivery(key, messageId, error, true);
+      if (waiting()) this.failDelivery(key, messageId, error, true);
       return;
     }
     let message = this.outgoing(key, messageId);
@@ -5624,6 +5662,153 @@ export class ClawtrateClient {
     return this.machines.removeDevice(deviceId);
   }
 
+  // Deleting a bot (`bot-delete.ts`) ------------------------------------------------------
+
+  /**
+   * What the delete dialog lists for a bot, from `agents.list`, read now, with the identity of
+   * the gateway it was read from. A gateway that names none is not offered a delete.
+   */
+  async readBotDelete(botId: string): Promise<BotDeleteRead> {
+    const link = this.deleteLink();
+    const target = this.target;
+    if (!link.alive()) throw new Error("Not connected to the gateway.");
+    const gatewayId = await this.readGatewayIdentity();
+    this.confirmGatewayIdentity(gatewayId, link.alive);
+    if (!link.alive()) throw new Error("The connection changed while reading. Read again.");
+    if (gatewayId === null)
+      throw new Error(
+        "The gateway hasn't said which gateway it is, so Clawtrate can't delete from it.",
+      );
+    return readBotDelete(this.botDeleteContext(link, { gatewayId, target }), botId);
+  }
+
+  /**
+   * Delete a bot (admin), with what the gateway answered and the bot list read after it. Sent
+   * only to the gateway the dialog read, on the target it was read on (`requireSameGateway`), and
+   * the reads before and after it go over the same connection. One delete per gateway and bot at a time, whichever viewer asks.
+   */
+  async deleteBot(
+    request: DeleteRequest,
+    options: { owner?: object } = {},
+  ): Promise<BotDeleteOutcome> {
+    // Every refusal before the send is an outcome, never a rejection: a viewer that sees a
+    // rejection can't tell it from a reply lost on the way, and treats it as unconfirmed.
+    const notSent = (message: string): BotDeleteOutcome => ({ kind: "not-sent", message });
+    // Ids are checked whole, never cut, by their JSON length, before anything is kept for them.
+    if (
+      jsonTextLength(request.botId) > MAX_ID_CHARS ||
+      jsonTextLength(String(request.stamp.gatewayId)) > MAX_ID_CHARS
+    )
+      return notSent("This delete names a bot or gateway Clawtrate can't take. Nothing was sent.");
+    const key = deleteKey(String(request.stamp.gatewayId), request.botId);
+    if (this.botDeletes.has(key))
+      return notSent(
+        "This bot is already being deleted from another window. Nothing more was sent.",
+      );
+    if (this.botDeletes.size >= MAX_BOT_DELETES)
+      return notSent("Too many deletes are under way. Nothing was sent; try again in a moment.");
+    this.botDeletes.add(key);
+    try {
+      const link = this.deleteLink();
+      let bound: { gatewayId: string; target: number };
+      try {
+        bound = await this.requireSameGateway(request.stamp);
+      } catch (error) {
+        return notSent(errorMessage(error));
+      }
+      if (!link.alive()) return notSent("The connection changed before the delete was sent.");
+      return await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
+    } finally {
+      this.botDeletes.delete(key);
+    }
+  }
+
+  /**
+   * The connection open now, on the target set now: its requests are refused once it closes,
+   * another replaces it or the host is pointed at a gateway anew.
+   */
+  private deleteLink(): {
+    alive: () => boolean;
+    request: (method: string, params: unknown) => Promise<unknown>;
+  } {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === target &&
+      this.state.connection.status === "connected";
+    return {
+      alive,
+      request: (method, params) =>
+        protocol && alive() ? protocol.request(method, params) : Promise.reject(new NotSentError()),
+    };
+  }
+
+  /**
+   * One connection's reads for a delete. A read is shown as the bot list only when it is whole
+   * and no newer read has been shown; one that isn't current decides nothing either.
+   */
+  private botDeleteContext(
+    link: ReturnType<ClawtrateClient["deleteLink"]>,
+    stamp: { gatewayId: string; target: number },
+    owner?: object,
+  ): BotDeleteContext {
+    return {
+      stamp,
+      wanted: () => !(owner && this.withdrawnOwners.has(owner)),
+      request: link.request,
+      readBots: async () => {
+        const issued = ++this.botsIssued;
+        const result = await link.request("agents.list", {});
+        const shown = wholeRoster(result) && link.alive() && this.newestBots(issued);
+        if (shown) this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+        // Asked again whenever it matters: a newer list shown since, or another connection, ends it.
+        return { result, current: () => shown && link.alive() && this.botsShown === issued };
+      },
+      // The one evidence that the bot is gone, acted on as it arrives, whatever follows.
+      deleted: (botId) => this.dropQueuedFor(botId),
+      admin: () =>
+        this.options.readOnly !== true &&
+        this.holds(ADMIN_SCOPE) &&
+        this.state.connection.scopes.includes(ADMIN_SCOPE),
+    };
+  }
+
+  /**
+   * The gateway answered that it deleted the bot: its tasks' queued and held messages in this
+   * host never go. Once, on that answer alone; the bot leaves the rail as any list change does.
+   */
+  private dropQueuedFor(botId: string): void {
+    const keys = Object.keys(this.state.transcripts).filter(
+      (key) => botIdFromSessionKey(key) === botId,
+    );
+    for (const key of keys) {
+      this.cancelAllQueued(key);
+      this.updateActivity(key, (activity) => {
+        let next = activity;
+        for (const message of activity.outbox) {
+          // Held, promoted from the queue but not yet out (as when a run ends in the same batch
+          // as this answer), or still waiting for write access: it never leaves.
+          const unsent =
+            message.status === "held" ||
+            (message.status === "sending" && message.leftAt == null) ||
+            message.status === "awaiting-access";
+          if (!unsent) continue;
+          this.dropAttachments(message.id);
+          next = updateMessage(next, message.id, { status: "cancelled" });
+          // Every message cancelled here takes the local run it started, if the gateway never
+          // named it, so no run is left showing as active.
+          if (message.mode !== "steer" && findRun(next, message.id))
+            next = dropUnboundRun(next, message.id);
+        }
+        return next;
+      });
+    }
+  }
+
   /** Read the bot list again, after a bot was created. */
   private async refreshBots(): Promise<void> {
     const generation = this.generation;
@@ -6069,9 +6254,14 @@ export class ClawtrateClient {
           if (now && now.state !== "stopping" && message.mode !== "queue") {
             next = updateMessage(next, id, { status: "sending", mode: "steer", runId: now.id });
             steered.push(id);
+          } else if (gatewayRunning(next, id)) {
+            // The gateway is running a run under this message's own id: the message is out.
+            next = updateMessage(next, id, { status: "sent", runId: id });
           } else {
             next = updateMessage(next, id, { status: "queued", mode: "queue", runId: null });
-            next = queueLocalRun(
+            // A message held after it started its own run (a question came with the run's end)
+            // queues again in that run's place: one run per message, in the order written.
+            next = requeueLocalRun(
               next,
               next.outbox.find((each) => each.id === id)!,
               this.now(),
@@ -6084,10 +6274,16 @@ export class ClawtrateClient {
     }
     const current = this.state.transcripts[key];
     if (!current) return;
+    // Only a message still queued is started: a queued run whose message was cancelled or taken
+    // back meanwhile never sends it.
     const next =
       activeRun(current) || questionPending(current)
         ? undefined
-        : current.runs.find((run) => run.state === "queued");
+        : current.runs.find(
+            (run) =>
+              run.state === "queued" &&
+              current.outbox.find((message) => message.id === run.id)?.status === "queued",
+          );
     if (next) {
       this.updateActivity(key, (activity) =>
         // It keeps `mode: "queue"`: if the gateway refuses to start it, the

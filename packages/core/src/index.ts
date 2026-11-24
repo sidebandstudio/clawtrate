@@ -39,6 +39,7 @@ export {
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./machines.ts";
+export * from "./bot-delete.ts";
 export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";

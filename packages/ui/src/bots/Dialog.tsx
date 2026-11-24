@@ -16,13 +16,13 @@ export function Dialog({
   role,
 }: {
   fallbackFocus?: RefObject<HTMLElement | null> | undefined;
-  kind: "create" | "settings" | "confirm";
+  kind: "create" | "settings" | "confirm" | "delete";
   labelledBy: string;
-  describedBy?: string;
+  describedBy?: string | undefined;
   onClose: () => void;
   children: ReactNode;
   testId?: string;
-  role?: "alertdialog";
+  role?: "alertdialog" | undefined;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const onCloseRef = useRef(onClose);

@@ -21,7 +21,7 @@ import {
   type ThemeChoice,
 } from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
-import { useSelection } from "./selection.ts";
+import { summarize, useSelection } from "./selection.ts";
 import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
@@ -29,6 +29,7 @@ import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
@@ -205,6 +206,11 @@ export function Shell({
   );
   // New bot, from the "+" menu and ⌘N, where the connection may write (bots.md section 3).
   const [newBot, setNewBot] = useState(false);
+  // Delete bot…: the bot as it was when chosen, so the result stays after it leaves the rail.
+  const [deleting, setDeleting] = useState<{ id: string; name: string; isDefault: boolean } | null>(
+    null,
+  );
+  const deletingOpen = deleting !== null;
   const openNewBot = useCallback(() => setNewBot(true), []);
   const mac = isMac();
   useEffect(() => {
@@ -256,9 +262,10 @@ export function Shell({
         // ⌘[ in the conversation goes back to the file while "Back to <file>" is offered.
         event.preventDefault();
         backLinkRef.current();
-      } else if (event.key === "Escape" && drawerOpen) {
+      } else if (event.key === "Escape" && drawerOpen && !deletingOpen) {
         setPanel(false);
-      } else if (event.key === "Tab" && drawerOpen && panelRef.current) {
+      } else if (event.key === "Tab" && drawerOpen && !deletingOpen && panelRef.current) {
+        // (The delete dialog, opened from the drawer, keeps Tab and Escape to itself.)
         // The drawer keeps focus inside itself.
         const items = [
           ...panelRef.current.querySelectorAll<HTMLElement>("button, [tabindex]"),
@@ -280,7 +287,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel, drawerOpen, setPanel]);
+  }, [togglePanel, drawerOpen, setPanel, deletingOpen]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
   const unread = unreadCount(
@@ -908,6 +915,9 @@ export function Shell({
                 : () => void send({ type: "requestAccess" }).catch(() => {})
             }
             onOpenMachines={() => onOpenSettings("machines")}
+            onDeleteBot={(each) =>
+              setDeleting({ id: each.id, name: each.name, isDefault: each.isDefault })
+            }
             drawer={drawerOpen}
             onClose={() => setPanel(false)}
             closeRef={closeRef}
@@ -943,6 +953,33 @@ export function Shell({
             requestAnimationFrame(() =>
               document.querySelector<HTMLElement>(".composer-input")?.focus(),
             );
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteBot
+          bot={deleting}
+          connection={state.connection}
+          info={info}
+          onClose={(deleted) => {
+            setDeleting(null);
+            // The rail already follows the gateway's list; the app lands on the Main Bot's latest
+            // task, or the Main Bot alone when it has none.
+            const main = state.bots.find((each) => each.isDefault) ?? state.bots[0];
+            if (deleted && main) {
+              // The Work drawer closes first, so the conversation behind it can take focus.
+              if (drawerOpen) setPanel(false);
+              const latest = summarize(state.tasksByBot[main.id] ?? [], {}, null).latest;
+              if (latest) selection.selectTask(main.id, latest.key);
+              else selection.selectBot(main.id);
+              // The composer, or, for a Main Bot with no task to write in, the page's heading.
+              requestAnimationFrame(() =>
+                (
+                  document.querySelector<HTMLElement>(".composer-input") ??
+                  document.querySelector<HTMLElement>(".conversation h1")
+                )?.focus(),
+              );
+            }
           }}
         />
       )}

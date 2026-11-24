@@ -82,6 +82,13 @@ import {
   type PlacementPart,
   type PlacementParts,
 } from "./machines.ts";
+import {
+  MAX_SHARED_NAMES,
+  MAX_SHOWN_NAME_CHARS,
+  type BotDeleteOutcome,
+  type BotDeleteRead,
+  type BotDeleteReview,
+} from "./bot-delete.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -416,10 +423,31 @@ export type BridgeCommand =
   | { type: "renameMachine"; nodeId: string; name: string }
   | { type: "removeMachine"; nodeId: string }
   | { type: "renameDevice"; deviceId: string; name: string }
-  | { type: "removeDevice"; deviceId: string };
+  | { type: "removeDevice"; deviceId: string }
+  // Deleting a bot (`bot-delete.ts`). The read is `operator.read`; the delete needs admin.
+  /** What the delete dialog lists for a bot, read now. */
+  | { type: "readBotDelete"; botId: string }
+  /**
+   * `stamp` is where the dialog read, `reviewed` what it showed of the bot, and `typed` what the
+   * person typed to confirm.
+   */
+  | {
+      type: "deleteBot";
+      botId: string;
+      stamp: GatewayStamp;
+      deleteFiles: boolean;
+      reviewed: BotDeleteReview;
+      typed: string;
+    };
 
 /** What each command answers with. */
-export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
+export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "readBotDelete" }
+  ? BotDeleteRead
+  : C extends { type: "deleteBot" }
+    ? BotDeleteOutcome
+    : BridgeResultRest<C>;
+
+type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
   : C extends { type: "sendAgain" }
     ? { messageId: string }
@@ -729,6 +757,29 @@ function botId(value: unknown): string {
 function flag(value: unknown): boolean {
   if (typeof value !== "boolean") throw new Error("invalid flag");
   return value;
+}
+
+/** What a delete dialog showed of a bot, field by field. */
+function deleteReview(value: unknown): BotDeleteReview {
+  const review = record(value, "review");
+  const folder = review.folder;
+  if (folder !== "own" && folder !== "shared" && folder !== "unknown")
+    throw new Error("invalid folder");
+  if (!Array.isArray(review.sharedWith) || review.sharedWith.length > MAX_SHARED_NAMES)
+    throw new Error("invalid names");
+  return {
+    nameDigest: nullable(review.nameDigest, (v) => {
+      if (typeof v !== "string" || !/^[a-f0-9]{64}$/.test(v)) throw new Error("invalid name");
+      return v;
+    }),
+    createdAt: nullable(review.createdAt, (v) =>
+      count(v, Number.MAX_SAFE_INTEGER, "creation record"),
+    ),
+    workspace: nullable(review.workspace, (v) => shortText(v, MAX_PATH_CHARS, "path")),
+    folder,
+    sharedWith: review.sharedWith.map((v) => shortText(v, MAX_SHOWN_NAME_CHARS, "name")),
+    sharedOmitted: count(review.sharedOmitted, Number.MAX_SAFE_INTEGER, "count"),
+  };
 }
 
 /** One change to the budgets, checked field by field. */
@@ -1595,6 +1646,17 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             : id(command.baseHash, "hash"),
       };
     }
+    case "readBotDelete":
+      return { type: "readBotDelete", botId: botId(command.botId) };
+    case "deleteBot":
+      return {
+        type: "deleteBot",
+        botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+        deleteFiles: flag(command.deleteFiles),
+        reviewed: deleteReview(command.reviewed),
+        typed: shortText(command.typed, MAX_SHOWN_NAME_CHARS, "typed text"),
+      };
     case "setBotWorkspace":
       return {
         type: "setBotWorkspace",
@@ -2162,6 +2224,19 @@ class ViewerSession implements BridgeSession {
         );
       case "setBotWorkspace":
         return client.setBotWorkspace(command.botId, command.path);
+      case "readBotDelete":
+        return client.readBotDelete(command.botId);
+      case "deleteBot":
+        return client.deleteBot(
+          {
+            botId: command.botId,
+            stamp: command.stamp,
+            deleteFiles: command.deleteFiles,
+            reviewed: command.reviewed,
+            typed: command.typed,
+          },
+          { owner },
+        );
       case "setMachineDefaults":
         return client.setMachineDefaults(command.machineId, command.choice, command.expectedHash, {
           owner,
@@ -2179,9 +2254,15 @@ class ViewerSession implements BridgeSession {
 
   apply<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>> {
     if (this.inFlight >= MAX_VIEWER_PENDING_COMMANDS) {
-      return Promise.reject(
-        new Error("Too many requests are waiting; try again when they finish."),
-      );
+      const busy = "Too many requests are waiting; try again when they finish.";
+      // A delete refused here never reached the host's client: its outcome says nothing was
+      // sent, as the host's other refusals do, so the viewer doesn't take it for a lost answer.
+      if (command.type === "deleteBot")
+        return Promise.resolve({
+          kind: "not-sent",
+          message: `${busy} Nothing was sent.`,
+        } as BridgeResultFor<C>);
+      return Promise.reject(new Error(busy));
     }
     this.inFlight += 1;
     return this.run(command).finally(() => {
