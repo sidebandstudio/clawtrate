@@ -13,7 +13,17 @@ import {
   type PlacementPart,
   type PlacementParts,
 } from "@clawtrate/core";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useBridge } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
 import { clockTime } from "../format.ts";
@@ -46,30 +56,375 @@ export const connectionKey = (connection: ConnectionState) =>
     connection.scopes.join(" "),
   ].join("\n");
 
+const fallbackScope = (connection: ConnectionState) =>
+  `connection:${connection.target}\n${connectionKey(connection)}`;
+
+const confirmedScope = (gatewayId: string) => `gateway:${gatewayId}`;
+
+/**
+ * Which gateway a placement save belongs to: its confirmed identity, or a key
+ * local to this connection while that identity isn't known yet.
+ */
+const placementScope = (connection: ConnectionState) =>
+  connection.gatewayId ? confirmedScope(connection.gatewayId) : fallbackScope(connection);
+
+const OTHER_PLACEMENT_PARTS = PLACEMENT_PARTS.filter((part) => part !== "commands");
+
+// `commandsSeq` moves with every save on the gateway, `workspaceSeq` with every workspace save
+// (another bot's folder can now be the same as this one's), and `botSeqs` with a bot's own saves.
+// `pending` counts command saves out, which hold the command picker; `workspacePending` counts
+// workspace saves out, which hold nothing on screen but keep a redirect until they end.
+type SaveEntry = {
+  pending: number;
+  workspacePending: number;
+  commandsSeq: number;
+  workspaceSeq: number;
+  botSeqs: Record<string, number>;
+};
+
+const EMPTY_SAVE: SaveEntry = {
+  pending: 0,
+  workspacePending: 0,
+  commandsSeq: 0,
+  workspaceSeq: 0,
+  botSeqs: {},
+};
+
+/** A fallback scope whose saves, of either kind, were still out when its gateway was confirmed, and how many. */
+type Redirect = { to: string; pending: number };
+
+type SavesState = {
+  seq: number;
+  entries: Record<string, SaveEntry>;
+  redirects: Record<string, Redirect>;
+};
+
+export const EMPTY_SAVES: SavesState = { seq: 0, entries: {}, redirects: {} };
+
+const resolveScope = (state: SavesState, scope: string) => state.redirects[scope]?.to ?? scope;
+
+/** The redirects once a save under `rawScope` begins (+1) or ends (-1): one is kept while its saves are out. */
+function countRedirect(state: SavesState, rawScope: string, by: 1 | -1): SavesState["redirects"] {
+  const redirect = state.redirects[rawScope];
+  if (!redirect) return state.redirects;
+  const { [rawScope]: _, ...rest } = state.redirects;
+  const pending = redirect.pending + by;
+  return pending > 0 ? { ...rest, [rawScope]: { ...redirect, pending } } : rest;
+}
+
+export function promoteScope(state: SavesState, fallback: string, confirmed: string): SavesState {
+  const carried = state.entries[fallback];
+  if (!carried) return state;
+  // Only a save still out under the fallback finishes through it; each connection has its own.
+  const out = carried.pending + carried.workspacePending;
+  const redirects =
+    out > 0 ? { ...state.redirects, [fallback]: { to: confirmed, pending: out } } : state.redirects;
+  const existing = state.entries[confirmed] ?? EMPTY_SAVE;
+  const botSeqs: Record<string, number> = { ...existing.botSeqs };
+  for (const [botId, seq] of Object.entries(carried.botSeqs)) {
+    botSeqs[botId] = Math.max(botSeqs[botId] ?? 0, seq);
+  }
+  const entries = { ...state.entries };
+  delete entries[fallback];
+  entries[confirmed] = {
+    pending: existing.pending + carried.pending,
+    workspacePending: existing.workspacePending + carried.workspacePending,
+    commandsSeq: Math.max(existing.commandsSeq, carried.commandsSeq),
+    workspaceSeq: Math.max(existing.workspaceSeq, carried.workspaceSeq),
+    botSeqs,
+  };
+  return { ...state, entries, redirects };
+}
+
+export function beginSave(state: SavesState, rawScope: string): SavesState {
+  const scope = resolveScope(state, rawScope);
+  const was = state.entries[scope] ?? EMPTY_SAVE;
+  return {
+    ...state,
+    entries: { ...state.entries, [scope]: { ...was, pending: was.pending + 1 } },
+    redirects: countRedirect(state, rawScope, 1),
+  };
+}
+
+/** A command save ended: every bot's commands and the saving bot's whole placement are read again. */
+export function finishSave(state: SavesState, rawScope: string, botId: string): SavesState {
+  const scope = resolveScope(state, rawScope);
+  const was = state.entries[scope] ?? EMPTY_SAVE;
+  const seq = state.seq + 1;
+  return {
+    seq,
+    entries: {
+      ...state.entries,
+      [scope]: {
+        ...was,
+        pending: Math.max(0, was.pending - 1),
+        commandsSeq: seq,
+        botSeqs: { ...was.botSeqs, [botId]: seq },
+      },
+    },
+    redirects: countRedirect(state, rawScope, -1),
+  };
+}
+
+/** What a bot's parts other than commands follow: its own saves and any workspace save. */
+const otherSeq = (entry: SaveEntry | undefined, botId: string) =>
+  Math.max(entry?.botSeqs[botId] ?? 0, entry?.workspaceSeq ?? 0);
+
+export function beginWorkspaceSave(state: SavesState, rawScope: string): SavesState {
+  const scope = resolveScope(state, rawScope);
+  const was = state.entries[scope] ?? EMPTY_SAVE;
+  return {
+    ...state,
+    entries: { ...state.entries, [scope]: { ...was, workspacePending: was.workspacePending + 1 } },
+    redirects: countRedirect(state, rawScope, 1),
+  };
+}
+
+/** A workspace save ended: when it may have changed a folder, every bot's commands and workspace are read again. */
+export function endWorkspaceSave(
+  state: SavesState,
+  rawScope: string,
+  refresh: boolean,
+): SavesState {
+  const scope = resolveScope(state, rawScope);
+  const was = state.entries[scope] ?? EMPTY_SAVE;
+  const seq = refresh ? state.seq + 1 : state.seq;
+  return {
+    seq,
+    entries: {
+      ...state.entries,
+      [scope]: {
+        ...was,
+        workspacePending: Math.max(0, was.workspacePending - 1),
+        ...(refresh ? { commandsSeq: seq, workspaceSeq: seq } : {}),
+      },
+    },
+    redirects: countRedirect(state, rawScope, -1),
+  };
+}
+
+type PlacementSaves = {
+  seq: number;
+  entries: Record<string, SaveEntry>;
+  begin: (scope: string, botId: string) => () => void;
+  beginWorkspace: (scope: string) => (refresh: boolean) => void;
+  commandsSeqOf: (scope: string) => number;
+  otherSeqOf: (scope: string, botId: string) => number;
+};
+
+const PlacementSavesContext = createContext<PlacementSaves | null>(null);
+
+/**
+ * Tracks in-flight placement saves and completion reloads above Work, keyed by
+ * confirmed gateway id (with a connection-local fallback while unknown) so
+ * closing Work or switching bots keeps a save's pending state and refresh, and
+ * another gateway at the same address is never affected by it.
+ */
+export function PlacementSavesProvider({
+  connection,
+  children,
+}: {
+  connection: ConnectionState;
+  children: ReactNode;
+}) {
+  const [state, setState] = useState<SavesState>(EMPTY_SAVES);
+  const [unconfirmed, setUnconfirmed] = useState<string | null>(null);
+  const fallback = fallbackScope(connection);
+  if (!connection.gatewayId) {
+    if (unconfirmed !== fallback) setUnconfirmed(fallback);
+  } else if (unconfirmed !== null || state.entries[fallback]) {
+    const confirmed = confirmedScope(connection.gatewayId);
+    if (unconfirmed !== null) setUnconfirmed(null);
+    if (unconfirmed === fallback || state.entries[fallback]) {
+      setState((current) => promoteScope(current, fallback, confirmed));
+    }
+  }
+  // Mirrors the latest saves state synchronously so reads started before a
+  // save settles are dropped immediately, before the reload render commits.
+  const mirror = useRef<SavesState>(EMPTY_SAVES);
+  useLayoutEffect(() => {
+    mirror.current = state;
+  }, [state]);
+  const commandsSeqOf = useCallback((scope: string) => {
+    const target = resolveScope(mirror.current, scope);
+    return mirror.current.entries[target]?.commandsSeq ?? 0;
+  }, []);
+  const otherSeqOf = useCallback(
+    (scope: string, botId: string) =>
+      otherSeq(mirror.current.entries[resolveScope(mirror.current, scope)], botId),
+    [],
+  );
+  const beginWorkspace = useCallback((scope: string) => {
+    mirror.current = beginWorkspaceSave(mirror.current, scope);
+    setState((current) => beginWorkspaceSave(current, scope));
+    let ended = false;
+    return (refresh: boolean) => {
+      if (ended) return;
+      ended = true;
+      mirror.current = endWorkspaceSave(mirror.current, scope, refresh);
+      setState((current) => endWorkspaceSave(current, scope, refresh));
+    };
+  }, []);
+  const begin = useCallback((scope: string, botId: string) => {
+    mirror.current = beginSave(mirror.current, scope);
+    setState((current) => beginSave(current, scope));
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      mirror.current = finishSave(mirror.current, scope, botId);
+      setState((current) => finishSave(current, scope, botId));
+    };
+  }, []);
+  const value = useMemo<PlacementSaves>(
+    () => ({
+      seq: state.seq,
+      entries: state.entries,
+      begin,
+      beginWorkspace,
+      commandsSeqOf,
+      otherSeqOf,
+    }),
+    [state.seq, state.entries, begin, beginWorkspace, commandsSeqOf, otherSeqOf],
+  );
+  return <PlacementSavesContext.Provider value={value}>{children}</PlacementSavesContext.Provider>;
+}
+
+type ReadBatch = { sessionId: number; generation: number; seq: number };
+
 /**
  * A bot's placement, its parts read when shown and again on `reload()`. A read
  * belongs to the bot and the connection's access it was made for: while another
  * bot's, an earlier connection's or other scopes' read is all there is, nothing
- * is drawn. Each part is kept as soon as its own read answers.
+ * is drawn. Each part is kept as soon as its own read answers, with the reload
+ * it was read after: `commandsCurrent` says the commands part shown was read
+ * after the latest `reload()`, so a choice made over it isn't made over a
+ * revision a save since has replaced, whichever page asked for that reload.
  */
 export function usePlacement(botId: string, connection: ConnectionState, active: boolean) {
   const bridge = useBridge();
-  const [held, setHeld] = useState<{ key: string; parts: Partial<Placement> } | null>(null);
-  const [tick, setTick] = useState(0);
+  const saves = useContext(PlacementSavesContext);
+  // Every bot on a gateway writes against the same config revision.
+  const scope = placementScope(connection);
+  const entry = saves?.entries[scope] ?? EMPTY_SAVE;
+  const botSeq = otherSeq(entry, botId);
+  const currentSeq = saves?.seq ?? 0;
+  const savesBegin = saves?.begin ?? null;
+  const savesBeginWorkspace = saves?.beginWorkspace ?? null;
+  const commandsSeqOf = saves?.commandsSeqOf ?? null;
+  const otherSeqOf = saves?.otherSeqOf ?? null;
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
   const key = `${botId}\n${connectionKey(connection)}`;
+  // Stay on the same session when this connection confirms its gateway id (null -> id);
+  // start a fresh session when the bot, connection, access or confirmed gateway changes.
+  const [session, setSession] = useState<{
+    key: string;
+    gatewayId: string | null;
+    id: number;
+  }>(() => ({ key, gatewayId: connection.gatewayId, id: 0 }));
+  let sessionId = session.id;
+  if (session.key !== key) {
+    sessionId = session.id + 1;
+    setSession({ key, gatewayId: connection.gatewayId, id: sessionId });
+  } else if (session.gatewayId !== connection.gatewayId && connection.gatewayId !== null) {
+    sessionId = session.gatewayId === null ? session.id : session.id + 1;
+    setSession({ key, gatewayId: connection.gatewayId, id: sessionId });
+  }
+  const [held, setHeld] = useState<{
+    sessionId: number;
+    parts: Partial<Placement>;
+    at: Partial<Record<PlacementPart, ReadBatch>>;
+  } | null>(null);
+  // The latest local reload asked for, as rendered.
+  const [generation, setGeneration] = useState(0);
+  // Bumped as soon as a reload is asked, so the reads started before it are dropped at once,
+  // not only once the reload's render ends them.
+  const asked = useRef(0);
+  // Fallback pending count when rendered outside PlacementSavesProvider.
+  const [localWriting, setLocalWriting] = useState(0);
+  const writing = saves ? entry.pending : localWriting;
+  const [commandsBatch, setCommandsBatch] = useState<ReadBatch>(() => ({
+    sessionId,
+    generation: 0,
+    seq: currentSeq,
+  }));
+  if (
+    commandsBatch.sessionId !== sessionId ||
+    commandsBatch.generation !== generation ||
+    commandsBatch.seq < entry.commandsSeq
+  ) {
+    setCommandsBatch({ sessionId, generation, seq: currentSeq });
+  }
+  const [otherBatch, setOtherBatch] = useState<ReadBatch>(() => ({
+    sessionId,
+    generation: 0,
+    seq: currentSeq,
+  }));
+  if (
+    otherBatch.sessionId !== sessionId ||
+    otherBatch.generation !== generation ||
+    otherBatch.seq < botSeq
+  ) {
+    setOtherBatch({ sessionId, generation, seq: currentSeq });
+  }
+  const scopeRef = useRef(scope);
+  useLayoutEffect(() => {
+    scopeRef.current = scope;
+  }, [scope]);
   useEffect(() => {
     if (!active || !connected) return;
+    if (commandsBatch.sessionId !== sessionId) return;
     let live = true;
+    const req = commandsBatch;
     const keep = (part: Partial<Placement>) =>
       live &&
-      setHeld((was) => ({ key, parts: { ...(was?.key === key ? was.parts : {}), ...part } }));
-    for (const part of PLACEMENT_PARTS)
+      req.generation === asked.current &&
+      (!commandsSeqOf || req.seq >= commandsSeqOf(scopeRef.current)) &&
+      setHeld((was) => {
+        const same = was?.sessionId === req.sessionId;
+        return {
+          sessionId: req.sessionId,
+          parts: { ...(same ? was.parts : {}), ...part },
+          at: { ...(same ? was.at : {}), commands: req },
+        };
+      });
+    bridge.invoke({ type: "readPlacement", botId, part: "commands" }).then(
+      (value) => keep({ commands: { status: "ready", value } }),
+      (error: unknown) =>
+        keep({
+          commands: {
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [bridge, botId, active, connected, commandsBatch, sessionId, commandsSeqOf]);
+  useEffect(() => {
+    if (!active || !connected) return;
+    if (otherBatch.sessionId !== sessionId) return;
+    let live = true;
+    const req = otherBatch;
+    const keep = (name: PlacementPart, part: Partial<Placement>) =>
+      live &&
+      req.generation === asked.current &&
+      (!otherSeqOf || req.seq >= otherSeqOf(scopeRef.current, botId)) &&
+      setHeld((was) => {
+        const same = was?.sessionId === req.sessionId;
+        return {
+          sessionId: req.sessionId,
+          parts: { ...(same ? was.parts : {}), ...part },
+          at: { ...(same ? was.at : {}), [name]: req },
+        };
+      });
+    for (const part of OTHER_PLACEMENT_PARTS)
       bridge.invoke({ type: "readPlacement", botId, part }).then(
-        (value) => keep({ [part]: { status: "ready", value } }),
+        (value) => keep(part, { [part]: { status: "ready", value } }),
         (error: unknown) =>
-          keep({
+          keep(part, {
             [part]: {
               status: "error",
               message: error instanceof Error ? error.message : String(error),
@@ -79,14 +434,34 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     return () => {
       live = false;
     };
-  }, [bridge, botId, active, connected, key, tick]);
-  const reload = useCallback(() => setTick((n) => n + 1), []);
-  // On a disconnect or another key, what was read is dropped before anything is derived.
-  if (held && (!connected || held.key !== key)) setHeld(null);
+  }, [bridge, botId, active, connected, otherBatch, sessionId, otherSeqOf]);
+  const reload = useCallback(() => {
+    asked.current += 1;
+    setGeneration(asked.current);
+  }, []);
+  const begin = useCallback(() => {
+    if (savesBegin) return savesBegin(scope, botId);
+    setLocalWriting((n) => n + 1);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      setLocalWriting((n) => n - 1);
+      reload();
+    };
+  }, [savesBegin, scope, botId, reload]);
+  const beginWorkspace = useCallback(() => {
+    if (savesBeginWorkspace) return savesBeginWorkspace(scope);
+    return (refresh: boolean) => {
+      if (refresh) reload();
+    };
+  }, [savesBeginWorkspace, scope, reload]);
+  // On a disconnect or another session, what was read is dropped before anything is derived.
+  if (held && (!connected || held.sessionId !== sessionId)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>
     !connected
       ? { status: "error", message: "Not connected to the gateway." }
-      : ((held?.key === key ? held.parts[name] : undefined) ?? { status: "loading" });
+      : ((held?.sessionId === sessionId ? held.parts[name] : undefined) ?? { status: "loading" });
   const read: Placement = {
     commands: part("commands"),
     workspace: part("workspace"),
@@ -94,7 +469,14 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     inventory: part("inventory"),
     credentials: part("credentials"),
   };
-  return { read, reload };
+  const commandsCurrent =
+    writing === 0 &&
+    held?.sessionId === sessionId &&
+    held.at.commands === commandsBatch &&
+    commandsBatch.sessionId === sessionId &&
+    commandsBatch.generation === generation &&
+    commandsBatch.seq >= entry.commandsSeq;
+  return { read, reload, begin, beginWorkspace, commandsCurrent };
 }
 
 /** A mark of section 2: an icon and its words, never colour alone. */
@@ -207,6 +589,9 @@ export function RunsOnPage({
   botName,
   read,
   reload,
+  begin,
+  beginWorkspace,
+  commandsCurrent,
   nameOf,
   connection,
   info,
@@ -218,6 +603,15 @@ export function RunsOnPage({
   botName: string;
   read: Placement;
   reload: () => void;
+  /** Counts a save as out until the returned function is called, on this page or one opened again. */
+  begin: () => () => void;
+  /**
+   * Counts a workspace save as out until the returned function is called, which refreshes
+   * placement on this gateway when asked, even if this page unmounted.
+   */
+  beginWorkspace: () => (refresh: boolean) => void;
+  /** Whether no save is out and the commands part shown was read after the latest reload. */
+  commandsCurrent: boolean;
   nameOf: (id: string) => string;
   connection: ConnectionState;
   info: HostInfo;
@@ -290,7 +684,11 @@ export function RunsOnPage({
     </>
   );
 
+  const commandsDisabled = !admin || saving || !commandsCurrent;
+
   const save = async (value: string, baseHash: string | null) => {
+    if (commandsDisabled) return;
+    const done = begin();
     setSaving(true);
     setError(null);
     setNote(null);
@@ -334,10 +732,11 @@ export function RunsOnPage({
       // A change never sent, or a read-back that failed or shows another setting: none confirms a save.
       announce("Save not confirmed");
     } finally {
+      // Ending the save also bumps this gateway's version above Work, so any
+      // open or reopened Runs on view on that gateway refreshes and waits for
+      // the new read, without touching another gateway.
+      done();
       if (mounted.current) setSaving(false);
-      // Whatever the outcome, the placement is read again, by its owner (the bot's Settings tab,
-      // keyed by bot and connection), so the Runs on row shows it even after Back.
-      reload();
     }
   };
 
@@ -383,7 +782,7 @@ export function RunsOnPage({
         <CommandsPart
           part={read.commands.value}
           botName={botName}
-          disabled={!admin || saving}
+          disabled={commandsDisabled}
           saveLines={saveLines}
           now={now}
           onSave={save}
@@ -454,6 +853,7 @@ export function RunsOnPage({
           botName={botName}
           initial={editing}
           current={workspace.status === "ready" ? workspace.value.workspace : null}
+          begin={beginWorkspace}
           onDone={(saved) => {
             if (!mounted.current) return;
             setEditing(null);
@@ -465,11 +865,7 @@ export function RunsOnPage({
                     ? "The gateway accepted the workspace change. The current workspace could not be confirmed."
                     : `The gateway accepted the workspace change. It now lists ${botName}'s workspace as ${saved.workspace}.`,
               );
-              reload();
             }
-          }}
-          onFailed={() => {
-            if (mounted.current) reload();
           }}
         />
       )}
@@ -682,7 +1078,7 @@ function CommandsPart({
         choices={choices}
         disabled={disabled}
         onChoose={(value) => {
-          if (value !== current) onSave(value, part.configHash);
+          if (!disabled && value !== current) onSave(value, part.configHash);
         }}
         testId="runs-on-machine"
       />
@@ -735,16 +1131,17 @@ function WorkspaceForm({
   botName,
   initial,
   current,
+  begin,
   onDone,
-  onFailed,
 }: {
   botId: string;
   botName: string;
   initial: string;
   /** The bot's workspace now, as the example beside the field. */
   current: string | null;
+  /** Counts the save as out until it ends; a refused save is read again too, as it may have made folders. */
+  begin: () => (refresh: boolean) => void;
   onDone: (saved: { workspace: string | null; asTyped: boolean } | null) => void;
-  onFailed: () => void;
 }) {
   const bridge = useBridge();
   const [value, setValue] = useState(initial);
@@ -760,12 +1157,15 @@ function WorkspaceForm({
     }
     setBusy(true);
     setError(null);
+    const end = begin();
     try {
-      onDone(await bridge.invoke({ type: "setBotWorkspace", botId, path: value }));
+      const saved = await bridge.invoke({ type: "setBotWorkspace", botId, path: value });
+      end(saved !== null);
+      onDone(saved);
     } catch (failure) {
+      end(true);
       setError(failure instanceof Error ? failure.message : String(failure));
       field.current?.focus();
-      onFailed();
     } finally {
       setBusy(false);
     }

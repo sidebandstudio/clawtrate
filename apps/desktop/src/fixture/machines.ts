@@ -468,12 +468,16 @@ export function machineCommands(now: number, params: MachineParams) {
             throw new Error(
               "This file changed since it was read. It has been read again; choose again.",
             );
+          const levels = choiceLevels[command.choice];
+          // As the gateway's file hash: the same contents keep the same hash.
+          if (levels.security === file.defaults.security && levels.ask === file.defaults.ask)
+            return file;
           const n = (w.hashes[command.machineId] ?? 1) + 1;
           w.hashes[command.machineId] = n;
           w.files[command.machineId] = {
             ...file,
             hash: `${command.machineId === "gateway" ? "g" : "m"}${n}`,
-            defaults: choiceLevels[command.choice],
+            defaults: levels,
           };
           return w.files[command.machineId];
         });

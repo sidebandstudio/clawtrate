@@ -120,14 +120,20 @@ const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuf
 
 /** Stop a child we started: SIGTERM, a bounded wait, then SIGKILL. */
 export async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  child.kill("SIGTERM");
-  const timer = new Promise<"timeout">((resolve) =>
-    setTimeout(() => resolve("timeout"), timeoutMs),
-  );
-  if ((await Promise.race([exited, timer])) === "timeout") {
-    child.kill("SIGKILL");
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
+  const exited = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    child.once("error", () => resolve());
+  });
+  if (!child.kill("SIGTERM")) return;
+  let handle: ReturnType<typeof setTimeout> | undefined;
+  const timer = new Promise<"timeout">((resolve) => {
+    handle = setTimeout(() => resolve("timeout"), timeoutMs);
+  });
+  const outcome = await Promise.race([exited, timer]);
+  clearTimeout(handle);
+  if (outcome === "timeout" && child.exitCode === null && child.signalCode === null) {
+    if (!child.kill("SIGKILL")) return;
     await exited;
   }
 }
@@ -168,19 +174,28 @@ export function startHost(
   const host = gated.child;
   const url = new Promise<string>((resolve, reject) => {
     let output = "";
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
     const timer = setTimeout(
-      () => reject(new Error(`preview host did not start:\n${output}`)),
+      () => finish(() => reject(new Error(`preview host did not start:\n${output}`))),
       20_000,
     );
     host.stdout!.on("data", (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = /Local\s+(http:\/\/\S+)/.exec(output);
-      if (match) {
-        clearTimeout(timer);
-        resolve(match[1]!.replace("localhost", "127.0.0.1"));
-      }
+      if (match) finish(() => resolve(match[1]!.replace("localhost", "127.0.0.1")));
     });
-    host.once("exit", (code) => reject(new Error(`preview host exited with ${code}:\n${output}`)));
+    host.once("error", (error) =>
+      finish(() => reject(new Error(`preview host failed to spawn: ${error.message}`))),
+    );
+    host.once("exit", (code, signal) =>
+      finish(() => reject(new Error(`preview host exited with ${code ?? signal}:\n${output}`))),
+    );
   });
   return { host, url, gated };
 }
@@ -385,6 +400,7 @@ export default async function globalSetup() {
     host = started.host;
     const found = processIdentity(host.pid!);
     if (found.state !== "alive") {
+      started.url.catch(() => {});
       started.gated.abort();
       throw new Error("could not record the preview host");
     }
