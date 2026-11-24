@@ -3,10 +3,12 @@
 // the gateway reports for the chosen model, or "Not offered". "View more" reads
 // the provider's full list each time it is opened, holds the answer for this
 // screen only, and shows the models the first list lacks in a section of their
-// own, with no verdict on any of them.
+// own, with no verdict on any of them. The last row takes a model id typed in.
 
 import {
   gatewayStamp,
+  MAX_MODEL_ID_CHARS,
+  modelIdProblem,
   type AccountsState,
   type CatalogModel,
   type ConnectionState,
@@ -126,6 +128,27 @@ export function modelMenu(
 
 const count = (n: number) => n.toLocaleString("en-US");
 
+/**
+ * A typed model id, or why it can't be one, under the rule the bridge applies to every model id
+ * (`modelIdProblem`). A leading `<provider>/` is the provider's own and is dropped.
+ */
+export function typedModel(text: string, provider: string): { id: string } | { error: string } {
+  let id = text.trim();
+  if (id.startsWith(`${provider}/`)) id = id.slice(provider.length + 1);
+  switch (modelIdProblem(id)) {
+    case "empty":
+      return { error: "Type a model id." };
+    case "long":
+      return { error: `A model id is at most ${MAX_MODEL_ID_CHARS} characters.` };
+    case "control":
+      return { error: "A model id can't hold control characters." };
+    case "space":
+      return { error: "A model id has no spaces and no @." };
+    case null:
+      return { id };
+  }
+}
+
 export function ModelPair({
   accounts,
   provider,
@@ -157,6 +180,45 @@ export function ModelPair({
   const menu = modelMenu(accounts, provider, model, list.models);
   const who = providerName(provider);
   const held = list.state;
+
+  // The field for a model id typed in (section 9), and the last id it chose.
+  const [typing, setTyping] = useState(false);
+  const [text, setText] = useState("");
+  const [typedError, setTypedError] = useState<string | null>(null);
+  const [typedId, setTypedId] = useState<string | null>(null);
+  const pairRef = useRef<HTMLDivElement>(null);
+  const fieldRef = useRef<HTMLDivElement>(null);
+  // On a phone the field and its buttons can open below the fold.
+  useEffect(() => {
+    if (typing) fieldRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [typing]);
+  const backToSelect = () =>
+    pairRef.current?.querySelector<HTMLElement>('[data-testid="model-select"]')?.focus();
+  const stopTyping = () => {
+    setTyping(false);
+    setText("");
+    setTypedError(null);
+  };
+  // Another provider: what was typed for the last one, its error and its note go.
+  const [typedFor, setTypedFor] = useState(provider);
+  if (typedFor !== provider) {
+    setTypedFor(provider);
+    stopTyping();
+    setTypedId(null);
+  }
+  const takeTyped = () => {
+    const result = typedModel(text, provider);
+    if ("error" in result) return setTypedError(result.error);
+    // An id the menu lists is that row: one the picker disables can't be had by typing it.
+    const listed =
+      menu.picker.find((m) => m.id === result.id) ?? menu.more.find((m) => m.id === result.id);
+    if (listed && !listed.available && menu.picker.includes(listed))
+      return setTypedError("Not available");
+    stopTyping();
+    setTypedId(result.id);
+    onModel(result.id, listed);
+    requestAnimationFrame(backToSelect);
+  };
 
   const rows: SelectRow[] = [];
   if (menu.cut)
@@ -200,41 +262,121 @@ export function ModelPair({
       rows: [{ label: "Try again", onSelect: () => list.ask() }],
     };
   // Refused (a gateway without `view: "all"`): no "View more".
+  const typeRow: SelectRow = {
+    label: "Use another model…",
+    note: "Type its id",
+    close: true,
+    onSelect: () => setTyping(true),
+  };
+  if (section) section.rows.push(typeRow);
+  else rows.push(typeRow);
 
   const levels = menu.row?.levels ?? [];
   return (
-    <div className="b-pair">
-      <Select
-        label="Model"
-        value={model ?? placeholder ?? "Choose"}
-        choices={[
-          ...(menu.pinned ? [{ value: menu.pinned, label: menu.pinned }] : []),
-          ...menu.picker.map((each) => ({
-            value: each.id,
-            label: each.id,
-            disabled: !each.available,
-            ...(each.available ? {} : { note: "Not available" }),
-          })),
-        ]}
-        rows={rows}
-        {...(section ? { section } : {})}
-        onChoose={(next) =>
-          onModel(
-            next,
-            menu.picker.find((m) => m.id === next) ?? menu.more.find((m) => m.id === next),
-          )
-        }
-        disabled={disabled}
-        testId="model-select"
-      />
-      <Select
-        label="Effort"
-        value={levels.length > 0 && effort ? effort : "Not offered"}
-        choices={levels.map((level) => ({ value: level, label: levelWord(level) }))}
-        onChoose={onEffort}
-        disabled={disabled || levels.length === 0}
-        testId="effort-select"
-      />
-    </div>
+    <>
+      <div className="b-pair" ref={pairRef}>
+        <Select
+          label="Model"
+          value={model ?? placeholder ?? "Choose"}
+          choices={[
+            ...(menu.pinned ? [{ value: menu.pinned, label: menu.pinned }] : []),
+            ...menu.picker.map((each) => ({
+              value: each.id,
+              label: each.id,
+              disabled: !each.available,
+              ...(each.available ? {} : { note: "Not available" }),
+            })),
+          ]}
+          rows={rows}
+          {...(section ? { section } : {})}
+          onChoose={(next) => {
+            stopTyping();
+            onModel(
+              next,
+              menu.picker.find((m) => m.id === next) ?? menu.more.find((m) => m.id === next),
+            );
+          }}
+          disabled={disabled}
+          testId="model-select"
+        />
+        <Select
+          label="Effort"
+          value={levels.length > 0 && effort ? effort : "Not offered"}
+          choices={levels.map((level) => ({ value: level, label: levelWord(level) }))}
+          onChoose={onEffort}
+          disabled={disabled || levels.length === 0}
+          testId="effort-select"
+        />
+      </div>
+      {typing && !disabled && (
+        <div className="b-model-typed" data-testid="model-typed" ref={fieldRef}>
+          <label className="b-field">
+            <span>Model id</span>
+            <input
+              className="input"
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              value={text}
+              aria-invalid={typedError ? true : undefined}
+              aria-describedby={typedError ? "b-model-typed-error" : "b-model-typed-hint"}
+              data-testid="model-id"
+              onChange={(event) => {
+                setText(event.target.value);
+                setTypedError(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  takeTyped();
+                } else if (event.key === "Escape") {
+                  // Escape belongs to the field first, not the dialog around it.
+                  event.preventDefault();
+                  event.stopPropagation();
+                  stopTyping();
+                  requestAnimationFrame(backToSelect);
+                }
+              }}
+            />
+          </label>
+          {typedError ? (
+            <p className="b-field-error" id="b-model-typed-error" role="alert">
+              {typedError}
+            </p>
+          ) : (
+            <p className="b-hint" id="b-model-typed-hint">
+              As {who} names it.
+            </p>
+          )}
+          <div className="b-actions">
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              data-variant="primary"
+              onClick={takeTyped}
+            >
+              Use
+            </button>
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => {
+                stopTyping();
+                backToSelect();
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {typedId !== null && typedId === model && menu.row === undefined && !typing && (
+        <p className="b-hint" data-testid="model-typed-line">
+          {typedId} was typed in.
+        </p>
+      )}
+    </>
   );
 }

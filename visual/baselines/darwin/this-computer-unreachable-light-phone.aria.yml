@@ -1,3 +1,4 @@
+- status
 - main:
   - button "Back"
   - heading "Connecting" [level=2]

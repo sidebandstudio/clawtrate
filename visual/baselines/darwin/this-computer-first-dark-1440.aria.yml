@@ -1,3 +1,4 @@
+- status
 - main:
   - heading "Clawtrate" [level=1]
   - paragraph: Your OpenClaw agents, orchestrated.

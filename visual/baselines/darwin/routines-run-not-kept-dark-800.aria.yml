@@ -1,3 +1,5 @@
+- banner: Clawtrate
+- status
 - navigation "Bots":
   - button "Routines"
   - 'button "Sort bots: Recent activity"'
@@ -48,6 +50,7 @@
         - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
 - main "Routines":
   - button "Back to Nightly backup check, all runs"
   - heading "Nightly backup check" [level=1]
