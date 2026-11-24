@@ -46,6 +46,7 @@ const WALKED = new Set([
   "AccountsEngine",
   "RoutinesEngine",
   "UsageEngine",
+  "BotNames",
   "MachinesEngine",
   "WaitingIndex",
   "ComputerViews",

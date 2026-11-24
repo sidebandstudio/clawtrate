@@ -24,6 +24,7 @@ import {
   type CreateBotInput,
   type CreatedBot,
 } from "./accounts-engine.ts";
+import { BotNames } from "./bot-names.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -335,6 +336,7 @@ import {
 } from "./computer.ts";
 import { readMachine, type MachineFacts } from "./machine.ts";
 import {
+  gatewayStamp,
   initialConnectionState,
   initialScopeUpgrade,
   initialState,
@@ -1503,6 +1505,41 @@ export class ClawtrateClient {
     identity: () => this.state.connection.gatewayId,
     withdrawn: (owner) => this.withdrawnOwners.has(owner),
     target: () => this.target,
+  });
+  /** Names bots wrote for themselves, waiting for the person (`bot-names.ts`); its state is `botNames`. */
+  private readonly botNames = new BotNames({
+    request: (method, params) => this.request(method, params),
+    bots: () => this.state.bots,
+    canRename: () =>
+      this.state.connection.status === "connected" &&
+      this.state.connection.canAdmin &&
+      !this.options.readOnly,
+    gateway: () => this.state.connection.gatewayId ?? this.state.connection.gatewayUrl,
+    stamp: () => gatewayStamp(this.state.connection),
+    sameGateway: async (stamp) => {
+      await this.requireSameGateway(stamp);
+    },
+    storage: {
+      get: (key) => this.host.storage.get(key),
+      set: (key, value) => this.host.storage.set(key, value),
+      delete: (key) => this.host.storage.delete(key),
+    },
+    takeRead: () => {
+      if (this.fileReads >= MAX_FILE_READS) return null;
+      this.fileReads += 1;
+      let released = false;
+      return () => {
+        if (!released) this.fileReads -= 1;
+        released = true;
+      };
+    },
+    refreshBots: () => this.refreshBots(),
+    missingScope: (error) => {
+      this.noteMissingScope(error);
+      return isMissingScope(error);
+    },
+    publish: (botNames) => this.store.update((state) => ({ ...state, botNames })),
+    log: (message) => this.log("warn", message),
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -5513,6 +5550,20 @@ export class ClawtrateClient {
     return this.accounts.removeFallbacks(botId);
   }
 
+  /**
+   * Rename on a name card: `name` and `gatewayId` must be the ones it shows (`bot-names.ts`).
+   * Nothing is sent unless that gateway is still the one connected.
+   */
+  acceptBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
+    if (this.options.readOnly) return Promise.reject(new Error("This host only reads."));
+    return this.botNames.accept(botId, name, stamp);
+  }
+
+  /** Not now on a name card: kept on this device for that bot and that name. */
+  declineBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
+    return this.botNames.decline(botId, name, stamp);
+  }
+
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
   async setBotPicture(
     botId: string,
@@ -5869,6 +5920,7 @@ export class ClawtrateClient {
     const removed = new Set<string>();
     for (const bot of this.state.bots) if (!present.has(bot.id)) removed.add(bot.id);
     this.store.update((state) => ({ ...state, bots }));
+    this.botNames.onBots(this.state.bots);
     for (const id of present) this.removedDuringRead.delete(id);
     if (removed.size === 0) return;
     // A task read already out can still list the removed bots' tasks: its rows for them are
@@ -7370,6 +7422,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    this.botNames.reset();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
@@ -7793,6 +7846,7 @@ export class ClawtrateClient {
             ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
+          if (newest) this.botNames.onBots(this.state.bots);
         }
         return result;
       }),
@@ -8398,6 +8452,9 @@ export class ClawtrateClient {
     const phase = asRecord(payload.data)?.phase;
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
+      // Only while a viewer has the task open: a task kept for its unsettled work reads nothing.
+      const botId = botIdFromSessionKey(key);
+      if (botId && this.openSessions.has(key)) void this.botNames.afterRun(botId, payload.runId);
     }
   }
 
@@ -9002,6 +9059,10 @@ export class ClawtrateClient {
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
+    // The host pointed anew (Suspend, Disconnect, a fresh pairing): no name card or skipped file
+    // read before counts, even on a reconnect to the same address.
+    if (patch.target !== undefined && patch.target !== this.state.connection.target)
+      this.botNames.reset();
     const scrubbed = this.scrubConnection(patch);
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
   }

@@ -128,6 +128,65 @@ describe("shell commands", () => {
   });
 });
 
+describe("#take-name", () => {
+  const tools = new Set([...ALL_TOOLS, "edit"]);
+  /** The edit the bot makes once its read returns `file`, and what it says after the edit. */
+  const take = (prompt: string, file: string) => {
+    const first = planReply([user(prompt, "pip")], tools);
+    const read = first.at(-1) as { id: string; name: string; arguments: unknown };
+    expect(read).toMatchObject({ kind: "tool", name: "read", arguments: { path: "IDENTITY.md" } });
+    const history: ChatMessage[] = [
+      user(prompt, "pip"),
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: read.id, function: { name: "read" } }],
+      },
+      { role: "tool", tool_call_id: read.id, content: file },
+    ];
+    const second = planReply(history, tools);
+    const edit = second.find((step) => step.kind === "tool") as
+      { id: string; arguments: { edits: unknown } } | undefined;
+    const said = (steps: ReplyStep[]) =>
+      steps.flatMap((step) => (step.kind === "text" ? [step.text] : [])).join("");
+    if (!edit) return { edits: null, said: said(second) };
+    const third = planReply(
+      [
+        ...history,
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: edit.id, function: { name: "edit" } }],
+        },
+        { role: "tool", tool_call_id: edit.id, content: "Successfully replaced 1 block(s)." },
+      ],
+      tools,
+    );
+    return { edits: edit.arguments.edits, said: said(third) };
+  };
+
+  it("edits either form of the name line, from the directive or its phrase", () => {
+    expect(take("#take-name Johnny", "# IDENTITY.md\n\n- **Name:** New bot\n")).toEqual({
+      edits: [{ oldText: "- **Name:** New bot", newText: "- **Name:** Johnny" }],
+      said: "Johnny it is. It shows once you confirm it in Clawtrate.",
+    });
+    // The line as the gateway writes it after a rename.
+    expect(take("#take-name Scout", "# IDENTITY.md\n\n- Name: Johnny\n").edits).toEqual([
+      { oldText: "- Name: Johnny", newText: "- **Name:** Scout" },
+    ]);
+    expect(take("Please take this name Max", "- **Name:** New bot\n").edits).toEqual([
+      { oldText: "- **Name:** New bot", newText: "- **Name:** Max" },
+    ]);
+  });
+
+  it("says only that it found no name line when it edited nothing", () => {
+    expect(take("#take-name Johnny", "# IDENTITY.md\n\nNo name here.\n")).toEqual({
+      edits: null,
+      said: "I found no name line to change.",
+    });
+  });
+});
+
 describe("the planner", () => {
   it("plays a scenario round by round as tool results come back", () => {
     const first = planReply([{ role: "system", content: "x" }, user("#steps", "main")], ALL_TOOLS);

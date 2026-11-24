@@ -3673,6 +3673,46 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(got.file.content, picture.toString("base64"), "the picture's bytes");
     },
   },
+  {
+    // Last, and on Marlow, whose first-run files no other check reads: the edit ends its first run.
+    name: "a bot takes a name in its own file",
+    covers: ["#take-name"],
+    run: async (h) => {
+      const read = await fileCall(h, "marlow", "IDENTITY.md");
+      const line = /^- \*\*Name:\*\*.*$/m.exec(
+        await workspaceFile(h, "marlow", "IDENTITY.md"),
+      )?.[0];
+      expect(line, "Marlow's IDENTITY.md has a name line");
+      const view = await h.run(
+        "plain",
+        await h.session("marlow", "take-name"),
+        "#take-name Johnny",
+      );
+      view.expectCalls([
+        read,
+        {
+          name: "edit",
+          args: { path: "IDENTITY.md", edits: [{ oldText: line, newText: "- **Name:** Johnny" }] },
+          isError: false,
+          content: textsLike([
+            matchesPattern(/^Successfully replaced 1 block\(s\) in \S+\/IDENTITY\.md\.$/),
+          ]),
+          details: (details: JsonRecord | undefined, where: string) =>
+            same(details?.changed, true, `${where} details changed`),
+          title: "Edit in IDENTITY.md",
+        },
+      ]);
+      view.expectEnd("final", "Johnny it is. It shows once you confirm it in Clawtrate.");
+      const file = await workspaceFile(h, "marlow", "IDENTITY.md");
+      expect(/^- \*\*Name:\*\* Johnny$/m.test(file), `IDENTITY.md after the edit: ${file}`);
+      // The gateway's own name for the bot is its config's, which the edit leaves alone.
+      const listed = await h.op("plain").request<{
+        agents: Array<{ id: string; name?: string; identity?: { name?: string } }>;
+      }>("agents.list", {});
+      const marlow = listed.agents.find((agent) => agent.id === "marlow");
+      same(marlow?.identity?.name ?? marlow?.name, "Marlow", "Marlow's name in the bot list");
+    },
+  },
 ];
 
 /** Directives of the scripted model that no scenario check claims to send. */

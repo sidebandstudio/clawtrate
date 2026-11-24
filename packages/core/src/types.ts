@@ -492,8 +492,30 @@ export type ClawtrateState = {
    * Absent where a host does not read them.
    */
   usage?: UsageState;
+  /**
+   * Names bots wrote for themselves that wait for the person (`bot-names.ts`): one card each in
+   * that bot's conversation. Absent until the first.
+   */
+  botNames?: NameProposal[];
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
+};
+
+/**
+ * A bot's IDENTITY.md names it otherwise than the gateway's config does (#424): the card in
+ * its conversation, whose Rename saves `name` with `agents.update`.
+ */
+export type NameProposal = {
+  botId: string;
+  /** The file's name made plain, exactly as Rename saves it (`plainName`). */
+  name: string;
+  /** The bot's name when the file was read; Rename sends nothing once the bot is named otherwise. */
+  from: string;
+  /** Where the file was read (`gatewayStamp`): Rename sends only there. */
+  stamp: GatewayStamp;
+  /** `renaming` while Rename is out; `failed` with `error` when it didn't land. */
+  status: "open" | "renaming" | "failed";
+  error: string | null;
 };
 
 /**
