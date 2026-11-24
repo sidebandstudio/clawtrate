@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   finishesReturn,
+  keptPlace,
   nextReturning,
   offsetFor,
   readingPlace,
@@ -119,5 +120,31 @@ describe("going back to the reader's place", () => {
     state = nextReturning(state, { kind: "laid-out", width: 669 });
     expect(state).toBe(382);
     expect(nextReturning(state, { kind: "laid-out", width: 382 })).toBeNull();
+  });
+});
+
+describe("keeping the reader's place up to date", () => {
+  it("reads the place again when the message being read grows at the same width, so a later width goes back to the right share of it", () => {
+    // A quarter of the way into the long message.
+    const saved = readingPlace(NARROW, 310)!;
+    expect(saved).toEqual({ key: "bot:2", into: 100, height: 400 });
+    // The message grows to twice its height while the view stays at the same offset.
+    const grown = NARROW.map((row) =>
+      row.key === "bot:2"
+        ? { ...row, height: 800 }
+        : row.key === "user:3"
+          ? { ...row, y: 1020 }
+          : row,
+    );
+    const kept = keptPlace(null, saved, grown, 310)!;
+    expect(kept).toEqual({ key: "bot:2", into: 100, height: 800 });
+    // Then the width changes: an eighth of the way in, not the stale quarter.
+    expect(offsetFor(kept, WIDE, 1000)).toBe(190 + 25);
+    expect(offsetFor(saved, WIDE, 1000)).toBe(190 + 50);
+  });
+
+  it("keeps the place a return goes back to while the return is under way", () => {
+    const saved = readingPlace(NARROW, 310)!;
+    expect(keptPlace(669, saved, WIDE, 500)).toBe(saved);
   });
 });

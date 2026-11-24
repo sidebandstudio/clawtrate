@@ -90,3 +90,18 @@ export function returnOffset(
 ): number | null {
   return state === null || place === null ? null : offsetFor(place, rows, maxScroll);
 }
+
+/**
+ * The place to keep after the view scrolls or the rows move at the same width
+ * (the message being read grows): read again from where the view is now, so a
+ * later change of width goes back to the right share of its row. A return
+ * under way keeps the place it goes back to.
+ */
+export function keptPlace(
+  state: Returning,
+  place: ReadingPlace | null,
+  rows: readonly RowBox[],
+  scrollY: number,
+): ReadingPlace | null {
+  return state !== null ? place : readingPlace(rows, scrollY);
+}

@@ -20,8 +20,8 @@ import {
 import { useEffect, useRef, useState, type ComponentRef, type ReactNode } from "react";
 import {
   finishesReturn,
+  keptPlace,
   nextReturning,
-  readingPlace,
   returnOffset,
   type ReadingPlace,
   type Returning,
@@ -328,6 +328,7 @@ export function Chat({
   const bodyTop = useRef(0);
   const extent = useRef({ width: 0, view: 0, content: 0 });
   const place = useRef<ReadingPlace | null>(null);
+  const scrollY = useRef(0);
   const returning = useRef<Returning>(null);
 
   // The task is open while its chat is on screen.
@@ -363,6 +364,8 @@ export function Chat({
       return [{ key, y: key === TASK_LINE ? box.y : bodyTop.current + box.y, height: box.height }];
     });
   const returnToPlace = () => {
+    // With nothing to go back to, the rows are not read: each row's layout calls this.
+    if (returning.current === null || place.current === null) return;
     const { view, content } = extent.current;
     const y = returnOffset(returning.current, place.current, laidOut(), content - view);
     if (y !== null) scroller.current?.scrollTo({ y, animated: false });
@@ -502,8 +505,8 @@ export function Chat({
               contentSize.height - (contentOffset.y + layoutMeasurement.height) < NEAR_END;
             following.current = end;
             setAtEnd(end);
-            if (returning.current === null)
-              place.current = readingPlace(laidOut(), contentOffset.y);
+            scrollY.current = contentOffset.y;
+            place.current = keptPlace(returning.current, place.current, laidOut(), scrollY.current);
           }}
           onScrollBeginDrag={() => {
             returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
@@ -528,6 +531,17 @@ export function Chat({
             extent.current = { ...extent.current, content: height };
             if (following.current) scroller.current?.scrollToEnd({ animated: false });
             else returnToPlace();
+            // The rows moved without a scroll (a message grew): once they have
+            // reported, read the place again from where the view is.
+            if (returning.current === null)
+              requestAnimationFrame(() => {
+                place.current = keptPlace(
+                  returning.current,
+                  place.current,
+                  laidOut(),
+                  scrollY.current,
+                );
+              });
             // The content has its new width: once its rows have reported where they
             // moved (the same layout pass, delivered by the next frame), go back to
             // the place one last time and stop, so later growth does not move the reader.
