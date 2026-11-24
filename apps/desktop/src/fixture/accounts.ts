@@ -27,7 +27,9 @@
 import {
   ADMIN_SCOPES,
   INTERACTIVE_SCOPES,
+  gatewayStamp,
   initialAccountsState,
+  sameStamp,
   type AccountsState,
   type BotBinding,
   type BridgeCommand,
@@ -1018,7 +1020,7 @@ export function accountCommand(
       return Promise.resolve();
     case "createBot": {
       // As the host does: nothing is sent for a gateway other than the one connected.
-      if (command.gatewayId !== get().connection.gatewayId)
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
         return Promise.reject(
           new Error("This change was made for another gateway, so nothing was sent."),
         );
@@ -1124,7 +1126,7 @@ export function accountCommand(
     }
     case "finishBot": {
       // As the host does: nothing is sent for a gateway other than the one connected.
-      if (command.gatewayId !== get().connection.gatewayId)
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
         return Promise.reject(
           new Error("This change was made for another gateway, so nothing was sent."),
         );
@@ -1194,7 +1196,7 @@ export function accountCommand(
     }
     case "setBotPicture": {
       // As the host does: nothing is sent for a gateway other than the one connected.
-      if (command.gatewayId !== get().connection.gatewayId)
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
         return Promise.reject(
           new Error("This change was made for another gateway, so nothing was sent."),
         );

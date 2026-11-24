@@ -29,7 +29,7 @@ export function NameCard({
     setBusy(true);
     try {
       if (type === "acceptBotName")
-        await send({ type, botId: bot.id, name, gatewayId: proposal.gatewayId });
+        await send({ type, botId: bot.id, name, stamp: proposal.stamp });
       else await send({ type, botId: bot.id, name });
       onAnnounce(type === "acceptBotName" ? `Renamed to ${name}` : `${bot.name} keeps its name`);
     } catch (error) {

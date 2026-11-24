@@ -31,7 +31,7 @@ import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { identityFile } from "../src/accounts-engine.ts";
 import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
-import { FAST, URL_A } from "./client-harness.ts";
+import { FAST, stampOn, URL_A } from "./client-harness.ts";
 import {
   deferred,
   GatewayError,
@@ -728,7 +728,7 @@ describe("a bot left half-made", () => {
   it("keeps an uncertain Create when every recovery read fails and finishes it once the list returns", async () => {
     const { client, fake, accounts } = await accountsClient();
     const viewer = createBridgeSession(client);
-    const command = { type: "createBot", ...input, gatewayId: "gateway-a" } as const;
+    const command = { type: "createBot", ...input, stamp: stampOn("gateway-a", client) } as const;
     const list = fake.gateway.handlers["agents.list"]!;
     const create = fake.gateway.handlers["agents.create"]!;
     try {

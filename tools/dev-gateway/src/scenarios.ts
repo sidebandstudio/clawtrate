@@ -42,6 +42,9 @@ export type Step =
 const PAGES = "/scripted/pages/";
 /** What the `#image` scenario asks the image tool to draw. */
 export const IMAGE_PROMPT = "A sun over a green hill, in flat solid colours";
+/** The message `#send-picture` sends with the trail map, and the words after it. */
+export const SEND_PICTURE_TEXT = "Here is the trail map.";
+export const SEND_PICTURE_AFTER = "That is the route for Saturday.";
 /** An address outside loopback, in a documentation range nothing answers. */
 export const OUTSIDE_ADDRESS = "http://192.0.2.1/";
 /** Another loopback port than the scripted pages' (one Chromium does not refuse itself): not theirs, so refused. */
@@ -514,6 +517,26 @@ export const SCENARIOS: Scenario[] = [
     steps: () => [
       tool("read", { path: PICTURE_PATH }),
       say("That is the trail map in my workspace."),
+    ],
+  },
+  {
+    name: "send-picture",
+    phrase: "send me the trail map",
+    summary: `Sends the trail map from Pip's workspace (${PICTURE_PATH}) with the message tool: the gateway delivers it as a message in the task, with the picture, then the bot says one more line.`,
+    bots: "Pip, on an instance started with `--with-message-tool`",
+    steps: () => [
+      tool("message", { action: "send", message: SEND_PICTURE_TEXT, media: PICTURE_PATH }),
+      (ctx) => {
+        const result = [...ctx.results].reverse().find((r) => r.name === "message");
+        if (!result) return [];
+        return [
+          say(
+            /^Sent visible reply/.test(result.text)
+              ? SEND_PICTURE_AFTER
+              : `The message tool answered: ${result.text.split("\n")[0]!.slice(0, 200)}`,
+          ),
+        ];
+      },
     ],
   },
   {

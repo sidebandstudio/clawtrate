@@ -7,6 +7,7 @@
 
 import {
   ADMIN_SCOPES,
+  gatewayStamp,
   mapHistory,
   RawTable,
   runsFromHistory,
@@ -166,7 +167,7 @@ export function botNameScene(
         botId: NAMED_BOT,
         name: "Johnny",
         from: "New bot",
-        gatewayId: base.connection.gatewayId,
+        stamp: gatewayStamp(base.connection),
         status: "open",
         error: null,
       },

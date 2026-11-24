@@ -119,6 +119,7 @@ describe("F-535: a picture in history", () => {
         width: 256,
         height: 256,
         sizeBytes: 887,
+        messageId: "a2",
       },
     ]);
     expect(JSON.stringify(items)).not.toContain("/api/chat/media");

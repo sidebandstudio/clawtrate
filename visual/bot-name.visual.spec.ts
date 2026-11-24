@@ -63,13 +63,18 @@ test.describe("bot name behaviour", () => {
       await page.keyboard.press("Shift+Tab");
     await expect(rename).toBeFocused();
     await page.keyboard.press("Enter");
-    // Bound to the gateway the card was read on: the one the fixture is connected to.
-    const gateway = await page.evaluate(
-      () => (window as unknown as Fixture).clawtrateFixture.getState().connection.gatewayId,
+    // Stamped where the card was read: the fixture's gateway and the host's target.
+    const { gatewayId, target } = await page.evaluate(
+      () => (window as unknown as Fixture).clawtrateFixture.getState().connection,
     );
-    expect(gateway).toMatch(/^[0-9a-f]+$/);
+    expect(gatewayId).toMatch(/^[0-9a-f]+$/);
     expect(await sent(page)).toEqual([
-      { type: "acceptBotName", botId: "new-bot", name: "Johnny", gatewayId: gateway },
+      {
+        type: "acceptBotName",
+        botId: "new-bot",
+        name: "Johnny",
+        stamp: { gatewayId, target },
+      },
     ]);
     await expect(card(page)).toHaveCount(0);
     await expect(page.locator(".title-pill-name")).toHaveText("Johnny");

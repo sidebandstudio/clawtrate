@@ -789,6 +789,39 @@ test("F-034: a reconnect to the same gateway, as an access grant makes, doesn't 
   await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^First/);
 });
 
+test("F-034: a Create answered after the host was pointed at the gateway anew, same address and id, closes nothing", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=release`, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("First");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await page.getByTestId("create").click();
+  await expect
+    .poll(async () => (await sent(page)).filter((each) => each.type === "createBot").length)
+    .toBe(1);
+  // A Connect to the same address, which reports the same gateway: a new target all the same.
+  await page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState((state) => {
+      const connection = state.connection as { target: number };
+      return {
+        ...state,
+        connection: {
+          ...connection,
+          target: connection.target + 1,
+          connectedAt: Date.now() + 60_000,
+        },
+      };
+    }),
+  );
+  await page.evaluate(() => (window as unknown as { releaseCreate: () => void }).releaseCreate());
+  await settled(page);
+  await expect(page.getByTestId("new-bot")).toBeVisible();
+  await expect(page.getByTestId("b-announcer")).not.toHaveText(/Created/);
+  await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^Otto/);
+});
+
 for (const outcome of ["release", "release-failed"] as const)
   test(`F-034: a Create ${outcome === "release" ? "success" : "refusal"} that lands while the gateway's identity is unknown again changes nothing`, async ({
     page,
@@ -878,7 +911,7 @@ for (const [then, landsOn] of [
       await expect(page.getByTestId("new-bot")).toBeVisible();
     } else {
       expect(creates).toHaveLength(1);
-      expect(creates[0]).toMatchObject({ name: "First", gatewayId: "gateway-a" });
+      expect(creates[0]).toMatchObject({ name: "First", stamp: { gatewayId: "gateway-a" } });
       await expect(page.getByTestId("new-bot")).toHaveCount(0);
       await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^First/);
     }
@@ -983,7 +1016,10 @@ test("F-034: a second Finish cannot take the first fixture answer", async ({ pag
     const fixture = held.clawtrateFixture;
     const second = fixture.invoke({
       type: "finishBot",
-      gatewayId: fixture.getState().connection.gatewayId,
+      stamp: {
+        gatewayId: fixture.getState().connection.gatewayId,
+        target: fixture.getState().connection.target,
+      },
       botId: "viral",
     });
     held.releaseFinish();

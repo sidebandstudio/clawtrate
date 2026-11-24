@@ -1,6 +1,8 @@
 import {
   MEMORY_NOTES_WRITABLE,
   ROOT_MEMORY,
+  gatewayStamp,
+  type GatewayStamp,
   type MemoryDocument,
   type MemoryList,
 } from "@clawtrate/core";
@@ -32,8 +34,8 @@ type Draft = {
   path: string;
   text: string;
   item: Item | null;
-  /** The gateway identity that supplied the text, from `gateway.identity.get`. */
-  gatewayId: string | null;
+  /** Where the text was read (`GatewayStamp`): it is saved nowhere else. */
+  stamp: GatewayStamp;
 };
 /** One root file's first load: a failed read stands alone beside its own file. */
 type RootLoad = { path: string; file: MemoryDocument | null; error: string | null };
@@ -87,7 +89,7 @@ export function BotMemory({
   const [note, setNote] = useState<MemoryDocument | null>(null);
   const [readingNote, setReadingNote] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [deleting, setDeleting] = useState<{ item: Item; gatewayId: string | null } | null>(null);
+  const [deleting, setDeleting] = useState<{ item: Item; stamp: GatewayStamp } | null>(null);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -175,12 +177,7 @@ export function BotMemory({
     }
   }
 
-  async function save(
-    path: string,
-    text: string | null,
-    item: Item | null,
-    gatewayId: string | null,
-  ) {
+  async function save(path: string, text: string | null, item: Item | null, stamp: GatewayStamp) {
     const isNote = path.startsWith("memory/");
     const file = item?.file ?? data?.root.find((doc) => doc.path === path)?.file;
     const content = isNote
@@ -195,7 +192,7 @@ export function BotMemory({
         type: "writeMemory",
         botId,
         path,
-        gatewayId,
+        stamp,
         expectedHash: file?.hash ?? null,
         content,
       });
@@ -228,7 +225,7 @@ export function BotMemory({
       onSubmit={(event) => {
         event.preventDefault();
         if (canEdit && !busy && changed === null && current.text.trim())
-          void save(current.path, current.text, current.item, current.gatewayId);
+          void save(current.path, current.text, current.item, current.stamp);
       }}
     >
       {!current.item && (
@@ -354,7 +351,7 @@ export function BotMemory({
                   path: item.file.path,
                   text: item.text,
                   item,
-                  gatewayId: connection.gatewayId,
+                  stamp: gatewayStamp(connection),
                 });
                 setConflictNote(null);
               }}
@@ -366,7 +363,7 @@ export function BotMemory({
               className="button"
               data-size="sm"
               disabled={busy || draft !== null}
-              onClick={() => setDeleting({ item, gatewayId: connection.gatewayId })}
+              onClick={() => setDeleting({ item, stamp: gatewayStamp(connection) })}
             >
               Delete
             </button>
@@ -490,7 +487,7 @@ export function BotMemory({
                       path: "MEMORY.md",
                       text: "",
                       item: null,
-                      gatewayId: connection.gatewayId,
+                      stamp: gatewayStamp(connection),
                     });
                     setConflictNote(null);
                   }}
@@ -515,9 +512,7 @@ export function BotMemory({
           onCancel={() => {
             if (!busy) setDeleting(null);
           }}
-          onAction={() =>
-            void save(deleting.item.file.path, null, deleting.item, deleting.gatewayId)
-          }
+          onAction={() => void save(deleting.item.file.path, null, deleting.item, deleting.stamp)}
         />
       )}
     </div>

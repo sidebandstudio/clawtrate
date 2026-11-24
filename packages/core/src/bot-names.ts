@@ -13,7 +13,7 @@
 
 import type { KeyValueStore } from "./host.ts";
 import { asRecord } from "./mapping.ts";
-import type { Bot, NameProposal } from "./types.ts";
+import { sameStamp, type Bot, type GatewayStamp, type NameProposal } from "./types.ts";
 
 /** A name as long as New bot's Name field takes. */
 export const MAX_BOT_NAME_CHARS = 40;
@@ -82,10 +82,10 @@ export type BotNamesContext = {
   canRename: () => boolean;
   /** The gateway's identity, or its address before that is known: whose Not now it is. */
   gateway: () => string | null;
-  /** The connected gateway's own identity, or null when it names none: whose card it is. */
-  gatewayId: () => string | null;
-  /** Refuse unless `gatewayId` is the gateway connected now, as every bot write does. */
-  sameGateway: (gatewayId: string | null) => Promise<void>;
+  /** Where a read is made now: the gateway's identity and the host's target (`gatewayStamp`). */
+  stamp: () => GatewayStamp;
+  /** Refuse unless `stamp` is still where the host is connected, as every bot write does. */
+  sameGateway: (stamp: GatewayStamp) => Promise<void>;
   storage: KeyValueStore;
   /** Take one of the client's file reads, or null when they are all in use. */
   takeRead: () => (() => void) | null;
@@ -124,8 +124,8 @@ export class BotNames {
     const release = this.ctx.takeRead();
     if (!release) return;
     const epoch = this.epoch;
-    // The gateway this read is for: a card drawn from it is for that gateway only.
-    const gatewayId = this.ctx.gatewayId();
+    // Where this read is made: a card drawn from it is for that gateway and that target only.
+    const stamp = this.ctx.stamp();
     this.reading.add(botId);
     try {
       const answer = asRecord(
@@ -151,7 +151,7 @@ export class BotNames {
       // A card being renamed stays until its Rename settles; a read from before a reset counts for nothing.
       if (
         epoch !== this.epoch ||
-        this.ctx.gatewayId() !== gatewayId ||
+        !sameStamp(this.ctx.stamp(), stamp) ||
         this.proposals.get(botId)?.status === "renaming"
       )
         return;
@@ -165,7 +165,7 @@ export class BotNames {
         botId,
         name,
         from: now.name,
-        gatewayId,
+        stamp,
         status: "open",
         error: null,
       });
@@ -179,14 +179,14 @@ export class BotNames {
   }
 
   /**
-   * Rename: one `agents.update` with the name the card shows, on the gateway it was drawn for,
+   * Rename: one `agents.update` with the name the card shows, where the card was read (`stamp`),
    * then the bot list read back. The one way a card's name is saved.
    */
-  async accept(botId: string, name: string, gatewayId: string | null): Promise<void> {
+  async accept(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
     const open = this.proposals.get(botId);
     if (!open || open.name !== name || open.status === "renaming")
       throw new Error("That name is no longer waiting for you.");
-    if (open.gatewayId !== gatewayId)
+    if (!sameStamp(open.stamp, stamp))
       throw new Error("This name was found on another gateway, so nothing was sent.");
     if (!this.ctx.canRename()) throw new Error("Renaming a bot needs admin access.");
     const epoch = this.epoch;
@@ -210,7 +210,7 @@ export class BotNames {
         throw new Error(`${open.from} was renamed ${bot.name} meanwhile, so nothing was sent.`);
       }
       // Still the gateway the card was drawn for, on the connection that read it.
-      await this.ctx.sameGateway(gatewayId);
+      await this.ctx.sameGateway(stamp);
       if (epoch !== this.epoch) throw new Error("The connection changed, so nothing was sent.");
       await this.ctx.request("agents.update", { agentId: botId, name });
     } catch (error) {

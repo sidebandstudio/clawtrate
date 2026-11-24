@@ -11,7 +11,7 @@ import { cadence, choiceWords, promptKind, type PromptKind } from "../src/check-
 const state = (main: { every: string; prompt: string | null }, kept = false): CheckInsState => ({
   status: "ready",
   error: null,
-  gatewayId: "gw-1",
+  stamp: { gatewayId: "gw-1", target: 0 },
   scheduler: true,
   readBotIds: ["main", "otto", "pip"],
   jobs: [
@@ -43,7 +43,7 @@ describe("F-201 a check-ins draft", () => {
     draft = rebase(draft, state({ every: "2h", prompt: "B" }));
     expect(draft.prompt).toBe("B");
     expect(draftToSave(draft)).toEqual({
-      gatewayId: "gw-1",
+      stamp: { gatewayId: "gw-1", target: 0 },
       every: "24h",
       prompt: null,
       was: { every: "2h", prompt: "B" },
@@ -106,9 +106,7 @@ describe("F-201 a check-ins draft", () => {
   });
 
   it("is not opened while nothing says which gateway the check-ins are from", () => {
-    expect(
-      openDraft({ ...state({ every: "30m", prompt: null }), gatewayId: null }, "main"),
-    ).toBeNull();
+    expect(openDraft({ ...state({ every: "30m", prompt: null }), stamp: null }, "main")).toBeNull();
   });
 });
 

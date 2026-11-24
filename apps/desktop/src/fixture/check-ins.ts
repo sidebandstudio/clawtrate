@@ -13,12 +13,15 @@
 import {
   durationMs,
   planCheckIn,
+  gatewayStamp,
   readDefaults,
   readSettings,
+  sameStamp,
   type BridgeCommand,
   type CheckInJob,
   type CheckInsState,
   type ClawtrateState,
+  type GatewayStamp,
 } from "@clawtrate/core";
 
 export type CheckInParams = {
@@ -104,12 +107,12 @@ function shown(config: Config, now: number, readBotIds: string[] = BOTS) {
 export function fixtureCheckIns(
   now: number,
   params: CheckInParams,
-  gatewayId: string | null,
+  stamp: GatewayStamp | null,
 ): CheckInsState {
   return {
     status: "ready",
     error: null,
-    gatewayId,
+    stamp,
     scheduler: params.scheduler,
     ...shown(configFor(params), now),
     save: null,
@@ -135,19 +138,19 @@ export function checkInCommands(params: CheckInParams) {
           Date.now(),
           get().bots.map((bot) => bot.id),
         );
-        const gatewayId = get().connection.gatewayId;
+        const stamp = gatewayStamp(get().connection);
         set({
           ...get(),
           checkIns: {
             ...(get().checkIns ?? fixtureCheckIns(Date.now(), params, null)),
             ...snapshot,
-            gatewayId,
+            stamp,
           },
         });
         return Promise.resolve(
           command.botId
             ? {
-                gatewayId,
+                stamp,
                 jobs: snapshot.jobs.filter((job) => job.botId === command.botId),
                 settings: snapshot.settings.filter((setting) => setting.botId === command.botId),
                 defaults: snapshot.defaults,
@@ -163,7 +166,7 @@ export function checkInCommands(params: CheckInParams) {
       case "saveCheckIn": {
         if (!get().connection.canAdmin)
           return Promise.reject(new Error("Changing check-ins needs admin access."));
-        if (command.gatewayId !== get().connection.gatewayId)
+        if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
           return Promise.reject(
             new Error("This change was made for another gateway, so nothing was sent."),
           );

@@ -97,6 +97,14 @@ pnpm dev-gateway start --instance pictures --with-images
 
 A development gateway denies `image_generate`, since a real image provider is a hosted service. `--with-images` points the gateway's bundled LiteLLM image provider at the instance's own scripted model, which answers `POST /v1/images/generations` with one fixed 256 × 256 PNG it draws (`tools/dev-gateway/src/scripted-images.ts`), and offers `image_generate` to every bot. Nothing leaves the machine. Send `#image`: the tool starts a background task, and the gateway delivers the picture in a turn of its own in the same task, which the scripted model answers with a caption and the picture's `MEDIA:` line. `pnpm e2e` starts its main instance with it.
 
+## Pictures sent with the message tool
+
+```bash
+pnpm dev-gateway start --instance pictures --with-images --with-message-tool
+```
+
+A development gateway denies the `message` tool. `--with-message-tool` (named instances only) offers it to every bot. No channel is configured, so a `send` that names no channel or target is the gateway's reply in the bot's own task: it stages the media and writes the message as a row of its own in the run, with the picture. Send `#send-picture` to Pip: it sends the trail map from its workspace this way, then says one more line. `pnpm e2e` starts its main instance with it, and `pnpm scenarios` runs its check on the image instance.
+
 ## Migrating from an older version
 
 Earlier versions of the tool recorded no process start times, so this version cannot prove anything about the state they left and refuses it for good: it never signals its processes, starts it over or deletes it. Move it aside once, by hand, from the checkout that started it. For the default instance:
@@ -165,6 +173,7 @@ The scripted model can put a run into every situation the live conversation has 
 | `#browse-download` | download the scripted file             | Navigates the current tab to a scripted file that downloads slowly, over eight seconds.                                                                                                                                         | a bot with a browser of its own |
 | `#browse-outside`  | open an outside address                | Navigates to an address outside loopback, then to another loopback port, and reads what the tab shows; both are refused.                                                                                                        | a bot with a browser of its own |
 | `#image`           | draw the sun over a green hill         | Asks the image tool for a picture; it arrives in the gateway's next turn in the same task.                                                                                                                                      | any bot, with `--with-images`   |
+| `#send-picture`    | send me the trail map                  | Sends the trail map from Pip's workspace with the message tool; it shows as a message in the task with the picture.                                                                                                             | Pip, with `--with-message-tool` |
 
 Where it matters which bot you ask:
 

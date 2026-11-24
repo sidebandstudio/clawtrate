@@ -78,6 +78,8 @@ export type AccountsContext = {
   gateway(): Promise<string | null>;
   /** The identity the connection has read so far, without asking: null until it is known. */
   gatewayNow(): string | null;
+  /** The host's target now (`ConnectionState.target`). */
+  target(): number;
   /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
   createMainTask(botId: string): Promise<void>;
   now(): number;
@@ -85,8 +87,19 @@ export type AccountsContext = {
   log(message: string): void;
 };
 
-/** One bot write, its optional gateway identity, and the reset count it began on. */
-type WriteMark = { gatewayId: string | null; resets: number; retired: boolean };
+/**
+ * One bot write, its optional gateway identity and the host's target its screen was read under
+ * (`GatewayStamp`), and the reset count it began on.
+ */
+type WriteMark = {
+  gatewayId: string | null;
+  target: number | null;
+  resets: number;
+  retired: boolean;
+};
+
+/** The gateway a bot write is bound to: its identity, and the host's target when a screen read it. */
+type WriteBinding = { gatewayId: string; target: number | null };
 
 /** A bot write retired because its gateway is no longer the one connected. */
 class WriteRetired extends Error {
@@ -172,6 +185,8 @@ export class AccountsEngine {
   private creating: WriteMark | null = null;
   /** The gateway the state's creation was asked of: it is kept, and finished, only there. */
   private creationGateway: string | null = null;
+  /** The host's target that creation's screen was read under. */
+  private creationTarget: number | null = null;
   /** The partial creation a Finish has claimed while its gateway may still be identifying itself. */
   private finishing: AccountsState["creation"] = null;
   private loading: Promise<void> | null = null;
@@ -1169,15 +1184,27 @@ export class AccountsEngine {
    * retires it: nothing more is sent or published.
    */
   private async boundTo<T>(
-    gatewayId: string | undefined,
+    binding: WriteBinding | undefined,
     run: (ctx: AccountsContext, mark: WriteMark) => Promise<T>,
   ): Promise<T> {
     const base = this.ctx;
     // This write's own mark and context: another write, refused or not, never touches them.
-    const mark: WriteMark = { gatewayId: gatewayId ?? null, resets: this.resets, retired: false };
+    const mark: WriteMark = {
+      gatewayId: binding?.gatewayId ?? null,
+      target: binding?.target ?? null,
+      resets: this.resets,
+      retired: false,
+    };
+    // The host pointed at a gateway anew since the screen was read: another gateway, whatever
+    // its identity says.
+    const sameTarget = () => mark.target === null || base.target() === mark.target;
     const live = () => !mark.retired && this.resets === mark.resets;
     const check = async () => {
       if (!live()) throw new WriteRetired();
+      if (!sameTarget()) {
+        mark.retired = true;
+        throw new WriteRetired();
+      }
       // In-host callers can omit the identity. Their writes still end on reset.
       if (mark.gatewayId === null) return;
       const here = await base.gateway();
@@ -1202,7 +1229,11 @@ export class AccountsEngine {
         return base.createMainTask(botId);
       },
       update: (change) => {
-        if (live() && (mark.gatewayId === null || base.gatewayNow() === mark.gatewayId))
+        if (
+          live() &&
+          sameTarget() &&
+          (mark.gatewayId === null || base.gatewayNow() === mark.gatewayId)
+        )
           base.update(change);
       },
     };
@@ -1264,8 +1295,8 @@ export class AccountsEngine {
     }
   }
 
-  async createBot(input: CreateBotInput, gatewayId?: string): Promise<CreatedBot> {
-    return this.boundTo(gatewayId, (ctx, mark) => this.create(ctx, input, mark));
+  async createBot(input: CreateBotInput, binding?: WriteBinding): Promise<CreatedBot> {
+    return this.boundTo(binding, (ctx, mark) => this.create(ctx, input, mark));
   }
 
   private async create(
@@ -1305,6 +1336,7 @@ export class AccountsEngine {
     };
     this.creating = mark;
     this.creationGateway = mark.gatewayId;
+    this.creationTarget = mark.target;
     ctx.update((a) => ({
       ...a,
       creation: {
@@ -1373,9 +1405,9 @@ export class AccountsEngine {
   async setBotPicture(
     botId: string,
     avatar: string,
-    gatewayId?: string,
+    binding?: WriteBinding,
   ): Promise<{ confirmed: boolean }> {
-    return this.boundTo(gatewayId, (ctx) => this.writePicture(ctx, botId, avatar));
+    return this.boundTo(binding, (ctx) => this.writePicture(ctx, botId, avatar));
   }
 
   private async writePicture(
@@ -1642,11 +1674,13 @@ export class AccountsEngine {
    * (the record of its account, its model with the empty fallback list and
    * effort, the bot list showing it, the first task), never create it again.
    */
-  async finishBot(botId: string, gatewayId?: string): Promise<CreatedBot> {
+  async finishBot(botId: string, binding?: WriteBinding): Promise<CreatedBot> {
     // Bound to the gateway it was asked of, or else the creation's: never finished on another.
-    return this.boundTo(gatewayId ?? this.creationGateway ?? undefined, (ctx, mark) =>
-      this.finish(ctx, botId, mark),
-    );
+    const creation =
+      this.creationGateway === null
+        ? undefined
+        : { gatewayId: this.creationGateway, target: this.creationTarget };
+    return this.boundTo(binding ?? creation, (ctx, mark) => this.finish(ctx, botId, mark));
   }
 
   private async finish(ctx: AccountsContext, botId: string, mark: WriteMark): Promise<CreatedBot> {
@@ -1674,6 +1708,7 @@ export class AccountsEngine {
   onGateway(gatewayId: string): void {
     if (this.creationGateway === null || this.creationGateway === gatewayId) return;
     this.creationGateway = null;
+    this.creationTarget = null;
     this.creating = null;
     this.finishing = null;
     if (this.slowTimer) clearTimeout(this.slowTimer);
@@ -1897,6 +1932,7 @@ export class AccountsEngine {
     this.resets += 1;
     this.creating = null;
     this.creationGateway = null;
+    this.creationTarget = null;
     this.finishing = null;
     this.onClose();
     this.kinds.clear();

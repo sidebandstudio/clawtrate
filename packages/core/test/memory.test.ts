@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { stampOn } from "./client-harness.ts";
 
 const URL = "ws://127.0.0.1:19001";
 const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
@@ -45,7 +46,13 @@ describe("memory writes", () => {
     try {
       for (const content of ["Updated note.", null]) {
         await expect(
-          client.writeMemory("otto", "memory/meeting.md", "gw-one", hex(1), content),
+          client.writeMemory(
+            "otto",
+            "memory/meeting.md",
+            stampOn("gw-one", client),
+            hex(1),
+            content,
+          ),
         ).rejects.toThrow(/notes are read-only/i);
       }
       expect(
@@ -64,25 +71,25 @@ describe("memory writes", () => {
     // The gateway behind the address is replaced while the draft is held.
     deviceId = "gw-two";
     await expect(
-      client.writeMemory("otto", "MEMORY.md", "gw-one", hex(1), "Saved text."),
+      client.writeMemory("otto", "MEMORY.md", stampOn("gw-one", client), hex(1), "Saved text."),
     ).rejects.toThrow(/different gateway/);
     expect(gateway.requests.some(({ method }) => method === "agents.files.set")).toBe(false);
     // The same draft, re-opened against the gateway that now answers, writes.
-    await client.writeMemory("otto", "MEMORY.md", "gw-two", hex(1), "Saved text.");
+    await client.writeMemory("otto", "MEMORY.md", stampOn("gw-two", client), hex(1), "Saved text.");
     expect(gateway.requests.some(({ method }) => method === "agents.files.set")).toBe(true);
     client.stop();
   });
 
   it("F-212: a write without a gateway identity, or with a failed identity read, is refused", async () => {
     const { client, gateway } = await connected(() => "gw-one");
-    await expect(client.writeMemory("otto", "USER.md", null, null, "Saved text.")).rejects.toThrow(
-      /different gateway/,
-    );
+    await expect(
+      client.writeMemory("otto", "USER.md", stampOn(null, client), null, "Saved text."),
+    ).rejects.toThrow(/different gateway/);
     gateway.handlers["gateway.identity.get"] = () => {
       throw new Error("identity read lost");
     };
     await expect(
-      client.writeMemory("otto", "USER.md", "gw-one", null, "Saved text."),
+      client.writeMemory("otto", "USER.md", stampOn("gw-one", client), null, "Saved text."),
     ).rejects.toThrow("identity read lost");
     expect(gateway.requests.some(({ method }) => method === "agents.files.set")).toBe(false);
     client.stop();

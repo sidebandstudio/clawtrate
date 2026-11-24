@@ -1,5 +1,6 @@
 import {
   browserUse,
+  gatewayStamp,
   type AccountsState,
   type Bot,
   type ComputerState,
@@ -183,7 +184,7 @@ export function WorkPanel({
             <EditPicture
               key={pictureSession.token}
               bot={bot}
-              gatewayId={connection.gatewayId}
+              stamp={gatewayStamp(connection)}
               canSave={canEditPicture}
               onClose={() => {
                 const token = pictureSession.token;
