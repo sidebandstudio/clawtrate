@@ -389,7 +389,7 @@ export const REQUESTED_SCOPES = ["operator.read"] as const;
 export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose again.";
 
 /** Deferred Stops of an archive or a delete kept for their runs' aborts (`deferredStops`). */
-const MAX_DEFERRED_STOPS = 32;
+export const MAX_DEFERRED_STOPS = 32;
 /** A failed read of the gateway's identity is asked again this many times, each 4 times later. */
 const IDENTITY_RETRIES = 4;
 const IDENTITY_RETRY_MS = 500;
