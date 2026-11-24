@@ -283,13 +283,20 @@ function TranscriptView({
     quiet: !commandsShown,
     thinking: thinkingShown,
   });
+  const items = conversationItems(transcript, commandsShown);
   const scroller = useRef<HTMLDivElement>(null);
-  const itemCount = transcript.items.length;
-  const contentSize = `${itemCount}:${live.signature}`;
+  // The view, while at the end, follows any change to what is drawn: its count or its last item.
+  // "Jump to latest" goes by the last item that is not a skill note, by the gateway's id of the
+  // message it shows, or else its identity, never a count (F-560): a note arriving, hidden or
+  // shown, one pushing a row off the top of a full page, even a merged turn's first row, and the
+  // "Show commands" switch are not new activity.
+  const contentSize = `${items.length}:${itemIdentity(items.at(-1)?.id)}:${live.signature}`;
+  const lastSaid = transcript.items.findLast((item) => item.skillNote !== true);
+  const activity = `${lastSaid?.messageId ?? itemIdentity(lastSaid?.id)}:${live.signature}`;
   const [atEnd, setAtEnd] = useState(true);
-  const [seenSize, setSeenSize] = useState(contentSize);
+  const [seenActivity, setSeenActivity] = useState(activity);
   const [now] = useState(() => Date.now());
-  const newActivity = !atEnd && contentSize !== seenSize;
+  const newActivity = !atEnd && activity !== seenActivity;
 
   // Whether the view follows the end, and where it last put the end. A scroll
   // the reader did not make (the content grew under a followed end) keeps
@@ -376,15 +383,15 @@ function TranscriptView({
     else pinAt(near ? element.scrollTop : null);
     following.current = near;
     setAtEnd(near);
-    if (near) setSeenSize(contentSize);
-  }, [contentSize, toEnd, pinAt]);
+    if (near) setSeenActivity(activity);
+  }, [activity, toEnd, pinAt]);
 
   const jumpToLatest = useCallback(() => {
     following.current = true;
     toEnd();
     setAtEnd(true);
-    setSeenSize(contentSize);
-  }, [contentSize, toEnd]);
+    setSeenActivity(activity);
+  }, [activity, toEnd]);
 
   // Follow new output while the reader is at the end.
   useLayoutEffect(() => {
@@ -398,7 +405,7 @@ function TranscriptView({
   const rows: ReactNode[] = [];
   let previous: number | null = null;
   const endingsBefore = live.endingsBefore;
-  for (const item of transcript.items) {
+  for (const item of items) {
     if (item.role === "user") {
       // What ended the turn before this message sits under that turn: above the time
       // that introduces this message, which is not when that turn's work happened.
@@ -554,6 +561,21 @@ function EmptyState({
   );
 }
 
+/** The history items the conversation draws: the gateway's skill notes only with commands shown (F-560). */
+export function conversationItems(
+  transcript: Pick<Transcript, "items">,
+  commandsShown: boolean,
+): TranscriptItem[] {
+  return commandsShown
+    ? transcript.items
+    : transcript.items.filter((item) => item.skillNote !== true);
+}
+
+/** A history item's identity across reads: its id without its place on the page the read gave it. */
+function itemIdentity(itemId: string | undefined): string {
+  return itemId?.replace(/:\d+$/, "") ?? "";
+}
+
 /** What the engine holds beyond history, laid out for the transcript. */
 type LiveParts = {
   bot: Bot;
@@ -647,6 +669,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         .find(
           (item) =>
             item.role === "assistant" &&
+            item.skillNote !== true &&
             item.blocks.some((block) => block.kind === "text" && block.text.trim()),
         );
       // The gateway writes a failure as the run's last row, its text the error itself: the
