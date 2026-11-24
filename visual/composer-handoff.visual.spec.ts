@@ -165,12 +165,46 @@ test("F-278 F-071: the remounted composer restores refused chips and files ahead
     return key ? JSON.parse(localStorage.getItem(key)!) : null;
   });
   expect(stored).toEqual({ text: "First words.\nLater words.", sessionId: "otto-disk-space" });
+  await expect(page.getByTestId("send")).toBeDisabled();
+  await expect(
+    page.getByText("Remove a skill or command before sending. A message can use only one."),
+  ).toBeVisible();
+  await field(page).press("Enter");
+  await field(page).press("Alt+Enter");
+  expect(await attempts(page)).toHaveLength(1);
+  await page.getByRole("button", { name: "Remove /status", exact: true }).click();
+  await expect(page.getByTestId("send")).toBeEnabled();
   await field(page).press("Enter");
   const uploaded = await page.evaluate(() => (window as unknown as Controls).uploaded);
   expect(uploaded).toHaveLength(2);
   expect(await attempts(page)).toMatchObject([
     { text: "/status First words.", attachmentIds: [uploaded[0]] },
-    { text: "/status /weather First words.\nLater words.", attachmentIds: uploaded },
+    { text: "/weather First words.\nLater words.", attachmentIds: uploaded },
+  ]);
+});
+
+test("F-278 F-071: starting a new task waits for a choice between two recovered commands", async ({
+  page,
+}) => {
+  await open(page);
+  await field(page).fill("/status");
+  await page.getByRole("option", { name: /\/status/ }).click();
+  await field(page).press("Enter");
+  await expect(page.getByTestId("token-chip")).toHaveCount(0);
+  await field(page).fill("/weather");
+  await page.getByRole("option", { name: /\/weather/ }).click();
+  await finish(page);
+  await expect(page.getByTestId("token-chip")).toHaveCount(2);
+  await session(page, "replacement");
+  const start = page.getByRole("button", { name: "Start a new task with this message" });
+  await expect(start).toBeDisabled();
+  await field(page).press("ControlOrMeta+Shift+Enter");
+  expect(await attempts(page)).toHaveLength(1);
+  await page.getByRole("button", { name: "Remove /weather", exact: true }).click();
+  await start.click();
+  expect(await attempts(page)).toMatchObject([
+    { type: "sendMessage", text: "/status" },
+    { type: "createTask", text: "/status" },
   ]);
 });
 

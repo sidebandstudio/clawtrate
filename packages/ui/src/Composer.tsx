@@ -370,7 +370,12 @@ export function Composer({
     ceilings,
   );
   const tooMuch = whole !== null;
-  const refused = files.some((file) => refusalOf(file) !== null) || tooMuch;
+  const chipConflict =
+    tokens.length > 1
+      ? "Remove a skill or command before sending. A message can use only one."
+      : null;
+  const refused =
+    chipConflict !== null || files.some((file) => refusalOf(file) !== null) || tooMuch;
   // A file the limits admit is on its way to the host until the host holds it.
   const pending = (file: Attached) => !file.info && refusalOf(file) === null;
   const uploading = files.some(pending);
@@ -378,7 +383,8 @@ export function Composer({
   const canSend = hasContent && !refused && !uploading;
   // Its words keep the task on screen should it leave the list (`keptOnScreen`).
   useHoldsWords(taskKey, hasContent || handingOff);
-  const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
+  const refusalReason =
+    chipConflict ?? (refused ? (whole ?? "Remove the files that are too large to send.") : null);
   // Until the view shows the task's session the draft stays here: only a new task takes it.
   const waits = sendWaits(transcript);
   // The draft keeps the session the view showed at its first word, or, started before the view
@@ -428,7 +434,7 @@ export function Composer({
     /** `chosen`: the session the person chose for words that name none (`DRAFT_UNBOUND`). */
     async (how: SendMode | "new-task", chosen?: string) => {
       if (!canSend) {
-        // A refused file already says why beside it; a file on its way says nothing else.
+        // Refused chips and files already show the reason beside them.
         if (hasContent && uploading && !refused)
           onNotice({
             title: "This message is still in the composer.",
@@ -1068,6 +1074,11 @@ export function Composer({
               ))}
             </ul>
           )}
+          {chipConflict && (
+            <p className="composer-note" role="status">
+              {chipConflict}
+            </p>
+          )}
           {files.length > 0 && (
             <div className="attachments">
               <ul className="chips">
@@ -1100,7 +1111,7 @@ export function Composer({
                   </li>
                 ))}
               </ul>
-              {tooMuch && <p className="attachments-note">{refusalReason}</p>}
+              {tooMuch && <p className="attachments-note">{whole}</p>}
             </div>
           )}
           {hasContent && (waits || moved || unbound) && (
@@ -1112,7 +1123,12 @@ export function Composer({
               data-tone={moved || chooseSession ? "danger" : undefined}
             >
               <span>{moved ? movedNote : chooseSession ? DRAFT_UNBOUND : waits}</span>
-              <button type="button" className="link-button" onClick={() => void sendAs("new-task")}>
+              <button
+                type="button"
+                className="link-button"
+                disabled={chipConflict !== null}
+                onClick={() => void sendAs("new-task")}
+              >
                 {moved || chooseSession
                   ? "Start a new task with this message"
                   : "Start as new task"}
@@ -1127,6 +1143,7 @@ export function Composer({
                 <button
                   type="button"
                   className="link-button"
+                  disabled={chipConflict !== null}
                   onClick={() => void sendAs(view.mode, shownSession)}
                 >
                   Send to the task shown
