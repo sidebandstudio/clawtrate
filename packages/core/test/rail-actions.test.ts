@@ -3,7 +3,11 @@
 
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
-import { ClawtrateClient, CONNECTION_CHANGED_AFTER_SEND } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  CONNECTION_CHANGED_AFTER_SEND,
+  MAX_DEFERRED_STOPS,
+} from "../src/client.ts";
 import { gatewayStamp } from "../src/types.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
@@ -556,7 +560,10 @@ describe("an archive or a delete bound to the connection it began on", () => {
    * An archive that stops a run the gateway hasn't named; `meanwhile` runs before the send's
    * answer names it. That abort's answer is lost, and gateway-x answers the reconnect.
    */
-  async function deferredStop(meanwhile: (client: ClawtrateClient, run: string) => void) {
+  async function deferredStop(
+    meanwhile: (client: ClawtrateClient, run: string) => void,
+    before: (client: ClawtrateClient) => void = () => {},
+  ) {
     const id = { value: "gateway-a" };
     const gateway = grantingGateway();
     gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
@@ -573,8 +580,10 @@ describe("an archive or a delete bound to the connection it began on", () => {
     };
     const { client, transcript } = await openTask({ gateway });
     await until(() => client.state.connection.gatewayId === "gateway-a");
+    await openOthers(client);
     const run = client.sendMessage(KEY, "Take your time");
     await until(() => gateway.calls("chat.send").length === 1);
+    before(client);
     const stamp = gatewayStamp(client.state.connection);
     const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
     await until(() => transcript().runs.find((each) => each.id === run)?.state === "stopping");
@@ -601,13 +610,101 @@ describe("an archive or a delete bound to the connection it began on", () => {
     });
   });
 
-  it("a deferred Stop still waiting is not let go for later ones", async () => {
-    await deferredStop((client) => {
-      // More Stops than the bound are kept after it, each for a run already over.
-      const host = client as unknown as Deferred;
-      for (let n = 0; n < 40; n += 1)
-        expect(host.keepDeferredStop(KEY, `ended-${n}`, () => true)).toBe(true);
+  /** Tasks besides KEY that hold waiting Stops: a task keeps at most 16 runs. */
+  const OTHERS = ["agent:main:waiting-a", "agent:main:waiting-b"];
+  const openOthers = async (client: ClawtrateClient) => {
+    for (const key of OTHERS) {
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+    }
+  };
+
+  /**
+   * `count` more deferred Stops, each for a run still waiting to be named, 14 to a task: copies
+   * of `run`, stopping, as the host would hold them. Answers how many the host kept.
+   */
+  const waitingStops = (client: ClawtrateClient, run: string, count: number) => {
+    const live = client.state.transcripts[KEY]!.runs.find((each) => each.id === run)!;
+    let kept = 0;
+    for (let n = 0; n < count; n += 1) {
+      const key = [KEY, ...OTHERS][Math.floor(n / 14)]!;
+      const id = `waiting-${n}`;
+      client.store.update((state) => {
+        const transcript = state.transcripts[key]!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              runs: [...transcript.runs, { ...live, id, messageId: id, state: "stopping" }],
+            },
+          },
+        };
+      });
+      expect(client.state.transcripts[key]!.runs.some((each) => each.id === id)).toBe(true);
+      if ((client as unknown as Deferred).keepDeferredStop(key, id, () => true)) kept += 1;
+    }
+    return kept;
+  };
+
+  it("a deferred Stop still waiting is not let go when the registry fills behind it", async () => {
+    await deferredStop((client, run) => {
+      // The archive's Stop is kept; every later one finds the registry full of Stops still
+      // waiting, and is refused rather than letting the archive's go.
+      expect(waitingStops(client, run, 40)).toBe(MAX_DEFERRED_STOPS - 1);
+      // The registry is full of Stops still waiting: none was let go for the later ones.
     });
+  });
+
+  it("Stops whose runs are over make room: an archive's Stop is kept after the registry filled with them", async () => {
+    await deferredStop(
+      () => {},
+      (client) => {
+        // The registry fills with Stops for runs already over, as sends that failed leave them.
+        const host = client as unknown as Deferred;
+        for (let n = 0; n < MAX_DEFERRED_STOPS; n += 1)
+          expect(host.keepDeferredStop(KEY, `ended-${n}`, () => true)).toBe(true);
+      },
+    );
+  });
+
+  it("an archive whose Stop finds the registry full sends no abort, here or to a gateway that replaces this one", async () => {
+    const id = { value: "gateway-a" };
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    const named = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => named.promise;
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [] });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    await openOthers(client);
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    expect(waitingStops(client, run, MAX_DEFERRED_STOPS)).toBe(MAX_DEFERRED_STOPS);
+    const stamp = gatewayStamp(client.state.connection);
+    const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    // The archive's Stop is given up at once, and says nothing was sent for it.
+    await until(
+      () =>
+        transcript()
+          .runs.find((each) => each.id === run)
+          ?.stopError?.includes("nothing was sent for this one") === true,
+    );
+    named.resolve({ runId: run, status: "started" });
+    // Another gateway answers the reconnect at the same address.
+    id.value = "gateway-x";
+    gateway.dropAll();
+    await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    await sleep(600);
+    expect(gateway.calls("chat.abort")).toEqual([]);
+    expect(await archived).not.toBe("done");
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
   });
 
   /** A read-tier host whose archive waits for an access grant the gateway approves. */

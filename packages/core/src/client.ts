@@ -394,7 +394,8 @@ export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose aga
 /** Deferred Stops of an archive or a delete kept for their runs' aborts (`deferredStops`). */
 export const MAX_DEFERRED_STOPS = 32;
 /** Why a deferred Stop was given up: every place for its check is held by a Stop still waiting. */
-const TOO_MANY_STOPS = "Too many Stops are waiting for their runs to start. Try again in a moment.";
+const TOO_MANY_STOPS =
+  "Too many Stops are waiting for their runs to start, so nothing was sent for this one. Try again in a moment.";
 /** A failed read of the gateway's identity is asked again this many times, each 4 times later. */
 const IDENTITY_RETRIES = 4;
 const IDENTITY_RETRY_MS = 500;
