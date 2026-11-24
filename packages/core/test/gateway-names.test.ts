@@ -5,6 +5,7 @@ import { ClawtrateClient, GatewayChangedError } from "../src/client.ts";
 import {
   GATEWAY_NAMES_KEY,
   MAX_GATEWAY_NAMES,
+  MAX_GATEWAY_NAME_CHARS,
   cleanGatewayName,
   gatewayAddress,
   gatewayNameFor,
@@ -37,6 +38,22 @@ describe("F-526: gateway names", () => {
     expect(withGatewayName(named, URL, "   ")).toEqual([]);
     expect(cleanGatewayName("  Dev\nbox\u0000 \u202e ")).toBe("Dev box");
     expect([...cleanGatewayName("x".repeat(60))]).toHaveLength(40);
+  });
+
+  it("a name stays within two JSON characters per character, lone surrogates and all", () => {
+    for (const raw of [
+      "\ud800".repeat(60),
+      "a\udfffb".repeat(20),
+      '"\\'.repeat(30),
+      "😀".repeat(60),
+    ]) {
+      const name = cleanGatewayName(raw);
+      expect(JSON.stringify(name).length - 2, JSON.stringify(raw).slice(0, 20)).toBeLessThanOrEqual(
+        2 * MAX_GATEWAY_NAME_CHARS,
+      );
+    }
+    expect(cleanGatewayName("Dev\ud800box")).toBe("Dev box");
+    expect(cleanGatewayName("😀 Lab")).toBe("😀 Lab");
   });
 
   it("keeps the newest 32 and reads anything unreadable as no names", () => {
