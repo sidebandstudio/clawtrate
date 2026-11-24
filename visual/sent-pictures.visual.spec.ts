@@ -145,6 +145,18 @@ test.describe("sent pictures behaviour", () => {
     await expect(close).toBeFocused();
     await page.keyboard.press("Shift+Tab");
     await expect(close).toBeFocused();
+    // The app's shortcuts don't act behind the open view: no switch of bot, no search, no sheet.
+    for (const shortcut of [
+      "Control+Tab",
+      "Alt+ArrowDown",
+      "ControlOrMeta+2",
+      "ControlOrMeta+Shift+F",
+      "ControlOrMeta+/",
+    ]) {
+      await page.keyboard.press(shortcut);
+      await expect(viewer(page), shortcut).toBeVisible();
+      await expect(close, shortcut).toBeFocused();
+    }
     await page.keyboard.press("Escape");
     await expect(viewer(page)).toHaveCount(0);
     await expect(preview(page)).toBeFocused();

@@ -1,5 +1,5 @@
-// A picture a person sends shows in their own message (#451). The gateway keeps
-// no copy a client can download (`sent-attachments-rows.ts`), so the preview
+// A picture a person sends shows in their own message (#451). Clawtrate doesn't
+// load a person's picture from the gateway (#469), so the preview
 // comes from the copy this app sent, while the task stays open; history names
 // each file so another device can say what was sent.
 
@@ -144,6 +144,9 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     expect(await client.readSentPicture(OTHER, `${id}:user`, 0)).toEqual({ status: "not-kept" });
     expect(gateway.requests.length).toBe(asked);
     expect(gateway.calls("artifacts.download")).toEqual([]);
+    // Nor on another gateway: a Disconnect lets every kept picture go.
+    await client.disconnect();
+    expect(client.keptPictureBytes).toBe(0);
     client.stop();
   });
 

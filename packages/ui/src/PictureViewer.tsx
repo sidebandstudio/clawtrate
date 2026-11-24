@@ -12,9 +12,10 @@ function PictureViewer({ url, alt, onClose }: { url: string; alt: string; onClos
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => close.current?.focus(), []);
   const onKey = (event: KeyboardEvent<HTMLElement>) => {
+    // No key reaches the app's shortcuts behind the view while it is open.
+    event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
-      event.stopPropagation();
       onClose();
     } else if (event.key === "Tab") {
       // Close is the one control: focus stays on it.
