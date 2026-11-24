@@ -3,7 +3,15 @@
 // release's tag. GitHub's API and downloads are stand-ins here.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -11,6 +19,7 @@ import { checkBetaFiles, makeLatestMac, releaseFolder } from "../packaging/beta-
 import {
   assembleSite,
   betaNotes,
+  whatsNewFile,
   main,
   newestBeta,
   whatsNew,
@@ -19,6 +28,7 @@ import {
   type Get,
   type ReleaseRow,
 } from "../packaging/site-feed.ts";
+import { MAX_WHATS_NEW_BYTES, parseWhatsNew } from "../src/main/update/whats-new.ts";
 
 /** Each zip as GitHub serves it here: 100 bytes. */
 const ZIP = "z".repeat(100);
@@ -637,6 +647,104 @@ describe("assembling the site", () => {
     // The earlier beta's list follows the newest one's.
     expect(page.indexOf(`<h3>${earlier}</h3>`)).toBeGreaterThan(page.indexOf(`<h3>${version} `));
     expect(page).not.toMatch(/__CLAWTRATE_/);
+  });
+
+  /** GitHub with the beta above as newest, and older betas whose pages hold `bodies`. */
+  const withBodies =
+    (bodies: Record<string, string | null>): Get =>
+    async (url, headers) => {
+      if (url.startsWith("https://api.github.com/"))
+        return new Response(
+          JSON.stringify(
+            Object.entries(bodies).map(([each, body]) =>
+              each === version ? row(version, { body }) : { ...row(each, { body }), assets: [] },
+            ),
+          ),
+        );
+      return oneBeta(url, headers);
+    };
+
+  it("F-554: serves the newest betas' lists as whats-new.json beside the feed, newest first", async () => {
+    fixture();
+    await assembleSite(
+      source,
+      output,
+      withBodies({
+        "0.1.1-beta.20261118.1": "What's new:\n\n- An older change (#1)\n",
+        [version]: "Notes.\n\nWhat's new:\n\n- Settings shows what an update adds (#457)\n",
+        "0.1.1-beta.20261119.1": "Nothing listed here.",
+        "0.1.1-beta.20261120.1":
+          "What's new:\n\n- A change in between (#2)\n- A\u200bhidden mark (#3)\n",
+      }),
+      undefined,
+    );
+    const text = readFileSync(join(output, "updates/beta/whats-new.json"), "utf8");
+    expect(JSON.parse(text)).toEqual({
+      format: 1,
+      builds: [
+        { version, items: ["Settings shows what an update adds (#457)"] },
+        { version: "0.1.1-beta.20261120.1", items: ["A change in between (#2)"] },
+        { version: "0.1.1-beta.20261118.1", items: ["An older change (#1)"] },
+      ],
+    });
+    // The app reads it as the site wrote it.
+    expect(parseWhatsNew(text)).toEqual(JSON.parse(text).builds);
+  });
+
+  it("F-554: writes whats-new.json with no builds when no page lists anything, and the feed's files exactly as before", async () => {
+    fixture();
+    await assembleSite(source, output, oneBeta, undefined);
+    expect(JSON.parse(readFileSync(join(output, "updates/beta/whats-new.json"), "utf8"))).toEqual({
+      format: 1,
+      builds: [],
+    });
+    const { feed, latest } = files(version);
+    expect(readFileSync(join(output, "updates/beta/feed.json"), "utf8")).toBe(feed);
+    expect(readFileSync(join(output, "updates/beta/latest-mac.json"), "utf8")).toBe(latest);
+    expect(readdirSync(join(output, "updates/beta")).sort()).toEqual([
+      "feed.json",
+      "latest-mac.json",
+      "whats-new.json",
+    ]);
+  });
+
+  it("F-554: the largest lists the rule allows serialize under the app's reading cap", () => {
+    const worst = (n: number) =>
+      row(`0.1.1-beta.20261120.${n}`, {
+        body: `What's new:\n\n${Array.from({ length: 30 }, () => `- ${"_".repeat(200)}`).join("\n")}\n`,
+      });
+    const rows = Array.from({ length: 12 }, (_, n) => worst(n + 1));
+    const text = whatsNewFile(rows);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(MAX_WHATS_NEW_BYTES);
+    expect(text).not.toMatch(/__/);
+    expect(parseWhatsNew(text)).toEqual(betaNotes(rows));
+  });
+
+  it("F-554: the page leaves out a title of blank fillers alone, and keeps accented ones, as the app does", () => {
+    expect(whatsNew("What's new:\n\n- \u3164\n- \u2800\n- \uffa0\n- Café ouvre (#1)\n")).toEqual([
+      "Café ouvre (#1)",
+    ]);
+  });
+
+  it("F-554: the page leaves out a title of invisible marks alone, as the app does", () => {
+    expect(whatsNew("What's new:\n\n- \u034f\n- \ufe0f\n- Cafe\u0301 opens (#1)\n")).toEqual([
+      "Cafe\u0301 opens (#1)",
+    ]);
+  });
+
+  it("F-554: a title naming a template token is served as written, without holding the token", async () => {
+    fixture();
+    await assembleSite(
+      source,
+      output,
+      withBodies({ [version]: "What's new:\n\n- Document __CLAWTRATE_BETA_VERSION__ (#3)\n" }),
+      undefined,
+    );
+    const text = readFileSync(join(output, "updates/beta/whats-new.json"), "utf8");
+    expect(text).not.toMatch(/__CLAWTRATE_/);
+    expect(parseWhatsNew(text)).toEqual([
+      { version, items: ["Document __CLAWTRATE_BETA_VERSION__ (#3)"] },
+    ]);
   });
 
   it("puts a title in as written, whatever it holds, and still asks GitHub once", async () => {
