@@ -266,6 +266,43 @@ test.describe("1440 dark", () => {
       await expect(page.locator(".updates-section")).toContainText(said);
     });
 
+  test("F-524: while a download runs, the update button still opens Updates", async ({ page }) => {
+    await openFixture(page, "scene=main&updates=offered&download=hold", "dark");
+    await updateButton(page).click();
+    await page.getByRole("button", { name: "Download", exact: true }).click();
+    await expect(updateButton(page)).toHaveAccessibleName(/^Downloading/);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".updates-section")).toHaveCount(0);
+    await expect(updateButton(page)).not.toHaveAttribute("aria-disabled", "true");
+    await updateButton(page).click();
+    await expect(page.locator(".updates-section")).toBeVisible();
+    await expect(page.locator(".updates-section progress")).toBeVisible();
+  });
+
+  test.describe("phone", () => {
+    test.use(contextFor(PHONE, "dark"));
+    test("F-524: with nothing to return to, closing Settings focuses a control that is shown", async ({
+      page,
+    }) => {
+      await openFixture(page, "scene=main&updates=offered", "dark");
+      await showList(page);
+      // Nothing has focus, so Settings has no opener to give it back to.
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await page.keyboard.press("ControlOrMeta+,");
+      await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const el = document.activeElement as HTMLElement | null;
+            return !!el && el !== document.body && el.getClientRects().length > 0;
+          }),
+        )
+        .toBe(true);
+    });
+  });
+
   test("F-524: Restarting turns, and stands still with reduced motion", async ({ page }) => {
     await openFixture(page, "scene=main&updates=preparing", "dark");
     await expect(page.locator(".update-spin:visible")).not.toHaveCSS("animation-name", "none");
