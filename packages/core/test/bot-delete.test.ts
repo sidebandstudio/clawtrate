@@ -37,6 +37,8 @@ import {
   URL_B,
 } from "./client-harness.ts";
 import { deferred, GatewayError, memoryStorage, sleep, tokenKey, until } from "./fake-gateway.ts";
+import { toBase64 } from "../src/bytes.ts";
+import { SHOT, sentRow, solidPng } from "./sent-attachments-rows.ts";
 
 type Json = Record<string, unknown>;
 type Agent = { id: string; name: string; workspace?: string; createdAt?: number };
@@ -868,6 +870,44 @@ async function adminClient() {
 }
 
 describe("deleting a bot: one gateway, one connection", () => {
+  it("F-557: a deleted bot's tasks let the pictures you sent in them go; another bot's stay", async () => {
+    const { client, fake } = await adminClient();
+    // A picture sent in a task of Pip's and one in a task of Marlow's, each held in history.
+    const MARLOW_TASK = "agent:marlow:letters";
+    client.openSession(MARLOW_TASK);
+    await until(() => client.state.transcripts[MARLOW_TASK]?.status === "ready");
+    const rows = new Map<string, unknown[]>();
+    fake.handlers["chat.history"] = (params) => ({
+      messages: rows.get((params as Json).sessionKey as string) ?? [],
+    });
+    const png = solidPng(8, 8, [10, 120, 200]);
+    const picture = {
+      type: "image",
+      mimeType: "image/png",
+      fileName: "shot.png",
+      content: toBase64(png),
+    };
+    for (const task of [PIP_TASK, MARLOW_TASK]) {
+      const id = client.sendMessage(task, "look", { attachments: [picture] });
+      await until(() => client.state.transcripts[task]!.outbox[0]?.status === "sent");
+      rows.set(task, [sentRow(id, "look", [SHOT])]);
+      fake.emit("sessions.changed", { sessionKey: task, phase: "message", updatedAt: 2 });
+      await until(() => client.state.transcripts[task]!.outbox.length === 0);
+    }
+    expect(client.keptPictureBytes).toBe(2 * png.length);
+    const read = await client.readBotDelete("pip");
+    const outcome = await client.deleteBot({
+      botId: "pip",
+      stamp: read.stamp,
+      deleteFiles: false,
+      reviewed: reviewOf(read),
+      typed: "Pip",
+    });
+    expect(outcome.kind).toBe("answered");
+    expect(client.keptPictureBytes).toBe(png.length);
+    client.stop();
+  });
+
   it("F-050: a dialog read on one gateway sends nothing once the host reaches another", async () => {
     const { client, fake, switchTo } = await adminClient();
     const read = await client.readBotDelete("pip");

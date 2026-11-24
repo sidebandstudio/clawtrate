@@ -6331,7 +6331,13 @@ export class ClawtrateClient {
         return notSent(errorMessage(error));
       }
       if (!link.alive()) return notSent("The connection changed before the delete was sent.");
-      return await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
+      const outcome = await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
+      // The gateway deleted the bot with its tasks and reports no removal for each task: the
+      // pictures you sent in them go now. Only its `ok` proves the delete.
+      if (outcome.kind === "answered")
+        for (const [id, kept] of this.sentPictures)
+          if (botIdFromSessionKey(kept.task) === request.botId) this.dropSentPictures(id);
+      return outcome;
     } finally {
       this.botDeletes.delete(key);
     }
