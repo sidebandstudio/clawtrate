@@ -69,57 +69,94 @@ describe("a chat's reading place", () => {
 
 describe("going back to the reader's place", () => {
   const place = readingPlace(NARROW, 310)!;
-  /** The chat changes from the narrow width to the wide one, the reader not at the end. */
-  const widened = (following = false) =>
-    nextReturning(null, { kind: "resized", from: 382, to: 669, following, place });
+  /** The chat is laid out at the wide width after the narrow one, the reader not at the end. */
+  const resized = (contentWidth: number, following = false) =>
+    nextReturning(null, { kind: "resized", from: 382, to: 669, contentWidth, following, place });
 
   it("after a new width, once the content is laid out at it, a row that grows does not move the reader", () => {
-    let state = widened();
+    let state = resized(382);
     // Going back: the long message's same quarter, at the new width.
-    expect(state).toBe(669);
+    expect(state).toEqual({ width: 669, contentLaidOut: false });
     expect(returnOffset(state, place, WIDE, 1000)).toBe(240);
     // Content still at the old width does not end the return; at the new width it does.
-    expect(finishesReturn(state, 382)).toBe(false);
-    expect(finishesReturn(state, 669)).toBe(true);
-    state = nextReturning(state, { kind: "laid-out", width: 669 });
+    state = nextReturning(state, { kind: "content-laid-out", width: 382 });
+    expect(finishesReturn(state)).toBe(false);
+    state = nextReturning(state, { kind: "content-laid-out", width: 669 });
+    expect(finishesReturn(state)).toBe(true);
+    state = nextReturning(state, { kind: "settled" });
     expect(state).toBeNull();
     // Then the message being read grows at the same width: the view stays where it is.
     const grown = WIDE.map((row) => (row.key === "bot:2" ? { ...row, height: 320 } : row));
-    expect(finishesReturn(state, 669)).toBe(false);
+    state = nextReturning(state, { kind: "content-laid-out", width: 669 });
+    expect(finishesReturn(state)).toBe(false);
     expect(returnOffset(state, place, grown, 1000)).toBeNull();
     expect(
-      nextReturning(state, { kind: "resized", from: 669, to: 669, following: false, place }),
+      nextReturning(state, {
+        kind: "resized",
+        from: 669,
+        to: 669,
+        contentWidth: 669,
+        following: false,
+        place,
+      }),
     ).toBeNull();
   });
 
+  it("ends the same way when the content is laid out at the new width before the chat is", () => {
+    // The content's layout comes first, while no return is under way: nothing to end yet.
+    let state = nextReturning(null, { kind: "content-laid-out", width: 669 });
+    expect(state).toBeNull();
+    // Then the chat's own layout at that width: both have happened, so the return
+    // goes back to the place once and ends when the rows have reported.
+    state = resized(669);
+    expect(state).toEqual({ width: 669, contentLaidOut: true });
+    expect(returnOffset(state, place, WIDE, 1000)).toBe(240);
+    expect(finishesReturn(state)).toBe(true);
+    expect(nextReturning(state, { kind: "settled" })).toBeNull();
+  });
+
+  it("does not end on the frame after the chat's layout alone", () => {
+    const state = resized(382);
+    expect(finishesReturn(state)).toBe(false);
+    expect(nextReturning(state, { kind: "settled" })).toEqual(state);
+  });
+
   it("does not start at the first layout, at the end of the chat, or with no place yet", () => {
+    const first = { kind: "resized", from: 0, to: 669, contentWidth: 0, following: false } as const;
+    expect(nextReturning(null, { ...first, place })).toBeNull();
+    expect(resized(382, true)).toBeNull();
     expect(
-      nextReturning(null, { kind: "resized", from: 0, to: 669, following: false, place }),
-    ).toBeNull();
-    expect(widened(true)).toBeNull();
-    expect(
-      nextReturning(null, { kind: "resized", from: 382, to: 669, following: false, place: null }),
+      nextReturning(null, {
+        kind: "resized",
+        from: 382,
+        to: 669,
+        contentWidth: 382,
+        following: false,
+        place: null,
+      }),
     ).toBeNull();
   });
 
   it("ends when the reader scrolls, before the content is laid out", () => {
-    const state = nextReturning(widened(), { kind: "reader-scrolled" });
+    const state = nextReturning(resized(382), { kind: "reader-scrolled" });
     expect(state).toBeNull();
     expect(returnOffset(state, place, WIDE, 1000)).toBeNull();
   });
 
-  it("follows a second change of width, which the first one's layout does not end", () => {
-    let state = nextReturning(widened(), {
+  it("follows a second change of width, which a late layout at the first one does not end", () => {
+    let state = nextReturning(resized(382), {
       kind: "resized",
       from: 669,
-      to: 382,
+      to: 800,
+      contentWidth: 382,
       following: false,
       place,
     });
-    expect(state).toBe(382);
-    state = nextReturning(state, { kind: "laid-out", width: 669 });
-    expect(state).toBe(382);
-    expect(nextReturning(state, { kind: "laid-out", width: 382 })).toBeNull();
+    expect(state).toEqual({ width: 800, contentLaidOut: false });
+    state = nextReturning(state, { kind: "content-laid-out", width: 669 });
+    expect(finishesReturn(state)).toBe(false);
+    state = nextReturning(state, { kind: "content-laid-out", width: 800 });
+    expect(nextReturning(state, { kind: "settled" })).toBeNull();
   });
 });
 
@@ -145,6 +182,6 @@ describe("keeping the reader's place up to date", () => {
 
   it("keeps the place a return goes back to while the return is under way", () => {
     const saved = readingPlace(NARROW, 310)!;
-    expect(keptPlace(669, saved, WIDE, 500)).toBe(saved);
+    expect(keptPlace({ width: 669, contentLaidOut: false }, saved, WIDE, 500)).toBe(saved);
   });
 });

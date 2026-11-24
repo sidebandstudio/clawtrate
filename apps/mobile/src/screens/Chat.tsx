@@ -322,11 +322,11 @@ export function Chat({
   const [viewHeight, setViewHeight] = useState(0);
   // Where the title and each row sit in the scroll content, the reader's place
   // among them, and, while the view goes back to that place after the chat
-  // changed width, the width it is going back at (`nextReturning` says when
-  // the return starts and ends).
+  // changed width, that width and whether the content has its layout there
+  // (`nextReturning` says when the return starts and ends).
   const boxes = useRef(new Map<string, { y: number; height: number }>());
   const bodyTop = useRef(0);
-  const extent = useRef({ width: 0, view: 0, content: 0 });
+  const extent = useRef({ width: 0, view: 0, content: 0, contentWidth: 0 });
   const place = useRef<ReadingPlace | null>(null);
   const scrollY = useRef(0);
   const returning = useRef<Returning>(null);
@@ -369,6 +369,21 @@ export function Chat({
     const { view, content } = extent.current;
     const y = returnOffset(returning.current, place.current, laidOut(), content - view);
     if (y !== null) scroller.current?.scrollTo({ y, animated: false });
+  };
+  /**
+   * Once the chat and its content both have the new width, in whichever order
+   * they came: on the next frame, when the rows have reported where they moved,
+   * go back to the place one last time and stop, so later growth does not move
+   * the reader.
+   */
+  const settle = () => {
+    const target = returning.current;
+    if (!finishesReturn(target)) return;
+    requestAnimationFrame(() => {
+      if (returning.current !== target) return;
+      returnToPlace();
+      returning.current = nextReturning(target, { kind: "settled" });
+    });
   };
   const measure = (key: string, event: LayoutChangeEvent) => {
     const { y, height } = event.nativeEvent.layout;
@@ -521,14 +536,20 @@ export function Chat({
               kind: "resized",
               from: was,
               to: width,
+              contentWidth: extent.current.contentWidth,
               following: following.current,
               place: place.current,
             });
             returnToPlace();
+            settle();
           }}
           onContentSizeChange={(contentWidth, height) => {
             setContentHeight(height);
-            extent.current = { ...extent.current, content: height };
+            extent.current = { ...extent.current, content: height, contentWidth };
+            returning.current = nextReturning(returning.current, {
+              kind: "content-laid-out",
+              width: contentWidth,
+            });
             if (following.current) scroller.current?.scrollToEnd({ animated: false });
             else returnToPlace();
             // The rows moved without a scroll (a message grew): once they have
@@ -542,19 +563,7 @@ export function Chat({
                   scrollY.current,
                 );
               });
-            // The content has its new width: once its rows have reported where they
-            // moved (the same layout pass, delivered by the next frame), go back to
-            // the place one last time and stop, so later growth does not move the reader.
-            const target = returning.current;
-            if (finishesReturn(target, contentWidth))
-              requestAnimationFrame(() => {
-                if (returning.current !== target) return;
-                returnToPlace();
-                returning.current = nextReturning(target, {
-                  kind: "laid-out",
-                  width: contentWidth,
-                });
-              });
+            settle();
           }}
         >
           <View onLayout={(event) => measure(TASK_LINE, event)}>

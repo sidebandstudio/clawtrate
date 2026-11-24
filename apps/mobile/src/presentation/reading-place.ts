@@ -42,17 +42,30 @@ export function offsetFor(
 }
 
 /**
- * While the chat goes back to the reader's place after its width changed, the
- * width it goes back at; null otherwise, and then nothing moves the view but
- * the reader.
+ * While the chat goes back to the reader's place after its width changed: the
+ * width it goes back at, and whether the content has been laid out at that
+ * width yet. Null otherwise, and then nothing moves the view but the reader.
  */
-export type Returning = number | null;
+export type Returning = { width: number; contentLaidOut: boolean } | null;
 
 export type ReturnEvent =
-  /** The chat was laid out `to` points wide, after `from` (0 before its first layout). */
-  | { kind: "resized"; from: number; to: number; following: boolean; place: ReadingPlace | null }
-  /** The frame after the content was laid out `width` points wide: its rows have reported. */
-  | { kind: "laid-out"; width: number }
+  /**
+   * The chat was laid out `to` points wide, after `from` (0 before its first
+   * layout). `contentWidth` is the width the content was last laid out at, which
+   * can be the new one already: the two layouts may arrive in either order.
+   */
+  | {
+      kind: "resized";
+      from: number;
+      to: number;
+      contentWidth: number;
+      following: boolean;
+      place: ReadingPlace | null;
+    }
+  /** The content was laid out `width` points wide. */
+  | { kind: "content-laid-out"; width: number }
+  /** The frame after both layouts: the rows have reported where they moved. */
+  | { kind: "settled" }
   /** The reader scrolled, or chose Jump to latest. */
   | { kind: "reader-scrolled" };
 
@@ -60,25 +73,31 @@ const sameWidth = (a: number, b: number) => Math.abs(a - b) < 0.5;
 
 /**
  * A new width starts a return to the reader's place, unless the reader follows
- * the end or has no place yet. The return ends once the content has been laid
- * out at that width, or when the reader scrolls; a later change at the same
+ * the end or has no place yet. The return ends once both the chat and its
+ * content have been laid out at that width, whichever comes first, and their
+ * rows have reported; or when the reader scrolls. A later change at the same
  * width leaves the view alone.
  */
 export function nextReturning(state: Returning, event: ReturnEvent): Returning {
   switch (event.kind) {
     case "resized":
       if (event.from === 0 || sameWidth(event.from, event.to)) return state;
-      return !event.following && event.place !== null ? event.to : null;
-    case "laid-out":
-      return state !== null && sameWidth(event.width, state) ? null : state;
+      if (event.following || event.place === null) return null;
+      return { width: event.to, contentLaidOut: sameWidth(event.contentWidth, event.to) };
+    case "content-laid-out":
+      if (state === null || state.contentLaidOut || !sameWidth(event.width, state.width))
+        return state;
+      return { ...state, contentLaidOut: true };
+    case "settled":
+      return state?.contentLaidOut ? null : state;
     case "reader-scrolled":
       return null;
   }
 }
 
-/** Whether content laid out at this width finishes the return, once its rows have reported. */
-export function finishesReturn(state: Returning, contentWidth: number): boolean {
-  return state !== null && sameWidth(contentWidth, state);
+/** Whether both layouts have happened, so the return ends once the rows have reported. */
+export function finishesReturn(state: Returning): boolean {
+  return state?.contentLaidOut === true;
 }
 
 /** Where the view goes after a layout: back to the place while returning, else nowhere (null). */
