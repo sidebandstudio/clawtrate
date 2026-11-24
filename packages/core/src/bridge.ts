@@ -107,7 +107,12 @@ export type BridgeCommand =
    * The one-time offer of full control (setup-effortless.md §6), for the gateway and device
    * it was shown for: accept it (one request for the six), or "Keep current access".
    */
-  | { type: "requestFullControl" | "dismissFullControl"; gatewayUrl: string; deviceId: string }
+  | {
+      type: "requestFullControl" | "dismissFullControl";
+      gatewayUrl: string;
+      deviceId: string;
+      stamp: GatewayStamp;
+    }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -1204,6 +1209,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: command.type,
         gatewayUrl: command.gatewayUrl,
         deviceId: id(command.deviceId, "device id"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "connectDevGateway":
     case "suspend":

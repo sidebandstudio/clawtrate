@@ -16,6 +16,7 @@ import {
   FullControlAsk,
   FullControlOffer,
   isFullRequest,
+  offerBinding,
 } from "../src/FullControl.tsx";
 
 const info: HostInfo = { kind: "desktop", version: "test", devGateway: null, fullControl: true };
@@ -61,6 +62,17 @@ describe("the offer of full control", () => {
     expect(isFullRequest(waiting(FULL_SCOPES))).toBe(true);
     expect(isFullRequest(waiting([...FULL_SCOPES].reverse()))).toBe(false);
     expect(isFullRequest(waiting(["operator.write", "operator.approvals"]))).toBe(false);
+  });
+});
+
+describe("what the offer is bound to", () => {
+  it("F-549: its gateway, this device and the connection's stamp, and nothing before the gateway names itself", () => {
+    expect(offerBinding({ ...offered, gatewayId: "gateway-a", target: 3 })).toEqual({
+      gatewayUrl: "wss://gateway.example",
+      deviceId: "device-1",
+      stamp: { gatewayId: "gateway-a", target: 3 },
+    });
+    expect(offerBinding({ ...offered, gatewayId: null })).toBeNull();
   });
 });
 

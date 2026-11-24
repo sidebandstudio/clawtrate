@@ -92,6 +92,8 @@ export function Shell({
     !info.readOnly &&
     state.connection.status === "connected" &&
     state.connection.fullOffer === "offer" &&
+    // Bound to the gateway's identity, so shown only once it is known (`offerBinding`).
+    state.connection.gatewayId !== null &&
     offerUrl !== offerFor
   ) {
     setOfferFor(offerUrl);

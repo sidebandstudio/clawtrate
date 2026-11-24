@@ -7,6 +7,7 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { ClawtrateClient, FULL_PAIRING_LIMIT, type ClientOptions } from "../src/client.ts";
 import type { ClawtrateHost, KeyValueStore } from "../src/host.ts";
 import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import { gatewayStamp } from "../src/types.ts";
 import {
   deferred,
   FakeGateway,
@@ -37,9 +38,20 @@ const fullRecord = (token: string, held: readonly string[] = FULL_SCOPES) =>
 /** A pairing made before full control: read alone. */
 const readRecord = (token: string) =>
   JSON.stringify({ token, grantedScopes: READ_SCOPES, heldScopes: READ_SCOPES });
-/** Accept the offer of full control for this file's gateway and device. */
-const askFull = (client: ClawtrateClient) =>
-  client.requestFullControl({ gatewayUrl: URL, deviceId: "device-1" });
+/** Accept the offer of full control for this file's gateway and device, as its screen shows it. */
+const askFull = async (client: ClawtrateClient) => {
+  await until(() => client.state.connection.gatewayId !== null);
+  return client.requestFullControl({
+    gatewayUrl: URL,
+    deviceId: "device-1",
+    stamp: gatewayStamp(client.state.connection),
+  });
+};
+/** A gateway that names itself, as the offer's stamp needs (`GatewayStamp`). */
+const identified = (gateway: FakeGateway) => {
+  gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+  return gateway;
+};
 
 const saved = (storage: { data: Map<string, string> }) =>
   JSON.parse(storage.data.get(tokenKey(URL)) ?? "null") as {
@@ -472,7 +484,7 @@ describe("full access under interleavings", () => {
       connection: JSON.stringify({ url: URL, token: null }),
       [tokenKey(URL)]: readRecord("token-A"),
     });
-    const gateway = new FakeGateway();
+    const gateway = identified(new FakeGateway());
     gateway.connectReply = (params) => ({
       ok: true,
       payload: helloOk(
@@ -512,7 +524,7 @@ describe("full access under interleavings", () => {
     return writes;
   };
   const approvingGateway = () => {
-    const gateway = new FakeGateway();
+    const gateway = identified(new FakeGateway());
     const approval = deferred<unknown>();
     gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-2" });
     gateway.handlers["device.scopes.waitUpgrade"] = () => approval.promise;

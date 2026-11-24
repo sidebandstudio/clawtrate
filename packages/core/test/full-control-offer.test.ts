@@ -5,10 +5,11 @@
 // restart and at another spelling of the address.
 
 import { describe, expect, it } from "vitest";
-import { ClawtrateClient, FULL_PAIRING_LIMIT } from "../src/client.ts";
+import { ClawtrateClient, FULL_PAIRING_LIMIT, type ProvedRoute } from "../src/client.ts";
 import { endpointSpellings, gatewayEndpoint } from "../src/gateway-url.ts";
 import type { KeyValueStore } from "../src/host.ts";
 import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import { gatewayStamp } from "../src/types.ts";
 import {
   deferred,
   FakeGateway,
@@ -30,6 +31,12 @@ const readRecord = JSON.stringify({
   token: "token-A",
   grantedScopes: READ_SCOPES,
   heldScopes: READ_SCOPES,
+});
+const fullRecord = JSON.stringify({
+  token: "token-A",
+  grantedScopes: FULL_SCOPES,
+  heldScopes: FULL_SCOPES,
+  fullGrant: true,
 });
 const pairedAt = (url = URL, record = readRecord) =>
   memoryStorage({
@@ -60,6 +67,8 @@ function gatewayFor() {
   const decision = deferred<unknown>();
   gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
   gateway.handlers["device.scopes.waitUpgrade"] = () => decision.promise;
+  // Its identity, which the offer's stamp carries (`GatewayStamp`).
+  gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
   return {
     gateway,
     decide: (result: object) => decision.resolve({ requestId: "up-1", ...result }),
@@ -83,12 +92,21 @@ function clientOn(
 
 async function connected(client: ClawtrateClient) {
   await client.start();
-  await until(() => client.state.connection.status === "connected");
+  await until(
+    () =>
+      client.state.connection.status === "connected" && client.state.connection.gatewayId !== null,
+  );
   return client;
 }
 
+/** The offer as the screen shows it now: its gateway, this device and the connection's stamp. */
+const binding = (client: ClawtrateClient, url = URL) => ({
+  gatewayUrl: url,
+  deviceId: DEVICE,
+  stamp: gatewayStamp(client.state.connection),
+});
 const accept = (client: ClawtrateClient, url = URL) =>
-  client.requestFullControl({ gatewayUrl: url, deviceId: DEVICE });
+  client.requestFullControl(binding(client, url));
 
 /** A restart on the same storage: what the offer is then, and what was asked. */
 async function afterRestart(storage: Storage) {
@@ -238,7 +256,7 @@ describe("the one-time offer of full control (F-500)", () => {
     const storage = pairedAt();
     const { gateway } = gatewayFor();
     const client = await connected(clientOn(gateway, storage));
-    await client.dismissFullControl({ gatewayUrl: URL, deviceId: DEVICE });
+    await client.dismissFullControl(binding(client));
     expect(answer(storage)).toBe("dismissed");
     expect(client.state.connection.fullOffer).toBe("settings");
     expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
@@ -290,15 +308,70 @@ describe("the one-time offer of full control (F-500)", () => {
     client.stop();
   });
 
+  it("F-549: isn't offered at any loopback spelling, even with a secure scheme", async () => {
+    const spellings = [
+      "wss://localhost:19984",
+      "wss://LOCALHOST.:19984",
+      "wss://a.localhost:19984",
+      "wss://127.1:19984",
+      "wss://0.0.0.0:19984",
+      "wss://[::1]:19984",
+      "wss://[::]:19984",
+      "wss://[::ffff:127.0.0.1]:19984",
+    ];
+    for (const url of spellings) {
+      const storage = pairedAt(url);
+      const before = new Map(storage.data);
+      const { gateway } = gatewayFor();
+      const client = await connected(clientOn(gateway, storage));
+      expect(client.state.connection.fullOffer, url).toBeNull();
+      await expect(accept(client, client.state.connection.gatewayUrl!), url).rejects.toThrow();
+      expect(gateway.calls("device.scopes.requestUpgrade"), url).toEqual([]);
+      expect(storage.data, url).toEqual(before);
+      client.stop();
+    }
+  });
+
+  it("F-549: over a proved local route, no offer, and a full pairing there asks for nothing more", async () => {
+    const LOCAL = "ws://127.0.0.1:19986";
+    const ROUTE = ".openclaw-clawtrate";
+    for (const record of [readRecord, fullRecord]) {
+      const storage = memoryStorage({
+        connection: JSON.stringify({ url: LOCAL, token: null, route: ROUTE }),
+        [tokenKey(LOCAL)]: JSON.stringify({ ...JSON.parse(record), route: ROUTE }),
+      });
+      const { gateway } = gatewayFor();
+      const sockets: ProvedRoute = {
+        createSocket: (url) => gateway.createWebSocket(url),
+        verify: async () => true,
+      };
+      const client = new ClawtrateClient(
+        { ...testHost(gateway, storage), secureCredentials: async () => true },
+        { ...FAST, localConnect: () => sockets },
+      );
+      await connected(client);
+      expect(client.state.connection.fullOffer).toBeNull();
+      if (record === fullRecord) {
+        // Full access holds on the proved route: the six are asked for and held.
+        expect((gateway.connects.at(-1) as ConnectParams).scopes).toEqual([...FULL_SCOPES]);
+        expect(client.state.connection.fullPairing).toBe(true);
+        await expect(client.requestAccess("admin")).rejects.toThrow(FULL_PAIRING_LIMIT);
+      }
+      await expect(accept(client, LOCAL)).rejects.toThrow(/isn't offered/);
+      expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+      client.stop();
+    }
+  });
+
   it("F-549: the offer is bound to the gateway and device it was shown for", async () => {
     const storage = pairedAt();
     const { gateway } = gatewayFor();
     const client = await connected(clientOn(gateway, storage));
+    await expect(client.requestFullControl(binding(client, "wss://other.example"))).rejects.toThrow(
+      /isn't offered/,
+    );
     await expect(
-      client.requestFullControl({ gatewayUrl: "wss://other.example", deviceId: DEVICE }),
-    ).rejects.toThrow(/isn't offered/);
-    await expect(
-      client.requestFullControl({ gatewayUrl: URL, deviceId: "device-2" }),
+      client.requestFullControl({ ...binding(client), deviceId: "device-2" }),
     ).rejects.toThrow(/isn't offered/);
     expect(answer(storage)).toBeNull();
     expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);

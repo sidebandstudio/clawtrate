@@ -328,9 +328,11 @@ import {
 } from "./computer.ts";
 import { readMachine, type MachineFacts } from "./machine.ts";
 import {
+  gatewayStamp,
   initialConnectionState,
   initialScopeUpgrade,
   initialState,
+  sameStamp,
   type ClawtrateState,
   type ConnectionState,
   type GatewayStamp,
@@ -418,6 +420,9 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
+
+/** What the offer of full control was shown for: its gateway, this device, and its stamp. */
+export type FullControlBinding = { gatewayUrl: string; deviceId: string; stamp: GatewayStamp };
 
 /** Why core starts no further scope request for a full pairing (setup-effortless.md §2). */
 export const FULL_PAIRING_LIMIT =
@@ -2191,13 +2196,18 @@ export class ClawtrateClient {
    * for the six, in their order, which the gateway's owner decides once. The answer is saved
    * before the request goes, so the offer never shows by itself again. An approval saves the
    * grant as a full pairing, a narrower one too, and nothing asks again; a refusal is saved.
-   * Bound to the gateway and device the offer was shown for.
+   * Bound to the gateway and device the offer was shown for, and to its stamp (`GatewayStamp`):
+   * an offer read before a Connect, a Disconnect or a switch sends nothing, even to a gateway
+   * that reports the same identity. The reconnect that brings the grant keeps the target.
    */
-  async requestFullControl(binding: { gatewayUrl: string; deviceId: string }): Promise<void> {
+  async requestFullControl(binding: FullControlBinding): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
+    if (!sameStamp(binding.stamp, gatewayStamp(this.state.connection)))
+      throw new Error(CONNECTION_CHANGED);
     const generation = this.generation;
     const offered = () =>
+      sameStamp(binding.stamp, gatewayStamp(this.state.connection)) &&
       generation === this.generation &&
       this.state.connection.status === "connected" &&
       this.state.connection.fullOffer !== null &&
@@ -2223,9 +2233,10 @@ export class ClawtrateClient {
   }
 
   /** "Keep current access": the offer is answered, and shows by itself no more. */
-  async dismissFullControl(binding: { gatewayUrl: string; deviceId: string }): Promise<void> {
+  async dismissFullControl(binding: FullControlBinding): Promise<void> {
     const connection = this.state.connection;
     if (
+      !sameStamp(binding.stamp, gatewayStamp(connection)) ||
       connection.fullOffer !== "offer" ||
       connection.gatewayUrl !== binding.gatewayUrl ||
       connection.deviceId !== binding.deviceId

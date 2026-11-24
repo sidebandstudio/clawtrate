@@ -2,7 +2,14 @@
 // (docs/design/setup-effortless.md §2, "Consent before Connect"; §8, a narrower grant).
 // Every sentence is the design's fixed copy.
 
-import { FULL_SCOPES, PAIRING_SCOPE, scopeSatisfied, type ConnectionState } from "@clawtrate/core";
+import {
+  FULL_SCOPES,
+  gatewayStamp,
+  PAIRING_SCOPE,
+  scopeSatisfied,
+  type ConnectionState,
+  type GatewayStamp,
+} from "@clawtrate/core";
 import { useEffect, useId, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
@@ -78,18 +85,25 @@ export function isFullRequest(connection: ConnectionState): boolean {
   return asked.length === FULL_SCOPES.length && FULL_SCOPES.every((scope, i) => asked[i] === scope);
 }
 
-/** Accept the offer for the gateway and device it is shown for; a refusal is the message. */
-function useAskFull(connection: ConnectionState) {
+/** What an offer is bound to: its gateway, this device and its stamp; null until all are known. */
+type Binding = { gatewayUrl: string; deviceId: string; stamp: GatewayStamp };
+export function offerBinding(connection: ConnectionState): Binding | null {
+  if (!connection.gatewayUrl || !connection.deviceId || connection.gatewayId === null) return null;
+  return {
+    gatewayUrl: connection.gatewayUrl,
+    deviceId: connection.deviceId,
+    stamp: gatewayStamp(connection),
+  };
+}
+
+/** Accept the offer for what it was shown for (`offerBinding`); a refusal is the message. */
+function useAskFull(binding: Binding | null) {
   const send = useCommand();
   const [failure, setFailure] = useState<string | null>(null);
   const ask = () => {
-    if (!connection.gatewayUrl || !connection.deviceId) return;
+    if (!binding) return;
     setFailure(null);
-    send({
-      type: "requestFullControl",
-      gatewayUrl: connection.gatewayUrl,
-      deviceId: connection.deviceId,
-    }).catch((error: unknown) =>
+    send({ type: "requestFullControl", ...binding }).catch((error: unknown) =>
       setFailure(error instanceof Error ? error.message : String(error)),
     );
   };
@@ -138,7 +152,9 @@ export function FullControlOffer({
   onClose: () => void;
 }) {
   const send = useCommand();
-  const { ask, failure } = useAskFull(connection);
+  // Bound to the gateway as the dialog first showed it: a switch since sends nothing.
+  const [binding] = useState(() => offerBinding(connection));
+  const { ask, failure } = useAskFull(binding);
   const [asked, setAsked] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -150,12 +166,7 @@ export function FullControlOffer({
     if (answeredElsewhere) onClose();
   }, [answeredElsewhere, onClose]);
   const keep = () => {
-    if (connection.gatewayUrl && connection.deviceId)
-      void send({
-        type: "dismissFullControl",
-        gatewayUrl: connection.gatewayUrl,
-        deviceId: connection.deviceId,
-      }).catch(() => {});
+    if (binding) void send({ type: "dismissFullControl", ...binding }).catch(() => {});
     onClose();
   };
   const note = failure ?? fullRequestNote(connection);
@@ -229,7 +240,8 @@ export function FullControlOffer({
  * line directly above "Give this device full control".
  */
 export function FullControlAsk({ connection }: { connection: ConnectionState }) {
-  const { ask, failure } = useAskFull(connection);
+  // As this screen shows the gateway now.
+  const { ask, failure } = useAskFull(offerBinding(connection));
   // While it waits, and once approved until the next hello, Settings' own lines say where it stands.
   const waiting =
     isFullRequest(connection) &&

@@ -549,9 +549,10 @@ export function Settings({
         </p>
       )}
       {/* The one-time offer stays here once answered (setup-effortless.md §6). */}
-      {!info.readOnly && connection.status === "connected" && connection.fullOffer !== null && (
-        <FullControlAsk connection={connection} />
-      )}
+      {!info.readOnly &&
+        connection.status === "connected" &&
+        connection.fullOffer !== null &&
+        connection.gatewayId !== null && <FullControlAsk connection={connection} />}
       {problem && (
         <div className="form-error" role="alert" data-testid="gateway-problem">
           <strong>{problem.title}</strong>

@@ -78,6 +78,8 @@ test("F-549: the offer opens on Keep current access, keeps Tab inside, and Escap
       type: "dismissFullControl",
       gatewayUrl: "wss://gateway.example",
       deviceId: expect.any(String),
+      // The stamp of the gateway the dialog opened on (`GatewayStamp`).
+      stamp: { gatewayId: expect.any(String), target: expect.any(Number) },
     },
   ]);
   // Nothing asks again by itself, and nothing was asked of the gateway.
