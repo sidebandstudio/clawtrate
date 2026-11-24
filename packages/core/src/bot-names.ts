@@ -353,9 +353,13 @@ export class BotNames {
       return true;
     }
     // The card stays up while what is kept is read; then the Not now is in memory before the
-    // card goes, so a run that ends meanwhile doesn't bring the card back.
-    await this.loadDeclines();
-    if (!answers()) return false;
+    // card goes, so a run that ends meanwhile doesn't bring the card back. Awaited only when not
+    // read yet: a card is drawn only once they are, and a wait here would let a Rename sent just
+    // after this Not now take the card first (#512). After a wait, the card is looked at again.
+    if (this.declines === null) {
+      await this.loadDeclines();
+      if (!answers()) return false;
+    }
     // Changed as they are now, after the read, so two at once both keep their names.
     const declines = { ...this.declines };
     const key = declineKey(gateway, botId);

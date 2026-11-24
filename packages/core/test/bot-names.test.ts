@@ -26,6 +26,7 @@ import {
   type NameProposal,
 } from "../src/types.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import { createBridgeSession } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { agentEvent, FAST, openTask, URL_A, URL_B, grantingGateway } from "./client-harness.ts";
 import {
@@ -1186,6 +1187,85 @@ describe("F-552: a bot that takes a name", () => {
     expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("Johnny");
     expect(client.state.botNames).toEqual([]);
     client.stop();
+  });
+
+  it("F-552: Not now followed at once by a Rename of the same card (#512): Not now wins, and nothing is renamed", async () => {
+    // Another window, a double press, or both commands in one socket read: the Rename reaches the
+    // engine in the same turn, right after the Not now.
+    const storage = memoryStorage();
+    const requests: string[] = [];
+    const names = engine({
+      storage,
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+    });
+    await names.ctxRun();
+    const [declined, renamed] = await Promise.allSettled([
+      names.engine.decline("new-bot", "Johnny", STAMP),
+      names.engine.accept("new-bot", "Johnny", STAMP),
+    ]);
+    expect(declined).toEqual({ status: "fulfilled", value: true });
+    expect(renamed).toMatchObject({
+      status: "rejected",
+      reason: { message: "That name is no longer waiting for you." },
+    });
+    expect(requests).not.toContain("agents.update");
+    expect(JSON.parse(storage.data.get(NAME_DECLINES_KEY)!)).toEqual({ "gw-a\nnew-bot": "Johnny" });
+  });
+
+  it("F-552: Not now and Rename from two windows in one turn, through the bridge (#512): one Not now, no rename", async () => {
+    const { gateway, takeName } = namingGateway();
+    const storage = adminStorage();
+    const { client } = await openTask({ gateway, storage, held: ADMIN_SCOPES, key: KEY });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    const stamp = here(client);
+    const [declined, renamed] = await Promise.allSettled([
+      createBridgeSession(client).apply({
+        type: "declineBotName",
+        botId: "new-bot",
+        name: "Johnny",
+        stamp,
+      }),
+      createBridgeSession(client).apply({
+        type: "acceptBotName",
+        botId: "new-bot",
+        name: "Johnny",
+        stamp,
+      }),
+    ]);
+    expect(declined).toEqual({ status: "fulfilled", value: { declined: true } });
+    expect(renamed.status).toBe("rejected");
+    expect(gateway.calls("agents.update")).toEqual([]);
+    expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("New bot");
+    expect(JSON.parse(storage.data.get(NAME_DECLINES_KEY)!)).toEqual({ "gw-a\nnew-bot": "Johnny" });
+    client.stop();
+  });
+
+  it("F-552: a Rename already under way when Not now arrives ends as the rename alone (#512)", async () => {
+    const storage = memoryStorage();
+    const listed = deferred<void>();
+    const requests: string[] = [];
+    const names = engine({
+      storage,
+      refreshBots: () => listed.promise,
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+    });
+    await names.ctxRun();
+    names.onUpdate = () => (names.bots[0] = { ...names.bots[0]!, name: "Johnny" });
+    const renaming = names.engine.accept("new-bot", "Johnny", STAMP);
+    // The Rename waits on its read of the bot list; Not now comes then, and in the same turn.
+    expect(await names.engine.decline("new-bot", "Johnny", STAMP)).toBe(false);
+    listed.resolve();
+    await renaming;
+    expect(requests.filter((each) => each === "agents.update")).toHaveLength(1);
+    expect(storage.data.get(NAME_DECLINES_KEY)).toBeUndefined();
   });
 
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
