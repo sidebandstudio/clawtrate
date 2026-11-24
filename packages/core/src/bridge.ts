@@ -116,6 +116,16 @@ export type BridgeCommand =
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
   /**
+   * The one-time offer of full control (setup-effortless.md §6), for the gateway and device
+   * it was shown for: accept it (one request for the six), or "Keep current access".
+   */
+  | {
+      type: "requestFullControl" | "dismissFullControl";
+      gatewayUrl: string;
+      deviceId: string;
+      stamp: GatewayStamp;
+    }
+  /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
    */
@@ -1267,6 +1277,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       )
         throw new Error("invalid url");
       return { type: "disconnect", gatewayUrl: command.gatewayUrl };
+    case "requestFullControl":
+    case "dismissFullControl":
+      if (
+        typeof command.gatewayUrl !== "string" ||
+        command.gatewayUrl.length > MAX_GATEWAY_URL_CHARS
+      )
+        throw new Error("invalid url");
+      return {
+        type: command.type,
+        gatewayUrl: command.gatewayUrl,
+        deviceId: id(command.deviceId, "device id"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "connectDevGateway":
     case "suspend":
     case "retry":
@@ -1887,6 +1910,10 @@ class ViewerSession implements BridgeSession {
         return client.reloadSession(command.key, command.failed);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
+      case "requestFullControl":
+        return client.requestFullControl(command);
+      case "dismissFullControl":
+        return client.dismissFullControl(command);
       case "refreshRoutines":
         return client.refreshRoutines();
       case "readBotRoutines":
