@@ -328,13 +328,20 @@ describe("the host's target", () => {
 
   it("a host started again at the same clock value, or an earlier one, starts at another number", () => {
     const targets: number[] = [];
-    for (const clock of [1_800_000_000_000, 1_800_000_000_000, 1_700_000_000_000]) {
+    // Fixed draws, so the test can't fail by chance: the clock alone would give the first two the same.
+    for (const [clock, draw] of [
+      [1_800_000_000_000, 0.25],
+      [1_800_000_000_000, 0.5],
+      [1_700_000_000_000, 0.75],
+    ] as const) {
       const now = vi.spyOn(Date, "now").mockReturnValue(clock);
+      const random = vi.spyOn(Math, "random").mockReturnValue(draw);
       try {
         const host = testHost(new FakeGateway(), memoryStorage());
         targets.push((new ClawtrateClient(host, FAST) as unknown as { target: number }).target);
       } finally {
         now.mockRestore();
+        random.mockRestore();
       }
     }
     expect(new Set(targets).size).toBe(3);

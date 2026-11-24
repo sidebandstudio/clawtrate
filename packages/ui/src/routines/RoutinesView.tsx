@@ -834,7 +834,8 @@ export function RoutinesView({
   // Kept fewer routines than the gateway has: one bot's are read from the gateway when chosen.
   const [botRead, retryBot] = useKeyedRead(
     store.omitted > 0 && nav.bot !== null
-      ? // The target never repeats across hosts, so a list read before a host restarted is read again.
+      ? // A host started again starts at another target (a random one, so a repeat is only very
+        // unlikely), so a list read before a host restarted is read again.
         `${gateway}:${state.connection.target}:${nav.bot}:${store.revision}:${store.omitted}`
       : null,
     () => bridge.invoke({ type: "readBotRoutines", botId: nav.bot! }),

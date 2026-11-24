@@ -546,6 +546,40 @@ describe("an archive or a delete bound to the connection it began on", () => {
     client.stop();
   });
 
+  it("a Stop asked before the gateway named the run, whose abort the drop lost, is not sent again to another gateway at the same address", async () => {
+    const id = { value: "gateway-a" };
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    // The send's answer, which names the run, comes only after the archive has asked to stop it.
+    const named = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => named.promise;
+    gateway.handlers["chat.abort"] = () => {
+      id.value = "gateway-x";
+      setTimeout(() => gateway.dropAll(), 0);
+      return new Promise(() => {});
+    };
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    const stamp = gatewayStamp(client.state.connection);
+    const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    await until(() => transcript().runs.find((each) => each.id === run)?.state === "stopping");
+    expect(gateway.calls("chat.abort")).toEqual([]);
+    named.resolve({ runId: run, status: "started" });
+    await until(() => gateway.calls("chat.abort").length === 1);
+    await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    await sleep(600);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    expect(await archived).not.toBe("done");
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
   /** A read-tier host whose archive waits for an access grant the gateway approves. */
   async function granted(after: string) {
     const { client, gateway } = await connected(READ_SCOPES);
