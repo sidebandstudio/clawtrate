@@ -58,7 +58,6 @@ import {
   type OverlayRead,
 } from "./windows.ts";
 
-const ROOT = join(import.meta.dirname, "..");
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const APP = process.env.CLAWTRATE_PACKAGED_APP!;
 const USER_DATA = process.env.CLAWTRATE_PACKAGED_USER_DATA!;
@@ -406,8 +405,8 @@ function runEndpoint() {
   const endpoint = provenEndpoint({
     instance: INSTANCE,
     home: homedir(),
-    runDir: runDirFor(INSTANCE, join(ROOT, "tools/dev-gateway/.run")),
-    checkout: realpathSync(ROOT),
+    runDir: runDirFor(INSTANCE, join(CHECKOUT, "tools/dev-gateway/.run")),
+    checkout: CHECKOUT,
     ...(WINDOWS ? { identify: windowsIdentity } : {}),
   });
   if ("refusal" in endpoint) throw new Error(endpoint.refusal);

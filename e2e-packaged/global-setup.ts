@@ -37,10 +37,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, win32 } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
-import { writeSandbox } from "../e2e/setup-sandbox.ts";
+import { currentRun, writeSandbox } from "../e2e/setup-sandbox.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-setup.ts";
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
@@ -285,7 +285,10 @@ export function launchArgs(userData: string, sandbox: string, checkout: string):
 }
 
 /** This checkout, as the dev-gateway tool records it. */
-export const CHECKOUT = realpathSync(ROOT);
+export const CHECKOUT =
+  hostedWindows && process.env.CLAWTRATE_PACKAGED_HOME
+    ? dirname(process.env.CLAWTRATE_PACKAGED_HOME)
+    : realpathSync(ROOT);
 
 /**
  * The sandbox the app's look on this computer is given (docs/development/setup.md):
@@ -296,17 +299,19 @@ export const CHECKOUT = realpathSync(ROOT);
 function setupSandbox(dir: string, instance: string): { file: string; appData: string } {
   const parent = join(dir, "setup");
   mkdirSync(parent, { recursive: true });
-  const run = process.platform === "win32" && !hostedWindows ? { run: "0".repeat(48) } : {};
-  const sandbox = writeSandbox({ instance, parent, ...run });
+  const run =
+    process.platform === "win32" && !hostedWindows
+      ? "0".repeat(48)
+      : currentRun(instance, CHECKOUT);
+  const sandbox = writeSandbox({ instance, parent, run });
   // The app keeps its data in the sandbox's own folder; the check passes and reads that one.
   return { file: sandbox.file, appData: realpathSync.native(sandbox.appData) };
 }
 
 export default async function globalSetup() {
   if (process.platform === "win32") {
-    const name = `e2e-${randomBytes(4).toString("hex")}`;
-    if (!hostedWindows) return windowsSetup(name);
-    process.env.CLAWTRATE_DEV_INSTANCE = name;
+    if (!hostedWindows) return windowsSetup(`e2e-${randomBytes(4).toString("hex")}`);
+    const name = process.env.CLAWTRATE_DEV_INSTANCE!;
     return withWindowsGateway(name, () => windowsSetup(name));
   }
   if (process.platform !== "darwin") throw new Error("the launch check runs on macOS and Windows");
@@ -518,7 +523,7 @@ async function windowsSetup(name: string) {
   const app = packagedApp();
   const exe = packagedExecutable(app);
   if (!existsSync(exe)) throw new Error(`${exe} does not exist. Run \`pnpm package:win\` first.`);
-  const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+  const dir = mkdtempSync(join(hostedWindows ? CHECKOUT : tmpdir(), TEMP_PREFIX));
   // The sandbox's data folder once it is written.
   let userData = join(realpathSync.native(dir), "user-data");
   let appProcess: ChildProcess | null = null;

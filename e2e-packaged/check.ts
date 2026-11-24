@@ -1,8 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { runCli } from "./run-cli.ts";
 
 const cli = createRequire(import.meta.url).resolve("@playwright/test/cli");
 const args = [cli, "test", "-c", "playwright.packaged.config.ts", ...process.argv.slice(2)];
@@ -11,33 +13,14 @@ if (
   process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
   process.env.GITHUB_ACTIONS !== "true"
 ) {
-  process.exitCode = spawnSync(process.execPath, args, { stdio: "inherit" }).status ?? 1;
+  await runCli(args);
 } else {
   const root = mkdtempSync(join(tmpdir(), "clawtrate-pairing-"));
   const home = join(root, "home");
-  const runtime = join(root, "runtime");
-  for (const dir of [
-    join(home, "tmp"),
-    join(home, "AppData", "Local"),
-    join(home, "AppData", "Roaming"),
-    runtime,
-  ])
-    mkdirSync(dir, { recursive: true });
-  const npm = join(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
-  execFileSync(
-    process.execPath,
-    [npm, "install", "--prefix", runtime, "--no-audit", "--no-fund", "openclaw@2026.10.6"],
-    { cwd: runtime, stdio: "inherit" },
-  );
-  const run = spawnSync(
+  console.log(`Windows pairing root: ${root}`);
+  const run = spawn(
     "powershell.exe",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-File",
-      join(import.meta.dirname, "windows-job.ps1"),
-      ...args,
-    ],
+    ["-NoProfile", "-NonInteractive", "-File", join(import.meta.dirname, "windows-job.ps1")],
     {
       env: {
         ...process.env,
@@ -45,15 +28,25 @@ if (
         HOME: home,
         CLAWTRATE_PACKAGED_NODE: process.execPath,
         CLAWTRATE_PACKAGED_HOME: home,
+        CLAWTRATE_PACKAGED_ARGS: JSON.stringify(args),
+        CLAWTRATE_DEV_INSTANCE: `e2e-${randomBytes(4).toString("hex")}`,
+        CLAWTRATE_PACKAGED_RUN: randomBytes(24).toString("hex"),
       },
-      stdio: "inherit",
+      stdio: ["pipe", "inherit", "inherit"],
       windowsHide: true,
     },
   );
-  if (run.error) throw run.error;
-  if (run.status === 0) {
-    rmSync(root, { recursive: true, maxRetries: 5, retryDelay: 200 });
-    console.log("Removed the Windows pairing home and private runtime");
+  const cancel = () => run.stdin.end();
+  process.on("SIGINT", cancel);
+  process.on("SIGBREAK", cancel);
+  try {
+    process.exitCode = await new Promise<number>((resolve, reject) => {
+      run.once("error", reject);
+      run.once("exit", (status) => resolve(status ?? 1));
+    });
+  } finally {
+    process.off("SIGINT", cancel);
+    process.off("SIGBREAK", cancel);
+    run.stdin.destroy();
   }
-  process.exitCode = run.status ?? 1;
 }
