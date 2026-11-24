@@ -3,7 +3,8 @@
 // reconnects, and a deleted bot's cached task rows pruned.
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
-import { MAX_BOTS } from "../src/state-bounds.ts";
+import { jsonTextLength } from "../src/bounds.ts";
+import { MAX_BOTS, MAX_ID_CHARS } from "../src/state-bounds.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 import {
   deferred,
@@ -458,6 +459,46 @@ describe("the bot list against the last whole roster", () => {
       pending.resolve(sessions(row("main", 20), row(hidden, 19)));
       await until(() => client.state.tasksByBot.main?.[0]?.updatedAt === 20);
       expect(client.state.tasksByBot[hidden]?.map(({ key }) => key) ?? []).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-558: a reconnect with the same roster past the cap reads its tasks once, at discovery", async () => {
+    const gateway = new FakeGateway();
+    const ids = ["main", ...Array.from({ length: MAX_BOTS }, (_, i) => `bot-${i}`)];
+    const client = await open(gateway, ids, row("main", 10));
+    try {
+      gateway.handlers["sessions.list"] = () => sessions(row("main", 20));
+      gateway.dropAll();
+      await until(() => gateway.calls("sessions.subscribe").length === 2);
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.discovery.status === "ready",
+      );
+      await sleep(30);
+      expect(gateway.calls("sessions.list")).toHaveLength(0);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-558: the ids kept of the last roster fit the host's id bound", async () => {
+    const gateway = new FakeGateway();
+    const long = "x".repeat(65_536);
+    gateway.handlers["agents.list"] = () => ({
+      ...roster(["main"]),
+      agents: [{ id: "main" }, { id: long, name: "Hidden", kind: "system" }],
+    });
+    gateway.handlers["sessions.subscribe"] = () => ({ subscribed: true, list: sessions() });
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    try {
+      await client.connect({ url: URL_A, token: "t" });
+      await until(() => client.state.discovery.status === "ready");
+      const kept = (client as unknown as { lastRosterIds: Set<string> }).lastRosterIds;
+      expect(kept.size).toBe(2);
+      expect(Math.max(...Array.from(kept, jsonTextLength))).toBeLessThanOrEqual(MAX_ID_CHARS);
     } finally {
       client.stop();
     }

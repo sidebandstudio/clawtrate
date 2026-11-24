@@ -6447,11 +6447,13 @@ export class ClawtrateClient {
     const listed = rosterIds(result);
     if (listed === null) return;
     const before = this.lastRoster;
-    const added = [...listed].some((id) => !this.lastRosterIds.has(id));
+    // Kept and compared within the host's id bound, as the other id maps are.
+    const capped = new Set([...listed].map((id) => capId(id, MAX_ID_CHARS)));
+    const added = [...capped].some((id) => !this.lastRosterIds.has(id));
     const removed = new Set<string>();
-    for (const id of this.lastRosterIds) if (!listed.has(id)) removed.add(id);
+    for (const id of this.lastRosterIds) if (!capped.has(id)) removed.add(id);
     this.lastRosterIds.clear();
-    for (const id of [...listed].slice(0, MAX_BOTS)) this.lastRosterIds.add(id);
+    for (const id of [...capped].slice(0, MAX_BOTS)) this.lastRosterIds.add(id);
     this.lastRoster = listed.size <= MAX_BOTS ? "all" : "some";
     for (const id of listed) this.removedDuringRead.delete(id);
     for (const bot of shownBefore) if (!listed.has(bot.id)) removed.add(bot.id);
@@ -8005,6 +8007,9 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.epoch += 1;
         this.discoveryRead = null;
+        // The next socket's first roster is its own, as after an explicit close.
+        this.lastRosterIds.clear();
+        this.lastRoster = "none";
         this.selectionReady = -1;
         this.streams.clear();
         this.computer.connectionLost();
