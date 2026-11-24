@@ -2533,16 +2533,15 @@ export class ClawtrateClient {
   /** Whether a task waits for the person (`waiting.ts`), whatever its row says. */
   private readonly waits = (key: string): boolean => this.waiting.waitingFor(key) !== null;
 
-  /** Whether the row cap keeps a task ahead of the person's own: it waits for them, or is open. */
+  /** Whether the row cap keeps a task ahead of the others: it waits for the person, or is open. */
   private readonly keeps = (key: string): boolean => this.waits(key) || this.openSessions.has(key);
 
   /**
-   * How many of another tool's or a channel's held rows the cap keeps for now (`keeps`). When
-   * fewer are kept with the list full, the list is read again, so a task of the person's one
-   * pushed out comes back: a waiting or open row never costs a task for longer than it waits or
-   * is open. Each event changes what is kept for one task, so the count tells when one stops.
+   * How many held rows the cap keeps for now (`keeps`), the person's own and other tools' alike.
+   * When fewer are kept with the list full, the list is read again, so a task one pushed out comes
+   * back: a waiting or open row never costs a task for longer than it waits or is open.
    */
-  private keptElsewhere = 0;
+  private keptRows = 0;
 
   /** Counts changes to what waits, so a list read can tell whether one came while it ran. */
   private waitingEpoch = 0;
@@ -2561,10 +2560,14 @@ export class ClawtrateClient {
     if (this.waiting.keys().some(this.unheldWait)) this.scheduleRefresh(this.generation);
   }
 
-  /** A task a switch may hide is listed while open: opening or leaving it lists the tasks again. */
+  /**
+   * Opening or leaving a task changes what the cap keeps (`keptRows`). One a switch may hide is
+   * listed while open, so for it the tasks are listed again.
+   */
   private relistIfHidden(key: string): void {
     const row = this.rows.get(capId(key, MAX_ID_CHARS));
     if (row && isElsewhere(row)) this.publishTasks();
+    else if (row) this.releaseKeptRows();
   }
 
   /** Whether events and reloads for this task are followed: a viewer has it open, or it is kept for its work. */
@@ -8659,12 +8662,15 @@ export class ClawtrateClient {
     this.releaseKeptRows();
   }
 
-  /** Read the list again when a kept channel or other-tool row with the list full stops being kept. */
+  /** Read the list again when a row the cap kept stops being kept with the list full. */
   private releaseKeptRows(): void {
     let kept = 0;
-    for (const [key, row] of this.rows) if (isElsewhere(row) && this.keeps(key)) kept += 1;
-    const released = kept < this.keptElsewhere;
-    this.keptElsewhere = kept;
+    for (const key of this.rows.keys()) if (this.keeps(key)) kept += 1;
+    // A count, not the keys: two kept rows swapping within one update aren't seen. That is fine,
+    // as each gateway event changes what is kept for one task, and a miss only delays a task's
+    // return until the next list read.
+    const released = kept < this.keptRows;
+    this.keptRows = kept;
     if (released && this.rows.size >= MAX_LISTED_TASKS) this.scheduleRefresh(this.generation);
   }
 

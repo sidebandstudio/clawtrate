@@ -514,6 +514,41 @@ describe("F-563: Show sessions from other tools", () => {
     client.stop();
   });
 
+  it("F-563: the person's own open task kept at a full list gives the place back once left", async () => {
+    const listed: Record<string, unknown>[] = Array.from(
+      { length: MAX_LISTED_TASKS },
+      (_, index) => ({
+        key: `agent:pip:dashboard:${String(index).padStart(8, "0")}-0000`,
+        agentId: "pip",
+        createdVia: "operator",
+        updatedAt: 1_000 + index,
+      }),
+    );
+    const [oldest, next] = listed.map((row) => row.key as string);
+    const { client, gateway, keys } = await connected({}, [...listed], true);
+    gateway.handlers["chat.history"] = () => ({ messages: [] });
+    gateway.handlers["sessions.list"] = () => ({ sessions: listed, hasMore: false });
+    gateway.handlers["sessions.create"] = () => {
+      listed.push({
+        key: "agent:pip:dashboard:new-task",
+        agentId: "pip",
+        createdVia: "operator",
+        updatedAt: 200_000,
+      });
+      return { key: "agent:pip:dashboard:new-task", entry: { updatedAt: 200_000 } };
+    };
+    client.openSession(oldest!);
+    await client.newTask("pip");
+    // The open one keeps its place; the next oldest gives way while it is open.
+    expect(keys()).toContain(oldest);
+    expect(keys()).not.toContain(next);
+    client.closeSession(oldest!);
+    await until(() => keys().includes(next!));
+    expect(keys()).not.toContain(oldest);
+    expect(keys()).toHaveLength(MAX_LISTED_TASKS);
+    client.stop();
+  });
+
   it("F-563: search results are filtered by the switches as they are when the results arrive", async () => {
     const { client, gateway } = await connected();
     await client.setShowChannelChats(true);

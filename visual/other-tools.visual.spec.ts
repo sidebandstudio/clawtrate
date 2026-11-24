@@ -5,7 +5,7 @@
 // client's or a scheduled custom session, are checked through the client
 // (packages/core/test/origins.test.ts) and against a development gateway
 // (e2e/other-tools.spec.ts).
-import type { ClawtrateState } from "@clawtrate/core";
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, SIZES } from "./fixture.ts";
 
