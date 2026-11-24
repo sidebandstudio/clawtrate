@@ -592,6 +592,8 @@ type LiveOptions = {
   thinking?: boolean;
   connected: boolean;
   interactive: boolean;
+  /** What this connection may act on: "Needs you" points only at a card it can answer. */
+  may: { canApprove: boolean; canAnswer: boolean };
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */
   onRequestAccess: (() => void) | null;
   /** Bring the running action's card into view; false when there is none. */
@@ -756,7 +758,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
     );
   }
 
-  const needsYou = options.interactive && oldestPending(transcript) !== null;
+  const needsYou = oldestPending(transcript, options.may) !== null;
   return {
     bot,
     foot,
@@ -773,9 +775,13 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
 }
 
 /** The oldest card that needs the person, which "Review" and ⌘J go to: the cards' own choice. */
-function needsYouOf(bot: Bot, transcript: Transcript | undefined, interactive: boolean): NeedsYou {
-  if (!transcript || !interactive) return null;
-  const oldest = oldestPending(transcript);
+function needsYouOf(
+  bot: Bot,
+  transcript: Transcript | undefined,
+  may: { canApprove: boolean; canAnswer: boolean },
+): NeedsYou {
+  if (!transcript) return null;
+  const oldest = oldestPending(transcript, may);
   if (oldest?.kind === "approval")
     return { kind: "approval", text: `${bot.name} needs your approval to run a command` };
   if (oldest?.kind === "question")
@@ -901,10 +907,11 @@ export function Conversation({
     : "";
 
   const active = currentRun(transcript);
+  const { canApprove, canAnswer } = connection;
   const review = useCallback(() => {
-    const oldest = transcript ? oldestPending(transcript) : null;
+    const oldest = transcript ? oldestPending(transcript, { canApprove, canAnswer }) : null;
     if (oldest) focusPending(oldest);
-  }, [transcript]);
+  }, [transcript, canApprove, canAnswer]);
   // The status line brings the running action's card into view and focuses its line (7.8).
   const onShowAction = useCallback(
     (callId: string) => showAction(callId, sectionRef.current ?? document),
@@ -1118,6 +1125,7 @@ export function Conversation({
         liveOptions={{
           connected: caughtUp,
           interactive,
+          may: { canApprove, canAnswer },
           onRequestAccess:
             info.readOnly || connection.fullPairing
               ? null
@@ -1230,7 +1238,7 @@ export function Conversation({
             })),
             ...notices.filter((notice) => notice.task === task.key),
           ]}
-          needsYou={needsYouOf(bot, transcript, interactive)}
+          needsYou={needsYouOf(bot, transcript, { canApprove, canAnswer })}
           onReview={review}
           onNotice={addNotice}
           onDismissNotice={(id) => {

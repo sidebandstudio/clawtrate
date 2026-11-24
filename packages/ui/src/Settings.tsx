@@ -389,6 +389,24 @@ export function Settings({
     !rePairing &&
     !connection.fullPairing;
   const missing = notGranted(connection);
+  const narrower =
+    missing.length > 0
+      ? `OpenClaw granted less than full control. Not granted: ${missing.join(", ")}. This device keeps what was granted.`
+      : null;
+  const access =
+    connection.status === "connected" && (connection.fullPairing || connection.fullOffer !== null)
+      ? connection.fullPairing && missing.length === 0
+        ? "Full control"
+        : "Less than full control"
+      : null;
+  // Said once when a reconnect changes the access shown, not each render nor when Settings opens.
+  const accessSaid = [access && `Access: ${access}.`, narrower].filter(Boolean).join(" ");
+  const accessShown = useRef(accessSaid);
+  useEffect(() => {
+    if (accessShown.current === accessSaid) return;
+    accessShown.current = accessSaid;
+    if (accessSaid) announce(accessSaid);
+  }, [accessSaid, announce]);
   const rePairProblem =
     upgrade.status === "rejected"
       ? "The gateway's owner rejected the new pairing. This device keeps its earlier access."
@@ -526,11 +544,7 @@ export function Settings({
           (connection.fullPairing || connection.fullOffer !== null) && (
             <div>
               <dt>Access</dt>
-              <dd data-testid="gateway-access">
-                {connection.fullPairing && missing.length === 0
-                  ? "Full control"
-                  : "Less than full control"}
-              </dd>
+              <dd data-testid="gateway-access">{access}</dd>
             </div>
           )}
         {connection.serverVersion && (
@@ -545,7 +559,7 @@ export function Settings({
       </dl>
       {missing.length > 0 && (
         <p className="settings-note" data-testid="narrower-grant">
-          {`OpenClaw granted less than full control. Not granted: ${missing.join(", ")}. This device keeps what was granted.`}
+          {narrower}
         </p>
       )}
       {/* The one-time offer stays here once answered (setup-effortless.md §6). */}

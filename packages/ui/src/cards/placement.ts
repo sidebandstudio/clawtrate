@@ -123,19 +123,23 @@ function itemOf(message: InterSessionMessage, items: TranscriptItem[]): string |
   return items.some((item) => item.id === message.itemId) ? message.itemId : null;
 }
 
-/** The oldest pending card, which "Review", ⌘J and "Needs you" go to. */
+/**
+ * The oldest pending card this connection can act on, which "Review", ⌘J and "Needs you" go to:
+ * an approval only with approval access, a question only with question access.
+ */
 export function oldestPending(
   input: Pick<TaskActivity, "approvals" | "questions">,
+  may: { canApprove: boolean; canAnswer: boolean },
 ): CardRef | null {
   const pending = [
     ...input.approvals
-      .filter((card) => card.status === "pending")
+      .filter((card) => may.canApprove && card.status === "pending")
       .map((card) => ({
         at: card.createdAt ?? 0,
         ref: { kind: "approval", id: card.id } as CardRef,
       })),
     ...input.questions
-      .filter((card) => card.status === "pending")
+      .filter((card) => may.canAnswer && card.status === "pending")
       .map((card) => ({
         at: card.createdAt ?? 0,
         ref: { kind: "question", id: card.id } as CardRef,

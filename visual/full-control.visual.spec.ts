@@ -100,6 +100,40 @@ test("F-522: a full pairing the gateway granted less keeps it, says so, and offe
   await expect(dialog.getByRole("button", { name: "Re-pair" })).toHaveCount(0);
 });
 
+test("F-522: when a reconnect narrows a full pairing's grant, Settings says so once", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=access-narrowed&${OTTO_DISK}&access=write`, "dark");
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByTestId("gateway-access")).toHaveText("Less than full control");
+  // Opening on it says nothing: the note is on screen.
+  await expect(dialog.getByTestId("b-announcer")).toHaveText("");
+  // The gateway grants read alone at the next connection.
+  await page.evaluate(() => {
+    const { clawtrateFixture } = window as unknown as {
+      clawtrateFixture: {
+        setState(f: (s: { connection: { scopes: string[] } }) => unknown): void;
+      };
+    };
+    clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: {
+        ...state.connection,
+        scopes: ["operator.read"],
+        canWrite: false,
+        canApprove: false,
+        canAnswer: false,
+      },
+    }));
+  });
+  const note = dialog.getByTestId("narrower-grant");
+  await expect(note).toContainText("Not granted: sending and stopping");
+  await expect(dialog.getByTestId("b-announcer")).toHaveText(
+    `Access: Less than full control. ${await note.textContent()}`,
+  );
+});
+
 test("F-522: a full pairing granted read, write, approvals and questions is offered admin and device access nowhere", async ({
   page,
 }) => {
