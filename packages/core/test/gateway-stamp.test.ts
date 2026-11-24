@@ -439,3 +439,78 @@ describe("the offer of full control on a stale screen", () => {
     client.stop();
   });
 });
+
+// #450: the writes that act on an id a restored copy shares, each read on one gateway and sent
+// after a switch to the other, then sent with no switch and after a plain reconnect.
+describe("a removal, a task, a bot's model and account, a routine's switch from a stale screen", () => {
+  /** What a stale removal or task action could send: none may reach either gateway after the switch. */
+  const sentOf = (fake: AccountsGateway, methods: string[]) =>
+    fake.gateway.requests.filter((request) => methods.includes(request.method));
+
+  /** Both gateways have one machine "node-1" and one other device "phone-1", as a copy would. */
+  const machines = (fake: AccountsGateway) => {
+    let nodes = [{ nodeId: "node-1", displayName: "Studio", paired: true }];
+    let paired = [{ deviceId: "phone-1", displayName: "Phone", role: "operator" }];
+    fake.gateway.handlers["node.list"] = () => ({ nodes });
+    fake.gateway.handlers["node.pair.remove"] = (params) => {
+      nodes = nodes.filter((node) => node.nodeId !== (params as { nodeId: string }).nodeId);
+      return { ok: true };
+    };
+    fake.gateway.handlers["device.pair.list"] = () => ({ paired });
+    fake.gateway.handlers["device.pair.remove"] = (params) => {
+      paired = paired.filter((row) => row.deviceId !== (params as { deviceId: string }).deviceId);
+      return { ok: true };
+    };
+  };
+  const UNPAIR = ["node.pair.remove", "device.pair.remove"];
+
+  it("Machines: a node or device removal read on one gateway reaches neither after a switch to another with the same id", async () => {
+    const { client, a, b, switchToB } = await twoGateways();
+    machines(a);
+    machines(b);
+    const viewer = createBridgeSession(client);
+    await viewer.apply({ type: "readMachines" });
+    const stamp = gatewayStamp(client.state.connection);
+    await switchToB();
+    await expect(viewer.apply({ type: "removeMachine", nodeId: "node-1", stamp })).rejects.toThrow(
+      CONNECTION_CHANGED,
+    );
+    await expect(
+      viewer.apply({ type: "removeDevice", deviceId: "phone-1", stamp }),
+    ).rejects.toThrow(CONNECTION_CHANGED);
+    expect(sentOf(a, UNPAIR)).toEqual([]);
+    expect(sentOf(b, UNPAIR)).toEqual([]);
+    // Read again on the gateway connected now, the removal goes there.
+    const fresh = gatewayStamp(client.state.connection);
+    await viewer.apply({ type: "removeMachine", nodeId: "node-1", stamp: fresh });
+    expect(b.gateway.calls("node.pair.remove")).toEqual([{ nodeId: "node-1" }]);
+    client.stop();
+  });
+
+  it("Machines: a removal goes with no switch, and after a dropped connection's reconnect", async () => {
+    const { client, a } = await twoGateways();
+    machines(a);
+    const viewer = createBridgeSession(client);
+    const stamp = gatewayStamp(client.state.connection);
+    await viewer.apply({ type: "removeDevice", deviceId: "phone-1", stamp });
+    expect(a.gateway.calls("device.pair.remove")).toEqual([{ deviceId: "phone-1" }]);
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => ready(client, URL_A) && client.state.connection.connectedAt !== was);
+    await viewer.apply({ type: "removeMachine", nodeId: "node-1", stamp });
+    expect(a.gateway.calls("node.pair.remove")).toEqual([{ nodeId: "node-1" }]);
+    client.stop();
+  });
+
+  it("Machines: a removal from a renderer keeps its stamp, and one without a stamp is refused", () => {
+    const stamp = { gatewayId: "gateway-a", target: 4 };
+    for (const command of [
+      { type: "removeMachine", nodeId: "node-1", stamp },
+      { type: "removeDevice", deviceId: "phone-1", stamp },
+    ] as const) {
+      expect(parseBridgeCommand(command)).toEqual(command);
+      const { stamp: _stamp, ...bare } = command;
+      expect(() => parseBridgeCommand(bare)).toThrow();
+    }
+  });
+});

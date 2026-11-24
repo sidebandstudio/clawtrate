@@ -445,9 +445,10 @@ export type BridgeCommand =
       expectedHash: string | null;
     }
   | { type: "renameMachine"; nodeId: string; name: string }
-  | { type: "removeMachine"; nodeId: string }
+  /** `stamp` is where Machines was read: a removal goes only to that gateway. */
+  | { type: "removeMachine"; nodeId: string; stamp: GatewayStamp }
   | { type: "renameDevice"; deviceId: string; name: string }
-  | { type: "removeDevice"; deviceId: string }
+  | { type: "removeDevice"; deviceId: string; stamp: GatewayStamp }
   // Deleting a bot (`bot-delete.ts`). The read is `operator.read`; the delete needs admin.
   /** What the delete dialog lists for a bot, read now. */
   | { type: "readBotDelete"; botId: string }
@@ -1760,7 +1761,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         name: shortText(command.name, MAX_MACHINE_NAME_CHARS, "name"),
       };
     case "removeMachine":
-      return { type: "removeMachine", nodeId: id(command.nodeId, "machine") };
+      return {
+        type: "removeMachine",
+        nodeId: id(command.nodeId, "machine"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "renameDevice":
       return {
         type: "renameDevice",
@@ -1768,7 +1773,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         name: shortText(command.name, MAX_MACHINE_NAME_CHARS, "name"),
       };
     case "removeDevice":
-      return { type: "removeDevice", deviceId: id(command.deviceId, "device") };
+      return {
+        type: "removeDevice",
+        deviceId: id(command.deviceId, "device"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     default:
       throw new Error("unknown command");
   }
@@ -2340,11 +2349,11 @@ class ViewerSession implements BridgeSession {
       case "renameMachine":
         return client.renameMachine(command.nodeId, command.name);
       case "removeMachine":
-        return client.removeMachine(command.nodeId);
+        return client.removeMachine(command.nodeId, command.stamp);
       case "renameDevice":
         return client.renameDevice(command.deviceId, command.name, { owner });
       case "removeDevice":
-        return client.removeDevice(command.deviceId);
+        return client.removeDevice(command.deviceId, command.stamp);
     }
   }
 

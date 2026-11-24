@@ -6217,16 +6217,25 @@ export class ClawtrateClient {
     return this.machines.renameMachine(nodeId, name);
   }
 
-  removeMachine(nodeId: string): Promise<void> {
-    return this.machines.removeMachine(nodeId);
+  /**
+   * Unpair a node. With `stamp` (where Machines was read), nothing is sent unless the host still
+   * has that target and that gateway connected: a restored copy has the same node ids.
+   */
+  async removeMachine(nodeId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp === undefined) return this.machines.removeMachine(nodeId);
+    await this.requireSameGateway(stamp);
+    return this.machines.removeMachine(nodeId, () => this.requireSameTarget(stamp));
   }
 
   renameDevice(deviceId: string, name: string, options: { owner?: object } = {}): Promise<void> {
     return this.machines.renameDevice(deviceId, name, () => this.checkNotWithdrawn(options.owner));
   }
 
-  removeDevice(deviceId: string): Promise<void> {
-    return this.machines.removeDevice(deviceId);
+  /** Unpair a device. With `stamp`, as for `removeMachine`. */
+  async removeDevice(deviceId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp === undefined) return this.machines.removeDevice(deviceId);
+    await this.requireSameGateway(stamp);
+    return this.machines.removeDevice(deviceId, () => this.requireSameTarget(stamp));
   }
 
   // Deleting a bot (`bot-delete.ts`) ------------------------------------------------------

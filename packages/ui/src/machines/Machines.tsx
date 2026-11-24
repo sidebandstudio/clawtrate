@@ -289,8 +289,13 @@ export function useMachinesSection({
   toNav: ReactNode;
 }): { title: string; back: ReactNode; body: ReactNode; foot: ReactNode } {
   const bridge = useBridge();
-  // Each read with the reload it was asked after.
-  const [held, setHeld] = useState<{ key: string; read: Read; at: number } | null>(null);
+  // Each read with the reload it was asked after, and the host's target it was asked under.
+  const [held, setHeld] = useState<{
+    key: string;
+    read: Read;
+    at: number;
+    target: number;
+  } | null>(null);
   const [generation, setGeneration] = useState(0);
   const asked = useRef(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -323,17 +328,19 @@ export function useMachinesSection({
     currentKey.current = key;
   }, [key]);
   const now = Date.now();
+  const target = connection.target;
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
     const at = asked.current;
     bridge.invoke({ type: "readMachines" }).then(
-      (view) => live && setHeld({ key, at, read: { status: "ready", view } }),
+      (view) => live && setHeld({ key, at, target, read: { status: "ready", view } }),
       (error: unknown) =>
         live &&
         setHeld({
           key,
           at,
+          target,
           read: {
             status: "error",
             message: error instanceof Error ? error.message : String(error),
@@ -343,7 +350,7 @@ export function useMachinesSection({
     return () => {
       live = false;
     };
-  }, [bridge, active, connected, key, generation]);
+  }, [bridge, active, connected, key, target, generation]);
   const reload = useCallback(() => {
     asked.current += 1;
     setGeneration(asked.current);
@@ -705,10 +712,14 @@ export function useMachinesSection({
           onAction={() => {
             const asked = removing;
             setBusy(asked);
+            // Where the rows were read: a removal sent anywhere else could unpair another
+            // gateway's machine of the same id, so the host refuses it.
+            // (The rows shown are `held`'s; no host hands out target 0.)
+            const stamp = { gatewayId: connection.gatewayId, target: held?.target ?? 0 };
             const done =
               asked.kind === "machine"
-                ? bridge.invoke({ type: "removeMachine", nodeId: asked.id })
-                : bridge.invoke({ type: "removeDevice", deviceId: asked.id });
+                ? bridge.invoke({ type: "removeMachine", nodeId: asked.id, stamp })
+                : bridge.invoke({ type: "removeDevice", deviceId: asked.id, stamp });
             const close = () => {
               setBusy((was) => (was === asked ? null : was));
               setRemoving((was) => (was === asked ? null : was));
