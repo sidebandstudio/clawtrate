@@ -34,18 +34,26 @@ if (process.platform === "win32") {
       writeFileSync(
         join(fixture, "windows-worker.ts"),
         `
-      import { readSync, writeFileSync } from 'node:fs';
-      const permit = Buffer.alloc(1);
-      if (readSync(0, permit) !== 1 || permit[0] !== 1) process.exit(2);
+      import { writeFileSync } from 'node:fs';
+      import { waitForJobPermit } from ${JSON.stringify(new URL("../e2e-packaged/windows-worker.ts", import.meta.url).href)};
+      waitForJobPermit();
       writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
       console.log('worker stdout'); console.error('worker stderr');
       ${mode === "worker failure" ? "process.exit(23);" : "setTimeout(() => {}, 15000);"}
     `,
       );
-      const run = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-File", supervisor], {
+      const invocation =
+        mode === "worker failure"
+          ? [
+              "-Command",
+              "[Console]::InputEncoding = [Text.UTF8Encoding]::new($true); & $env:PROOF_SUPERVISOR; exit $LASTEXITCODE",
+            ]
+          : ["-File", supervisor];
+      const run = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", ...invocation], {
         windowsHide: true,
         env: {
           ...process.env,
+          PROOF_SUPERVISOR: supervisor,
           CLAWTRATE_PACKAGED_HOME: join(root, "home"),
           CLAWTRATE_PACKAGED_NODE: process.execPath,
         },
