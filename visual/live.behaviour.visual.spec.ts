@@ -538,7 +538,11 @@ test("F-074: files can be dragged into the composer or pasted into its field", a
   });
   await expect(page.locator(".attachments .chip")).toHaveText([/dragged\.txt/, /pasted\.png/]);
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.getByTestId("outgoing")).toContainText("dragged.txt, pasted.png");
+  // Each file is on the message, in the order added (F-557).
+  await expect(page.getByTestId("outgoing").getByTestId("sent-files").locator("> *")).toHaveText([
+    /dragged\.txt/,
+    /pasted\.png/,
+  ]);
 });
 
 test("F-282: Start as new task with files attached keeps the words and the files, and says why", async ({

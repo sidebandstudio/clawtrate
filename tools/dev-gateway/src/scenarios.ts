@@ -141,6 +141,11 @@ function lastResult(ctx: PlanContext, name: string): Record<string, unknown> | n
 const rec = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
+/** The name `#take-name` or its phrase takes: the rest of that line, or null when none follows. */
+export function takenName(prompt: string | undefined): string | null {
+  return /(?:#take-name|take this name)[ \t]+([^\n]+)/i.exec(prompt ?? "")?.[1]?.trim() || null;
+}
+
 /** Every bot's workspace starts with these five files, so six reads need one twice. */
 const SIX_READS = [
   { path: "AGENTS.md" },
@@ -455,6 +460,29 @@ export const SCENARIOS: Scenario[] = [
         edits: [{ oldText: "Leave at 9:00.", newText: "Leave at 8:30." }],
       }),
       say("I changed the departure time in notes/edit-me.md."),
+    ],
+  },
+  {
+    name: "take-name",
+    phrase: "take this name",
+    summary:
+      "A read of IDENTITY.md, then an edit of its name line (`- **Name:**`, or `- Name:` as the gateway writes it) to the words after the directive or the phrase (`#take-name Johnny`), as a bot asked to take a name does. Its name in the gateway's config stays as it was.",
+    steps: () => [
+      tool("read", { path: "IDENTITY.md" }),
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const read = [...ctx.results].reverse().find((r) => r.name === "read")?.text ?? "";
+          const line = /^- (?:\*\*Name:\*\*|Name:).*$/m.exec(read)?.[0];
+          const name = takenName(ctx.prompt);
+          if (!line || !name) return say("I found no name line to change.");
+          return tool("edit", {
+            path: "IDENTITY.md",
+            edits: [{ oldText: line, newText: `- **Name:** ${name}` }],
+          });
+        },
+      },
+      (ctx) => [say(`${takenName(ctx.prompt)} it is. It shows once you confirm it in Clawtrate.`)],
     ],
   },
   {

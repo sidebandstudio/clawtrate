@@ -114,6 +114,8 @@
     - 'button "Usage: Budget 1,640,000 of 2,500,000 tokens this week · This week: 1,640,000 tokens · about $3.29, as of 5:39 PM. Open."': "Usage Budget 1,640,000 of 2,500,000 tokens this week · This week: 1,640,000 tokens · about $3.29, as of 5:39 PM"
     - heading "Runs on" [level=3]
     - 'button "Where Otto runs: Command setting: media-box. Open."': "Where Otto runs Command setting: media-box"
+    - heading "Manage" [level=3]
+    - button "Delete bot…"
     - region "Access":
       - text: Admin access needed. Changing Otto's settings needs admin access.
       - button "Request admin access"

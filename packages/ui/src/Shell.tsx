@@ -21,7 +21,7 @@ import {
   type ThemeChoice,
 } from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
-import { useSelection } from "./selection.ts";
+import { summarize, useSelection } from "./selection.ts";
 import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
@@ -29,6 +29,8 @@ import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { FullControlOffer } from "./FullControl.tsx";
+import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
@@ -95,6 +97,25 @@ export function Shell({
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
 
+  // The one-time offer of full control (setup-effortless.md §6): it opens once per gateway in
+  // this window while it is unanswered, stays open while its request runs, and once closed
+  // lives on in Settings only.
+  const [offerFor, setOfferFor] = useState<string | null>(null);
+  const [offerOpen, setOfferOpen] = useState(false);
+  const offerUrl = state.connection.gatewayUrl;
+  if (
+    !inert &&
+    !info.readOnly &&
+    state.connection.status === "connected" &&
+    state.connection.fullOffer === "offer" &&
+    // Bound to the gateway's identity, so shown only once it is known (`offerBinding`).
+    state.connection.gatewayId !== null &&
+    offerUrl !== offerFor
+  ) {
+    setOfferFor(offerUrl);
+    setOfferOpen(true);
+  }
+
   // When access arrives, the strip says so for four seconds; the conversation announces it.
   const connectedNow = state.connection.status === "connected";
   const [tier, setTier] = useState(interactive);
@@ -142,6 +163,8 @@ export function Shell({
   const overlay = mainWidth !== null && mainWidth < DOCK_FROM;
   // The Routines view takes the main pane, Work included: no drawer, scrim or inert rail behind it.
   const drawerOpen = panelOpen && overlay && !routines;
+  // While the offer of full control is open, its dialog keeps the keyboard, not the drawer behind.
+  const drawerKeys = drawerOpen && !offerOpen;
 
   const setPanel = useCallback((open: boolean) => {
     if (open) {
@@ -205,10 +228,15 @@ export function Shell({
   );
   // New bot, from the "+" menu and ⌘N, where the connection may write (bots.md section 3).
   const [newBot, setNewBot] = useState(false);
+  // Delete bot…: the bot as it was when chosen, so the result stays after it leaves the rail.
+  const [deleting, setDeleting] = useState<{ id: string; name: string; isDefault: boolean } | null>(
+    null,
+  );
+  const deletingOpen = deleting !== null;
   const openNewBot = useCallback(() => setNewBot(true), []);
   const mac = isMac();
   useEffect(() => {
-    if (inert || newBot || shortcuts || searchOpen) return;
+    if (inert || newBot || shortcuts || searchOpen || offerOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (mac ? event.metaKey : event.ctrlKey) &&
@@ -222,9 +250,10 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inert, newBot, shortcuts, searchOpen, mac, openPalette]);
+  }, [inert, newBot, shortcuts, searchOpen, offerOpen, mac, openPalette]);
   useEffect(() => {
-    if (!interactive || inert) return;
+    // The full-control offer keeps ⌘N, as it keeps ⌘K: nothing opens over it.
+    if (!interactive || inert || offerOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -238,7 +267,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interactive, inert]);
+  }, [interactive, inert, offerOpen]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -256,9 +285,10 @@ export function Shell({
         // ⌘[ in the conversation goes back to the file while "Back to <file>" is offered.
         event.preventDefault();
         backLinkRef.current();
-      } else if (event.key === "Escape" && drawerOpen) {
+      } else if (event.key === "Escape" && drawerKeys && !deletingOpen) {
         setPanel(false);
-      } else if (event.key === "Tab" && drawerOpen && panelRef.current) {
+      } else if (event.key === "Tab" && drawerKeys && !deletingOpen && panelRef.current) {
+        // (The delete dialog, opened from the drawer, keeps Tab and Escape to itself.)
         // The drawer keeps focus inside itself.
         const items = [
           ...panelRef.current.querySelectorAll<HTMLElement>("button, [tabindex]"),
@@ -280,7 +310,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel, drawerOpen, setPanel]);
+  }, [togglePanel, drawerKeys, setPanel, deletingOpen]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
   const unread = unreadCount(
@@ -908,6 +938,9 @@ export function Shell({
                 : () => void send({ type: "requestAccess" }).catch(() => {})
             }
             onOpenMachines={() => onOpenSettings("machines")}
+            onDeleteBot={(each) =>
+              setDeleting({ id: each.id, name: each.name, isDefault: each.isDefault })
+            }
             drawer={drawerOpen}
             onClose={() => setPanel(false)}
             closeRef={closeRef}
@@ -920,6 +953,14 @@ export function Shell({
           />
         )}
       </div>
+      {offerOpen && (
+        <FullControlOffer
+          // Each gateway's offer is its own: a switch shows that gateway's choices afresh.
+          key={offerFor ?? ""}
+          connection={state.connection}
+          onClose={() => setOfferOpen(false)}
+        />
+      )}
       {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
       {searchOpen && (
         <SearchPalette
@@ -943,6 +984,33 @@ export function Shell({
             requestAnimationFrame(() =>
               document.querySelector<HTMLElement>(".composer-input")?.focus(),
             );
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteBot
+          bot={deleting}
+          connection={state.connection}
+          info={info}
+          onClose={(deleted) => {
+            setDeleting(null);
+            // The rail already follows the gateway's list; the app lands on the Main Bot's latest
+            // task, or the Main Bot alone when it has none.
+            const main = state.bots.find((each) => each.isDefault) ?? state.bots[0];
+            if (deleted && main) {
+              // The Work drawer closes first, so the conversation behind it can take focus.
+              if (drawerOpen) setPanel(false);
+              const latest = summarize(state.tasksByBot[main.id] ?? [], {}, null).latest;
+              if (latest) selection.selectTask(main.id, latest.key);
+              else selection.selectBot(main.id);
+              // The composer, or, for a Main Bot with no task to write in, the page's heading.
+              requestAnimationFrame(() =>
+                (
+                  document.querySelector<HTMLElement>(".composer-input") ??
+                  document.querySelector<HTMLElement>(".conversation h1")
+                )?.focus(),
+              );
+            }
           }}
         />
       )}
