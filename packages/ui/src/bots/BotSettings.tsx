@@ -18,7 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { screenStamp } from "../stamp.ts";
+import { screenStamp, shownStamp } from "../stamp.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -171,11 +171,11 @@ export function BotSettings({
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
   }, []);
   // The host's target when Change account opened: the choice made there goes only to that gateway.
-  const changeOpenedOn = useRef(connection.target);
+  const changeOpenedOn = useRef(shownStamp(connection));
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
-    if (next === "change" && view !== "change") changeOpenedOn.current = connection.target;
+    if (next === "change" && view !== "change") changeOpenedOn.current = shownStamp(connection);
     if (next !== "change") setPick(null);
     focusIn(focus);
   };
@@ -366,7 +366,7 @@ export function BotSettings({
     const wordText = bindingWord(binding, age);
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
     // Where the page shown was read: a restored copy has the same bot ids.
-    const shownOn = connection.target;
+    const shownOn = shownStamp(connection);
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
       try {
@@ -694,7 +694,7 @@ export function BotSettings({
   // --- The Account page --------------------------------------------------------------------
   const page: ReactNode[] = [];
   // Where the page shown was read; a refusal is said under the page.
-  const shownOn = connection.target;
+  const shownOn = shownStamp(connection);
   const removeFallbacks = async () => {
     setError(null);
     try {

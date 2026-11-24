@@ -575,9 +575,7 @@ test("#450: Change account, a Disconnect confirmation and a typed key send the t
   await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
   let before = await moveTarget(page);
   await page.getByRole("button", { name: "Save" }).click();
-  await expect
-    .poll(() => sentStamp(page, "changeBotAccount"))
-    .toEqual({ gatewayId: null, target: before });
+  await expect.poll(() => sentStamp(page, "changeBotAccount")).toEqual(before);
 
   // Disconnect…: the confirmation keeps the target it was asked under.
   await page.keyboard.press("ControlOrMeta+,");
@@ -590,9 +588,7 @@ test("#450: Change account, a Disconnect confirmation and a typed key send the t
     .getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" })
     .getByRole("button", { name: "Disconnect" })
     .click();
-  await expect
-    .poll(() => sentStamp(page, "disconnectAccount"))
-    .toEqual({ gatewayId: null, target: before });
+  await expect.poll(() => sentStamp(page, "disconnectAccount")).toEqual(before);
 });
 
 test("#450: a key typed in Connect goes with the target Connect opened with", async ({ page }) => {
@@ -603,9 +599,22 @@ test("#450: a key typed in Connect goes with the target Connect opened with", as
   await page.getByTestId("api-key").fill("made-up-key-for-a-check");
   const before = await moveTarget(page);
   await newBot(page).getByRole("button", { name: "Save key" }).click();
-  await expect
-    .poll(() => sentStamp(page, "saveApiKey"))
-    .toEqual({ gatewayId: null, target: before });
+  await expect.poll(() => sentStamp(page, "saveApiKey")).toEqual(before);
+});
+
+test("#450: disconnecting the account a failed sign-in left sends the stamp Connect opened with", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=failed&saved=1`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI · / })
+    .click();
+  await expect(page.getByTestId("reread")).toContainText("It may not be ready to use.");
+  await page.getByTestId("reread").getByRole("button", { name: "Disconnect it…" }).click();
+  const before = await moveTarget(page);
+  await newBot(page).getByRole("button", { name: "Disconnect", exact: true }).click();
+  await expect.poll(() => sentStamp(page, "disconnectAccount")).toEqual(before);
 });
 
 test("F-476: Disconnect asks first, with focus on Cancel; Escape closes the confirmation alone", async ({

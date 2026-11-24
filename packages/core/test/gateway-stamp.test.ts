@@ -10,6 +10,7 @@ import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
 import { pictureWithChoice } from "../src/avatar.ts";
 import { ADMIN_SCOPES, FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { gatewayStamp, type GatewayStamp } from "../src/types.ts";
+import { screenStamp, shownStamp } from "../../ui/src/stamp.ts";
 import { AccountsGateway } from "./accounts-fake.ts";
 import { FAST, URL_A, URL_B } from "./client-harness.ts";
 import {
@@ -790,31 +791,36 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
-  it("A bot's account: a change under way when the host switches sends nothing more to the other gateway", async () => {
-    const { client, a, b, switchToB } = await twoGateways();
-    // A takes the patch but is slow to apply it: the change waits, reading A's config again.
-    const get = a.gateway.handlers["config.get"]!;
-    let switched: Promise<void> | null = null;
-    a.gateway.handlers["config.get"] = async (params) => {
-      const config = (await get(params)) as Record<string, unknown>;
-      if (a.gateway.calls("config.patch").length === 0) return config;
-      switched ??= switchToB();
-      return { ...config, appliedConfigHash: "not yet" };
-    };
-    const pending = createBridgeSession(client)
-      .apply({ ...ACCOUNT, stamp: gatewayStamp(client.state.connection) })
-      .then(
-        () => "saved",
-        (error: Error) => error.message,
-      );
-    await until(() => switched !== null);
-    await switched;
-    expect(await pending).toBe(CONNECTION_CHANGED);
-    // The account's record, the step after the patch, never reached B.
-    expect(sentOf(b, SETTING_WRITES)).toEqual([]);
-    expect(b.gateway.calls("config.get")).toEqual([]);
-    client.stop();
-  });
+  for (const [what, command] of [
+    ["account", ACCOUNT],
+    ["model", MODEL],
+    ["fallbacks", FALLBACKS],
+  ] as const)
+    it(`A bot's ${what}: a change under way when the host switches sends nothing more to the other gateway`, async () => {
+      const { client, a, b, switchToB } = await twoGateways();
+      // A takes the patch but is slow to apply it: the change waits, reading A's config again.
+      const get = a.gateway.handlers["config.get"]!;
+      let switched: Promise<void> | null = null;
+      a.gateway.handlers["config.get"] = async (params) => {
+        const config = (await get(params)) as Record<string, unknown>;
+        if (a.gateway.calls("config.patch").length === 0) return config;
+        switched ??= switchToB();
+        return { ...config, appliedConfigHash: "not yet" };
+      };
+      const pending = createBridgeSession(client)
+        .apply({ ...command, stamp: gatewayStamp(client.state.connection) })
+        .then(
+          () => "saved",
+          (error: Error) => error.message,
+        );
+      await until(() => switched !== null);
+      await switched;
+      expect(await pending).toBe(CONNECTION_CHANGED);
+      // The next read of the config, and any step after the patch, never reached B.
+      expect(sentOf(b, SETTING_WRITES)).toEqual([]);
+      expect(b.gateway.calls("config.get")).toEqual([]);
+      client.stop();
+    });
 
   it("An account's Disconnect and a key: read on one gateway, they reach neither after a switch to another with the same id", async () => {
     const { client, a, b, switchToB } = await twoGateways();
@@ -845,6 +851,86 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     await client.refreshAccounts();
     await viewer.apply({ ...DISCONNECT, stamp });
     expect(a.gateway.calls("models.authLogout")).toHaveLength(1);
+    client.stop();
+  });
+
+  // A screen's held dialog, through the stamp the interface sends (`packages/ui/src/stamp.ts`).
+  /** What the interface reads the host's state through. */
+  const viewOf = (client: ClawtrateClient) => ({
+    getState: () => client.state,
+    subscribe: (listener: (state: ClawtrateClient["state"]) => void) =>
+      client.store.subscribe(listener),
+  });
+  const deleteFrom = async (client: ClawtrateClient, shown: ReturnType<typeof shownStamp>) =>
+    createBridgeSession(client).apply({
+      type: "deleteTask",
+      key: KEY,
+      stamp: await screenStamp(viewOf(client), shown),
+    });
+
+  it("a Delete dialog held across another gateway answering at the same address is refused, as the screen sends it", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    const shown = shownStamp(client.state.connection);
+    await replacedBehindReconnect(client, a);
+    await expect(deleteFrom(client, shown)).rejects.toThrow(
+      "This change was made for another gateway, so nothing was sent.",
+    );
+    expect(sentOf(a, TASK_WRITES)).toEqual([]);
+    client.stop();
+  });
+
+  it("a Delete dialog confirmed before the replacing gateway has named itself is refused once it does", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    const shown = shownStamp(client.state.connection);
+    // A comes back as gateway-x, whose name is not read yet when the person confirms.
+    const named = deferred<unknown>();
+    a.identityReply = named.promise;
+    a.identity = "gateway-x";
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.connectedAt !== was,
+    );
+    expect(client.state.connection.gatewayId).toBeNull();
+    const pending = deleteFrom(client, shown).then(
+      () => "deleted",
+      (error: Error) => error.message,
+    );
+    named.resolve({ deviceId: "gateway-x" });
+    expect(await pending).toBe("This change was made for another gateway, so nothing was sent.");
+    expect(sentOf(a, TASK_WRITES)).toEqual([]);
+    client.stop();
+  });
+
+  it("a dialog drawn before the gateway named itself, confirmed on a later connection, is refused rather than taking that one's name", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    // A reconnect whose identity read doesn't answer: the screen is drawn with no name.
+    a.identityReply = new Promise<unknown>(() => {});
+    let was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.connectedAt !== was,
+    );
+    const shown = shownStamp(client.state.connection);
+    expect(shown.gatewayId).toBeNull();
+    // Then another gateway answers at the same address, and names itself.
+    a.identityReply = null;
+    a.identity = "gateway-x";
+    was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => client.state.connection.gatewayId === "gateway-x");
+    expect(client.state.connection.connectedAt).not.toBe(was);
+    await expect(deleteFrom(client, shown)).rejects.toThrow(
+      "The gateway hasn't said which gateway it is, so nothing was sent.",
+    );
+    expect(sentOf(a, TASK_WRITES)).toEqual([]);
     client.stop();
   });
 

@@ -1,26 +1,49 @@
-// The stamp a screen's write carries back (`GatewayStamp`): the host's target the screen was read
-// under, and the gateway's identity on that target. Right after a connect the identity is not
-// read yet; a write made then waits for it rather than going without one, which the host refuses.
+// The stamp a screen's write carries back (`GatewayStamp`): the gateway's identity and the host's
+// target when the screen was drawn. Right after a connect the identity is not read yet; a write
+// from a screen drawn then waits for it, on the connection the screen was drawn on, rather than
+// going without one, which the host refuses.
 
-import type { ClawtrateBridge, GatewayStamp } from "@clawtrate/core";
+import type { ConnectionState, GatewayStamp } from "@clawtrate/core";
 
 /** How long a write waits for the gateway to name itself before it is sent without its name. */
 export const IDENTITY_WAIT_MS = 15_000;
 
+/** Where a screen was drawn: its stamp, and the connection (its hello) it was drawn on. */
+export type ShownStamp = GatewayStamp & { connectedAt: number | null };
+
+/** The stamp of a screen drawn on the connection as it is now. */
+export const shownStamp = (
+  connection: Pick<ConnectionState, "gatewayId" | "target" | "connectedAt">,
+): ShownStamp => ({
+  gatewayId: connection.gatewayId,
+  target: connection.target,
+  connectedAt: connection.connectedAt,
+});
+
+type StateSource = {
+  getState(): { connection: ConnectionState };
+  subscribe(listener: (state: { connection: ConnectionState }) => void): () => void;
+};
+
 /**
- * Where a screen read at `target` was read: the gateway's identity once the host has it on that
- * target. When the target moves on first, the stamp keeps the screen's, and the host refuses it.
+ * The stamp a write from a screen drawn at `shown` sends. A screen that knew its gateway sends
+ * that, as drawn, whatever is connected now: the host compares it with the gateway it has. A
+ * screen drawn before the gateway named itself waits for the name on the connection it was
+ * drawn on; once the target or the connection has moved on, it sends no name, and the host
+ * refuses it.
  */
 export function screenStamp(
-  bridge: Pick<ClawtrateBridge, "getState" | "subscribe">,
-  target: number,
+  bridge: StateSource,
+  shown: ShownStamp,
   waitMs = IDENTITY_WAIT_MS,
 ): Promise<GatewayStamp> {
-  const settled = () => {
+  const { gatewayId, target } = shown;
+  if (gatewayId !== null) return Promise.resolve({ gatewayId, target });
+  const settled = (): GatewayStamp | null => {
     const connection = bridge.getState().connection;
-    return connection.gatewayId !== null || connection.target !== target
-      ? { gatewayId: connection.target === target ? connection.gatewayId : null, target }
-      : null;
+    if (connection.target !== target || connection.connectedAt !== shown.connectedAt)
+      return { gatewayId: null, target };
+    return connection.gatewayId !== null ? { gatewayId: connection.gatewayId, target } : null;
   };
   const now = settled();
   if (now) return Promise.resolve(now);

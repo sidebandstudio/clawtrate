@@ -237,9 +237,7 @@ test("#450: a Remove confirmation sends the target of the read its row came from
   // The host is pointed at a gateway anew while the confirmation is open.
   const before = await moveTarget(page);
   await page.getByRole("alertdialog").getByRole("button", { name: "Remove", exact: true }).click();
-  await expect
-    .poll(() => sentStamp(page, "removeMachine"))
-    .toEqual({ gatewayId: null, target: before });
+  await expect.poll(() => sentStamp(page, "removeMachine")).toEqual(before);
 });
 
 test("F-157: a removal that completes after the connection's access changed leaves nothing behind", async ({

@@ -21,7 +21,7 @@ import { Dialog } from "../bots/Dialog.tsx";
 import { Note } from "../bots/parts.tsx";
 import { ChevronIcon } from "../icons.tsx";
 import { type MenuEntry } from "../Menu.tsx";
-import { screenStamp } from "../stamp.ts";
+import { screenStamp, type ShownStamp } from "../stamp.ts";
 import { draftOf } from "./draft.ts";
 import { viewerZone, when, zoneCity } from "./schedule.ts";
 
@@ -43,16 +43,17 @@ function assign<T>(all: Record<string, T>, id: string, value: T | null): Record<
 
 /** What the admin actions are doing now, by routine. */
 /**
- * `listedOn` is the list the rows on screen came from, and `target` the host's target it was
- * read under: each action sends both (`GatewayStamp`), so one from a row of an earlier
- * connection's list, or of another gateway's, is refused, not sent.
+ * `listedOn` is the list the rows on screen came from, and `shown` where it was drawn: each
+ * action sends both (`GatewayStamp`), so one from a row of an earlier connection's list, or of
+ * another gateway's, is refused, not sent.
  */
 export function useRoutineActions(
   announce: (text: string) => void,
   routines: Routine[],
   listedOn: number,
-  target: number,
+  shown: ShownStamp,
 ) {
+  const { gatewayId, target, connectedAt } = shown;
   const bridge = useBridge();
   /** A switch turned and not yet confirmed: the value it shows meanwhile. */
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -93,7 +94,7 @@ export function useRoutineActions(
           id: routine.id,
           enabled,
           listedOn,
-          stamp: await screenStamp(bridge, target),
+          stamp: await screenStamp(bridge, { gatewayId, target, connectedAt }),
         });
         if (result.status === "saved")
           announce(`${enabled ? "Resumed" : "Paused"} ${routine.name}`);
@@ -118,7 +119,7 @@ export function useRoutineActions(
         putPending(routine.id, null);
       }
     },
-    [bridge, announce, listedOn, target],
+    [bridge, announce, listedOn, gatewayId, target, connectedAt],
   );
 
   const runNow = useCallback(
@@ -130,7 +131,7 @@ export function useRoutineActions(
           type: "runRoutineNow",
           id: routine.id,
           listedOn,
-          stamp: await screenStamp(bridge, target),
+          stamp: await screenStamp(bridge, { gatewayId, target, connectedAt }),
         });
       } catch (error) {
         result = { status: "unknown", error: errorText(error) };
@@ -165,7 +166,7 @@ export function useRoutineActions(
         );
       }
     },
-    [bridge, announce, listedOn, target],
+    [bridge, announce, listedOn, gatewayId, target, connectedAt],
   );
 
   return { pending, notes, runs, setEnabled, runNow };
@@ -280,20 +281,20 @@ export function RunNoteLine({ note, paused }: { note: RunNote | undefined; pause
 export function DeleteRoutine({
   routine,
   listedOn,
-  target,
+  shown,
   onCancel,
   onDeleted,
 }: {
   routine: Routine;
   /** The list the routine was shown from (`RoutinesState.listedOn`). */
   listedOn: number;
-  /** The host's target that list was read under: the confirmation keeps the one it opened with. */
-  target: number;
+  /** Where that list was drawn: the confirmation keeps the one it opened with. */
+  shown: ShownStamp;
   onCancel: () => void;
   onDeleted: () => void;
 }) {
   const bridge = useBridge();
-  const [opened] = useState(target);
+  const [opened] = useState(shown);
   const [status, setStatus] = useState<"idle" | "deleting" | "unknown" | "checking" | "present">(
     "idle",
   );

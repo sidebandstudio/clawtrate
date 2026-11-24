@@ -13,7 +13,7 @@ import {
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { screenStamp } from "../stamp.ts";
+import { screenStamp, shownStamp } from "../stamp.ts";
 import { BackIcon, CheckIcon, LockIcon, WarnIcon } from "../icons.tsx";
 import { AccountRow } from "./AccountChoices.tsx";
 import { Connect, keptLabel } from "./Connect.tsx";
@@ -64,8 +64,8 @@ export function useAccountsSection({
   const [label, setLabel] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<GatewayAccount | null>(null);
-  // The host's target when Disconnect… was asked: another gateway can have the same profile id.
-  const confirmedOn = useRef(connection.target);
+  // Where Disconnect… was asked: another gateway can have the same profile id.
+  const confirmedOn = useRef(shownStamp(connection));
   const [busy, setBusy] = useState(false);
   const [now] = useState(() => Date.now());
   const granted = useGranted(connection);
@@ -338,7 +338,7 @@ export function useAccountsSection({
                 data-size="sm"
                 data-tone="danger"
                 onClick={() => {
-                  confirmedOn.current = connection.target;
+                  confirmedOn.current = shownStamp(connection);
                   setConfirm(account);
                 }}
               >

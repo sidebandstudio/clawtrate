@@ -529,9 +529,7 @@ test.describe("1440", () => {
     const dialog = page.getByTestId("routine-delete");
     const before = await moveTarget(page);
     await dialog.getByRole("button", { name: "Delete", exact: true }).click();
-    await expect
-      .poll(() => sentStamp(page, "removeRoutine"))
-      .toEqual({ gatewayId: null, target: before });
+    await expect.poll(() => sentStamp(page, "removeRoutine")).toEqual(before);
   });
 
   test("F-352: delete asks first, says what it loses, and the routine leaves the list; a failure keeps the dialog", async ({

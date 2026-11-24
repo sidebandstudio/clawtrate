@@ -25,7 +25,7 @@ import { clockTime } from "../format.ts";
 import { CheckIcon, EyeIcon, WarnIcon } from "../icons.tsx";
 import { AdminBar, CommandBlock, GrantedBar, useGranted } from "../bots/parts.tsx";
 import { Confirm } from "../bots/Dialog.tsx";
-import { screenStamp } from "../stamp.ts";
+import { screenStamp, shownStamp, type ShownStamp } from "../stamp.ts";
 import { connectionKey, Mark } from "./RunsOn.tsx";
 import { CHOICE_WORDS, lastSeen, levelsWords, names, nodeState } from "./words.ts";
 import "./machines.css";
@@ -36,13 +36,13 @@ type Read =
   | { status: "ready"; view: MachinesView };
 
 /** One removal confirmation; each opening is its own object. */
-/** A removal asked for, with the host's target of the read its row came from. */
+/** A removal asked for, with where the read its row came from was asked. */
 type Removal = {
   kind: "machine" | "device";
   id: string;
   name: string;
   bots: string[];
-  target: number;
+  shown: ShownStamp;
 };
 
 const PAIRING = "operator.pairing";
@@ -297,12 +297,12 @@ export function useMachinesSection({
   toNav: ReactNode;
 }): { title: string; back: ReactNode; body: ReactNode; foot: ReactNode } {
   const bridge = useBridge();
-  // Each read with the reload it was asked after, and the host's target it was asked under.
+  // Each read with the reload it was asked after, and where it was asked (`ShownStamp`).
   const [held, setHeld] = useState<{
     key: string;
     read: Read;
     at: number;
-    target: number;
+    shown: ShownStamp;
   } | null>(null);
   const [generation, setGeneration] = useState(0);
   const asked = useRef(0);
@@ -336,19 +336,24 @@ export function useMachinesSection({
     currentKey.current = key;
   }, [key]);
   const now = Date.now();
-  const target = connection.target;
+  // The connection as this render draws it, for the read the effect below asks.
+  const drawnOn = useRef(shownStamp(connection));
+  useLayoutEffect(() => {
+    drawnOn.current = shownStamp(connection);
+  });
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
     const at = asked.current;
+    const shown = drawnOn.current;
     bridge.invoke({ type: "readMachines" }).then(
-      (view) => live && setHeld({ key, at, target, read: { status: "ready", view } }),
+      (view) => live && setHeld({ key, at, shown, read: { status: "ready", view } }),
       (error: unknown) =>
         live &&
         setHeld({
           key,
           at,
-          target,
+          shown,
           read: {
             status: "error",
             message: error instanceof Error ? error.message : String(error),
@@ -358,14 +363,14 @@ export function useMachinesSection({
     return () => {
       live = false;
     };
-  }, [bridge, active, connected, key, target, generation]);
+  }, [bridge, active, connected, key, generation]);
   const reload = useCallback(() => {
     asked.current += 1;
     setGeneration(asked.current);
   }, []);
   if (held && (!connected || held.key !== key)) setHeld(null);
-  // The target of the read the rows shown came from (no host hands out target 0).
-  const readTarget = held?.target ?? 0;
+  // Where the read the rows shown came from was asked (no host hands out target 0).
+  const readShown = held?.shown ?? { gatewayId: null, target: 0, connectedAt: null };
   const read: Read = !connected
     ? { status: "error", message: "Not connected to the gateway." }
     : held && held.key === key
@@ -572,7 +577,7 @@ export function useMachinesSection({
                   id: machine.id,
                   name: machine.name,
                   bots: machine.named,
-                  target: readTarget,
+                  shown: readShown,
                 })
               }
             >
@@ -630,7 +635,7 @@ export function useMachinesSection({
                       id: device.id,
                       name: device.name,
                       bots: [],
-                      target: readTarget,
+                      shown: readShown,
                     })
                   }
                 >
@@ -731,7 +736,7 @@ export function useMachinesSection({
             setBusy(asked);
             // Where the row was read: a removal sent anywhere else could unpair another
             // gateway's machine of the same id, so the host refuses it.
-            const done = screenStamp(bridge, asked.target).then((stamp) =>
+            const done = screenStamp(bridge, asked.shown).then((stamp) =>
               asked.kind === "machine"
                 ? bridge.invoke({ type: "removeMachine", nodeId: asked.id, stamp })
                 : bridge.invoke({ type: "removeDevice", deviceId: asked.id, stamp }),

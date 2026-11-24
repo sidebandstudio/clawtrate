@@ -47,6 +47,7 @@ import { Markdown } from "../Markdown.tsx";
 import { Note } from "../bots/parts.tsx";
 import { Calendar } from "./Calendar.tsx";
 import { useKeyedRead } from "./read.ts";
+import { shownStamp } from "../stamp.ts";
 import {
   fullWhen,
   ownerOf,
@@ -924,7 +925,7 @@ export function RoutinesView({
     announce,
     store.routines,
     store.listedOn,
-    state.connection.target,
+    shownStamp(state.connection),
   );
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [deleting, setDeleting] = useState<Routine | null>(null);
@@ -1261,7 +1262,7 @@ export function RoutinesView({
         <DeleteRoutine
           routine={deleting}
           listedOn={store.listedOn}
-          target={state.connection.target}
+          shown={shownStamp(state.connection)}
           onCancel={() => setDeleting(null)}
           onDeleted={() => {
             announce(`Deleted ${deleting.name}`);

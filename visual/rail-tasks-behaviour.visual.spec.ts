@@ -506,8 +506,11 @@ test("F-277: a task whose run is active asks Stop and archive or Cancel; Cancel 
   expect(await sent(page, "archiveTask")).toEqual([]);
   await taskMenu(page, "Rotate the logs");
   await page.getByRole("menuitem", { name: "Stop and archive…" }).click();
+  // The host is pointed at a gateway anew while the dialog is open: it keeps the row's stamp.
+  const before = await moveTarget(page);
   await dialog.getByRole("button", { name: "Stop and archive" }).click();
   await expect(taskRow(page, "Rotate the logs")).toHaveCount(0);
+  expect(await sentStamp(page, "archiveTask")).toEqual(before);
   expect(await sent(page, "archiveTask")).toEqual([
     { type: "archiveTask", key: "agent:otto:rotate-logs", stop: true, stamp: expect.any(Object) },
   ]);
@@ -539,7 +542,7 @@ test("F-278: Delete asks first, with Cancel focused; Delete removes the task and
   const before = await moveTarget(page);
   await dialog.getByRole("button", { name: "Delete" }).click();
   await expect(dialog).toHaveCount(0);
-  expect(await sentStamp(page, "deleteTask")).toEqual({ gatewayId: null, target: before });
+  expect(await sentStamp(page, "deleteTask")).toEqual(before);
   await expect(taskRow(page, "Certificate renewal")).toHaveCount(0);
   await expect(taskRow(page, "Router firmware")).toBeFocused();
   expect(await sent(page, "deleteTask")).toEqual([

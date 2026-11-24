@@ -18,7 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { screenStamp } from "../stamp.ts";
+import { screenStamp, shownStamp } from "../stamp.ts";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
 import { recall, remember } from "./memory.ts";
 import { AdminBar, CodeBlock, Note, Result, Wait } from "./parts.tsx";
@@ -91,8 +91,8 @@ export function useConnect({
 }): ConnectView {
   const bridge = useBridge();
   const admin = connection.canAdmin;
-  // The host's target when Connect opened: a key typed here goes only to that gateway.
-  const [openedOn] = useState(connection.target);
+  // Where Connect opened: a key typed here goes only to that gateway.
+  const [openedOn] = useState(() => shownStamp(connection));
   // Done: the sign-in that finished is let go, so the component opens afresh next time.
   const finish = (account: string | null) => {
     remember(LABEL_KEPT, null);
