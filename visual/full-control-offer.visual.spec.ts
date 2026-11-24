@@ -17,6 +17,23 @@ const sent = (page: Page) =>
       .map((each) => ({ ...each })),
   );
 
+/** Change the fixture's connection, as the host would. */
+const patchConnection = (page: Page, patch: Record<string, unknown>) =>
+  page.evaluate(
+    (change) =>
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            setState(next: (state: { connection: Record<string, unknown> }) => object): void;
+          };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, ...change },
+      })),
+    patch,
+  );
+
 async function openGatewaySettings(page: Page, phone: boolean) {
   await page.keyboard.press("ControlOrMeta+,");
   const dialog = page.getByRole("dialog", { name: "Settings" });
@@ -188,4 +205,94 @@ test("F-549: a device without the offer sees neither the dialog nor its place in
   const settings = page.getByRole("dialog", { name: "Settings" });
   await expect(settings.getByTestId("gateway-access")).toBeVisible();
   await expect(settings.getByTestId("full-control-ask")).toHaveCount(0);
+});
+
+test("F-549: a switch to another gateway with its own offer shows that gateway's choices afresh", async ({
+  page,
+}) => {
+  await openFixture(page, OFFER, "dark");
+  const offer = page.getByRole("dialog", { name: "Give this device full control" });
+  await offer.getByRole("button", { name: "Give this device full control" }).click();
+  await expect(offer.getByTestId("full-offer-status")).toBeVisible();
+  // The host switches to another gateway, read-only too and never offered.
+  await patchConnection(page, {
+    gatewayUrl: "wss://gateway-two.example",
+    target: 99,
+    fullOffer: "offer",
+    upgrade: {
+      status: "idle",
+      scopes: [],
+      requestId: null,
+      approveCommand: null,
+      approveNote: null,
+      error: null,
+    },
+  });
+  await expect(offer).toContainText("paired with gateway-two.example");
+  await expect(offer.getByRole("button", { name: "Keep current access" })).toBeVisible();
+  await expect(offer.getByTestId("full-offer-status")).toHaveCount(0);
+});
+
+test("F-549: Settings says the owner refused full control, even for a device that can send and answer", async ({
+  page,
+}) => {
+  await openFixture(page, OFFER, "dark");
+  await page
+    .getByRole("dialog", { name: "Give this device full control" })
+    .getByRole("button", { name: "Keep current access" })
+    .click();
+  await patchConnection(page, {
+    scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+    canWrite: true,
+    canAnswer: true,
+    canApprove: true,
+    upgrade: {
+      status: "rejected",
+      scopes: [
+        "operator.read",
+        "operator.write",
+        "operator.approvals",
+        "operator.questions",
+        "operator.admin",
+        "operator.pairing",
+      ],
+      requestId: "up-full-0001",
+      approveCommand: null,
+      approveNote: null,
+      error: null,
+    },
+  });
+  const settings = await openGatewaySettings(page, false);
+  await expect(settings.getByTestId("repair-problem")).toHaveText(
+    "The gateway's owner rejected the new pairing. This device keeps its earlier access.",
+  );
+});
+
+test("F-549: the offer waits for the gateway to name itself, in the dialog and in Settings", async ({
+  page,
+}) => {
+  // A connection whose gateway hasn't said which it is yet, with the offer unanswered.
+  await openFixture(page, `scene=access-narrowed&${OTTO_DISK}`, "dark");
+  await patchConnection(page, { fullPairing: false, fullOffer: "offer", gatewayId: null });
+  await page.waitForTimeout(200);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await expect(settings.getByTestId("gateway-access")).toBeVisible();
+  await expect(settings.getByTestId("full-control-ask")).toHaveCount(0);
+  // Once it has, Settings offers it.
+  await patchConnection(page, { gatewayId: "gateway-a" });
+  await expect(settings.getByTestId("full-control-ask")).toBeVisible();
+});
+
+test("F-549: the offer's dialog keeps Tab inside it while the Work drawer is open behind it", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 700 });
+  await openFixture(page, `${OFFER}&panel=open`, "dark");
+  const offer = page.getByRole("dialog", { name: "Give this device full control" });
+  const keep = offer.getByRole("button", { name: "Keep current access" });
+  await expect(keep).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(offer.getByRole("button", { name: "Give this device full control" })).toBeFocused();
 });
