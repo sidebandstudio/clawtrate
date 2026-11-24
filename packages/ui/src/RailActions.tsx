@@ -17,7 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { useBridge } from "./bridge.tsx";
+import { useBridge, useClawtrateState } from "./bridge.tsx";
 import type { ShownStamp } from "./stamp.ts";
 import { rowTime } from "./format.ts";
 import { ChevronIcon } from "./icons.tsx";
@@ -340,6 +340,9 @@ export function ArchivedGroup({
   const [error, setError] = useState<string | null>(null);
   const keys = tasks.map((task) => task.key).join("\n");
   const goneKeys = [...gone].map(([key, at]) => `${key} ${at}`).join("\n");
+  // What the switches let the group list: a change reads it again (F-519, F-563).
+  const state = useClawtrateState();
+  const shownKinds = `${state.showChannelChats === true}:${state.showOtherToolSessions === true}`;
 
   useEffect(() => {
     if (!open) return;
@@ -357,7 +360,7 @@ export function ArchivedGroup({
     return () => {
       live = false;
     };
-  }, [open, bridge, bot.id, keys, goneKeys, target]);
+  }, [open, bridge, bot.id, keys, goneKeys, shownKinds, target]);
   // Hidden only while the gateway still lists that same archive of the task.
   const shown = list && {
     ...list,
