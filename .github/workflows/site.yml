@@ -1,8 +1,10 @@
 name: Site
 
 # Deploys site/ to GitHub Pages with the newest published beta's feed under
-# updates/beta/. It deploys only from main: the github-pages environment allows
-# the main branch alone, with no tag rule, because a tag rule would let anyone
+# updates/channel/beta/, and under updates/beta/, which betas published before
+# that folder read: the newest beta there too, or the beta LEGACY_BETA_PIN in
+# apps/desktop/packaging/beta-files.ts names. It deploys only from main: the
+# github-pages environment allows the main branch alone, with no tag rule, because a tag rule would let anyone
 # who can push a v* tag deploy that tag's own copy of this workflow. So a
 # release event does not start it; `pnpm release:beta --publish` and
 # `--withdraw` dispatch it on main once GitHub lists the release's new state,
@@ -49,6 +51,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.assemble.outputs.tag }}
+      pinned: ${{ steps.assemble.outputs.pinned }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,18 +84,22 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      # The beta may have been withdrawn since the build job assembled it: GitHub
+      # A beta may have been withdrawn since the build job assembled it: GitHub
       # answers 404 for a draft's tag, so a withdrawn beta fails here and the
       # last deployment stays. The withdrawal's own run then deploys what is left.
+      # Both feeds are checked: the newest beta, and the pinned one when there is one.
       - name: Check the assembled beta is still published
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.build.outputs.tag }}
+          PINNED: ${{ needs.build.outputs.pinned }}
         run: |
-          state=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '"\(.draft) \(.prerelease)"')
-          if [ "$state" != "false true" ]; then
-            echo "::error::$TAG is no longer a published beta, so nothing deploys."
-            exit 1
-          fi
+          for TAG in $TAG $PINNED; do
+            state=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '"\(.draft) \(.prerelease)"')
+            if [ "$state" != "false true" ]; then
+              echo "::error::$TAG is no longer a published beta, so nothing deploys."
+              exit 1
+            fi
+          done
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

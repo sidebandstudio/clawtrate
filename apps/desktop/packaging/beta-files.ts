@@ -9,10 +9,27 @@ import { parseVersion, versionTrack } from "../src/main/update/version.ts";
 import { artifactName } from "./feed.ts";
 
 export const REPOSITORY = "sidebandstudio/clawtrate";
+/**
+ * The site's folder for the Beta feed, and the one before it. Builds read the
+ * first. Every beta published before it read the second, which stays served
+ * so those copies can still update (docs/decisions.md, "Moving betas to three
+ * numbers").
+ */
+export const BETA_FOLDER = "updates/channel/beta";
+export const LEGACY_BETA_FOLDER = "updates/beta";
 /** Where the app built for the Beta track reads its feed. */
-export const BETA_FEED_URL = "https://clawtrate.dev/updates/beta/feed.json";
+export const BETA_FEED_URL = `https://clawtrate.dev/${BETA_FOLDER}/feed.json`;
 /** Where the website's install script reads the newest Mac build. */
-export const BETA_LATEST_MAC_URL = "https://clawtrate.dev/updates/beta/latest-mac.json";
+export const BETA_LATEST_MAC_URL = `https://clawtrate.dev/${BETA_FOLDER}/latest-mac.json`;
+/** Where betas published before the new folder read their feed. */
+export const LEGACY_BETA_FEED_URL = `https://clawtrate.dev/${LEGACY_BETA_FOLDER}/feed.json`;
+/**
+ * The beta the legacy folder serves instead of the newest one, or null to
+ * serve the newest there too. It is set once, when betas move to three
+ * numbers, to the last dated beta, which reads the new folder. That release
+ * is never withdrawn.
+ */
+export const LEGACY_BETA_PIN: string | null = null;
 export const FEED_NAME = "feed.json";
 export const LATEST_MAC_NAME = "latest-mac.json";
 
