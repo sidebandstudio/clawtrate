@@ -231,6 +231,8 @@ function nonStreamingBody(model: string, id: string, steps: ReplyStep[]) {
 export const OFFERED_TOOLS_PATH = "/scripted/offered-tools";
 /** The turns the gateway started itself in a session and the scripted model answered quietly, by the prompt each was. */
 export const QUIET_TURNS_PATH = "/scripted/quiet-turns";
+/** Where a check reads the system prompt the latest model request in a session carried. */
+export const SYSTEM_PROMPT_PATH = "/scripted/system-prompt";
 
 /** A scripted account failure, in the shape the providers' APIs answer it. */
 function failureBody({ status, message }: ScriptedFailure) {
@@ -273,6 +275,9 @@ export function startFakeProvider(options: FakeProviderOptions) {
   // The tool names of the latest model request in each session, as evidence
   // of which tools the gateway really offers a bot.
   const offered = new Map<string, string[]>();
+  // The system text of the latest model request in each session, as evidence
+  // of what the gateway really tells a bot (a plugin's prompt additions).
+  const systems = new Map<string, string>();
   // Gateway-started turns answered with the silent reply, which leave no trace
   // in the gateway's history, counted per session.
   const quiet = new Map<string, string[]>();
@@ -301,6 +306,11 @@ export function startFakeProvider(options: FakeProviderOptions) {
       if (req.method === "GET" && url.pathname === OFFERED_TOOLS_PATH) {
         const session = url.searchParams.get("session") ?? "";
         sendJson(res, 200, { session, tools: offered.get(session) ?? null });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === SYSTEM_PROMPT_PATH) {
+        const session = url.searchParams.get("session") ?? "";
+        sendJson(res, 200, { session, system: systems.get(session) ?? null });
         return;
       }
       if (req.method === "GET" && url.pathname === QUIET_TURNS_PATH) {
@@ -362,6 +372,10 @@ export function startFakeProvider(options: FakeProviderOptions) {
           return;
         }
         if (session) offered.set(session, [...toolNames].sort());
+        if (session) {
+          const system = messages.filter((m) => m.role === "system" || m.role === "developer");
+          systems.set(session, system.map(messageText).join("\n\n"));
+        }
         const steps = planReply(messages, new Set(toolNames), {
           pagesOrigin: options.pagesOrigin ?? null,
           skillReview: options.skillReview === true,

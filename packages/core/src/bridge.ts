@@ -5,6 +5,7 @@
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import { utf8Length } from "./encoding.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
+import type { BotVoiceAnswer } from "./voice.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -142,6 +143,10 @@ export type BridgeCommand =
   | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
   /** The "Turn time limit", in minutes, for every run this client starts (F-100). */
   | { type: "setTurnLimit"; minutes: number }
+  /** Whether the voice guide is added to the bots' prompts, as the gateway's voice plugin reads it back. */
+  | { type: "readBotVoice" }
+  /** Turn the voice guide on or off for the gateway's bots; needs operator.write. */
+  | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
@@ -611,24 +616,30 @@ type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage"
                                                                                                   }
                                                                                                 ? MemoryList
                                                                                                 : C extends {
-                                                                                                      type: "readMemory";
+                                                                                                      type:
+                                                                                                        | "readBotVoice"
+                                                                                                        | "setBotVoice";
                                                                                                     }
-                                                                                                  ? MemoryDocument
+                                                                                                  ? BotVoiceAnswer
                                                                                                   : C extends {
-                                                                                                        type:
-                                                                                                          | "checkRoutineCreate"
-                                                                                                          | "checkRoutineUpdate";
+                                                                                                        type: "readMemory";
                                                                                                       }
-                                                                                                    ? RoutineSaveCheck
+                                                                                                    ? MemoryDocument
                                                                                                     : C extends {
-                                                                                                          type: "readChatPicture";
+                                                                                                          type:
+                                                                                                            | "checkRoutineCreate"
+                                                                                                            | "checkRoutineUpdate";
                                                                                                         }
-                                                                                                      ? ChatPictureRead
+                                                                                                      ? RoutineSaveCheck
                                                                                                       : C extends {
-                                                                                                            type: "readSentPicture";
+                                                                                                            type: "readChatPicture";
                                                                                                           }
-                                                                                                        ? SentPictureRead
-                                                                                                        : void;
+                                                                                                        ? ChatPictureRead
+                                                                                                        : C extends {
+                                                                                                              type: "readSentPicture";
+                                                                                                            }
+                                                                                                          ? SentPictureRead
+                                                                                                          : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -1338,6 +1349,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       if (typeof command.minutes !== "number" || !Number.isInteger(command.minutes))
         throw new Error("invalid turn limit");
       return { type: "setTurnLimit", minutes: command.minutes };
+    case "readBotVoice":
+      return { type: "readBotVoice" };
+    case "setBotVoice":
+      if (typeof command.on !== "boolean") throw new Error("invalid voice setting");
+      return {
+        type: "setBotVoice",
+        on: command.on,
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "setShowChannelChats":
       if (typeof command.on !== "boolean") throw new Error("invalid channel chats setting");
       return { type: "setShowChannelChats", on: command.on };
@@ -2103,6 +2123,10 @@ class ViewerSession implements BridgeSession {
         return client.stopRun(this.mine(command.key), command.runId, { owner });
       case "setTurnLimit":
         return client.setTurnLimit(command.minutes);
+      case "readBotVoice":
+        return client.readBotVoice();
+      case "setBotVoice":
+        return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":
         return client.setShowChannelChats(command.on);
       case "readComposerMenu":

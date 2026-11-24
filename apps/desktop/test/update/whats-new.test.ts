@@ -127,51 +127,76 @@ describe("F-554: what the Updates pane shows from the lists", () => {
   const running = "0.1.1-beta.20261120.1";
 
   it("an offer shows its own list and those of the builds skipped to reach it, newest first, and the running build's", () => {
-    expect(whatsNewView(builds, running, "0.1.1-beta.20261121.1")).toEqual({
+    expect(whatsNewView(builds, running, "0.1.1-beta.20261121.1", "nightly")).toEqual({
       coming: [builds[1], builds[2]],
       running: ["Running (#6)"],
     });
   });
 
   it("a file that doesn't list the offered version exactly is stale: nothing shows for the update, skipped builds included", () => {
-    expect(whatsNewView(builds, running, "0.1.1-beta.20261121.2")).toEqual({
+    expect(whatsNewView(builds, running, "0.1.1-beta.20261121.2", "nightly")).toEqual({
       coming: [],
       running: ["Running (#6)"],
     });
-    expect(whatsNewView(builds.slice(1, 3), running, "0.1.1-beta.20261121.2")).toBeUndefined();
+    expect(
+      whatsNewView(builds.slice(1, 3), running, "0.1.1-beta.20261121.2", "nightly"),
+    ).toBeUndefined();
   });
 
   it("skipped builds lie strictly between the running build and the offer; the running build's list is only its own", () => {
-    const view = whatsNewView(builds, "0.1.1-beta.20261120.3", "0.1.1-beta.20261121.1");
+    const view = whatsNewView(builds, "0.1.1-beta.20261120.3", "0.1.1-beta.20261121.1", "nightly");
     expect(view).toEqual({ coming: [builds[1]], running: ["Skipped (#7)"] });
-    expect(whatsNewView(builds, "0.1.1-beta.20261120.2", null)).toBeUndefined();
+    expect(whatsNewView(builds, "0.1.1-beta.20261120.2", null, "nightly")).toBeUndefined();
   });
 
-  it("a skipped build is on the offered build's track: a Stable release between is not listed", () => {
+  it("F-559: a skipped build is one the checked track can have: a dated beta is never a Stable build", () => {
     const view = whatsNewView(
       [
-        { version: "1.2.0-beta.20261120.1", items: ["The offer (#3)"] },
+        { version: "1.2.0", items: ["The offer (#3)"] },
         { version: "1.1.0", items: ["A Stable release (#2)"] },
-        { version: "1.1.1-beta.20261110.1", items: ["A Beta between (#4)"] },
+        { version: "1.1.1-beta.20261110.1", items: ["A dated beta between (#4)"] },
       ],
       "1.0.0",
-      "1.2.0-beta.20261120.1",
+      "1.2.0",
+      "stable",
     );
-    expect(view?.coming.map((build) => build.version)).toEqual([
-      "1.2.0-beta.20261120.1",
-      "1.1.1-beta.20261110.1",
-    ]);
+    expect(view?.coming.map((build) => build.version)).toEqual(["1.2.0", "1.1.0"]);
+  });
+
+  it("F-559: on the Beta track, three-numbered builds and dated betas are all Beta builds", () => {
+    const betas = [
+      { version: "0.2.1", items: ["The offer (#12)"] },
+      { version: "0.2.0", items: ["The first three-numbered build (#11)"] },
+      { version: "0.1.1-beta.20261124.3", items: ["The last dated beta (#10)"] },
+      { version: "0.1.1-beta.20261124.2", items: ["Running (#9)"] },
+    ];
+    expect(whatsNewView(betas, "0.1.1-beta.20261124.2", "0.2.1", "nightly")).toEqual({
+      coming: betas.slice(0, 3),
+      running: ["Running (#9)"],
+    });
+    expect(whatsNewView(betas, "0.2.0", "0.2.1", "nightly")).toEqual({
+      coming: betas.slice(0, 1),
+      running: ["The first three-numbered build (#11)"],
+    });
+    // An older offer shows nothing for the update.
+    expect(whatsNewView(betas, "0.2.1", "0.2.0", "nightly")).toEqual({
+      coming: [],
+      running: ["The offer (#12)"],
+    });
   });
 
   it("with nothing newer, only the running build's list; with no list for it, nothing", () => {
-    expect(whatsNewView(builds, running, null)).toEqual({ coming: [], running: ["Running (#6)"] });
-    expect(whatsNewView(builds, running, running)).toEqual({
+    expect(whatsNewView(builds, running, null, "nightly")).toEqual({
       coming: [],
       running: ["Running (#6)"],
     });
-    expect(whatsNewView(builds, "0.1.1-beta.20261118.1", null)).toBeUndefined();
-    expect(whatsNewView(builds, null, "0.1.1-beta.20261121.1")).toBeUndefined();
-    expect(whatsNewView([], running, "0.1.1-beta.20261121.1")).toBeUndefined();
+    expect(whatsNewView(builds, running, running, "nightly")).toEqual({
+      coming: [],
+      running: ["Running (#6)"],
+    });
+    expect(whatsNewView(builds, "0.1.1-beta.20261118.1", null, "nightly")).toBeUndefined();
+    expect(whatsNewView(builds, null, "0.1.1-beta.20261121.1", "nightly")).toBeUndefined();
+    expect(whatsNewView([], running, "0.1.1-beta.20261121.1", "nightly")).toBeUndefined();
   });
 });
 
@@ -247,19 +272,19 @@ describe("F-554: the fixture shows what the app would", () => {
     const read = (query: string) => fixtureUpdates(new URLSearchParams(query)).get();
     const beta = "buildTrack=nightly&track=nightly";
     expect((await read(`updates=offered&${beta}`)).whatsNew).toEqual(
-      whatsNewView(FIXTURE_BETA_NOTES, "0.1.0-beta.20261115.1", "0.2.0-beta.20261116.1"),
+      whatsNewView(FIXTURE_BETA_NOTES, "0.1.0-beta.20261115.1", "0.2.0-beta.20261116.1", "nightly"),
     );
     expect((await read(`updates=nothing-newer&${beta}`)).whatsNew).toEqual(
-      whatsNewView(FIXTURE_BETA_NOTES, "0.1.0-beta.20261115.1", null),
+      whatsNewView(FIXTURE_BETA_NOTES, "0.1.0-beta.20261115.1", null, "nightly"),
     );
     // After an update, the running build is the one installed, and its list is the one shown.
     expect((await read(`updates=nothing-newer&${beta}&after=target-running`)).whatsNew).toEqual(
-      whatsNewView(FIXTURE_BETA_NOTES, "0.2.0-beta.20261116.1", null),
+      whatsNewView(FIXTURE_BETA_NOTES, "0.2.0-beta.20261116.1", null, "nightly"),
     );
     // After a failed download the check had read its lists, so this build's shows; after a
     // failed check there were none.
     expect((await read(`updates=faildl&${beta}`)).whatsNew).toEqual(
-      whatsNewView(FIXTURE_BETA_NOTES, "0.1.0-beta.20261115.1", null),
+      whatsNewView(FIXTURE_BETA_NOTES, "0.1.0-beta.20261115.1", null, "nightly"),
     );
     for (const query of [
       `updates=failcheck&${beta}`,
