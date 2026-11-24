@@ -1392,7 +1392,8 @@ export class ClawtrateClient {
   /**
    * The accept of the full-control offer under way, from before its answer is saved until the
    * gateway settles its request: an accept that comes meanwhile (a double click, another window)
-   * joins it, so one choice sends one request. Released when the save fails, to try again.
+   * joins it, so one choice sends one request. Released when the save fails, or when the
+   * connection stops before the gateway answers, to try again.
    */
   private fullAttempt: Promise<void> | null = null;
   /** The scopes a `held` request keeps, as the connection held them when it was made. */
@@ -2830,6 +2831,9 @@ export class ClawtrateClient {
   /** Reject every operation waiting for access, without changing what is being asked for. */
   private rejectAccessWaiters(error: Error): void {
     this.upgradeWanted = false;
+    // An accept of full control ends here unanswered, so a later one asks again. A request
+    // still under way keeps blocking a second one (`scopeUpgrade`).
+    this.fullAttempt = null;
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
     for (const waiter of waiters) waiter.reject(error);

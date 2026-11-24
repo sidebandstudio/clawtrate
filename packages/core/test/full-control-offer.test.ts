@@ -230,6 +230,33 @@ describe("the one-time offer of full control (F-500)", () => {
     client.stop();
   });
 
+  it("F-549: an accept whose connection stopped before an answer can be made again after Retry", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    await accept(client);
+    await until(() => client.state.connection.upgrade.status === "pending");
+    // The connection drops while the owner decides, and the gateway then stops letting it back.
+    const reply = gateway.connectReply;
+    gateway.connectReply = () => ({
+      ok: false,
+      error: { code: "UNAUTHORIZED", message: "slow down", details: { code: "AUTH_RATE_LIMITED" } },
+    });
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "error");
+    gateway.connectReply = reply;
+    await client.retryNow();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.gatewayId !== null &&
+        client.state.connection.fullOffer === "settings",
+    );
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
+    client.stop();
+  });
+
   it("F-549: a refusal keeps the pairing as it was, is saved, and leaves the offer in Settings only, across a restart", async () => {
     const storage = pairedAt();
     const { gateway, decide } = gatewayFor();
