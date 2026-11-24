@@ -41,7 +41,7 @@ import {
   type PlanContext,
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
-import { IMAGE_PROMPT } from "./scenarios.ts";
+import { IMAGE_PROMPT, SEND_PICTURE_AFTER, SEND_PICTURE_TEXT } from "./scenarios.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
@@ -562,6 +562,8 @@ export type Harness = {
   op(client: ClientName): OperatorSession;
   /** The instance was started with `--with-images`: it offers image_generate (StartOptions.images). */
   images: boolean;
+  /** The instance was started with `--with-message-tool`: it offers message (StartOptions.messageTool). */
+  messageTool: boolean;
   /** A new session key for a bot, subscribed on every client. */
   session(botId: string, tag: string): Promise<string>;
   /** Send and return the run, without waiting for it. */
@@ -1054,6 +1056,7 @@ const SCHEDULE_HISTORY_DETAILS = true;
 
 /** The check that runs only on an instance with the stand-in image provider. */
 export const IMAGE_CHECK = "a picture from the image tool";
+export const SEND_PICTURE_CHECK = "a picture sent with the message tool";
 const IMAGE_CALL_TITLE = "Image Generation";
 
 export type ScenarioCheck = {
@@ -3076,9 +3079,14 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     name: "the tools in effect are exactly the allowed ones",
     covers: [],
     run: async (h) => {
-      // An instance started with `--with-images` offers image_generate as well, and no other.
+      // An instance started with `--with-images` offers image_generate as well, one with
+      // `--with-message-tool` message, and no other.
       const withImages = (tools: string[]) =>
-        h.images ? [...tools, "image_generate"].sort() : tools;
+        [
+          ...tools,
+          ...(h.images ? ["image_generate"] : []),
+          ...(h.messageTool ? ["message"] : []),
+        ].sort();
       // What the model was really offered, as the scripted server received it.
       const paired = await h.session("main", "offered");
       const pairedRun = await h.run("plain", paired, "#text");
@@ -3114,7 +3122,9 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         withImages(EXPECTED_EFFECTIVE_TOOLS),
         "tools.effective available tools",
       );
-      for (const tool of DENIED_TOOLS.filter((t) => !(h.images && t === "image_generate"))) {
+      for (const tool of DENIED_TOOLS.filter(
+        (t) => !(h.images && t === "image_generate") && !(h.messageTool && t === "message"),
+      )) {
         const row = tools.find((t) => t.id === tool);
         expect(!row || row.status !== "available", `${tool} is denied but reported available`);
       }
@@ -3471,6 +3481,69 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       );
     },
   },
+  // Only on an instance started with `--with-message-tool` (SEND_PICTURE_CHECK).
+  {
+    name: SEND_PICTURE_CHECK,
+    covers: ["#send-picture"],
+    run: async (h) => {
+      const key = await h.session(FILES_BOT, "send-picture");
+      const view = await h.run("plain", key, "#send-picture");
+      view.expectCalls([
+        {
+          name: "message",
+          args: { action: "send", message: SEND_PICTURE_TEXT, media: PICTURE_PATH },
+          isError: false,
+          content: (texts, where) =>
+            same(
+              texts,
+              ["Sent visible reply to the current source conversation via internal-ui."],
+              where,
+            ),
+          // The staged picture's path on the gateway's computer is in the details; it varies.
+          details: (details: JsonRecord | undefined, where: string) =>
+            same(
+              [details?.status, details?.deliveryStatus, details?.target, details?.message],
+              ["ok", "sent", "current-run", SEND_PICTURE_TEXT],
+              `${where} details`,
+            ),
+          title: `Message ${PICTURE_PATH}`,
+        },
+      ]);
+      view.expectEnd("final", SEND_PICTURE_AFTER);
+      // The gateway's reply in the task: a row of its own in the run, with the text and the picture.
+      const history = await h
+        .op("plain")
+        .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key });
+      const delivered = history.messages.filter(
+        (m) => m.role === "assistant" && m.model === "delivery-mirror",
+      );
+      same(delivered.length, 1, "rows the gateway delivered");
+      same(rec(delivered[0]!.__openclaw).runId, view.runId, "the delivered row's run");
+      const content = delivered[0]!.content as JsonRecord[];
+      same(content[0], { type: "text", text: SEND_PICTURE_TEXT }, "the delivered text");
+      const block = content[1]!;
+      same(
+        [content.length, block.type, block.mimeType, block.width, block.height],
+        [2, "image", "image/png", 240, 160],
+        "the delivered picture",
+      );
+      expect(
+        /^artifact_managed_image_[0-9a-f-]{36}$/.test(String(block.artifactId)),
+        `the picture's id: ${String(block.artifactId)}`,
+      );
+      const download = await h.op("plain").request<JsonRecord>("artifacts.download", {
+        sessionKey: key,
+        artifactId: block.artifactId,
+      });
+      expect(
+        new RegExp(
+          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/${String(block.artifactId).slice(-36)}/full\\?mediaTicket=v1\\.[A-Za-z0-9._~-]+$`,
+        ).test(String(download.url)),
+        `the download's path: ${String(download.url)}`,
+      );
+      same(rec(download.artifact).sizeBytes, trailMap().length, "the picture's size");
+    },
+  },
   {
     name: "every directive has a check",
     covers: [],
@@ -3600,6 +3673,46 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(got.file.content, picture.toString("base64"), "the picture's bytes");
     },
   },
+  {
+    // Last, and on Marlow, whose first-run files no other check reads: the edit ends its first run.
+    name: "a bot takes a name in its own file",
+    covers: ["#take-name"],
+    run: async (h) => {
+      const read = await fileCall(h, "marlow", "IDENTITY.md");
+      const line = /^- \*\*Name:\*\*.*$/m.exec(
+        await workspaceFile(h, "marlow", "IDENTITY.md"),
+      )?.[0];
+      expect(line, "Marlow's IDENTITY.md has a name line");
+      const view = await h.run(
+        "plain",
+        await h.session("marlow", "take-name"),
+        "#take-name Johnny",
+      );
+      view.expectCalls([
+        read,
+        {
+          name: "edit",
+          args: { path: "IDENTITY.md", edits: [{ oldText: line, newText: "- **Name:** Johnny" }] },
+          isError: false,
+          content: textsLike([
+            matchesPattern(/^Successfully replaced 1 block\(s\) in \S+\/IDENTITY\.md\.$/),
+          ]),
+          details: (details: JsonRecord | undefined, where: string) =>
+            same(details?.changed, true, `${where} details changed`),
+          title: "Edit in IDENTITY.md",
+        },
+      ]);
+      view.expectEnd("final", "Johnny it is. It shows once you confirm it in Clawtrate.");
+      const file = await workspaceFile(h, "marlow", "IDENTITY.md");
+      expect(/^- \*\*Name:\*\* Johnny$/m.test(file), `IDENTITY.md after the edit: ${file}`);
+      // The gateway's own name for the bot is its config's, which the edit leaves alone.
+      const listed = await h.op("plain").request<{
+        agents: Array<{ id: string; name?: string; identity?: { name?: string } }>;
+      }>("agents.list", {});
+      const marlow = listed.agents.find((agent) => agent.id === "marlow");
+      same(marlow?.identity?.name ?? marlow?.name, "Marlow", "Marlow's name in the bot list");
+    },
+  },
 ];
 
 /** Directives of the scripted model that no scenario check claims to send. */
@@ -3622,6 +3735,8 @@ export async function runScenarioChecks(
     providerUrl?: string;
     /** The instance was started with `--with-images` (`Harness.images`). */
     images?: boolean;
+    /** The instance was started with `--with-message-tool` (`Harness.messageTool`). */
+    messageTool?: boolean;
   } = {},
 ): Promise<{ passed: number; failed: number; notes: string[] }> {
   const log = options.log ?? console.log;
@@ -3630,6 +3745,7 @@ export async function runScenarioChecks(
     options.ownerAgent,
     options.providerUrl,
     options.images ?? false,
+    options.messageTool ?? false,
   );
   await prepareRecipient(harness);
   let passed = 0;
@@ -3665,6 +3781,7 @@ export function createHarness(
   ownerAgent?: (botId: string, key: string, message: string) => Promise<void>,
   providerUrl?: string,
   images = false,
+  messageTool = false,
 ): Harness & { notes: string[] } {
   let counter = 0;
   const notes: string[] = [];
@@ -3672,6 +3789,7 @@ export function createHarness(
   const harness = {
     notes,
     images,
+    messageTool,
     op: (client: ClientName) => clients[client],
     async session(botId: string, tag: string) {
       counter += 1;

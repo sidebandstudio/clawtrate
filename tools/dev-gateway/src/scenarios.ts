@@ -42,6 +42,9 @@ export type Step =
 const PAGES = "/scripted/pages/";
 /** What the `#image` scenario asks the image tool to draw. */
 export const IMAGE_PROMPT = "A sun over a green hill, in flat solid colours";
+/** The message `#send-picture` sends with the trail map, and the words after it. */
+export const SEND_PICTURE_TEXT = "Here is the trail map.";
+export const SEND_PICTURE_AFTER = "That is the route for Saturday.";
 /** An address outside loopback, in a documentation range nothing answers. */
 export const OUTSIDE_ADDRESS = "http://192.0.2.1/";
 /** Another loopback port than the scripted pages' (one Chromium does not refuse itself): not theirs, so refused. */
@@ -137,6 +140,11 @@ function lastResult(ctx: PlanContext, name: string): Record<string, unknown> | n
 
 const rec = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+/** The name `#take-name` or its phrase takes: the rest of that line, or null when none follows. */
+export function takenName(prompt: string | undefined): string | null {
+  return /(?:#take-name|take this name)[ \t]+([^\n]+)/i.exec(prompt ?? "")?.[1]?.trim() || null;
+}
 
 /** Every bot's workspace starts with these five files, so six reads need one twice. */
 const SIX_READS = [
@@ -455,6 +463,29 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "take-name",
+    phrase: "take this name",
+    summary:
+      "A read of IDENTITY.md, then an edit of its name line (`- **Name:**`, or `- Name:` as the gateway writes it) to the words after the directive or the phrase (`#take-name Johnny`), as a bot asked to take a name does. Its name in the gateway's config stays as it was.",
+    steps: () => [
+      tool("read", { path: "IDENTITY.md" }),
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const read = [...ctx.results].reverse().find((r) => r.name === "read")?.text ?? "";
+          const line = /^- (?:\*\*Name:\*\*|Name:).*$/m.exec(read)?.[0];
+          const name = takenName(ctx.prompt);
+          if (!line || !name) return say("I found no name line to change.");
+          return tool("edit", {
+            path: "IDENTITY.md",
+            edits: [{ oldText: line, newText: `- **Name:** ${name}` }],
+          });
+        },
+      },
+      (ctx) => [say(`${takenName(ctx.prompt)} it is. It shows once you confirm it in Clawtrate.`)],
+    ],
+  },
+  {
     name: "write-large",
     phrase: "write a long log",
     summary: `A file write, then an edit that appends to it, leaving it over the gateway's 256 KiB preview limit (logs/transcode.log, ${LARGE_LOG_BYTES.toLocaleString("en-US")} bytes): the Work pane says it is too large to show, with the limit. Two calls, because the gateway takes at most 256,000 bytes of arguments in one.`,
@@ -482,6 +513,26 @@ export const SCENARIOS: Scenario[] = [
     steps: () => [
       tool("read", { path: PICTURE_PATH }),
       say("That is the trail map in my workspace."),
+    ],
+  },
+  {
+    name: "send-picture",
+    phrase: "send me the trail map",
+    summary: `Sends the trail map from Pip's workspace (${PICTURE_PATH}) with the message tool: the gateway delivers it as a message in the task, with the picture, then the bot says one more line.`,
+    bots: "Pip, on an instance started with `--with-message-tool`",
+    steps: () => [
+      tool("message", { action: "send", message: SEND_PICTURE_TEXT, media: PICTURE_PATH }),
+      (ctx) => {
+        const result = [...ctx.results].reverse().find((r) => r.name === "message");
+        if (!result) return [];
+        return [
+          say(
+            /^Sent visible reply/.test(result.text)
+              ? SEND_PICTURE_AFTER
+              : `The message tool answered: ${result.text.split("\n")[0]!.slice(0, 200)}`,
+          ),
+        ];
+      },
     ],
   },
   {

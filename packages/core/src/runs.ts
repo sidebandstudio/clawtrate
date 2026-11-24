@@ -1332,18 +1332,60 @@ export function queueLocalRun(
   return { ...activity, runs: [...activity.runs, run] };
 }
 
-/** A queued run that is about to be sent goes from `queued` to `running`. */
-export function startQueuedRun(activity: TaskActivity, runId: string, now: number): TaskActivity {
-  return updateRun(activity, runId, (run) =>
-    run.state === "queued" ? { ...run, state: "running", startedAt: now } : run,
+/** Whether the gateway is running a run under this message's own id. */
+export function gatewayRunning(activity: TaskActivity, messageId: string): boolean {
+  const run = findRun(activity, messageId);
+  return run !== undefined && isActive(run.state) && (run.bound || run.origin !== "local");
+}
+
+/**
+ * A held message goes back to the queue, always with a queued run the scheduler can start, in the
+ * place of the run it had, so it stays ahead of messages queued after it and its id names one run.
+ * That run may be a local one the gateway never named, or one the gateway named and ended; a run
+ * the gateway is still running under the message's id is left as it is (the message is out).
+ */
+export function requeueLocalRun(
+  activity: TaskActivity,
+  message: OutgoingMessage,
+  now: number,
+): TaskActivity {
+  const run = findRun(activity, message.id);
+  if (!run) return queueLocalRun(activity, message, now);
+  if (gatewayRunning(activity, message.id)) return activity;
+  return replaceRun(
+    activity,
+    newRun(message.id, { state: "queued", origin: "local", messageId: message.id }, now),
   );
 }
 
-/** "Cancel" on the chip, or the task was archived or deleted. */
+/**
+ * A queued run that is about to be sent goes from `queued` to `running`: the queued one with
+ * that id, beside an earlier run of the same message the gateway named.
+ */
+export function startQueuedRun(activity: TaskActivity, runId: string, now: number): TaskActivity {
+  const queued = activity.runs.find((run) => run.id === runId && run.state === "queued");
+  if (!queued) return activity;
+  return {
+    ...activity,
+    runs: activity.runs.map((run) =>
+      run === queued ? { ...run, state: "running", startedAt: now } : run,
+    ),
+  };
+}
+
+/**
+ * "Cancel" on the chip, or the task was archived or deleted: the queued run with that id, beside
+ * an earlier run of the same message the gateway named.
+ */
 export function cancelQueuedRun(activity: TaskActivity, runId: string, now: number): TaskActivity {
-  return updateRun(activity, runId, (run) =>
-    run.state === "queued" ? { ...run, state: "cancelled", endedAt: now } : run,
-  );
+  const queued = activity.runs.find((run) => run.id === runId && run.state === "queued");
+  if (!queued) return activity;
+  return {
+    ...activity,
+    runs: activity.runs.map((run) =>
+      run === queued ? { ...run, state: "cancelled", endedAt: now } : run,
+    ),
+  };
 }
 
 /**

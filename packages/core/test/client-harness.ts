@@ -3,6 +3,7 @@
 
 import { ClawtrateClient, type ClientOptions } from "../src/client.ts";
 import type { KeyValueStore } from "../src/host.ts";
+import type { GatewayStamp } from "../src/types.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
@@ -11,6 +12,18 @@ export const URL_B = "ws://127.0.0.1:19002";
 export const KEY = "agent:otto:disk-space";
 /** The session the fake gateway names for `KEY` when a test says nothing of it. */
 export const SESSION = `session:${KEY}`;
+/**
+ * A screen's stamp (`GatewayStamp`): a gateway's identity and the host's target, given as a
+ * number or read from the client the screen belongs to. The host starts its target from the
+ * clock; each Connect, Disconnect or new pairing raises it.
+ */
+export const stampOn = (
+  gatewayId: string | null,
+  from: number | { state: { connection: { target: number } } } = 0,
+): GatewayStamp => ({
+  gatewayId,
+  target: typeof from === "number" ? from : from.state.connection.target,
+});
 export const FAST: ClientOptions = { reconnect: { initialMs: 20, maxMs: 40 } };
 
 type ConnectParams = { scopes: string[]; auth?: { deviceToken?: string } };

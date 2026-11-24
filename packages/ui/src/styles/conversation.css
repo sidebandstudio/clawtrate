@@ -1683,3 +1683,39 @@ button.reaction {
 .picture-note .button:hover {
   background: color-mix(in srgb, var(--bg) 92%, var(--text));
 }
+
+/* A bot's new name, waiting for the person (F-552). */
+.name-card {
+  align-items: flex-start;
+}
+
+.name-card-words {
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.name-card .name-card-words p {
+  flex: none;
+}
+
+.name-card .name-card-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.name-card .name-card-line {
+  color: var(--text-muted);
+}
+
+.name-card .name-card-error {
+  color: var(--danger);
+}
+
+.name-card-actions {
+  display: flex;
+  gap: 8px;
+  align-self: center;
+}

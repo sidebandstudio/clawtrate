@@ -222,7 +222,7 @@ export type StandIn = { accepted: () => number; bytes: () => number; stop: () =>
 export async function standIn(
   port: number,
   target: number | null,
-  options: { wrap?: string[]; load?: string; hold?: string[] } = {},
+  options: { wrap?: string[]; load?: string; hold?: string[]; startMs?: number } = {},
 ): Promise<StandIn> {
   const [program, ...args] = [
     ...(options.wrap ?? []),
@@ -246,17 +246,18 @@ export async function standIn(
       if (line.startsWith("bytes ")) bytes = Number(line.slice(6));
     }
   });
+  const stop = async () => {
+    if (exited) return;
+    child.kill("SIGKILL");
+    for (let waited = 0; !exited && waited < 5_000; waited += 50) await sleep(50);
+  };
   for (let waited = 0; !ready; waited += 50) {
-    if (exited || waited > 20_000) throw new Error("the stand-in didn't start");
+    if (exited || waited > (options.startMs ?? 20_000)) {
+      // One that never got ready is stopped, and gone, before the test hears of it.
+      await stop();
+      throw new Error("the stand-in didn't start");
+    }
     await sleep(50);
   }
-  return {
-    accepted: () => accepted,
-    bytes: () => bytes,
-    stop: async () => {
-      if (exited) return;
-      child.kill("SIGKILL");
-      for (let waited = 0; !exited && waited < 5_000; waited += 50) await sleep(50);
-    },
-  };
+  return { accepted: () => accepted, bytes: () => bytes, stop };
 }

@@ -480,10 +480,18 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           items.push(item);
         }
-        if (pictures.length > 0) item.pictures = [...(item.pictures ?? []), ...pictures];
-        if (cutByGateway) item.truncated = true;
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
         const rowId = str(info.id);
+        // The same picture twice in one turn is drawn once, where it first came.
+        const held = new Set((item.pictures ?? []).map((picture) => picture.artifactId));
+        const added = pictures.filter((picture) => {
+          if (held.has(picture.artifactId)) return false;
+          held.add(picture.artifactId);
+          if (rowId) picture.messageId = rowId;
+          return true;
+        });
+        if (added.length > 0) item.pictures = [...(item.pictures ?? []), ...added];
+        if (cutByGateway) item.truncated = true;
         if (rowId) {
           for (const block of blocks)
             if (block.kind === "text" && block.text.trim()) {

@@ -152,6 +152,7 @@ import type {
   ClawtrateState,
   ConnectionError,
   ConnectionState,
+  GatewayStamp,
   DiscoveryState,
   MessageReaction,
   PairingRequest,
@@ -166,6 +167,7 @@ import type {
   TranscriptBlock,
   TranscriptItem,
   ChatPicture,
+  NameProposal,
 } from "./types.ts";
 
 // Field caps, in JSON characters --------------------------------------------------
@@ -587,6 +589,7 @@ const picture = object<ChatPicture>()({
   width: NUMBER,
   height: NUMBER,
   sizeBytes: NUMBER,
+  messageId: ID,
 });
 const item = flagged<TranscriptItem>()({
   id: ID,
@@ -698,12 +701,14 @@ const connection = object<ConnectionState>()({
   canApprove: FLAG,
   canAdmin: FLAG,
   fullPairing: FLAG,
+  fullOffer: ENUM,
   upgrade,
   deviceId: ID,
   pairing,
   error: connectionError,
   retryAt: NUMBER,
   connectedAt: NUMBER,
+  target: NUMBER,
   paired: FLAG,
   sendLimits: object<SendLimits>()({
     imageBytes: NUMBER,
@@ -725,6 +730,14 @@ const bot = flagged<Bot>()({
   theme: NAME,
   model: NAME,
   isDefault: FLAG,
+});
+const nameProposal = object<NameProposal>()({
+  botId: ID,
+  name: NAME,
+  from: NAME,
+  stamp: object<NameProposal["stamp"]>()({ gatewayId: ID, target: NUMBER }),
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const task = flagged<Task>()({
   key: ID,
@@ -1185,7 +1198,7 @@ const checkInSave = object<CheckInSave>()({
 export const CHECK_INS: Bound = object<CheckInsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
-  gatewayId: ID,
+  stamp: object<GatewayStamp>()({ gatewayId: ID, target: NUMBER }),
   scheduler: FLAG,
   readBotIds: list(MAX_BOTS, ID),
   jobs: list(MAX_BOTS, checkInJob),
@@ -1264,6 +1277,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
   usage: USAGE,
+  botNames: list(MAX_BOTS, nameProposal),
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

@@ -3,11 +3,12 @@
 
 import { describe, expect, it, onTestFinished } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
+import { gatewayStamp } from "../src/types.ts";
 import { avatarFor, pictureWithChoice } from "../src/avatar.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
 import { GatewayError, deferred, tokenKey, until } from "./fake-gateway.ts";
-import { URL_A, URL_B } from "./client-harness.ts";
+import { stampOn, URL_A, URL_B } from "./client-harness.ts";
 import { SLOW_CREATE_MS } from "../src/accounts.ts";
 
 /** A 2×2 PNG carrying a creature choice, as New bot and Edit picture send it. */
@@ -25,7 +26,7 @@ describe("F-037: changing a bot's picture", () => {
         type: "setBotPicture",
         botId: "otto",
         avatar: PICTURE,
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).toEqual({
       confirmed: true,
@@ -49,7 +50,7 @@ describe("F-037: changing a bot's picture", () => {
         type: "setBotPicture",
         botId: "otto",
         avatar: PICTURE,
-        gatewayId: "gateway-b",
+        stamp: stampOn("gateway-b", client),
       }),
     ).rejects.toThrow("made for another gateway");
     expect(fake.gateway.calls("agents.update")).toEqual([]);
@@ -59,20 +60,20 @@ describe("F-037: changing a bot's picture", () => {
   it("refuses a missing gateway identity on either side, never matching two missing ones", async () => {
     // The dialog was opened before the gateway said which gateway it is.
     const named = await accountsClient();
-    await expect(named.client.setBotPicture("otto", PICTURE, null)).rejects.toThrow(
-      "hasn't said which gateway it is",
-    );
+    await expect(
+      named.client.setBotPicture("otto", PICTURE, stampOn(null, named.client)),
+    ).rejects.toThrow("hasn't said which gateway it is");
     named.client.stop();
     // A gateway that names none, with a dialog that has no identity either.
     const fake = new AccountsGateway();
     fake.identity = "";
     const unnamed = await accountsClient({ gateway: fake });
-    await expect(unnamed.client.setBotPicture("otto", PICTURE, null)).rejects.toThrow(
-      "hasn't said which gateway it is",
-    );
-    await expect(unnamed.client.setBotPicture("otto", PICTURE, "gateway-a")).rejects.toThrow(
-      "made for another gateway",
-    );
+    await expect(
+      unnamed.client.setBotPicture("otto", PICTURE, stampOn(null, unnamed.client)),
+    ).rejects.toThrow("hasn't said which gateway it is");
+    await expect(
+      unnamed.client.setBotPicture("otto", PICTURE, stampOn("gateway-a", unnamed.client)),
+    ).rejects.toThrow("made for another gateway");
     expect(fake.gateway.calls("agents.update")).toEqual([]);
     unnamed.client.stop();
   });
@@ -98,7 +99,7 @@ describe("F-037: changing a bot's picture", () => {
         () => "sent",
         (error: Error) => error.message,
       );
-    const picture = outcome(client.setBotPicture("otto", PICTURE, "gateway-a"));
+    const picture = outcome(client.setBotPicture("otto", PICTURE, stampOn("gateway-a", client)));
     const created = outcome(
       client.createBot(
         {
@@ -109,7 +110,7 @@ describe("F-037: changing a bot's picture", () => {
           model: "dev-1",
           effort: null,
         },
-        "gateway-a",
+        stampOn("gateway-a", client),
       ),
     );
     // Replaced again before the identity arrives: the answer belongs to a connection now gone.
@@ -171,11 +172,13 @@ describe("F-037: changing a bot's picture", () => {
       model: "dev-1",
       effort: null,
     } as const;
-    await expect(viewer.apply({ ...command, gatewayId: "gateway-b" })).rejects.toThrow(
+    await expect(viewer.apply({ ...command, stamp: stampOn("gateway-b", client) })).rejects.toThrow(
       "made for another gateway",
     );
     expect(fake.gateway.calls("agents.create")).toEqual([]);
-    expect((await viewer.apply({ ...command, gatewayId: "gateway-a" })).botId).toBe("viral");
+    expect((await viewer.apply({ ...command, stamp: stampOn("gateway-a", client) })).botId).toBe(
+      "viral",
+    );
     client.stop();
   });
 
@@ -258,7 +261,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const { client, fake } = await accountsClient();
     const release = holdCreate(fake);
     const created = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         () => "created",
         (error: Error) => error.message,
@@ -283,7 +286,7 @@ describe("a bot write is bound to its gateway to the end", () => {
         type: "createBot",
         ...input,
         name: "Bee",
-        gatewayId: "gateway-b",
+        stamp: stampOn("gateway-b", client),
       }),
     ).toEqual({ botId: "bee", missing: [] });
     expect(fake.gateway.calls("agents.create").slice(forB)).toEqual([
@@ -299,7 +302,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const created = createBridgeSession(client).apply({
       type: "createBot",
       ...input,
-      gatewayId: "gateway-a",
+      stamp: stampOn("gateway-a", client),
     });
     await until(() => fake.gateway.calls("agents.create").length === 1);
     const from = (fake.gateway as unknown as { requests: unknown[] }).requests.length;
@@ -317,7 +320,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const created = createBridgeSession(client).apply({
       type: "createBot",
       ...input,
-      gatewayId: "gateway-a",
+      stamp: stampOn("gateway-a", client),
     });
     await until(() => fake.gateway.calls("agents.create").length === 1);
     await expect(
@@ -325,7 +328,7 @@ describe("a bot write is bound to its gateway to the end", () => {
         type: "createBot",
         ...input,
         name: "Other",
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).rejects.toThrow("A bot is already being created.");
     release();
@@ -341,7 +344,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const created = createBridgeSession(client).apply({
       type: "createBot",
       ...input,
-      gatewayId: "gateway-a",
+      stamp: stampOn("gateway-a", client),
     });
     await until(() => fake.gateway.calls("agents.create").length === 1);
     // Another session's save starts and finishes while the Create is out.
@@ -350,7 +353,7 @@ describe("a bot write is bound to its gateway to the end", () => {
         type: "setBotPicture",
         botId: "otto",
         avatar: PICTURE,
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).toEqual({ confirmed: true });
     release();
@@ -362,7 +365,7 @@ describe("a bot write is bound to its gateway to the end", () => {
         type: "setBotPicture",
         botId: "viral",
         avatar: PICTURE,
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).toEqual({ confirmed: true });
     client.stop();
@@ -372,7 +375,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const { client, fake } = await accountsClient();
     const releaseFirst = holdCreate(fake);
     const first = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         () => "created",
         (error: Error) => error.message,
@@ -385,7 +388,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       type: "createBot",
       ...input,
       name: "Bee",
-      gatewayId: "gateway-a",
+      stamp: stampOn("gateway-a", client),
     });
     await until(() => fake.gateway.calls("agents.create").length === 2);
     const from = (fake.gateway as unknown as { requests: unknown[] }).requests.length;
@@ -411,7 +414,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const create = fake.gateway.handlers["agents.create"]!;
     const releaseFirst = holdCreate(fake);
     try {
-      const first = client.createBot(input, "gateway-a");
+      const first = client.createBot(input, stampOn("gateway-a", client));
       await until(() => fake.gateway.calls("agents.create").length === 1);
       resetCreation(client);
       fake.gateway.handlers["agents.create"] = create;
@@ -420,7 +423,9 @@ describe("a bot write is bound to its gateway to the end", () => {
       fake.gateway.handlers["users.prefs.set"] = () => {
         throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
       };
-      expect(await client.createBot({ ...input, name: "Bee" }, "gateway-a")).toEqual({
+      expect(
+        await client.createBot({ ...input, name: "Bee" }, stampOn("gateway-a", client)),
+      ).toEqual({
         botId: "bee",
         missing: ["preference"],
       });
@@ -455,7 +460,7 @@ describe("a bot write is bound to its gateway to the end", () => {
         throw new GatewayError({ code: "INVALID_REQUEST", message: "no" });
       });
     const first = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         () => "created",
         (error: Error) => error.message,
@@ -467,7 +472,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       return answer.promise.then(() => made);
     };
     const second = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, name: "Bee", gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, name: "Bee", stamp: stampOn("gateway-a", client) })
       .catch((error: Error) => error);
     await until(() => fake.gateway.calls("agents.create").length === 2);
     refuse.resolve();
@@ -487,7 +492,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const original = fake.gateway.handlers["sessions.create"]!;
     fake.gateway.handlers["sessions.create"] = () => new Promise(() => {});
     const created = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         (result) => result,
         (error: Error) => error.message,
@@ -516,7 +521,7 @@ describe("a bot write is bound to its gateway to the end", () => {
         type: "createBot",
         ...input,
         name: "Bee",
-        gatewayId: "gateway-b",
+        stamp: stampOn("gateway-b", client),
       }),
     ).toEqual({ botId: "bee", missing: [] });
     expect(fake.gateway.calls("agents.create").slice(forB)).toEqual([
@@ -534,7 +539,11 @@ describe("a bot write is bound to its gateway to the end", () => {
     try {
       expect(client.state.connection.gatewayId).toBeNull();
       fake.identity = "gateway-a";
-      const command = { type: "createBot", ...input, gatewayId: fake.identity } as const;
+      const command = {
+        type: "createBot",
+        ...input,
+        stamp: stampOn(fake.identity, client),
+      } as const;
       first = createBridgeSession(client).apply(command);
       await until(() => fake.gateway.calls("agents.create").length === 1);
       expect(client.state.connection.gatewayId).toBe(fake.identity);
@@ -571,12 +580,12 @@ describe("a bot write is bound to its gateway to the end", () => {
       const viewer = createBridgeSession(client);
       const from = requested(fake);
       await expect(
-        viewer.apply({ type: "finishBot", botId: "viral", gatewayId: "gateway-a" }),
+        viewer.apply({ type: "finishBot", botId: "viral", stamp: stampOn("gateway-a", client) }),
       ).rejects.toThrow("another gateway");
       expect(client.state.connection.gatewayId).toBe("gateway-b");
       expect(client.state.accounts.creation).toBeNull();
       await expect(
-        viewer.apply({ type: "finishBot", botId: "viral", gatewayId: "gateway-b" }),
+        viewer.apply({ type: "finishBot", botId: "viral", stamp: stampOn("gateway-b", client) }),
       ).rejects.toThrow("nothing left to finish");
       expect(sentSince(fake, from)).toEqual([]);
     } finally {
@@ -596,7 +605,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       createBridgeSession(client).apply({
         type: "finishBot",
         botId: "viral",
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).rejects.toThrow();
     expect(sentSince(fake, from)).toEqual([]);
@@ -665,7 +674,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       await createBridgeSession(client).apply({
         type: "finishBot",
         botId: "viral",
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).toEqual({ botId: "viral", missing: [] });
     expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
@@ -686,7 +695,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       await createBridgeSession(client).apply({
         type: "createBot",
         ...input,
-        gatewayId: "gateway-b",
+        stamp: stampOn("gateway-b", client),
       }),
     ).toEqual({ botId: "viral", missing: ["task"] });
     fake.gateway.handlers["sessions.create"] = original;
@@ -696,7 +705,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       createBridgeSession(client).apply({
         type: "finishBot",
         botId: "viral",
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).rejects.toThrow("made for another gateway");
     expect(sentSince(fake, from)).toEqual([]);
@@ -706,7 +715,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       await createBridgeSession(client).apply({
         type: "finishBot",
         botId: "viral",
-        gatewayId: "gateway-b",
+        stamp: stampOn("gateway-b", client),
       }),
     ).toEqual({ botId: "viral", missing: [] });
     client.stop();
@@ -727,7 +736,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     fake.gateway.handlers["agents.files.get"] = (params) =>
       reply.promise.then(() => original(params));
     const created = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         (result) => result,
         (error: Error) => error.message,
@@ -754,7 +763,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       createBridgeSession(client).apply({
         type: "finishBot",
         botId: "viral",
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).rejects.toThrow();
     expect(fake.gateway.calls("agents.files.set")).toEqual([]);
@@ -778,7 +787,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       await createBridgeSession(client).apply({
         type: "finishBot",
         botId: "viral",
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).toEqual({ botId: "viral", missing: [] });
     expect(fake.gateway.calls("agents.files.set")).toEqual([
@@ -803,7 +812,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     });
     fake.gateway.handlers["users.prefs.set"] = () => reply.promise;
     const created = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         (result) => result,
         (error: Error) => error.message,
@@ -835,7 +844,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       await createBridgeSession(client).apply({
         type: "finishBot",
         botId: "viral",
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).toEqual({ botId: "viral", missing: [] });
     expect(fake.gateway.calls("agents.create")).toHaveLength(creates);
@@ -898,7 +907,7 @@ describe("a bot write is bound to its gateway to the end", () => {
           : createBridgeSession(client).apply({
               type: "createBot",
               ...input,
-              gatewayId: "gateway-a",
+              stamp: stampOn("gateway-a", client),
             });
       const first = creating.then(
         () => "settled",
@@ -912,7 +921,7 @@ describe("a bot write is bound to its gateway to the end", () => {
           type: "createBot",
           ...input,
           name: "Bee",
-          gatewayId: "gateway-a",
+          stamp: stampOn("gateway-a", client),
         })
         .catch((error: Error) => error);
       await until(() => fake.gateway.calls("agents.create").length === 2);
@@ -931,7 +940,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const release = holdCreate(fake);
     onTestFinished(release);
     const first = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         () => "created",
         (error: Error) => error.message,
@@ -955,7 +964,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       await createBridgeSession(client).apply({
         type: "createBot",
         ...input,
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).toEqual({ botId: "viral", missing: [] });
     expect(fake.gateway.calls("agents.create")).toHaveLength(1);
@@ -967,7 +976,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const release = holdCreate(fake);
     onTestFinished(release);
     const first = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         () => "created",
         (error: Error) => error.message,
@@ -991,7 +1000,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const original = fake.gateway.handlers["config.patch"]!;
     fake.gateway.handlers["config.patch"] = () => new Promise(() => {});
     const first = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         () => "created",
         (error: Error) => error.message,
@@ -1011,13 +1020,13 @@ describe("a bot write is bound to its gateway to the end", () => {
     expect(
       client.state.accounts.bindings.find((each) => each.botId === "viral")?.fallbacksUnwritten,
     ).toBe(false);
-    // A Create on that gateway shows its own state.
+    // A Create on that gateway, from a screen read since the switch, shows its own state.
     expect(
       await createBridgeSession(client).apply({
         type: "createBot",
         ...input,
         name: "Bee",
-        gatewayId: "gateway-b",
+        stamp: gatewayStamp(client.state.connection),
       }),
     ).toEqual({ botId: "bee", missing: [] });
     expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "bee" });
@@ -1041,14 +1050,17 @@ describe("a bot write is bound to its gateway to the end", () => {
       }
     ).store;
     const first = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         (result) => result,
         (error: Error) => error.message,
       );
     await until(() => fake.gateway.calls("sessions.create").length === 1);
     fake.gateway.handlers["sessions.create"] = original;
-    store.update((state) => ({ ...state, connection: { ...state.connection, gatewayId: null } }));
+    store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: null },
+    }));
     task.resolve();
     expect(await first).toEqual({ botId: "viral", missing: ["task"] });
     expect(client.state.accounts.creation).toMatchObject({
@@ -1065,7 +1077,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       await createBridgeSession(client).apply({
         type: "finishBot",
         botId: "viral",
-        gatewayId: "gateway-a",
+        stamp: stampOn("gateway-a", client),
       }),
     ).toEqual({ botId: "viral", missing: [] });
     client.stop();
@@ -1075,7 +1087,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     const { client, fake } = await accountsClient();
     const release = holdCreate(fake);
     const created = createBridgeSession(client)
-      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .apply({ type: "createBot", ...input, stamp: stampOn("gateway-a", client) })
       .then(
         () => "created",
         (error: Error) => error.message,

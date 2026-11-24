@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession, MAX_OPAQUE_ID_CHARS, parseBridgeCommand } from "../src/bridge.ts";
+import { MAX_MESSAGE_LINE_CHARS } from "../src/state-bounds.ts";
 import type { ClawtrateClient } from "../src/client.ts";
 import { KEY, openTask } from "./client-harness.ts";
-import { GatewayError, until } from "./fake-gateway.ts";
+import { deferred, GatewayError, until } from "./fake-gateway.ts";
 
 describe("parseBridgeCommand", () => {
   it("accepts the known commands", () => {
@@ -15,6 +16,21 @@ describe("parseBridgeCommand", () => {
       type: "openSession",
       key: "agent:otto:disk-space",
     });
+    expect(parseBridgeCommand({ type: "reloadSession", key: "agent:otto:disk-space" })).toEqual({
+      type: "reloadSession",
+      key: "agent:otto:disk-space",
+    });
+    expect(
+      parseBridgeCommand({
+        type: "reloadSession",
+        key: "agent:otto:disk-space",
+        failed: "history unavailable",
+      }),
+    ).toEqual({
+      type: "reloadSession",
+      key: "agent:otto:disk-space",
+      failed: "history unavailable",
+    });
     expect(parseBridgeCommand({ type: "retry", extra: 1 })).toEqual({ type: "retry" });
   });
 
@@ -24,6 +40,16 @@ describe("parseBridgeCommand", () => {
     expect(() => parseBridgeCommand({ type: "connect", url: 4 })).toThrow("invalid url");
     expect(() => parseBridgeCommand({ type: "openSession", key: "../../etc" })).toThrow();
     expect(() => parseBridgeCommand({ type: "connect", url: "ws://x", token: {} })).toThrow();
+    expect(() =>
+      parseBridgeCommand({ type: "reloadSession", key: "agent:otto:disk-space", failed: 4 }),
+    ).toThrow("invalid error");
+    expect(() =>
+      parseBridgeCommand({
+        type: "reloadSession",
+        key: "agent:otto:disk-space",
+        failed: "x".repeat(MAX_MESSAGE_LINE_CHARS + 1),
+      }),
+    ).toThrow("invalid error");
   });
 });
 
@@ -282,6 +308,235 @@ describe("openSession", () => {
       client.stop();
     }
   });
+
+  it("F-105: a view opening a task whose failed history is already being read again starts no read of its own", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    const second = createBridgeSession(client);
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      // A run ending refreshes the history; that read is held while the second view opens.
+      const refresh = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => refresh.promise;
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+
+      await second.apply({ type: "openSession", key: KEY });
+      expect(client.state.transcripts[KEY]?.status).toBe("loading");
+      // Any further read fails: it would put the conversation back in its error state.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      refresh.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status !== "loading");
+      // A duplicate read would be queued from a listener that runs after the refresh drains, so
+      // wait on the read queue until it stays idle across a turn; a late one can't slip through.
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+    } finally {
+      first.dispose();
+      second.dispose();
+      client.stop();
+    }
+  });
+
+  it("F-105: a view opening a task while a failed read of it is still telling its listeners gets the task read", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    let opened = false;
+    const stop = client.store.subscribe(() => {
+      if (opened || client.state.transcripts[KEY]?.status !== "error") return;
+      // The failed read's own notification: the read has published but not yet ended.
+      opened = true;
+      gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false });
+      client.openSession(KEY);
+    });
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => opened);
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+    } finally {
+      stop();
+      first.dispose();
+      client.stop();
+    }
+  });
+
+  it("F-105: a read held from before a close-and-reopen queues no read for the reopened task", async () => {
+    const { client, gateway } = await openTask();
+    // Two views hold the task; the harness opened it once, a second open makes two.
+    client.openSession(KEY);
+    try {
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      client.reloadSession(KEY);
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      // A run ends and refreshes history; that read is held.
+      const refresh = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => refresh.promise;
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+
+      // Capture the old read's promise while its entry is still in `loads`.
+      const oldRead = client.historyReadsSettled(KEY);
+
+      // A view arrives while the refresh is held: it schedules a reread for when the read ends.
+      client.openSession(KEY);
+      expect(client.state.transcripts[KEY]?.status).toBe("loading");
+
+      // Both views, and this one, close: the task is released and its incarnation forgotten.
+      client.closeSession(KEY);
+      client.closeSession(KEY);
+      client.closeSession(KEY);
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+
+      // The task is opened again. Its first read is held, so a new incarnation is loading.
+      const reopen = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => reopen.promise;
+      client.openSession(KEY);
+      await until(() => gateway.calls("chat.history").length >= before + 2);
+      const afterReopen = gateway.calls("chat.history").length;
+
+      // Any further read now fails and would put the reopened task back in error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      // Spy after `openSession` so we catch a stale retry even when the replacement read is loading.
+      const reloadSpy = vi.spyOn(client, "reloadSession");
+      // The old refresh, from the closed task, finishes while the reopen's read is still held.
+      refresh.resolve({ messages: [], hasMore: false });
+      await oldRead;
+      expect(reloadSpy).not.toHaveBeenCalled();
+      reopen.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status !== "loading");
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      // The reopen's read succeeded and no stale read followed it.
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+      expect(gateway.calls("chat.history")).toHaveLength(afterReopen);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-105: closing and reopening a failing task inside its loading notification attaches no old refresh to the new task", async () => {
+    const { client, gateway } = await openTask({ held: ["operator.read"] });
+    const reopen = deferred<unknown>();
+    let reopened = false;
+    let stop: (() => void) | null = null;
+    try {
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      client.reloadSession(KEY);
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      // A background refresh is pending on the failing task.
+      const refresh = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => refresh.promise;
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+
+      const oldRead = client.historyReadsSettled(KEY);
+
+      // When a second open publishes loading, a synchronous store listener closes both holds
+      // and reopens the same key, giving it a new incarnation before the second open returns.
+      stop = client.store.subscribe(() => {
+        if (reopened || client.state.transcripts[KEY]?.status !== "loading") return;
+        reopened = true;
+        client.closeSession(KEY);
+        client.closeSession(KEY);
+        gateway.handlers["chat.history"] = () => reopen.promise;
+        client.openSession(KEY);
+      });
+      client.openSession(KEY);
+      expect(reopened).toBe(true);
+      await until(() => gateway.calls("chat.history").length === before + 2);
+
+      // Any extra read fails and would replace the reopened task's successful history with error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      const reloadSpy = vi.spyOn(client, "reloadSession");
+      refresh.resolve({ messages: [], hasMore: false });
+      await oldRead;
+      expect(reloadSpy).not.toHaveBeenCalled();
+      reopen.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status !== "loading");
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 2);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+    } finally {
+      stop?.();
+      client.stop();
+    }
+  });
+
+  it("F-105: a released history loop with queued work starts no read for a reopened task", async () => {
+    const { client, gateway } = await openTask();
+    try {
+      // A refresh is pending on the open task.
+      const refresh = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => refresh.promise;
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+
+      // Another event queues trailing work (`again`) on the pending read entry.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        gateway.emit("session.message", { sessionKey: KEY });
+        vi.advanceTimersByTime(150);
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // Capture the abandoned queue while its entry is still installed.
+      const abandoned = client.historyReadsSettled(KEY);
+      // The last view closes the task (releasing its loads entry) and reopens it.
+      client.closeSession(KEY);
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+      const reopen = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => reopen.promise;
+      client.openSession(KEY);
+      await until(() => gateway.calls("chat.history").length === before + 2);
+
+      // Any stray read from the abandoned loop fails and would put the reopened task in error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      reopen.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      await client.historyReadsSettled(KEY);
+
+      refresh.resolve({ messages: [], hasMore: false });
+      await abandoned;
+      expect(gateway.calls("chat.history")).toHaveLength(before + 2);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+    } finally {
+      client.stop();
+    }
+  });
 });
 
 describe("reloadSession", () => {
@@ -318,6 +573,91 @@ describe("reloadSession", () => {
     } finally {
       first.dispose();
       second.dispose();
+      client.stop();
+    }
+  });
+
+  it("F-105: a duplicate reload while a read is pending is coalesced so the first read settles the transcript", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      // The first retry starts a read; a second retry arrives in a later turn before it settles.
+      const read = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => read.promise;
+      const before = gateway.calls("chat.history").length;
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+      await first.apply({ type: "reloadSession", key: KEY });
+
+      // A queued second read would fail and replace the first read's success with error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      read.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status !== "loading");
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+    } finally {
+      first.dispose();
+      client.stop();
+    }
+  });
+
+  it("F-105: a retry carrying a stale error does not read again after the task recovered", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+      const failed = client.state.transcripts[KEY]!.error!;
+
+      // First retry succeeds and brings the transcript back to ready.
+      gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false });
+      const before = gateway.calls("chat.history").length;
+      await first.apply({ type: "reloadSession", key: KEY, failed });
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+
+      // Any further read fails and would overwrite the good history with an error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      // A stale snapshot lets the view click Try again with the old error.
+      await first.apply({ type: "reloadSession", key: KEY, failed });
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+
+      // Without `failed`, a reload still reads unconditionally; if that fails with a different error,
+      // a retry carrying the earlier error is also ignored.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.error === "gateway restarting");
+      const afterSecondFailure = gateway.calls("chat.history").length;
+      await first.apply({ type: "reloadSession", key: KEY, failed });
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(afterSecondFailure);
+      expect(client.state.transcripts[KEY]?.error).toBe("gateway restarting");
+    } finally {
+      first.dispose();
       client.stop();
     }
   });

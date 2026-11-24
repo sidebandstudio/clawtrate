@@ -617,7 +617,7 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
       client.sendMessage(KEY, "later", { ...asShown(client), mode: "queue" });
       const archived = () =>
         gateway.emit("sessions.changed", { sessionKey: KEY, session: { archived: true } });
-      gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-1" } });
+      gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: SESSION } });
       gateway.handlers["sessions.patch"] = () => {
         if (order === "before") archived();
         return { ok: true };

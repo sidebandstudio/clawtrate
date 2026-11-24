@@ -27,6 +27,19 @@ function start(gateway: Parameters<typeof sentTexts>[0], runId = "run-x") {
   gateway.emit("agent", agentEvent(runId, 1, "lifecycle", { phase: "start" }));
 }
 
+/** A question the gateway lists as pending until it is resolved, as its list would say. */
+function listQuestion(
+  gateway: { handlers: Record<string, (params: unknown) => unknown> },
+  record: unknown,
+) {
+  let listed = [record];
+  gateway.handlers["question.list"] = () => ({ questions: listed });
+  gateway.handlers["question.resolve"] = () => {
+    listed = [];
+    return { status: "cancelled" };
+  };
+}
+
 describe("held messages (F-096, F-106)", () => {
   it("releases several held messages once each, in the order they were sent", async () => {
     const { client, gateway, transcript } = await openTask();
@@ -44,6 +57,177 @@ describe("held messages (F-096, F-106)", () => {
       .calls("chat.send")
       .map((p) => (p as { idempotencyKey: string }).idempotencyKey);
     expect(new Set(keys).size).toBe(3);
+    client.stop();
+  });
+});
+
+describe("queued messages held by a question keep their order (F-106)", () => {
+  it("two queued messages, the first held by a question that came with the run's end, go out in the order written", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.send"] = (params) => {
+      const { idempotencyKey } = params as { idempotencyKey: string };
+      start(gateway, idempotencyKey);
+      return { runId: idempotencyKey, status: "started" };
+    };
+    start(gateway);
+    await until(() => transcript().runs.length === 1);
+    const first = client.sendMessage(KEY, "first", { ...asShown(client), mode: "queue" });
+    const second = client.sendMessage(KEY, "second", { ...asShown(client), mode: "queue" });
+    // The run ends and a question from another run arrives in the same batch: the first message
+    // starts a local run, then is held before it is sent.
+    gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
+    listQuestion(gateway, questionRecord("ask_1", "run-y"));
+    gateway.emit("question.requested", questionRecord("ask_1", "run-y"));
+    await until(() => transcript().outbox.find((m) => m.id === first)?.status === "held");
+    await client.dismissQuestion(KEY, "ask_1");
+    await until(() => sentTexts(gateway).length >= 1);
+    await sleep(60);
+    expect(sentTexts(gateway)).toEqual(["first"]);
+    expect(transcript().runs.filter((run) => run.id === first)).toMatchObject([
+      { state: "running" },
+    ]);
+    // The first message's run ends: the second goes after it.
+    gateway.emit("agent", agentEvent(first, 2, "lifecycle", { phase: "end" }));
+    await until(() => sentTexts(gateway).length === 2);
+    expect(sentTexts(gateway)).toEqual(["first", "second"]);
+    expect(gateway.calls("chat.send")).toMatchObject([
+      { sessionKey: KEY, idempotencyKey: first },
+      { sessionKey: KEY, idempotencyKey: second },
+    ]);
+    client.stop();
+  });
+});
+
+describe("a released message whose own run the gateway named and ended (F-106)", () => {
+  it("is queued with a run that can start, ahead of a message queued after it, and is sent first", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    start(gateway);
+    await until(() => transcript().runs.length === 1);
+    const id = client.sendMessage(KEY, "after this", { ...asShown(client), mode: "queue" });
+    client.sendMessage(KEY, "and then this", { ...asShown(client), mode: "queue" });
+    const socket = (
+      gateway as unknown as { sockets: Array<{ push(frame: unknown): void }> }
+    ).sockets.at(-1)!;
+    socket.push({
+      type: "event",
+      event: "agent",
+      payload: agentEvent("run-x", 2, "lifecycle", { phase: "end" }),
+    });
+    listQuestion(gateway, questionRecord("ask_1", "run-y"));
+    socket.push({
+      type: "event",
+      event: "question.requested",
+      payload: questionRecord("ask_1", "run-y"),
+    });
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "held");
+    // The gateway reports a run under the message's own id, which starts and ends: that run is
+    // the gateway's now.
+    gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent(id, 2, "lifecycle", { phase: "end" }));
+    await until(() => transcript().runs.some((run) => run.id === id && run.bound));
+    await until(() => !transcript().runs.some((run) => run.id === id && run.state === "running"));
+    await client.dismissQuestion(KEY, "ask_1");
+    await until(() => sentTexts(gateway).length >= 1);
+    await sleep(60);
+    expect(sentTexts(gateway)).toEqual(["after this"]);
+    // One run per message: its id names one run, which is the one now running.
+    expect(transcript().runs.filter((run) => run.state === "running")).toHaveLength(1);
+    // Its run ends: the message queued after it goes next.
+    const running = transcript().runs.find((run) => run.state === "running")!;
+    gateway.emit("agent", agentEvent(running.id, 3, "lifecycle", { phase: "end" }));
+    await until(() => sentTexts(gateway).length === 2);
+    expect(sentTexts(gateway)).toEqual(["after this", "and then this"]);
+    client.stop();
+  });
+
+  it("is out when the gateway is still running a run under its id: it is not sent again", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    start(gateway);
+    await until(() => transcript().runs.length === 1);
+    const id = client.sendMessage(KEY, "after this", { ...asShown(client), mode: "queue" });
+    const socket = (
+      gateway as unknown as { sockets: Array<{ push(frame: unknown): void }> }
+    ).sockets.at(-1)!;
+    socket.push({
+      type: "event",
+      event: "agent",
+      payload: agentEvent("run-x", 2, "lifecycle", { phase: "end" }),
+    });
+    listQuestion(gateway, questionRecord("ask_1", "run-y"));
+    socket.push({
+      type: "event",
+      event: "question.requested",
+      payload: questionRecord("ask_1", "run-y"),
+    });
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "held");
+    gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === id && run.bound));
+    await client.dismissQuestion(KEY, "ask_1");
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "sent");
+    await sleep(60);
+    expect(sentTexts(gateway)).toEqual([]);
+    expect(transcript().runs.filter((run) => run.id === id)).toHaveLength(1);
+    client.stop();
+  });
+});
+
+describe("a retried message cancelled before it starts (F-106)", () => {
+  it("is never sent, though an earlier run of it the gateway named has the same id", async () => {
+    const { client, gateway, transcript } = await openTask();
+    // Accepted without naming a run: the send is unconfirmed.
+    gateway.handlers["chat.send"] = () => ({ status: "accepted" });
+    // Queued behind a run, it goes when that run ends, and stays a message from the queue.
+    start(gateway, "run-a");
+    await until(() => transcript().runs.some((run) => run.id === "run-a"));
+    const id = client.sendMessage(KEY, "once more", { ...asShown(client), mode: "queue" });
+    gateway.emit("agent", agentEvent("run-a", 2, "lifecycle", { phase: "end" }));
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "unconfirmed");
+    // The gateway then reports a run under the message's own id, which ends.
+    gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent(id, 2, "lifecycle", { phase: "end" }));
+    await until(() =>
+      transcript().runs.some((run) => run.id === id && run.bound && run.state === "completed"),
+    );
+    // Another run is going: the retry waits in the queue beside that earlier run.
+    start(gateway, "run-x");
+    await until(() => transcript().runs.some((run) => run.id === "run-x"));
+    client.retryMessage(KEY, id);
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "queued");
+    // The retry's id names one run: the queued one.
+    expect(
+      transcript()
+        .runs.filter((run) => run.id === id)
+        .map((run) => run.state),
+    ).toEqual(["queued"]);
+    const sends = gateway.calls("chat.send").length;
+    client.cancelQueued(KEY, id);
+    expect(transcript().outbox.find((m) => m.id === id)?.status).toBe("cancelled");
+    expect(transcript().runs.some((run) => run.id === id && run.state === "queued")).toBe(false);
+    // The run ends: nothing queued starts, and the cancelled retry is never sent.
+    gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
+    await sleep(100);
+    expect(gateway.calls("chat.send")).toHaveLength(sends);
+    expect(transcript().outbox.find((m) => m.id === id)?.status).toBe("cancelled");
+    client.stop();
+  });
+});
+
+describe("a retried message the gateway is still running under its own id (F-106)", () => {
+  it("is out: nothing is sent again, and its id names one run", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.send"] = () => ({ status: "accepted" });
+    const id = client.sendMessage(KEY, "still going", asShown(client));
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "unconfirmed");
+    gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === id && run.state === "running"));
+    const sends = gateway.calls("chat.send").length;
+    client.retryMessage(KEY, id);
+    expect(transcript().outbox.find((m) => m.id === id)?.status).toBe("sent");
+    await sleep(60);
+    expect(gateway.calls("chat.send")).toHaveLength(sends);
+    expect(transcript().runs.filter((run) => run.id === id)).toHaveLength(1);
     client.stop();
   });
 });
@@ -260,7 +444,7 @@ describe("queued messages (F-421, F-420)", () => {
     start(gateway);
     await until(() => transcript().runs.length === 1);
     client.sendMessage(KEY, "later", { ...asShown(client), mode: "queue" });
-    gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-1" } });
+    gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: SESSION } });
     gateway.handlers["sessions.patch"] = () => ({ ok: true });
     gateway.handlers["sessions.delete"] = () => {
       gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
