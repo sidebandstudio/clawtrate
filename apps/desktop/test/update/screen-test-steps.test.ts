@@ -128,6 +128,32 @@ it("keeps only the last check or download, and an error's code, never its messag
   expect(readFileSync(join(dir.path, "update-steps.jsonl"), "utf8")).not.toContain("profile");
 });
 
+it("keeps unknown error codes, signals and outcomes out of the timing log", async () => {
+  const steps = log();
+  const detail = "fixture-private-value";
+  for (const error of [{ code: detail }, { signal: detail }]) {
+    await expect(
+      steps.time(
+        "folders",
+        () => Promise.reject(error),
+        () => "made",
+      ),
+    ).rejects.toBe(error);
+  }
+  const value = await steps.time(
+    "installer-inspect",
+    async () => detail,
+    (result) => result,
+  );
+  expect(value).toBe(detail);
+  expect(readFileSync(join(dir.path, "update-steps.jsonl"), "utf8")).not.toContain(detail);
+  expect(readSteps(dir.path)?.map((row) => row.outcome)).toEqual([
+    "threw an error",
+    "threw an error",
+    "other",
+  ]);
+});
+
 it("never fails the step it times, and leaves out a line still being written", async () => {
   const missing = stepLog(join(dir.path, "missing"), () => clock);
   expect(

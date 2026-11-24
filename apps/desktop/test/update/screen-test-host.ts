@@ -28,7 +28,7 @@ export async function startDesktopUpdates(
             ? (readFileSync(refusal, "utf8") as UpdateInstallRefusal)
             : null;
         },
-        (reason) => reason ?? "accepted",
+        (reason) => (reason === null ? "accepted" : "refused"),
       ),
     async launch(_file, _signal, handed, submitted) {
       while (existsSync(join(profile, "hold-launch"))) await pause(20);

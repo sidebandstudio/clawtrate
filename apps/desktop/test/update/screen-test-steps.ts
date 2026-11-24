@@ -4,9 +4,11 @@
 // outcomes and times only: never a path, an address or a file's contents.
 import type { DesktopUpdateState } from "@clawtrate/core";
 import { appendFileSync, readFileSync } from "node:fs";
+import { constants } from "node:os";
 import { join } from "node:path";
 
 const STEP_LOG = "update-steps.jsonl";
+const outcomes = new Set(["made", "read", "wrong size", "accepted", "refused"]);
 
 /** A state the screens show, which lasts until the next; or a step's start, or with `outcome` its end. */
 type StepLine = { at: number } & ({ state: string } | { step: string; outcome?: string });
@@ -26,15 +28,19 @@ export interface Step {
 /** A state's kind, the step after the last byte, or why it failed. */
 function stateName(state: DesktopUpdateState): string {
   if (state.kind === "downloading") return state.step ?? "downloading";
-  if (state.kind === "failed" || state.kind === "handoff-failed")
-    return `${state.kind} ${state.reason}`;
+  if (state.kind === "failed") return `${state.kind} ${state.reason}`;
   return state.kind;
 }
 
 /** An error's signal or code, never its message, which can name the file. */
 function threw(error: unknown): string {
   const { code, signal } = (error ?? {}) as { code?: unknown; signal?: unknown };
-  return `threw ${String(signal ?? code ?? "an error")}`;
+  if (typeof signal === "string" && Object.hasOwn(constants.signals, signal))
+    return `threw ${signal}`;
+  if (typeof code === "string" && Object.hasOwn(constants.errno, code)) return `threw ${code}`;
+  if (typeof code === "number" && Number.isInteger(code) && code >= 0 && code <= 255)
+    return `threw ${code}`;
+  return "threw an error";
 }
 
 /** Appends to the log in the app's profile folder. */
@@ -63,7 +69,8 @@ export function stepLog(profile: string, now: () => number = Date.now) {
         write({ at: now(), step, outcome: threw(error) });
         throw error;
       }
-      write({ at: now(), step, outcome: outcome(value) });
+      const result = outcome(value);
+      write({ at: now(), step, outcome: outcomes.has(result) ? result : "other" });
       return value;
     },
   };
