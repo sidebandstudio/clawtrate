@@ -75,8 +75,10 @@ async function until<T>(what: string, ms: number, probe: () => Promise<T | null>
   for (;;) {
     const value = await probe();
     if (value !== null) return value;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await sleep(500);
+    // Never asleep past the deadline: the last probe starts by then, within its own limit.
+    const left = deadline - Date.now();
+    if (left <= 0) throw new Error(`timed out waiting for ${what}`);
+    await sleep(Math.min(500, left));
   }
 }
 
