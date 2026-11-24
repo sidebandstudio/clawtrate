@@ -8,6 +8,7 @@
 import {
   ADMIN_SCOPES,
   gatewayStamp,
+  sameStamp,
   mapHistory,
   RawTable,
   runsFromHistory,
@@ -190,12 +191,13 @@ export function botNameCommand(
   if (command.type === "declineBotName") {
     const open = (state.botNames ?? []).find((each) => each.botId === command.botId);
     const stamp = gatewayStamp(state.connection);
+    // As the engine decides: the open card's name, not being renamed, and stamps that match and
+    // name a gateway (`sameStamp`), the card's and this connection's.
     const declined =
       open?.name === command.name &&
-      open.stamp.gatewayId === command.stamp.gatewayId &&
-      open.stamp.target === command.stamp.target &&
-      stamp.gatewayId === command.stamp.gatewayId &&
-      stamp.target === command.stamp.target;
+      open.status !== "renaming" &&
+      sameStamp(open.stamp, command.stamp) &&
+      sameStamp(stamp, command.stamp);
     if (declined) set({ ...state, botNames });
     return Promise.resolve({ declined });
   }

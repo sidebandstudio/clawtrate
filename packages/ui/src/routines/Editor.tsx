@@ -281,6 +281,19 @@ export function Editor({
   const deleted = id !== null && (gone || removed || (read.status === "ready" && !read.value));
   const saving = !deleted && save.status === "saving";
   const busy = saving || (!deleted && save.status === "unknown");
+  // A new routine opened for a bot that leaves the gateway's list closes; one opened with no
+  // fixed bot switches to another listed bot so the picker never holds a deleted id.
+  const newBotMissing = mode.mode === "new" && !busy && !bot;
+  const closeMissingBot =
+    newBotMissing && (bots.length === 0 || (target.mode === "new" && target.botId === draft.botId));
+  const fallbackBotId =
+    newBotMissing && !closeMissingBot
+      ? ((bots.find((each) => each.isDefault) ?? bots[0])?.id ?? null)
+      : null;
+  useEffect(() => {
+    if (closeMissingBot) onClose();
+  }, [closeMissingBot, onClose]);
+  if (fallbackBotId) setDraft((each) => ({ ...each, botId: fallbackBotId }));
   useLayoutEffect(() => {
     if (deleted) attempt.current += 1;
   }, [deleted]);

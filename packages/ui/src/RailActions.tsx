@@ -25,6 +25,8 @@ import { ChevronIcon } from "./icons.tsx";
 // The dialog -----------------------------------------------------------------------
 
 export type DialogSpec = {
+  /** The bot this dialog acts on: if it leaves the gateway's list, the dialog closes. */
+  botId?: string;
   title: string;
   body: ReactNode;
   /** The confirming action. */

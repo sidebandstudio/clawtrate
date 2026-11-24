@@ -204,6 +204,15 @@ export function unkeptRoutines(now: number): Routine[] {
       text: "Check the trail conditions for the weekend.",
       nextRunAt: nextDay(now, NY, 18, (weekday) => weekday === "Fri"),
     }),
+    // Quartermaster's only routine: no routine in the kept list is its.
+    base({
+      id: "routine-stores",
+      botId: "quartermaster",
+      name: "Stores count",
+      schedule: schedule({ expr: "0 9 * * 1", tz: NY }),
+      text: "Count what the stores hold.",
+      nextRunAt: nextDay(now, NY, 9, (weekday) => weekday === "Mon"),
+    }),
   ];
 }
 

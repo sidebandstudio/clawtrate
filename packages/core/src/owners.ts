@@ -136,6 +136,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "listings.*": { max: MAX_LISTED_TASKS, each: ROW, row: null, opaque: "`SESSION_ROW`" },
   // Per followed task: keys and small values.
   openSessions: { max: T, each: ID + N, row: "bookkeeping" },
+  // Bots removed while one task read is out, at most the bot list's own cap; cleared as the next read starts.
+  removedDuringRead: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  // The last whole roster's ids, kept while there are at most `MAX_BOTS`; dropped as the connection closes.
+  lastRosterIds: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   retained: { max: T, each: ID, row: "bookkeeping" },
   incarnations: { max: T, each: ID + N, row: "bookkeeping" },
   loads: { max: T, each: ID + SHORT, row: "bookkeeping" },
