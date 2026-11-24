@@ -1,4 +1,11 @@
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 export type MenuEntry =
   | {
@@ -53,16 +60,39 @@ export function Menu({
 }) {
   const ref = useRef<HTMLUListElement>(null);
 
-  useEffect(() => {
-    if (focusAt === undefined) return;
+  // Whether the menu had focus: true when focus lands in it, false when focus lands on anything
+  // else. A focused row that is removed moves focus to the page with no focus event, so this still
+  // says the menu had it; Tab from there to another control lands focus outside and clears it.
+  const hasFocus = useRef(false);
+  useLayoutEffect(() => {
+    const menu = ref.current;
+    const onFocusIn = (event: FocusEvent) => {
+      hasFocus.current = menu?.contains(event.target as Node) ?? false;
+    };
+    document.addEventListener("focusin", onFocusIn, true);
+    return () => document.removeEventListener("focusin", onFocusIn, true);
+  }, []);
+  // The menu may move focus only if it had it and focus is still in it or lost to the page: a
+  // menu never takes focus from another control, whatever happened to its rows first.
+  const mayMoveFocus = () => {
+    const active = document.activeElement;
+    return (
+      hasFocus.current &&
+      (!active || active === document.body || (ref.current?.contains(active) ?? false))
+    );
+  };
+
+  // Both focus moves run as the entries change, in the same task, so a key pressed straight after
+  // (Escape) finds focus in the menu.
+  useLayoutEffect(() => {
+    if (focusAt === undefined || !mayMoveFocus()) return;
     ref.current?.querySelectorAll<HTMLElement>(".menu-item")[focusAt]?.focus();
   }, [focusAt]);
 
-  // An item that had focus and went away (its entries changed in place) leaves it in the menu.
-  useEffect(() => {
+  // A focused row that went away (its entries changed in place) leaves focus in the menu.
+  useLayoutEffect(() => {
     const menu = ref.current;
-    if (!menu || menu.contains(document.activeElement)) return;
-    if (document.activeElement && document.activeElement !== document.body) return;
+    if (!menu || !mayMoveFocus() || menu.contains(document.activeElement)) return;
     (
       menu.querySelector<HTMLElement>('[aria-checked="true"]') ??
       menu.querySelector<HTMLElement>(".menu-item")
