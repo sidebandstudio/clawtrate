@@ -1088,6 +1088,40 @@ describe("F-552: a bot that takes a name", () => {
     client.stop();
   });
 
+  it("F-552: a bot listed by its id alone, named nowhere in its config, gets a card for the name its file gives, and Rename names it", async () => {
+    // As OpenClaw lists a bot whose config entry has no name: the list never reads IDENTITY.md.
+    const { gateway, bot, takeName } = namingGateway();
+    let named = false;
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "main",
+      agents: [
+        { id: "main", identity: { name: "Juniper" } },
+        named ? { id: "new-bot", name: bot.name, identity: { name: bot.name } } : { id: "new-bot" },
+      ],
+    });
+    const update = gateway.handlers["agents.update"]!;
+    gateway.handlers["agents.update"] = (params) => {
+      named = true;
+      return update(params);
+    };
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("new-bot");
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    expect(client.state.botNames![0]).toMatchObject({ name: "Johnny", from: "new-bot" });
+    await client.acceptBotName("new-bot", "Johnny", here(client));
+    expect(gateway.calls("agents.update")).toEqual([{ agentId: "new-bot", name: "Johnny" }]);
+    expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("Johnny");
+    expect(client.state.botNames).toEqual([]);
+    client.stop();
+  });
+
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
     // Emphasis marks at an end go, as the gateway drops them when it reads the line back.
     const cut = plainName(`${"A".repeat(39)}*B`)!;

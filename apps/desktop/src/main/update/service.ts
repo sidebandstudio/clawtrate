@@ -87,11 +87,17 @@ export class DesktopUpdateService {
 
   static async start(options: UpdateServiceOptions): Promise<DesktopUpdateService> {
     const version = parseVersion(options.version);
-    const runningTrack = version && versionTrack(version);
     const tracks = (["stable", "nightly"] as const).flatMap((track) => {
       const address = checkFeedAddress(options.feeds[track], options.loopbackHttpForTests);
       return address.ok ? [{ track, source: address.url.hostname }] : [];
     });
+    // Three numbers don't name a track (issue #438): a build with only a Beta feed is a
+    // Beta build. Otherwise the version's shape decides, as it always has.
+    const runningTrack =
+      version &&
+      (version.length === 3 && tracks.length === 1 && tracks[0]!.track === "nightly"
+        ? "nightly"
+        : versionTrack(version));
     let selectedTrack =
       tracks.find((t) => t.track === runningTrack)?.track ?? tracks[0]?.track ?? null;
     let lastCheck: DesktopUpdateSnapshot["lastCheck"] = null;
@@ -181,7 +187,7 @@ export class DesktopUpdateService {
   }
 
   /** The builds' lists the current check read (F-554); null before a check and when it read none. */
-  private notes: { engine: UpdateEngine; builds: BuildNotes[] } | null = null;
+  private notes: { engine: UpdateEngine; track: UpdateTrack; builds: BuildNotes[] } | null = null;
 
   /** The snapshot with what the current check's lists say for its state (F-554). */
   private withNotes(snapshot: DesktopUpdateSnapshot): DesktopUpdateSnapshot {
@@ -190,14 +196,15 @@ export class DesktopUpdateService {
     // Kept until the check has its answer: while it still says Checking, nothing shows.
     const notes =
       this.notes && this.notes.engine === this.engine && snapshot.state.kind !== "checking"
-        ? this.notes.builds
+        ? this.notes
         : null;
     const view =
       notes &&
       whatsNewView(
-        notes,
+        notes.builds,
         snapshot.runningVersion,
         "version" in snapshot.state ? snapshot.state.version : null,
+        notes.track,
       );
     return view ? { ...rest, whatsNew: view } : rest;
   }
@@ -207,10 +214,15 @@ export class DesktopUpdateService {
    * answer. Its result, or its failure, changes only what the pane lists: no
    * state the updater reads, and never the check.
    */
-  private async readNotes(engine: UpdateEngine, feed: URL, runningVersion: string) {
+  private async readNotes(
+    engine: UpdateEngine,
+    track: UpdateTrack,
+    feed: URL,
+    runningVersion: string,
+  ) {
     const builds = await readWhatsNew(feed, `Clawtrate/${runningVersion}`);
     if (this.closed || this.engine !== engine || !builds) return;
-    this.notes = { engine, builds };
+    this.notes = { engine, track, builds };
     // Its own counter: `revision`, which commands are checked against, stays as it is.
     this.snapshot = this.withNotes({
       ...this.snapshot,
@@ -480,7 +492,7 @@ export class DesktopUpdateService {
           this.options.loopbackHttpForTests,
         );
         if (feed.ok && (result.kind === "available" || result.kind === "up-to-date"))
-          void this.readNotes(engine, feed.url, runningVersion);
+          void this.readNotes(engine, selectedTrack, feed.url, runningVersion);
         this.clearIssue("update-folder-unavailable");
         const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
         if (lastCheck) {

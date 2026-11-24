@@ -592,3 +592,93 @@ it.each(["finish", "cancel"])(
     }
   },
 );
+
+// Betas move from dated five-part versions to three numbers (issue #438). Every
+// installed dated beta must take the first three-numbered Beta build as newer,
+// and no build may ever be offered one older than itself or the same.
+describe("F-559: dated betas and three-numbered builds on each track", () => {
+  const OLDEST = "0.1.1-beta.20261122.1";
+  const DATED = "0.1.1-beta.20261124.2";
+  const offer = (running: string, offered: string, track: "stable" | "nightly") => {
+    const file = payload(1024);
+    server.route(
+      "/feed.json",
+      json(
+        feedFor(server.origin, offered, { size: file.body.length, sha512: file.sha512 }, { track }),
+      ),
+    );
+    server.route("/files/app.zip", bytes(file.body));
+    return engineFor(server, join(dir.path, "updates"), { currentVersion: running, track }).engine;
+  };
+
+  it.each([
+    // Old to new: the first three-numbered build, from the oldest and the newest dated beta.
+    [OLDEST, "0.2.0", "nightly"],
+    [DATED, "0.2.0", "nightly"],
+    [DATED, "0.2.1", "nightly"],
+    [DATED, "0.3.0", "nightly"],
+    // New to new: the last number, then the middle one, compared as numbers.
+    ["0.2.0", "0.2.1", "nightly"],
+    ["0.2.9", "0.2.10", "nightly"],
+    ["0.2.10", "0.3.0", "nightly"],
+    ["0.2.0", "0.2.1", "stable"],
+    ["0.2.9", "0.2.10", "stable"],
+    // Old to old, as before.
+    ["0.1.1-beta.20261124.1", DATED, "nightly"],
+    ["0.1.1-beta.20261123.11", "0.1.1-beta.20261124.1", "nightly"],
+    // A dated beta that chose Stable takes a three-numbered Stable build.
+    [DATED, "0.2.0", "stable"],
+    // The three numbers compare first: a dated build with higher ones is newer. Never
+    // publishing one after the switch is the release tooling's rule, not the updater's.
+    ["0.2.0", "0.2.1-beta.20261201.1", "nightly"],
+  ] as const)("%s takes %s from the %s feed", async (running, offered, track) => {
+    expect(await offer(running, offered, track).check()).toMatchObject({
+      kind: "available",
+      version: offered,
+    });
+  });
+
+  it.each([
+    // The same build.
+    ["0.2.0", "0.2.0", "nightly"],
+    ["0.2.0", "0.2.0", "stable"],
+    [DATED, DATED, "nightly"],
+    // An older build: three numbers below three numbers, and every dated beta below 0.2.0.
+    ["0.2.1", "0.2.0", "nightly"],
+    ["0.2.10", "0.2.9", "nightly"],
+    ["0.2.1", "0.2.0", "stable"],
+    ["0.2.0", DATED, "nightly"],
+    ["0.2.0", OLDEST, "nightly"],
+    ["0.2.0", "0.1.1-beta.99991231.999", "nightly"],
+    // A dated build of the same three numbers comes before them.
+    ["0.2.0", "0.2.0-beta.20261201.1", "nightly"],
+    // Old against old.
+    [DATED, "0.1.1-beta.20261124.1", "nightly"],
+    // Three numbers below a dated beta's own.
+    [DATED, "0.1.0", "nightly"],
+  ] as const)("%s is not offered %s from the %s feed", async (running, offered, track) => {
+    expect(await offer(running, offered, track).check()).toEqual({
+      kind: "up-to-date",
+      latest: offered,
+    });
+    expect(server.requests).toEqual(["/feed.json"]);
+  });
+
+  it.each([
+    [DATED, "0.1.1-beta.20261124.3"],
+    ["0.2.0", "0.2.1-beta.20261201.1"],
+  ])("%s refuses the dated %s on the Stable feed", async (running, offered) => {
+    expect(await offer(running, offered, "stable").check()).toEqual(failed("check", "wrong-track"));
+  });
+
+  it("downloads and verifies the first three-numbered build for an installed dated beta", async () => {
+    const engine = offer(DATED, "0.2.0", "nightly");
+    expect((await engine.check()).kind).toBe("available");
+    expect(await engine.download()).toMatchObject({
+      kind: "ready",
+      version: "0.2.0",
+      path: join(dir.path, "updates", "Clawtrate-0.2.0-mac-arm64.zip"),
+    });
+    expect(engine.newer).toEqual({ version: "0.2.0", releaseDate: "2026-11-01T00:00:00.000Z" });
+  });
+});

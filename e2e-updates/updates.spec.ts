@@ -604,6 +604,58 @@ test("F-231: a stale check or download reconciles the screen without contacting 
   expect(feedRequests(server)).toEqual(["/stable", "/stable"]);
 });
 
+test("F-231 F-559: a dated beta updates to a three-numbered Beta build, which takes the next and no older one", async ({
+  desktopApp,
+}) => {
+  const { relaunch, server, manifest, profile, filePath, resume } = desktopApp;
+  // A beta build has only the Beta feed, as a published one does.
+  writeFileSync(join(profile, "beta-feed-only"), "");
+  const open = async (version: string) => {
+    const page = await relaunch(version);
+    await page.keyboard.press("ControlOrMeta+,");
+    await page.getByRole("button", { name: "Updates", exact: true }).click();
+    const facts = page.locator(".updates-section .facts").first();
+    await expect(facts).toContainText(`Clawtrate ${version}`);
+    await expect(facts).toContainText("This copy is a Beta build.");
+    return page;
+  };
+  const check = async (page: Page, offered: string) => {
+    server.route("/nightly", json({ ...manifest, track: "nightly", version: offered }));
+    await page.getByRole("button", { name: "Check for Updates" }).click();
+  };
+  const line = (page: Page) => page.locator(".update-result dd");
+  resume();
+  // Old to new: the installed dated beta takes 0.2.0 and downloads it.
+  let page = await open("0.1.1-beta.20261124.2");
+  await check(page, "0.2.0");
+  await expect(line(page)).toHaveText("Clawtrate 0.2.0 is offered by the update source.");
+  await page.getByRole("button", { name: "Download", exact: true }).click();
+  await expect(line(page)).toHaveText(
+    "Clawtrate 0.2.0 is downloaded, and its size and checksum match the update source. Ready to install.",
+    { timeout: 30_000 },
+  );
+  expect(feedRequests(server)).toEqual(["/nightly", filePath]);
+  // Never the same build or an older one, asked of the host so each answer is its own check's.
+  page = await open("0.2.0");
+  for (const older of ["0.2.0", "0.1.1-beta.20261124.2", "0.1.1-beta.20261122.1"]) {
+    server.route("/nightly", json({ ...manifest, track: "nightly", version: older }));
+    const reply = await page.evaluate(async () => {
+      const api = (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates;
+      return api.check("nightly", (await api.get()).revision);
+    });
+    expect(reply.snapshot.state, older).toEqual({ kind: "nothing-newer" });
+  }
+  await expect(line(page)).toContainText("No newer version was offered for this build");
+  // New to new.
+  await check(page, "0.2.1");
+  await expect(line(page)).toHaveText("Clawtrate 0.2.1 is offered by the update source.");
+  expect(feedRequests(server)).toEqual([
+    "/nightly",
+    filePath,
+    ...Array.from({ length: 4 }, () => "/nightly"),
+  ]);
+});
+
 test("F-231: an older Check on the same track preserves the verified download", async ({
   desktopApp,
 }) => {

@@ -9,7 +9,15 @@ import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
 import { listArchived, MAX_ARCHIVED_LISTED, type TaskActionContext } from "../src/task-actions.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, questionRecord, URL_A } from "./client-harness.ts";
-import { FakeGateway, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  FakeGateway,
+  memoryStorage,
+  sleep,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 const DISCORD = "agent:pip:discord:channel:1234567890";
 const NATIVE = "agent:pip:dashboard:0f6c2a9e-1111";
@@ -106,6 +114,72 @@ describe("F-519: Show external channel chats", () => {
     expect(again.client.state.showChannelChats).toBe(true);
     expect(again.keys()).toEqual([DISCORD, NATIVE, MAIN]);
     again.client.stop();
+  });
+
+  for (const key of ["show-channel-chats", "turn-limit-minutes"])
+    it(`F-519: a ${key} read a stopped startup made changes nothing when it returns after the next startup's`, async () => {
+      const storage = memoryStorage({ "show-channel-chats": "true", "turn-limit-minutes": "30" });
+      // The old startup's read keeps the value it found, and answers when the test says.
+      const gate = deferred<void>();
+      let held = false;
+      const get = storage.get;
+      storage.get = async (read) => {
+        const value = await get(read);
+        if (read === key && !held) {
+          held = true;
+          await gate.promise;
+        }
+        return value;
+      };
+      const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+      try {
+        const old = client.start();
+        await until(() => held);
+        client.stop();
+        await storage.set("show-channel-chats", "false");
+        await storage.set("turn-limit-minutes", "45");
+        await client.start();
+        expect(client.state).toMatchObject({ showChannelChats: false, turnLimitMinutes: 45 });
+        gate.resolve();
+        await old;
+        await sleep(20);
+        expect(client.state).toMatchObject({ showChannelChats: false, turnLimitMinutes: 45 });
+      } finally {
+        gate.resolve();
+        client.stop();
+      }
+    });
+
+  it("F-519: what the person sets while startup reads the preferences stays, and both are kept", async () => {
+    const storage = memoryStorage({ "show-channel-chats": "false", "turn-limit-minutes": "30" });
+    const gate = deferred<void>();
+    let held = false;
+    const get = storage.get;
+    storage.get = async (read) => {
+      const value = await get(read);
+      if (read === "show-channel-chats" && !held) {
+        held = true;
+        await gate.promise;
+      }
+      return value;
+    };
+    const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+    try {
+      const starting = client.start();
+      await until(() => held);
+      await client.setTurnLimit(45);
+      await client.setShowChannelChats(true);
+      gate.resolve();
+      await starting;
+      expect(client.state).toMatchObject({ showChannelChats: true, turnLimitMinutes: 45 });
+      expect(Object.fromEntries(storage.data)).toMatchObject({
+        "show-channel-chats": "true",
+        "turn-limit-minutes": "45",
+      });
+    } finally {
+      gate.resolve();
+      client.stop();
+    }
   });
 
   it("F-519: a choice the host could not keep is not taken", async () => {
