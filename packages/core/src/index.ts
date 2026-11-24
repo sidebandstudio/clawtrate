@@ -1,5 +1,6 @@
 export * from "./types.ts";
 export * from "./store.ts";
+export * from "./gateway-names.ts";
 export * from "./host.ts";
 export * from "./mapping.ts";
 export * from "./origins.ts";

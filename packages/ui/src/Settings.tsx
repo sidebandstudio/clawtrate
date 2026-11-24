@@ -32,7 +32,7 @@ import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
 import { FullControlAsk, isFullRequest, notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
-import { gatewayLabel } from "./format.ts";
+import { gatewayTitle } from "./format.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 import { useForget } from "./forget.ts";
 import { BackIcon, ChevronIcon, CloseIcon, ExternalIcon } from "./icons.tsx";
@@ -799,6 +799,33 @@ export function Settings({
     !rePairing &&
     !connection.fullPairing;
   const missing = notGranted(connection);
+  const narrower =
+    missing.length > 0
+      ? `OpenClaw granted less than full control. Not granted: ${missing.join(", ")}. This device keeps what was granted.`
+      : null;
+  const access =
+    connection.status === "connected" && (connection.fullPairing || connection.fullOffer !== null)
+      ? connection.fullPairing && missing.length === 0
+        ? "Full control"
+        : "Less than full control"
+      : null;
+  // Said once when a reconnect changes the access shown, not each render nor when Settings opens.
+  // What a connected gateway showed is kept across a disconnect, so the same grant after
+  // Reconnect says nothing; another gateway, or one that shows no access, clears what was said.
+  const accessSaid = [access && `Access: ${access}.`, narrower].filter(Boolean).join(" ");
+  const gateway = connection.gatewayUrl;
+  const accessShown = useRef({ gateway, said: accessSaid });
+  useEffect(() => {
+    const shown = accessShown.current;
+    if (shown.gateway !== gateway) {
+      accessShown.current = { gateway, said: accessSaid };
+      announce("");
+      return;
+    }
+    if (connection.status !== "connected" || shown.said === accessSaid) return;
+    accessShown.current = { gateway, said: accessSaid };
+    announce(accessSaid);
+  }, [gateway, connection.status, accessSaid, announce]);
   const rePairProblem =
     upgrade.status === "rejected"
       ? "The gateway's owner rejected the new pairing. This device keeps its earlier access."
@@ -936,11 +963,7 @@ export function Settings({
           (connection.fullPairing || connection.fullOffer !== null) && (
             <div>
               <dt>Access</dt>
-              <dd data-testid="gateway-access">
-                {connection.fullPairing && missing.length === 0
-                  ? "Full control"
-                  : "Less than full control"}
-              </dd>
+              <dd data-testid="gateway-access">{access}</dd>
             </div>
           )}
         {connection.serverVersion && (
@@ -955,7 +978,7 @@ export function Settings({
       </dl>
       {missing.length > 0 && (
         <p className="settings-note" data-testid="narrower-grant">
-          {`OpenClaw granted less than full control. Not granted: ${missing.join(", ")}. This device keeps what was granted.`}
+          {narrower}
         </p>
       )}
       {/* The one-time offer stays here once answered (setup-effortless.md §6). */}
@@ -1032,8 +1055,7 @@ export function Settings({
       )}
       {connection.gatewayUrl && (
         <p className="settings-note">
-          {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
-          disconnected.{" "}
+          {gatewayTitle(connection)} keeps this device's pairing while it is disconnected.{" "}
           {connection.fullPairing
             ? ""
             : connection.canAdmin

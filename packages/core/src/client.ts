@@ -288,6 +288,14 @@ import {
   validateGatewayUrl,
 } from "./gateway-url.ts";
 import {
+  GATEWAY_NAMES_KEY,
+  gatewayNameFor,
+  readGatewayNames,
+  withGatewayName,
+  writeGatewayNames,
+  type GatewayNames,
+} from "./gateway-names.ts";
+import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
   CREATION,
@@ -1206,9 +1214,23 @@ export class ClawtrateClient {
    */
   readonly store: Store<ClawtrateState> = createStore(initialState, (next) =>
     withAlarm(
-      enforceState(next.setup === this.setupSlice ? next : withSetup(next, this.setupSlice)),
+      enforceState(
+        this.withGatewayName(
+          next.setup === this.setupSlice ? next : withSetup(next, this.setupSlice),
+        ),
+      ),
     ),
   );
+  /** The names given to gateways on this device, from the host's storage (`gateway-names.ts`). */
+  private gatewayNames: GatewayNames = [];
+  /** The current address's name, on every state written, so no reset of the connection loses it. */
+  private withGatewayName(next: ClawtrateState): ClawtrateState {
+    // The store normalises its first value before this field is set.
+    const name = gatewayNameFor(this.gatewayNames ?? [], next.connection.gatewayUrl);
+    return next.connection.gatewayName === name
+      ? next
+      : { ...next, connection: { ...next.connection, gatewayName: name } };
+  }
   /**
    * The host's setup slice (`setup.ts`), kept through every reset of the
    * state, since the host alone writes it (`setSetup`).
@@ -1929,6 +1951,9 @@ export class ClawtrateClient {
           (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
         const otherTools =
           (await this.host.storage.get(OTHER_TOOLS_KEY).catch(() => null)) === "true";
+        const names = readGatewayNames(
+          await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null),
+        );
         // A startup stopped while it read keeps nothing: the next one reads again. A preference
         // the person set meanwhile is newer than what was read.
         if (stops !== this.stops) return;
@@ -1942,6 +1967,8 @@ export class ClawtrateClient {
           this.showChannelChats = channelChats;
         if (sets.otherTools === this.preferenceSets.otherTools)
           this.showOtherToolSessions = otherTools;
+        // A name given meanwhile is newer than what was read.
+        if (this.gatewayNames.length === 0) this.gatewayNames = names;
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
@@ -7058,6 +7085,19 @@ export class ClawtrateClient {
     void next.then(() => {
       if (this.deliveries.get(key) === next) this.deliveries.delete(key);
     });
+  }
+
+  /**
+   * Name the selected gateway on this device, or remove its name with an empty
+   * one. Only the address the person saw: another viewer may have changed it.
+   * Kept in the host's storage first; the gateway is never told.
+   */
+  async nameGateway(gatewayUrl: string, name: string): Promise<void> {
+    if (this.state.connection.gatewayUrl !== gatewayUrl) throw new GatewayChangedError();
+    const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
+    await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
+    this.gatewayNames = next;
+    this.store.update((state) => ({ ...state }));
   }
 
   /**

@@ -27,12 +27,12 @@ import {
   worstCase,
   type ClawtrateState,
 } from "../src/index.ts";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { AccountsEngine, identityFile } from "../src/accounts-engine.ts";
-import { initialAccountsState, type AccountsState } from "../src/accounts.ts";
+import { initialAccountsState, modelIdProblem, type AccountsState } from "../src/accounts.ts";
 import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
 import { FAST, stampOn, URL_A } from "./client-harness.ts";
 import {
@@ -46,6 +46,33 @@ import {
 
 const binding = (state: ClawtrateState["accounts"], botId: string) =>
   state.bindings.find((each) => each.botId === botId)!;
+
+describe("a model id", () => {
+  it("F-533: the field's rule and the bridge's are one: an id one refuses, the other refuses", () => {
+    const ids = [
+      "gpt-6.2-sol",
+      "",
+      "gpt\u007f9",
+      "gpt\u00019",
+      "gpt 9",
+      "gpt-9@acme:work",
+      "x".repeat(513),
+    ];
+    for (const model of ids) {
+      const refused = (() => {
+        try {
+          parseBridgeCommand({ type: "setBotModel", botId: "otto", model, effort: null });
+          return false;
+        } catch {
+          return true;
+        }
+      })();
+      expect(refused, JSON.stringify(model)).toBe(modelIdProblem(model) !== null);
+    }
+    expect(modelIdProblem("gpt\u007f9")).toBe("control");
+    expect(modelIdProblem("gpt-6.2-sol")).toBeNull();
+  });
+});
 
 describe("the Model menu's lists", () => {
   const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20));

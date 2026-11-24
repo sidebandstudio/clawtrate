@@ -1,3 +1,4 @@
+- status
 - dialog "Settings":
   - region "Advanced":
     - button "Close settings"
