@@ -202,8 +202,9 @@ const emptyComposer = (words: Draft = { text: "" }): ComposerDraft => ({
   files: [],
   tokens: [],
 });
-const useComposerHandoff = createHandoffDraft<ComposerDraft>(({ words, files, tokens }) =>
-  Boolean(words.text || files.length || tokens.length),
+const useComposerHandoff = createHandoffDraft<ComposerDraft>(
+  ({ words, files, tokens }) => Boolean(words.text || files.length || tokens.length),
+  ({ files, tokens }) => files.length > 0 || tokens.length > 0,
 );
 const uploadingFiles = new WeakSet<Attached>();
 

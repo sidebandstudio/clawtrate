@@ -85,6 +85,10 @@ test("F-278: a file-only refusal while away retries with the same host ID, only 
   await expect(chipNames(page)).toHaveCount(0);
   await switchTask(page, "Disk almost full");
   await expect(chipNames(page)).toHaveText(["original.txt"]);
+  await switchTask(page, "Weekly backup check");
+  await expect(chipNames(page)).toHaveCount(0);
+  await switchTask(page, "Disk almost full");
+  await expect(chipNames(page)).toHaveText(["original.txt"]);
   await expect(field(page)).toHaveValue("");
   await session(page, "replacement");
   await expect(page.getByTestId("send")).toBeDisabled();
@@ -107,6 +111,31 @@ test("F-278: a file-only refusal while away retries with the same host ID, only 
   });
   await expect(chipNames(page)).toHaveCount(0);
   await expect(page.getByTestId("outgoing")).toContainText("original.txt");
+  await switchTask(page, "Weekly backup check");
+  await switchTask(page, "Disk almost full");
+  await expect(chipNames(page)).toHaveCount(0);
+});
+
+test("F-278 F-071: a recovered command survives task switches until it is removed", async ({
+  page,
+}) => {
+  await open(page);
+  await field(page).fill("/status");
+  await page.getByRole("option", { name: /\/status/ }).click();
+  await field(page).press("Enter");
+  await expect(page.getByTestId("token-chip")).toHaveCount(0);
+  await finish(page);
+  await expect(page.getByTestId("token-chip")).toHaveText(/\/status/);
+  await switchTask(page, "Weekly backup check");
+  await expect(page.getByTestId("token-chip")).toHaveCount(0);
+  await switchTask(page, "Disk almost full");
+  const chip = page.getByTestId("token-chip");
+  await expect(chip).toHaveText(/\/status/);
+  await chip.getByRole("button").click();
+  await switchTask(page, "Weekly backup check");
+  await switchTask(page, "Disk almost full");
+  await expect(chip).toHaveCount(0);
+  expect(await attempts(page)).toHaveLength(1);
 });
 
 test("F-278 F-071: the remounted composer restores refused chips and files ahead of newer edits", async ({

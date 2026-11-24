@@ -1,11 +1,16 @@
 import { useCallback, useState, useSyncExternalStore, type SetStateAction } from "react";
 
 export function createHandoffDraft<T>(
-  hasWords: (value: T) => boolean,
-  save?: (key: string, value: T) => void,
+  hasContent: (value: T) => boolean,
+  keepOnReturn?: (value: T) => boolean,
 ) {
   type Cell = { value: T; pending: number; version: number; listeners: Set<() => void> };
   const handoffs = new Map<string, Cell>();
+  const releaseIfSettled = (key: string, cell: Cell) => {
+    if (cell.pending || handoffs.get(key) !== cell) return;
+    if (!hasContent(cell.value) || (cell.listeners.size > 0 && !keepOnReturn?.(cell.value)))
+      handoffs.delete(key);
+  };
   const publish = (cell: Cell) => {
     cell.version++;
     for (const notify of cell.listeners) notify();
@@ -17,7 +22,7 @@ export function createHandoffDraft<T>(
     const subscribe = useCallback(
       (notify: () => void) => {
         cell.listeners.add(notify);
-        if (!cell.pending) handoffs.delete(key);
+        releaseIfSettled(key, cell);
         return () => {
           cell.listeners.delete(notify);
         };
@@ -29,7 +34,7 @@ export function createHandoffDraft<T>(
     const change = useCallback(
       (next: SetStateAction<T>) => {
         cell.value = typeof next === "function" ? (next as (current: T) => T)(cell.value) : next;
-        save?.(key, cell.value);
+        releaseIfSettled(key, cell);
         publish(cell);
       },
       [cell, key],
@@ -40,7 +45,7 @@ export function createHandoffDraft<T>(
       publish(cell);
       return () => {
         cell.pending--;
-        if (!cell.pending && (cell.listeners.size || !hasWords(cell.value))) handoffs.delete(key);
+        releaseIfSettled(key, cell);
         publish(cell);
       };
     }, [cell, key]);
