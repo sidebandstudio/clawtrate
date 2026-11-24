@@ -3683,6 +3683,18 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         await workspaceFile(h, "marlow", "IDENTITY.md"),
       )?.[0];
       expect(line, "Marlow's IDENTITY.md has a name line");
+      // The gateway lists a bot's name from its config only, never from IDENTITY.md: "Marlow" where
+      // the seed named it with `agents set-identity`, none on an unseeded instance (R40).
+      const listedName = async () => {
+        const listed = await h.op("plain").request<{
+          agents: Array<{ id: string; name?: string; identity?: { name?: string } }>;
+        }>("agents.list", {});
+        const marlow = listed.agents.find((agent) => agent.id === "marlow");
+        expect(marlow, "Marlow is in the bot list");
+        return marlow.identity?.name ?? marlow.name ?? null;
+      };
+      const before = await listedName();
+      expect(before !== "Johnny", "Marlow isn't listed as Johnny before the edit");
       const view = await h.run(
         "plain",
         await h.session("marlow", "take-name"),
@@ -3705,12 +3717,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       view.expectEnd("final", "Johnny it is. It shows once you confirm it in Clawtrate.");
       const file = await workspaceFile(h, "marlow", "IDENTITY.md");
       expect(/^- \*\*Name:\*\* Johnny$/m.test(file), `IDENTITY.md after the edit: ${file}`);
-      // The gateway's own name for the bot is its config's, which the edit leaves alone.
-      const listed = await h.op("plain").request<{
-        agents: Array<{ id: string; name?: string; identity?: { name?: string } }>;
-      }>("agents.list", {});
-      const marlow = listed.agents.find((agent) => agent.id === "marlow");
-      same(marlow?.identity?.name ?? marlow?.name, "Marlow", "Marlow's name in the bot list");
+      // The edit leaves the listed name as it was, whatever it was: only Rename changes it.
+      same(await listedName(), before, "Marlow's name in the bot list after the edit");
     },
   },
 ];
