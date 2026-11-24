@@ -7,6 +7,7 @@ import {
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import { rowTime, stampTime } from "../src/format.ts";
+import { reloadCommand } from "../src/Shell.tsx";
 import { stripFor, taskInSync } from "../src/StatusStrip.tsx";
 
 function state(
@@ -116,5 +117,29 @@ describe("times", () => {
   it("stamps the transcript with the day and the time", () => {
     expect(stampTime(new Date(2026, 10, 16, 17, 36).getTime(), now)).toMatch(/^Today 5:36\s?PM$/);
     expect(stampTime(new Date(2026, 10, 15, 9, 2).getTime(), now)).toMatch(/^Yesterday 9:02\s?AM$/);
+  });
+});
+
+describe("reloadCommand", () => {
+  it("F-105: carries the transcript error on failed loads and refreshes, and omits it otherwise", () => {
+    // Refresh that failed (items kept).
+    expect(reloadCommand(KEY, failed)).toEqual({
+      type: "reloadSession",
+      key: KEY,
+      failed: "timed out",
+    });
+    // Initial load that failed (no items).
+    expect(reloadCommand(KEY, { ...failed, items: [] })).toEqual({
+      type: "reloadSession",
+      key: KEY,
+      failed: "timed out",
+    });
+    // Refused open or reopen (no transcript yet).
+    expect(reloadCommand(KEY, undefined)).toEqual({ type: "reloadSession", key: KEY });
+    // Ready transcript carries no failure.
+    expect(reloadCommand(KEY, { ...failed, status: "ready", error: null })).toEqual({
+      type: "reloadSession",
+      key: KEY,
+    });
   });
 });

@@ -135,6 +135,28 @@ function expectRegistered(
 const size = (value: unknown) => JSON.stringify(value).length;
 
 describe("the registry of what the host keeps", () => {
+  it("keeps no stopped startup in its registry across start and stop cycles", async () => {
+    const storage = memoryStorage({ connection: JSON.stringify({ url: URL_A, token: null }) });
+    const gate = deferred<void>();
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (key === "connection") await gate.promise;
+      return get(key);
+    };
+    const client = new ClawtrateClient(testHost(grantingGateway(), storage), FAST);
+    try {
+      // Each start registers before its first wait, and each stop comes while it reads.
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        void client.start().catch(() => undefined);
+        client.stop();
+      }
+      expectRegistered(client, CLIENT_OWNERS, CLIENT_NOT_WALKED);
+    } finally {
+      gate.resolve();
+      client.stop();
+    }
+  });
+
   it("names every collection of a client in use, inside map values too, and each is within its count", async () => {
     const gateway = grantingGateway();
     const command = "c".repeat(10_000);

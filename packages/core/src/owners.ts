@@ -31,6 +31,7 @@ import {
   MAX_ACCESS_WAITERS,
   MAX_FOREIGN_READ_SESSIONS,
   MAX_OPENED_READS,
+  MAX_BOT_DELETES,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
@@ -177,6 +178,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Tasks the engine follows, as their runs describe them.
   // A task's read on opening, while it is on its way.
   openedReads: { max: MAX_OPENED_READS, each: ID, row: "bookkeeping" },
+  // Bot deletes under way, by gateway and bot: two ids, each within `ID` as JSON, and the
+  // separator between them, which JSON escapes to six characters (`\u0000`).
+  botDeletes: { max: MAX_BOT_DELETES, each: 2 * ID + 4, row: "bookkeeping" },
   "waiting.held": { max: MAX_WAITING_SESSIONS, each: WAITING_HELD_CHARS, row: "bookkeeping" },
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
@@ -255,6 +259,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
+  // Settings reads a stop ends: connection commands run one at a time, each with one read.
+  stopWaiters: { max: 1, each: 0, row: null },
+  // Startups still reading: a host starts once, and again only after a stop.
+  startReads: { max: 1, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
   // Each failed request's log policy; an entry lives only as long as that error object.
