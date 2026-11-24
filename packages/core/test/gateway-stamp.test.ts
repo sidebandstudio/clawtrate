@@ -5,14 +5,23 @@
 // keeps it. Two test gateways at two addresses, with made-up bots and files.
 
 import { describe, expect, it } from "vitest";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
 import { pictureWithChoice } from "../src/avatar.ts";
-import { ADMIN_SCOPES } from "../src/scopes.ts";
+import { ADMIN_SCOPES, FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { gatewayStamp, type GatewayStamp } from "../src/types.ts";
 import { AccountsGateway } from "./accounts-fake.ts";
 import { FAST, URL_A, URL_B } from "./client-harness.ts";
-import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  FakeGateway,
+  helloOk,
+  memoryStorage,
+  sleep,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 const PICTURE = pictureWithChoice(
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4z8DAAMIM/4EAAB/uBfsL2WiLAAAAAElFTkSuQmCC",
@@ -321,6 +330,112 @@ describe("the host's target", () => {
     seen.push(client.state.connection.target);
     expect(new Set(seen).size).toBe(3);
     expect([...seen].sort((x, y) => x - y)).toEqual(seen);
+    client.stop();
+  });
+});
+
+// The one-time offer of full control (setup-effortless.md §6, F-549) is bound by the same stamp.
+describe("the offer of full control on a stale screen", () => {
+  const WSS_A = "wss://gateway-a.example:19993";
+  const WSS_B = "wss://gateway-b.example:19994";
+  const READ = JSON.stringify({
+    token: "device-token",
+    grantedScopes: READ_SCOPES,
+    heldScopes: READ_SCOPES,
+  });
+
+  /** A gateway that grants what is asked, names itself "gateway-a", and holds each upgrade. */
+  function offering() {
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
+      return { ok: true, payload: helloOk([...scopes], auth?.deviceToken) };
+    };
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    const decision = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => decision.promise;
+    return {
+      gateway,
+      decide: (result: object) => decision.resolve({ requestId: "up-1", ...result }),
+    };
+  }
+
+  /** A host paired read-only with both, at protected addresses, connected to the first. */
+  async function pairedWithBoth() {
+    const a = offering();
+    const b = offering();
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: WSS_A, token: null }),
+      [tokenKey(WSS_A)]: READ,
+      [tokenKey(WSS_B)]: READ,
+    });
+    const host = {
+      ...testHost(a.gateway, storage),
+      createWebSocket: (url: string) => (url === WSS_B ? b : a).gateway.createWebSocket(url),
+      secureCredentials: async () => true,
+    };
+    const client = new ClawtrateClient(host, { ...FAST, fullAccess: true });
+    await client.start();
+    const offered = (url: string) =>
+      client.state.connection.status === "connected" &&
+      client.state.connection.gatewayUrl === url &&
+      client.state.connection.gatewayId === "gateway-a" &&
+      client.state.connection.fullOffer === "offer";
+    await until(() => offered(WSS_A));
+    return { client, a, b, offered };
+  }
+
+  it("F-549: an offer shown on one gateway sends no request after a switch to another at another address with the same id", async () => {
+    const { client, a, b, offered } = await pairedWithBoth();
+    // What the dialog took when it opened on A.
+    const stamp = gatewayStamp(client.state.connection);
+    await client.connect({ url: WSS_B });
+    await until(() => offered(WSS_B));
+    expect(client.state.connection.gatewayId).toBe(stamp.gatewayId);
+    expect(client.state.connection.target).not.toBe(stamp.target);
+    // The stale dialog accepts, and dismisses, with the address now shown: nothing goes.
+    const viewer = createBridgeSession(client);
+    const stale = { gatewayUrl: WSS_B, deviceId: "device-1", stamp };
+    await expect(viewer.apply({ type: "requestFullControl", ...stale })).rejects.toThrow(
+      CONNECTION_CHANGED,
+    );
+    await viewer.apply({ type: "dismissFullControl", ...stale });
+    await sleep(50);
+    expect(a.gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    expect(b.gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    expect(client.state.connection.fullOffer).toBe("offer");
+    client.stop();
+  });
+
+  it("F-549: an accept or a dismissal from a renderer keeps its stamp, and one without a stamp is refused", () => {
+    const stamp = { gatewayId: "gateway-a", target: 4 };
+    for (const type of ["requestFullControl", "dismissFullControl"] as const) {
+      const command = { type, gatewayUrl: WSS_A, deviceId: "device-1", stamp };
+      expect(parseBridgeCommand(command)).toEqual(command);
+      expect(() => parseBridgeCommand({ type, gatewayUrl: WSS_A, deviceId: "device-1" })).toThrow();
+    }
+  });
+
+  it("F-549: the reconnect that brings the offer's grant keeps the target, so its own answer is taken", async () => {
+    const { client, a } = await pairedWithBoth();
+    const stamp = gatewayStamp(client.state.connection);
+    const viewer = createBridgeSession(client);
+    await viewer.apply({
+      type: "requestFullControl",
+      gatewayUrl: WSS_A,
+      deviceId: "device-1",
+      stamp,
+    });
+    await until(() => client.state.connection.upgrade.status === "pending");
+    expect(a.gateway.calls("device.scopes.requestUpgrade")).toEqual([{ scopes: [...FULL_SCOPES] }]);
+    const connects = a.gateway.connects.length;
+    a.decide({ status: "approved", deviceToken: "token-F", scopes: [...FULL_SCOPES] });
+    await until(() => client.state.connection.fullPairing);
+    // A reconnect, not a new target: what was read before the grant still names this gateway.
+    expect(a.gateway.connects.length).toBeGreaterThan(connects);
+    expect(client.state.connection.target).toBe(stamp.target);
+    expect(client.state.connection.scopes).toEqual([...FULL_SCOPES]);
     client.stop();
   });
 });

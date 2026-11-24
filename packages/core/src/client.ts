@@ -262,7 +262,12 @@ import {
   WRITE_SCOPE,
 } from "./scopes.ts";
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
-import { protectedGatewayUrl, validateGatewayUrl } from "./gateway-url.ts";
+import {
+  endpointSpellings,
+  gatewayEndpoint,
+  protectedGatewayUrl,
+  validateGatewayUrl,
+} from "./gateway-url.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -339,6 +344,7 @@ import {
   initialConnectionState,
   initialScopeUpgrade,
   initialState,
+  sameStamp,
   type ClawtrateState,
   type ConnectionState,
   type GatewayStamp,
@@ -426,6 +432,20 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
+
+/** What the offer of full control was shown for: its gateway, this device, and its stamp. */
+export type FullControlBinding = { gatewayUrl: string; deviceId: string; stamp: GatewayStamp };
+
+/** Why core starts no further scope request for a full pairing (setup-effortless.md §2). */
+export const FULL_PAIRING_LIMIT =
+  "This device's full pairing holds what the gateway granted; it asks for no more.";
+
+/**
+ * The person's answer to the offer of full control, per device and gateway endpoint: asked
+ * (sent, not yet decided), granted, narrower, refused or dismissed ("Keep current access").
+ */
+type OfferAnswer = "asked" | "granted" | "narrower" | "refused" | "dismissed";
+const OFFER_ANSWERS: readonly string[] = ["asked", "granted", "narrower", "refused", "dismissed"];
 /** Reads on opening a task on their way at once; past it, one more waits for the next opening. */
 export const MAX_OPENED_READS = 16;
 /** Bot deletes under way at once, from every viewer. */
@@ -1356,10 +1376,26 @@ export class ClawtrateClient {
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
   /**
-   * What the request under way asks for: the interactive tier, admin with it, or
-   * (`held`) the scopes the connection held when device access was asked for.
+   * What the request under way asks for: the interactive tier, admin with it,
+   * (`held`) the scopes the connection held when device access was asked for, or (`full`)
+   * the six, the offer of full control accepted.
    */
-  private upgradeTier: "interactive" | "admin" | "held" = "interactive";
+  private upgradeTier: "interactive" | "admin" | "held" | "full" = "interactive";
+  /**
+   * The saved spelling of an address whose pairing is kept under another spelling of the
+   * same endpoint (`endpointSpellings`), for the address the connection opened last: it is
+   * the same pairing.
+   */
+  private tokenAlias: { url: string; spelling: string } | null = null;
+  /** The answer to the full-control offer for the current gateway and device, read at each open. */
+  private offerAnswer: OfferAnswer | "unread" | null = null;
+  /**
+   * The accept of the full-control offer under way, from before its answer is saved until the
+   * gateway settles its request: an accept that comes meanwhile (a double click, another window)
+   * joins it, so one choice sends one request. Released when the save fails, or when the
+   * connection stops before the gateway answers, to try again.
+   */
+  private fullAttempt: Promise<void> | null = null;
   /** The scopes a `held` request keeps, as the connection held them when it was made. */
   private heldBase: readonly string[] = [];
   /** The access request under way also asks for device access (`operator.pairing`). */
@@ -2309,6 +2345,11 @@ export class ClawtrateClient {
   async requestAccess(tier: "interactive" | "admin" | "pairing" = "interactive"): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
+    // A full pairing's grant is the gateway's limit, a narrower one too: nothing asks again,
+    // whatever calls this (setup-effortless.md §2).
+    if (this.holdsFullPairing()) throw new Error(FULL_PAIRING_LIMIT);
+    // The six asked for already cover any tier: a smaller ask never replaces that request.
+    if (this.upgradeWanted && this.upgradeTier === "full") return;
     // A request for admin is never narrowed by a later one for less, and device access
     // (`operator.pairing`) is asked for only by name, added to the scopes the connection
     // holds and nothing else: from a read connection it asks for no power to send or answer.
@@ -2336,12 +2377,147 @@ export class ClawtrateClient {
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
 
-  private tierScopes(tier: "interactive" | "admin" | "held"): readonly string[] {
-    return tier === "admin" ? ADMIN_SCOPES : tier === "held" ? this.heldBase : INTERACTIVE_SCOPES;
+  private tierScopes(tier: "interactive" | "admin" | "held" | "full"): readonly string[] {
+    return tier === "full"
+      ? FULL_SCOPES
+      : tier === "admin"
+        ? ADMIN_SCOPES
+        : tier === "held"
+          ? this.heldBase
+          : INTERACTIVE_SCOPES;
+  }
+
+  /**
+   * Accept the offer of full control (setup-effortless.md §6): one `device.scopes.requestUpgrade`
+   * for the six, in their order, which the gateway's owner decides once. The answer is saved
+   * before the request goes, so the offer never shows by itself again. An approval saves the
+   * grant as a full pairing, a narrower one too, and nothing asks again; a refusal is saved.
+   * Bound to the gateway and device the offer was shown for, and to its stamp (`GatewayStamp`):
+   * an offer read before a Connect, a Disconnect or a switch sends nothing, even to a gateway
+   * that reports the same identity. The reconnect that brings the grant keeps the target.
+   */
+  async requestFullControl(binding: FullControlBinding): Promise<void> {
+    if (this.options.readOnly)
+      throw new Error("This host only reads; it does not ask for more access.");
+    if (!sameStamp(binding.stamp, gatewayStamp(this.state.connection)))
+      throw new Error(CONNECTION_CHANGED);
+    const generation = this.generation;
+    const offered = () =>
+      sameStamp(binding.stamp, gatewayStamp(this.state.connection)) &&
+      generation === this.generation &&
+      this.state.connection.status === "connected" &&
+      this.state.connection.fullOffer !== null &&
+      // A full pairing asks for nothing more, even before the next hello moves the offer away.
+      !this.holdsFullPairing() &&
+      this.state.connection.gatewayUrl === binding.gatewayUrl &&
+      this.state.connection.deviceId === binding.deviceId &&
+      this.settings?.url === binding.gatewayUrl;
+    if (!offered()) throw new Error("Full control isn't offered on this connection.");
+    // Reserved before the save starts: an accept that overlaps this one joins it, even if the
+    // gateway settles it first, so it never sends a request of its own.
+    if (this.fullAttempt) return this.fullAttempt;
+    if (this.scopeUpgrade && this.upgradeTier === "full") return;
+    const attempt = (async () => {
+      // Saved first: an answer that can't be kept would let the offer ask again.
+      if (!(await this.answerOffer("asked", binding)))
+        throw new Error("Clawtrate couldn't save this choice. Try again.");
+      if (!offered()) throw new Error("The connection changed. Try again from Settings.");
+      if (this.scopeUpgrade && this.upgradeTier === "full") return;
+      this.scopeUpgrade?.cancelScopeUpgrade();
+      this.scopeUpgrade = null;
+      this.upgradeTier = "full";
+      this.pairingWanted = false;
+      this.upgradeWanted = true;
+      this.startUpgrade();
+    })();
+    this.fullAttempt = attempt;
+    // A failed save sends nothing: the person may try again. Otherwise the gateway's answer to
+    // the request releases it (`startUpgrade`), or leaving the gateway does.
+    attempt.catch(() => {
+      if (this.fullAttempt === attempt) this.fullAttempt = null;
+    });
+    return attempt;
+  }
+
+  /** "Keep current access": the offer is answered, and shows by itself no more. */
+  async dismissFullControl(binding: FullControlBinding): Promise<void> {
+    const connection = this.state.connection;
+    if (
+      !sameStamp(binding.stamp, gatewayStamp(connection)) ||
+      connection.fullOffer !== "offer" ||
+      connection.gatewayUrl !== binding.gatewayUrl ||
+      connection.deviceId !== binding.deviceId
+    )
+      return;
+    await this.answerOffer("dismissed", binding);
+  }
+
+  private offerKey(url: string, deviceId: string): string {
+    return `fullControlOffer:${encodeURIComponent(gatewayEndpoint(url) ?? url)}:${deviceId}`;
+  }
+
+  /** The saved answer; one that can't be read counts as answered, so nothing asks twice. */
+  private async loadOfferAnswer(
+    url: string,
+    deviceId: string,
+  ): Promise<OfferAnswer | "unread" | null> {
+    try {
+      const raw = await this.host.storage.get(this.offerKey(url, deviceId));
+      if (raw === null) return null;
+      const answer = asRecord(JSON.parse(raw))?.answer;
+      return typeof answer === "string" && OFFER_ANSWERS.includes(answer)
+        ? (answer as OfferAnswer)
+        : "unread";
+    } catch {
+      return "unread";
+    }
+  }
+
+  /**
+   * Saves the answer for the gateway and device it was given for, and, while that gateway is
+   * the one in use, moves the offer to Settings. Resolves false when it couldn't be kept; this
+   * session counts it as answered anyway.
+   */
+  private async answerOffer(
+    answer: OfferAnswer,
+    at: { gatewayUrl: string; deviceId: string },
+  ): Promise<boolean> {
+    if (this.settings?.url === at.gatewayUrl && this.state.connection.deviceId === at.deviceId) {
+      this.offerAnswer = answer;
+      if (this.state.connection.fullOffer === "offer")
+        this.setConnection({ fullOffer: "settings" });
+    }
+    try {
+      await this.host.storage.set(
+        this.offerKey(at.gatewayUrl, at.deviceId),
+        JSON.stringify({ answer }),
+      );
+      return true;
+    } catch {
+      this.log("warn", "Could not save the answer to the full-control offer.");
+      return false;
+    }
+  }
+
+  /**
+   * Whether this connection is offered full control, and where (`ConnectionState.fullOffer`):
+   * only at a protected address. This Mac's upgrade presents the shared token on a proved
+   * socket instead, and isn't built.
+   */
+  private offerFor(scopes: readonly string[]): "offer" | "settings" | null {
+    const url = this.settings?.url;
+    if (!url || !this.fullAccess || !protectedGatewayUrl(url)) return null;
+    if (this.holdsFullPairing() || this.isSetup(url)) return null;
+    // Only a device the gateway paired: a hello that left no saved token offers nothing.
+    const deviceId = this.state.connection.deviceId;
+    if (!deviceId || !this.writes.grants.get(this.tokenKey(url, deviceId, "operator"))) return null;
+    if (FULL_SCOPES.every((scope) => scopes.includes(scope))) return null;
+    return this.offerAnswer === null ? "offer" : "settings";
   }
 
   /** What an access request asks for: its tier, device access when asked for or held. */
   private upgradeTarget(): string[] {
+    if (this.upgradeTier === "full") return [...FULL_SCOPES];
     const keepPairing = this.pairingWanted || this.state.connection.scopes.includes(PAIRING_SCOPE);
     return [...this.tierScopes(this.upgradeTier), ...(keepPairing ? [PAIRING_SCOPE] : [])];
   }
@@ -2367,6 +2543,16 @@ export class ClawtrateClient {
   }
 
   private startUpgrade(): void {
+    // A full pairing asks for nothing more, a request queued before its grant was known too.
+    if (this.holdsFullPairing()) {
+      if (!this.upgradeWanted) return;
+      this.upgradeWanted = false;
+      this.pairingWanted = false;
+      const waiters = this.accessWaiters;
+      this.accessWaiters = [];
+      for (const waiter of waiters) waiter.reject(new Error(FULL_PAIRING_LIMIT));
+      return;
+    }
     const protocol = this.protocol;
     const identity = this.identity;
     const url = this.settings?.url;
@@ -2376,6 +2562,11 @@ export class ClawtrateClient {
     const tier = this.upgradeTier;
     const target = this.upgradeTarget();
     const askedPairing = target.includes(PAIRING_SCOPE);
+    const asked = { gatewayUrl: url, deviceId: identity.deviceId };
+    // The gateway's answer ends the person's accept of the offer: a later one is a new choice.
+    const settled = () => {
+      if (tier === "full") this.fullAttempt = null;
+    };
     const upgrade = new GatewayScopeUpgrade({
       request: (method, params, options) => protocol.request(method, params, options),
       tokenStore: {
@@ -2416,12 +2607,13 @@ export class ClawtrateClient {
                 : current?.fullGrant
                   ? current.heldScopes
                   : null;
+            // Full control accepted: the grant is a full pairing's, held by name, a narrower one too.
             await this.writeToken(
               url,
               deviceId,
               role,
-              fullHeld
-                ? fullUpgrade(fullHeld, token, target, scopes)
+              fullHeld || tier === "full"
+                ? fullUpgrade(fullHeld ?? [], token, target, scopes)
                 : grantRecord(token, scopes, target),
             );
             const key = this.tokenKey(url, deviceId, role);
@@ -2461,11 +2653,20 @@ export class ClawtrateClient {
         (outcome) => {
           if (this.scopeUpgrade !== upgrade) return;
           this.scopeUpgrade = null;
+          settled();
           if (outcome.status === "approved") {
             // Judged on what is kept (the store's rule), so an approval is never one the saved
             // record can't hold: an admin grant for a write request keeps neither.
             const kept = withinAsked(outcome.scopes, target);
-            if (
+            // Full control's grant is the limit, whatever it is: kept, said, and never asked again.
+            if (tier === "full")
+              void this.answerOffer(
+                FULL_SCOPES.every((scope) => outcome.scopes.includes(scope))
+                  ? "granted"
+                  : "narrower",
+                asked,
+              );
+            else if (
               (tier !== "held" &&
                 !scopeSatisfied(kept, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) ||
               (askedPairing && !kept.includes(PAIRING_SCOPE))
@@ -2484,6 +2685,8 @@ export class ClawtrateClient {
             this.setUpgrade({ status: "approved", error: null });
             return;
           }
+          if (tier === "full" && outcome.status === "rejected")
+            void this.answerOffer("refused", asked);
           this.failAccess(new AccessRequestError(outcome.status));
         },
         (error: unknown) => {
@@ -2494,6 +2697,7 @@ export class ClawtrateClient {
             // The connection dropped while waiting. Ask again after the next hello.
             return;
           }
+          settled();
           this.failAccess(new AccessRequestError("error", errorMessage(error)));
         },
       );
@@ -2511,6 +2715,7 @@ export class ClawtrateClient {
   private abandonAccessRequest(reason: string): void {
     this.scopeUpgrade?.cancelScopeUpgrade();
     this.scopeUpgrade = null;
+    this.fullAttempt = null;
     this.upgradeWanted = false;
     this.pairingWanted = false;
     const waiters = this.accessWaiters;
@@ -2547,6 +2752,13 @@ export class ClawtrateClient {
         ),
       );
     }
+    // A full pairing asks for nothing more: what it doesn't hold, while it is connected or
+    // doesn't mean to hold, it never will by asking (setup-effortless.md §2).
+    if (
+      this.holdsFullPairing() &&
+      (connection.status === "connected" || !connection.requestedScopes.includes(scope))
+    )
+      return Promise.reject(new Error(FULL_PAIRING_LIMIT));
     if (this.accessWaiters.length >= MAX_ACCESS_WAITERS) {
       return Promise.reject(
         new Error("Too many operations are waiting for access; try again when they finish."),
@@ -2619,6 +2831,9 @@ export class ClawtrateClient {
   /** Reject every operation waiting for access, without changing what is being asked for. */
   private rejectAccessWaiters(error: Error): void {
     this.upgradeWanted = false;
+    // An accept of full control ends here unanswered, so a later one asks again. A request
+    // still under way keeps blocking a second one (`scopeUpgrade`).
+    this.fullAttempt = null;
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
     for (const waiter of waiters) waiter.reject(error);
@@ -6569,6 +6784,21 @@ export class ClawtrateClient {
     const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
     this.fullAccess = routed && secure;
+    // The same device at another spelling of this address is the same pairing (§6): a protected
+    // address with no record of its own uses the one saved at another wss:// spelling of its
+    // endpoint.
+    // Only a protected address, whatever else may ask for the six: a token moves toward wss://.
+    this.tokenAlias = null;
+    const offerable = this.fullAccess && protectedGatewayUrl(settings.url);
+    const spelling = offerable ? await this.pairingSpelling(settings.url, identity.deviceId) : null;
+    if (generation !== this.generation) return;
+    if (spelling) this.tokenAlias = { url: settings.url, spelling };
+    // Read first, kept only while this open is current: a superseded read never lands.
+    const offerAnswer = offerable
+      ? await this.loadOfferAnswer(settings.url, identity.deviceId)
+      : null;
+    if (generation !== this.generation) return;
+    this.offerAnswer = offerAnswer;
     const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
@@ -7643,6 +7873,7 @@ export class ClawtrateClient {
       canApprove: scopeSatisfied(scopes, APPROVALS_SCOPE),
       canAdmin: scopes.includes(ADMIN_SCOPE),
       fullPairing: this.fullAccess && this.holdsFullPairing(),
+      fullOffer: this.offerFor(scopes),
       pairing: null,
       error: null,
       retryAt: null,
@@ -9206,8 +9437,9 @@ export class ClawtrateClient {
     deviceId: string,
     role: string,
     includeRejected = false,
+    // A key captured earlier: a removal compares and deletes the same record it named.
+    key = this.tokenKey(url, deviceId, role),
   ): Promise<StoredDeviceToken | null> {
-    const key = this.tokenKey(url, deviceId, role);
     const raw = await this.host.storage.get(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
@@ -9271,9 +9503,27 @@ export class ClawtrateClient {
     return this.writes.grants.get(this.tokenKey(url, deviceId, "operator"))?.full === true;
   }
 
-  /** Device tokens are scoped to one gateway, so a token is never offered to another. */
+  /**
+   * Device tokens are scoped to one gateway, so a token is never offered to another. An address
+   * whose pairing is saved under another spelling of its endpoint uses that record (`tokenAlias`).
+   */
   private tokenKey(url: string, deviceId: string, role: string): string {
-    return `deviceToken:${encodeURIComponent(url)}:${deviceId}:${role}`;
+    return `deviceToken:${encodeURIComponent(this.tokenAlias?.url === url ? this.tokenAlias.spelling : url)}:${deviceId}:${role}`;
+  }
+
+  /**
+   * Another protected spelling of this address's endpoint with this device's saved pairing, when
+   * the address has none of its own: the first found, in `endpointSpellings`'s order.
+   */
+  private async pairingSpelling(url: string, deviceId: string): Promise<string | null> {
+    const key = (each: string) => `deviceToken:${encodeURIComponent(each)}:${deviceId}:operator`;
+    if ((await this.host.storage.get(key(url))) !== null) return null;
+    for (const each of endpointSpellings(url))
+      // Only a protected spelling: a pairing saved at ws:// sent its token unencrypted, and a
+      // full grant must never be kept where ws:// reads it.
+      if (protectedGatewayUrl(each) && (await this.host.storage.get(key(each))) !== null)
+        return each;
+    return null;
   }
 
   /**
@@ -9382,7 +9632,7 @@ export class ClawtrateClient {
         this.endEligibility(url);
         this.writes.refusals += 1;
         await this.changeConnection(async () => {
-          const existing = await this.loadToken(url, deviceId, role, true);
+          const existing = await this.loadToken(url, deviceId, role, true, key);
           if (existing?.token.trim() === rejected) {
             await this.host.storage.delete(key);
             this.writes.grants.set(key, null);

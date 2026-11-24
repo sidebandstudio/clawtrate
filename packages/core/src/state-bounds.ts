@@ -696,6 +696,7 @@ const connection = object<ConnectionState>()({
   canApprove: FLAG,
   canAdmin: FLAG,
   fullPairing: FLAG,
+  fullOffer: ENUM,
   upgrade,
   deviceId: ID,
   pairing,
