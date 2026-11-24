@@ -712,7 +712,7 @@ test("F-023: the shell gives the host the number of unread tasks for the dock ba
   await expect.poll(badge).toBe(0);
 });
 
-test("F-555: the sidebar, open conversation and open dialogs follow renamed, new and deleted bots", async ({
+test("F-558: the sidebar, open conversation and open dialogs follow renamed, new and deleted bots", async ({
   page,
 }) => {
   await openFixture(page, `scene=rail-write&${OTTO_DISK}`, "light");

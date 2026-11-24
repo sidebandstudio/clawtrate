@@ -15,7 +15,7 @@ async function connect(gateway: FakeGateway) {
 }
 
 describe("the bot list follows gateway config changes", () => {
-  it("F-555: rereads agents.list on config.changed, follows added, renamed and deleted bots, and prunes a deleted bot's tasks", async () => {
+  it("F-558: rereads agents.list on config.changed, follows added, renamed and deleted bots, and prunes a deleted bot's tasks", async () => {
     let agents: Array<Record<string, unknown>> = [
       { id: "main", identity: { name: "Juniper" } },
       { id: "otto", identity: { name: "Otto" } },
@@ -92,7 +92,7 @@ describe("the bot list follows gateway config changes", () => {
     }
   });
 
-  it("F-555: coalesces bursts of config.changed into at most one read in flight plus one queued, and drops stale reads after reconnect", async () => {
+  it("F-558: coalesces bursts of config.changed into at most one read in flight plus one queued, and drops stale reads after reconnect", async () => {
     const gateway = new FakeGateway();
     const client = await connect(gateway);
     const answers: Array<(value: unknown) => void> = [];
