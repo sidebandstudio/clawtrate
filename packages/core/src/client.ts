@@ -6506,11 +6506,11 @@ export class ClawtrateClient {
    * This client's archive or delete of the task succeeded: the messages waiting when it began,
    * queued or parked by its own stop, never run, as the person confirmed (F-420).
    */
-  private cancelWaiting(key: string, ids: readonly string[]): void {
+  private cancelWaiting(key: string, ids: readonly string[], sessionId: string): void {
     this.updateActivity(key, (activity) => {
       let next = activity;
       for (const message of activity.outbox) {
-        if (!ids.includes(message.id)) continue;
+        if (message.sessionId !== sessionId || !ids.includes(message.id)) continue;
         if (message.status !== "queued" && message.status !== "not-sent") continue;
         this.dropAttachments(message.id);
         next = updateMessage(cancelQueuedRun(next, message.id, this.now()), message.id, {
@@ -8753,7 +8753,7 @@ export class ClawtrateClient {
     key: string,
     options: { stop?: boolean; owner?: object; sessionId?: string } = {},
   ): Promise<ArchiveResult> {
-    return this.removing(key, "archived", options.owner ?? null, (ctx) =>
+    return this.removing(key, "archived", options.sessionId, options.owner ?? null, (ctx) =>
       archiveTask(ctx, key, {
         stop: options.stop === true,
         ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
@@ -8770,7 +8770,7 @@ export class ClawtrateClient {
     key: string,
     options: { owner?: object; sessionId?: string } = {},
   ): Promise<void> {
-    await this.removing(key, "deleted", options.owner ?? null, (ctx) =>
+    await this.removing(key, "deleted", options.sessionId, options.owner ?? null, (ctx) =>
       deleteTask(ctx, key, options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
     );
   }
@@ -8793,6 +8793,7 @@ export class ClawtrateClient {
   private async removing<R>(
     key: string,
     how: "archived" | "deleted",
+    sessionId: string | undefined,
     owner: object | null,
     act: (ctx: TaskActionContext) => Promise<R>,
   ): Promise<R> {
@@ -8800,6 +8801,7 @@ export class ClawtrateClient {
     if (!this.tracked(key) || this.ownRemovals.size >= MAX_TRACKED_TASKS) return act(ctx);
     const id = (this.removals += 1);
     const removal: OwnRemoval = { key, waiting: this.waitingIn(key), sent: null, heard: null };
+    let target = sessionNamed({ sessionId });
     this.ownRemovals.set(id, removal);
     let expired = false;
     let giveUp: (error: Error) => void = () => undefined;
@@ -8819,6 +8821,12 @@ export class ClawtrateClient {
           ...ctx,
           request: (method, params) => {
             inTime();
+            if (method === "sessions.describe" && sessionId === undefined) {
+              return ctx.request(method, params).then((answer) => {
+                target = sessionNamed(asRecord(asRecord(answer)?.session));
+                return answer;
+              });
+            }
             // From here an archive or delete heard of the session it names is this request's own.
             const expected = asRecord(params)?.expectedSessionId;
             if (
@@ -8842,8 +8850,9 @@ export class ClawtrateClient {
         }),
         late,
       ]);
-      if (removal.sent === null) this.refuseWaiting(key, removal.heard ?? how, ofSession(null));
-      else this.cancelWaiting(key, removal.waiting);
+      if (removal.sent !== null) this.cancelWaiting(key, removal.waiting, removal.sent);
+      else if (target !== null)
+        this.refuseWaiting(key, removal.heard ?? how, (message) => message.sessionId === target);
       return result;
     } catch (error) {
       if (removal.heard) this.refuseWaiting(key, removal.heard, ofSession(removal.sent));
