@@ -1093,9 +1093,8 @@ export class MachinesEngine {
   }
 
   /** `node.pair.remove` (admin), done when the whole `node.list` read back no longer has the id. */
-  async removeMachine(nodeId: string, beforeSend: () => void = () => {}): Promise<void> {
+  async removeMachine(nodeId: string): Promise<void> {
     this.requireWrite("admin", "Removing a machine");
-    beforeSend();
     try {
       await this.ctx.request("node.pair.remove", { nodeId });
     } catch (error) {
@@ -1142,11 +1141,10 @@ export class MachinesEngine {
   }
 
   /** `device.pair.remove` (admin), never this device; done when the whole listing lacks the id. */
-  async removeDevice(deviceId: string, beforeSend: () => void = () => {}): Promise<void> {
+  async removeDevice(deviceId: string): Promise<void> {
     if (deviceId === this.ctx.deviceId())
       throw new PlacementWriteError("This device can't remove itself here.");
     this.requireWrite("admin", "Removing a device");
-    beforeSend();
     try {
       await this.ctx.request("device.pair.remove", { deviceId });
     } catch (error) {

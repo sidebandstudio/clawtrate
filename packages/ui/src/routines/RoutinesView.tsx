@@ -8,7 +8,6 @@
 
 import {
   botIdFromSessionKey,
-  gatewayStamp,
   mainTaskKey,
   type Bot,
   type CheckInsState,
@@ -925,7 +924,7 @@ export function RoutinesView({
     announce,
     store.routines,
     store.listedOn,
-    gatewayStamp(state.connection),
+    state.connection.target,
   );
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [deleting, setDeleting] = useState<Routine | null>(null);
@@ -1262,7 +1261,7 @@ export function RoutinesView({
         <DeleteRoutine
           routine={deleting}
           listedOn={store.listedOn}
-          stamp={gatewayStamp(state.connection)}
+          target={state.connection.target}
           onCancel={() => setDeleting(null)}
           onDeleted={() => {
             announce(`Deleted ${deleting.name}`);

@@ -25,6 +25,7 @@ import { clockTime } from "../format.ts";
 import { CheckIcon, EyeIcon, WarnIcon } from "../icons.tsx";
 import { AdminBar, CommandBlock, GrantedBar, useGranted } from "../bots/parts.tsx";
 import { Confirm } from "../bots/Dialog.tsx";
+import { screenStamp } from "../stamp.ts";
 import { connectionKey, Mark } from "./RunsOn.tsx";
 import { CHOICE_WORDS, lastSeen, levelsWords, names, nodeState } from "./words.ts";
 import "./machines.css";
@@ -715,11 +716,11 @@ export function useMachinesSection({
             // Where the rows were read: a removal sent anywhere else could unpair another
             // gateway's machine of the same id, so the host refuses it.
             // (The rows shown are `held`'s; no host hands out target 0.)
-            const stamp = { gatewayId: connection.gatewayId, target: held?.target ?? 0 };
-            const done =
+            const done = screenStamp(bridge, held?.target ?? 0).then((stamp) =>
               asked.kind === "machine"
                 ? bridge.invoke({ type: "removeMachine", nodeId: asked.id, stamp })
-                : bridge.invoke({ type: "removeDevice", deviceId: asked.id, stamp });
+                : bridge.invoke({ type: "removeDevice", deviceId: asked.id, stamp }),
+            );
             const close = () => {
               setBusy((was) => (was === asked ? null : was));
               setRemoving((was) => (was === asked ? null : was));

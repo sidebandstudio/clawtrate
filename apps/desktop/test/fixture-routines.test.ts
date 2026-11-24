@@ -300,7 +300,12 @@ describe("the fixture's routine host", () => {
   it("a manual run keeps its original conversation when edited to run on Main", async () => {
     vi.useFakeTimers();
     const { send, ask, routines } = host();
-    const started = send<{ runId: string }>({ type: "runRoutineNow", id: DIGEST, listedOn: 0 });
+    const started = send<{ runId: string }>({
+      type: "runRoutineNow",
+      id: DIGEST,
+      listedOn: 0,
+      stamp: STAMP,
+    });
     await vi.advanceTimersByTimeAsync(300);
     const digest = routines().find((each) => each.id === DIGEST)!;
     const update = send(editOf(digest, { target: "main" }));
@@ -413,10 +418,10 @@ describe("the fixture's routine host", () => {
       stamp: STAMP,
     } as BridgeCommand;
     const { routine } = await ask<{ routine: Routine }>(create);
-    const started = send({ type: "runRoutineNow", id: routine.id, listedOn: 0 });
+    const started = send({ type: "runRoutineNow", id: routine.id, listedOn: 0, stamp: STAMP });
     await vi.advanceTimersByTimeAsync(300);
     expect(await started).toMatchObject({ status: "started" });
-    const remove = send({ type: "removeRoutine", id: routine.id, listedOn: 0 });
+    const remove = send({ type: "removeRoutine", id: routine.id, listedOn: 0, stamp: STAMP });
     await vi.advanceTimersByTimeAsync(300);
     expect(await remove).toMatchObject({ status: "removed" });
     expect(await ask(create)).toMatchObject({ status: "saved" });

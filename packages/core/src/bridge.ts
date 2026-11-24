@@ -319,9 +319,11 @@ export type BridgeCommand =
   | { type: "recheckSignIn" }
   | { type: "chooseSignInAccount"; profileId: string }
   /** An API key the person typed. Sent once to the gateway and kept nowhere. */
-  | { type: "saveApiKey"; provider: string; key: string; botId: string | null }
+  /** `stamp` is where Connect was opened: a key goes only to that gateway. */
+  | { type: "saveApiKey"; provider: string; key: string; botId: string | null; stamp: GatewayStamp }
   | { type: "setAccountLabel"; profileId: string; label: string }
-  | { type: "disconnectAccount"; profileId: string }
+  /** `stamp` is where the confirmation was opened: another gateway can have the same profile id. */
+  | { type: "disconnectAccount"; profileId: string; stamp: GatewayStamp }
   /** New bot: its name and picture, and the account it runs on (null: the gateway chooses). */
   | {
       type: "createBot";
@@ -1255,6 +1257,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         provider: providerId(command.provider),
         key: secretText(command.key),
         botId: command.botId === null || command.botId === undefined ? null : botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "chooseSignInAccount":
       return { type: "chooseSignInAccount", profileId: profileId(command.profileId) };
@@ -1265,7 +1268,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         label: shortText(command.label, 128, "label"),
       };
     case "disconnectAccount":
-      return { type: "disconnectAccount", profileId: profileId(command.profileId) };
+      return {
+        type: "disconnectAccount",
+        profileId: profileId(command.profileId),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "createBot":
       return {
         type: "createBot",
@@ -2062,11 +2069,11 @@ class ViewerSession implements BridgeSession {
       case "chooseSignInAccount":
         return client.chooseSignInAccount(command.profileId);
       case "saveApiKey":
-        return client.saveApiKey(command.provider, command.key, command.botId);
+        return client.saveApiKey(command.provider, command.key, command.botId, command.stamp);
       case "setAccountLabel":
         return client.setAccountLabel(command.profileId, command.label);
       case "disconnectAccount":
-        return client.disconnectAccount(command.profileId);
+        return client.disconnectAccount(command.profileId, command.stamp);
       case "createBot":
         return client.createBot(
           {

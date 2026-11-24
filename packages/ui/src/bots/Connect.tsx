@@ -18,6 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { screenStamp } from "../stamp.ts";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
 import { recall, remember } from "./memory.ts";
 import { AdminBar, CodeBlock, Note, Result, Wait } from "./parts.tsx";
@@ -90,6 +91,8 @@ export function useConnect({
 }): ConnectView {
   const bridge = useBridge();
   const admin = connection.canAdmin;
+  // The host's target when Connect opened: a key typed here goes only to that gateway.
+  const [openedOn] = useState(connection.target);
   // Done: the sign-in that finished is let go, so the component opens afresh next time.
   const finish = (account: string | null) => {
     remember(LABEL_KEPT, null);
@@ -253,6 +256,7 @@ export function useConnect({
           provider: keyProvider,
           key,
           botId: forBot,
+          stamp: await screenStamp(bridge, openedOn),
         });
         if (!kp?.method) {
           // Saved only when the read after it shows the account; otherwise it says so.
@@ -1071,7 +1075,9 @@ export function useConnect({
               onClick={() => {
                 const id = confirmDrop;
                 setConfirmDrop(null);
-                void bridge.send({ type: "disconnectAccount", profileId: id }).catch(() => {});
+                void screenStamp(bridge, openedOn)
+                  .then((stamp) => bridge.send({ type: "disconnectAccount", profileId: id, stamp }))
+                  .catch(() => {});
               }}
             >
               Disconnect

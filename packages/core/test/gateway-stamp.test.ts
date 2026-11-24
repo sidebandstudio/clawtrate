@@ -691,7 +691,192 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
-  it("Machines, tasks, a bot's settings and routines: a command from a renderer keeps its stamp, and one without a stamp is refused", () => {
+  // Another gateway at the same address, behind a plain reconnect: the target stays, so only the
+  // identity tells them apart.
+  /** A drops and comes back reporting another identity, on the same target. */
+  const replacedBehindReconnect = async (client: ClawtrateClient, a: AccountsGateway) => {
+    const target = client.state.connection.target;
+    const was = client.state.connection.connectedAt;
+    a.identity = "gateway-x";
+    a.gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.connectedAt !== was &&
+        client.state.connection.gatewayId === "gateway-x",
+    );
+    expect(client.state.connection.target).toBe(target);
+  };
+  const ACCOUNT_WRITES = ["models.authLogout", "models.authSetApiKey"];
+  const DISCONNECT = { type: "disconnectAccount", profileId: "acme:home" } as const;
+  const SAVE_KEY = {
+    type: "saveApiKey",
+    provider: "globex",
+    key: "clawtrate-dev-key.globex.stale",
+    botId: null,
+  } as const;
+  const EVERY_WRITE = [
+    ...UNPAIR,
+    ...TASK_WRITES,
+    ...SETTING_WRITES,
+    ...ROUTINE_WRITES,
+    ...ACCOUNT_WRITES,
+  ];
+
+  it("Every group: a write read on one gateway is refused when another answers at the same address behind a plain reconnect", async () => {
+    const { client, a } = await twoGateways();
+    machines(a);
+    tasks(a);
+    const stamp = gatewayStamp(client.state.connection);
+    await replacedBehindReconnect(client, a);
+    const viewer = createBridgeSession(client);
+    for (const command of [
+      { type: "removeMachine", nodeId: "node-1", stamp },
+      { type: "removeDevice", deviceId: "phone-1", stamp },
+      { type: "archiveTask", key: KEY, stop: false, stamp },
+      { type: "deleteTask", key: KEY, stamp },
+      { ...ACCOUNT, stamp },
+      { ...MODEL, stamp },
+      { ...FALLBACKS, stamp },
+      { ...DISCONNECT, stamp },
+      { ...SAVE_KEY, stamp },
+    ] as const)
+      await expect(viewer.apply(command), command.type).rejects.toThrow(
+        "This change was made for another gateway, so nothing was sent.",
+      );
+    expect(sentOf(a, EVERY_WRITE)).toEqual([]);
+    client.stop();
+  });
+
+  it("Routines: a row read on one gateway is refused when another answers at the same address behind a plain reconnect", async () => {
+    const { client, a } = await twoGateways();
+    routines(a);
+    await listed(client);
+    const stamp = gatewayStamp(client.state.connection);
+    await replacedBehindReconnect(client, a);
+    const viewer = await listed(client);
+    // The rows of the list read since: only the stamp's identity is stale.
+    for (const command of rowActions(client.state.routines.listedOn, stamp))
+      expect(await viewer.apply(command)).toEqual({ status: "not-sent", reason: "gateway" });
+    expect(sentOf(a, ROUTINE_WRITES)).toEqual([]);
+    client.stop();
+  });
+
+  it("Tasks: a Stop and archive under way when the host switches sends nothing more to the other gateway", async () => {
+    const { client, a, b, switchToB } = await twoGateways();
+    tasks(a);
+    tasks(b);
+    // On A the run keeps going, so the archive waits for it to stop; B has the same task, idle.
+    a.gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-logs", status: "running", archived: false },
+    });
+    a.gateway.handlers["chat.abort"] = () => ({ ok: true });
+    const pending = createBridgeSession(client)
+      .apply({
+        type: "archiveTask",
+        key: KEY,
+        stop: true,
+        stamp: gatewayStamp(client.state.connection),
+      })
+      .then(
+        () => "archived",
+        (error: Error) => error.message,
+      );
+    await until(() => a.gateway.calls("chat.abort").length === 1);
+    await switchToB();
+    expect(await pending).not.toBe("archived");
+    expect(sentOf(a, TASK_WRITES)).toEqual([]);
+    expect(sentOf(b, TASK_WRITES)).toEqual([]);
+    client.stop();
+  });
+
+  it("A bot's account: a change under way when the host switches sends nothing more to the other gateway", async () => {
+    const { client, a, b, switchToB } = await twoGateways();
+    // A takes the patch but is slow to apply it: the change waits, reading A's config again.
+    const get = a.gateway.handlers["config.get"]!;
+    let switched: Promise<void> | null = null;
+    a.gateway.handlers["config.get"] = async (params) => {
+      const config = (await get(params)) as Record<string, unknown>;
+      if (a.gateway.calls("config.patch").length === 0) return config;
+      switched ??= switchToB();
+      return { ...config, appliedConfigHash: "not yet" };
+    };
+    const pending = createBridgeSession(client)
+      .apply({ ...ACCOUNT, stamp: gatewayStamp(client.state.connection) })
+      .then(
+        () => "saved",
+        (error: Error) => error.message,
+      );
+    await until(() => switched !== null);
+    await switched;
+    expect(await pending).toBe(CONNECTION_CHANGED);
+    // The account's record, the step after the patch, never reached B.
+    expect(sentOf(b, SETTING_WRITES)).toEqual([]);
+    expect(b.gateway.calls("config.get")).toEqual([]);
+    client.stop();
+  });
+
+  it("An account's Disconnect and a key: read on one gateway, they reach neither after a switch to another with the same id", async () => {
+    const { client, a, b, switchToB } = await twoGateways();
+    const stamp = gatewayStamp(client.state.connection);
+    await switchToB();
+    await client.refreshAccounts();
+    const viewer = createBridgeSession(client);
+    for (const command of [
+      { ...DISCONNECT, stamp },
+      { ...SAVE_KEY, stamp },
+    ] as const)
+      await expect(viewer.apply(command)).rejects.toThrow(CONNECTION_CHANGED);
+    expect(sentOf(a, ACCOUNT_WRITES)).toEqual([]);
+    expect(sentOf(b, ACCOUNT_WRITES)).toEqual([]);
+    expect(b.typed).toEqual([]);
+    client.stop();
+  });
+
+  it("An account's Disconnect and a key go with no switch, and after a dropped connection's reconnect", async () => {
+    const { client, a } = await twoGateways();
+    const viewer = createBridgeSession(client);
+    const stamp = gatewayStamp(client.state.connection);
+    await viewer.apply({ ...SAVE_KEY, stamp });
+    expect(a.gateway.calls("models.authSetApiKey")).toHaveLength(1);
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => ready(client, URL_A) && client.state.connection.connectedAt !== was);
+    await client.refreshAccounts();
+    await viewer.apply({ ...DISCONNECT, stamp });
+    expect(a.gateway.calls("models.authLogout")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("the gateway's identity, when its first read fails, is read again on the same connection, and a stamp taken then goes", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    let fails = 1;
+    const answer = a.gateway.handlers["gateway.identity.get"]!;
+    a.gateway.handlers["gateway.identity.get"] = (params) => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("the gateway was busy");
+      }
+      return answer(params);
+    };
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => client.state.connection.connectedAt !== was && fails === 0);
+    expect(client.state.connection.gatewayId).toBeNull();
+    // No other read asks for it: the connection asks again by itself.
+    await until(() => client.state.connection.gatewayId === "gateway-a", 3_000);
+    await createBridgeSession(client).apply({
+      type: "archiveTask",
+      key: KEY,
+      stop: false,
+      stamp: gatewayStamp(client.state.connection),
+    });
+    expect(a.gateway.calls("sessions.patch")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("Every group: a command from a renderer keeps its stamp, and one without a stamp is refused", () => {
     const stamp = { gatewayId: "gateway-a", target: 4 };
     for (const command of [
       { type: "removeMachine", nodeId: "node-1", stamp },
@@ -702,6 +887,8 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
       { ...MODEL, stamp },
       { ...FALLBACKS, stamp },
       ...rowActions(3, stamp),
+      { ...DISCONNECT, stamp },
+      { ...SAVE_KEY, stamp },
     ] as const) {
       expect(parseBridgeCommand(command)).toEqual(command);
       const { stamp: _stamp, ...bare } = command;

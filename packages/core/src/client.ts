@@ -379,6 +379,10 @@ export const REQUESTED_SCOPES = ["operator.read"] as const;
 /** Why forgetting a gateway was refused: another viewer chose a different one meanwhile. */
 export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose again.";
 
+/** A failed read of the gateway's identity is asked again this many times, each 4 times later. */
+const IDENTITY_RETRIES = 4;
+const IDENTITY_RETRY_MS = 500;
+
 /** Why a write stamped on an earlier connection target is not sent (`requireSameGateway`). */
 export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
@@ -5998,11 +6002,17 @@ export class ClawtrateClient {
   }
 
   /** An API key the person typed: sent once to the gateway, kept nowhere. */
-  saveApiKey(
+  /**
+   * With `stamp` (where Connect was opened), the key is sent only while the host still has that
+   * target and that gateway connected: a key is a credential, and goes nowhere else.
+   */
+  async saveApiKey(
     provider: string,
     key: string,
     botId: string | null,
+    stamp?: GatewayStamp,
   ): Promise<{ profileId: string | null }> {
+    if (stamp !== undefined) await this.requireSameGateway(stamp);
     return this.accounts.saveKey(provider, key, botId);
   }
 
@@ -6010,7 +6020,9 @@ export class ClawtrateClient {
     return this.accounts.setLabel(profileId, label);
   }
 
-  disconnectAccount(profileId: string): Promise<void> {
+  /** With `stamp` (where the confirmation was opened), as for `saveApiKey`. */
+  async disconnectAccount(profileId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp !== undefined) await this.requireSameGateway(stamp);
     return this.accounts.disconnect(profileId);
   }
 
@@ -6247,8 +6259,9 @@ export class ClawtrateClient {
    */
   async removeMachine(nodeId: string, stamp?: GatewayStamp): Promise<void> {
     if (stamp === undefined) return this.machines.removeMachine(nodeId);
+    // One request, sent in the same turn as the guard's last check.
     await this.requireSameGateway(stamp);
-    return this.machines.removeMachine(nodeId, () => this.requireSameTarget(stamp));
+    return this.machines.removeMachine(nodeId);
   }
 
   renameDevice(deviceId: string, name: string, options: { owner?: object } = {}): Promise<void> {
@@ -6259,7 +6272,7 @@ export class ClawtrateClient {
   async removeDevice(deviceId: string, stamp?: GatewayStamp): Promise<void> {
     if (stamp === undefined) return this.machines.removeDevice(deviceId);
     await this.requireSameGateway(stamp);
-    return this.machines.removeDevice(deviceId, () => this.requireSameTarget(stamp));
+    return this.machines.removeDevice(deviceId);
   }
 
   // Deleting a bot (`bot-delete.ts`) ------------------------------------------------------
@@ -8396,6 +8409,21 @@ export class ClawtrateClient {
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
   }
 
+  /** Read the identity again, a few times further apart, while this connection lasts without it. */
+  private askIdentityAgain(current: () => boolean, attempt: number): void {
+    if (attempt >= IDENTITY_RETRIES) return;
+    setTimeout(
+      () => {
+        if (!current() || this.state.connection.gatewayId !== null) return;
+        void this.readGatewayIdentity().then((id) => {
+          if (id === null) this.askIdentityAgain(current, attempt + 1);
+          else this.confirmGatewayIdentity(id, current);
+        });
+      },
+      IDENTITY_RETRY_MS * 4 ** attempt,
+    );
+  }
+
   private readGatewayIdentity(): Promise<string | null> {
     const known = this.gatewayIdentity;
     if (known?.epoch === this.epoch) return known.id;
@@ -8437,6 +8465,11 @@ export class ClawtrateClient {
     // Applied here too, so a bot list that fails or is slow to read does not
     // keep the identity back.
     void gatewayId.then((id) => this.confirmGatewayIdentity(id, sameSocket));
+    // Every connection that can read can read it, so a read that failed is asked again:
+    // a screen's write waits for the identity rather than going without it.
+    void gatewayId.then((id) => {
+      if (id === null) this.askIdentityAgain(sameSocket, 0);
+    });
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;
@@ -9338,16 +9371,12 @@ export class ClawtrateClient {
    * asked for through the same request as sending (`ensureScope`) only when an
    * action needs it, by the viewer that started it.
    */
-  /** With `stamp`, each request is sent only while the host keeps the target the screen read on. */
-  private actionContext(
-    owner: object | null,
-    stamp?: GatewayStamp,
-  ): TaskActionContext & SidebarContext {
+  private actionContext(owner: object | null): TaskActionContext & SidebarContext {
     const generation = this.generation;
     return {
       request: async (method, params) => {
         this.checkNotWithdrawn(owner);
-        if (stamp) this.requireSameTarget(stamp);
+        // Every close moves this on, so a later step of an action never reaches the next connection.
         if (generation !== this.generation) throw new Error("Switched to another gateway.");
         try {
           return await this.request(method, params);
@@ -9457,7 +9486,7 @@ export class ClawtrateClient {
     options: { stop?: boolean; owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<ArchiveResult> {
     if (options.stamp) await this.requireSameGateway(options.stamp);
-    return archiveTask(this.actionContext(options.owner ?? null, options.stamp), key, {
+    return archiveTask(this.actionContext(options.owner ?? null), key, {
       stop: options.stop === true,
     });
   }
@@ -9472,7 +9501,7 @@ export class ClawtrateClient {
     options: { owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<void> {
     if (options.stamp) await this.requireSameGateway(options.stamp);
-    await deleteTask(this.actionContext(options.owner ?? null, options.stamp), key);
+    await deleteTask(this.actionContext(options.owner ?? null), key);
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */

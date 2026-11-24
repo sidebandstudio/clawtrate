@@ -6,7 +6,6 @@
 
 import {
   accountWord,
-  gatewayStamp,
   lockCommand,
   retainedOrder,
   unlockCommand,
@@ -19,6 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { screenStamp } from "../stamp.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -349,7 +349,7 @@ export function BotSettings({
     const wordText = bindingWord(binding, age);
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
     // Where the page shown was read: a restored copy has the same bot ids.
-    const stamp = gatewayStamp(connection);
+    const shownOn = connection.target;
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
       try {
@@ -358,7 +358,7 @@ export function BotSettings({
           botId: bot.id,
           model: nextModel,
           effort: nextEffort,
-          stamp,
+          stamp: await screenStamp(bridge, shownOn),
         });
         announce(nextModel !== model ? "Model saved" : "Effort saved");
       } catch (failure) {
@@ -533,7 +533,7 @@ export function BotSettings({
           provider: targetProvider,
           model,
           effort,
-          stamp: { gatewayId: connection.gatewayId, target: changeOpenedOn.current },
+          stamp: await screenStamp(bridge, changeOpenedOn.current),
         });
         announce(
           toGateway
@@ -673,13 +673,14 @@ export function BotSettings({
   // --- The Account page --------------------------------------------------------------------
   const page: ReactNode[] = [];
   // Where the page shown was read; a refusal is said under the page.
+  const shownOn = connection.target;
   const removeFallbacks = async () => {
     setError(null);
     try {
       await bridge.invoke({
         type: "removeBotFallbacks",
         botId: bot.id,
-        stamp: gatewayStamp(connection),
+        stamp: await screenStamp(bridge, shownOn),
       });
       return true;
     } catch (failure) {

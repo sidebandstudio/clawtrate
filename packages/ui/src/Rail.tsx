@@ -7,7 +7,7 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE, avatarFor, gatewayStamp } from "@clawtrate/core";
+import { ACTIVE_RUN_MESSAGE, avatarFor } from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -22,6 +22,7 @@ import {
 } from "react";
 import { Avatar, type FaceState } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
+import { screenStamp } from "./stamp.ts";
 import { copyText } from "./clipboard.ts";
 import { gatewayLabel, rowTime } from "./format.ts";
 import { forgetFailure } from "./forget.ts";
@@ -777,13 +778,13 @@ export function Rail({
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     // Where the row was listed: a restored copy has the same keys, so the host sends it nowhere else.
-    const stamp = gatewayStamp(connection);
+    const target = connection.target;
     const act = async (stop: boolean) => {
       const { stoppedRun } = await bridge.invoke({
         type: "archiveTask",
         key: task.key,
         stop,
-        stamp,
+        stamp: await screenStamp(bridge, target),
       });
       setAnnouncement(`Archived ${task.title}.`);
       // The gateway's archive ends anything running in the task: a run that had just started,
@@ -832,7 +833,7 @@ export function Rail({
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
-    const stamp = gatewayStamp(connection);
+    const target = connection.target;
     setDialog({
       title: `Delete “${task.title}”?`,
       body: (
@@ -846,7 +847,11 @@ export function Rail({
       ),
       confirm: { label: "Delete", tone: "danger" },
       onConfirm: async () => {
-        await bridge.invoke({ type: "deleteTask", key: task.key, stamp });
+        await bridge.invoke({
+          type: "deleteTask",
+          key: task.key,
+          stamp: await screenStamp(bridge, target),
+        });
         setAnnouncement(`Deleted ${task.title}.`);
         if (listed) await afterRemoval(bot, task as Task, remaining, next);
         else {

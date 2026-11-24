@@ -13,6 +13,7 @@ import {
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { screenStamp } from "../stamp.ts";
 import { BackIcon, CheckIcon, LockIcon, WarnIcon } from "../icons.tsx";
 import { AccountRow } from "./AccountChoices.tsx";
 import { Connect, keptLabel } from "./Connect.tsx";
@@ -63,6 +64,8 @@ export function useAccountsSection({
   const [label, setLabel] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<GatewayAccount | null>(null);
+  // The host's target when Disconnect… was asked: another gateway can have the same profile id.
+  const confirmedOn = useRef(connection.target);
   const [busy, setBusy] = useState(false);
   const [now] = useState(() => Date.now());
   const granted = useGranted(connection);
@@ -334,7 +337,10 @@ export function useAccountsSection({
                 data-variant="quiet"
                 data-size="sm"
                 data-tone="danger"
-                onClick={() => setConfirm(account)}
+                onClick={() => {
+                  confirmedOn.current = connection.target;
+                  setConfirm(account);
+                }}
               >
                 Disconnect…
               </button>
@@ -356,8 +362,10 @@ export function useAccountsSection({
             onAction={() => {
               const target = confirm;
               setBusy(true);
-              void bridge
-                .invoke({ type: "disconnectAccount", profileId: target.id })
+              void screenStamp(bridge, confirmedOn.current)
+                .then((stamp) =>
+                  bridge.invoke({ type: "disconnectAccount", profileId: target.id, stamp }),
+                )
                 .then(
                   () => {
                     announce(`Disconnected ${accountName(target, accounts)}`);
