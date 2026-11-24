@@ -285,6 +285,36 @@ test("F-549: the offer waits for the gateway to name itself, in the dialog and i
   await expect(settings.getByTestId("full-control-ask")).toBeVisible();
 });
 
+test("F-549: search and New bot don't open over the offer, and open again once it is answered", async ({
+  page,
+}) => {
+  await openFixture(page, OFFER, "dark");
+  const offer = page.getByRole("dialog", { name: "Give this device full control" });
+  const keep = offer.getByRole("button", { name: "Keep current access" });
+  await expect(keep).toBeFocused();
+  // A device that can already send and answer, where ⌘N opens New bot.
+  await patchConnection(page, {
+    scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+    canWrite: true,
+    canAnswer: true,
+    canApprove: true,
+  });
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.waitForTimeout(200);
+  await expect(page.getByTestId("search-palette")).toHaveCount(0);
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  await expect(keep).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(offer).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+K");
+  await expect(page.getByTestId("search-palette")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("search-palette")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByTestId("new-bot")).toBeVisible();
+});
+
 test("F-549: the offer's dialog keeps Tab inside it while the Work drawer is open behind it", async ({
   page,
 }) => {

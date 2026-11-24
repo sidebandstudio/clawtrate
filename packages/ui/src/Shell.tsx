@@ -236,7 +236,7 @@ export function Shell({
   const openNewBot = useCallback(() => setNewBot(true), []);
   const mac = isMac();
   useEffect(() => {
-    if (inert || newBot || shortcuts || searchOpen) return;
+    if (inert || newBot || shortcuts || searchOpen || offerOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (mac ? event.metaKey : event.ctrlKey) &&
@@ -250,9 +250,10 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inert, newBot, shortcuts, searchOpen, mac, openPalette]);
+  }, [inert, newBot, shortcuts, searchOpen, offerOpen, mac, openPalette]);
   useEffect(() => {
-    if (!interactive || inert) return;
+    // The full-control offer keeps ⌘N, as it keeps ⌘K: nothing opens over it.
+    if (!interactive || inert || offerOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -266,7 +267,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interactive, inert]);
+  }, [interactive, inert, offerOpen]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
