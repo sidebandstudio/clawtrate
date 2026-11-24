@@ -5,7 +5,15 @@ import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import { MAX_BOTS } from "../src/state-bounds.ts";
 import { FAST, URL_A } from "./client-harness.ts";
-import { FakeGateway, GatewayError, memoryStorage, testHost, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  FakeGateway,
+  GatewayError,
+  memoryStorage,
+  sleep,
+  testHost,
+  until,
+} from "./fake-gateway.ts";
 
 async function connect(gateway: FakeGateway) {
   const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
@@ -26,16 +34,16 @@ describe("the bot list follows gateway config changes", () => {
       if (fail) throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
       return { defaultId: "main", mainKey: "main", scope: "per-sender", agents };
     };
-    gateway.handlers["sessions.subscribe"] = () => ({
-      subscribed: true,
-      list: {
-        sessions: [
-          { key: "agent:main:main", agentId: "main", updatedAt: 10 },
-          { key: "agent:otto:main", agentId: "otto", updatedAt: 20, unread: true },
-        ],
-        hasMore: false,
-      },
-    });
+    const listed = {
+      sessions: [
+        { key: "agent:main:main", agentId: "main", updatedAt: 10 },
+        { key: "agent:otto:main", agentId: "otto", updatedAt: 20, unread: true },
+      ],
+      hasMore: false,
+    };
+    gateway.handlers["sessions.subscribe"] = () => ({ subscribed: true, list: listed });
+    // A bot new to the list has its tasks read, as the gateway lists them.
+    gateway.handlers["sessions.list"] = () => listed;
     const client = await connect(gateway);
     try {
       expect(client.state.bots.map((bot) => [bot.id, bot.name])).toEqual([
@@ -373,6 +381,102 @@ describe("the bot list follows gateway config changes", () => {
       gateway.emit("config.changed", { hash: "h6", ts: 6 });
       await until(() => client.state.bots[0]?.name === "Fresh");
       expect(client.state.bots.map((bot) => [bot.id, bot.name])).toEqual([["main", "Fresh"]]);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("the bot list against the last whole roster", () => {
+  const roster = (ids: string[]) => ({
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: ids.map((id) => ({ id })),
+  });
+  const row = (id: string, updatedAt: number) => ({
+    key: `agent:${id}:main`,
+    agentId: id,
+    updatedAt,
+  });
+  const sessions = (...rows: ReturnType<typeof row>[]) => ({ sessions: rows, hasMore: false });
+
+  async function open(gateway: FakeGateway, ids: string[], ...rows: ReturnType<typeof row>[]) {
+    gateway.handlers["agents.list"] = () => roster(ids);
+    gateway.handlers["sessions.subscribe"] = () => ({ subscribed: true, list: sessions(...rows) });
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    await client.connect({ url: URL_A, token: "t" });
+    await until(() => client.state.discovery.status === "ready");
+    return client;
+  }
+
+  it("F-558: a bot hidden from the list and shown again gets its tasks back", async () => {
+    const gateway = new FakeGateway();
+    const both = [row("main", 10), row("otto", 20)];
+    const client = await open(gateway, ["main", "otto"], ...both);
+    gateway.handlers["sessions.list"] = () => sessions(...both);
+    try {
+      gateway.handlers["agents.list"] = () => roster(["main"]);
+      gateway.emit("config.changed", { hash: "hide-otto" });
+      await until(() => client.state.bots.length === 1);
+      gateway.handlers["agents.list"] = () => roster(["main", "otto"]);
+      gateway.emit("config.changed", { hash: "show-otto" });
+      await until(() => client.state.bots.some(({ id }) => id === "otto"));
+      await sleep(380);
+      expect(client.state.tasksByBot.otto?.map(({ key }) => key) ?? []).toEqual([
+        "agent:otto:main",
+      ]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-558: a bot past the display cap can't come back in a task read that was out when it left", async () => {
+    const gateway = new FakeGateway();
+    const ids = ["main", ...Array.from({ length: MAX_BOTS + 1 }, (_, i) => `bot-${i}`)];
+    const client = await open(gateway, ids, row("main", 10));
+    try {
+      const hidden = ids.find(
+        (id) => id !== "main" && !client.state.bots.some((bot) => bot.id === id),
+      )!;
+      const anchor = client.state.bots.find((bot) => bot.id !== hidden)!.id;
+      const pending = deferred<unknown>();
+      gateway.handlers["sessions.list"] = () =>
+        gateway.calls("sessions.list").length === 1 ? pending.promise : sessions(row("main", 20));
+      gateway.emit("sessions.changed", {});
+      await until(() => gateway.calls("sessions.list").length === 1);
+      const updated = roster(ids.filter((id) => id !== hidden));
+      gateway.handlers["agents.list"] = () => ({
+        ...updated,
+        agents: updated.agents.map(({ id }) => ({
+          id,
+          name: id === anchor ? "Roster applied" : id,
+        })),
+      });
+      gateway.emit("config.changed", { hash: "remove-past-cap" });
+      await until(() => client.state.bots.some(({ name }) => name === "Roster applied"));
+      pending.resolve(sessions(row("main", 20), row(hidden, 19)));
+      await until(() => client.state.tasksByBot.main?.[0]?.updatedAt === 20);
+      expect(client.state.tasksByBot[hidden]?.map(({ key }) => key) ?? []).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-558: a row's bot is the one the sidebar shows it under, for pruning too", async () => {
+    const gateway = new FakeGateway();
+    // Keyed under a bot the gateway no longer lists, the row names Otto as its own.
+    const moved = { key: "agent:old-owner:task", agentId: "otto", updatedAt: 30 };
+    const client = await open(gateway, ["main", "otto"], row("main", 10), moved);
+    try {
+      expect(client.state.tasksByBot.otto?.map(({ key }) => key)).toEqual(["agent:old-owner:task"]);
+      gateway.handlers["agents.list"] = () => ({
+        ...roster(["main", "otto"]),
+        agents: [{ id: "main" }, { id: "otto", name: "Otto again" }],
+      });
+      gateway.emit("config.changed", { hash: "rename-otto" });
+      await until(() => client.state.bots.some(({ name }) => name === "Otto again"));
+      expect(client.state.tasksByBot.otto?.map(({ key }) => key)).toEqual(["agent:old-owner:task"]);
     } finally {
       client.stop();
     }

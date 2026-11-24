@@ -155,6 +155,7 @@ import { externalChannelOf } from "./channels.ts";
 import {
   asRecord,
   botIdFromSessionKey,
+  rowBotOf,
   groupTasks,
   isExcludedSessionKey,
   isSessionRemoval,
@@ -752,10 +753,6 @@ type ConnectionWrites = {
   retiredShared: Map<string, string>;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
-
-/** The bot a task row belongs to: its key's, or the row's own `agentId`. */
-const rowBotId = (key: string, row: RawRecord) =>
-  botIdFromSessionKey(key) ?? (typeof row.agentId === "string" ? row.agentId : null);
 
 /**
  * A connection's token store. A rejection removes a token only through
@@ -1694,6 +1691,13 @@ export class ClawtrateClient {
   private readonly removedDuringRead = new Set<string>();
   /** A removal that didn't fit in `removedDuringRead`: the task read now out is dropped whole. */
   private readOutdated = false;
+  /**
+   * The last whole roster on this connection: its ids, at most `MAX_BOTS` of them, and whether
+   * that was all of them (`none` before one). A bot that leaves it, or joins it, is known
+   * against it.
+   */
+  private readonly lastRosterIds = new Set<string>();
+  private lastRoster: "none" | "all" | "some" = "none";
 
   /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
   private readonly trackedLimit: number;
@@ -6417,26 +6421,40 @@ export class ClawtrateClient {
     // Every id the gateway lists, system agents and bots past the display cap included.
     const listed = rosterIds(result);
     if (listed === null) return;
-    for (const id of listed) this.removedDuringRead.delete(id);
+    const before = this.lastRoster;
+    const added = [...listed].some((id) => !this.lastRosterIds.has(id));
     const removed = new Set<string>();
+    for (const id of this.lastRosterIds) if (!listed.has(id)) removed.add(id);
+    this.lastRosterIds.clear();
+    for (const id of [...listed].slice(0, MAX_BOTS)) this.lastRosterIds.add(id);
+    this.lastRoster = listed.size <= MAX_BOTS ? "all" : "some";
+    for (const id of listed) this.removedDuringRead.delete(id);
     for (const bot of shownBefore) if (!listed.has(bot.id)) removed.add(bot.id);
     for (const [key, row] of this.rows) {
-      const botId = rowBotId(key, row);
+      const botId = rowBotOf(key, row);
       if (botId && !listed.has(botId)) removed.add(botId);
     }
-    if (removed.size === 0) return;
+    // Past what the last roster kept, a bot may have left that nothing here can name.
+    const unnamed = before === "some";
     // A task read already out can still list the removed bots' tasks: its rows for them are
-    // dropped when it lands, and the tasks are read once more after it.
-    if (this.refreshing) {
+    // dropped when it lands, or the whole answer when they can't all be named, and the tasks are
+    // read once more after it.
+    if (this.refreshing && (removed.size > 0 || unnamed)) {
       this.refreshAgain = true;
+      if (unnamed) this.readOutdated = true;
       for (const id of removed) {
         if (this.removedDuringRead.size < MAX_BOTS) this.removedDuringRead.add(id);
         else this.readOutdated = true;
       }
     }
+    // A bot the last roster on this connection didn't have: its tasks are read, since a bot hidden
+    // from the list and shown again still has them. The connection's first read has its own.
+    if (before === "some" || (before === "all" && added))
+      void this.refreshSessions(this.generation);
+    if (removed.size === 0) return;
     let pruned = false;
     for (const [key, row] of [...this.rows]) {
-      const botId = rowBotId(key, row);
+      const botId = rowBotOf(key, row);
       if (!botId || !removed.has(botId)) continue;
       this.rows.delete(key);
       this.retireForeign(key);
@@ -8029,6 +8047,8 @@ export class ClawtrateClient {
     this.reopenTimer = null;
     this.discoveryRead = null;
     this.botsRefresh = null;
+    this.lastRosterIds.clear();
+    this.lastRoster = "none";
     this.selectionReady = -1;
     this.endSocketReads();
     this.endSocketReads = () => {};
@@ -8576,7 +8596,7 @@ export class ClawtrateClient {
           // The read after it, already asked for, is the one kept.
           if (this.readOutdated) continue;
           for (const [key, row] of rows) {
-            const botId = rowBotId(key, row);
+            const botId = rowBotOf(key, row);
             if (botId && this.removedDuringRead.has(botId)) rows.delete(key);
           }
           this.replaceRows(rows);
