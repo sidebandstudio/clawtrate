@@ -70,26 +70,47 @@ const placementScope = (connection: ConnectionState) =>
 
 const OTHER_PLACEMENT_PARTS = PLACEMENT_PARTS.filter((part) => part !== "commands");
 
-type SaveEntry = { pending: number; commandsSeq: number; botSeqs: Record<string, number> };
+// `commandsSeq` moves with every save on the gateway, `workspaceSeq` with every workspace save
+// (another bot's folder can now be the same as this one's), and `botSeqs` with a bot's own saves.
+type SaveEntry = {
+  pending: number;
+  commandsSeq: number;
+  workspaceSeq: number;
+  botSeqs: Record<string, number>;
+};
 
-const EMPTY_SAVE: SaveEntry = { pending: 0, commandsSeq: 0, botSeqs: {} };
+const EMPTY_SAVE: SaveEntry = { pending: 0, commandsSeq: 0, workspaceSeq: 0, botSeqs: {} };
+
+/** A fallback scope whose saves were still out when its gateway was confirmed, and how many. */
+type Redirect = { to: string; pending: number };
 
 type SavesState = {
   seq: number;
   entries: Record<string, SaveEntry>;
-  redirects: Record<string, string>;
+  redirects: Record<string, Redirect>;
 };
 
-const EMPTY_SAVES: SavesState = { seq: 0, entries: {}, redirects: {} };
+export const EMPTY_SAVES: SavesState = { seq: 0, entries: {}, redirects: {} };
 
-const resolveScope = (state: SavesState, scope: string) => state.redirects[scope] ?? scope;
+const resolveScope = (state: SavesState, scope: string) => state.redirects[scope]?.to ?? scope;
 
-function promoteScope(state: SavesState, fallback: string, confirmed: string): SavesState {
+/** The redirects once a save under `rawScope` begins (+1) or ends (-1): one is kept while its saves are out. */
+function countRedirect(state: SavesState, rawScope: string, by: 1 | -1): SavesState["redirects"] {
+  const redirect = state.redirects[rawScope];
+  if (!redirect) return state.redirects;
+  const { [rawScope]: _, ...rest } = state.redirects;
+  const pending = redirect.pending + by;
+  return pending > 0 ? { ...rest, [rawScope]: { ...redirect, pending } } : rest;
+}
+
+export function promoteScope(state: SavesState, fallback: string, confirmed: string): SavesState {
   const carried = state.entries[fallback];
   if (!carried) return state;
   // Only a save still out under the fallback finishes through it; each connection has its own.
   const redirects =
-    carried.pending > 0 ? { ...state.redirects, [fallback]: confirmed } : state.redirects;
+    carried.pending > 0
+      ? { ...state.redirects, [fallback]: { to: confirmed, pending: carried.pending } }
+      : state.redirects;
   const existing = state.entries[confirmed] ?? EMPTY_SAVE;
   const botSeqs: Record<string, number> = { ...existing.botSeqs };
   for (const [botId, seq] of Object.entries(carried.botSeqs)) {
@@ -100,53 +121,55 @@ function promoteScope(state: SavesState, fallback: string, confirmed: string): S
   entries[confirmed] = {
     pending: existing.pending + carried.pending,
     commandsSeq: Math.max(existing.commandsSeq, carried.commandsSeq),
+    workspaceSeq: Math.max(existing.workspaceSeq, carried.workspaceSeq),
     botSeqs,
   };
   return { ...state, entries, redirects };
 }
 
-function beginSave(state: SavesState, rawScope: string): SavesState {
+export function beginSave(state: SavesState, rawScope: string): SavesState {
   const scope = resolveScope(state, rawScope);
   const was = state.entries[scope] ?? EMPTY_SAVE;
   return {
     ...state,
     entries: { ...state.entries, [scope]: { ...was, pending: was.pending + 1 } },
+    redirects: countRedirect(state, rawScope, 1),
   };
 }
 
-function finishSave(state: SavesState, rawScope: string, botId: string): SavesState {
+/** A command save ended: every bot's commands and the saving bot's whole placement are read again. */
+export function finishSave(state: SavesState, rawScope: string, botId: string): SavesState {
   const scope = resolveScope(state, rawScope);
   const was = state.entries[scope] ?? EMPTY_SAVE;
   const seq = state.seq + 1;
   return {
-    ...state,
     seq,
     entries: {
       ...state.entries,
       [scope]: {
+        ...was,
         pending: Math.max(0, was.pending - 1),
         commandsSeq: seq,
         botSeqs: { ...was.botSeqs, [botId]: seq },
       },
     },
+    redirects: countRedirect(state, rawScope, -1),
   };
 }
 
-function settleSave(state: SavesState, rawScope: string, botId: string): SavesState {
+/** What a bot's parts other than commands follow: its own saves and any workspace save. */
+const otherSeq = (entry: SaveEntry | undefined, botId: string) =>
+  Math.max(entry?.botSeqs[botId] ?? 0, entry?.workspaceSeq ?? 0);
+
+/** A workspace save settled: every bot's commands and workspace are read again. */
+function settleSave(state: SavesState, rawScope: string): SavesState {
   const scope = resolveScope(state, rawScope);
   const was = state.entries[scope] ?? EMPTY_SAVE;
   const seq = state.seq + 1;
   return {
     ...state,
     seq,
-    entries: {
-      ...state.entries,
-      [scope]: {
-        pending: was.pending,
-        commandsSeq: seq,
-        botSeqs: { ...was.botSeqs, [botId]: seq },
-      },
-    },
+    entries: { ...state.entries, [scope]: { ...was, commandsSeq: seq, workspaceSeq: seq } },
   };
 }
 
@@ -154,9 +177,9 @@ type PlacementSaves = {
   seq: number;
   entries: Record<string, SaveEntry>;
   begin: (scope: string, botId: string) => () => void;
-  settled: (scope: string, botId: string) => void;
+  settled: (scope: string) => void;
   commandsSeqOf: (scope: string) => number;
-  botSeqOf: (scope: string, botId: string) => number;
+  otherSeqOf: (scope: string, botId: string) => number;
 };
 
 const PlacementSavesContext = createContext<PlacementSaves | null>(null);
@@ -196,13 +219,14 @@ export function PlacementSavesProvider({
     const target = resolveScope(mirror.current, scope);
     return mirror.current.entries[target]?.commandsSeq ?? 0;
   }, []);
-  const botSeqOf = useCallback((scope: string, botId: string) => {
-    const target = resolveScope(mirror.current, scope);
-    return mirror.current.entries[target]?.botSeqs[botId] ?? 0;
-  }, []);
-  const settled = useCallback((scope: string, botId: string) => {
-    mirror.current = settleSave(mirror.current, scope, botId);
-    setState((current) => settleSave(current, scope, botId));
+  const otherSeqOf = useCallback(
+    (scope: string, botId: string) =>
+      otherSeq(mirror.current.entries[resolveScope(mirror.current, scope)], botId),
+    [],
+  );
+  const settled = useCallback((scope: string) => {
+    mirror.current = settleSave(mirror.current, scope);
+    setState((current) => settleSave(current, scope));
   }, []);
   const begin = useCallback((scope: string, botId: string) => {
     mirror.current = beginSave(mirror.current, scope);
@@ -216,8 +240,8 @@ export function PlacementSavesProvider({
     };
   }, []);
   const value = useMemo<PlacementSaves>(
-    () => ({ seq: state.seq, entries: state.entries, begin, settled, commandsSeqOf, botSeqOf }),
-    [state.seq, state.entries, begin, settled, commandsSeqOf, botSeqOf],
+    () => ({ seq: state.seq, entries: state.entries, begin, settled, commandsSeqOf, otherSeqOf }),
+    [state.seq, state.entries, begin, settled, commandsSeqOf, otherSeqOf],
   );
   return <PlacementSavesContext.Provider value={value}>{children}</PlacementSavesContext.Provider>;
 }
@@ -239,12 +263,12 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   // Every bot on a gateway writes against the same config revision.
   const scope = placementScope(connection);
   const entry = saves?.entries[scope] ?? EMPTY_SAVE;
-  const botSeq = entry.botSeqs[botId] ?? 0;
+  const botSeq = otherSeq(entry, botId);
   const currentSeq = saves?.seq ?? 0;
   const savesBegin = saves?.begin ?? null;
   const savesSettled = saves?.settled ?? null;
   const commandsSeqOf = saves?.commandsSeqOf ?? null;
-  const botSeqOf = saves?.botSeqOf ?? null;
+  const otherSeqOf = saves?.otherSeqOf ?? null;
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
   const key = `${botId}\n${connectionKey(connection)}`;
@@ -343,7 +367,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     const keep = (name: PlacementPart, part: Partial<Placement>) =>
       live &&
       req.generation === asked.current &&
-      (!botSeqOf || req.seq >= botSeqOf(scopeRef.current, botId)) &&
+      (!otherSeqOf || req.seq >= otherSeqOf(scopeRef.current, botId)) &&
       setHeld((was) => {
         const same = was?.sessionId === req.sessionId;
         return {
@@ -366,7 +390,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     return () => {
       live = false;
     };
-  }, [bridge, botId, active, connected, otherBatch, sessionId, botSeqOf]);
+  }, [bridge, botId, active, connected, otherBatch, sessionId, otherSeqOf]);
   const reload = useCallback(() => {
     asked.current += 1;
     setGeneration(asked.current);
@@ -383,9 +407,9 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     };
   }, [savesBegin, scope, botId, reload]);
   const settled = useCallback(() => {
-    if (savesSettled) savesSettled(scope, botId);
+    if (savesSettled) savesSettled(scope);
     else reload();
-  }, [savesSettled, scope, botId, reload]);
+  }, [savesSettled, scope, reload]);
   // On a disconnect or another session, what was read is dropped before anything is derived.
   if (held && (!connected || held.sessionId !== sessionId)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>

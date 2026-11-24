@@ -1284,6 +1284,36 @@ test("F-046: Otto's command save refreshes Pip's commands without re-reading Pip
   await expect(page.getByRole("button", { name: "Change…" })).toBeVisible();
 });
 
+test("F-046: Otto's workspace save into Pip's folder makes Pip's open page say they share it", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await holdAnswer(page, "setBotWorkspace");
+  await page.getByRole("button", { name: "Change…" }).click();
+  await page
+    .getByRole("textbox", { name: /path on the gateway's machine/ })
+    .fill("/srv/clawtrate/workspaces/pip");
+  await page.getByRole("button", { name: "Save folder" }).click();
+  // Pip's page reads its placement while Otto's save is still out: no folder is shared yet.
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Pip\b/ })
+    .click();
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /^Where Pip runs: / }).click();
+  await expect(page.getByTestId("runs-on-workspace")).toContainText(
+    "/srv/clawtrate/workspaces/pip",
+  );
+  await expect(page.getByTestId("runs-on-shared")).toHaveCount(0);
+  await page.evaluate(() =>
+    (window as unknown as { answerHeld: () => Promise<unknown> }).answerHeld(),
+  );
+  await expect(page.getByTestId("runs-on-shared")).toContainText(
+    "Pip and Otto have the same workspace setting.",
+  );
+});
+
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
   page,
 }) => {
