@@ -1,3 +1,4 @@
+- status
 - region "Conversation":
   - button "Back to bots"
   - button "Marlow, Main. Show details.": Marlow

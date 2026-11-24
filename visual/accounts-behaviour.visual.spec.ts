@@ -873,12 +873,14 @@ test("F-478: the Model menu is the gateway's picker, its unavailable models disa
     ["gpt-5.5-mini", false, ""],
     ["gpt-5.5-codex", false, "Not available"],
     ["View more", false, ""],
+    ["Use another model…", false, "Type its id"],
   ]);
   await menu.getByRole("menuitemradio", { name: "gpt-5.5-codex" }).click();
   await expect(menu).toBeVisible();
   expect((await sent(page)).filter((each) => each.type === "loadModelCatalog")).toEqual([]);
   // Opened: the full list is asked for, and View more says it is loading.
   await page.keyboard.press("End");
+  await page.keyboard.press("ArrowUp");
   await page.keyboard.press("Enter");
   expect((await sent(page)).filter((each) => each.type === "loadModelCatalog")).toEqual([
     { type: "loadModelCatalog", provider: "openai" },
@@ -901,6 +903,7 @@ test("F-478: the Model menu is the gateway's picker, its unavailable models disa
       ["gpt-5.4", false, ""],
       ["gpt-5.4-mini", false, ""],
       ["gpt-5.5-pro", false, ""],
+      ["Use another model…", false, "Type its id"],
     ]);
   await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toBeFocused();
   await menu.getByRole("menuitemradio", { name: "gpt-5.5-pro" }).click();
@@ -946,12 +949,12 @@ test("F-478: View more that failed says so and tries again; a refused one isn't 
   await page.getByTestId("model-select").click();
   await menu.getByRole("menuitem", { name: "View more" }).click();
   // Refused: View more goes, and focus stays in the menu.
-  await expect(menu.getByRole("menuitem")).toHaveCount(0);
-  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.5", exact: true })).toBeFocused();
+  await expect(menu.getByRole("menuitem", { name: "View more" })).toHaveCount(0);
+  await expect(menu.locator(".menu-item:focus")).toHaveCount(1);
   await page.keyboard.press("Escape");
   await page.getByTestId("model-select").click();
   await expect(menu.getByRole("menuitemradio")).toHaveCount(3);
-  await expect(menu.getByRole("menuitem")).toHaveCount(0);
+  await expect(menu.getByRole("menuitem")).toHaveText([/^Use another model…/]);
   await page.keyboard.press("Escape");
 
   await newBotOnWork(page, `${ADMIN}&catalog=big`);
@@ -1307,6 +1310,276 @@ test("F-034 F-478: an account chosen before its models arrive gets the menu's fi
   await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-5.5");
   await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
   await expect(page.getByTestId("create")).toBeEnabled();
+});
+
+/** Type a model id through "Use another model…". */
+async function typeModel(page: Page, id: string) {
+  await page.getByTestId("model-select").click();
+  await page.getByRole("menuitem", { name: "Use another model…" }).click();
+  await page.getByRole("textbox", { name: "Model id" }).fill(id);
+  await page.getByRole("button", { name: "Use", exact: true }).click();
+}
+
+test("F-533: New bot takes a model id typed in, says only that it was typed in, and creates the bot on it", async ({
+  page,
+}) => {
+  await newBotOnWork(page, ADMIN);
+  const select = page.getByTestId("model-select");
+  await select.click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  const other = menu.getByRole("menuitem", { name: "Use another model…" });
+  await expect(other).toHaveAccessibleDescription("Type its id");
+  await other.click();
+  await expect(menu).toHaveCount(0);
+  const field = page.getByRole("textbox", { name: "Model id" });
+  await expect(field).toBeFocused();
+  // Nothing typed, and an account named with @, are refused where they are typed.
+  await page.getByRole("button", { name: "Use", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("Type a model id.");
+  await field.fill("gpt-9@openai:work");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("alert")).toHaveText("A model id has no spaces and no @.");
+  // Escape leaves the field alone, not the dialog.
+  await page.keyboard.press("Escape");
+  await expect(field).toHaveCount(0);
+  await expect(newBot(page)).toBeVisible();
+  await expect(select).toBeFocused();
+  await expect(select).toHaveAccessibleName("Model: gpt-5.5");
+  // The provider's own prefix is dropped.
+  await typeModel(page, "openai/gpt-9-preview");
+  await expect(select).toHaveAccessibleName("Model: gpt-9-preview");
+  await expect(select).toBeFocused();
+  await expect(page.getByTestId("model-typed-line")).toHaveText("gpt-9-preview was typed in.");
+  await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Not offered");
+  // It has a checked row of its own.
+  await select.click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-9-preview" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await page.keyboard.press("Escape");
+  expect(await page.getByTestId("new-bot").innerText()).not.toMatch(
+    /isn't in|doesn't offer|not in the gateway|isn't available/i,
+  );
+  await page.getByTestId("create").click();
+  expect((await sent(page)).find((each) => each.type === "createBot")).toMatchObject({
+    account: "openai:work",
+    provider: "openai",
+    model: "gpt-9-preview",
+    effort: null,
+  });
+});
+
+test("F-533: a typed id the menu lists is that row: usable rows are chosen, a row the picker disables is refused", async ({
+  page,
+}) => {
+  await newBotOnWork(page, ADMIN);
+  const select = page.getByTestId("model-select");
+  // A usable picker row: chosen as that row, with its levels and no typed-in line.
+  await typeModel(page, "gpt-5.5-mini");
+  await expect(select).toHaveAccessibleName("Model: gpt-5.5-mini");
+  await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
+  await expect(page.getByTestId("model-typed-line")).toHaveCount(0);
+  // A row the picker disables: refused with the picker's own words, the field stays open.
+  await typeModel(page, "gpt-5.5-codex");
+  await expect(page.getByRole("alert")).toHaveText("Not available");
+  await expect(page.getByRole("textbox", { name: "Model id" })).toBeVisible();
+  await expect(select).toHaveAccessibleName("Model: gpt-5.5-mini");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  // A row of "View more", once it is read: chosen as that row, marked or not.
+  await select.click();
+  await page
+    .getByRole("menu", { name: "Model" })
+    .getByRole("menuitem", { name: "View more" })
+    .click();
+  await expect(page.getByRole("menuitemradio", { name: "gpt-5.5-pro" })).toBeVisible();
+  await page
+    .getByRole("menu", { name: "Model" })
+    .getByRole("menuitem", { name: "Use another model…" })
+    .click();
+  await page.getByRole("textbox", { name: "Model id" }).fill("gpt-5.5-pro");
+  await page.getByRole("button", { name: "Use", exact: true }).click();
+  await expect(select).toHaveAccessibleName("Model: gpt-5.5-pro");
+  await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
+  await expect(page.getByTestId("model-typed-line")).toHaveCount(0);
+});
+
+test("F-533: a bot's Settings saves a typed model id, says no level is known for it, and keeps it across an account change", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings`, "light");
+  await typeModel(page, "gpt-9-preview");
+  await expect
+    .poll(async () => (await sent(page)).find((each) => each.type === "setBotModel"))
+    .toMatchObject({ botId: "otto", model: "gpt-9-preview", effort: null });
+  await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-9-preview");
+  // No row has it: no level is known, whatever the gateway keeps, and none was sent.
+  await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Not offered");
+  await expect(page.getByTestId("effort-select")).toBeDisabled();
+  await expect(page.getByTestId("model-typed-line")).toBeVisible();
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await expect(page.getByTestId("model-select")).toHaveCount(0);
+  await page.getByRole("button", { name: "Save" }).click();
+  expect((await sent(page)).find((each) => each.type === "changeBotAccount")).toMatchObject({
+    account: "openai:home",
+    model: "gpt-9-preview",
+  });
+});
+
+test("F-533: a model typed in before a list has it takes that row's effort once it does, and Create sends what Effort shows", async ({
+  page,
+}) => {
+  await newBotOnWork(page, ADMIN);
+  await typeModel(page, "gpt-5.4");
+  const effort = page.getByTestId("effort-select");
+  await expect(effort).toHaveAccessibleName("Effort: Not offered");
+  // View more's list has gpt-5.4, with its levels: Effort shows one, and Create sends it.
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await page.keyboard.press("Escape");
+  await expect(effort).toHaveAccessibleName("Effort: Medium");
+  await expect(page.getByTestId("model-typed-line")).toHaveCount(0);
+  await page.getByTestId("create").click();
+  expect((await sent(page)).find((each) => each.type === "createBot")).toMatchObject({
+    model: "gpt-5.4",
+    effort: "medium",
+  });
+});
+
+test("F-533: in Settings, a bot that keeps no effort on a model only a later list has shows that row's effort, the one saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings&model=gpt-5.4&effort=none`, "light");
+  const effort = page.getByTestId("effort-select");
+  await expect(effort).toHaveAccessibleName("Effort: Not offered");
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  // The row's own level, though the bot keeps none.
+  await expect(effort).toHaveAccessibleName("Effort: Medium");
+  // Choosing that row again saves the effort Effort shows.
+  await page.getByTestId("model-select").click();
+  await menu.getByRole("menuitemradio", { name: "gpt-5.4", exact: true }).click();
+  await expect
+    .poll(async () => (await sent(page)).filter((each) => each.type === "setBotModel").at(-1))
+    .toMatchObject({ model: "gpt-5.4", effort: "medium" });
+});
+
+test("F-533: what was typed for one provider goes when another provider's account is chosen", async ({
+  page,
+}) => {
+  await newBotOnWork(page, ADMIN);
+  await page.getByTestId("model-select").click();
+  await page.getByRole("menuitem", { name: "Use another model…" }).click();
+  const field = page.getByRole("textbox", { name: "Model id" });
+  await field.fill("gpt 9");
+  await page.getByRole("button", { name: "Use", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("A model id has no spaces and no @.");
+  await field.fill("gpt-9-preview");
+  // Another provider's account, with the field still open: the field, its text and its error go.
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  await expect(field).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: grok-4.7");
+  await page.getByTestId("model-select").click();
+  await page.getByRole("menuitem", { name: "Use another model…" }).click();
+  await expect(field).toHaveValue("");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  // A note for an id typed under one provider goes too.
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await typeModel(page, "gpt-9-preview");
+  await expect(page.getByTestId("model-typed-line")).toBeVisible();
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  await expect(page.getByTestId("model-typed-line")).toHaveCount(0);
+  await page.getByTestId("create").click();
+  expect((await sent(page)).find((each) => each.type === "createBot")).toMatchObject({
+    provider: "xai",
+    model: "grok-4.7",
+  });
+});
+
+test("F-533: Change account saves the effort it shows for a typed model another list has", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings&catalog=xaimore`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  await typeModel(page, "grok-4.8");
+  const effort = page.getByTestId("effort-select");
+  await expect(effort).toHaveAccessibleName("Effort: Not offered");
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await expect(menu.getByRole("menuitemradio", { name: "grok-4.8" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await page.keyboard.press("Escape");
+  await expect(effort).toHaveAccessibleName("Effort: Medium");
+  await page.getByRole("button", { name: "Save" }).click();
+  expect((await sent(page)).find((each) => each.type === "changeBotAccount")).toMatchObject({
+    provider: "xai",
+    model: "grok-4.8",
+    effort: "medium",
+  });
+});
+
+test("F-533: Change account sends the effort it shows, never a level chosen for a row that has gone", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings&catalog=xaimore`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  const select = page.getByTestId("model-select");
+  const menu = page.getByRole("menu", { name: "Model" });
+  await select.click();
+  await menu.getByRole("menuitem", { name: "View more" }).click();
+  await menu.getByRole("menuitemradio", { name: "grok-4.8" }).click();
+  const effort = page.getByTestId("effort-select");
+  await effort.click();
+  await page.getByRole("menuitemradio", { name: "High" }).click();
+  await expect(effort).toHaveAccessibleName("Effort: High");
+  // A reconnect drops the dialog's list, and with it grok-4.8's row: no level is known now.
+  await change(
+    page,
+    `return { ...state, connection: { ...state.connection, status: "reconnecting" } };`,
+  );
+  await change(
+    page,
+    `return { ...state, connection: { ...state.connection, status: "connected" } };`,
+  );
+  await expect(select).toHaveAccessibleName("Model: grok-4.8");
+  await expect(effort).toHaveAccessibleName("Effort: Not offered");
+  await page.getByRole("button", { name: "Save" }).click();
+  expect((await sent(page)).find((each) => each.type === "changeBotAccount")).toMatchObject({
+    model: "grok-4.8",
+    effort: null,
+  });
+});
+
+test("F-533: an id the bridge would refuse is refused where it is typed, and nothing is sent", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings`, "light");
+  await page.getByTestId("model-select").click();
+  await page.getByRole("menuitem", { name: "Use another model…" }).click();
+  const field = page.getByRole("textbox", { name: "Model id" });
+  await field.fill("gpt\u007f9");
+  await page.getByRole("button", { name: "Use", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("A model id can't hold control characters.");
+  await expect(field).toBeVisible();
+  expect((await sent(page)).filter((each) => each.type === "setBotModel")).toEqual([]);
 });
 
 /** New bot, connecting an account, on the sign-in methods. */

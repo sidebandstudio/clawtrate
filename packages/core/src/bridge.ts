@@ -16,7 +16,7 @@ import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts"
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
 import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
-import type { ModelList } from "./accounts.ts";
+import { modelIdProblem, type ModelList } from "./accounts.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
@@ -99,6 +99,8 @@ export type BridgeCommand =
   | { type: "connectDevGateway" }
   /** Forget the gateway at this address, the one the viewer shows; refused if another is selected. */
   | { type: "disconnect"; gatewayUrl: string }
+  /** A name for this gateway on this device; empty removes it. Never sent to the gateway. */
+  | { type: "nameGateway"; gatewayUrl: string; name: string }
   /** Setting up on the host's computer (`setup.ts`): look there, stop, pair with what was found, start over. */
   | { type: "setupLook" }
   | { type: "setupCancel" }
@@ -498,7 +500,9 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "readBo
   ? BotDeleteRead
   : C extends { type: "deleteBot" }
     ? BotDeleteOutcome
-    : BridgeResultRest<C>;
+    : C extends { type: "declineBotName" }
+      ? { declined: boolean }
+      : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
@@ -780,6 +784,12 @@ function sessionKey(value: unknown): string {
   if (typeof value !== "string" || !SESSION_KEY_PATTERN.test(value)) {
     throw new Error("invalid session key");
   }
+  return value;
+}
+
+/** A model id under the one rule the typed field uses too (`modelIdProblem`). */
+function modelId(value: unknown): string {
+  if (typeof value !== "string" || modelIdProblem(value) !== null) throw new Error("invalid model");
   return value;
 }
 
@@ -1299,7 +1309,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : profileId(command.account),
         provider: providerId(command.provider),
-        model: id(command.model, "model"),
+        model: modelId(command.model),
         effort:
           command.effort === null || command.effort === undefined
             ? null
@@ -1322,7 +1332,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : profileId(command.account),
         provider: providerId(command.provider),
-        model: id(command.model, "model"),
+        model: modelId(command.model),
         effort:
           command.effort === null || command.effort === undefined
             ? null
@@ -1333,7 +1343,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "setBotModel",
         botId: botId(command.botId),
-        model: id(command.model, "model"),
+        model: modelId(command.model),
         effort:
           command.effort === null || command.effort === undefined
             ? null
@@ -1347,6 +1357,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       )
         throw new Error("invalid url");
       return { type: "disconnect", gatewayUrl: command.gatewayUrl };
+    case "nameGateway":
+      if (
+        typeof command.gatewayUrl !== "string" ||
+        command.gatewayUrl.length > MAX_GATEWAY_URL_CHARS
+      )
+        throw new Error("invalid url");
+      if (typeof command.name !== "string" || command.name.length > 1000)
+        throw new Error("invalid name");
+      return { type: "nameGateway", gatewayUrl: command.gatewayUrl, name: command.name };
     case "requestFullControl":
     case "dismissFullControl":
       if (
@@ -1986,6 +2005,8 @@ class ViewerSession implements BridgeSession {
         return client.connect(policy.devGateway);
       case "disconnect":
         return client.disconnect(command.gatewayUrl);
+      case "nameGateway":
+        return client.nameGateway(command.gatewayUrl, command.name);
       case "setupLook":
       case "setupCancel":
       case "setupConnect":

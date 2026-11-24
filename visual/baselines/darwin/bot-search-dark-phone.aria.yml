@@ -1,5 +1,6 @@
+- status
 - navigation "Bots":
-  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - text: Clawtrate
   - search:
     - textbox "Search bots": p
     - button "Close search"
@@ -17,4 +18,6 @@
         - text: Here is the week, with Thursday kept clear.
       - button "More for Pip"
   - status
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
 - status

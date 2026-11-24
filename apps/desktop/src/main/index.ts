@@ -240,6 +240,12 @@ function createWindow(): BrowserWindow {
     // The dark theme's ground: the app opens dark until a person chooses otherwise.
     backgroundColor: "#101112",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    // The window controls, centred in the 40 px title row (docs/design/titlebar.md). Measured in
+    // a capture of this window: the buttons' circles start 1 px right of this point and their
+    // centre line is 7.75 px below it, so y 12 centres them at 19.75 (the row's centre is 20) and
+    // x 13 starts them 14 px in, as far as they sit from the top, 14.5 px clear of the mark at
+    // 80. hiddenInset's own placement put the centre line at 18.75.
+    ...(process.platform === "darwin" ? { trafficLightPosition: { x: 13, y: 12 } } : {}),
     ...(process.platform === "darwin" ? {} : { icon: join(RESOURCES, "icon.png") }),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.cjs"),

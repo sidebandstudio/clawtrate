@@ -1,6 +1,6 @@
 # The model list: where it comes from and how it gets newer
 
-Why a bot's Model menu can miss models a provider already offers, checked against OpenClaw 2026.10.6, the version `docs/decisions.md` names, and against OpenClaw 2026.11.6, the newest release on npm when this was written. It is the evidence behind parity row F-478 and the Model menu of `docs/design/bots.md` section 9.
+Why a bot's Model menu can miss models a provider already offers, checked against OpenClaw 2026.10.6, the version `docs/decisions.md` names, and against OpenClaw 2026.11.6, the newest release on npm when this was written. It is the evidence behind parity rows F-478 and F-533 and the Model menu of `docs/design/bots.md` section 9.
 
 How to read the citations, as in `steer-stop.md`:
 
@@ -164,6 +164,6 @@ null
 
 - Show the gateway's picker as the menu did before, its unavailable models disabled. Behind "View more", read the provider's full list (`view: "all"`) when it is opened, and show the models the picker lacks in the gateway's order, never called newest first, with no availability verdict. Say when it is loading, failed or longer than kept, and offer no "View more" on a gateway that refuses `view: "all"` (F-478).
 - Ask for the picker after the account reads, never alongside them: the gateway refuses it while they prepare the bots' metadata.
-- Let a person type a model id the catalogue doesn't list, and leave the decision to the provider.
+- Let a person type a model id the catalogue doesn't list, and leave the decision to the provider (F-533).
 - When the gateway reports `updateAvailable`, say near the Model menu that a newer OpenClaw is out and give `openclaw update`.
 - For OpenAI's newest models on a ChatGPT sign-in: update OpenClaw to 2026.11.6 or newer and keep a current `codex` on the gateway's `PATH`. That is what the documentation establishes; it was not run against a real account.
