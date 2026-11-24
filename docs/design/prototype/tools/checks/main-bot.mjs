@@ -137,17 +137,50 @@ await check("MB-04 choosing opens the first run: opening, greeting, guided card,
   assert.equal(await page.locator(".mb-status").count(), 0);
 });
 
+await check("MB-20 the Main Bot's tile comes first, with the gold star, and the gateway's own bot isn't listed", async ({ page, open, width }) => {
+  for (const query of ["view=first&at=greeted", "view=first&existing=1"]) {
+    await open(query);
+    if (width === "phone") continue;
+    const tile = page.getByTestId("main-tile");
+    assert.equal(await tile.count(), 1);
+    // The tile sits above the list of the other bots, and the Main Bot isn't a row too.
+    const above = await page.evaluate(() => {
+      const t = document.querySelector('[data-testid="main-tile"]').getBoundingClientRect();
+      const l = document.querySelector(".mb-list").getBoundingClientRect();
+      return t.bottom <= l.top + 1;
+    });
+    assert(above, "the tile is above the rows");
+    assert.equal(await page.locator(".mb-list [data-bot='clawtrate-main-bot']").count(), 0);
+    assert.match(await tile.getAttribute("aria-label"), /, Main Bot$/);
+    assert.equal(await tile.locator(".mb-star").count(), 1);
+    // The star is the gold token, not the accent.
+    const fill = await tile.locator(".mb-star").evaluate((el) => getComputedStyle(el).backgroundColor);
+    const gold = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--star)";
+      document.body.append(probe);
+      const value = getComputedStyle(probe).color;
+      probe.remove();
+      return value;
+    });
+    assert.equal(fill, gold);
+    // The gateway's own bot, `main`, is on the gateway but not in the rail; the person's bots are.
+    assert.equal(await page.getByTestId("rail-name-main").count(), 0);
+    assert.equal(await page.getByTestId("rail-name-pip").count(), 1);
+  }
+});
+
 await check("MB-05 Save without a name writes nothing", async ({ page, open }) => {
   await open("view=first");
   await page.getByTestId("guided").getByRole("button", { name: "Save" }).click();
   await has(page, '[data-testid="guided-problem"]', "Give your Main Bot a name first.");
-  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "main");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Clawtrate Main Bot");
 });
 
 await check("MB-06 the rail and header wait for the gateway's answer", async ({ page, open, width }) => {
   await open("view=first&at=saving");
-  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "main");
-  if (width !== "phone") assert.equal(await railName(page, "main", width), "main");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Clawtrate Main Bot");
+  if (width !== "phone") assert.equal(await railName(page, "clawtrate-main-bot", width), "Clawtrate Main Bot");
   await has(page, '[data-testid="guided"]', "Saving…");
 
   const name = page.locator("#g-name");
@@ -180,7 +213,7 @@ await check("MB-07 Save writes exactly the card's name and role, read back; the 
   await page.getByText("Fennel Bulb's picture is its Claw").waitFor();
   assert.equal(await page.getByTestId("title-pill").getAttribute("data-picture"), "claw");
   assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Fennel Bulb");
-  if (width !== "phone") assert.equal(await railName(page, "main", width), "Fennel Bulb");
+  if (width !== "phone") assert.equal(await railName(page, "clawtrate-main-bot", width), "Fennel Bulb");
   assert.equal(await page.getByTestId("title-pill").getAttribute("aria-label"), "Fennel Bulb, Main Bot");
   await has(page, ".mb-transcript", "Call yourself Fennel Bulb. Help me plan the garden.");
 });
@@ -189,11 +222,11 @@ await check("MB-08 unconfirmed and stale saves leave the name and say why", asyn
   await open("view=first&card=unconfirmed");
   await page.getByTestId("guided-problem").waitFor();
   await has(page, '[data-testid="guided-problem"]', "Clawtrate couldn't confirm whether this changed.");
-  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "main");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Clawtrate Main Bot");
   await open("view=first&card=stale");
   await page.getByTestId("guided-problem").waitFor();
   await has(page, '[data-testid="guided-problem"]', "so nothing was saved");
-  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "main");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Clawtrate Main Bot");
 });
 
 await check("MB-09 no Apply and no Undo on any card: proposals are saved in the person's own editor", async ({ page, open }) => {
@@ -485,7 +518,7 @@ await check("MB-17 agents with access: See by default, no direct changes, the li
 
 await check("MB-18 an ambiguous opening stops and waits for an explicit retry", async ({ page, open }) => {
   await open("view=first&opening=ambiguous");
-  await has(page, '[data-testid="card-opening"]', "Clawtrate couldn't confirm the first message reached main");
+  await has(page, '[data-testid="card-opening"]', "Clawtrate couldn't confirm the first message reached Clawtrate Main Bot");
   assert.equal(await page.getByTestId("guided").count(), 0);
   assert.equal(await page.locator(".mb-msg.is-user").count(), 1);
   await page.getByRole("button", { name: "Send it again" }).click();

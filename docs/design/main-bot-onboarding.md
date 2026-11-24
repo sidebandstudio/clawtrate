@@ -863,12 +863,12 @@ Whether `messageChannel` is trusted per-turn provenance; whether a plugin's prom
 | `at`       | `start`, `greeted`, `saving`, `done`: a point in the first run; `done` also saves a proposal through its editor                                                                     |
 | `card`     | `unconfirmed`, `stale` (the editor on a changed bot), `declined`: other outcomes                                                                                                    |
 | `opening`  | `ambiguous`: the first message's delivery couldn't be confirmed                                                                                                                     |
-| `existing` | `1`: an existing Main Bot                                                                                                                                                           |
+| `existing` | `1`: a Main Bot already made, on another device                                                                                                                                     |
 | `plugin`   | `missing`                                                                                                                                                                           |
 | `grant`    | `0`: Juniper isn't a manager yet (create)                                                                                                                                           |
 | `step`     | `add`, `added` (agents)                                                                                                                                                             |
 
-A stand-in gateway answers after a delay, and the rail changes only on its answer. The Claws are a stand-in drawn from the name, not #300's creatures, which aren't on `main`. The page is a fixture: it shows each state and proves no gateway effect.
+A stand-in gateway answers after a delay, and the rail changes only on its answer. The rail draws the Main Bot, `clawtrate-main-bot` ("Clawtrate Main Bot" until named, Juniper when it exists already), as its tile with the gold star above the other bots, and keeps the gateway's own bot, `main`, out of it, since other bots exist (check MB-20). Not drawn yet: the guided card's Picture row and manager switch, which still show as a separate picture offer after Save, and the offer to start from what an existing bot knows (#487). The Claws are a stand-in drawn from the name, not #300's creatures, which aren't on `main`. The page is a fixture: it shows each state and proves no gateway effect.
 
 ## 19. Not covered
 

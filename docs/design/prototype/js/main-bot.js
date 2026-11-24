@@ -36,6 +36,7 @@
     alsoMain: false,
   };
   const AUTONOMY = { "hands-off": "Hands-off", ask: "Ask before acting" };
+  const MAIN = "clawtrate-main-bot";
 
   const esc = (s) =>
     String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -115,21 +116,29 @@
       return new Promise((resolve) => setTimeout(() => resolve(fn()), reduced() ? 0 : ms));
     },
   };
+  // The Main Bot is a bot Clawtrate made (id MAIN), never the gateway's own
+  // bot. The gateway's own bot (`own`) stays on the gateway and out of the rail
+  // once another bot exists (#490). The first run's usual case is a gateway
+  // that already has bots: Pip, Otto and Marlow stay as they were, below.
   function seedBots() {
     const fresh = (state.view === "setup" || state.view === "first") && !state.existing;
     const main = fresh
-      ? { id: "main", name: "main", main: true, autonomy: null, role: "", avatar: null }
-      : { id: "main", name: "Juniper", main: true, autonomy: "ask", role: "", avatar: "claw" };
-    gateway.bots = fresh
-      ? [main]
-      : [
-          main,
-          { id: "pip", name: "Pip", preview: "Saturday errands route" },
-          { id: "otto", name: "Otto", preview: "Weekly backup check" },
-          { id: "marlow", name: "Marlow", preview: "Neighborhood newsletter intro" },
-        ];
+      ? { id: MAIN, name: "Clawtrate Main Bot", main: true, autonomy: null, role: "", avatar: null }
+      : { id: MAIN, name: "Juniper", main: true, autonomy: "ask", role: "", avatar: "claw" };
+    gateway.bots = [
+      { id: "main", name: "main", own: true, preview: "Channel messages" },
+      main,
+      { id: "pip", name: "Pip", preview: "Saturday errands route" },
+      { id: "otto", name: "Otto", preview: "Weekly backup check" },
+      { id: "marlow", name: "Marlow", preview: "Neighborhood newsletter intro" },
+    ];
   }
   const botById = (id) => gateway.bots.find((b) => b.id === id);
+  // What the rail shows: the gateway's own bot only while it is the only bot.
+  const shown = () => {
+    const others = gateway.bots.filter((b) => !b.own);
+    return others.length ? others : gateway.bots;
+  };
 
   // ---- rendering --------------------------------------------------------------
 
@@ -139,7 +148,14 @@
   const openProposals = () => proposals.filter((x) => x.state === "open").length;
 
   function rail(selected) {
-    const rows = gateway.bots
+    // The Main Bot's tile comes first, above every other bot, with the gold star.
+    const m = shown().find((b) => b.main);
+    const tile = m
+      ? `<div class="mb-tile-wrap"><button type="button" class="mb-tile" data-bot="${m.id}" data-testid="main-tile"${m.id === selected ? ' aria-current="true"' : ""} aria-label="${esc(`${m.name}, Main Bot`)}">` +
+        `${claw(m.name, 56, { star: true })}<strong class="mb-name" data-testid="rail-name-${m.id}" title="${esc(m.name)}">${esc(m.name)}</strong></button></div>`
+      : "";
+    const rows = shown()
+      .filter((b) => !b.main)
       .map((b) => {
         const sel = b.id === selected ? ' aria-current="true"' : "";
         const label = b.main ? `${b.name}, Main Bot` : b.name;
@@ -155,7 +171,7 @@
       : "";
     return (
       `<nav class="mb-rail" aria-label="Bots"><div class="mb-rail-top"><span class="mb-brand">Clawtrate</span>` +
-      `<button type="button" class="mb-round" aria-label="New">+</button></div><ul class="mb-list">${rows}</ul>` +
+      `<button type="button" class="mb-round" aria-label="New">+</button></div>${tile}<ul class="mb-list">${rows}</ul>` +
       `<div class="mb-rail-foot"><button type="button" class="mb-gw"><span class="mb-dot"></span><span><strong>Home gateway</strong><span>Connected</span></span>${count}</button></div></nav>`
     );
   }
@@ -248,7 +264,7 @@
       `<p class="mb-hint" data-testid="stored-as">${esc(storedAs(g.name || ""))}</p>` +
       `<label class="mb-field"><span>How should it help?</span><textarea id="g-role" maxlength="500" rows="2" placeholder="For example, plan meals and keep my week on track"${busy}>${esc(g.role || "")}</textarea></label>` +
       (g.proposed
-        ? `<p class="mb-hint" data-testid="proposed-note">${esc(botById("main").name)} suggested these from your message. Nothing is saved until you press Save.</p>`
+        ? `<p class="mb-hint" data-testid="proposed-note">${esc(botById(MAIN).name)} suggested these from your message. Nothing is saved until you press Save.</p>`
         : "") +
       `<p class="mb-hint">${missing ? "Saves this name and role yourself, in Clawtrate." : "Saves this name and role. Clawtrate shows them once the gateway confirms."}</p>` +
       (g.problem ? `<p class="mb-card-note" data-tone="warn" data-testid="guided-problem">${esc(g.problem)}</p>` : "") +
@@ -333,7 +349,7 @@
 
   async function playFirst() {
     if (state.existing) {
-      const main = botById("main");
+      const main = botById(MAIN);
       chat.items.push({ kind: "line", text: `${main.name} is your Main Bot.`, testid: "existing-main" });
       if (gateway.newBots)
         chat.items.push({
@@ -345,7 +361,7 @@
       return renderChat();
     }
     chat.items.push({ kind: "user", text: FIRST.opening, caption: "Sent for you when setup finished." });
-    const writing = { kind: "status", text: "main is writing…" };
+    const writing = { kind: "status", text: `${botById(MAIN).name} is writing…` };
     chat.items.push(writing);
     renderChat();
     if (state.at === "start") return;
@@ -356,8 +372,8 @@
         kind: "card",
         cardKind: "opening",
         id: "opening",
-        who: "main",
-        title: "Clawtrate couldn't confirm the first message reached main",
+        who: botById(MAIN).name,
+        title: `Clawtrate couldn't confirm the first message reached ${botById(MAIN).name}`,
         note: "Nothing is sent again by itself.",
         actions: [["Send it again", "resend", "primary"], ["Leave it", "leave"]],
       });
@@ -384,7 +400,7 @@
   }
 
   async function saveFirst() {
-    const b = botById("main");
+    const b = botById(MAIN);
     const name = norm(guidedCard.name);
     const role = (guidedCard.role || "").trim();
     if (!name) {
@@ -690,7 +706,8 @@
         // agents.create refuses an id that already exists (R28).
         if (botById(id)) return { refused: `There's already a bot with the id ${id}, so nothing was created. Choose another name.` };
         const bot = { id, name: norm(name), preview: "New bot", fresh: true, model, autonomy, role: role.trim(), routine: norm(routine) };
-        gateway.bots.splice(1, 0, bot);
+        // After the gateway's own bot and the Main Bot: first among the rows.
+        gateway.bots.splice(2, 0, bot);
         return bot;
       },
       done: (b) => ({
@@ -718,7 +735,7 @@
       rows: [["Name", "Juniper → <strong>Junebug</strong>", '<span class="mb-read">yours to make</span>']],
       from: "Clawtrate couldn't confirm where this request came from.",
       note: "Clawtrate can't apply a name from a request on this gateway. You can rename Juniper yourself.",
-      ownRename: { bot: "main", to: "Junebug", label: "Rename Juniper to Junebug" },
+      ownRename: { bot: MAIN, to: "Junebug", label: "Rename Juniper to Junebug" },
       actions: [["Rename Juniper to Junebug", "own-rename", "primary"], ["Not now", "decline"]],
       declinedTitle: "Kept Juniper's name",
     });
@@ -871,7 +888,7 @@
       // Setup always writes the new-bot default. A Main Bot never set up is
       // newly managed and takes the choice; an existing one only with the opt-in.
       gateway.newBots = choice;
-      if (!state.existing || state.alsoMain) botById("main").autonomy = choice;
+      if (!state.existing || state.alsoMain) botById(MAIN).autonomy = choice;
       say(AUTONOMY[choice]);
       state.view = "first";
       state.at = null;
@@ -944,7 +961,7 @@
       c.stateText = "Saving…";
       renderChat();
       const read = await gateway.answer(700, () => {
-        const b = botById("main");
+        const b = botById(MAIN);
         b.avatar = "claw";
         return { name: b.name, avatar: b.avatar };
       });
@@ -966,7 +983,7 @@
       await greet();
     } else if (act === "leave") {
       const c = chat.items.find((i) => i.id === "opening");
-      Object.assign(c, { cardKind: "left", note: "Left as it is. You can write to main yourself.", actions: [] });
+      Object.assign(c, { cardKind: "left", note: `Left as it is. You can write to ${botById(MAIN).name} yourself.`, actions: [] });
       renderChat();
     } else if (act === "add") {
       agents.adding = true;
@@ -1082,7 +1099,7 @@
     proposals.length = 0;
     guidedCard = null;
     composer = { value: "" };
-    chat = { bot: state.view === "rename" ? "pip" : "main", items: [] };
+    chat = { bot: state.view === "rename" ? "pip" : MAIN, items: [] };
     if (state.view === "setup") return renderSetup();
     if (state.view === "agents") {
       seedAgents();

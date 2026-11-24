@@ -55,22 +55,51 @@
   bottom: -2px;
   display: grid;
   place-items: center;
-  width: max(10px, calc(var(--size) * 0.42));
-  height: max(10px, calc(var(--size) * 0.42));
+  width: max(10px, calc(var(--size) * 0.38));
+  height: max(10px, calc(var(--size) * 0.38));
   border-radius: 50%;
-  background: var(--bg-rail);
+  background: var(--star);
   box-shadow: 0 0 0 1.5px var(--bg-rail);
 }
 
 .mb-star svg {
-  width: 80%;
-  height: 80%;
-  fill: var(--accent-line);
+  width: 70%;
+  height: 70%;
+  fill: var(--star-ink);
 }
 
 .mb-pill .mb-star {
-  background: var(--bg-raised);
   box-shadow: 0 0 0 1.5px var(--bg-raised);
+}
+
+/* The Main Bot's tile: its own place at the top of the rail, above every other bot. */
+.mb-tile-wrap {
+  display: grid;
+  justify-items: center;
+  padding: var(--space-1) var(--space-2) var(--space-2);
+}
+
+.mb-tile {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: center;
+  width: 112px;
+  padding: var(--space-3) var(--space-2) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  cursor: pointer;
+}
+
+.mb-tile[aria-current="true"] {
+  background: var(--bg-selected);
+}
+
+.mb-tile .mb-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- the shell ---- */
