@@ -6,7 +6,7 @@
 // are made up (apps/desktop/src/fixture/routines.ts).
 import type { ClawtrateState, ConnectionState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
+import { contextFor, moveTarget, NOW, openFixture, sentStamp, SIZES } from "./fixture.ts";
 
 const ADMIN = "scene=main&routines=on&access=admin";
 const READ = "scene=main&routines=on";
@@ -518,6 +518,20 @@ test.describe("1440", () => {
     await expect(page.getByTestId("b-announcer")).toHaveText("Running Morning digest", {
       timeout: 10_000,
     });
+  });
+
+  test("#450: a delete confirmation sends the target it opened with, not the host's now", async ({
+    page,
+  }) => {
+    await openPage(page, "Plan the week");
+    await view(page).getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Delete…" }).click();
+    const dialog = page.getByTestId("routine-delete");
+    const before = await moveTarget(page);
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect
+      .poll(() => sentStamp(page, "removeRoutine"))
+      .toEqual({ gatewayId: null, target: before });
   });
 
   test("F-352: delete asks first, says what it loses, and the routine leaves the list; a failure keeps the dialog", async ({

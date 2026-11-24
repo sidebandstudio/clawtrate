@@ -4,7 +4,16 @@
 // thing, the access bar for admin, and what a read-only connection shows.
 import type { ClawtrateBridge, ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import {
+  contextFor,
+  moveTarget,
+  NOW,
+  openFixture,
+  OTTO_DISK,
+  sentStamp,
+  settle,
+  SIZES,
+} from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
@@ -551,6 +560,53 @@ test("F-490: a read-only connection shows a bot's settings with every value, and
   await expect(page.getByTestId("admin-bar")).toContainText(
     "Changing Otto's settings needs admin access.",
   );
+});
+
+test("#450: Change account, a Disconnect confirmation and a typed key send the target they opened with", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  // Change account: the choice is made on the page as it opened.
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  let before = await moveTarget(page);
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect
+    .poll(() => sentStamp(page, "changeBotAccount"))
+    .toEqual({ gatewayId: null, target: before });
+
+  // Disconnect…: the confirmation keeps the target it was asked under.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
+  await settings.getByRole("button", { name: "Disconnect…" }).click();
+  before = await moveTarget(page);
+  await page
+    .getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" })
+    .getByRole("button", { name: "Disconnect" })
+    .click();
+  await expect
+    .poll(() => sentStamp(page, "disconnectAccount"))
+    .toEqual({ gatewayId: null, target: before });
+});
+
+test("#450: a key typed in Connect goes with the target Connect opened with", async ({ page }) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  await newBot(page).getByRole("combobox", { name: "Provider" }).selectOption("xai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  const before = await moveTarget(page);
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect
+    .poll(() => sentStamp(page, "saveApiKey"))
+    .toEqual({ gatewayId: null, target: before });
 });
 
 test("F-476: Disconnect asks first, with focus on Cancel; Escape closes the confirmation alone", async ({

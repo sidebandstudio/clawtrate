@@ -36,7 +36,14 @@ type Read =
   | { status: "ready"; view: MachinesView };
 
 /** One removal confirmation; each opening is its own object. */
-type Removal = { kind: "machine" | "device"; id: string; name: string; bots: string[] };
+/** A removal asked for, with the host's target of the read its row came from. */
+type Removal = {
+  kind: "machine" | "device";
+  id: string;
+  name: string;
+  bots: string[];
+  target: number;
+};
 
 const PAIRING = "operator.pairing";
 
@@ -357,6 +364,8 @@ export function useMachinesSection({
     setGeneration(asked.current);
   }, []);
   if (held && (!connected || held.key !== key)) setHeld(null);
+  // The target of the read the rows shown came from (no host hands out target 0).
+  const readTarget = held?.target ?? 0;
   const read: Read = !connected
     ? { status: "error", message: "Not connected to the gateway." }
     : held && held.key === key
@@ -563,6 +572,7 @@ export function useMachinesSection({
                   id: machine.id,
                   name: machine.name,
                   bots: machine.named,
+                  target: readTarget,
                 })
               }
             >
@@ -615,7 +625,13 @@ export function useMachinesSection({
                   data-size="sm"
                   data-variant="quiet"
                   onClick={() =>
-                    setRemoving({ kind: "device", id: device.id, name: device.name, bots: [] })
+                    setRemoving({
+                      kind: "device",
+                      id: device.id,
+                      name: device.name,
+                      bots: [],
+                      target: readTarget,
+                    })
                   }
                 >
                   Remove
@@ -713,10 +729,9 @@ export function useMachinesSection({
           onAction={() => {
             const asked = removing;
             setBusy(asked);
-            // Where the rows were read: a removal sent anywhere else could unpair another
+            // Where the row was read: a removal sent anywhere else could unpair another
             // gateway's machine of the same id, so the host refuses it.
-            // (The rows shown are `held`'s; no host hands out target 0.)
-            const done = screenStamp(bridge, held?.target ?? 0).then((stamp) =>
+            const done = screenStamp(bridge, asked.target).then((stamp) =>
               asked.kind === "machine"
                 ? bridge.invoke({ type: "removeMachine", nodeId: asked.id, stamp })
                 : bridge.invoke({ type: "removeDevice", deviceId: asked.id, stamp }),

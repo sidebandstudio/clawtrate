@@ -7,7 +7,17 @@
 // Back returning to the row that opened it.
 import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
-import { contextFor, hold, NOW, openFixture, OTTO_DISK, release, SIZES } from "./fixture.ts";
+import {
+  contextFor,
+  hold,
+  moveTarget,
+  NOW,
+  openFixture,
+  OTTO_DISK,
+  release,
+  sentStamp,
+  SIZES,
+} from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings`;
@@ -216,6 +226,20 @@ test("F-274: a workspace form stays while its save is pending", async ({ page })
   await expect(announcer(page)).toHaveText(
     "Saved. Otto's workspace: /srv/clawtrate/workspaces/otto-3",
   );
+});
+
+test("#450: a Remove confirmation sends the target of the read its row came from, not the host's now", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openMachines(page);
+  await page.getByRole("button", { name: "Remove media-box…" }).click();
+  // The host is pointed at a gateway anew while the confirmation is open.
+  const before = await moveTarget(page);
+  await page.getByRole("alertdialog").getByRole("button", { name: "Remove", exact: true }).click();
+  await expect
+    .poll(() => sentStamp(page, "removeMachine"))
+    .toEqual({ gatewayId: null, target: before });
 });
 
 test("F-157: a removal that completes after the connection's access changed leaves nothing behind", async ({

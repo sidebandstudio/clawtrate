@@ -272,7 +272,8 @@ test("on the read tier nothing that writes is offered, and a write sent anyway i
   })) as {
     value?: unknown;
   };
-  expect(JSON.stringify(answer)).toContain('"not-sent"');
+  // Refused for admin, not for a stale stamp or list: those are refused as not sent too.
+  expect(answer).toMatchObject({ value: { status: "not-sent", reason: "admin" } });
   expect((await get(job.id)).id).toBe(job.id);
 });
 

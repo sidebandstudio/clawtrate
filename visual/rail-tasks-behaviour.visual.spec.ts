@@ -3,7 +3,7 @@
 // offers none of them.
 import type { BridgeCommand } from "../packages/core/src/bridge.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
+import { contextFor, moveTarget, openFixture, sentStamp, settle, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const OTTO = "bot=otto&task=agent:otto:disk-space";
@@ -535,8 +535,11 @@ test("F-278: Delete asks first, with Cancel focused; Delete removes the task and
 
   await taskMenu(page, "Certificate renewal");
   await page.getByRole("menuitem", { name: "Delete…" }).click();
+  // The host is pointed at a gateway anew while the dialog is open: it keeps the row's target.
+  const before = await moveTarget(page);
   await dialog.getByRole("button", { name: "Delete" }).click();
   await expect(dialog).toHaveCount(0);
+  expect(await sentStamp(page, "deleteTask")).toEqual({ gatewayId: null, target: before });
   await expect(taskRow(page, "Certificate renewal")).toHaveCount(0);
   await expect(taskRow(page, "Router firmware")).toBeFocused();
   expect(await sent(page, "deleteTask")).toEqual([

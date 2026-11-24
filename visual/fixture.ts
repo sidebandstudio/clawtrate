@@ -327,3 +327,41 @@ export const STATE_SCENES: StateScene[] = [
     },
   },
 ];
+
+type TargetFixture = {
+  clawtrateFixture: {
+    setState: (
+      change: (state: { connection: { target: number } }) => { connection: { target: number } },
+    ) => void;
+    sent: Array<Record<string, unknown>>;
+  };
+};
+
+/**
+ * Move the host's target on, as a Connect does, without changing anything else the screen keys
+ * its reads on; answers the target before. A dialog open across it must keep the one before.
+ */
+export function moveTarget(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    let before = 0;
+    (window as unknown as TargetFixture).clawtrateFixture.setState((state) => {
+      before = state.connection.target;
+      return { ...state, connection: { ...state.connection, target: before + 1 } };
+    });
+    return before;
+  });
+}
+
+/**
+ * The stamp the last command of `type` the fixture was sent carried, or null when none was. A
+ * screen whose target the host has left sends that target with no identity: the host refuses it.
+ */
+export function sentStamp(page: Page, type: string): Promise<unknown> {
+  return page.evaluate(
+    (type) =>
+      (window as unknown as TargetFixture).clawtrateFixture.sent
+        .filter((each) => each.type === type)
+        .at(-1)?.stamp ?? null,
+    type,
+  );
+}
