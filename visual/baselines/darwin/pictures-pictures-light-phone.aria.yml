@@ -9,15 +9,14 @@
     - paragraph: Draw the sun over a green hill for the newsletter.
     - toolbar "Message actions":
       - button "More"
-    - group: Thought
     - paragraph: I asked for the picture. It will arrive in this task when it is ready.
     - toolbar "Message actions":
       - button "More"
     - paragraph: Here is the picture you asked for.
-    - toolbar "Message actions":
-      - button "More"
     - figure:
       - 'img "Picture made from the description: A sun over a green hill, in flat solid colours"'
+    - toolbar "Message actions":
+      - button "More"
     - group: Worked 1 action
     - status
   - region "Access":

@@ -25,7 +25,8 @@ import {
   type SidebarPrefs,
 } from "./sidebar.ts";
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
-import type { ClawtrateState, TranscriptItem } from "./types.ts";
+import { MAX_MESSAGE_LINE_CHARS } from "./state-bounds.ts";
+import type { ClawtrateState, GatewayStamp, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
 import type { SetupHost, SetupOffer } from "./setup.ts";
 import {
@@ -98,8 +99,11 @@ export type BridgeCommand =
   | { type: "retry" }
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string }
-  /** Read a task this viewer holds again, as the retry of a failed history read. */
-  | { type: "reloadSession"; key: string }
+  /**
+   * Read a task this viewer holds again, as the retry of a failed history read.
+   * With `failed`, the host reads only if the task is still in `error` with that error.
+   */
+  | { type: "reloadSession"; key: string; failed?: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
@@ -185,8 +189,8 @@ export type BridgeCommand =
       type: "writeMemory";
       botId: string;
       path: string;
-      /** The gateway identity that supplied the draft, from `gateway.identity.get`. */
-      gatewayId: string | null;
+      /** Where the draft was read (`GatewayStamp`): nothing is written anywhere else. */
+      stamp: GatewayStamp;
       expectedHash: string | null;
       content: string | null;
     }
@@ -228,13 +232,13 @@ export type BridgeCommand =
       sessionKey: string | null;
     }
   // Changing routines (automation.md sections 9 and 10). The engine refuses each below admin.
-  // `gateway` is the one a draft was opened on: a write waits for it to match.
-  | { type: "createRoutine"; input: NewRoutine; key: string; gateway: string | null }
+  // `stamp` is where a draft was opened: a write waits for it to match.
+  | { type: "createRoutine"; input: NewRoutine; key: string; stamp: GatewayStamp }
   /**
    * After a create whose answer never came: the routine its draft made, found
    * by the draft's key, against `input`. Refused when any other gateway answers.
    */
-  | { type: "checkRoutineCreate"; key: string; input: RoutineFields; gateway: string | null }
+  | { type: "checkRoutineCreate"; key: string; input: RoutineFields; stamp: GatewayStamp }
   /** After an edit whose answer never came, as `updateRoutine` was sent it. */
   | {
       type: "checkRoutineUpdate";
@@ -242,13 +246,13 @@ export type BridgeCommand =
       original: RoutineFields;
       edit: RoutineFields;
       expected: RoutineFields;
-      gateway: string | null;
+      stamp: GatewayStamp;
     }
   /**
    * One routine as the gateway has it now; reads only. With `gateway`, a
    * read-back of a write: answered by any other gateway, it is refused.
    */
-  | { type: "readRoutine"; id: string; gateway?: string | null }
+  | { type: "readRoutine"; id: string; stamp?: GatewayStamp }
   /** `original` is what the editor opened with; only what differs from it is written. */
   | {
       type: "updateRoutine";
@@ -256,7 +260,7 @@ export type BridgeCommand =
       original: RoutineFields;
       edit: RoutineFields;
       expected: RoutineRevision;
-      gateway: string | null;
+      stamp: GatewayStamp;
     }
   /** `listedOn` is the routines list the row came from (`RoutinesState.listedOn`). */
   | { type: "setRoutineEnabled"; id: string; enabled: boolean; listedOn: number }
@@ -290,12 +294,12 @@ export type BridgeCommand =
       provider: string;
       model: string;
       effort: string | null;
-      /** The gateway New bot was opened on; nothing is created on another. */
-      gatewayId: string | null;
+      /** Where New bot was read (`GatewayStamp`); nothing is created anywhere else. */
+      stamp: GatewayStamp;
     }
   | { type: "dismissBotCreation" }
   /** Finish a bot whose creation is partial, by its id, on the gateway New bot was showing. */
-  | { type: "finishBot"; botId: string; gatewayId: string | null }
+  | { type: "finishBot"; botId: string; stamp: GatewayStamp }
   | {
       type: "changeBotAccount";
       botId: string;
@@ -311,8 +315,8 @@ export type BridgeCommand =
       type: "setBotPicture";
       botId: string;
       avatar: string;
-      /** The gateway Edit picture was opened on; nothing is written to another. */
-      gatewayId: string | null;
+      /** Where Edit picture was read (`GatewayStamp`); nothing is written anywhere else. */
+      stamp: GatewayStamp;
     }
   // Check-ins (`check-ins.ts`). Saving needs admin.
   | { type: "refreshCheckIns"; botId?: string }
@@ -624,6 +628,12 @@ export type ClawtrateBridge = {
    * save dialog). Absent where the host has none: a browser downloads instead.
    */
   save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /**
+   * Hear of a task this view had open that the host refused to open again after the
+   * bridge reconnected on its own: the view no longer holds it, and `error` says why.
+   * Absent where a bridge never reopens tasks itself (the desktop's IPC).
+   */
+  onReopenRefused?(listener: (key: string, error: string) => void): () => void;
 };
 
 /**
@@ -918,9 +928,13 @@ function oneOf<T extends string>(value: unknown, options: readonly T[], what: st
   return value as T;
 }
 
-/** The gateway a draft was opened on, or null when the editor did not know it. */
-function optionalGateway(value: unknown): string | null {
-  return value === null || value === undefined ? null : shortText(value, 256, "gateway");
+/** Where a screen was read (`GatewayStamp`): the gateway's identity, or null, and the host's target. */
+function gatewayStampOf(value: unknown): GatewayStamp {
+  const stamp = record(value, "gateway stamp");
+  return {
+    gatewayId: stamp.gatewayId === null ? null : id(stamp.gatewayId, "gateway"),
+    target: count(stamp.target, Number.MAX_SAFE_INTEGER, "gateway stamp"),
+  };
 }
 
 function routineFields(value: Record<string, unknown>): RoutineFields {
@@ -989,7 +1003,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "saveCheckIn",
         saveId: id(command.saveId, "save"),
         botId: botId(command.botId),
-        gatewayId: id(command.gatewayId, "gateway"),
+        stamp: gatewayStampOf(command.stamp),
         every: every(command.every),
         prompt: prompt(command.prompt),
         was: { every: every(was.every), prompt: prompt(was.prompt) },
@@ -1030,7 +1044,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "createRoutine",
         input: { ...routineFields(input), botId: botId(input.botId) },
         key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
-        gateway: optionalGateway(command.gateway),
+        stamp: gatewayStampOf(command.stamp),
       };
     }
     case "checkRoutineCreate":
@@ -1038,7 +1052,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "checkRoutineCreate",
         key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
         input: routineFields(record(command.input, "routine")),
-        gateway: optionalGateway(command.gateway),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "checkRoutineUpdate":
       return {
@@ -1047,7 +1061,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         original: routineFields(record(command.original, "routine")),
         edit: routineFields(record(command.edit, "routine")),
         expected: routineFields(record(command.expected, "routine")),
-        gateway: optionalGateway(command.gateway),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "updateRoutine": {
       const expected = record(command.expected, "routine revision");
@@ -1060,7 +1074,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         original: routineFields(record(command.original, "routine")),
         edit: routineFields(record(command.edit, "routine")),
         expected: { ...routineFields(expected), updatedAt },
-        gateway: optionalGateway(command.gateway),
+        stamp: gatewayStampOf(command.stamp),
       };
     }
     case "setRoutineEnabled":
@@ -1081,7 +1095,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: command.type,
         id: id(command.id, "routine id"),
-        ...(command.gateway === undefined ? {} : { gateway: optionalGateway(command.gateway) }),
+        ...(command.stamp === undefined ? {} : { stamp: gatewayStampOf(command.stamp) }),
       };
     case "readGatewayHooks":
       return { type: "readGatewayHooks" };
@@ -1098,7 +1112,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "finishBot",
         botId: botId(command.botId),
-        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "startSignIn":
       return {
@@ -1143,12 +1157,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
-        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "setBotPicture":
       return {
         type: "setBotPicture",
-        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
+        stamp: gatewayStampOf(command.stamp),
         botId: botId(command.botId),
         avatar: shortText(command.avatar, 32_768, "picture"),
       };
@@ -1360,8 +1374,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "openSession":
     case "closeSession":
-    case "reloadSession":
       return { type: command.type, key: sessionKey(command.key) };
+    case "reloadSession":
+      return {
+        type: "reloadSession",
+        key: sessionKey(command.key),
+        ...(command.failed === undefined
+          ? {}
+          : { failed: shortText(command.failed, MAX_MESSAGE_LINE_CHARS, "error") }),
+      };
     case "listTaskFiles":
       return { type: "listTaskFiles", key: sessionKey(command.key) };
     case "readTaskFile":
@@ -1386,7 +1407,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         throw new Error("invalid memory path");
       const target = { botId: botId(command.botId), path };
       if (command.type === "readMemory") return { type: command.type, ...target };
-      const { content, expectedHash, gatewayId } = command;
+      const { content, expectedHash, stamp } = command;
       if (
         content !== null &&
         (typeof content !== "string" || utf8Length(content) > MAX_MEMORY_BYTES)
@@ -1402,7 +1423,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         ...target,
         content,
         expectedHash,
-        gatewayId: gatewayId === null ? null : id(gatewayId, "gateway identity"),
+        stamp: gatewayStampOf(stamp),
       };
     }
     case "listWorkspace":
@@ -1783,7 +1804,7 @@ class ViewerSession implements BridgeSession {
       }
       case "reloadSession":
         if (!this.open.has(command.key)) throw new Error(NOT_OPEN_IN_VIEW);
-        return client.reloadSession(command.key);
+        return client.reloadSession(command.key, command.failed);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
       case "refreshRoutines":
@@ -1803,13 +1824,13 @@ class ViewerSession implements BridgeSession {
           }),
         );
       case "createRoutine":
-        return client.createRoutine(command.input, command.key, owner, command.gateway);
+        return client.createRoutine(command.input, command.key, owner, command.stamp);
       case "checkRoutineCreate":
-        return client.checkRoutineCreate(command.key, command.input, command.gateway);
+        return client.checkRoutineCreate(command.key, command.input, command.stamp);
       case "checkRoutineUpdate":
-        return client.checkRoutineUpdate(command.id, command, command.gateway);
+        return client.checkRoutineUpdate(command.id, command, command.stamp);
       case "readRoutine":
-        return client.readRoutine(command.id, command.gateway);
+        return client.readRoutine(command.id, command.stamp);
       case "updateRoutine":
         return client.updateRoutine(
           command.id,
@@ -1817,7 +1838,7 @@ class ViewerSession implements BridgeSession {
           command.edit,
           command.expected,
           owner,
-          command.gateway,
+          command.stamp,
         );
       case "setRoutineEnabled":
         return client.setRoutineEnabled(command.id, command.enabled, owner, command.listedOn);
@@ -1859,12 +1880,12 @@ class ViewerSession implements BridgeSession {
             model: command.model,
             effort: command.effort,
           },
-          command.gatewayId,
+          command.stamp,
         );
       case "dismissBotCreation":
         return client.dismissBotCreation();
       case "finishBot":
-        return client.finishBot(command.botId, command.gatewayId);
+        return client.finishBot(command.botId, command.stamp);
       case "changeBotAccount":
         return client.changeBotAccount(
           command.botId,
@@ -1878,7 +1899,7 @@ class ViewerSession implements BridgeSession {
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
       case "setBotPicture":
-        return client.setBotPicture(command.botId, command.avatar, command.gatewayId);
+        return client.setBotPicture(command.botId, command.avatar, command.stamp);
       case "refreshCheckIns":
         return client.refreshCheckIns(command.botId);
       case "saveCheckIn":
@@ -1886,7 +1907,7 @@ class ViewerSession implements BridgeSession {
           command.saveId,
           command.botId,
           {
-            gatewayId: command.gatewayId,
+            stamp: command.stamp,
             every: command.every,
             prompt: command.prompt,
             was: command.was,
@@ -2025,7 +2046,7 @@ class ViewerSession implements BridgeSession {
         return client.writeMemory(
           command.botId,
           command.path,
-          command.gatewayId,
+          command.stamp,
           command.expectedHash,
           command.content,
         );

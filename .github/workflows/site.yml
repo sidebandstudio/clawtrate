@@ -27,6 +27,7 @@ on:
       - "apps/desktop/src/main/update/address.ts"
       - "apps/desktop/src/main/update/feed.ts"
       - "apps/desktop/src/main/update/version.ts"
+      - "apps/desktop/src/main/update/whats-new.ts"
       - ".github/workflows/site.yml"
   workflow_dispatch:
 

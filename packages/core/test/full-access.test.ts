@@ -242,14 +242,17 @@ describe("full access behind a flag", () => {
   // §3's send gate: this computer's gateway through local connect's proved sockets. Every socket
   // of the connection comes from that route, and the person's consent holds when it opens.
   const LOOPBACK = "ws://127.0.0.1:19950";
+  const ROUTE = ".openclaw-clawtrate";
   const provedRoute = (gateway: FakeGateway, consent: () => boolean) => {
     const made: string[] = [];
+    const proofs: number[] = [];
+    const createSocket = (url: string) => (made.push(url), gateway.createWebSocket(url));
+    const prove = async () => (proofs.push(made.length), true);
     return {
       made,
-      setup: {
-        createSocket: (url: string) => (made.push(url), gateway.createWebSocket(url)),
-        consent,
-      },
+      proofs,
+      sockets: { createSocket, verify: prove },
+      setup: { createSocket, prove, route: ROUTE, consent },
     };
   };
 
@@ -271,6 +274,8 @@ describe("full access behind a flag", () => {
     gateway.dropAll();
     await until(() => gateway.connects.length === 2);
     expect(route.made).toEqual([LOOPBACK, LOOPBACK]);
+    // Each socket, the retry's included, was proved again last before its frame.
+    expect(route.proofs).toEqual([1, 2]);
     expect(connectAt(gateway, 1)).toMatchObject({
       scopes: [...FULL_SCOPES],
       auth: { deviceToken: ISSUED },
@@ -278,10 +283,56 @@ describe("full access behind a flag", () => {
     client.stop();
   });
 
+  it("F-492: a full pairing made through the proved sockets goes, after a restart, only on a proved socket of its route", async () => {
+    const gateway = grantingGateway();
+    const { client, storage } = fullClient(gateway);
+    const route = provedRoute(gateway, () => true);
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, route.setup);
+    await until(() => client.state.discovery.status === "ready");
+    // Saved with its route: the gateway, and its six-scope token.
+    expect(JSON.parse(storage.data.get("connection")!).route).toBe(ROUTE);
+    const record = JSON.parse(storage.data.get(tokenKey(LOOPBACK))!) as {
+      route?: string;
+      fullGrant?: boolean;
+    };
+    expect(record).toMatchObject({ route: ROUTE, fullGrant: true });
+    client.stop();
+
+    // A restart: every socket comes from the route the host gives, proved again last.
+    const later = provedRoute(gateway, () => false);
+    const host = { ...testHost(gateway, storage), secureCredentials: async () => true };
+    const plain: string[] = [];
+    host.createWebSocket = (url) => (plain.push(url), gateway.createWebSocket(url));
+    const restarted = new ClawtrateClient(host, {
+      ...FAST,
+      fullAccess: true,
+      localConnect: () => later.sockets,
+    });
+    await restarted.start();
+    await until(() => gateway.connects.length === 2);
+    expect(connectAt(gateway, 1)).toMatchObject({
+      scopes: [...FULL_SCOPES],
+      auth: { deviceToken: ISSUED },
+    });
+    expect(later.made).toEqual([LOOPBACK]);
+    expect(later.proofs).toEqual([1]);
+    expect(plain).toEqual([]);
+    restarted.stop();
+
+    // And a restart whose host can't prove the route sends nothing at all.
+    const none = new ClawtrateClient(host, { ...FAST, fullAccess: true });
+    await none.start();
+    await until(() => none.state.connection.error?.code === "LOCAL_UNVERIFIED");
+    expect(gateway.connects).toHaveLength(2);
+    expect(plain).toEqual([]);
+    none.stop();
+  });
+
   it("setup's reuse of a saved pairing through the proved sockets asks for read, and so do its retries", async () => {
     const gateway = grantingGateway();
-    const { client } = fullClient(gateway);
     const route = provedRoute(gateway, () => true);
+    const { client } = fullClient(gateway, { client: { localConnect: () => route.sockets } });
     await client.start();
     await client.connect({ url: LOOPBACK, token: SHARED }, route.setup);
     await until(() => client.state.discovery.status === "ready");
@@ -297,6 +348,30 @@ describe("full access behind a flag", () => {
     gateway.dropAll();
     await until(() => gateway.connects.length === 3);
     expect(connectAt(gateway, 2).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("a socket factory with no last proof before the credential proves nothing: it asks for read", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway);
+    const { createSocket, consent } = provedRoute(gateway, () => true).setup;
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, { createSocket, consent });
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("a socket factory with no last proof proves nothing, even beside a route the host can prove", async () => {
+    const gateway = grantingGateway();
+    const { client } = fullClient(gateway, {
+      client: { localConnect: () => provedRoute(gateway, () => true).sockets },
+    });
+    const { createSocket, consent } = provedRoute(gateway, () => true).setup;
+    await client.start();
+    await client.connect({ url: LOOPBACK, token: SHARED }, { createSocket, consent, route: ROUTE });
+    await until(() => gateway.connects.length === 1);
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
     client.stop();
   });
 
@@ -360,10 +435,15 @@ describe("full access behind a flag", () => {
   });
 
   it("a typed loopback address with a saved full pairing asks for read over the host's socket, in every spelling", async () => {
-    for (const typed of [LOOPBACK, "ws://localhost:19950", "ws://[::1]:19950"]) {
+    for (const [typed, routed] of [LOOPBACK, "ws://localhost:19950", "ws://[::1]:19950"].flatMap(
+      (url) => [[url, false] as const, [url, true] as const],
+    )) {
       const url = validateGatewayUrl(typed);
       const gateway = grantingGateway();
       const storage = memoryStorage();
+      // Also where the gateway was saved before with a proved route: a typed address replaces it.
+      if (routed)
+        storage.data.set("connection", JSON.stringify({ url, token: null, route: ROUTE }));
       storage.data.set(
         tokenKey(url),
         JSON.stringify({

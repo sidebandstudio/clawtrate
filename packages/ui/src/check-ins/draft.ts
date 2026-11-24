@@ -7,6 +7,7 @@
 
 import {
   keptByDefault,
+  type GatewayStamp,
   type CheckInDraft,
   type CheckInKept,
   type CheckInRead,
@@ -24,7 +25,8 @@ type Base = {
 };
 
 export type Draft = {
-  gatewayId: string;
+  /** Where the check-ins the draft started from were read. */
+  stamp: GatewayStamp;
   botId: string;
   base: Base;
   choice: Choice;
@@ -37,7 +39,9 @@ export type Draft = {
   rebased: string | null;
 };
 
-function baseOf(checkIns: CheckInRead, botId: string): Base {
+type Read = Pick<CheckInRead, "jobs" | "settings" | "defaults">;
+
+function baseOf(checkIns: Read, botId: string): Base {
   const setting = checkIns.settings?.find((each) => each.botId === botId);
   return {
     ...choiceOf(checkIns.jobs.find((job) => job.botId === botId)),
@@ -49,10 +53,10 @@ function baseOf(checkIns: CheckInRead, botId: string): Base {
 
 /** A new draft for the bot, or null while nothing says which gateway the check-ins are from. */
 export function openDraft(checkIns: CheckInsState, botId: string): Draft | null {
-  if (checkIns.gatewayId === null) return null;
+  if (checkIns.stamp === null || checkIns.stamp.gatewayId === null) return null;
   const base = baseOf(checkIns, botId);
   return {
-    gatewayId: checkIns.gatewayId,
+    stamp: checkIns.stamp,
     botId,
     base,
     choice: base.choice,
@@ -70,7 +74,7 @@ export function openDraft(checkIns: CheckInsState, botId: string): Draft | null 
  * and the person's edits stay, except a prompt that is now longer than
  * Clawtrate edits, which cannot be saved over.
  */
-export function rebase(draft: Draft, checkIns: CheckInRead): Draft {
+export function rebase(draft: Draft, checkIns: Read): Draft {
   const base = baseOf(checkIns, draft.botId);
   const edits = draftToSave(draft);
   const every = edits.every !== null;
@@ -89,7 +93,7 @@ export function draftToSave(draft: Draft): CheckInDraft {
   const { base, touched } = draft;
   const every = everyFor(draft.choice, draft.every);
   return {
-    gatewayId: draft.gatewayId,
+    stamp: draft.stamp,
     every: touched.every && every !== everyFor(base.choice, base.every) ? every : null,
     prompt: touched.prompt && draft.prompt !== (base.was.prompt ?? "") ? draft.prompt : null,
     was: base.was,

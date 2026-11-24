@@ -29,7 +29,8 @@
     "dev-gateway": "node tools/dev-gateway/src/cli.ts",
     "brand:icons": "node tools/brand/src/make-icons.ts",
     "brand:strip": "node tools/brand/src/strip-logo.ts",
-    "brand:creatures": "node tools/brand/src/make-creatures.ts"
+    "brand:creatures": "node tools/brand/src/make-creatures.ts",
+    "brand:cards": "node tools/brand/src/make-cards.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

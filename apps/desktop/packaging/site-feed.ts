@@ -14,7 +14,10 @@
 // install.sh will check, both of the same download, and writes them to
 // <output>/updates/beta/. From the same beta it fills the Mac download page
 // (download/mac/index.html, a template) and requires install.sh to pin that
-// beta's team. With no published beta, a template token left or another
+// beta's team. The page's "What's new" section is the newest betas' own lists:
+// the "- " lines under "What's new:" on each release's page, as plain text, and
+// the same lists go beside the feed as updates/beta/whats-new.json, which the app
+// reads inside a check (F-554). With no published beta, a template token left or another
 // team pinned, it fails, so the workflow deploys nothing and the last
 // deployment stays; it assembles in a temporary folder and copies the result
 // to <output> only once every check has passed. The Site workflow runs it on every deploy, from main
@@ -36,6 +39,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GITHUB_RELEASE_ASSETS, releaseAssetRedirect } from "../src/main/update/address.ts";
 import { isNewer, parseVersion, versionTrack } from "../src/main/update/version.ts";
+import {
+  isTitle,
+  MAX_WHATS_NEW_ITEMS,
+  WHATS_NEW_FILE,
+  WHATS_NEW_FORMAT,
+} from "../src/main/update/whats-new.ts";
 import {
   checkBetaFiles,
   releaseFolder,
@@ -151,17 +160,8 @@ async function text(get: Get, url: string, headers: Record<string, string>): Pro
   return response.text();
 }
 
-/** Writes the files and returns the tag they came from, or null when there is no beta. */
-export async function writeSiteFeed(
-  site: string,
-  get: Get,
-  token: string | undefined,
-): Promise<string | null> {
-  const folder = join(site, "updates", "beta");
-  if (existsSync(folder))
-    throw new Error(
-      "updates/beta/ is the generated Beta feed's folder; the site may not have one.",
-    );
+/** The repository's releases, as GitHub's API lists them. */
+async function releaseRows(get: Get, token: string | undefined): Promise<ReleaseRow[]> {
   const api: Record<string, string> = {
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
@@ -174,7 +174,130 @@ export async function writeSiteFeed(
     rows.push(...batch);
     if (batch.length < 100) break;
   }
-  const release = newestBeta(rows);
+  return rows;
+}
+
+/** The line a release page puts above its list of what the beta adds. */
+export const WHATS_NEW_HEADING = "What's new:";
+
+/**
+ * What a release page says the beta adds, as plain text. The contract is
+ * narrow on purpose: the last line reading "What's new:", then the lines that
+ * begin "- " at the margin, up to the first line that is neither one of those
+ * nor a blank before the list. The release tooling writes that block last.
+ * Nothing else on the page is read, and it is not read as Markdown: a title
+ * that is too long, or holds a character outside `TITLE`, is left out.
+ */
+export function whatsNew(body: string | null | undefined): string[] {
+  const lines = (body ?? "").split(/\r\n?|\n/);
+  let start = -1;
+  lines.forEach((line, at) => {
+    if (line.trim() === WHATS_NEW_HEADING) start = at;
+  });
+  if (start < 0) return [];
+  const items: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.startsWith("- ")) {
+      if (line.trim() === "" && !items.length) continue;
+      break;
+    }
+    // The app's own rule (isTitle), so the page and the app show the same lines.
+    const item = line.slice(2).trim();
+    if (isTitle(item)) items.push(item);
+    if (items.length === MAX_WHATS_NEW_ITEMS) break;
+  }
+  return items;
+}
+
+/** whats-new.json: the newest betas' lists, as the app reads them (update/whats-new.ts). */
+export function whatsNewFile(rows: readonly ReleaseRow[]): string {
+  const text = JSON.stringify({ format: WHATS_NEW_FORMAT, builds: betaNotes(rows) }, null, 2);
+  // A title may name a template token. With the second "_" of each "__" written "\u005f"
+  // it reads back the same and is not mistaken for a token left in the site. Only those:
+  // each costs five bytes more, and the largest list must stay under the app's cap.
+  return `${text.replaceAll("__", "_\\u005f")}\n`;
+}
+
+/** The newest published betas whose pages list what they add, newest first. */
+export function betaNotes(
+  rows: readonly ReleaseRow[],
+  limit = 5,
+): Array<{ version: string; items: string[] }> {
+  const betas = rows.flatMap((row) => {
+    if (row.draft || !row.prerelease || !row.tag_name.startsWith("v")) return [];
+    const version = parseVersion(row.tag_name.slice(1));
+    if (!version || versionTrack(version) !== "nightly") return [];
+    const items = whatsNew(row.body);
+    return items.length ? [{ version, text: row.tag_name.slice(1), items }] : [];
+  });
+  betas.sort((a, b) =>
+    isNewer(a.version, b.version) ? -1 : isNewer(b.version, a.version) ? 1 : 0,
+  );
+  return betas.slice(0, limit).map(({ text, items }) => ({ version: text, items }));
+}
+
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+const escapeHtml = (value: string) =>
+  value
+    .replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]!)
+    // A title may name a template token. Written with entities it shows as typed,
+    // is not filled in, and is not mistaken for a token left in the page.
+    .replaceAll("__", "&#95;&#95;");
+
+/**
+ * The download page's "What's new" section, which opens on a click: each
+ * beta's list, with a change's closing "(#123)" linked to its pull request.
+ * Empty when no beta has a list.
+ */
+export function whatsNewHtml(
+  notes: ReadonlyArray<{ version: string; items: readonly string[] }>,
+  current: string,
+): string {
+  if (!notes.length) return "";
+  const item = (value: string) =>
+    escapeHtml(value).replace(
+      /\(#(\d{1,7})\)$/,
+      `(<a href="https://github.com/${REPOSITORY}/pull/$1">#$1</a>)`,
+    );
+  const builds = notes.map(
+    ({ version, items }) =>
+      `<article class="whats-new-build"><h3>${escapeHtml(version)}${
+        version === current ? ' <span class="whats-new-current">This beta</span>' : ""
+      }</h3><ul>${items.map((value) => `<li>${item(value)}</li>`).join("")}</ul></article>`,
+  );
+  // Closed until the visitor opens it, so the downloads stay the page's first thing.
+  return (
+    '<details class="whats-new">' +
+    "<summary><h2>What's new</h2></summary>" +
+    '<p class="whats-new-note">What each beta added, newest first.</p>' +
+    builds.join("") +
+    "</details>"
+  );
+}
+
+/**
+ * Writes the files and returns the tag they came from, or null when there is no
+ * beta. `rows` are the releases already read, when the caller has them.
+ */
+export async function writeSiteFeed(
+  site: string,
+  get: Get,
+  token: string | undefined,
+  rows?: readonly ReleaseRow[],
+): Promise<string | null> {
+  const folder = join(site, "updates", "beta");
+  if (existsSync(folder))
+    throw new Error(
+      "updates/beta/ is the generated Beta feed's folder; the site may not have one.",
+    );
+  const all = rows ?? (await releaseRows(get, token));
+  const release = newestBeta(all);
   if (!release) return null;
   const tag = release.tag_name;
   const version = tag.slice(1);
@@ -211,6 +334,9 @@ export async function writeSiteFeed(
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, FEED_NAME), files.feed);
   writeFileSync(join(folder, LATEST_MAC_NAME), files.latest);
+  // What the newest betas add, for the app to read inside a check (F-554); the
+  // two files above are written exactly as before.
+  writeFileSync(join(folder, WHATS_NEW_FILE), whatsNewFile(all));
   return tag;
 }
 
@@ -257,7 +383,9 @@ export async function assembleSite(
   const work = mkdtempSync(join(tmpdir(), "clawtrate-site-"));
   try {
     cpSync(source, work, { recursive: true });
-    const tag = await writeSiteFeed(work, get, token);
+    // Read once: the feed comes from the newest beta, the page's list from the newest few.
+    const rows = await releaseRows(get, token);
+    const tag = await writeSiteFeed(work, get, token, rows);
     if (!tag)
       throw new Error("No published beta: the download page cannot be filled, so nothing deploys.");
     const latest = JSON.parse(
@@ -272,7 +400,10 @@ export async function assembleSite(
       .replaceAll(
         "__CLAWTRATE_RELEASE_PAGE__",
         `https://github.com/${REPOSITORY}/releases/tag/${tag}`,
-      );
+      )
+      // A function, so the section goes in as written: in a replacement string
+      // a title's "$&" or "$`" would be read as a pattern.
+      .replaceAll("__CLAWTRATE_WHATS_NEW__", () => whatsNewHtml(betaNotes(rows), tag.slice(1)));
     writeFileSync(page, filled);
     for (const file of filesUnder(work)) {
       const left = TEMPLATE_TOKEN.exec(readFileSync(join(work, file), "latin1"));

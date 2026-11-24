@@ -5,7 +5,8 @@
 // take their call's place in the column, an approval follows the call it
 // names, and a question card takes its `ask_user` call's place. With "Show
 // commands" off (7.11) the action cards leave the conversation for the run
-// line's list, and the reasoning that led to them stays at their place.
+// line's list, and the reasoning that led to them stays at their place. With
+// "Show thinking" off, no reasoning is drawn.
 
 import {
   actionWords,
@@ -34,6 +35,7 @@ import {
   type Step,
   type Transcript,
   type TranscriptItem,
+  type ChatPicture,
 } from "@clawtrate/core";
 import {
   createContext,
@@ -57,7 +59,8 @@ import {
 import { fullDate } from "../format.ts";
 import { Markdown } from "../Markdown.tsx";
 import { MessageUnit } from "../Messages.tsx";
-import { useShowCommands } from "../preferences.ts";
+import { Pictures } from "../Pictures.tsx";
+import { useShowCommands, useShowThinking } from "../preferences.ts";
 import {
   ActionEnvContext,
   ActionGroup,
@@ -70,7 +73,14 @@ import {
 
 /** What a non-action entry of a record is. */
 export type FeedRef =
-  | { t: "text"; text: string; title?: string | undefined; messageId?: string | undefined }
+  | {
+      t: "text";
+      text: string;
+      title?: string | undefined;
+      messageId?: string | undefined;
+      /** The pictures the message of this bubble carried, drawn under it (F-535). */
+      pictures?: ChatPicture[];
+    }
   | { t: "preamble"; preamble: Preamble }
   | { t: "reply"; run: Run }
   | { t: "card"; ref: CardRef }
@@ -82,8 +92,8 @@ export type FeedRef =
 type Groups = FeedGroup<FeedRef>[];
 
 type Feeds = {
-  /** The groups of each assistant history item, by item id. */
-  items: Map<string, { groups: Groups; revision: number }>;
+  /** The groups of each assistant history item, by item id, and the pictures drawn with a bubble. */
+  items: Map<string, { groups: Groups; revision: number; placed: ReadonlySet<string> }>;
   /** The groups of each run drawn from the engine, by run id. */
   runs: Map<string, { groups: Groups; revision: number }>;
   /** Each run's account of what is drawn (`retentionAccount`), and its drawn calls the engine holds. */
@@ -234,6 +244,36 @@ class Tally {
         );
     }
   }
+}
+
+/**
+ * Each picture of an item goes under the last bubble of the message that carried
+ * it, so a picture a bot sent with its message tool shows with that message, not
+ * after what the bot did next (F-535). Returns the pictures placed; the rest stay
+ * under the turn.
+ */
+export function placePictures(
+  item: TranscriptItem,
+  entries: FeedEntry<FeedRef>[],
+): ReadonlySet<string> {
+  const placed = new Set<string>();
+  for (const picture of item.pictures ?? []) {
+    if (!picture.messageId) continue;
+    const at = entries.findLastIndex(
+      (entry) =>
+        entry.type === "bubble" &&
+        entry.ref.t === "text" &&
+        entry.ref.messageId === picture.messageId,
+    );
+    const entry = entries[at];
+    if (entry?.type !== "bubble" || entry.ref.t !== "text") continue;
+    entries[at] = {
+      ...entry,
+      ref: { ...entry.ref, pictures: [...(entry.ref.pictures ?? []), picture] },
+    };
+    placed.add(picture.artifactId);
+  }
+  return placed;
 }
 
 /** An assistant history item's record. */
@@ -440,8 +480,9 @@ export function markRepeats(lists: FeedEntry<FeedRef>[][], ctx: ReadingContext) 
  * stretch between the bot's words, and leaves the cards so it is not drawn
  * twice. In a run still going, reasoning with nothing after it yet is the
  * status line's (section 5), not a line. An action that waits for the person
- * or went wrong (`staysInView`) keeps its card in the conversation, a fold
- * with such a member keeps the whole fold, and neither is in the run line's list.
+ * (`staysInView`) keeps its card in the conversation, a fold with such a
+ * member keeps the whole fold, and neither is in the run line's list. An
+ * action that went wrong takes the same path as any other.
  */
 export function quietFeed(
   groups: Groups,
@@ -457,7 +498,7 @@ export function quietFeed(
     shown.push({ type: "thought", key: thought.id, thought, place });
     pending = [];
   };
-  // An action that waits for the person, or went wrong, stays in view as its card (7.11).
+  // An action that waits for the person stays in view as its card (7.11).
   const inView = (call: ActionCall) => staysInView(lineOf(call, ctx).outcome);
   for (const group of groups) {
     if (
@@ -482,6 +523,53 @@ export function quietFeed(
   }
   flush("end");
   return { shown, hidden };
+}
+
+/**
+ * What one record draws in the conversation (`shown`) and what goes to its run
+ * line's list (`hidden`), by the two switches of 7.11. With both on, the
+ * record's groups are drawn as they are, except that in a run still going the
+ * reasoning with nothing after it yet is the status line's (section 5), not a
+ * line, as without commands shown.
+ */
+export function viewGroups(
+  groups: Groups,
+  view: { commands: boolean; thinking: boolean; live: boolean },
+  ctx: ReadingContext = {},
+): { shown: Groups; hidden: Groups } {
+  const thought = view.thinking ? groups : withoutThinking(groups);
+  if (view.commands)
+    return {
+      shown: view.live
+        ? thought.filter((g) => !(g.type === "thought" && g.place === "end"))
+        : thought,
+      hidden: [],
+    };
+  return quietFeed(thought, view.live, ctx);
+}
+
+/**
+ * Without "Show thinking" (7.11): no "Thought" line, and no reasoning inside a
+ * card, a fold or a line of actions.
+ */
+function withoutThinking(groups: Groups): Groups {
+  return groups.flatMap((group): Groups => {
+    switch (group.type) {
+      case "thought":
+        return [];
+      case "action":
+      case "card":
+        return [{ ...group, thought: null }];
+      case "fold":
+        return [{ ...group, members: group.members.map((m) => ({ ...m, thought: null })) }];
+      case "break":
+        return group.ref.t === "actions"
+          ? [{ ...group, ref: { t: "actions", groups: withoutThinking(group.ref.groups) } }]
+          : [group];
+      default:
+        return [group];
+    }
+  });
 }
 
 /**
@@ -515,6 +603,8 @@ export function ActionScope({
   // Commands and raw calls only when the person chose to see them (7.11).
   const [commandsShown] = useShowCommands();
   const quiet = !commandsShown;
+  // Reasoning only when the person chose to see it (7.11).
+  const [thinkingShown] = useShowThinking();
   const ctx = useMemo(
     () => ({
       ...given,
@@ -588,7 +678,12 @@ export function ActionScope({
     );
     const drawnOf = new Map<string, Set<string>>();
     const tally = new Tally();
-    const built: Array<{ id: string; entries: FeedEntry<FeedRef>[]; revision: number }> = [];
+    const built: Array<{
+      id: string;
+      entries: FeedEntry<FeedRef>[];
+      revision: number;
+      placed: ReadonlySet<string>;
+    }> = [];
     for (const item of transcript.items) {
       if (item.role !== "assistant") continue;
       const run = runOf.get(item.id);
@@ -602,7 +697,8 @@ export function ActionScope({
           ? engineRecord(run, inRows, drawn, lastItem.get(run.id) === item.id, tally)
           : null;
       const entries = itemEntries(item, run, index, skip, cards, tally, fromEngine, record);
-      built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0 });
+      const placed = placePictures(item, entries);
+      built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0, placed });
     }
     const builtRuns: Array<{ id: string; entries: FeedEntry<FeedRef>[]; revision: number }> = [];
     for (const run of engineRuns) {
@@ -639,15 +735,21 @@ export function ActionScope({
     for (const each of built) listOf(runOf.get(each.id)?.id, each.entries);
     for (const each of builtRuns) listOf(each.id, each.entries);
     for (const lists of listsOf.values()) markRepeats(lists, ctx);
-    const items = new Map<string, { groups: Groups; revision: number }>();
+    const items = new Map<
+      string,
+      { groups: Groups; revision: number; placed: ReadonlySet<string> }
+    >();
     const runs = new Map<string, { groups: Groups; revision: number }>();
     const hidden = new Map<string, { groups: Groups; revision: number }>();
     // Without commands shown, each run's cards go to its run line, in order (7.11).
     const keep = (runId: string | undefined, groups: Groups, revision: number): Groups => {
-      if (!quiet) return groups;
       const live =
         runId !== undefined && engineRuns.some((r) => r.id === runId && !isTerminal(r.state));
-      const { shown, hidden: cards } = quietFeed(groups, live, ctx);
+      const { shown, hidden: cards } = viewGroups(
+        groups,
+        { commands: !quiet, thinking: thinkingShown, live },
+        ctx,
+      );
       if (!cards.length) return shown;
       if (!runId) {
         // History with no run has no run line: its cards stay behind a line of their own.
@@ -667,6 +769,7 @@ export function ActionScope({
       items.set(each.id, {
         groups: keep(runOf.get(each.id)?.id, groupFeed(each.entries, ctx), each.revision),
         revision: each.revision,
+        placed: each.placed,
       });
     for (const each of builtRuns)
       runs.set(each.id, {
@@ -674,7 +777,7 @@ export function ActionScope({
         revision: each.revision,
       });
     return { items, runs, accounts, hidden } satisfies Feeds;
-  }, [transcript, engineRuns, selected, handover, placement, ctx, quiet]);
+  }, [transcript, engineRuns, selected, handover, placement, ctx, quiet, thinkingShown]);
 
   const placed = useMemo(() => {
     const keys = new Set<string>();
@@ -703,7 +806,7 @@ export function ActionScope({
     };
   }, [taskKey, transcript.runs, transcript.sessionKey, ctx, rawState, lost, readOnly, effort]);
 
-  useKeepFocus();
+  useKeepFocus(env.stepOf);
   // Cards drawn with the feed's first drawing are not arrivals; later ones are.
   const drawn = useRef(false);
   useEffect(() => {
@@ -723,9 +826,11 @@ export function ActionScope({
  * When the control that held focus is replaced (a card becoming a fold, a
  * fold splitting), focus moves to the same control in what replaced it, or
  * to the replacement's line (section 2, Input). Controls are found by their
- * call and their own name, never by position.
+ * call and their own name, never by position. A card that left the
+ * conversation for its run's list (7.11) gives focus to its run line, or,
+ * while the run works and has none, to the transcript.
  */
-function useKeepFocus() {
+function useKeepFocus(stepOf: ActionEnv["stepOf"]) {
   const last = useRef<{ element: HTMLElement; call: string; control: string } | null>(null);
   useEffect(() => {
     const onFocus = (event: FocusEvent) => {
@@ -753,7 +858,20 @@ function useKeepFocus() {
     const holder =
       document.querySelector<HTMLElement>(`[data-call="${CSS.escape(held.call)}"]`) ??
       document.querySelector<HTMLElement>(`[data-first="${CSS.escape(held.call)}"]`);
-    if (!holder) return;
+    const closedLine = holder?.closest<HTMLElement>("details.run-line:not([open])");
+    if (!holder || closedLine) {
+      const runId = stepOf(held.call)?.runId;
+      const line =
+        closedLine ??
+        (runId
+          ? document.querySelector<HTMLElement>(`details.run-line[data-run="${CSS.escape(runId)}"]`)
+          : null);
+      const fallback =
+        line?.querySelector<HTMLElement>(":scope > summary") ??
+        document.querySelector<HTMLElement>('[data-testid="transcript"]');
+      fallback?.focus({ preventScroll: true });
+      return;
+    }
     const target =
       holder.querySelector<HTMLElement>(
         held.control === ":scope > summary" ? ":scope > summary" : held.control,
@@ -834,6 +952,7 @@ function GroupView({
               <Bubble title={ref.title}>
                 <Markdown text={ref.text} />
               </Bubble>
+              {ref.pictures && <BubblePictures pictures={ref.pictures} />}
             </MessageUnit>
           );
         case "preamble":
@@ -852,7 +971,7 @@ function GroupView({
           );
         case "actions":
           return (
-            <ActionsLine id={group.key} count={callsOf(ref.groups).length}>
+            <ActionsLine id={group.key} calls={callsOf(ref.groups)}>
               <Groups groups={ref.groups} revision={revision} reply={reply} />
             </ActionsLine>
           );
@@ -887,6 +1006,18 @@ function Groups({
       ))}
     </>
   );
+}
+
+function BubblePictures({ pictures }: { pictures: ChatPicture[] }) {
+  const env = useContext(ActionEnvContext);
+  return env ? <Pictures taskKey={env.taskKey} pictures={pictures} /> : null;
+}
+
+/** The pictures of an item that no bubble of it draws: under the turn, in their order. */
+export function TurnPictures({ taskKey, item }: { taskKey: string; item: TranscriptItem }) {
+  const placed = useFeeds().items.get(item.id)?.placed;
+  const rest = (item.pictures ?? []).filter((picture) => !placed?.has(picture.artifactId));
+  return <Pictures taskKey={taskKey} pictures={rest} />;
 }
 
 /** An assistant history item's bubbles, cards and Thought lines. */
@@ -924,7 +1055,7 @@ export function RunLine({ run }: { run: Run }) {
   ) : null;
   if (!line)
     return list && isTerminal(run.state) ? (
-      <ActionsLine id={`run:${run.id}`} count={callsOf(hidden!.groups).length}>
+      <ActionsLine id={`run:${run.id}`} calls={callsOf(hidden!.groups)}>
         {list}
       </ActionsLine>
     ) : null;

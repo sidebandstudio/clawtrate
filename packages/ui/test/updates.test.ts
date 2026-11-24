@@ -521,3 +521,47 @@ it.each([
     ).toBe(line);
   },
 );
+
+it("F-554: an offer's list is open, a skipped build's and the running build's closed, as plain text; nothing without lists", () => {
+  const offered: DesktopUpdateState = {
+    kind: "offered",
+    version: "1.2.0",
+    releaseDate: "2026-11-20T00:00:00Z",
+    offerId: "stable-1",
+  };
+  const { html } = render(offered, {
+    whatsNew: {
+      coming: [
+        { version: "1.2.0", items: ["The offer (#3)", "A <b>tag</b> stays text (#4)"] },
+        { version: "1.1.0", items: ["Skipped (#2)"] },
+      ],
+      running: ["This build (#1)"],
+    },
+  });
+  const sections = [
+    ...html.matchAll(/<details class="b-disclosure whats-new"[^>]*>[\s\S]*?<\/details>/g),
+  ].map((m) => m[0]);
+  const read = (section: string) => ({
+    open: /^<details[^>]* open=""/.test(section),
+    title: /<\/svg>([^<]*)<\/summary>/.exec(section)?.[1],
+    lines: [...section.matchAll(/<li>([^<]*)<\/li>/g)].map((m) => m[1]),
+  });
+  expect(sections.map(read)).toEqual([
+    { open: false, title: "What's new in this build", lines: ["This build (#1)"] },
+    {
+      open: true,
+      title: "What's new in 1.2.0",
+      lines: ["The offer (#3)", "A &lt;b&gt;tag&lt;/b&gt; stays text (#4)"],
+    },
+    { open: false, title: "What's new in 1.1.0", lines: ["Skipped (#2)"] },
+  ]);
+  expect(sections.join("")).not.toMatch(/<a|<img|<b>/);
+  // The notes are not part of the app's own status: they follow its group, Download included.
+  expect(html.indexOf(">Download</button>")).toBeGreaterThan(
+    html.indexOf('aria-label="Update status"'),
+  );
+  expect(html.indexOf("What's new in 1.2.0")).toBeGreaterThan(html.indexOf(">Download</button>"));
+  // Before a check, and when the lists name nothing, there is no section.
+  expect(render({ kind: "not-checked" }).html).not.toContain("whats-new");
+  expect(render(offered).html).not.toContain("whats-new");
+});

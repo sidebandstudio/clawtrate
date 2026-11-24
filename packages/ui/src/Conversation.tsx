@@ -27,7 +27,14 @@ import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from 
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
 import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
-import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
+import {
+  ActionScope,
+  ItemFeed,
+  RunFeed,
+  RunLine,
+  showAction,
+  TurnPictures,
+} from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
@@ -35,9 +42,8 @@ import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
-import { Pictures } from "./Pictures.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
-import { useShowCommands } from "./preferences.ts";
+import { useShowCommands, useShowThinking } from "./preferences.ts";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -60,7 +66,7 @@ function Turn({
       {role === "assistant" ? (
         <>
           <ItemFeed itemId={item.id} />
-          <Pictures taskKey={taskKey} item={item} />
+          <TurnPictures taskKey={taskKey} item={item} />
         </>
       ) : (
         <MessageUnit
@@ -260,12 +266,15 @@ function TranscriptView({
     }),
     [task.key, transcript, bot.name, liveOptions.interactive, liveOptions.connected, onAnnounce],
   );
-  // Without commands shown, the status line says the kind of work and what the bot thinks (7.11).
+  // Without commands shown, the status line says the kind of work; with thinking shown, what the
+  // bot thinks shows under it (7.11).
   const [commandsShown] = useShowCommands();
+  const [thinkingShown] = useShowThinking();
   const live = buildLive(bot, task, transcript, {
     ...liveOptions,
     reading,
     quiet: !commandsShown,
+    thinking: thinkingShown,
   });
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
@@ -571,6 +580,8 @@ type LiveOptions = {
   reading?: ReadingContext;
   /** "Show commands" is off (7.11). */
   quiet?: boolean;
+  /** "Show thinking" is on (7.11). */
+  thinking?: boolean;
   connected: boolean;
   interactive: boolean;
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */

@@ -238,6 +238,46 @@ test.afterEach(async ({ desktopApp }, testInfo) => {
   await captureHostState(desktopApp.page, testInfo, desktopApp.server, desktopApp.rendererRequests);
 });
 
+/** The feed's and the files' requests; a check also asks once for the lists beside the feed (F-554). */
+const feedRequests = (server: { requests: string[] }) =>
+  server.requests.filter((path) => path !== "/whats-new.json");
+
+test("F-231 F-554: what the offered build adds reaches the pane through the preload, after the feed answered", async ({
+  desktopApp,
+}) => {
+  const { page, server, manifest } = desktopApp;
+  // The feed answers only when released, so the order is shown, not just the request log.
+  const feedHeld = Promise.withResolvers<void>();
+  server.route("/stable", async (request, response) => {
+    await feedHeld.promise;
+    json(manifest)(request, response);
+  });
+  server.route(
+    "/whats-new.json",
+    json({
+      format: 1,
+      builds: [{ version: "1.1.0", items: ["Settings shows what an update adds (#457)"] }],
+    }),
+  );
+  await page.keyboard.press("ControlOrMeta+,");
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  await expect(page.getByTestId("whats-new")).toHaveCount(0);
+  await page.getByRole("button", { name: "Check for Updates" }).click();
+  // Checking, with the feed's answer held: the lists are not asked for.
+  await expect(page.getByRole("group", { name: "Update status" })).toContainText("Checking");
+  await expect.poll(() => server.requests).toEqual(["/stable"]);
+  await page.waitForTimeout(500);
+  expect(server.requests).toEqual(["/stable"]);
+  feedHeld.resolve();
+  const section = page.getByTestId("whats-new");
+  await expect(section.locator(":scope > summary")).toHaveText("What's new in 1.1.0");
+  await expect(section).toHaveAttribute("open", "");
+  await expect(section.getByRole("listitem")).toHaveText([
+    "Settings shows what an update adds (#457)",
+  ]);
+  expect(server.requests).toEqual(["/stable", "/whats-new.json"]);
+});
+
 test("F-231: checks only the chosen feed and downloads matching bytes on request", async ({
   desktopApp,
 }) => {
@@ -255,7 +295,11 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   expect(server.requests).toEqual([]);
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toHaveText("Clawtrate 1.1.0 is offered by the update source.");
-  expect(server.requests).toEqual(["/stable"]);
+  expect(feedRequests(server)).toEqual(["/stable"]);
+  // F-554: what the update adds is asked for once, after the feed answered; this
+  // server has none, so the pane lists nothing and the offer stands.
+  await expect.poll(() => server.requests).toEqual(["/stable", "/whats-new.json"]);
+  await expect(page.getByTestId("whats-new")).toHaveCount(0);
   await expect(page.locator("#update-source")).toHaveText(
     "Downloads Clawtrate 1.1.0, only when you choose to.",
   );
@@ -275,7 +319,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await expect(bar).toHaveAttribute("max", String(body.length));
   const total = await page.evaluate((size) => size.toLocaleString(), body.length);
   await expect(line).toContainText(`of ${total} bytes`);
-  expect(server.requests).toEqual(["/stable", filePath]);
+  expect(feedRequests(server)).toEqual(["/stable", filePath]);
   await expect(line).not.toContainText("checksum");
   resume();
   const checking = "Checking the downloaded update for Clawtrate 1.1.0…";
@@ -293,12 +337,12 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await nightly.click();
   await expect(nightly).toBeChecked();
   await expect(line).toHaveText("Not checked yet.");
-  expect(server.requests).toEqual(["/stable", filePath]);
+  expect(feedRequests(server)).toEqual(["/stable", filePath]);
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toHaveText(
     "No newer Beta build was offered. Clawtrate 0.1.0 is still running.",
   );
-  expect(server.requests).toEqual(["/stable", filePath, "/nightly"]);
+  expect(feedRequests(server)).toEqual(["/stable", filePath, "/nightly"]);
 
   // Same size, different checksum. Only a new check can offer another download.
   const damaged = Buffer.from(body);
@@ -320,7 +364,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   server.route(filePath, (_req, res) => res.end(body));
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toHaveText("Clawtrate 1.1.0 is offered by the update source.");
-  expect(server.requests).toEqual([
+  expect(feedRequests(server)).toEqual([
     "/stable",
     filePath,
     "/nightly",
@@ -340,7 +384,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
     stage: "download",
     reason: "size-mismatch",
   });
-  expect(server.requests).toEqual([
+  expect(feedRequests(server)).toEqual([
     "/stable",
     filePath,
     "/nightly",
@@ -427,7 +471,7 @@ for (const stage of ["check", "download"] as const) {
       await page.keyboard.press("Enter");
       notes.push({ type: "focus after Enter", description: await focusedElement(page) });
       await expect(status).toBeFocused();
-      await expect.poll(() => server.requests).toEqual(["/stable"]);
+      await expect.poll(() => feedRequests(server)).toEqual(["/stable"]);
       let id = "";
       if (stage === "download") {
         await expect(download).toBeVisible();
@@ -486,7 +530,7 @@ for (const stage of ["check", "download"] as const) {
         const stale = await page.evaluate(checkStable);
         expect(stale.outcome).toBe("stale");
       }
-      expect(server.requests).toEqual(before);
+      expect(feedRequests(server)).toEqual(before);
       const seen = await page.evaluate(() => (window as unknown as ProbeWindow).seenUpdates);
       expect(seen).toContain("checking");
       if (stage === "download")
@@ -557,7 +601,7 @@ test("F-231: a stale check or download reconciles the screen without contacting 
   await expect(line).toContainText("1.1.0 is offered");
   await download.click();
   await expect(line).toContainText("1.2.0 is offered");
-  expect(server.requests).toEqual(["/stable", "/stable"]);
+  expect(feedRequests(server)).toEqual(["/stable", "/stable"]);
 });
 
 test("F-231: an older Check on the same track preserves the verified download", async ({
@@ -584,7 +628,7 @@ test("F-231: an older Check on the same track preserves the verified download", 
   const artifact = join(offerDir, files[0]!);
   expect(readFileSync(artifact).equals(body)).toBe(true);
   await expect(line).toHaveText("Not checked yet.");
-  expect(server.requests).toEqual(["/stable", filePath]);
+  expect(feedRequests(server)).toEqual(["/stable", filePath]);
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toContainText("its size and checksum match the update source.");
   await expect(page.getByRole("button", { name: /^(Check for Updates|Download)$/ })).toHaveCount(0);
@@ -595,7 +639,7 @@ test("F-231: an older Check on the same track preserves the verified download", 
   ).toEqual(verified.snapshot);
   await expect(page.getByRole("button", { name: "Restart to Update" })).toBeVisible();
   expect(readFileSync(artifact).equals(body)).toBe(true);
-  expect(server.requests).toEqual(["/stable", filePath]);
+  expect(feedRequests(server)).toEqual(["/stable", filePath]);
 });
 
 if (process.platform !== "win32")
@@ -634,7 +678,7 @@ if (process.platform !== "win32")
       await retry.click();
       await expect(line).toContainText("is offered by the update source.");
       await expect(notice).toHaveCount(0);
-      expect(server.requests).toEqual(["/stable"]);
+      expect(feedRequests(server)).toEqual(["/stable"]);
     } finally {
       chmodSync(profile, mode);
       await gateway.close();
@@ -734,7 +778,7 @@ for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
           .split("\n")
           .map((s) => JSON.parse(s)),
       ).toEqual([id]);
-      expect(server.requests).toEqual(["/stable", filePath]);
+      expect(feedRequests(server)).toEqual(["/stable", filePath]);
       expect(rendererRequests).toEqual([]);
     });
   });
@@ -754,13 +798,13 @@ test.describe("unsigned build", () => {
     );
     await expect(page.locator(".b-note")).toContainText("This build can't install updates itself.");
     await expect(page.getByRole("button", { name: "Download", exact: true })).toHaveCount(0);
-    expect(server.requests).toEqual(["/stable"]);
+    expect(feedRequests(server)).toEqual(["/stable"]);
     const check = page.getByRole("button", { name: "Check for Updates" });
     await expect(check).toHaveAccessibleDescription(
       "Checks 127.0.0.1 for a newer build, only when you choose to.",
     );
     await check.click();
-    await expect.poll(() => server.requests).toEqual(["/stable", "/stable"]);
+    await expect.poll(() => feedRequests(server)).toEqual(["/stable", "/stable"]);
     await expect(page.locator(".update-result dd")).toHaveText(
       "Clawtrate 1.1.0 is offered by the update source.",
     );
@@ -822,7 +866,7 @@ test.describe("installer refusals", () => {
       );
       await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
       requests.push("/stable", filePath);
-      expect(server.requests).toEqual(requests);
+      expect(feedRequests(server)).toEqual(requests);
     }
     expect(existsSync(join(profile, "restart-calls"))).toBe(false);
     expect(rendererRequests).toEqual([]);

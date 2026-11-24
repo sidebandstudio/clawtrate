@@ -7,12 +7,16 @@ import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } fro
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 
-async function openPane(page: Page, theme: "light" | "dark" = "light") {
+async function openPane(
+  page: Page,
+  theme: "light" | "dark" = "light",
+  section: "Conversation" | "Advanced" = "Conversation",
+) {
   await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, theme);
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("button", { name: "Conversation", exact: true }).click();
-  await expect(settings.getByRole("heading", { name: "Conversation", level: 3 })).toBeVisible();
+  await settings.getByRole("button", { name: section, exact: true }).click();
+  await expect(settings.getByRole("heading", { name: section, level: 3 })).toBeVisible();
   return settings;
 }
 
@@ -58,10 +62,16 @@ test.describe("the turn time limit", () => {
     ).toHaveValue("20");
   });
 
-  test("F-519: Settings has Show external channel chats, off by default, and a change reaches the host", async ({
+  test("F-519: Settings → Advanced has Show external channel chats, off by default, and a change reaches the host", async ({
     page,
   }) => {
-    const settings = await openPane(page);
+    const settings = await openPane(page, "light", "Advanced");
+    // Not in Conversation any more.
+    await settings.getByRole("button", { name: "Conversation", exact: true }).click();
+    await expect(settings.getByRole("switch", { name: "Show external channel chats" })).toHaveCount(
+      0,
+    );
+    await settings.getByRole("button", { name: "Advanced", exact: true }).click();
     const toggle = settings.getByRole("switch", { name: "Show external channel chats" });
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await expect(toggle).toHaveAccessibleDescription(/main conversation always shows/);

@@ -39,8 +39,10 @@ test.describe.serial("scenario check", () => {
       clients,
       (botId, key, message) => ownerAgent(inst, botId, key, message),
       `http://127.0.0.1:${instancePorts(inst).providerPort}`,
-      // Global setup starts this instance with `--with-images` (e2e/ui-pictures.spec.ts).
+      // Global setup starts this instance with `--with-images` and `--with-message-tool`
+      // (e2e/ui-pictures.spec.ts).
       recordedStartOptions(inst).images === true,
+      recordedStartOptions(inst).messageTool === true,
     );
     await prepareRecipient(harness);
   });
