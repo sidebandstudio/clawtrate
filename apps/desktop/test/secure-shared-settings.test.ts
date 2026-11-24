@@ -34,6 +34,14 @@ const box: SecretBox = {
   decrypt: async (data) => new TextDecoder().decode(flip(data)),
 };
 
+async function untilAsync(check: () => Promise<boolean>, timeoutMs = 4_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await sleep(10);
+  }
+}
+
 describe("clients sharing a secure store", () => {
   it("suspending after another client's pairing retired the earlier build's gateway token leaves it retired", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clawtrate-secure-shared-"));
@@ -67,7 +75,9 @@ describe("clients sharing a secure store", () => {
       // The other client pairs: saving its device token retires the earlier token in the store.
       await other.start();
       await until(() => other.state.connection.status === "connected");
-      await sleep(30);
+      await untilAsync(
+        async () => ((await record()) as { token: string | null } | null)?.token === null,
+      );
       expect(await record()).toEqual({ url: URL_A, token: null });
       await client.suspend();
       expect(await record()).toEqual({ url: URL_A, token: null, suspended: true });
