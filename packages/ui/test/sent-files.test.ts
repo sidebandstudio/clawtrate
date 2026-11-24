@@ -53,7 +53,7 @@ describe("F-557: your files on your message", () => {
     expect(kinds).toEqual(["sent-picture:not-kept"]);
     expect(html).toContain("shot.png");
     expect(html).toContain(
-      "Picture sent with this message. It shows only on the device that sent it, while the task is open.",
+      "Picture sent with this message. It shows on the device that sent it, until Clawtrate disconnects or is closed.",
     );
   });
 
