@@ -296,7 +296,8 @@ test.describe("F-557: a picture you attach", () => {
       timeout: 20_000,
     });
     await expect(there.getByTestId("sent-picture")).toContainText(
-      "shot.pngPicture sent with this message. The gateway doesn't give it back to show here.",
+      // Its name and size as the gateway recorded them, then the plain line.
+      `shot.png${Math.round(shot.length / 1024)} KBPicture sent with this message. The gateway doesn't give it back to show here.`,
     );
     await expect(there.locator(".bubble")).toHaveText(WORDS);
     await otherContext.close();
