@@ -1746,7 +1746,7 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
-  /** Run a storage read, or abandon it with `fallback` if `stop()` runs first. */
+  /** Run a read, or abandon it with `fallback` if `stop()` runs first. */
   private async raceStop<T>(stops: number, read: () => Promise<T>, fallback: T): Promise<T> {
     if (stops !== this.stops) return fallback;
     let stop!: () => void;
@@ -2230,8 +2230,10 @@ export class ClawtrateClient {
       }
       if (stops !== this.stops) return;
       // Counted once it opens: one whose open failed, or was stopped, leaves startup to open the
-      // saved gateway.
-      await this.open();
+      // saved gateway. A stop frees the queue at once: the open, still reading this device's
+      // token, gives up at its next check and writes nothing, so another client's change needn't
+      // wait for that read.
+      await this.raceStop(stops, () => this.open(), undefined);
       if (stops !== this.stops) return;
       this.connectionCommands += 1;
     });
