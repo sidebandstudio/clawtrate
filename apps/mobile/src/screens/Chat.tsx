@@ -318,13 +318,14 @@ export function Chat({
   const [contentHeight, setContentHeight] = useState(0);
   const [viewHeight, setViewHeight] = useState(0);
   // Where the title and each row sit in the scroll content, the reader's place
-  // among them, and whether the view is going back to that place after the
-  // chat changed width. The reader's own scroll ends the return.
+  // among them, and, while the view goes back to that place after the chat
+  // changed width, the width it is going back at. The return ends once the
+  // content has been laid out at that width, or when the reader scrolls.
   const boxes = useRef(new Map<string, { y: number; height: number }>());
   const bodyTop = useRef(0);
   const extent = useRef({ width: 0, view: 0, content: 0 });
   const place = useRef<ReadingPlace | null>(null);
-  const returning = useRef(false);
+  const returning = useRef<number | null>(null);
 
   // The task is open while its chat is on screen.
   useEffect(() => {
@@ -359,7 +360,7 @@ export function Chat({
       return [{ key, y: key === TASK_LINE ? box.y : bodyTop.current + box.y, height: box.height }];
     });
   const returnToPlace = () => {
-    if (!returning.current || !place.current) return;
+    if (returning.current === null || !place.current) return;
     const { view, content } = extent.current;
     const y = offsetFor(place.current, laidOut(), content - view);
     if (y !== null) scroller.current?.scrollTo({ y, animated: false });
@@ -471,7 +472,7 @@ export function Chat({
 
   const toEnd = () => {
     following.current = true;
-    returning.current = false;
+    returning.current = null;
     scroller.current?.scrollToEnd({ animated: true });
   };
 
@@ -499,10 +500,11 @@ export function Chat({
               contentSize.height - (contentOffset.y + layoutMeasurement.height) < NEAR_END;
             following.current = end;
             setAtEnd(end);
-            if (!returning.current) place.current = readingPlace(laidOut(), contentOffset.y);
+            if (returning.current === null)
+              place.current = readingPlace(laidOut(), contentOffset.y);
           }}
           onScrollBeginDrag={() => {
-            returning.current = false;
+            returning.current = null;
           }}
           onLayout={({ nativeEvent }) => {
             const { width, height } = nativeEvent.layout;
@@ -511,15 +513,25 @@ export function Chat({
             extent.current = { ...extent.current, width, view: height };
             // A new width rewraps every message: go back to the reader's place.
             if (was !== 0 && width !== was) {
-              returning.current = !following.current && place.current !== null;
+              returning.current = !following.current && place.current !== null ? width : null;
               returnToPlace();
             }
           }}
-          onContentSizeChange={(_width, height) => {
+          onContentSizeChange={(contentWidth, height) => {
             setContentHeight(height);
             extent.current = { ...extent.current, content: height };
             if (following.current) scroller.current?.scrollToEnd({ animated: false });
             else returnToPlace();
+            // The content has its new width: once its rows have reported where they
+            // moved (the same layout pass, delivered by the next frame), go back to
+            // the place one last time and stop, so later growth does not move the reader.
+            const target = returning.current;
+            if (target !== null && Math.abs(contentWidth - target) < 0.5)
+              requestAnimationFrame(() => {
+                if (returning.current !== target) return;
+                returnToPlace();
+                returning.current = null;
+              });
           }}
         >
           <View onLayout={(event) => measure(TASK_LINE, event)}>
