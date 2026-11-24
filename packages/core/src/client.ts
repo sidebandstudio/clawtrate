@@ -260,6 +260,7 @@ import {
   MAX_ID_CHARS,
   MAX_LINKED_RUNS,
   MAX_MCP_TOOLS,
+  MAX_BOTS,
   MAX_BUILTIN_TOOLS,
   MAX_LISTED_TASKS,
   MAX_MESSAGE_JSON_CHARS,
@@ -677,6 +678,10 @@ type ConnectionWrites = {
   grants: Map<string, { full: boolean; held: number } | null>;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
+
+/** The bot a task row belongs to: its key's, or the row's own `agentId`. */
+const rowBotId = (key: string, row: RawRecord) =>
+  botIdFromSessionKey(key) ?? (typeof row.agentId === "string" ? row.agentId : null);
 
 /**
  * A connection's token store. A rejection removes a token only through
@@ -1523,6 +1528,11 @@ export class ClawtrateClient {
   private readonly listings = new Set<Map<string, RawRecord>>();
   private refreshing = false;
   private refreshAgain = false;
+  /**
+   * Bots the gateway stopped listing while the task read now out was asked: that read's rows for
+   * them are dropped, so a stale answer can't bring a deleted bot's tasks back.
+   */
+  private readonly removedDuringRead = new Set<string>();
 
   /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
   private readonly trackedLimit: number;
@@ -5672,13 +5682,18 @@ export class ClawtrateClient {
     const removed = new Set<string>();
     for (const bot of this.state.bots) if (!present.has(bot.id)) removed.add(bot.id);
     this.store.update((state) => ({ ...state, bots }));
+    for (const id of present) this.removedDuringRead.delete(id);
     if (removed.size === 0) return;
-    // A task read already out can still list the removed bots' tasks: read them once more after it.
-    if (this.refreshing) this.refreshAgain = true;
+    // A task read already out can still list the removed bots' tasks: its rows for them are
+    // dropped when it lands, and the tasks are read once more after it.
+    if (this.refreshing) {
+      this.refreshAgain = true;
+      for (const id of removed)
+        if (this.removedDuringRead.size < MAX_BOTS) this.removedDuringRead.add(id);
+    }
     let pruned = false;
     for (const [key, row] of [...this.rows]) {
-      const botId =
-        botIdFromSessionKey(key) ?? (typeof row.agentId === "string" ? row.agentId : null);
+      const botId = rowBotId(key, row);
       if (!botId || !removed.has(botId)) continue;
       this.rows.delete(key);
       this.cancelAllQueued(key);
@@ -7732,9 +7747,15 @@ export class ClawtrateClient {
     try {
       do {
         this.refreshAgain = false;
+        // A read asked from here on lists only the bots the gateway has now.
+        this.removedDuringRead.clear();
         try {
           const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
           if (generation !== this.generation) return;
+          for (const [key, row] of rows) {
+            const botId = rowBotId(key, row);
+            if (botId && this.removedDuringRead.has(botId)) rows.delete(key);
+          }
           this.replaceRows(rows);
           this.setDiscovery({ partial });
         } catch (error) {
@@ -7743,6 +7764,7 @@ export class ClawtrateClient {
       } while (this.refreshAgain && generation === this.generation);
     } finally {
       this.refreshing = false;
+      this.removedDuringRead.clear();
     }
   }
 

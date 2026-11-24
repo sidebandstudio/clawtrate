@@ -120,12 +120,21 @@ test.describe("1440", () => {
         bots: state.bots.filter((bot) => bot.id !== "quartermaster"),
       })),
     );
+    const picker = view(page).getByRole("combobox", { name: "Bots" });
     await expect(view(page).getByLabel("Loading routines")).toBeVisible();
+    await expect(picker).toHaveValue("quartermaster");
     await page.evaluate(() =>
       (window as unknown as { releaseRoutineReads(): void }).releaseRoutineReads(),
     );
     await expect(view(page).getByTestId("routine-row")).toHaveCount(1);
     await expect(view(page).getByTestId("routine-row")).toContainText("Stores count");
+    await expect(picker).toHaveValue("quartermaster");
+    // All bots clears the filter.
+    await picker.selectOption({ label: "All bots" });
+    await expect(picker).toHaveValue("");
+    await expect(
+      view(page).getByTestId("routine-row").filter({ hasText: "Stores count" }),
+    ).toHaveCount(0);
   });
 
   test("F-191: the bot filter confirms completeness only after a successful complete read", async ({

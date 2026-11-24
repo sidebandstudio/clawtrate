@@ -123,7 +123,7 @@ describe("the bot list follows gateway config changes", () => {
     }
   });
 
-  it("F-558: a task read already out when a bot is deleted doesn't bring its tasks back", async () => {
+  it("F-558: a task read already out when a bot is deleted doesn't bring its tasks back, even if the next read fails", async () => {
     let agents: Array<Record<string, unknown>> = [
       { id: "main", identity: { name: "Juniper" } },
       { id: "otto", identity: { name: "Otto" } },
@@ -139,8 +139,10 @@ describe("the bot list follows gateway config changes", () => {
       list: { sessions: both, hasMore: false },
     });
     const client = await connect(gateway);
-    const answers: Array<(value: unknown) => void> = [];
-    gateway.handlers["sessions.list"] = () => new Promise((resolve) => answers.push(resolve));
+    const answers: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> =
+      [];
+    gateway.handlers["sessions.list"] = () =>
+      new Promise((resolve, reject) => answers.push({ resolve, reject }));
     try {
       expect(Object.keys(client.state.tasksByBot).sort()).toEqual(["main", "otto"]);
       gateway.emit("sessions.changed", {});
@@ -149,9 +151,12 @@ describe("the bot list follows gateway config changes", () => {
       agents = [{ id: "main", identity: { name: "Juniper" } }];
       gateway.emit("config.changed", { hash: "h1", ts: 1 });
       await until(() => !("otto" in client.state.tasksByBot));
-      answers[0]!({ sessions: both, hasMore: false });
+      // The stale answer lists Otto's task; it stays gone.
+      answers[0]!.resolve({ sessions: both, hasMore: false });
       await until(() => answers.length === 2);
-      answers[1]!({ sessions: both.slice(0, 1), hasMore: false });
+      expect(Object.keys(client.state.tasksByBot)).toEqual(["main"]);
+      // The read after it fails: nothing brings Otto's task back either.
+      answers[1]!.reject(new GatewayError({ code: "UNAVAILABLE", message: "busy" }));
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
       expect(Object.keys(client.state.tasksByBot)).toEqual(["main"]);
     } finally {
