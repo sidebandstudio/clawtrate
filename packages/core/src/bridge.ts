@@ -309,7 +309,7 @@ export type BridgeCommand =
   | { type: "removeBotFallbacks"; botId: string }
   /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
   | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
-  | { type: "declineBotName"; botId: string; name: string }
+  | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
   | {
       type: "setBotPicture";
@@ -1114,6 +1114,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "declineBotName",
         botId: botId(command.botId),
         name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "finishBot":
       return {
@@ -1901,7 +1902,7 @@ class ViewerSession implements BridgeSession {
       case "acceptBotName":
         return client.acceptBotName(command.botId, command.name, command.stamp);
       case "declineBotName":
-        return client.declineBotName(command.botId, command.name);
+        return client.declineBotName(command.botId, command.name, command.stamp);
       case "setBotPicture":
         return client.setBotPicture(command.botId, command.avatar, command.stamp);
       case "refreshCheckIns":

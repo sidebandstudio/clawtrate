@@ -24,6 +24,10 @@ export const MAX_NAME_DECLINES = 64;
 export const NAME_DECLINES_KEY = "clawtrate.bot-name-declines";
 /** Cards, and bots skipped, at most: one per bot the state lists (`MAX_BOTS`). */
 export const MAX_NAME_CARDS = 32;
+/** Runs whose end was checked, the latest kept: a repeated end of one of them reads nothing. */
+export const MAX_CHECKED_RUNS = 64;
+/** A run id longer than this isn't kept: its end is checked each time it comes. */
+export const MAX_CHECKED_RUN_CHARS = 256;
 /** What a card says of a Rename that didn't land, at most. */
 export const MAX_NAME_ERROR_CHARS = 512;
 
@@ -71,7 +75,8 @@ export function plainName(raw: string): string | null {
   const name = Array.from(spaced.replace(/\s+/g, " ").trim())
     .slice(0, MAX_BOT_NAME_CHARS)
     .join("")
-    .trim();
+    // Emphasis marks the gateway strips when it reads the line back, which a cut can leave at an end.
+    .replace(/^[*_`\s]+|[*_`\s]+$/g, "");
   return name || null;
 }
 
@@ -97,13 +102,20 @@ export type BotNamesContext = {
 };
 
 type Declines = Record<string, string>;
+/** A kept decline's key: a gateway's identity or address and a bot's id, each an id at most. */
+const MAX_DECLINE_KEY_CHARS = 2 * 1_024 + 1;
 const declineKey = (gateway: string, botId: string) => `${gateway}\n${botId}`;
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export class BotNames {
   private proposals = new Map<string, NameProposal>();
-  private readonly reading = new Set<string>();
+  /** The read under way for each bot, by a token of its own, so only that read ends it. */
+  private readonly reading = new Map<string, object>();
+  /** Not now's writes, one after another, each from the record the one before kept. */
+  private declining: Promise<void> = Promise.resolve();
   private readonly skipped = new Set<string>();
+  /** Runs already checked (`MAX_CHECKED_RUNS`), so one run reads the file once. */
+  private readonly checkedRuns = new Set<string>();
   private declines: Declines | null = null;
   /** Moves on with every reset, so a read begun before it changes nothing after. */
   private epoch = 0;
@@ -114,9 +126,18 @@ export class BotNames {
     this.ctx = ctx;
   }
 
-  /** A run of `botId` ended in an open task: read its name line once, and show a card when it differs. */
-  async afterRun(botId: string): Promise<void> {
+  /**
+   * A run of `botId` ended in an open task: read its name line once, and show a card when it
+   * differs. A run already checked (its end delivered twice) reads nothing again.
+   */
+  async afterRun(botId: string, runId?: string): Promise<void> {
     if (!this.ctx.canRename() || this.reading.has(botId) || this.skipped.has(botId)) return;
+    if (runId !== undefined && runId.length <= MAX_CHECKED_RUN_CHARS) {
+      if (this.checkedRuns.has(runId)) return;
+      this.checkedRuns.add(runId);
+      if (this.checkedRuns.size > MAX_CHECKED_RUNS)
+        this.checkedRuns.delete(this.checkedRuns.values().next().value!);
+    }
     const bot = this.ctx.bots().find((each) => each.id === botId);
     // The gateway's default bot takes its name in OpenClaw's own first run, which saves the config
     // too, and the gateway renames an implicit `main` only through its config (R13, R16).
@@ -126,14 +147,21 @@ export class BotNames {
     const epoch = this.epoch;
     // Where this read is made: a card drawn from it is for that gateway and that target only.
     const stamp = this.ctx.stamp();
-    this.reading.add(botId);
+    const token = {};
+    this.reading.set(botId, token);
     try {
       const answer = asRecord(
         asRecord(
           await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }),
         )?.file,
       );
-      if (epoch !== this.epoch) return;
+      // A card being renamed stays until its Rename settles; a read from before a reset or for
+      // another target counts for nothing.
+      const stale = () =>
+        epoch !== this.epoch ||
+        !sameStamp(this.ctx.stamp(), stamp) ||
+        this.proposals.get(botId)?.status === "renaming";
+      if (stale()) return;
       // A picture copied in isn't counted: Rename takes it out again.
       const content =
         typeof answer?.content === "string" ? answer.content.replace(PICTURE_LINE, "") : null;
@@ -148,13 +176,7 @@ export class BotNames {
       const raw = identityName(content);
       const name = raw === null ? null : plainName(raw);
       const declined = name !== null && (await this.declined(botId, name));
-      // A card being renamed stays until its Rename settles; a read from before a reset counts for nothing.
-      if (
-        epoch !== this.epoch ||
-        !sameStamp(this.ctx.stamp(), stamp) ||
-        this.proposals.get(botId)?.status === "renaming"
-      )
-        return;
+      if (stale()) return;
       const now = this.ctx.bots().find((each) => each.id === botId);
       // A name the bot already has, longer than a card's, is not a new one cut short.
       if (!now || name === null || name === now.name || name === plainName(now.name) || declined)
@@ -173,7 +195,7 @@ export class BotNames {
     } catch (error) {
       this.ctx.log(`could not read ${botId}'s IDENTITY.md: ${errorText(error)}`);
     } finally {
-      this.reading.delete(botId);
+      if (this.reading.get(botId) === token) this.reading.delete(botId);
       release();
     }
   }
@@ -214,6 +236,16 @@ export class BotNames {
       // Still the gateway the card was drawn for, on the connection that read it.
       await this.ctx.sameGateway(stamp);
       if (epoch !== this.epoch) throw new Error("The connection changed, so nothing was sent.");
+      // The list as it stands after that wait, with no wait between this look and the write.
+      const still = this.ctx.bots().find((each) => each.id === botId);
+      if (still?.name !== open.from) {
+        this.drop(botId);
+        throw new Error(
+          still
+            ? `${open.from} was renamed ${still.name} meanwhile, so nothing was sent.`
+            : `${open.from} is no longer on the gateway, so nothing was sent.`,
+        );
+      }
       await this.ctx.request("agents.update", { agentId: botId, name });
     } catch (error) {
       if (this.proposals.get(botId)?.status !== "renaming") throw error;
@@ -244,8 +276,9 @@ export class BotNames {
    * `agents.update` writes every identity field the config holds into IDENTITY.md, the picture
    * as an `Avatar` line of up to 32 KB that every run would carry (R38). Take that line out
    * again, held to the file just read, as New bot's first step does (`endFirstRun`); the picture
-   * stays in the config, which takes precedence over the file. The rename has landed whatever
-   * happens here, so a failure is only logged.
+   * stays in the config, which takes precedence over the file. Only a line with the config's own
+   * picture goes: a bot whose picture lives only in its file keeps it. The rename has landed
+   * whatever happens here, so a failure is only logged.
    */
   private async keepPictureOutOfFile(botId: string, epoch: number): Promise<void> {
     // Within the client's file reads like every other read: with none free it is left for the
@@ -256,6 +289,11 @@ export class BotNames {
       return;
     }
     try {
+      const config = asRecord(await this.ctx.request("config.get", {}));
+      const entry = asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId];
+      const picture = asRecord(asRecord(entry)?.identity)?.avatar;
+      if (epoch !== this.epoch || typeof picture !== "string" || !picture.startsWith("data:"))
+        return;
       const file = asRecord(
         asRecord(
           await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }),
@@ -266,7 +304,10 @@ export class BotNames {
       const hash =
         typeof file?.hash === "string" && /^[a-f0-9]{64}$/i.test(file.hash) ? file.hash : null;
       if (content === null || hash === null) return;
-      const kept = content.replace(PICTURE_LINE, "");
+      const kept = content
+        .split(/(?<=\n)/)
+        .filter((line) => line.replace(/\r?\n$/, "") !== `- Avatar: ${picture}`)
+        .join("");
       if (kept === content) return;
       await this.ctx.request("agents.files.set", {
         agentId: botId,
@@ -285,12 +326,18 @@ export class BotNames {
    * Not now: kept on this device for this bot and this name, only when it answers the card shown
    * now. A late answer to an earlier card changes nothing, so it can't replace a later Not now.
    */
-  async decline(botId: string, name: string): Promise<void> {
+  async decline(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
     const open = this.proposals.get(botId);
-    if (open?.name !== name || open.status === "renaming") return;
+    if (open?.name !== name || open.status === "renaming" || !sameStamp(open.stamp, stamp)) return;
     this.drop(botId);
     const gateway = this.ctx.gateway();
     if (!gateway) return;
+    const write = this.declining.then(() => this.keepDecline(gateway, botId, name));
+    this.declining = write.catch(() => {});
+    await write;
+  }
+
+  private async keepDecline(gateway: string, botId: string, name: string): Promise<void> {
     const declines = { ...(await this.loadDeclines()) };
     const key = declineKey(gateway, botId);
     delete declines[key];
@@ -325,6 +372,7 @@ export class BotNames {
     this.epoch += 1;
     this.reading.clear();
     this.skipped.clear();
+    this.checkedRuns.clear();
     if (this.proposals.size === 0) return;
     this.proposals = new Map();
     this.publish();
@@ -350,7 +398,12 @@ export class BotNames {
     try {
       const parsed = asRecord(JSON.parse((await this.ctx.storage.get(NAME_DECLINES_KEY)) ?? "{}"));
       for (const [key, value] of Object.entries(parsed ?? {}).slice(-MAX_NAME_DECLINES))
-        if (typeof value === "string" && value.length <= MAX_BOT_NAME_CHARS * 4) read[key] = value;
+        if (
+          key.length <= MAX_DECLINE_KEY_CHARS &&
+          typeof value === "string" &&
+          value.length <= MAX_BOT_NAME_CHARS * 4
+        )
+          read[key] = value;
     } catch {
       read = {};
     }

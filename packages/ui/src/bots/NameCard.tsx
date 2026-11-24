@@ -28,9 +28,8 @@ export function NameCard({
   const act = async (type: "acceptBotName" | "declineBotName") => {
     setBusy(true);
     try {
-      if (type === "acceptBotName")
-        await send({ type, botId: bot.id, name, stamp: proposal.stamp });
-      else await send({ type, botId: bot.id, name });
+      // Both carry the stamp of the read the card came from, so neither acts on another gateway's card.
+      await send({ type, botId: bot.id, name, stamp: proposal.stamp });
       onAnnounce(type === "acceptBotName" ? `Renamed to ${name}` : `${bot.name} keeps its name`);
     } catch (error) {
       onAnnounce(`Not renamed. ${error instanceof Error ? error.message : String(error)}`);

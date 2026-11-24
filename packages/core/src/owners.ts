@@ -56,7 +56,7 @@ import {
   MAX_QUEUED_INPUTS,
 } from "./computer.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
-import { MAX_NAME_ERROR_CHARS } from "./bot-names.ts";
+import { MAX_CHECKED_RUN_CHARS, MAX_CHECKED_RUNS, MAX_NAME_ERROR_CHARS } from "./bot-names.ts";
 import {
   MAX_WAITING_ID_CHARS,
   MAX_WAITING_MARKERS,
@@ -283,6 +283,11 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },
   "botNames.skipped": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  "botNames.checkedRuns": {
+    max: MAX_CHECKED_RUNS,
+    each: MAX_CHECKED_RUN_CHARS,
+    row: "bookkeeping",
+  },
   "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.

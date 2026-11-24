@@ -5364,8 +5364,8 @@ export class ClawtrateClient {
   }
 
   /** Not now on a name card: kept on this device for that bot and that name. */
-  declineBotName(botId: string, name: string): Promise<void> {
-    return this.botNames.decline(botId, name);
+  declineBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
+    return this.botNames.decline(botId, name, stamp);
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
@@ -8024,7 +8024,7 @@ export class ClawtrateClient {
       this.scheduleHistory(key);
       // Only while a viewer has the task open: a task kept for its unsettled work reads nothing.
       const botId = botIdFromSessionKey(key);
-      if (botId && this.openSessions.has(key)) void this.botNames.afterRun(botId);
+      if (botId && this.openSessions.has(key)) void this.botNames.afterRun(botId, payload.runId);
     }
   }
 
