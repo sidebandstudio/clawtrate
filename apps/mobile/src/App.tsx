@@ -117,7 +117,10 @@ function Screens() {
     ) : null;
   const chat =
     show.chat === "task" && shown.name === "task" && bot && task ? (
+      // Keyed by task: another task beside the list opens at its own start, while
+      // folding or unfolding with the same task keeps its view.
       <Chat
+        key={task.key}
         state={state}
         bot={bot}
         task={task}
