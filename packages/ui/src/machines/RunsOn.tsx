@@ -72,16 +72,25 @@ const OTHER_PLACEMENT_PARTS = PLACEMENT_PARTS.filter((part) => part !== "command
 
 // `commandsSeq` moves with every save on the gateway, `workspaceSeq` with every workspace save
 // (another bot's folder can now be the same as this one's), and `botSeqs` with a bot's own saves.
+// `pending` counts command saves out, which hold the command picker; `workspacePending` counts
+// workspace saves out, which hold nothing on screen but keep a redirect until they end.
 type SaveEntry = {
   pending: number;
+  workspacePending: number;
   commandsSeq: number;
   workspaceSeq: number;
   botSeqs: Record<string, number>;
 };
 
-const EMPTY_SAVE: SaveEntry = { pending: 0, commandsSeq: 0, workspaceSeq: 0, botSeqs: {} };
+const EMPTY_SAVE: SaveEntry = {
+  pending: 0,
+  workspacePending: 0,
+  commandsSeq: 0,
+  workspaceSeq: 0,
+  botSeqs: {},
+};
 
-/** A fallback scope whose saves were still out when its gateway was confirmed, and how many. */
+/** A fallback scope whose saves, of either kind, were still out when its gateway was confirmed, and how many. */
 type Redirect = { to: string; pending: number };
 
 type SavesState = {
@@ -107,10 +116,9 @@ export function promoteScope(state: SavesState, fallback: string, confirmed: str
   const carried = state.entries[fallback];
   if (!carried) return state;
   // Only a save still out under the fallback finishes through it; each connection has its own.
+  const out = carried.pending + carried.workspacePending;
   const redirects =
-    carried.pending > 0
-      ? { ...state.redirects, [fallback]: { to: confirmed, pending: carried.pending } }
-      : state.redirects;
+    out > 0 ? { ...state.redirects, [fallback]: { to: confirmed, pending: out } } : state.redirects;
   const existing = state.entries[confirmed] ?? EMPTY_SAVE;
   const botSeqs: Record<string, number> = { ...existing.botSeqs };
   for (const [botId, seq] of Object.entries(carried.botSeqs)) {
@@ -120,6 +128,7 @@ export function promoteScope(state: SavesState, fallback: string, confirmed: str
   delete entries[fallback];
   entries[confirmed] = {
     pending: existing.pending + carried.pending,
+    workspacePending: existing.workspacePending + carried.workspacePending,
     commandsSeq: Math.max(existing.commandsSeq, carried.commandsSeq),
     workspaceSeq: Math.max(existing.workspaceSeq, carried.workspaceSeq),
     botSeqs,
@@ -161,15 +170,36 @@ export function finishSave(state: SavesState, rawScope: string, botId: string): 
 const otherSeq = (entry: SaveEntry | undefined, botId: string) =>
   Math.max(entry?.botSeqs[botId] ?? 0, entry?.workspaceSeq ?? 0);
 
-/** A workspace save settled: every bot's commands and workspace are read again. */
-function settleSave(state: SavesState, rawScope: string): SavesState {
+export function beginWorkspaceSave(state: SavesState, rawScope: string): SavesState {
   const scope = resolveScope(state, rawScope);
   const was = state.entries[scope] ?? EMPTY_SAVE;
-  const seq = state.seq + 1;
   return {
     ...state,
+    entries: { ...state.entries, [scope]: { ...was, workspacePending: was.workspacePending + 1 } },
+    redirects: countRedirect(state, rawScope, 1),
+  };
+}
+
+/** A workspace save ended: when it may have changed a folder, every bot's commands and workspace are read again. */
+export function endWorkspaceSave(
+  state: SavesState,
+  rawScope: string,
+  refresh: boolean,
+): SavesState {
+  const scope = resolveScope(state, rawScope);
+  const was = state.entries[scope] ?? EMPTY_SAVE;
+  const seq = refresh ? state.seq + 1 : state.seq;
+  return {
     seq,
-    entries: { ...state.entries, [scope]: { ...was, commandsSeq: seq, workspaceSeq: seq } },
+    entries: {
+      ...state.entries,
+      [scope]: {
+        ...was,
+        workspacePending: Math.max(0, was.workspacePending - 1),
+        ...(refresh ? { commandsSeq: seq, workspaceSeq: seq } : {}),
+      },
+    },
+    redirects: countRedirect(state, rawScope, -1),
   };
 }
 
@@ -177,7 +207,7 @@ type PlacementSaves = {
   seq: number;
   entries: Record<string, SaveEntry>;
   begin: (scope: string, botId: string) => () => void;
-  settled: (scope: string) => void;
+  beginWorkspace: (scope: string) => (refresh: boolean) => void;
   commandsSeqOf: (scope: string) => number;
   otherSeqOf: (scope: string, botId: string) => number;
 };
@@ -224,9 +254,16 @@ export function PlacementSavesProvider({
       otherSeq(mirror.current.entries[resolveScope(mirror.current, scope)], botId),
     [],
   );
-  const settled = useCallback((scope: string) => {
-    mirror.current = settleSave(mirror.current, scope);
-    setState((current) => settleSave(current, scope));
+  const beginWorkspace = useCallback((scope: string) => {
+    mirror.current = beginWorkspaceSave(mirror.current, scope);
+    setState((current) => beginWorkspaceSave(current, scope));
+    let ended = false;
+    return (refresh: boolean) => {
+      if (ended) return;
+      ended = true;
+      mirror.current = endWorkspaceSave(mirror.current, scope, refresh);
+      setState((current) => endWorkspaceSave(current, scope, refresh));
+    };
   }, []);
   const begin = useCallback((scope: string, botId: string) => {
     mirror.current = beginSave(mirror.current, scope);
@@ -240,8 +277,15 @@ export function PlacementSavesProvider({
     };
   }, []);
   const value = useMemo<PlacementSaves>(
-    () => ({ seq: state.seq, entries: state.entries, begin, settled, commandsSeqOf, otherSeqOf }),
-    [state.seq, state.entries, begin, settled, commandsSeqOf, otherSeqOf],
+    () => ({
+      seq: state.seq,
+      entries: state.entries,
+      begin,
+      beginWorkspace,
+      commandsSeqOf,
+      otherSeqOf,
+    }),
+    [state.seq, state.entries, begin, beginWorkspace, commandsSeqOf, otherSeqOf],
   );
   return <PlacementSavesContext.Provider value={value}>{children}</PlacementSavesContext.Provider>;
 }
@@ -266,7 +310,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   const botSeq = otherSeq(entry, botId);
   const currentSeq = saves?.seq ?? 0;
   const savesBegin = saves?.begin ?? null;
-  const savesSettled = saves?.settled ?? null;
+  const savesBeginWorkspace = saves?.beginWorkspace ?? null;
   const commandsSeqOf = saves?.commandsSeqOf ?? null;
   const otherSeqOf = saves?.otherSeqOf ?? null;
   const connected = connection.status === "connected";
@@ -406,10 +450,12 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
       reload();
     };
   }, [savesBegin, scope, botId, reload]);
-  const settled = useCallback(() => {
-    if (savesSettled) savesSettled(scope);
-    else reload();
-  }, [savesSettled, scope, reload]);
+  const beginWorkspace = useCallback(() => {
+    if (savesBeginWorkspace) return savesBeginWorkspace(scope);
+    return (refresh: boolean) => {
+      if (refresh) reload();
+    };
+  }, [savesBeginWorkspace, scope, reload]);
   // On a disconnect or another session, what was read is dropped before anything is derived.
   if (held && (!connected || held.sessionId !== sessionId)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>
@@ -430,7 +476,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     commandsBatch.sessionId === sessionId &&
     commandsBatch.generation === generation &&
     commandsBatch.seq >= entry.commandsSeq;
-  return { read, reload, begin, settled, commandsCurrent };
+  return { read, reload, begin, beginWorkspace, commandsCurrent };
 }
 
 /** A mark of section 2: an icon and its words, never colour alone. */
@@ -544,7 +590,7 @@ export function RunsOnPage({
   read,
   reload,
   begin,
-  settled,
+  beginWorkspace,
   commandsCurrent,
   nameOf,
   connection,
@@ -559,8 +605,11 @@ export function RunsOnPage({
   reload: () => void;
   /** Counts a save as out until the returned function is called, on this page or one opened again. */
   begin: () => () => void;
-  /** Refreshes placement on this gateway after a save settles, even if this page unmounted. */
-  settled: () => void;
+  /**
+   * Counts a workspace save as out until the returned function is called, which refreshes
+   * placement on this gateway when asked, even if this page unmounted.
+   */
+  beginWorkspace: () => (refresh: boolean) => void;
   /** Whether no save is out and the commands part shown was read after the latest reload. */
   commandsCurrent: boolean;
   nameOf: (id: string) => string;
@@ -804,8 +853,8 @@ export function RunsOnPage({
           botName={botName}
           initial={editing}
           current={workspace.status === "ready" ? workspace.value.workspace : null}
+          begin={beginWorkspace}
           onDone={(saved) => {
-            if (saved) settled();
             if (!mounted.current) return;
             setEditing(null);
             if (saved) {
@@ -818,7 +867,6 @@ export function RunsOnPage({
               );
             }
           }}
-          onFailed={settled}
         />
       )}
 
@@ -1083,16 +1131,17 @@ function WorkspaceForm({
   botName,
   initial,
   current,
+  begin,
   onDone,
-  onFailed,
 }: {
   botId: string;
   botName: string;
   initial: string;
   /** The bot's workspace now, as the example beside the field. */
   current: string | null;
+  /** Counts the save as out until it ends; a refused save is read again too, as it may have made folders. */
+  begin: () => (refresh: boolean) => void;
   onDone: (saved: { workspace: string | null; asTyped: boolean } | null) => void;
-  onFailed: () => void;
 }) {
   const bridge = useBridge();
   const [value, setValue] = useState(initial);
@@ -1108,12 +1157,15 @@ function WorkspaceForm({
     }
     setBusy(true);
     setError(null);
+    const end = begin();
     try {
-      onDone(await bridge.invoke({ type: "setBotWorkspace", botId, path: value }));
+      const saved = await bridge.invoke({ type: "setBotWorkspace", botId, path: value });
+      end(saved !== null);
+      onDone(saved);
     } catch (failure) {
+      end(true);
       setError(failure instanceof Error ? failure.message : String(failure));
       field.current?.focus();
-      onFailed();
     } finally {
       setBusy(false);
     }

@@ -1314,6 +1314,98 @@ test("F-046: Otto's workspace save into Pip's folder makes Pip's open page say t
   );
 });
 
+test("F-274: Otto's workspace save still refreshes after a second connection to the same gateway", async ({
+  page,
+}) => {
+  type Save = "setCommandMachine" | "setBotWorkspace";
+  type Probe = {
+    clawtrateFixture: Fixture;
+    releaseSave: Partial<Record<Save, () => Promise<unknown>>>;
+    placementReads: Array<{ type: string; botId?: string; part?: string }>;
+  };
+  const patch = (changes: Partial<ClawtrateState["connection"]>) =>
+    page.evaluate((changes) => {
+      (window as unknown as Probe).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, ...changes },
+      }));
+    }, changes);
+  const releaseSave = (save: Save) =>
+    page.evaluate((save) => (window as unknown as Probe).releaseSave[save]!(), save);
+  const workspaceReads = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as Probe).placementReads.filter(
+          (read) => read.botId === "otto" && read.part === "workspace",
+        ).length,
+    );
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  const initial = await page.evaluate(
+    () => (window as unknown as Probe).clawtrateFixture.getState().connection,
+  );
+  expect(initial.gatewayId).toBeTruthy();
+  // A connection whose gateway isn't confirmed yet: its saves start under the connection's key.
+  await patch({ gatewayId: null, connectedAt: (initial.connectedAt ?? 0) + 1 });
+  await page.getByRole("button", { name: /^Where Otto runs: / }).click();
+  const picker = page.getByTestId("runs-on-machine");
+  const workspace = page.getByTestId("runs-on-workspace");
+  const oldPath = "/srv/clawtrate/workspaces/otto";
+  const newPath = "/srv/clawtrate/workspaces/otto-moved";
+  await expect(picker).toBeEnabled();
+  await expect(workspace).toHaveText(oldPath);
+  await page.evaluate(() => {
+    const probe = window as unknown as Probe;
+    const invoke = probe.clawtrateFixture.invoke.bind(probe.clawtrateFixture);
+    probe.releaseSave = {};
+    probe.placementReads = [];
+    probe.clawtrateFixture.invoke = (command) => {
+      const { type } = command;
+      if (type === "readPlacement") probe.placementReads.push(command);
+      if (type === "setCommandMachine" || type === "setBotWorkspace")
+        return new Promise((resolve, reject) => {
+          probe.releaseSave[type] = () =>
+            invoke(command).then(
+              (result) => {
+                resolve(result);
+                return result;
+              },
+              (error) => {
+                reject(error);
+                throw error;
+              },
+            );
+        });
+      return invoke(command);
+    };
+  });
+  // Both saves go out on that connection.
+  await picker.click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await expect(picker).toBeDisabled();
+  await page.getByRole("button", { name: "Change…" }).click();
+  await page.getByRole("textbox", { name: /path on the gateway's machine/ }).fill(newPath);
+  await page.getByRole("button", { name: "Save folder" }).click();
+  await expect
+    .poll(() => page.evaluate(() => Object.keys((window as unknown as Probe).releaseSave).sort()))
+    .toEqual(["setBotWorkspace", "setCommandMachine"]);
+  // The gateway is confirmed while both are out, and the command save ends first.
+  await patch({ gatewayId: initial.gatewayId });
+  await expect(picker).toBeDisabled();
+  await releaseSave("setCommandMachine");
+  await expect(picker).toHaveAccessibleName("Otto's command machine: The gateway's machine");
+  await expect.poll(workspaceReads).toBe(1);
+  await expect(workspace).toHaveText(oldPath);
+  // A reconnect to the same gateway, with another connection key, reads the old folder again.
+  const beforeReconnect = await workspaceReads();
+  await patch({ connectedAt: (initial.connectedAt ?? 0) + 2 });
+  await expect(page.getByRole("button", { name: "Change…" })).toBeVisible();
+  await expect.poll(workspaceReads).toBeGreaterThan(beforeReconnect);
+  await expect(workspace).toHaveText(oldPath);
+  // The workspace save ends now: the page reads the folder again and shows the new one.
+  expect(await releaseSave("setBotWorkspace")).toEqual({ workspace: newPath, asTyped: true });
+  await expect(workspace).toHaveText(newPath);
+});
+
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
   page,
 }) => {

@@ -3,7 +3,14 @@
 // carries it is dropped once no such save is out.
 
 import { describe, expect, it } from "vitest";
-import { beginSave, EMPTY_SAVES, finishSave, promoteScope } from "../src/machines/RunsOn.tsx";
+import {
+  beginSave,
+  beginWorkspaceSave,
+  EMPTY_SAVES,
+  endWorkspaceSave,
+  finishSave,
+  promoteScope,
+} from "../src/machines/RunsOn.tsx";
 
 describe("placement saves (F-046)", () => {
   it("keeps a fallback redirect only while a save begun under it is out, across reconnects", () => {
@@ -19,6 +26,22 @@ describe("placement saves (F-046)", () => {
       expect(state.entries["gateway:g1"]!.pending).toBe(0);
       expect(state.redirects).toEqual({});
     }
+  });
+
+  it("F-274: a workspace save out keeps the redirect after the command save ends, and settles on the confirmed gateway", () => {
+    let state = beginWorkspaceSave(beginSave(EMPTY_SAVES, "connection:a"), "connection:a");
+    state = promoteScope(state, "connection:a", "gateway:g1");
+    expect(state.redirects["connection:a"]).toEqual({ to: "gateway:g1", pending: 2 });
+    state = finishSave(state, "connection:a", "otto");
+    expect(state.redirects["connection:a"]).toEqual({ to: "gateway:g1", pending: 1 });
+    // Only command saves hold the picker.
+    expect(state.entries["gateway:g1"]!.pending).toBe(0);
+    const before = state.entries["gateway:g1"]!.workspaceSeq;
+    state = endWorkspaceSave(state, "connection:a", true);
+    expect(state.redirects).toEqual({});
+    expect(state.entries["gateway:g1"]!.workspacePending).toBe(0);
+    expect(state.entries["gateway:g1"]!.workspaceSeq).toBeGreaterThan(before);
+    expect(state.entries["connection:a"]).toBeUndefined();
   });
 
   it("keeps a redirect until the last of its saves ends", () => {
