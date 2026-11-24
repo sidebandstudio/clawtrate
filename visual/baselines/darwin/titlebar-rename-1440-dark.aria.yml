@@ -1,0 +1,11 @@
+- dialog "Name this gateway":
+  - heading "Name this gateway" [level=2]
+  - paragraph: The name shows in the sidebar instead of the address. It stays on this device and is never sent to the gateway.
+  - paragraph: ws://127.0.0.1:18789
+  - text: Name
+  - textbox "Name Leave it empty to show the address.":
+    - /placeholder: For example, Devbox
+    - text: Devbox
+  - text: Leave it empty to show the address.
+  - button "Cancel"
+  - button "Save"

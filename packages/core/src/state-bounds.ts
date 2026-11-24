@@ -703,6 +703,7 @@ const connection = object<ConnectionState>()({
   status: ENUM,
   gatewayUrl: text(MAX_GATEWAY_URL_CHARS),
   gatewayId: ID,
+  gatewayName: NAME,
   serverVersion: NAME,
   protocol: NUMBER,
   scopes: list(MAX_SCOPES, NAME),

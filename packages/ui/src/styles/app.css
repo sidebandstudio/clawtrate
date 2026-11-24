@@ -349,8 +349,8 @@ textarea {
   --presence-surface: var(--bg-rail);
 }
 
-/* new: search and new, top right. The empty left part drags the window and
-   leaves room for the macOS window controls. */
+/* new: search and new, top right. The empty left part drags the window. In the
+   one-pane layout it starts with the brand and the update button (titlebar.css). */
 .rail-top {
   display: flex;
   flex: none;
@@ -359,23 +359,10 @@ textarea {
   gap: 8px;
   /* The same band the conversation's floating controls sit in, so the two panes
      share one top edge. On a read-only connection it holds no controls (no
-     search, no "+"), and the design keeps the product's name out of the rail. */
+     search, no "+"). */
   height: var(--header-height);
   padding: 0 12px;
   -webkit-app-region: drag;
-}
-
-.rail-top .rail-status {
-  position: relative;
-  display: none;
-  margin-right: auto;
-}
-
-.rail-status .status-dot {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  box-shadow: 0 0 0 2px var(--bg-rail);
 }
 
 .bot-list {
@@ -1970,19 +1957,6 @@ textarea {
     display: grid;
   }
 
-  .rail-footer {
-    display: none;
-  }
-
-  .rail-top .rail-status {
-    display: grid;
-  }
-
-  .gateway-menu {
-    top: var(--header-height);
-    bottom: auto;
-  }
-
   .work-panel {
     width: 100%;
     border-radius: 0;
@@ -2104,11 +2078,6 @@ textarea {
 [data-input="touch"] .menu-item {
   min-height: var(--tap-min);
   font-size: var(--text-base);
-}
-
-/* macOS desktop: leave room for the window controls in the hidden title bar. */
-[data-host="desktop"][data-platform="darwin"] .rail-top {
-  padding-left: 84px;
 }
 
 /* Bot search: a floating pill that takes the rail's top band while it is open.
