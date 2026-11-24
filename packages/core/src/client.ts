@@ -8022,8 +8022,9 @@ export class ClawtrateClient {
     const phase = asRecord(payload.data)?.phase;
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
+      // Only while a viewer has the task open: a task kept for its unsettled work reads nothing.
       const botId = botIdFromSessionKey(key);
-      if (botId) void this.botNames.afterRun(botId);
+      if (botId && this.openSessions.has(key)) void this.botNames.afterRun(botId);
     }
   }
 
@@ -8624,6 +8625,10 @@ export class ClawtrateClient {
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
+    // The host pointed anew (Suspend, Disconnect, a fresh pairing): no name card or skipped file
+    // read before counts, even on a reconnect to the same address.
+    if (patch.target !== undefined && patch.target !== this.state.connection.target)
+      this.botNames.reset();
     const scrubbed = this.scrubConnection(patch);
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
   }

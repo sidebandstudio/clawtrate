@@ -199,6 +199,8 @@ export class BotNames {
     try {
       // The bot as the gateway lists it now: renamed or gone since the card was drawn, nothing is sent.
       await this.ctx.refreshBots();
+      // A reset meanwhile: the cards now are another gateway's, and this one sends and removes nothing.
+      if (epoch !== this.epoch) throw new Error("The connection changed, so nothing was sent.");
       const bot = this.ctx.bots().find((each) => each.id === botId);
       if (!bot) {
         this.drop(botId);
@@ -229,8 +231,11 @@ export class BotNames {
     } catch {
       // Shown below: the list did not confirm it.
     }
+    // Sent before a reset: it reached the gateway it was for, and leaves the cards of the next alone.
+    if (epoch !== this.epoch) return;
+    // Claimed only once the gateway's own list shows it.
     if (this.ctx.bots().find((each) => each.id === botId)?.name === name) return this.drop(botId);
-    const unconfirmed = "The gateway saved it, but its bot list doesn't show it yet.";
+    const unconfirmed = `Rename was sent, but the gateway's bot list doesn't show ${name} yet.`;
     set({ status: "failed", error: unconfirmed });
     throw new Error(unconfirmed);
   }
@@ -243,6 +248,13 @@ export class BotNames {
    * happens here, so a failure is only logged.
    */
   private async keepPictureOutOfFile(botId: string, epoch: number): Promise<void> {
+    // Within the client's file reads like every other read: with none free it is left for the
+    // next Rename, which a copied picture doesn't keep from coming.
+    const release = this.ctx.takeRead();
+    if (!release) {
+      this.ctx.log(`left the picture in ${botId}'s IDENTITY.md: no file read was free`);
+      return;
+    }
     try {
       const file = asRecord(
         asRecord(
@@ -264,13 +276,19 @@ export class BotNames {
       });
     } catch (error) {
       this.ctx.log(`could not take the picture out of ${botId}'s IDENTITY.md: ${errorText(error)}`);
+    } finally {
+      release();
     }
   }
 
-  /** Not now: kept on this device for this bot and this name. */
+  /**
+   * Not now: kept on this device for this bot and this name, only when it answers the card shown
+   * now. A late answer to an earlier card changes nothing, so it can't replace a later Not now.
+   */
   async decline(botId: string, name: string): Promise<void> {
     const open = this.proposals.get(botId);
-    if (open?.name === name && open.status !== "renaming") this.drop(botId);
+    if (open?.name !== name || open.status === "renaming") return;
+    this.drop(botId);
     const gateway = this.ctx.gateway();
     if (!gateway) return;
     const declines = { ...(await this.loadDeclines()) };

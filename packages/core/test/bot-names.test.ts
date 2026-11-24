@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { identityFile } from "../src/accounts-engine.ts";
 import {
   BotNames,
+  type BotNamesContext,
   identityName,
   MAX_BOT_NAME_CHARS,
   MAX_IDENTITY_CHARS,
@@ -118,6 +119,49 @@ function endRun(gateway: ReturnType<typeof namingGateway>["gateway"], key = KEY)
 }
 const reads = (gateway: ReturnType<typeof namingGateway>["gateway"]) =>
   gateway.calls("agents.files.get").length;
+const BOT: Bot = {
+  id: "new-bot",
+  name: "New bot",
+  emoji: null,
+  avatarUrl: null,
+  theme: null,
+  model: null,
+  isDefault: false,
+};
+const STAMP: GatewayStamp = { gatewayId: "gw-a", target: 1 };
+
+/** The engine alone, on a context of the test's own: its reads, writes, slots and list. */
+function engine(options: Partial<BotNamesContext> = {}) {
+  const bots: Bot[] = [{ ...BOT }];
+  const published: NameProposal[][] = [];
+  const out = {
+    bots,
+    published,
+    onUpdate: () => {},
+    engine: null as unknown as BotNames,
+    ctxRun: () => out.engine.afterRun("new-bot"),
+  };
+  out.engine = new BotNames({
+    bots: () => bots,
+    canRename: () => true,
+    gateway: () => STAMP.gatewayId,
+    stamp: () => STAMP,
+    sameGateway: async () => {},
+    storage: memoryStorage(),
+    takeRead: () => () => {},
+    refreshBots: async () => {},
+    missingScope: () => false,
+    publish: (each) => published.push(each),
+    log: () => {},
+    ...options,
+    request: async (method, params) => {
+      if (method === "agents.update") out.onUpdate();
+      return (options.request ?? (async () => ({})))(method, params);
+    },
+  });
+  return out;
+}
+
 /** Where the client is connected now: the stamp a card read now carries. */
 const here = (client: { state: { connection: ConnectionState } }) =>
   gatewayStamp(client.state.connection);
@@ -403,9 +447,16 @@ describe("F-552: a bot that takes a name", () => {
     // The bot list doesn't show the new name after the write.
     const list = gateway.handlers["agents.list"]!;
     gateway.handlers["agents.update"] = () => ({ ok: true, agentId: "new-bot" });
-    await expect(client.acceptBotName("new-bot", "Johnny", here(client))).rejects.toThrow(
-      /doesn't show it yet/,
+    const unconfirmed = await client.acceptBotName("new-bot", "Johnny", here(client)).then(
+      () => null,
+      (error: Error) => error.message,
     );
+    // Said as what happened: the update went out, and the list doesn't show the name.
+    expect(unconfirmed).toBe(
+      "Rename was sent, but the gateway's bot list doesn't show Johnny yet.",
+    );
+    expect(unconfirmed).not.toMatch(/saved/i);
+    expect(client.state.botNames![0]!.error).toBe(unconfirmed);
     expect(client.state.botNames![0]).toMatchObject({ status: "failed" });
     // The bot is gone when Rename reads the list again: nothing is sent, and it says so.
     gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents: [{ id: "main" }] });
@@ -681,6 +732,133 @@ describe("F-552: a bot that takes a name", () => {
     expect(published.at(-1)).toMatchObject([
       { name: "Johnny", stamp: { gatewayId: "gw-b", target: 1 } },
     ]);
+  });
+
+  it("F-552: a late Not now for an earlier name keeps the later one declined", async () => {
+    const { gateway, takeName } = namingGateway();
+    const storage = adminStorage();
+    const { client } = await openTask({ gateway, storage, held: ADMIN_SCOPES, key: KEY });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    takeName("Scout");
+    endRun(gateway);
+    await until(() => client.state.botNames?.[0]?.name === "Scout");
+    await client.declineBotName("new-bot", "Scout");
+    // Not now from a view still showing the Johnny card arrives after.
+    await client.declineBotName("new-bot", "Johnny");
+    expect(storage.data.get(NAME_DECLINES_KEY)).toBe(
+      JSON.stringify({ ["gw-a\nnew-bot"]: "Scout" }),
+    );
+    endRun(gateway);
+    await until(() => reads(gateway) === 3);
+    await sleep(30);
+    expect(client.state.botNames ?? []).toEqual([]);
+    client.stop();
+  });
+
+  it("F-552: a Rename cut off by a reset sends nothing and leaves the next gateway's card alone", async () => {
+    const listed = deferred<void>();
+    let bots: Bot[] = [{ ...BOT, name: "New bot" }];
+    const requests: string[] = [];
+    const names = engine({
+      bots: () => bots,
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+      refreshBots: () => listed.promise,
+    });
+    await names.ctxRun();
+    const renaming = names.engine.accept("new-bot", "Johnny", STAMP).then(
+      () => null,
+      (error: Error) => error.message,
+    );
+    // Another gateway meanwhile, whose bot of the same id has another name and its own card.
+    names.engine.reset();
+    bots = [{ ...BOT, name: "Scout" }];
+    await names.ctxRun();
+    expect(names.published.at(-1)).toMatchObject([{ name: "Johnny", from: "Scout" }]);
+    listed.resolve();
+    expect(await renaming).toBe("The connection changed, so nothing was sent.");
+    expect(requests).not.toContain("agents.update");
+    expect(names.published.at(-1)).toMatchObject([{ name: "Johnny", from: "Scout" }]);
+  });
+
+  it("F-552: the cleanup read waits for a free file read like every other, and the rename stands", async () => {
+    let free = 1;
+    const requests: string[] = [];
+    const names = engine({
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+      takeRead: () => {
+        if (free === 0) return null;
+        free -= 1;
+        return () => void (free += 1);
+      },
+    });
+    await names.ctxRun();
+    expect(requests).toEqual(["agents.files.get"]);
+    // Every read is in use when the update lands: the cleanup read isn't sent.
+    free = 0;
+    const bots = names.bots;
+    names.onUpdate = () => (bots[0] = { ...bots[0]!, name: "Johnny" });
+    await names.engine.accept("new-bot", "Johnny", STAMP);
+    expect(requests).toEqual(["agents.files.get", "agents.update"]);
+  });
+
+  it("F-552: Suspend drops the cards and the files skipped, and a reconnect reads afresh", async () => {
+    const { gateway, bot, takeName } = namingGateway();
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    // A file too long: read once, then skipped on this target.
+    const short = bot.file;
+    bot.file = short + "x".repeat(MAX_IDENTITY_CHARS);
+    endRun(gateway);
+    await until(() => reads(gateway) === 1);
+    bot.file = short;
+    takeName("Johnny");
+    endRun(gateway);
+    await sleep(50);
+    expect(reads(gateway)).toBe(1);
+    await client.suspend();
+    await client.retryNow();
+    await until(
+      () =>
+        client.state.connection.status === "connected" && client.state.discovery.status === "ready",
+    );
+    client.openSession(KEY);
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // Pointed anew: that card is gone with it.
+    await client.suspend();
+    expect(client.state.botNames ?? []).toEqual([]);
+    client.stop();
+  });
+
+  it("F-552: a run that ends after its task was closed reads nothing, though the task is kept for its message", async () => {
+    const { gateway, takeName } = namingGateway();
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    client.sendMessage(KEY, "Hi");
+    await until(() => gateway.calls("chat.send").length === 1);
+    client.closeSession(KEY);
+    endRun(gateway);
+    await sleep(80);
+    expect(reads(gateway)).toBe(0);
+    expect(client.state.botNames ?? []).toEqual([]);
+    client.stop();
   });
 
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
