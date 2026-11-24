@@ -203,12 +203,17 @@ export default async function globalSetup() {
   // when this run can include them.
   const computer = `e2e-${run}-computer`;
   const withComputer = runIncludes(process.argv, join(ROOT, "e2e/work-computer.spec.ts"));
-  const own = [name, sentinel, accounts, computer];
+  // Bot voice changes the system prompt of every bot it reaches and makes tasks of its own, so
+  // its check runs on a seeded instance of its own: nothing it leaves reaches another spec.
+  const voice = `e2e-${run}-voice`;
+  const withVoice = runIncludes(process.argv, join(ROOT, "e2e/bot-voice.spec.ts"));
+  const own = [name, sentinel, accounts, computer, voice];
   // The spec's own dev-gateway calls address this run's instance.
   process.env.CLAWTRATE_DEV_INSTANCE = name;
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
   process.env.CLAWTRATE_E2E_ACCOUNTS = accounts;
   if (withComputer) process.env.CLAWTRATE_E2E_COMPUTER = computer;
+  if (withVoice) process.env.CLAWTRATE_E2E_VOICE = voice;
 
   recoverDeadRuns(RECORDS, resetInstance);
 
@@ -351,7 +356,15 @@ export default async function globalSetup() {
         "--renew-timeout-ms",
         "20000",
       );
-    for (const instance of withComputer ? [name, accounts, computer] : [name, accounts]) {
+    // With the voice plugin and its conversation hook (F-527), seeded for its four bots.
+    if (withVoice) await startInstance(voice, "--with-plugin", "clawtrate-voice");
+    const instances = [
+      name,
+      accounts,
+      ...(withComputer ? [computer] : []),
+      ...(withVoice ? [voice] : []),
+    ];
+    for (const instance of instances) {
       const mine = listInstances().find((row) => row.name === instance);
       if (!mine?.gatewayRunning) throw new Error(`instance ${instance} is not running`);
       for (const port of [mine.gatewayPort, mine.providerPort]) {

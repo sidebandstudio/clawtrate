@@ -462,6 +462,11 @@ export type ClawtrateState = {
    */
   showChannelChats?: boolean;
   /**
+   * Counts the times the gateway said the voice plugin's setting may have changed: its
+   * `changed` event, or `plugins.changed`. Settings reads `readBotVoice` again when it moves.
+   */
+  voiceChanges?: number;
+  /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
    * does not read it.

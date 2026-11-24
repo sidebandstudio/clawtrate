@@ -74,6 +74,7 @@ import {
 import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
+import { voiceCommands, type VoiceParams } from "./voice.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 import { NO_SEARCH_PARAMS, searchCommands, withMessageIds, type SearchParams } from "./search.ts";
 
@@ -518,6 +519,7 @@ export function createFixtureBridge(
     computer?: ComputerParams;
     checkIns?: CheckInParams;
     search?: SearchParams;
+    voice?: VoiceParams;
     /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
     fullPairing?: boolean;
   } = {},
@@ -714,6 +716,12 @@ export function createFixtureBridge(
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
+  const voice = voiceCommands(
+    options.voice ?? { voice: null, save: null },
+    () => state.connection.canWrite,
+    () => gatewayStamp(state.connection),
+    now,
+  );
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
@@ -726,6 +734,10 @@ export function createFixtureBridge(
     if (checkIn) {
       sent.push(command);
       return checkIn;
+    }
+    if (command.type === "readBotVoice" || command.type === "setBotVoice") {
+      sent.push(command);
+      return voice(command);
     }
     if (
       command.type === "listMemory" ||

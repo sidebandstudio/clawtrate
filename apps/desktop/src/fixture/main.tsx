@@ -26,6 +26,7 @@ import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { AvatarSheet } from "./avatars.tsx";
+import { voiceParams } from "./voice.ts";
 import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
 import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
@@ -113,6 +114,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   usage: usageParams(params),
   machines: machineParams(params),
   search: searchParams(params),
+  voice: voiceParams(params),
   fullPairing: params.get("full") === "1",
 });
 if (params.has("hold")) bridge.hold();

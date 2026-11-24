@@ -3,6 +3,13 @@
 
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
+  readVoice,
+  setVoice,
+  VOICE_CHANGED_EVENT,
+  VOICE_GET,
+  type BotVoiceAnswer,
+} from "./voice.ts";
+import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
   GatewayProtocolClient,
@@ -1530,6 +1537,8 @@ export class ClawtrateClient {
    * views and the control. Tickets, streams, frames, generations and queued
    * input stay in it; only codes and plain facts reach the state.
    */
+  /** Whether the latest hello's `features.methods` lists the voice plugin's read, or null when it listed none. */
+  private voiceAdvertised: boolean | null = null;
   private readonly computer: ComputerViews = new ComputerViews({
     request: (method, params) => this.request(method, params),
     openStream: (url) => {
@@ -5711,6 +5720,70 @@ export class ClawtrateClient {
     );
   }
 
+  /**
+   * Whether the voice guide is added to the bots' prompts, read now from the gateway's voice
+   * plugin, stamped with where it was read. The identity is null when the gateway names none or
+   * the connection changed during the read, so it is never shown as another's.
+   */
+  async readBotVoice(): Promise<BotVoiceAnswer> {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === target &&
+      this.state.connection.status === "connected";
+    const gatewayId = await this.readGatewayIdentity();
+    this.confirmGatewayIdentity(gatewayId, alive);
+    const voice = await readVoice(
+      (method, params) => this.request(method, params),
+      this.voiceAdvertised,
+    );
+    return { ...voice, stamp: { gatewayId: alive() ? gatewayId : null, target } };
+  }
+
+  /** Settings reads the voice setting again (`state.voiceChanges`). */
+  private voiceChanged(): void {
+    this.store.update((state) => ({ ...state, voiceChanges: (state.voiceChanges ?? 0) + 1 }));
+  }
+
+  /**
+   * Turn the voice guide on or off for the bots on the gateway (operator.write). `stamp` is where
+   * the setting on screen was read: unless that gateway and target still hold, nothing is sent.
+   * Nor is it sent once `owner`, the viewer that asked, is withdrawn.
+   */
+  async setBotVoice(
+    on: boolean,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<BotVoiceAnswer> {
+    if (this.options.readOnly || !this.state.connection.canWrite)
+      throw new Error("Changing how the bots talk needs write access.");
+    // The connection the guard checks is the one the change goes out on: captured first,
+    // checked again after the guard, and the request refused if it closed or moved on.
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === stamp.target &&
+      this.state.connection.status === "connected";
+    await this.requireSameGateway(stamp);
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
+    this.checkNotWithdrawn(owner);
+    const voice = await setVoice(
+      (method, params) =>
+        protocol && alive()
+          ? protocol.request(method, params)
+          : Promise.reject(new Error(CONNECTION_CHANGED)),
+      on,
+    );
+    return { ...voice, stamp };
+  }
+
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
   listTaskFiles(key: string, options: FileReadOptions = {}): Promise<TaskFileList> {
     return this.fileRead((ctx) => listTaskFiles(ctx, key), options);
@@ -7421,9 +7494,11 @@ export class ClawtrateClient {
     // connection while control was held read the browser's leases again before offering anything.
     this.computer.reconnected();
     const methods = asRecord(hello.features)?.methods;
-    this.computer.hello(
-      Array.isArray(methods) ? methods.filter((m): m is string => typeof m === "string") : [],
-    );
+    const listed = Array.isArray(methods)
+      ? methods.filter((m): m is string => typeof m === "string")
+      : null;
+    this.voiceAdvertised = listed === null ? null : listed.includes(VOICE_GET);
+    this.computer.hello(listed ?? []);
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;
@@ -8128,6 +8203,12 @@ export class ClawtrateClient {
         for (const key of Object.keys(this.state.transcripts)) {
           if (this.tracked(key)) void this.readToolMap(key, generation);
         }
+        // The voice plugin may have come or gone, so the hello's list no longer says.
+        this.voiceAdvertised = null;
+        this.voiceChanged();
+        return;
+      case VOICE_CHANGED_EVENT:
+        this.voiceChanged();
         return;
       case "session.message": {
         const key = asRecord(event.payload)?.sessionKey;

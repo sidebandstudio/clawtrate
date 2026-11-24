@@ -1260,6 +1260,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   checkIns: CHECK_INS,
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
+  voiceChanges: NUMBER,
   usage: USAGE,
 });
 /** The listed-tasks pool, applied over the whole state. */
