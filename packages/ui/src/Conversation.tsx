@@ -398,6 +398,12 @@ function TranscriptView({
   let previous: number | null = null;
   const endingsBefore = live.endingsBefore;
   for (const item of transcript.items) {
+    if (item.role === "user") {
+      // What ended the turn before this message sits under that turn: above the time
+      // that introduces this message, which is not when that turn's work happened.
+      const before = endingsBefore.get(item.id);
+      if (before) rows.push(...before);
+    }
     const at = item.timestamp;
     if (
       at !== null &&
@@ -410,11 +416,6 @@ function TranscriptView({
       );
     }
     if (at !== null) previous = at;
-    if (item.role === "user") {
-      // What ended the turn before this message sits under that turn.
-      const before = endingsBefore.get(item.id);
-      if (before) rows.push(...before);
-    }
     rows.push(
       <CardSlot key={item.id} item={item}>
         {item.role === "system" ? (
