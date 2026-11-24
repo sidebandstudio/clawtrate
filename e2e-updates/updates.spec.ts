@@ -23,6 +23,7 @@ import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { setTimeout as pause } from "node:timers/promises";
 import { join } from "node:path";
 import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
+import { readSteps } from "../apps/desktop/test/update/screen-test-steps.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
 import { PRIVATE_DIRECTORIES_TIMEOUT_MS } from "../apps/desktop/src/main/private-update-directory.ts";
@@ -212,7 +213,7 @@ const test = base.extend<{
         });
         console.log(
           "Update status at failure",
-          JSON.stringify({ requests: server.requests, ...reading }),
+          JSON.stringify({ requests: server.requests, ...reading, steps: readSteps(profile) }),
         );
       }
     } finally {
@@ -235,7 +236,13 @@ test.afterEach(async ({ desktopApp }, testInfo) => {
   if (testInfo.status === "passed" || testInfo.status === "skipped") return;
   // A test that captured before its own cleanup keeps that snapshot.
   if (testInfo.attachments.some((each) => each.name === "host-state")) return;
-  await captureHostState(desktopApp.page, testInfo, desktopApp.server, desktopApp.rendererRequests);
+  await captureHostState(
+    desktopApp.page,
+    testInfo,
+    desktopApp.server,
+    desktopApp.rendererRequests,
+    desktopApp.profile,
+  );
 });
 
 /** The feed's and the files' requests; a check also asks once for the lists beside the feed (F-554). */
@@ -402,18 +409,21 @@ async function captureHostState(
   info: TestInfo,
   server: TestApp["server"],
   rendererRequests: string[],
+  profile: string,
 ) {
   try {
     const reading = await Promise.race([
       page.evaluate(() => (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get()),
       pause(10_000).then(() => null),
     ]).catch((cause) => ({ error: String(cause) }));
+    // Which step the host stopped in, and for how long.
+    const steps = readSteps(profile);
     const file = join(info.outputDir, "host-state.json");
     mkdirSync(info.outputDir, { recursive: true });
     writeFileSync(
       file,
       JSON.stringify(
-        { reading, requests: server.requests, rendererRequests, notes: info.annotations },
+        { reading, steps, requests: server.requests, rendererRequests, notes: info.annotations },
         null,
         2,
       ),
@@ -557,7 +567,7 @@ for (const stage of ["check", "download"] as const) {
       );
     } catch (error) {
       // Cleanup releases the held choice, so the failure's state is read first.
-      await captureHostState(page, test.info(), server, desktopApp.rendererRequests);
+      await captureHostState(page, test.info(), server, desktopApp.rendererRequests, profile);
       throw error;
     } finally {
       delayed.resolve();

@@ -3,11 +3,16 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { prepareUpdateDirectory as prepare } from "../../src/main/private-update-directory.ts";
+import { stepLog } from "./screen-test-steps.ts";
 export { clearUpdateDirectory } from "../../src/main/private-update-directory.ts";
 
 export async function prepareUpdateDirectory(root: string, offerId: string) {
   try {
-    await prepare(root, offerId);
+    await stepLog(dirname(root)).time(
+      "folders",
+      () => prepare(root, offerId),
+      () => "made",
+    );
   } catch (error) {
     if (error instanceof Error) {
       const detail = JSON.stringify({

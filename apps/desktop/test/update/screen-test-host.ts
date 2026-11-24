@@ -5,6 +5,7 @@ import type { UpdateInstaller } from "../../src/main/update/install.ts";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
+import { stepLog } from "./screen-test-steps.ts";
 
 declare const __TEST_FEED_PORT__: number;
 export async function startDesktopUpdates(
@@ -12,15 +13,23 @@ export async function startDesktopUpdates(
 ) {
   const origin = "http://127.0.0.1:" + __TEST_FEED_PORT__;
   const profile = dirname(options.downloadDir);
+  const steps = stepLog(profile);
   const mode = process.env.UPDATE_SCREEN_TEST_INSTALLER;
   const refusal = join(profile, "inspect-refusal");
   const installer: UpdateInstaller = {
     unavailable: mode === "unsigned" ? "build-not-signed" : null,
     ...(mode === "mac" || mode === "mac-unconfirmed" ? { completesOnQuit: true } : {}),
-    async inspect() {
-      while (existsSync(join(profile, "hold-inspect"))) await pause(20);
-      return existsSync(refusal) ? (readFileSync(refusal, "utf8") as UpdateInstallRefusal) : null;
-    },
+    inspect: () =>
+      steps.time(
+        "installer-inspect",
+        async () => {
+          while (existsSync(join(profile, "hold-inspect"))) await pause(20);
+          return existsSync(refusal)
+            ? (readFileSync(refusal, "utf8") as UpdateInstallRefusal)
+            : null;
+        },
+        (reason) => reason ?? "accepted",
+      ),
     async launch(_file, _signal, handed, submitted) {
       while (existsSync(join(profile, "hold-launch"))) await pause(20);
       if (mode === "manual") return "installer-failed";
@@ -37,6 +46,7 @@ export async function startDesktopUpdates(
       throw Error("Unexpected quit in screen test");
     },
     changed(snapshot) {
+      steps.state(snapshot.state);
       if (!existsSync(join(dirname(options.downloadDir), "hold-events"))) options.changed(snapshot);
     },
     store: {
