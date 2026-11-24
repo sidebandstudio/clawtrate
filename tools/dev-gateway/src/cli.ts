@@ -1885,6 +1885,21 @@ async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void>
 }
 
 export async function seed(inst: DevInstance, pairingOnly = false): Promise<void> {
+  if (pairingOnly && process.env.CLAWTRATE_CANCEL_MARKER) {
+    const marker = readMarker(inst.stateDir)!;
+    writeFileAtomic(
+      process.env.CLAWTRATE_CANCEL_MARKER,
+      JSON.stringify({
+        root: inst.checkout,
+        records: inst.runDir,
+        state: inst.stateDir,
+        gateway: marker.gatewayPid,
+        provider: marker.providerPid,
+        gatewayPort: marker.gatewayPort,
+        providerPort: marker.providerPort,
+      }),
+    );
+  }
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
   if (!(await gatewayHealthy(inst))) {

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -7,6 +7,11 @@ import { join } from "node:path";
 import { runCli } from "./run-cli.ts";
 
 const cli = createRequire(import.meta.url).resolve("@playwright/test/cli");
+if (process.platform === "win32" && !process.env.CLAWTRATE_PROOF_CHILD) {
+  process.exit(
+    spawnSync(process.execPath, ["scratch/pairing-proof.mjs"], { stdio: "inherit" }).status ?? 1,
+  );
+}
 const args = [cli, "test", "-c", "playwright.packaged.config.ts", ...process.argv.slice(2)];
 if (
   process.platform !== "win32" ||
