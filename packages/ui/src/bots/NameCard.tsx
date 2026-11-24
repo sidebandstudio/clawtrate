@@ -40,7 +40,9 @@ export function NameCard({
         if (declined) onAnnounce(`${bot.name} keeps its name`);
       }
     } catch (error) {
-      onAnnounce(`Not renamed. ${error instanceof Error ? error.message : String(error)}`);
+      // The engine's words say what happened: nothing sent, sent but not shown yet, or sent and
+      // not confirmed. None of them is "not renamed" for sure, so none is announced as that.
+      onAnnounce(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }

@@ -11,18 +11,20 @@
 //                    routinesnorev, filesfail (Pip's), filesnoroot (Juniper's),
 //                    filestimeout (Juniper's never answers), filescap (Otto's walk
 //                    stopped), slow (nothing answers), missing (a match not among
-//                    the loaded rows), unlisted (a match in a task the list never held)
+//                    the loaded rows), unlisted (a match in a task the list never held,
+//                    whose history holds it), gone (one whose history no longer does)
 //   routinepage=3    the routine page size, so a few routines page
 //   marlow=workspace Marlow's workspace can be verified too
 
-import type {
-  BridgeCommand,
-  ClawtrateState,
-  FileSearch,
-  MessageHit,
-  MessageSearch,
-  RoutineSearch,
-  Transcript,
+import {
+  emptyActivity,
+  type BridgeCommand,
+  type ClawtrateState,
+  type FileSearch,
+  type MessageHit,
+  type MessageSearch,
+  type RoutineSearch,
+  type Transcript,
 } from "@clawtrate/core";
 import { unkeptRoutines } from "./routines.ts";
 
@@ -160,6 +162,18 @@ function findMessages(
     });
     titles["agent:otto:x-old"] = "Old transcode settings";
   }
+  if (params.src.has("gone") && pieces.includes("transcode") && botId === null) {
+    hits.push({
+      sessionKey: "agent:otto:x-gone",
+      sessionId: "otto-x-gone",
+      messageId: "m-gone-1",
+      botId: "otto",
+      role: "assistant",
+      timestamp: Date.now() - 500 * 86_400_000,
+      snippet: "The transcode queue was cleared by hand.",
+    });
+    titles["agent:otto:x-gone"] = "Old transcode queue";
+  }
   return {
     hits: hits.slice(0, 25),
     titles,
@@ -265,4 +279,46 @@ export function searchCommands(
         return undefined;
     }
   };
+}
+
+/** A loaded history the task list doesn't hold, as `chat.history` answers for its key. */
+function history(sessionKey: string, items: Transcript["items"]): Transcript {
+  return {
+    ...emptyActivity,
+    linkedRuns: {},
+    interSession: [],
+    mcpTools: {},
+    sessionKey,
+    status: "ready",
+    items,
+    error: null,
+    hasMore: false,
+    live: null,
+    loadedAt: 0,
+  };
+}
+
+/** The histories of the matches in tasks the list doesn't hold (`unlisted`, `gone`). */
+export function searchHistories(params: SearchParams): Record<string, Transcript> {
+  const out: Record<string, Transcript> = {};
+  if (params.src.has("unlisted"))
+    out["agent:otto:x-old"] = history("agent:otto:x-old", [
+      {
+        id: "x-old-1",
+        role: "assistant",
+        timestamp: Date.now() - 400 * 86_400_000,
+        model: null,
+        messageId: "m-x",
+        blocks: [
+          {
+            kind: "text",
+            text: "The transcode settings from last year are in the old notes folder.",
+            messageId: "m-x-1",
+          },
+        ],
+      },
+    ]);
+  // Its conversation no longer holds the match.
+  if (params.src.has("gone")) out["agent:otto:x-gone"] = history("agent:otto:x-gone", []);
+  return out;
 }
