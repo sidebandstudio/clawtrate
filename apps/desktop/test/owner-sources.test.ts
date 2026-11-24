@@ -169,6 +169,8 @@ const ALLOWED: Record<string, string> = {
     "one history read; the run ids active before it was asked, at most the named ids', dropped when it returns",
   "packages/core/src/client.ts:readRecipientRuns>inferred":
     "one history read; the run ids whose end that read does not establish, at most 40 messages' runs, dropped when it returns",
+  "packages/core/src/client.ts:settleUnnamedDelete>waiting":
+    "one read of a key; the ids of the task's messages waiting when a delete naming only the key was heard, at most `MAX_OUTBOX`, dropped when it answers",
   // The renderer's side of the web bridge, in a browser tab, not the host.
   "packages/core/src/remote-bridge.ts:createRemoteBridge>listeners":
     "renderer; one per subscription, removed by its unsubscribe",
