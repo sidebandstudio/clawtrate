@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { artifactName, makeFeed } from "../packaging/feed.ts";
 import {
@@ -255,7 +256,7 @@ describe("the constants the build writes for the update engine", () => {
         [
           "--input-type=module",
           "-e",
-          `import { checkoutCommit } from ${JSON.stringify(join(APP, "packaging/update-defines.ts"))};` +
+          `import { checkoutCommit } from ${JSON.stringify(pathToFileURL(join(APP, "packaging/update-defines.ts")).href)};` +
             `console.log(String(checkoutCommit(${JSON.stringify(outside)})));`,
         ],
         {
