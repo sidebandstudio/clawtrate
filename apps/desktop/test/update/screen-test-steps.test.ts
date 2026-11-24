@@ -66,6 +66,23 @@ it("names the step a download stopped in after its last byte, and how long it ha
   ]);
 });
 
+it("writes one row per state change rather than one per downloaded chunk", () => {
+  const steps = log();
+  steps.state(downloading(0));
+  steps.state(downloading(1_000));
+  steps.state(downloading(4_000_000, "moving"));
+  steps.state(downloading(4_000_000, "moving"));
+  steps.state({ kind: "checking" });
+  steps.state(downloading(0));
+  const rows = readFileSync(join(dir.path, "update-steps.jsonl"), "utf8").trim().split("\n");
+  expect(rows.map((row) => JSON.parse(row).state)).toEqual([
+    "downloading",
+    "moving",
+    "checking",
+    "downloading",
+  ]);
+});
+
 it("ends every step of a download that completes, and passes each step's result on", async () => {
   const steps = log();
   const readBack = await stalledDownload(steps);

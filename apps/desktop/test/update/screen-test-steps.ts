@@ -39,15 +39,21 @@ function threw(error: unknown): string {
 
 /** Appends to the log in the app's profile folder. */
 export function stepLog(profile: string, now: () => number = Date.now) {
+  let lastState: string | undefined;
   const write = (line: StepLine) => {
     try {
       appendFileSync(join(profile, STEP_LOG), JSON.stringify(line) + "\n");
+      return true;
     } catch {
       // The check under way outranks its diagnostics.
+      return false;
     }
   };
   return {
-    state: (state: DesktopUpdateState) => write({ at: now(), state: stateName(state) }),
+    state(state: DesktopUpdateState) {
+      const name = stateName(state);
+      if (name !== lastState && write({ at: now(), state: name })) lastState = name;
+    },
     async time<T>(step: string, work: () => Promise<T>, outcome: (value: T) => string) {
       write({ at: now(), step });
       let value: T;
