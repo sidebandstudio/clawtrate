@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { offsetFor, readingPlace, type RowBox } from "../src/presentation/reading-place.ts";
+import {
+  finishesReturn,
+  nextReturning,
+  offsetFor,
+  readingPlace,
+  returnOffset,
+  type RowBox,
+} from "../src/presentation/reading-place.ts";
 
 /** A chat at phone width: the title, then three messages with gaps between them. */
 const NARROW: RowBox[] = [
@@ -56,5 +63,61 @@ describe("a chat's reading place", () => {
         1000,
       ),
     ).toBeNull();
+  });
+});
+
+describe("going back to the reader's place", () => {
+  const place = readingPlace(NARROW, 310)!;
+  /** The chat changes from the narrow width to the wide one, the reader not at the end. */
+  const widened = (following = false) =>
+    nextReturning(null, { kind: "resized", from: 382, to: 669, following, place });
+
+  it("after a new width, once the content is laid out at it, a row that grows does not move the reader", () => {
+    let state = widened();
+    // Going back: the long message's same quarter, at the new width.
+    expect(state).toBe(669);
+    expect(returnOffset(state, place, WIDE, 1000)).toBe(240);
+    // Content still at the old width does not end the return; at the new width it does.
+    expect(finishesReturn(state, 382)).toBe(false);
+    expect(finishesReturn(state, 669)).toBe(true);
+    state = nextReturning(state, { kind: "laid-out", width: 669 });
+    expect(state).toBeNull();
+    // Then the message being read grows at the same width: the view stays where it is.
+    const grown = WIDE.map((row) => (row.key === "bot:2" ? { ...row, height: 320 } : row));
+    expect(finishesReturn(state, 669)).toBe(false);
+    expect(returnOffset(state, place, grown, 1000)).toBeNull();
+    expect(
+      nextReturning(state, { kind: "resized", from: 669, to: 669, following: false, place }),
+    ).toBeNull();
+  });
+
+  it("does not start at the first layout, at the end of the chat, or with no place yet", () => {
+    expect(
+      nextReturning(null, { kind: "resized", from: 0, to: 669, following: false, place }),
+    ).toBeNull();
+    expect(widened(true)).toBeNull();
+    expect(
+      nextReturning(null, { kind: "resized", from: 382, to: 669, following: false, place: null }),
+    ).toBeNull();
+  });
+
+  it("ends when the reader scrolls, before the content is laid out", () => {
+    const state = nextReturning(widened(), { kind: "reader-scrolled" });
+    expect(state).toBeNull();
+    expect(returnOffset(state, place, WIDE, 1000)).toBeNull();
+  });
+
+  it("follows a second change of width, which the first one's layout does not end", () => {
+    let state = nextReturning(widened(), {
+      kind: "resized",
+      from: 669,
+      to: 382,
+      following: false,
+      place,
+    });
+    expect(state).toBe(382);
+    state = nextReturning(state, { kind: "laid-out", width: 669 });
+    expect(state).toBe(382);
+    expect(nextReturning(state, { kind: "laid-out", width: 382 })).toBeNull();
   });
 });

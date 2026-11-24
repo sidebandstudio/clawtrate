@@ -19,9 +19,12 @@ import {
 } from "../presentation/conversation-words.ts";
 import { useEffect, useRef, useState, type ComponentRef, type ReactNode } from "react";
 import {
-  offsetFor,
+  finishesReturn,
+  nextReturning,
   readingPlace,
+  returnOffset,
   type ReadingPlace,
+  type Returning,
   type RowBox,
 } from "../presentation/reading-place.ts";
 import { Pressable, ScrollView, View, type LayoutChangeEvent } from "react-native";
@@ -319,13 +322,13 @@ export function Chat({
   const [viewHeight, setViewHeight] = useState(0);
   // Where the title and each row sit in the scroll content, the reader's place
   // among them, and, while the view goes back to that place after the chat
-  // changed width, the width it is going back at. The return ends once the
-  // content has been laid out at that width, or when the reader scrolls.
+  // changed width, the width it is going back at (`nextReturning` says when
+  // the return starts and ends).
   const boxes = useRef(new Map<string, { y: number; height: number }>());
   const bodyTop = useRef(0);
   const extent = useRef({ width: 0, view: 0, content: 0 });
   const place = useRef<ReadingPlace | null>(null);
-  const returning = useRef<number | null>(null);
+  const returning = useRef<Returning>(null);
 
   // The task is open while its chat is on screen.
   useEffect(() => {
@@ -360,9 +363,8 @@ export function Chat({
       return [{ key, y: key === TASK_LINE ? box.y : bodyTop.current + box.y, height: box.height }];
     });
   const returnToPlace = () => {
-    if (returning.current === null || !place.current) return;
     const { view, content } = extent.current;
-    const y = offsetFor(place.current, laidOut(), content - view);
+    const y = returnOffset(returning.current, place.current, laidOut(), content - view);
     if (y !== null) scroller.current?.scrollTo({ y, animated: false });
   };
   const measure = (key: string, event: LayoutChangeEvent) => {
@@ -472,7 +474,7 @@ export function Chat({
 
   const toEnd = () => {
     following.current = true;
-    returning.current = null;
+    returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
     scroller.current?.scrollToEnd({ animated: true });
   };
 
@@ -504,7 +506,7 @@ export function Chat({
               place.current = readingPlace(laidOut(), contentOffset.y);
           }}
           onScrollBeginDrag={() => {
-            returning.current = null;
+            returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
           }}
           onLayout={({ nativeEvent }) => {
             const { width, height } = nativeEvent.layout;
@@ -512,10 +514,14 @@ export function Chat({
             const was = extent.current.width;
             extent.current = { ...extent.current, width, view: height };
             // A new width rewraps every message: go back to the reader's place.
-            if (was !== 0 && width !== was) {
-              returning.current = !following.current && place.current !== null ? width : null;
-              returnToPlace();
-            }
+            returning.current = nextReturning(returning.current, {
+              kind: "resized",
+              from: was,
+              to: width,
+              following: following.current,
+              place: place.current,
+            });
+            returnToPlace();
           }}
           onContentSizeChange={(contentWidth, height) => {
             setContentHeight(height);
@@ -526,11 +532,14 @@ export function Chat({
             // moved (the same layout pass, delivered by the next frame), go back to
             // the place one last time and stop, so later growth does not move the reader.
             const target = returning.current;
-            if (target !== null && Math.abs(contentWidth - target) < 0.5)
+            if (finishesReturn(target, contentWidth))
               requestAnimationFrame(() => {
                 if (returning.current !== target) return;
                 returnToPlace();
-                returning.current = null;
+                returning.current = nextReturning(target, {
+                  kind: "laid-out",
+                  width: contentWidth,
+                });
               });
           }}
         >
