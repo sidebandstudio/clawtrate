@@ -101,11 +101,16 @@ const exactId = (value: unknown): string | null => {
   return id !== null && id.length <= MAX_ID_CHARS ? id : null;
 };
 
-/** `sessions.search` across bots, or one bot's, with the task list's own filters (search.md §5). */
+/**
+ * `sessions.search` across bots, or one bot's, with the task list's own filters (search.md §5).
+ * `hidden` leaves out a hit whose session the list hides, decided from the session's row as the
+ * gateway sends it with the matches, or null when it sent none.
+ */
 export async function searchMessages(
   request: Request,
   query: string,
   botId: string | null,
+  hidden?: (sessionKey: string, row: RawRecord | null) => boolean,
 ): Promise<MessageSearch> {
   const reply = asRecord(
     await request("sessions.search", {
@@ -118,7 +123,22 @@ export async function searchMessages(
       limit: MESSAGE_SEARCH_LIMIT,
     }),
   );
-  return readMessageSearch(reply);
+  const found = readMessageSearch(reply);
+  if (!hidden) return found;
+  // The gateway sends the row of each session its matches came from (`sessions`, at most 25).
+  const rows = new Map<string, RawRecord>();
+  for (const raw of Array.isArray(reply?.sessions) ? reply.sessions : []) {
+    const row = asRecord(raw);
+    const key = exactId(row?.key);
+    if (row && key) rows.set(key, row);
+  }
+  const hits = found.hits.filter(
+    (hit) => !hidden(hit.sessionKey, rows.get(hit.sessionKey) ?? null),
+  );
+  const titles = Object.fromEntries(
+    Object.entries(found.titles).filter(([key]) => hits.some((hit) => hit.sessionKey === key)),
+  );
+  return { ...found, hits, titles };
 }
 
 export function readMessageSearch(reply: RawRecord | null): MessageSearch {

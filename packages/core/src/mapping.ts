@@ -3,6 +3,7 @@
 // trusted, so a newer gateway adding or changing fields cannot crash the UI.
 
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
+import { isOtherToolSession } from "./origins.ts";
 import { gatewayPreviewOfNote, isSkillChangeNote } from "./skill-notes.ts";
 import type {
   Bot,
@@ -208,6 +209,7 @@ export function mapSessionRow(row: RawRecord): Task | null {
     ...(row.markedUnreadAt !== undefined ? { unreadMarker: num(row.markedUnreadAt) } : {}),
     ...contextOf(row),
     ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
+    ...(isOtherToolSession(row) ? { otherTool: true as const } : {}),
     ...(channel ? { channel } : {}),
   };
 }
@@ -234,17 +236,19 @@ export function sessionRowsFromList(result: unknown): RawRecord[] {
 
 /**
  * Group tasks under their bot: pinned first, then newest first. Chats from an
- * external channel are left out unless `showChannelChats`, so nothing derived
- * from the list (a bot's preview, unread, recency, the badge) counts them.
+ * external channel are left out unless `showChannelChats`, and sessions another
+ * tool opened unless `showOtherToolSessions`, so nothing derived from the list
+ * (a bot's preview, unread, recency, the badge) counts them.
  */
 export function groupTasks(
   rows: Iterable<RawRecord>,
-  options: { showChannelChats?: boolean } = {},
+  options: { showChannelChats?: boolean; showOtherToolSessions?: boolean } = {},
 ): Record<string, Task[]> {
   const grouped: Record<string, Task[]> = {};
   for (const row of rows) {
     const task = mapSessionRow(row);
     if (!task || (task.channel && options.showChannelChats !== true)) continue;
+    if (task.otherTool && options.showOtherToolSessions !== true) continue;
     (grouped[task.botId] ??= []).push(task);
   }
   for (const tasks of Object.values(grouped)) {

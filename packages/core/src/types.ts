@@ -234,6 +234,12 @@ export type Task = {
    */
   effort?: string;
   /**
+   * Another tool opened this session, not the person (`origins.ts`): an API client, a scheduled
+   * run, a plugin. Present and true only then; such a task is listed only with
+   * `showOtherToolSessions`, or while it waits for the person.
+   */
+  otherTool?: true;
+  /**
    * The external channel the chat came in through (`discord`, `telegram`, …), as the
    * gateway names it; absent for Clawtrate's own tasks and a bot's main task (`channels.ts`).
    */
@@ -499,6 +505,12 @@ export type ClawtrateState = {
    * `changed` event, or `plugins.changed`. Settings reads `readBotVoice` again when it moves.
    */
   voiceChanges?: number;
+  /**
+   * "Show sessions from other tools": whether `tasksByBot` lists sessions an API client, a
+   * scheduled run or another tool opened with a bot (`Task.otherTool`). Off by default, kept by
+   * the host.
+   */
+  showOtherToolSessions?: boolean;
   /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host

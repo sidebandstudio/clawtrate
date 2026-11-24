@@ -1,6 +1,6 @@
 import type { Bot, Task } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { botLabel, summarize, taskState, visibleTasks } from "../src/selection.ts";
+import { botLabel, linkTarget, summarize, taskState, visibleTasks } from "../src/selection.ts";
 
 const bot: Bot = {
   id: "otto",
@@ -136,5 +136,18 @@ describe("F-020 F-426: a bot row's state", () => {
     // New activity in that task after it was seen brings the marker back.
     const later = [{ ...tasks[0]!, updatedAt: 9 }, tasks[1]!];
     expect(summarize(later, { dwf: 5 }, null).state).toBe("done-with-failures");
+  });
+});
+
+describe("F-563: a link to a task", () => {
+  it("F-563: opens a session the list hides, by its key, rather than the bot's newest task", () => {
+    const listed = [task("agent:otto:dashboard:a", 300)];
+    const hidden = "agent:otto:openai-user:client";
+    expect(linkTarget(listed, "otto", hidden, null)).toMatchObject({ key: hidden, botId: "otto" });
+    expect(linkTarget(undefined, "otto", hidden, null)).toMatchObject({ key: hidden });
+    // One the list holds opens from the list; one given with the link is kept.
+    expect(linkTarget(listed, "otto", "agent:otto:dashboard:a", null)).toBeNull();
+    const given = task(hidden, 5, { title: "From the routine" });
+    expect(linkTarget(listed, "otto", hidden, given)).toBe(given);
   });
 });

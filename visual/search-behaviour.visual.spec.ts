@@ -709,7 +709,7 @@ test("F-033: a routine past the ones this device keeps opens its page, read with
 test("F-033: a message that can't be shown in place says why, and the palette stays", async ({
   page,
 }) => {
-  await search(page, "transcode", `${BASE}&src=missing,unlisted`);
+  await search(page, "transcode", `${BASE}&src=missing,gone`);
   const missing = options(page, "messages").filter({ hasText: "back under 20 GB" });
   await missing.click();
   await expect(palette(page)).toBeVisible();
@@ -719,7 +719,8 @@ test("F-033: a message that can't be shown in place says why, and the palette st
   const latest = options(page, "messages").filter({ hasText: "Open the task at its latest" });
   await expect(latest).toBeVisible();
 
-  const unlisted = options(page, "messages").filter({ hasText: "Old transcode settings" });
+  // A task the list doesn't hold, whose history no longer holds the match.
+  const unlisted = options(page, "messages").filter({ hasText: "Old transcode queue" });
   await unlisted.click();
   await expect(group(page, "messages")).toContainText(
     "This task isn't in this device's task list, which keeps up to 500 tasks.",
