@@ -38,6 +38,7 @@ const ALLOWED: Record<string, string> = {
     "one call's paths, at most `MAX_STEP_PATHS`, returned to the caller",
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
   "packages/core/src/mapping.ts:NOT_FILES": "static, six block types that are never a file",
+  "packages/core/src/mapping.ts:KNOWN_FILES": "static, three block types that hand a file over",
   "packages/core/src/pictures.ts:SIGNATURES.image/png": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/jpeg": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/gif": "static, two byte signatures",

@@ -64,11 +64,12 @@
     - status: Saved.
     - text: reviews.txt 1 KB · text/plain
     - button "Save reviews.txt": Save
-    - alert: Couldn't save it. The gateway answered 404 for this file.
+    - status: Couldn't save it. The gateway answered 404 for this file.
     - text: trail-photos.zip 6.0 MB · application/zip
     - status: "Too large to save here: Clawtrate saves files up to 5 MB."
     - text: voice-note.wav 178 KB · audio/wav
     - button "Save voice-note.wav": Save
+    - status
     - text: gps-track.bin application/octet-stream
     - status: The gateway didn't hand this file over, so it can't be saved.
     - toolbar "Message actions":
@@ -79,6 +80,7 @@
       - button "More"
     - text: route.csv 1 KB · text/csv
     - button "Save route.csv": Save
+    - status
     - status
   - region "Access":
     - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
