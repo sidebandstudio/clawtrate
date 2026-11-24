@@ -1034,25 +1034,14 @@ for (const width of [320, 390, 430]) {
       await expect(pills).toHaveCount(2);
       for (const control of [...(await buttons.all()), ...(await pills.all())])
         expect(await unreached(control)).toEqual([]);
-      // The quote heads the reply's turn, just over its bubble. Across its whole width, no touch
-      // in its 44 px area reaches the bar. The bubble lies over the area's foot with the bar shut
-      // too, so the bar is all that is looked for.
+      // The quote heads the reply's turn, just over its bubble: each touch in its 44 px area
+      // reaches it, and across its whole width none reaches the bar.
       const quote = page
         .getByTestId("transcript-turn")
         .filter({ has: message })
         .getByTestId("reply-quote");
-      const onBar = await quote.evaluate((el) => {
-        const box = el.getBoundingClientRect();
-        const bar = el.closest(".turn")!.querySelector(".msg-actions")!;
-        const points: string[] = [];
-        for (let x = box.left + 0.5; x < box.right; x += 4)
-          for (const dy of [-21.5, -11, 0, 11, 21.5]) {
-            const y = box.top + box.height / 2 + dy;
-            if (bar.contains(document.elementFromPoint(x, y))) points.push(`${x},${y}`);
-          }
-        return points;
-      });
-      expect(onBar).toEqual([]);
+      expect(await unreached(quote)).toEqual([]);
+      expect(await onBar(quote, message.getByTestId("message-actions"))).toEqual([]);
     });
 
     for (const [access, scene, count] of [

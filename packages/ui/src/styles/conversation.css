@@ -1547,6 +1547,12 @@ button.reaction {
   position: relative;
 }
 
+/* The foot of a quote's 44 px area reaches into the top padding of its reply's bubble, whose
+   unit comes after it and would take those touches. Raised, the quote keeps its whole area. */
+[data-input="touch"] .reply-quote {
+  z-index: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .msg-actions {
     transition: none;
