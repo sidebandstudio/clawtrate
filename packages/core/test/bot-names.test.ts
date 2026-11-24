@@ -456,6 +456,38 @@ describe("F-552: a bot that takes a name", () => {
     client.stop();
   });
 
+  it("F-558 F-552: a card goes, with no reconnect, when another client renames the bot to its name or deletes the bot", async () => {
+    const { gateway, bot, takeName } = namingGateway();
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // Renamed to that name in another client: the gateway's config.changed is all this one gets.
+    bot.name = "Johnny";
+    gateway.emit("config.changed", { hash: "h1", ts: 1 });
+    await until(() => client.state.bots.find((each) => each.id === "new-bot")?.name === "Johnny");
+    expect(client.state.botNames).toEqual([]);
+
+    // A new name brings a new card; then another client deletes the bot.
+    takeName("Jonas");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "main",
+      agents: [{ id: "main", identity: { name: "Juniper" } }],
+    });
+    gateway.emit("config.changed", { hash: "h2", ts: 2 });
+    await until(() => !client.state.bots.some((each) => each.id === "new-bot"));
+    expect(client.state.botNames).toEqual([]);
+    expect(gateway.calls("agents.update")).toEqual([]);
+    client.stop();
+  });
+
   it("F-552: no read on a connection that can't rename or for the default bot; a bot not made in New bot gets a card, and a file too long is read once", async () => {
     for (const held of [READ_SCOPES, INTERACTIVE_SCOPES]) {
       const { gateway, takeName } = namingGateway();
