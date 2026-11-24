@@ -61,6 +61,7 @@ import {
   type AccountParams,
 } from "./accounts.ts";
 import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
+import { botDeleteCommands, NO_BOT_DELETE_PARAMS, type BotDeleteParams } from "./bot-delete.ts";
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
@@ -515,6 +516,7 @@ export function createFixtureBridge(
     routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
+    botDelete?: BotDeleteParams;
     computer?: ComputerParams;
     checkIns?: CheckInParams;
     search?: SearchParams;
@@ -713,6 +715,7 @@ export function createFixtureBridge(
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
+  const botDeleteCommand = botDeleteCommands(options.botDelete ?? NO_BOT_DELETE_PARAMS);
   const memory = memoryCommands(now);
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
@@ -754,6 +757,11 @@ export function createFixtureBridge(
       setAnswer = (next) => {
         if (request === latestAccessRequest) set(next);
       };
+    }
+    const botDelete = botDeleteCommand(command, () => state, set, deferred);
+    if (botDelete) {
+      sent.push(command);
+      return botDelete;
     }
     const machine = machineCommand(command, () => state, setAnswer, deferred);
     if (machine) {

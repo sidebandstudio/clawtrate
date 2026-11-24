@@ -70,6 +70,7 @@ export function WorkPanel({
   onShowQuestion,
   onRequestAccess,
   onOpenMachines,
+  onDeleteBot,
   accounts,
   bots,
   tasks,
@@ -100,6 +101,8 @@ export function WorkPanel({
   onRequestAccess: (() => void) | null;
   /** Settings, on Machines: where a node's settings are. */
   onOpenMachines?: (() => void) | undefined;
+  /** Delete bot…, from the bot's settings. */
+  onDeleteBot?: ((bot: Bot) => void) | undefined;
   accounts: AccountsState;
   bots: readonly Bot[];
   /** The bot's tasks, for a run in progress when its account changes. */
@@ -315,6 +318,7 @@ export function WorkPanel({
               info={info}
               visible={tab === "settings"}
               announce={announce}
+              onDeleteBot={onDeleteBot ? () => onDeleteBot(bot) : null}
             />
           ) : (
             <p className="work-note">Pick a bot to see its settings.</p>
