@@ -232,9 +232,15 @@ The run is failed if any image failed, otherwise inconclusive if any image was, 
 }
 ```
 
-`images` has one entry per image (`macos-15`, `macos-26`, `xcode-27`), so a caller can weigh the preview image apart. The run's step summary gives the same answer in one line per image.
+`images` has one entry per image (`macos-15`, `macos-26`, `xcode-27`), so a caller can weigh the preview image apart. The run's step summary gives the same answer in one line per image. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
 
-**For the release job.** Read `verdict` from `real-update-summary.json`, never the run's conclusion, because an inconclusive run is green. Pause releases on `failed`, on any other value, and when the run has no `real-update-summary` artifact (the `versions` job failed, or the run was cancelled before its summary). `inconclusive` means the feed already offers a newer release than the candidate, so the candidate was not tested. Don't pause for it, and don't record the candidate as checked: the newer release's own run checks what the feed now offers. Pass `previous` and `candidate` explicitly, so that a release published before the `versions` job starts can't change the pair. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
+**For the release job.** Read `real-update-summary.json`, never the run's conclusion, because an inconclusive run is green.
+
+- **Pause releases** when any image `failed`, when a verdict is anything other than the three values above, and when the run has no `real-update-summary` artifact (the `versions` job failed, or the run was cancelled before its summary). A failure on the preview image alone (`xcode-27`) is a warning, not a pause.
+- **A release counts as checked** when at least one image `passed` and none `failed`, whatever the run's own `verdict`. An image that started after a newer release was published ends `inconclusive`, which says nothing against an image that passed.
+- **A release with no passing image** isn't recorded as checked, and isn't a reason to pause by itself. After three such releases in a row, hold the next release until the newest one's check has a passing or failing image. Nothing newer is published in that time, so the images still waiting are offered the candidate.
+- **A run that hasn't finished** when the release job stops waiting is read when it does finish: a late pass still counts, and a late failure still pauses.
+- **Pass `previous` and `candidate` explicitly**, so that a release published before the `versions` job starts can't change the pair.
 
 It can pass only when the previous release has the fix for [#383](https://github.com/sidebandstudio/clawtrate/issues/383): every earlier build fails at inspection, which is what the check showed on macOS 26 with `0.1.1-beta.20261122.4`. So it is meaningful from the second release after that fix.
 
