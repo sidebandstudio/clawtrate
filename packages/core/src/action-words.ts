@@ -181,6 +181,7 @@ export const FORMS = {
   ofDone: (done: number, all: number) => `${done} of ${all} done`,
   exit: (code: number) => `exit ${code}`,
   toWhom: (to: string, text: string) => (to ? `to ${to}: ${text}` : text),
+  to: (to: string) => `to ${to}`,
   mayBeStale: "may be out of date",
   httpStatus: (status: number) => `HTTP ${status}`,
   shown: "shown",
@@ -374,6 +375,43 @@ export const PHRASES = {
   waitingForAnswer: "Waiting for an answer",
   stopping: "Stopping…",
   reconnecting: (last: string) => `Reconnecting. Last seen ${last}`,
+  /** The person closed the connection; nothing is coming until they reconnect. */
+  disconnected: (last: string) => `Disconnected. Last seen ${last}`,
+  /** A reply is streaming and no tool runs. */
+  writing: "Writing",
+} as const;
+
+/**
+ * The status line's phrase for a running action of each kind while "Show
+ * commands" is off (7.11): what the bot is doing, in a few words, never the
+ * call itself. The Messaged cards keep their own running words ("Messaging
+ * Juniper").
+ */
+export const KIND_PHRASES = {
+  read: "Reading files",
+  list: "Looking through files",
+  edit: "Editing files",
+  memory: "Saving to memory",
+  recall: "Searching memory",
+  command: "Using the computer",
+  terminal: "Using the computer",
+  web: "Searching the web",
+  xsearch: "Searching posts on X",
+  page: "Reading the web",
+  browser: "Using the browser",
+  computer: "Using the computer",
+  phone: "Using the phone",
+  screen: "Looking at the screen",
+  routine: "Working on routines",
+  tasks: "Looking through tasks",
+  helper: "Working with helpers",
+  question: "Asking you a question",
+  plan: "Planning",
+  media: "Making media",
+  look: "Reading files",
+  channel: "Sending a message",
+  server: "Using tools",
+  tool: "Using tools",
 } as const;
 
 /** The run line (7.7). */

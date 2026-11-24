@@ -45,6 +45,8 @@ export const REACTIONS: Array<{ emoji: string; name: string }> = [
 
 /** How long a touch on a message is held before its actions show. */
 const LONG_PRESS_MS = 500;
+/** How far a held finger may drift and still be a touch and hold, about what iOS and Android allow. */
+const LONG_PRESS_SLOP = 10;
 
 type MessageEnv = {
   taskKey: string;
@@ -170,6 +172,13 @@ export function MessageActions({
   const [current, setCurrent] = useState(0);
   /** The button whose menu is open, for focus to go back to. */
   const [trigger, setTrigger] = useState<HTMLElement | null>(null);
+  const closeActionsMenu = useCallback(
+    (refocus: boolean) => {
+      if (refocus) trigger?.focus();
+      setMenu(null);
+    },
+    [trigger],
+  );
 
   // Beside the message's bubble: to its right for the bot's, to its left for yours. False, with
   // the bar shut, when a finger's bar has no clear place.
@@ -196,18 +205,60 @@ export function MessageActions({
     const scroller = turn.closest<HTMLElement>(".transcript");
     const inner = scroller?.firstElementChild;
     const view = scroller?.getBoundingClientRect();
-    const band = inner ? Number.parseFloat(getComputedStyle(inner).paddingTop) || 0 : 0;
+    const thread = touch ? scroller?.parentElement?.querySelector(":scope > .thread") : null;
+    const conversation = scroller?.closest(".conversation");
+    const header = conversation?.querySelector(":scope > .conversation-header");
+    const strip = conversation?.querySelector(":scope > .status-strip:not([hidden])");
+    const stripButton = strip?.querySelector("button");
     // A keyboard can shrink what shows of the screen and leave the page's own size as it was.
     const screen = window.visualViewport;
+    const topEdge = Math.max(
+      view?.top ?? -Infinity,
+      header?.getBoundingClientRect().bottom ?? -Infinity,
+      strip?.getBoundingClientRect().bottom ?? -Infinity,
+      screen?.offsetTop ?? -Infinity,
+      touch && scroller && view
+        ? view.top +
+            (Number.parseFloat(
+              getComputedStyle(scroller).getPropertyValue("--transcript-mask-start"),
+            ) || 0)
+        : -Infinity,
+    );
+    const bottomEdge = Math.min(
+      view?.bottom ?? Infinity,
+      screen ? screen.offsetTop + screen.height : Infinity,
+    );
+    const leftEdge = Math.max(view?.left ?? -Infinity, screen?.offsetLeft ?? -Infinity);
+    const rightEdge = Math.min(
+      view?.right ?? Infinity,
+      thread?.getBoundingClientRect().left ?? Infinity,
+      screen ? screen.offsetLeft + screen.width : Infinity,
+    );
+    const dismiss = () => {
+      setHeld(false);
+      setMenu(null);
+      delete toolbar.dataset.pointer;
+      if (touch && toolbar.contains(document.activeElement))
+        scroller?.focus({ preventScroll: true });
+      return false;
+    };
+    if (
+      touch &&
+      (Math.max(box.top, topEdge) >= Math.min(box.bottom, bottomEdge) ||
+        Math.max(box.left, leftEdge) >= Math.min(box.right, rightEdge))
+    )
+      return dismiss();
+
     const first =
-      Math.max(view ? view.top + band : -Infinity, screen?.offsetTop ?? -Infinity) +
+      Math.max(topEdge, touch && stripButton ? touchArea(stripButton).bottom : -Infinity) +
       clear -
       turnBox.top;
-    const last =
-      Math.min(view?.bottom ?? Infinity, screen ? screen.offsetTop + screen.height : Infinity) -
-      clear -
-      height -
-      turnBox.top;
+    const last = bottomEdge - clear - height - turnBox.top;
+    const minLeft = touch ? Math.max(0, leftEdge + clear - turnBox.left) : 0;
+    const maxLeft =
+      Math.min(turnBox.right, touch ? rightEdge - clear : Infinity) - turnBox.left - width;
+    if (touch && (minLeft > maxLeft || first > last)) return dismiss();
+
     const quote = turn.previousElementSibling;
     // Only what lies within a bar and its reach of the message and its quote is looked at: the
     // message's row of the transcript, and the rows next to it out to that far. A 44 px touch area
@@ -277,24 +328,24 @@ export function MessageActions({
     const fitted = (top: number, left: number) => (setPlace({ top, left }), true);
     const left =
       role === "user" ? box.left - turnBox.left - width - 6 : box.right - turnBox.left + 6;
-    const max = turnBox.width - width;
     const top = box.top - turnBox.top;
-    if (left >= 0 && left <= max && fits(top, left)) return fitted(top, left);
+    if (left >= minLeft && left <= maxLeft && fits(top, left)) return fitted(top, left);
     // Within the column: where there is no room beside it, it sits at the bubble's outer corner,
     // above the message, else below it, else inside it at the top of what shows of it, under its
     // quote. A finger's bar with none of these clear is shut: scrolled to the transcript's foot or
     // under the header, a message leaves its bar no room.
     const corner = Math.max(
-      0,
-      Math.min(max, role === "user" ? box.left - turnBox.left : box.right - turnBox.left - width),
+      minLeft,
+      Math.min(
+        maxLeft,
+        role === "user" ? box.left - turnBox.left : box.right - turnBox.left - width,
+      ),
     );
     const above = Math.min(top - 4, ...over.map((area) => area.top)) - height;
     const below = Math.max(box.bottom - turnBox.top + 4, ...under.map((area) => area.bottom));
     const inside = Math.max(first, top, ...over.map((area) => area.bottom));
     for (const each of [above, below, inside]) if (fits(each, corner)) return fitted(each, corner);
-    setHeld(false);
-    setMenu(null);
-    return false;
+    return dismiss();
   }, [turnRef, role]);
 
   // A bar whose width changes while it shows, as write access comes or goes, or whose column
@@ -319,20 +370,27 @@ export function MessageActions({
     if (!open) return;
     const scroller = turnRef.current?.closest<HTMLElement>(".transcript");
     const wrap = scroller?.parentElement;
+    const conversation = scroller?.closest(".conversation");
     const screen = window.visualViewport;
     const again = () => measure();
     const resized = new ResizeObserver(again);
     if (scroller) resized.observe(scroller);
-    const jump = () => {
-      const button = wrap?.querySelector(":scope > .jump-latest");
-      if (button) resized.observe(button);
+    const observeControls = () => {
+      for (const element of [
+        wrap?.querySelector(":scope > .jump-latest"),
+        wrap?.querySelector(":scope > .thread"),
+        conversation?.querySelector(":scope > .conversation-header"),
+        conversation?.querySelector(":scope > .status-strip"),
+      ])
+        if (element) resized.observe(element);
     };
-    jump();
+    observeControls();
     const changed = new MutationObserver(() => {
-      jump();
+      observeControls();
       again();
     });
     if (wrap) changed.observe(wrap, { childList: true });
+    if (conversation) changed.observe(conversation, { childList: true });
     scroller?.addEventListener("scroll", again, { passive: true });
     screen?.addEventListener("resize", again);
     screen?.addEventListener("scroll", again);
@@ -349,65 +407,158 @@ export function MessageActions({
   useEffect(() => {
     const turn = turnRef.current;
     if (!turn) return;
-    // The bar is placed and spaced for the pointer that shows it: a finger's touch and hold, or a
-    // mouse or a pen over the message.
+    // A mouse, or a pen above the screen, shows the actions while it is over the message: set here,
+    // since a tap leaves :hover behind, and a touch screen in tablet mode can report no hover with
+    // a mouse attached.
+    const hovering = (event: PointerEvent) =>
+      event.pointerType === "mouse" || (event.pointerType === "pen" && event.buttons === 0);
     const onEnter = (event: PointerEvent) => {
-      if (bar.current) bar.current.dataset.pointer = event.pointerType;
+      const toolbar = bar.current;
+      if (!toolbar || !hovering(event)) return;
+      turn.dataset.hover = "true";
+      if (toolbar.dataset.pointer === "touch" && toolbar.dataset.open === "true") return;
+      toolbar.dataset.pointer = event.pointerType;
       measure();
     };
+    // A tap takes the hover away; the mouse moving on over the message brings it back.
+    const onHover = (event: PointerEvent) => {
+      if (!turn.dataset.hover && hovering(event)) onEnter(event);
+    };
+    // A finger lifting is no mouse leaving: a mouse still over the message keeps the actions.
+    const onLeave = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") delete turn.dataset.hover;
+    };
     turn.addEventListener("pointerenter", onEnter);
-    // The finger that held the message is still down when its bar opens, maybe where a button of
-    // the bar now lies: the click its lift can make presses nothing. The next touch, click or key
-    // is the person's own.
-    const events = ["click", "pointerdown", "keydown"];
-    const swallow = (event: Event) => {
-      if (event.type === "click") {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-      for (const type of events) window.removeEventListener(type, swallow, true);
-    };
-    // Touch and hold on the message shows its actions; a tap elsewhere hides them.
+    turn.addEventListener("pointermove", onHover);
+    turn.addEventListener("pointerleave", onLeave);
+    // Touch and hold on the message shows its actions; a tap elsewhere hides them. The finger that
+    // starts it owns the gesture until it lifts or the browser takes it, which is how WebKit on iOS
+    // hands a touch to a long press of its own: it cancels the pointer, with no contextmenu.
+    let owner: number | null = null;
+    let gesture: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const onDown = (event: PointerEvent) => {
-      if (event.pointerType !== "touch") return;
-      // A second finger makes it no touch and hold: the first one's wait ends too.
-      if (timer) return cancel();
-      if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
-      timer = setTimeout(() => {
-        if (bar.current) bar.current.dataset.pointer = "touch";
-        if (!measure()) return;
-        setHeld(true);
-        for (const type of events) window.addEventListener(type, swallow, true);
-      }, LONG_PRESS_MS);
+    let start = { x: 0, y: 0, top: 0 };
+    let guardedTouch: number | null = null;
+    let guard: AbortController | null = null;
+    let guardTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearGuard = () => {
+      if (guardTimer !== null) clearTimeout(guardTimer);
+      guardTimer = null;
+      guard?.abort();
+      guard = null;
+      guardedTouch = null;
     };
-    const cancel = () => {
+    const swallow = (event: PointerEvent) => {
+      if (event.pointerType !== "touch" || event.pointerId !== guardedTouch) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearGuard();
+    };
+    const onNextDown = (event: PointerEvent) => {
+      if (event.pointerType === "touch" && event.pointerId === guardedTouch) clearGuard();
+    };
+    // Ends the wait, not the gesture: the text stays unselectable until the finger lifts.
+    const stop = () => {
       if (timer) clearTimeout(timer);
       timer = null;
     };
+    const open = () => {
+      stop();
+      // The transcript can scroll before its scroll event comes: a message that moved opens nothing.
+      const toolbar = bar.current;
+      if (!toolbar || owner === null || turn.getBoundingClientRect().top !== start.top) return;
+      toolbar.dataset.pointer = "touch";
+      if (!measure()) return;
+      setHeld(true);
+      clearGuard();
+      guardedTouch = owner;
+      guard = new AbortController();
+      const options = { capture: true, signal: guard.signal };
+      window.addEventListener("click", swallow, options);
+      window.addEventListener("pointerdown", onNextDown, options);
+    };
+    const end = () => {
+      stop();
+      gesture?.abort();
+      gesture = null;
+      owner = null;
+      delete turn.dataset.touching;
+    };
+    // A second finger anywhere ends the wait.
+    const onOther = (event: PointerEvent) => {
+      if (event.pointerType === "touch" && event.pointerId !== owner) stop();
+    };
+    // A held finger always drifts a little; only a move past the slop ends the wait.
+    const onMove = (event: PointerEvent) => {
+      if (event.pointerId !== owner) return;
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > LONG_PRESS_SLOP) stop();
+    };
+    const onEnd = (event: PointerEvent) => {
+      if (event.pointerId !== owner) return;
+      end();
+      if (event.pointerId !== guardedTouch) return;
+      if (event.type === "pointercancel") clearGuard();
+      else guardTimer = setTimeout(clearGuard, 500);
+    };
+    // The message moving under the finger, as when the transcript scrolls, ends the wait.
+    const onScroll = () => {
+      if (turn.getBoundingClientRect().top !== start.top) stop();
+    };
+    // Chromium's own long press, its contextmenu, can come while this one waits: it opens the
+    // actions at once, and Chromium's menu, which would cover them, stays shut. A right-click
+    // meanwhile is the mouse's own, and leaves both alone.
+    const onMenu = (event: MouseEvent) => {
+      if ((event as PointerEvent).pointerType !== "touch") return;
+      if (!turn.contains(event.target as Node)) return;
+      event.preventDefault();
+      if (timer) open();
+    };
+    const onDown = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      delete turn.dataset.hover;
+      // A second finger is no touch and hold, nor the start of one.
+      if (owner !== null || !event.isPrimary) return;
+      if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
+      owner = event.pointerId;
+      start = { x: event.clientX, y: event.clientY, top: turn.getBoundingClientRect().top };
+      // Until the finger lifts, so the system's own long press, which can come later than this
+      // one, neither selects the text nor shows its callout. More has Copy text.
+      turn.dataset.touching = "true";
+      timer = setTimeout(open, LONG_PRESS_MS);
+      // On the document: the finger's later events can land outside the message, as when the
+      // text it went down on is replaced and the browser lets go of it.
+      gesture = new AbortController();
+      const options = { capture: true, signal: gesture.signal };
+      document.addEventListener("pointerdown", onOther, options);
+      document.addEventListener("pointermove", onMove, options);
+      document.addEventListener("pointerup", onEnd, options);
+      document.addEventListener("pointercancel", onEnd, options);
+      document.addEventListener("lostpointercapture", onEnd, options);
+      document.addEventListener("scroll", onScroll, options);
+      document.addEventListener("contextmenu", onMenu, options);
+    };
     turn.addEventListener("pointerdown", onDown);
-    turn.addEventListener("pointerup", cancel);
-    turn.addEventListener("pointercancel", cancel);
-    turn.addEventListener("pointermove", cancel);
     return () => {
-      cancel();
-      for (const type of events) window.removeEventListener(type, swallow, true);
+      end();
+      clearGuard();
       turn.removeEventListener("pointerenter", onEnter);
+      turn.removeEventListener("pointermove", onHover);
+      turn.removeEventListener("pointerleave", onLeave);
       turn.removeEventListener("pointerdown", onDown);
-      turn.removeEventListener("pointerup", cancel);
-      turn.removeEventListener("pointercancel", cancel);
-      turn.removeEventListener("pointermove", cancel);
     };
   }, [turnRef, measure]);
 
   useEffect(() => {
-    if (!held) return;
+    if (!held) {
+      if (!menu && bar.current?.dataset.pointer === "touch") delete bar.current.dataset.pointer;
+      return;
+    }
     const onDown = (event: PointerEvent) => {
       if (!turnRef.current?.contains(event.target as Node)) setHeld(false);
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
-  }, [held, turnRef]);
+  }, [held, menu, turnRef]);
 
   if (!env) return null;
   const messageId = message.messageId;
@@ -475,7 +626,16 @@ export function MessageActions({
       data-open={held || menu !== null ? "true" : undefined}
       data-testid="message-actions"
       style={place ? { top: place.top, left: place.left } : undefined}
-      onFocus={measure}
+      onFocus={(event) => {
+        if (
+          event.currentTarget.dataset.pointer === "touch" &&
+          event.target.matches(":focus-visible")
+        ) {
+          delete event.currentTarget.dataset.pointer;
+          setHeld(false);
+        }
+        measure();
+      }}
       onKeyDown={onKey}
     >
       {env.canWrite && (
@@ -530,10 +690,7 @@ export function MessageActions({
           className="msg-actions-menu"
           entries={menu === "react" ? reactEntries : moreEntries}
           trigger={trigger}
-          onClose={(refocus) => {
-            if (refocus) trigger?.focus();
-            setMenu(null);
-          }}
+          onClose={closeActionsMenu}
         />
       )}
     </div>

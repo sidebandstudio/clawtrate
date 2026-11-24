@@ -57,51 +57,72 @@ test("F-034: the one + menu offers New task and New bot with ⌘N; New bot opens
   await page.keyboard.press("Enter");
   await expect(newBot(page)).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Name" })).toBeFocused();
-  // The live picture follows the shape and colour chosen.
-  await page.getByRole("radio", { name: "gem" }).click();
-  await page.getByRole("radio", { name: "Blue" }).click();
-  await expect(page.locator(".b-preview svg g").first()).toHaveAttribute("fill", "#5b8dff");
+  // The live picture follows the creature and colour chosen.
+  await page.getByRole("radio", { name: "Shellfolk" }).click();
+  await page.getByRole("radio", { name: "Sky" }).click();
+  await expect(page.locator(".b-preview svg")).toHaveAttribute("data-family", "shellfolk");
+  await expect(page.locator('.b-preview svg [data-part="shell"]')).toHaveAttribute(
+    "fill",
+    "#45bdf5",
+  );
   await page.keyboard.press("Escape");
   await expect(newBot(page)).toHaveCount(0);
   await expect(plus).toBeFocused();
   // What was entered is kept: the dialog opens again with it, from ⌘N.
   await page.keyboard.press("ControlOrMeta+n");
-  await expect(page.getByRole("radio", { name: "gem" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Shellfolk" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
 });
 
-test("F-034: shapes and colours are radio groups of one tab stop; arrows move and choose; Enter in the name is Next", async ({
+test("F-034 F-035: the picker's groups are radio groups of one tab stop; arrows move and choose; Enter in the name is Next", async ({
   page,
 }) => {
   await openFixture(page, ADMIN, "light");
   await page.keyboard.press("ControlOrMeta+n");
   await page.getByRole("textbox", { name: "Name" }).fill("Viral");
   await page.keyboard.press("Tab");
-  const drop = page.getByRole("radio", { name: "drop" });
-  await expect(drop).toBeFocused();
+  // A fresh dialog starts on a Clawling.
+  await expect(page.getByRole("radio", { name: "Clawlings" })).toBeFocused();
+  await expect(page.getByRole("radio", { name: "Clawlings" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("radio", { name: "gem" })).toBeFocused();
-  await expect(page.getByRole("radio", { name: "gem" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Shellfolk" })).toBeFocused();
+  await expect(page.getByRole("radio", { name: "Shellfolk" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(page.getByRole("radiogroup", { name: "Shell" })).toBeVisible();
   // Frames asked for from Home on run only after Tab: a focus move the key left for a later
   // frame lands after Tab and takes focus back from the colours.
   await holdFrames(page);
   await page.keyboard.press("Home");
-  await expect(page.getByRole("radio", { name: "pebble" })).toHaveAttribute("aria-checked", "true");
-  // Read while the frames are held: Home itself moved focus to the shape it chose.
-  const homeFocusedPebble = await page
-    .getByRole("radio", { name: "pebble" })
+  await expect(page.getByRole("radio", { name: "Clawlings" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  // Read while the frames are held: Home itself moved focus to the family it chose.
+  const homeFocusedFirst = await page
+    .getByRole("radio", { name: "Clawlings" })
     .evaluate((radio) => radio === document.activeElement);
-  // One tab stop: Tab leaves the group for the colours.
+  // One tab stop: Tab leaves the group for the next, the Clawling's body.
   await page.keyboard.press("Tab");
   await releaseFrames(page);
-  await expect(page.getByRole("radio", { name: "Pink" })).toBeFocused();
-  expect(homeFocusedPebble).toBe(true);
+  await expect(page.getByRole("radio", { name: "Dome" })).toBeFocused();
+  expect(homeFocusedFirst).toBe(true);
   await page.getByRole("textbox", { name: "Name" }).press("Enter");
   await expect(page.getByRole("heading", { name: "Account", level: 2 })).toBeVisible();
   await expect(page.getByText("Choose the account Viral runs on.")).toBeVisible();
   // Back keeps everything.
   await page.getByRole("button", { name: "Back to the picture" }).click();
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("Viral");
-  await expect(page.getByRole("radio", { name: "pebble" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Clawlings" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
 });
 
 test("F-472: the Account step: subscriptions first, the gateway's choice last; Create waits for a choice; arrows choose", async ({
@@ -175,7 +196,8 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
     model: "grok-build-0.1",
     effort: null,
   });
-  expect(String(create!.avatar)).toMatch(/^data:image\/png;base64,/);
+  // The picture was left as it was: none is sent, and the bot's id chooses its Clawling.
+  expect(create!.avatar).toBeNull();
   await expect(
     page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
   ).toBeVisible();
@@ -801,6 +823,29 @@ test("F-034: a bot written whose first task did not land is said to exist, unfin
   await expect(
     page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
   ).toBeVisible();
+});
+
+test("F-520: a bot whose first-run questions were not turned off is not offered to open as it is, only to finish", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=partial-identity`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByTestId("create").click();
+  const note = page.getByTestId("create-partial");
+  await expect(note).toContainText(
+    "Viral exists, and isn't finished. Viral was created, but OpenClaw's first-run questions were not turned off",
+  );
+  await expect(note.getByRole("button", { name: "Finish Viral" })).toBeVisible();
+  await expect(note.getByRole("button", { name: "Open Viral as it is" })).toHaveCount(0);
+  // Finish is what turns them off, and it completes the bot by its id.
+  await note.getByRole("button", { name: "Finish Viral" }).click();
+  await expect(newBot(page)).toHaveCount(0);
+  const types = (await sent(page)).map((each) => each.type);
+  expect(types.filter((type) => type === "createBot")).toHaveLength(1);
+  expect(types.indexOf("finishBot")).toBeGreaterThan(types.indexOf("createBot"));
 });
 
 test("F-476: on admin two unlabelled accounts of one provider read differently, by their ids, in New bot and Settings", async ({

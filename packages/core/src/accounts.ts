@@ -314,11 +314,13 @@ export type SignInState = {
 };
 
 /**
- * A step of creating a bot that did not land: Clawtrate's record of its
- * account (`preference`), its model with the empty fallback list and effort
- * (`fallbacks`), the gateway's bot list showing it (`listed`), its first task.
+ * A step of creating a bot that did not land: its name written into its
+ * `IDENTITY.md`, which ends OpenClaw's first-run questions (`identity`),
+ * Clawtrate's record of its account (`preference`), its model with the empty
+ * fallback list and effort (`fallbacks`), the gateway's bot list showing it
+ * (`listed`), its first task.
  */
-export type MissingStep = "preference" | "fallbacks" | "listed" | "task";
+export type MissingStep = "identity" | "preference" | "fallbacks" | "listed" | "task";
 
 export type BotCreationState = {
   name: string;

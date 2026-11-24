@@ -67,6 +67,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # A unit test reads the gateway's own tool-naming function from the installed package.
       - run: npm install --global openclaw@2026.10.6
+      # The settings reader's test checks its pinned native-module hashes against this package.
+      - run: echo "CLAWTRATE_PINNED_OPENCLAW=$(npm root --global)/openclaw" >> "$GITHUB_ENV"
       # The development gateway's browser tests start the Chromium that Playwright installs.
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm lint
@@ -121,6 +123,59 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec vitest run apps/desktop/test/update/mac-inspection.test.ts
+      # A settings file another account owns, for the settings reader's owner check: made only on
+      # a discarded GitHub-hosted runner, where sudo needs no password. The test only reads it.
+      - if: runner.environment == 'github-hosted'
+        run: |
+          fixture=$(realpath "$(mktemp -d)")
+          mkdir -m 700 "$fixture/fixture-home" "$fixture/fixture-home/.openclaw"
+          file="$fixture/fixture-home/.openclaw/openclaw.json"
+          printf '{}' > "$file"
+          chmod 600 "$file"
+          sudo -n chown root "$file"
+          sudo -n chmod +a "$(id -un) allow read" "$file"
+          echo "CLAWTRATE_OWNER_FIXTURE_HOME=$fixture/fixture-home" >> "$GITHUB_ENV"
+      # The settings reader's macOS helper, built with packaging's flags.
+      - run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts
+      # Electron's install script is declined (pnpm-workspace.yaml); requiring the package fetches its binary.
+      - run: node -e "require('electron')"
+        working-directory: apps/desktop
+      # The update folders under Electron's own fs, which reads app.asar as a folder (#383).
+      - run: pnpm exec vitest run apps/desktop/test/update/asar-trees.test.ts
+        env:
+          CLAWTRATE_ELECTRON_FS_TESTS: "1"
+      # Local connect's proof through the same helper, against development gateways of the tests'
+      # own, from the public registry.
+      - run: npm install --global openclaw@2026.10.6
+      # Another account's listener, for local connect's check (e): started only on a discarded
+      # GitHub-hosted runner, where sudo needs no password. It logs what it accepts and is sent;
+      # the test only connects to it and reads the log.
+      - if: runner.environment == 'github-hosted'
+        run: |
+          fixture=$(realpath "$(mktemp -d /tmp/clawtrate-other-account.XXXXXX)")
+          chmod 755 "$fixture"
+          cat > "$fixture/listener.pl" <<'EOF'
+          use IO::Socket::INET;
+          my ($port, $log) = @ARGV;
+          my $server = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $port, Listen => 16, ReuseAddr => 1) or die;
+          open(my $out, ">>", $log) or die;
+          $out->autoflush(1);
+          print $out "ready\n";
+          while (my $socket = $server->accept) {
+            print $out "accepted\n";
+            my $bytes = 0;
+            while (sysread($socket, my $data, 4096)) { $bytes += length $data; print $out "bytes $bytes\n"; }
+            close $socket;
+          }
+          EOF
+          chmod 644 "$fixture/listener.pl"
+          : > "$fixture/log"
+          chmod 666 "$fixture/log"
+          sudo -n -u nobody /usr/bin/perl "$fixture/listener.pl" 19417 "$fixture/log" > /dev/null 2>&1 &
+          for attempt in $(seq 1 50); do grep -q ready "$fixture/log" && break; sleep 0.2; done
+          grep -q ready "$fixture/log"
+          echo "CLAWTRATE_OTHER_ACCOUNT_LISTENER=19417:$fixture/log" >> "$GITHUB_ENV"
+      - run: OPENCLAW_BIN="$(npm prefix --global)/bin/openclaw" CLAWTRATE_LOCAL_GATEWAY=1 pnpm exec vitest run apps/desktop/test/local-prove.test.ts apps/desktop/test/local-connect.test.ts apps/desktop/test/setup-connect-boundaries.test.ts
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
       # What a failed or flaky check saw: the first attempt's actual and difference pictures,
@@ -151,6 +206,8 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Check the settings reader on Windows
+        run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts -t "reads nothing on Windows|in a production run"
       # Unsigned: no signing variables are set.
       - run: pnpm test:desktop-updates
       - run: pnpm package:win
@@ -167,7 +224,7 @@ jobs:
           $installer = @(Get-ChildItem apps/desktop/dist/Clawtrate-*-win-x64.exe)
           if ($installer.Count -ne 1) { throw "expected one installer, found $($installer.Count)" }
           # A space in the path, as a folder a person picks may have. NSIS takes /D= last and unquoted.
-          $dir = Join-Path $env:RUNNER_TEMP "Clawtrate install"
+          $dir = Join-Path $env:RUNNER_TEMP "Clawtrate test.app\Contents\MacOS"
           $run = Start-Process $installer[0].FullName -ArgumentList '/S', '/currentuser', "/D=$dir" -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "the installer exited with $($run.ExitCode)" }
           foreach ($file in 'Clawtrate.exe', 'resources\app.asar', 'Uninstall Clawtrate.exe') {

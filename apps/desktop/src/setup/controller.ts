@@ -17,6 +17,8 @@ import {
   type SetupHost,
   type SetupState,
 } from "@clawtrate/core";
+import { basename, dirname } from "node:path";
+import { proveFor, provedSockets, type LocalConnect } from "./local-connect.ts";
 import { boundedFileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { ProgramResult } from "./programs.ts";
@@ -56,6 +58,12 @@ export type SetupControllerOptions = {
   /** The host's log: fixed lines only, never a program's output or a credential. */
   log?: (line: string) => void;
   now?: () => number;
+  /**
+   * Local connect (docs/design/setup-effortless.md §3): every socket of a setup
+   * connection is dialled by the host and its far end proved, before its first
+   * byte and again before its credential. Off in every shipped host.
+   */
+  localConnect?: LocalConnect;
 };
 
 /**
@@ -79,6 +87,17 @@ export function pairConfirmation(
     detail: "Clawtrate asks for read access. The gateway may ask its owner to approve this device.",
     confirm: "Pair",
   };
+}
+
+/**
+ * The connector's last proof of a socket, for an attempt that is still the current one after
+ * the proof as well as before it: a Back while it ran (up to the proof's 2 s) sends nothing.
+ */
+export function provedWhile(
+  current: () => boolean,
+  verify: (signal: AbortSignal) => Promise<boolean>,
+): (signal: AbortSignal) => Promise<boolean> {
+  return async (signal) => current() && (await verify(signal)) && !signal.aborted && current();
 }
 
 export class SetupController implements SetupHost {
@@ -436,6 +455,17 @@ export class SetupController implements SetupHost {
         return false;
       }
     };
+    // With local connect, the host dials each socket itself and proves its far end first, and
+    // again last before its credential; the gateway is saved with that route, so its sockets
+    // after setup, and after a restart, are proved the same way.
+    const local = this.provedRoute(found);
+    const proved = local
+      ? {
+          createSocket: local.sockets.createWebSocket,
+          prove: provedWhile(() => attempt === this.attempt, local.sockets.verify),
+          route: local.folder,
+        }
+      : {};
     // Once each socket is up and again just before its credential goes, the endpoint's
     // listener is read again: the port's listener by PID and start time, the endpoint, the
     // program file, as the look found them. Any difference sends nothing (docs/decisions.md).
@@ -467,6 +497,7 @@ export class SetupController implements SetupHost {
         check: listening,
         verify,
         consent: () => !expired(),
+        ...proved,
       });
       return;
     }
@@ -498,7 +529,24 @@ export class SetupController implements SetupHost {
       check: listening,
       verify,
       consent: () => !expired(),
+      ...proved,
     });
+  }
+
+  /**
+   * Local connect's sockets for the gateway found, or null when it is off. The
+   * profile's folder must be directly in the home the host named; otherwise
+   * every socket is refused before it is dialled.
+   */
+  private provedRoute(found: FoundGateway) {
+    const local = this.options.localConnect;
+    if (!local) return null;
+    const folder =
+      dirname(found.profile.stateDir) === local.home ? basename(found.profile.stateDir) : "";
+    const prove = proveFor(local, folder, found.port, (why) =>
+      this.log(`couldn't verify what is listening at port ${found.port} (${why})`),
+    );
+    return { sockets: provedSockets(found.port, prove), folder };
   }
 
   /**

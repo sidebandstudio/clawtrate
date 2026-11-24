@@ -136,6 +136,11 @@ export async function startHostRuntime(options: {
    */
   secretBox?: SecretBox;
   /**
+   * A first pairing asks for full control once (`ClientOptions.fullAccess`, docs/decisions.md):
+   * only the packaged Mac app sets it, beside its `secretBox`, and it has no effect without one.
+   */
+  fullAccess?: boolean;
+  /**
    * Reopen the gateway the data folder remembers (the default). A development
    * build, an automated run and the web host's setup look pass false: they
    * never resume a saved gateway, whatever its address.
@@ -169,6 +174,7 @@ export async function startHostRuntime(options: {
       if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
     },
   });
+  const full = options.fullAccess === true && !!options.secretBox && !options.readOnly;
   const client = new ClawtrateClient(host, {
     allowGatewayUrl: (url) => {
       if (dev && url === dev.url) return stillProven();
@@ -176,6 +182,7 @@ export async function startHostRuntime(options: {
       return !options.devOnly;
     },
     ...(options.readOnly ? { readOnly: true } : {}),
+    ...(full ? { fullAccess: true } : {}),
   });
   const devOnly = options.devOnly ? dev : null;
   if (devOnly) {
@@ -183,6 +190,8 @@ export async function startHostRuntime(options: {
     if (saved && saved.url !== devOnly.url) throw new SavedGatewayRefusedError(saved.url);
   }
   await client.start({ resume: options.resume !== false });
+  // A session-only start never asks for full control (`SESSION_ONLY`), so it shows no consent line.
+  const fullControl = full && (await host.credentialStatus?.()) !== "session";
   if (options.autoConnectDev && devGateway && client.state.connection.status === "idle") {
     await client.connect(devGateway);
   }
@@ -203,6 +212,7 @@ export async function startHostRuntime(options: {
           }
         : null,
       ...(options.readOnly ? { readOnly: true } : {}),
+      ...(fullControl ? { fullControl: true } : {}),
     },
     // Files viewers add before sending, held in this process until a message takes them.
     policy: {

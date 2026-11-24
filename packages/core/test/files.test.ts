@@ -768,6 +768,17 @@ describe("content on its way to a viewer", () => {
     expect(transfers.size).toBe(0);
   });
 
+  it("is full only while four transfers are still in time: a wait for room doesn't wait on expired ones", () => {
+    let now = 0;
+    const transfers = new FileTransfers(() => now);
+    const big = new Uint8Array(chunkBytesFor(100_000) * 2);
+    for (let held = 0; held < MAX_FILE_TRANSFERS; held += 1) transfers.start({}, big, 100_000);
+    expect(transfers.full()).toBe(true);
+    now += FILE_TRANSFER_TTL_MS + 1;
+    expect(transfers.full()).toBe(false);
+    expect(transfers.start({}, big, 100_000).id).not.toBeNull();
+  });
+
   it("base64, UTF-8 and SHA-256 give the standard answers", () => {
     const bytes = Uint8Array.from({ length: 1000 }, (_, i) => (i * 13) & 255);
     expect(fromBase64(toBase64(bytes))).toEqual(bytes);

@@ -4,6 +4,7 @@
 // `wizard.next`, `wizard.cancel`) with every ending scripted per session.
 // The credentials are made-up development strings.
 
+import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
 import { ADMIN_SCOPES } from "../src/scopes.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 import { ClawtrateClient } from "../src/client.ts";
@@ -62,6 +63,12 @@ export const CHOICES = {
   key: "dev-signin/acme-api-key",
 } as const;
 
+/** The start of OpenClaw's `IDENTITY.md` template, as a new workspace gets it. */
+export const IDENTITY_TEMPLATE =
+  "# IDENTITY.md - Who Am I?\n\n_Fill this in during your first conversation. Make it yours._\n";
+
+const sha256 = (text: string) => sha256Hex(utf8Bytes(text));
+
 export class AccountsGateway {
   readonly gateway = new FakeGateway();
   admin = true;
@@ -90,7 +97,7 @@ export class AccountsGateway {
     },
   };
   revision = 1;
-  bots: Array<{ id: string; name: string }> = [
+  bots: Array<{ id: string; name: string; avatar?: string }> = [
     { id: "main", name: "Juniper" },
     { id: "otto", name: "Otto" },
     { id: "pip", name: "Pip" },
@@ -115,6 +122,15 @@ export class AccountsGateway {
   readonly typed: unknown[] = [];
   /** Fail the next `config.patch` with this message. */
   failPatch: string | null = null;
+  /** Answer `agents.update` but list the bot without the picture, as a gateway that dropped it. */
+  keepNoPicture = false;
+  /** The gateway's identity (`gateway.identity.get`); empty for a gateway that names none. */
+  identity = "gateway-a";
+  /** An answer to `gateway.identity.get` the test settles when it chooses. */
+  identityReply: Promise<unknown> | null = null;
+  /** Fail `agents.list` once an `agents.update` has been taken. */
+  failListAfterUpdate = false;
+  private updated = false;
   /** Leave the next `agents.create` unanswered, then make the bot anyway. */
   silentCreate = false;
   /** Refuse the next `wizard.cancel`: the gateway is saving. */
@@ -123,6 +139,27 @@ export class AccountsGateway {
   failStatusFor: string | null = null;
   /** Echo what was typed back in a refusal, as a careless gateway might. */
   echoTyped = false;
+  /**
+   * Each created bot's workspace files, as `agents.create` seeds a new workspace: `AGENTS.md`
+   * and the other starting files, `IDENTITY.md` as its template, and `BOOTSTRAP.md`.
+   */
+  readonly files = new Map<string, Map<string, string>>();
+  /** Refuse the next `agents.files.set` with this message. */
+  failFileSet: string | null = null;
+
+  /** Give a bot the files `agents.create` seeds a new workspace with. */
+  seedWorkspace(id: string): void {
+    this.files.set(
+      id,
+      new Map([
+        ["AGENTS.md", "# AGENTS.md\n"],
+        ["SOUL.md", "# SOUL.md\n"],
+        ["IDENTITY.md", IDENTITY_TEMPLATE],
+        ["USER.md", "# USER.md\n"],
+        ["BOOTSTRAP.md", "# BOOTSTRAP.md - Birth Sequence\n"],
+      ]),
+    );
+  }
 
   constructor() {
     const g = this.gateway;
@@ -134,10 +171,53 @@ export class AccountsGateway {
     g.handlers["question.list"] = () => ({ questions: [] });
     for (const method of ["exec.approval.list", "plugin.approval.list", "openclaw.approval.list"])
       g.handlers[method] = () => [];
-    g.handlers["agents.list"] = () => ({
+    g.handlers["gateway.identity.get"] = () =>
+      this.identityReply ?? (this.identity ? { deviceId: this.identity } : {});
+    g.handlers["agents.list"] = () => {
+      if (this.failListAfterUpdate && this.updated)
+        throw new GatewayError({ code: "UNAVAILABLE", message: "list unavailable" });
+      return listed();
+    };
+    const listed = () => ({
       defaultId: "main",
-      agents: this.bots.map((bot) => ({ id: bot.id, identity: { name: bot.name } })),
+      agents: this.bots.map((bot) => ({
+        id: bot.id,
+        identity: { name: bot.name, ...(bot.avatar ? { avatarUrl: bot.avatar } : {}) },
+      })),
     });
+    g.handlers["agents.update"] = (params) => {
+      const { agentId, avatar, name } = params as {
+        agentId: string;
+        avatar?: string;
+        name?: string;
+      };
+      const bot = this.bots.find((each) => each.id === agentId);
+      if (!bot)
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: `agent "${agentId}" not found`,
+        });
+      if (avatar !== undefined && !this.keepNoPicture) bot.avatar = avatar;
+      if (name !== undefined) {
+        bot.name = name;
+        // As OpenClaw merges a new name into IDENTITY.md: only the `- Name:` line is replaced,
+        // whatever its emphasis, and the rest of the file is left as it was.
+        const files = this.files.get(agentId);
+        const identity = files?.get("IDENTITY.md");
+        if (files && identity !== undefined)
+          files.set(
+            "IDENTITY.md",
+            identity
+              .split("\n")
+              .map((line) =>
+                /^\s*-\s*[*_`]*name[*_`]*\s*:/i.test(line) ? `- Name: ${name}` : line,
+              )
+              .join("\n"),
+          );
+      }
+      this.updated = true;
+      return { ok: true, agentId };
+    };
     g.handlers["config.get"] = () => ({
       config: JSON.parse(JSON.stringify(this.config)) as Json,
       hash: `h${this.revision}`,
@@ -197,12 +277,53 @@ export class AccountsGateway {
         ...(model ? { model } : {}),
         ...(avatar ? { identity: { avatar } } : {}),
       };
+      this.seedWorkspace(id);
       this.revision += 1;
       if (this.silentCreate) {
         this.silentCreate = false;
         return new Promise(() => {});
       }
       return { ok: true, agentId: id, name, workspace: `/w/${id}`, ...(model ? { model } : {}) };
+    };
+    g.handlers["agents.files.get"] = (params) => {
+      const { agentId, name } = params as { agentId: string; name: string };
+      const files = this.files.get(agentId);
+      if (!files) throw new GatewayError({ code: "INVALID_REQUEST", message: "unknown agent" });
+      const content = files.get(name);
+      return {
+        agentId,
+        file:
+          content === undefined
+            ? { name, missing: true }
+            : { name, missing: false, hash: sha256(content), content },
+      };
+    };
+    g.handlers["agents.files.set"] = (params) => {
+      const { agentId, name, content, expectedHash, expectedMissing } = params as {
+        agentId: string;
+        name: string;
+        content: string;
+        expectedHash?: string;
+        expectedMissing?: boolean;
+      };
+      const files = this.files.get(agentId);
+      if (!files) throw new GatewayError({ code: "INVALID_REQUEST", message: "unknown agent" });
+      if (this.failFileSet !== null) {
+        const message = this.failFileSet;
+        this.failFileSet = null;
+        throw new GatewayError({ code: "UNAVAILABLE", message });
+      }
+      const current = files.get(name);
+      if (
+        (expectedMissing && current !== undefined) ||
+        (expectedHash !== undefined && (current === undefined || sha256(current) !== expectedHash))
+      )
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: `agent file "${name}" changed since it was read`,
+        });
+      files.set(name, content);
+      return { ok: true, agentId, file: { name, missing: false, hash: sha256(content), content } };
     };
     g.handlers["sessions.create"] = (params) => {
       const { key } = params as { key: string };

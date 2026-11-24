@@ -1,9 +1,11 @@
 // The plugin's methods and service (index.js registers them).
 
+import { isDeepStrictEqual } from "node:util";
+import * as Apply from "./apply.js";
 import { hashDevice, newId } from "./canonical.js";
 import * as L from "./ledger.js";
 import { EXPIRES_MS, LIMITS, Refusal, requireId } from "./ledger.js";
-import { NAMESPACE, Records, VERSIONS } from "./records.js";
+import { JOURNAL, NAMESPACE, Records, VERSIONS } from "./records.js";
 
 export const PLUGIN_ID = "clawtrate-bots";
 export const PLUGIN_VERSION = "0.1.0";
@@ -28,6 +30,21 @@ const hash = (v, what) => {
 };
 const unreadable = () => new Refusal("unreadable", "Clawtrate couldn't read this request.");
 const incarnation = (bot) => ({ id: bot.id, createdAt: bot.createdAt });
+const MANAGERS_MAX = 64;
+const MANAGERS_PATH = "plugins.entries.clawtrate-bots.config.managers";
+/** The explicit manager grants in a gateway config (section 7). */
+export function managersIn(config) {
+  const list = config?.plugins?.entries?.["clawtrate-bots"]?.config?.managers;
+  return Array.isArray(list) ? list : [];
+}
+/**
+ * Section 7: a bot may propose for itself, and for another bot only when its
+ * own incarnation is an explicit manager grant. Being the Main Bot (the star)
+ * grants nothing.
+ */
+export const mayPropose = (managers, proposer, bot) =>
+  (proposer.id === bot.id && proposer.createdAt === bot.createdAt) ||
+  managers.some((m) => m?.id === proposer.id && m?.createdAt === proposer.createdAt);
 const hasIncarnation = (bot) => typeof bot?.id === "string" && Number.isSafeInteger(bot.createdAt);
 
 /**
@@ -76,14 +93,23 @@ const fieldNames = (fields) =>
 
 export function createBots(api, options = {}) {
   const { sdk } = options;
+  // The gateway's conditional writes bound to a bot's incarnation (lib/apply.js).
+  // OpenClaw 2026.10.6 has none and index.js passes none: only the unit tests' stand-in does.
+  const effects = options.effects ?? null;
+  // Managers are read from config.get before each use, so writing them keeps this instance:
+  // a replacement would wait on managers.set's own call, which waits on the write.
+  api.registerReload?.({ noopPrefixes: [MANAGERS_PATH] });
   const now = options.now ?? Date.now;
   const store =
     options.store ??
     api.runtime.state.openKeyedStore({ namespace: NAMESPACE, retention: "retained" });
   let emit = null;
   const versions = options.versions ?? api.runtime.state.openKeyedStore(VERSIONS);
+  const journal = options.journal ?? api.runtime.state.openKeyedStore(JOURNAL);
   const records = new Records(store, versions, {
     now,
+    journal,
+    ...(options.monotonic ? { monotonic: options.monotonic } : {}),
     // Empty: readers fetch again, and nothing about a request goes out.
     onChange: () => emit?.("changed", {}, { scope: "operator.read" }),
   });
@@ -101,6 +127,22 @@ export function createBots(api, options = {}) {
     if (!roster?.ok || !Array.isArray(roster.payload?.agents))
       throw new Refusal("bots", "Clawtrate couldn't list this gateway's bots.");
     return roster.payload.agents.filter((a) => a.kind !== "system");
+  }
+
+  async function config() {
+    const read = await sdk.dispatchGatewayMethod("config.get", {});
+    if (!read?.ok || typeof read.payload?.hash !== "string")
+      throw new Refusal("config", "Clawtrate couldn't read this gateway's config.");
+    return read.payload;
+  }
+
+  /** Right before each write: a bot's request for another bot needs its manager grant still in the config. */
+  async function mayWrite(body) {
+    if (body.source?.kind !== "bot") return true;
+    const proposer = { id: body.source.bot, createdAt: body.source.createdAt };
+    // A bot's request for itself needs no grant, so it never waits on a config read.
+    if (mayPropose([], proposer, body.bot)) return true;
+    return mayPropose(managersIn((await config()).config), proposer, body.bot);
   }
 
   /**
@@ -123,10 +165,36 @@ export function createBots(api, options = {}) {
     ...entry,
     generation: grant?.generation,
   });
-  const LIST_LIMIT = { default: 50, max: 200 };
-  const CURSOR = /^(\d+):(p_[0-9a-f]{32})$/;
-  // Newest first; the same creation time is ordered by id, so a page boundary never repeats or skips one.
-  const newestFirst = ([a, x], [b, y]) => y.createdAt - x.createdAt || (a < b ? 1 : a > b ? -1 : 0);
+  // Newest first; the same time is ordered by id, so a page boundary never repeats or skips one.
+  const newestFirst = ([a, x], [b, y]) => y - x || (a < b ? 1 : a > b ? -1 : 0);
+  /** A page of [id, entry] rows by `timeOf`, newest first, after a cursor `<time>:<id>` this gave. */
+  function page(rows, timeOf, { limit, cursor }, { fallback, max, id }) {
+    limit ??= fallback;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > max)
+      throw bad(`limit must be 1 to ${max}.`);
+    const after =
+      cursor === undefined
+        ? null
+        : new RegExp(`^(\\d+):(${id.source})$`).exec(typeof cursor === "string" ? cursor : "");
+    if (cursor !== undefined && !after) throw bad("cursor isn't one Clawtrate gave.");
+    const order = ([a, x], [b, y]) => newestFirst([a, timeOf(x)], [b, timeOf(y)]);
+    const sorted = rows.sort(order);
+    const start = after
+      ? sorted.findIndex(
+          ([key, e]) => newestFirst([key, timeOf(e)], [after[2], Number(after[1])]) > 0,
+        )
+      : 0;
+    const shown = start < 0 ? [] : sorted.slice(start, start + limit);
+    const last = shown.at(-1);
+    const more = start >= 0 && start + limit < sorted.length;
+    return { shown, ...(more && last ? { nextCursor: `${timeOf(last[1])}:${last[0]}` } : {}) };
+  }
+  /** A decision commits no later than its request's expiry, or its grant's. */
+  const decisionDeadline = (id) => (l) => {
+    const entry = own(l.proposals, id);
+    const grant = entry?.grant && own(l.grants, entry.grant.grant);
+    return Math.min(entry?.expiresAt ?? 0, grant ? grant.expiresAt : Infinity);
+  };
 
   const methods = {
     status: [
@@ -138,7 +206,7 @@ export function createBots(api, options = {}) {
           version: PLUGIN_VERSION,
           gateway: await gatewayId(),
           capabilities: { proposals: true, relay: true, onboarding: false },
-          apply: { available: false, reason: "incarnation" },
+          apply: effects ? { available: true } : { available: false, reason: "incarnation" },
           describe: { available: false, reason: "route-binding" },
           open: Object.values(ledger.proposals).filter((e) => e.state === "open").length,
           limits: { ...LIMITS },
@@ -148,24 +216,16 @@ export function createBots(api, options = {}) {
     // A page of summaries from the ledger alone; the full request, with any instruction text, comes from get.
     "proposals.list": [
       "operator.read",
-      async ({ limit = LIST_LIMIT.default, cursor }) => {
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > LIST_LIMIT.max)
-          throw bad(`limit must be 1 to ${LIST_LIMIT.max}.`);
-        const after =
-          cursor === undefined ? null : CURSOR.exec(typeof cursor === "string" ? cursor : "");
-        if (cursor !== undefined && !after) throw bad("cursor isn't one Clawtrate gave.");
-        const sorted = Object.entries((await snapshot()).ledger.proposals).sort(newestFirst);
-        const start = after
-          ? sorted.findIndex(
-              (row) => newestFirst(row, [after[2], { createdAt: Number(after[1]) }]) > 0,
-            )
-          : 0;
-        const page = start < 0 ? [] : sorted.slice(start, start + limit);
-        const last = page.at(-1);
-        const more = start >= 0 && start + limit < sorted.length;
+      async (params) => {
+        const rows = Object.entries((await snapshot()).ledger.proposals);
+        const { shown, nextCursor } = page(rows, (e) => e.createdAt, params, {
+          fallback: 50,
+          max: 200,
+          id: /p_[0-9a-f]{32}/,
+        });
         return {
-          proposals: page.map(([id, e]) => summary(id, e)),
-          ...(more && last ? { nextCursor: `${last[1].createdAt}:${last[0]}` } : {}),
+          proposals: shown.map(([id, e]) => summary(id, e)),
+          ...(nextCursor ? { nextCursor } : {}),
         };
       },
     ],
@@ -196,29 +256,111 @@ export function createBots(api, options = {}) {
           async (l, at) => {
             if (!(await records.version(id, L.claim(l, id, digest, at).digest))) throw unreadable();
           },
-          (l) => {
-            const entry = own(l.proposals, id);
-            const grant = entry?.grant && own(l.grants, entry.grant.grant);
-            return Math.min(entry?.expiresAt ?? 0, grant ? grant.expiresAt : Infinity);
-          },
+          decisionDeadline(id),
         );
         return { id, state: "declined" };
       },
     ],
     // Section 17: on 2026.10.6 no stored request can be applied. The claim's
     // checks still run, so a request already settled, or expired, says so.
+    // Only with `effects` (the unit tests' stand-in) does it claim and apply.
     "proposals.accept": [
       "operator.admin",
-      async ({ id, digest }) => {
+      async ({ id, digest }, opts) => {
         requireId("p", id, "id");
+        if (effects)
+          return Apply.accept(records, effects, {
+            id,
+            digest,
+            by: hashDevice(opts.client?.connect?.device?.id),
+            gateway: await gatewayId(),
+            deadline: decisionDeadline(id),
+            mayWrite,
+          });
         const entry = L.claim((await snapshot()).ledger, id, digest, now());
         if (!(await records.version(id, entry.digest))) throw unreadable();
         // Again, with the clock as it is after the read.
         L.claim((await snapshot()).ledger, id, digest, now());
-        throw new Refusal(
-          "apply-unavailable",
-          "Clawtrate can't apply a saved request on this gateway. Review and save it yourself instead.",
+        throw Apply.unavailable();
+      },
+    ],
+    // The journal, newest first, with each entry's Undo (section 9). On 2026.10.6 it stays empty.
+    "changes.list": [
+      "operator.read",
+      async (params) => {
+        const { ledger } = await snapshot();
+        const { shown, nextCursor } = page(
+          Object.entries(ledger.journal ?? {}),
+          (e) => e.at,
+          params,
+          {
+            fallback: 20,
+            max: 50,
+            id: /j:[a-z0-9_.:]{1,80}/,
+          },
         );
+        const changes = [];
+        for (const [key, indexed] of shown) {
+          const entry = await records.entry(key, indexed.digest);
+          const undo = Boolean(effects) && L.undoable(ledger, key, now());
+          changes.push(entry ? { ...entry, undo } : { id: key, at: indexed.at, unreadable: true });
+        }
+        return { changes, ...(nextCursor ? { nextCursor } : {}) };
+      },
+    ],
+    "changes.undo": [
+      "operator.admin",
+      async ({ id, allow }, opts) => {
+        if (typeof id !== "string" || !/^j:[pu]_[0-9a-f]{32}:\d{1,6}:[a-z.]{1,24}$/.test(id))
+          throw bad("id isn't a change Clawtrate journaled.");
+        if (!effects)
+          throw new Refusal("undo-unavailable", "Undo isn't available for this change.");
+        return Apply.undo(records, effects, {
+          key: id,
+          by: hashDevice(opts.client?.connect?.device?.id),
+          gateway: await gatewayId(),
+          allow,
+        });
+      },
+    ],
+    // Section 7: the explicit manager grants, by incarnation, written to this
+    // plugin's own config entry under the hash just read, and read back. It
+    // writes nothing to any bot.
+    "managers.set": [
+      "operator.admin",
+      async ({ bots: ids }) => {
+        if (
+          !Array.isArray(ids) ||
+          ids.length > MANAGERS_MAX ||
+          !ids.every((b) => typeof b === "string")
+        )
+          throw bad(`bots must be a list of at most ${MANAGERS_MAX} bot ids.`);
+        const roster = (await bots()).filter(hasIncarnation);
+        const chosen = [...new Set(ids)].map((b) => roster.find((r) => r.id === b));
+        if (chosen.includes(undefined))
+          throw new Refusal(
+            "bot",
+            "A chosen bot isn't on this gateway, or has no creation record.",
+          );
+        const managers = chosen.map(incarnation);
+        const { hash } = await config();
+        const patch = { plugins: { entries: { [PLUGIN_ID]: { config: { managers } } } } };
+        const sent = await sdk.dispatchGatewayMethod("config.patch", {
+          raw: JSON.stringify(patch),
+          baseHash: hash,
+          // An id-keyed list merges by id unless replaced: a removed grant must go.
+          replacePaths: [MANAGERS_PATH],
+        });
+        if (!sent?.ok) {
+          const said = sent?.error?.message ?? "";
+          if (/changed since last load/i.test(said))
+            throw new Refusal("config-changed", "The gateway's config changed. Try again.");
+          throw new Refusal("unconfirmed", "Clawtrate couldn't confirm whether this changed.");
+        }
+        const read = await config().catch(() => null);
+        if (!read || !isDeepStrictEqual(managersIn(read.config), managers))
+          throw new Refusal("unconfirmed", "Clawtrate couldn't confirm whether this changed.");
+        return { managers };
       },
     ],
     "relay.grants.get": [
@@ -242,10 +384,13 @@ export function createBots(api, options = {}) {
           const { generation } = await records.transact((l, at) => L.revoke(l, id, at));
           return { id, generation, revoked: true };
         }
-        // A grant is never changed: a narrower one is a new grant, with a fresh id.
-        if (params.id !== undefined)
-          throw bad("A grant can't be changed. Add a new one and remove this one.");
-        const id = newId("g");
+        // A new grant gets a fresh id; an update names the generation it read,
+        // and the publish compares it, so a stale update can't land.
+        const update = params.id !== undefined;
+        const id = update ? requireId("g", params.id, "id") : newId("g");
+        const expected = update ? params.expectedGeneration : null;
+        if (update && !Number.isSafeInteger(expected))
+          throw bad("An update names the expectedGeneration it read.");
         if (!["see", "suggest"].includes(params.scope)) throw bad("scope must be see or suggest.");
         const all = params.bots === "all";
         if (
@@ -281,12 +426,20 @@ export function createBots(api, options = {}) {
         };
         const version = newId("gv");
         const body = { kind: "grant", grant: id, gateway: await gatewayId(), details };
+        if (update) L.grantForUpdate((await snapshot()).ledger, id, expected);
         const digest = await records.persist(version, body);
         const { generation } = await records.publish(
           version,
           digest,
-          (l, t) => L.publishGrant(l, id, { version, digest, expiresAt }, t),
-          () => expiresAt,
+          (l, t) => L.publishGrant(l, id, { version, digest, expiresAt }, expected, t),
+          // An update lives no longer than the generation it read: until that
+          // grant's expiry, or the end of its retention once revoked.
+          (ledger) => {
+            const current = update ? own(ledger.grants, id) : undefined;
+            if (!current) return expiresAt;
+            const until = current.revoked ? current.revokedAt + L.RETAIN_MS : current.expiresAt;
+            return Math.min(expiresAt, until);
+          },
         );
         return { id, generation, ...details };
       },
@@ -410,9 +563,14 @@ export function createBots(api, options = {}) {
     async start(ctx) {
       const events = ctx?.gatewayEvents;
       emit = events ? (name, payload, opts) => events.emit(name, payload, opts) : null;
+      // Recovery settles abandoned claims from the journal before retention runs.
+      const look = effects && ((bot, step) => Apply.observe(effects, bot, step));
       const tick = () =>
         records
           .transact(() => {})
+          .then(() => records.settleAbandoned(look))
+          .then(() => records.journalRetention())
+          .then(() => records.sweepOrphans())
           .catch((error) =>
             api.logger?.warn?.(`${PLUGIN_ID}: couldn't sweep its records: ${error.message}`),
           );

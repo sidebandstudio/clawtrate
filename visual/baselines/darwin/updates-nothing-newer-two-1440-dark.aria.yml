@@ -1,0 +1,32 @@
+- dialog "Settings":
+  - navigation "Settings":
+    - heading "Settings" [level=2]
+    - button "Gateway"
+    - button "Accounts"
+    - button "Conversation"
+    - button "Usage"
+    - button "Machines"
+    - button "Check-ins"
+    - button "Updates"
+    - button "Advanced"
+  - region "Updates":
+    - button "Close settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - paragraph: This build can't install updates itself.
+    - term: Version
+    - definition:
+      - text: Clawtrate 0.1.0
+      - paragraph: This copy is a Stable build.
+    - radiogroup "Update track":
+      - text: Update track
+      - radio "Stable" [checked]
+      - text: Stable
+      - radio "Beta"
+      - text: Beta
+    - group "Update status":
+      - term: Updates
+      - definition: No newer version was offered for this build by its update source. Checked at 5:41 PM.
+      - button "Check for Updates"
+      - paragraph: Checks stable.updates.example for a newer build, only when you choose to.
+    - status: No newer version was offered for this build by its update source. Checked at 5:41 PM. This build can't install updates itself.

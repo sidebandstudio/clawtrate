@@ -8,13 +8,23 @@ pnpm typecheck
 pnpm test        # unit tests
 pnpm e2e         # end-to-end tests against a development gateway of their own
 pnpm visual      # screenshots and behaviour of the fixture mode; the baselines are macOS ones
+pnpm mobile:check  # on a Mac, after pnpm mobile:build: the iOS app in the Simulator (see ios.md)
 ```
 
 The memory plugin tests in `pnpm test` require OpenClaw 2026.10.6. Install it globally or set `OPENCLAW_PACKAGE_DIR` to the directory of that installed package.
 
 The unit tests include the SSH transport's, some against an `sshd` they start themselves ([The SSH transport's tests](ssh.md)).
 
-CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm and Electron under `xvfb-run`, split by file across three runners, `pnpm visual` on every core and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made. A pull request that changes only documentation (`docs/`, the Markdown files at the top level, the issue and pull request templates) runs the Linux `check` job alone.
+Local connect's send gate ([setup-effortless.md §3](../design/setup-effortless.md#the-send-gate)) is also checked on macOS against development gateways the tests start themselves: OpenClaw 2026.10.6 with `--profile clawtrate` in a temporary home, on a port of their own. They run only when asked:
+
+```bash
+OPENCLAW_BIN=<a copy of openclaw 2026.10.6>/bin/openclaw CLAWTRATE_LOCAL_GATEWAY=1 \
+  pnpm exec vitest run apps/desktop/test/local-prove.test.ts apps/desktop/test/setup-connect-boundaries.test.ts
+```
+
+`OPENCLAW_BIN` must be a copy of the tests' own, never a system-wide Homebrew one. `OPENCLAW_NODE` names the Node that runs it when the one running the tests is outside OpenClaw's supported range. The case with another account's listener runs only on CI's discarded macOS runner.
+
+CI runs lint, typecheck and the unit tests on Linux, local connect's gateway-backed checks on macOS, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm and Electron under `xvfb-run`, split by file across three runners, `pnpm visual` on every core and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made. A pull request that changes only documentation (`docs/`, the Markdown files at the top level, the issue and pull request templates) runs the Linux `check` job alone.
 
 `pnpm test:desktop-updates` runs the desktop update flow on macOS and Windows. It builds a temporary Electron app with a loopback feed, launches it with a fresh profile, and checks the renderer through the real preload and main process. It runs independently of packaging and development gateways.
 
@@ -31,9 +41,11 @@ pnpm visual    # screenshot, legibility and behaviour tests against the fixture 
 
 The fixture mode is the real interface fed a fixed state through the same bridge the hosts use. It needs no gateway and makes no request of its own. Pick what it shows from the address: `?scene=` with `main`, `connect`, `connect-error`, `connecting`, `pairing`, `reconnecting`, `reconnecting-unloaded`, `offline`, `offline-long-address`, `catching-up`, `synced`, `sync-pending`, `sync-failed`, `refresh-failed`, `load-failed`, `loading`, `discovery-error`, `discovering`, `empty`, `partial`, `zero-tasks`, `task-states`, `protocol-mismatch`, `pairing-rejected`, `pairing-expired`, `connect-unreachable`, `disconnected` or `offline-unreachable`; `&bot=otto&task=agent:otto:disk-space` to open a task; `&panel=open`; `&theme=dark`; `&pins=main,otto`, `&hidden=marlow` and `&sort=name` for the rail's arrangement; `&bubbles=neutral`; `&routines=on` shows the gateway routines. Add `&access=admin` to edit them. The [routines fixture](../../apps/desktop/src/fixture/routines.ts) lists the states and controls for saves, pauses, runs and deletions. `?setup=` shows the desktop's first screen and each state of setting up on this computer (`first`, `looking`, `found`, `untested`, `stopped`, `not-found`, `connecting`, `code-failed` and the rest in `apps/desktop/src/fixture/setup.ts`). `&search=on` gives every transcript row its message id, so a search result opens in place; [`apps/desktop/src/fixture/search.ts`](../../apps/desktop/src/fixture/search.ts) lists the search palette's conditions (`&src=msgfail,filesfail`, for example). It is a separate build, never part of the desktop app or the web preview.
 
-For Settings → Updates, choose a [fixture update state](../../apps/desktop/src/fixture/updates.ts) with `?updates=offered`, for example. The fixture has two tracks unless `tracks=one`. Choose the running track with `buildTrack=nightly` (Beta), the selected track with `track=nightly`, or a failed selection with `save=failed`. Without an update state, the fixture has no updater.
+A bot's Delete bot… dialog has states of its own: `&delshared=1` gives Pip Marlow's workspace folder, `&delrecord=none` leaves every bot without a creation record, `&delname=<name>` gives Pip another name, and `&delresult=partial` (or `purge`, `unread`, `refused`, `unconfirmed`, `noanswer`, `lost`, `stale`, `replaced`, `renamed`, `recreated`, `moved`, `kept-moved`) picks how the delete goes; [`apps/desktop/src/fixture/bot-delete.ts`](../../apps/desktop/src/fixture/bot-delete.ts) lists them.
 
-`pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. After an intended change, `pnpm visual:update` rewrites them; look at every changed image before committing it.
+For Settings → Updates, choose a [fixture update state](../../apps/desktop/src/fixture/updates.ts) with `?updates=offered`, for example. The fixture has two tracks unless `tracks=one`. Choose the running track with `buildTrack=nightly` (Beta), the selected track with `track=nightly`, or a failed selection with `save=failed`. Once a check has run, its Beta source lists what its builds add (F-554); `whatsNew=none` serves no lists. Without an update state, the fixture has no updater.
+
+`pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. A screenshot may differ from its baseline in 0.2% of its pixels, which a changed sentence can stay under, so each screenshot also compares the accessibility snapshot of what it shows, its words, names and states, exactly with the `.aria.yml` file beside the image. Specs get this from the `expect` that [`visual/fixture.ts`](../../visual/fixture.ts) exports. After an intended change, `pnpm visual:update` rewrites both; look at every changed image and text snapshot before committing it.
 
 ## The end-to-end tests
 

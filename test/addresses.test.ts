@@ -4,7 +4,7 @@
 // from its parts at run time.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -82,21 +82,31 @@ describe("tracked files", () => {
     }
   });
 
+  // Reads every tracked text file, about 19 MB in 1,000 files: a fraction of a second idle, and
+  // several seconds when a full run shares a busy machine.
   it("carry no private-range address literal and no new home-directory path", () => {
     const files = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" })
       .split("\0")
       .filter(Boolean);
     expect(files.length).toBeGreaterThan(100);
     const found: string[] = [];
+    // Git's own test: a NUL in the first 8,000 bytes makes a file binary. It spares reading the
+    // 250 MB of screenshots and visual baselines whole.
+    const head = Buffer.alloc(8000);
     for (const file of files) {
-      let bytes: Buffer;
+      let fd: number;
       try {
-        bytes = readFileSync(join(ROOT, file));
+        fd = openSync(join(ROOT, file), "r");
       } catch {
         continue; // deleted in the working tree
       }
-      if (bytes.includes(0)) continue; // binary
-      const text = bytes.toString("utf8");
+      let text: string;
+      try {
+        if (head.subarray(0, readSync(fd, head, 0, head.length, 0)).includes(0)) continue;
+        text = readFileSync(fd, "utf8");
+      } finally {
+        closeSync(fd);
+      }
       for (const address of privateAddresses(text)) {
         found.push(`${file}: ${address}`);
       }
@@ -105,5 +115,5 @@ describe("tracked files", () => {
       }
     }
     expect(found).toEqual([]);
-  });
+  }, 30_000);
 });

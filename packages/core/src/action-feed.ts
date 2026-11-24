@@ -5,7 +5,7 @@
 // breaks the fold; reasoning is not shown, so it breaks nothing, and belongs
 // to the next action, else to the reply that follows, else to the run's end.
 
-import { RUN_LINE, durationWords } from "./action-words.ts";
+import { KIND_PHRASES, PHRASES, RUN_LINE, durationWords } from "./action-words.ts";
 import { sha256Hex, utf8Bytes } from "./bytes.ts";
 import {
   isOpenOutcome,
@@ -61,6 +61,11 @@ export type FeedGroup<R> =
   /** Reasoning over a reply (`reply`), or at the end of a run with neither an action nor a reply after it. */
   | { type: "thought"; key: string; thought: Thought; place: "reply" | "end" };
 
+/** Several "Thought" lines as one: their segments in order, their durations added (7.11). */
+export function mergeThoughts(thoughts: Thought[]): Thought {
+  return thoughtOf(thoughts.flatMap((t) => t.segments));
+}
+
 function thoughtOf(segments: ThoughtSegment[]): Thought {
   const spans = segments.map((s) =>
     s.startedAt !== null && s.endedAt !== null && s.endedAt >= s.startedAt
@@ -88,6 +93,12 @@ export function groupFeed<R>(entries: FeedEntry<R>[], ctx: ReadingContext = {}):
       const next = entries[j]!;
       if (next.type === "action" || next.type === "card") {
         target = j;
+        break;
+      }
+      // Without commands shown, the bot's words end a stretch of thinking: reasoning before them
+      // is their Thought line, so it never shows after the words it came before (7.11).
+      if (next.type === "bubble" && ctx.quiet) {
+        bubble = j;
         break;
       }
       if (next.type === "bubble" && bubble === null) bubble = j;
@@ -363,6 +374,19 @@ export function phraseLine(call: ActionCall, ctx: ReadingContext = {}): ActionLi
   return lineOf(call, ctx);
 }
 
+/**
+ * The status line's phrase for a running action while "Show commands" is off
+ * (7.11): what the bot is doing, by the action's kind ("Using the computer",
+ * "Reading files"), never the call. A message to a bot or to T3 Code keeps
+ * its card's words ("Messaging Juniper"); a command under review says so.
+ */
+export function kindPhrase(call: ActionCall, ctx: ReadingContext = {}): string {
+  const line = lineOf(call, { ...ctx, quiet: true });
+  if (line.outcome === "review") return PHRASES.reviewing;
+  if (line.kind === "message" || line.kind === "t3") return line.running;
+  return KIND_PHRASES[line.kind];
+}
+
 // What retention left out --------------------------------------------------------------
 
 /** How many of a run's actions are drawn, how many the gateway reported, and where the rest were. */
@@ -441,6 +465,35 @@ export type RunLine = {
  * counts actions, not cards, and reports a duration only when the gateway
  * reported both ends.
  */
+/**
+ * What a line of actions says of how they went (7.7): how many failed or did
+ * not run, then the other problems ("1 unavailable"). A run line and the line
+ * of history with no run say the same.
+ */
+export function outcomeCounts(
+  calls: ActionCall[],
+  ctx: ReadingContext = {},
+): { failed: number; problems: string[] } {
+  const problems = calls.map((c) => problemOf(outcomeOf(c, ctx).outcome));
+  const failed = problems.filter((p) => p === "failed" || p === "notRun").length;
+  const n = (p: string) => problems.filter((each) => each === p).length;
+  const others = [
+    n("unavailable") ? RUN_LINE.problem.unavailable(n("unavailable")) : "",
+    n("suppressed") ? RUN_LINE.problem.suppressed(n("suppressed")) : "",
+    n("stopped") ? RUN_LINE.problem.stopped(n("stopped")) : "",
+    n("unknown") ? RUN_LINE.problem.unknown(n("unknown")) : "",
+  ].filter(Boolean);
+  return { failed, problems: others };
+}
+
+/** The line of history with no run (7.11): its actions, then how they went. */
+export function actionsLineOf(calls: ActionCall[], ctx: ReadingContext = {}): string {
+  const { failed, problems } = outcomeCounts(calls, ctx);
+  return [RUN_LINE.actions(calls.length), failed ? RUN_LINE.failedCount(failed) : "", ...problems]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function runLineOf(
   run: Pick<Run, "state" | "startedAt" | "endedAt" | "reportedStartAt"> &
     Partial<Pick<Run, "omittedTools" | "endFromRows">>,
@@ -462,15 +515,7 @@ export function runLineOf(
       : run.state === "failed"
         ? RUN_LINE.failed(after)
         : RUN_LINE.worked(after);
-  const problems = calls.map((c) => problemOf(outcomeOf(c, ctx).outcome));
-  const failed = problems.filter((p) => p === "failed" || p === "notRun").length;
-  const n = (p: string) => problems.filter((each) => each === p).length;
-  const others = [
-    n("unavailable") ? RUN_LINE.problem.unavailable(n("unavailable")) : "",
-    n("suppressed") ? RUN_LINE.problem.suppressed(n("suppressed")) : "",
-    n("stopped") ? RUN_LINE.problem.stopped(n("stopped")) : "",
-    n("unknown") ? RUN_LINE.problem.unknown(n("unknown")) : "",
-  ].filter(Boolean);
+  const { failed, problems: others } = outcomeCounts(calls, ctx);
   const count = RUN_LINE.actions(reported);
   const shown = reported > drawn ? RUN_LINE.shown(drawn) : "";
   const text = [label, count, shown, failed ? RUN_LINE.failedCount(failed) : "", ...others]

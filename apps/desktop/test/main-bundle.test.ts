@@ -39,13 +39,16 @@ function packageName(specifier: string): string {
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
 }
 
+type MainBuild = {
+  externalizeDeps?: { exclude?: string[] };
+  rolldownOptions?: { input?: Record<string, string> };
+};
+
 describe("the desktop main bundle", () => {
-  it("requires no package at run time: each one it imports is bundled, Electron's or Node's", () => {
-    const build = (config as { main?: { build?: { externalizeDeps?: { exclude?: string[] } } } })
-      .main?.build?.externalizeDeps?.exclude;
-    const bundled = new Set(build ?? []);
-    const packages = packagesOf(resolve(DESKTOP, "src/main/index.ts"));
-    const required = [...packages].filter(([specifier]) => {
+  const build = (config as { main?: { build?: MainBuild } }).main?.build;
+  const bundled = new Set(build?.externalizeDeps?.exclude ?? []);
+  const required = (packages: Map<string, string>) =>
+    [...packages].filter(([specifier]) => {
       const name = packageName(specifier);
       return (
         !bundled.has(name) &&
@@ -54,9 +57,26 @@ describe("the desktop main bundle", () => {
         !builtinModules.includes(name)
       );
     });
-    expect(required).toEqual([]);
+
+  it("requires no package at run time: each one it imports is bundled, Electron's or Node's", () => {
+    const packages = packagesOf(resolve(DESKTOP, "src/main/index.ts"));
+    expect(required(packages)).toEqual([]);
     // The walk reaches the setup's synthetic gateway, the one module that needs `ws`.
     expect(packages.get("ws")).toMatch(/synthetic-gateway\.ts$/);
     expect(bundled.has("ws")).toBe(true);
+    // And local connect's connector, which dials through `undici`.
+    expect(packages.get("undici")).toMatch(/local-connect\.ts$/);
+    expect(bundled.has("undici")).toBe(true);
+  });
+
+  it("builds the settings reader's parse worker as an entry of its own, with `json5` in it", () => {
+    expect(build?.rolldownOptions?.input).toEqual({
+      index: "src/main/index.ts",
+      "settings-parse": "src/setup/settings-parse.ts",
+    });
+    const packages = packagesOf(resolve(DESKTOP, "src/setup/settings-parse.ts"));
+    expect(required(packages)).toEqual([]);
+    expect(packages.get("json5")).toMatch(/settings-extract\.ts$/);
+    expect(bundled.has("json5")).toBe(true);
   });
 });

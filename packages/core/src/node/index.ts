@@ -16,6 +16,7 @@ import type {
   ClawtrateHost,
   ClientIdentity,
   DeviceSigner,
+  HttpResponseLike,
   KeyValueStore,
   WebSocketLike,
 } from "../host.ts";
@@ -183,5 +184,8 @@ export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
     client: options.client,
     ...(options.log ? { log: options.log } : {}),
     ...(options.approvalInstructions ? { approvalInstructions: options.approvalInstructions } : {}),
+    // Only the downloads the gateway issues for pictures (`pictures.ts` checks the path first).
+    // Node's Response has more than `HttpResponseLike`; its overloaded `getReader` defeats inference.
+    fetch: (url, init) => globalThis.fetch(url, init) as unknown as Promise<HttpResponseLike>,
   };
 }

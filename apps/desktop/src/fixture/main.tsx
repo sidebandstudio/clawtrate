@@ -15,15 +15,18 @@
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   &computer=control      the Work pane's Computer states (computer.ts), with &firstwatch=1,
 //                          &takerace=grant, &access=read
+//   ?sheet=avatars         every creature in every state at every size (avatars.tsx)
 //   ?setup=first           the desktop's first screen and a state of setup (setup.ts)
 //   &checkins=off, &scheduler=off, &cisave=fail …    check-ins (check-ins.ts)
 //   &routines=running, &routines=many …            routines (routines.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
 //   &search=on, &src=…, &routinepage=3 …            search (search.ts)
+//   &delshared=1, &delresult=partial …              Delete bot… (bot-delete.ts)
 
 import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { AvatarSheet } from "./avatars.tsx";
 import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
 import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
@@ -35,6 +38,7 @@ import { releaseRoutineReads, routineParams } from "./routines.ts";
 import { usageParams } from "./usage.ts";
 import { fixtureUpdates } from "./updates.ts";
 import { machineParams } from "./machines.ts";
+import { botDeleteParams } from "./bot-delete.ts";
 import { searchParams } from "./search.ts";
 
 const params = new URLSearchParams(location.search);
@@ -110,7 +114,9 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   routines: routineParams(params),
   usage: usageParams(params),
   machines: machineParams(params),
+  botDelete: botDeleteParams(params),
   search: searchParams(params),
+  fullPairing: params.get("full") === "1",
 });
 if (params.has("hold")) bridge.hold();
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.
@@ -119,10 +125,17 @@ if (params.get("uview") === "usage")
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge, releaseRoutineReads });
 
+// The sheet has no app around it to apply the theme from the address.
+if (params.get("sheet") === "avatars")
+  document.documentElement.dataset.theme = params.get("theme") ?? "dark";
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BridgeProvider bridge={bridge}>
-      <App info={bridge.info} onUnreadCount={(count) => (bridge.badge = count)} />
+      {params.get("sheet") === "avatars" ? (
+        <AvatarSheet />
+      ) : (
+        <App info={bridge.info} onUnreadCount={(count) => (bridge.badge = count)} />
+      )}
     </BridgeProvider>
   </StrictMode>,
 );

@@ -13,6 +13,7 @@ import {
   decisionText,
   endDecision,
   endReadback,
+  FULL_SCOPES,
   initialState,
   MAX_RAW_ENTRY_CHARS,
   noteSent,
@@ -31,6 +32,9 @@ import {
   type RunRawRead,
   type TaskActivity,
   type Transcript,
+  hasUnsettledWork,
+  gatewayStamp,
+  NOT_OPEN_IN_VIEW,
 } from "@clawtrate/core";
 import {
   CARD_SCENES,
@@ -58,9 +62,12 @@ import {
   type AccountParams,
 } from "./accounts.ts";
 import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
+import { botDeleteCommands, NO_BOT_DELETE_PARAMS, type BotDeleteParams } from "./bot-delete.ts";
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { isPictureScene, PICTURE_SCENES, pictureAnswers, pictureScene } from "./pictures.ts";
+import { BOT_NAME_SCENES, botNameCommand, botNameScene, isBotNameScene } from "./bot-name.ts";
 import {
   computerFixture,
   FIXTURE_VIEWER,
@@ -115,9 +122,14 @@ export const SCENES = [
   "disconnected",
   "offline-unreachable",
   "offline-down",
+  "connect-full",
+  "access-narrowed",
+  "access-offer",
   ...LIVE_SCENES,
   ...RAIL_SCENES,
   ...ACTION_SCENES,
+  ...PICTURE_SCENES,
+  ...BOT_NAME_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -185,6 +197,9 @@ function pairing(): ClawtrateState {
     },
   };
 }
+
+/** The view the fixture's own page is; tests name any other view with `sendFrom`. */
+const PAGE_VIEW = "page";
 
 const UNREACHABLE = {
   code: "UNREACHABLE",
@@ -266,6 +281,24 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: base, steps: [] };
     case "connect":
       return { initial: idle(), steps: [] };
+    // The packaged Mac app's address form, with a secure address typed (setup-effortless.md §2).
+    case "connect-full":
+      return {
+        initial: withConnection(idle(), { gatewayUrl: "wss://gateway.example" }),
+        steps: [],
+      };
+    // A full pairing the gateway granted read alone (§8).
+    case "access-narrowed":
+      return {
+        initial: withConnection(base, { gatewayUrl: "wss://gateway.example", fullPairing: true }),
+        steps: [],
+      };
+    // A device paired read-only before full control, offered it once (§6).
+    case "access-offer":
+      return {
+        initial: withConnection(base, { gatewayUrl: "wss://gateway.example", fullOffer: "offer" }),
+        steps: [],
+      };
     case "connect-error":
       return {
         initial: withConnection(idle(), {
@@ -425,6 +458,8 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
+      if (isPictureScene(name)) return { initial: pictureScene(base, now, name), steps: [] };
+      if (isBotNameScene(name)) return { initial: botNameScene(name, base, now), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
 }
@@ -492,14 +527,28 @@ export function createFixtureBridge(
     routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
+    botDelete?: BotDeleteParams;
     computer?: ComputerParams;
     checkIns?: CheckInParams;
     search?: SearchParams;
+    /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
+    fullPairing?: boolean;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
   sent: BridgeCommand[];
+  /** The task of every history read, in order. */
+  reads: string[];
+  /** How many views hold a task open. */
+  holds(key: string): number;
+  /** Send a command as another view of the same host, such as a second web tab, named `view`. */
+  sendFrom(view: string, command: BridgeCommand): Promise<void>;
+  /**
+   * The host refuses, with `error`, to open a task again for this page after the web bridge
+   * reconnected: the page no longer holds it, and its snapshot leaves the task out.
+   */
+  refuseReopen(key: string, error: string): void;
   /** The last unread count the interface gave for the dock badge. */
   badge: number | null;
   /** From now on, refuse the rail's commands of this type, as a gateway refuses a change. */
@@ -516,6 +565,9 @@ export function createFixtureBridge(
    */
   hold(): void;
   release(): void;
+  /** Hold state snapshots from reaching subscribers until `releaseSnapshots`, as IPC/WS can delay them. */
+  holdSnapshots(): void;
+  releaseSnapshots(): void;
   /** Takes the Computer pane has shown refused as busy so far (`computerFixture`'s `refusals`). */
   computerRefusals(): number;
 } {
@@ -526,6 +578,7 @@ export function createFixtureBridge(
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
+  const pictureAnswer = pictureAnswers(name);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
   const routineParams = options.routines ?? { state: "none" };
   let state =
@@ -552,7 +605,7 @@ export function createFixtureBridge(
   if (state.bots.length > 0)
     state = {
       ...state,
-      checkIns: fixtureCheckIns(now, checkInParams, state.connection.gatewayId),
+      checkIns: fixtureCheckIns(now, checkInParams, gatewayStamp(state.connection)),
     };
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
@@ -581,14 +634,47 @@ export function createFixtureBridge(
       transcripts: withComputerRuns(state.transcripts, now, computerParams),
     };
   }
+  if (options.fullPairing)
+    state = { ...state, connection: { ...state.connection, fullPairing: true } };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
   let histories = state.transcripts;
   const listeners = new Set<(state: ClawtrateState) => void>();
+  // Tasks whose shared transcript is still kept (another view or unsettled work),
+  // but omitted from this page's view after a refused reopen.
+  const pageOmitted = new Set<string>();
+  const pageState = (source: ClawtrateState): ClawtrateState => {
+    if (pageOmitted.size === 0) return source;
+    let transcripts: ClawtrateState["transcripts"] | null = null;
+    for (const key of pageOmitted) {
+      if (!(key in source.transcripts)) continue;
+      transcripts ??= { ...source.transcripts };
+      delete transcripts[key];
+    }
+    return transcripts ? { ...source, transcripts } : source;
+  };
+  let snapshot = pageState(state);
+  let holdSnapshots = false;
+  let snapshotPending = false;
+  const publish = () => {
+    if (holdSnapshots) {
+      snapshotPending = true;
+      return;
+    }
+    snapshot = pageState(state);
+    for (const listener of listeners) listener(snapshot);
+  };
+  // The host's target (`ConnectionState.target`), as the host keeps it: raised when the person
+  // points it at a gateway anew (Connect, Disconnect, setup's connect, a new pairing), kept across
+  // an ordinary reconnect, and carried into every state set here, from `idle()`, `pairing()` and
+  // `loaded()` too, so a stamp taken before such a change no longer matches.
+  let target = state.connection.target;
   const set = (next: ClawtrateState) => {
-    state = next;
-    for (const listener of listeners) listener(state);
+    // A state that already carries a higher target (a test's own) raises the counter with it.
+    target = Math.max(target, next.connection.target);
+    state = next.connection.target === target ? next : withConnection(next, { target });
+    publish();
   };
   const computer =
     computerParams.mode !== null ? computerFixture(computerParams, now, () => state, set) : null;
@@ -603,6 +689,26 @@ export function createFixtureBridge(
   };
   let pairingChecks = 0;
   const sent: BridgeCommand[] = [];
+  // The views holding each task, and every history read, as the engine counts them. As in
+  // the bridge, a view holds a task once however often it opens it.
+  const holds = new Map<string, Set<string>>();
+  const releaseHold = (key: string, view: string): boolean => {
+    const viewers = holds.get(key);
+    if (!viewers?.delete(view) || viewers.size > 0) return false;
+    holds.delete(key);
+    // As the engine: the last view to leave releases the task, unless it holds work.
+    const current = state.transcripts[key];
+    if (!current || hasUnsettledWork(current)) return false;
+    // The gateway keeps what was read; opening the task again reads it back.
+    if (current.status === "ready") histories = { ...histories, [key]: current };
+    pageOmitted.delete(key);
+    const transcripts = { ...state.transcripts };
+    delete transcripts[key];
+    set({ ...state, transcripts });
+    return true;
+  };
+  const reopenRefusals = new Set<(key: string, error: string) => void>();
+  const reads: string[] = [];
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   const timers = holdableTimers();
@@ -620,10 +726,11 @@ export function createFixtureBridge(
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
+  const botDeleteCommand = botDeleteCommands(options.botDelete ?? NO_BOT_DELETE_PARAMS);
   const memory = memoryCommands(now);
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
-  async function apply(command: BridgeCommand): Promise<unknown> {
+  async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
     const searched = searchCommand(command, () => state);
     if (searched) {
       sent.push(command);
@@ -662,6 +769,11 @@ export function createFixtureBridge(
         if (request === latestAccessRequest) set(next);
       };
     }
+    const botDelete = botDeleteCommand(command, () => state, set, deferred);
+    if (botDelete) {
+      sent.push(command);
+      return botDelete;
+    }
     const machine = machineCommand(command, () => state, setAnswer, deferred);
     if (machine) {
       sent.push(command);
@@ -681,10 +793,20 @@ export function createFixtureBridge(
       sent.push(command);
       return rail;
     }
+    const named = botNameCommand(
+      command,
+      () => state,
+      (next) => set(next),
+    );
+    if (named) {
+      sent.push(command);
+      return named;
+    }
     const live = liveCommand(command, () => state, setAnswer, files, deferred);
     sent.push(command);
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
+    if (command.type === "readChatPicture") return pictureAnswer();
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;
@@ -725,6 +847,14 @@ export function createFixtureBridge(
       return computer.machine(command.key, command.probe);
     }
     if (
+      command.type === "connect" ||
+      command.type === "connectDevGateway" ||
+      command.type === "disconnect" ||
+      command.type === "suspend" ||
+      command.type === "setupConnect"
+    )
+      target += 1;
+    if (
       setupCommand(
         command,
         () => state,
@@ -756,6 +886,8 @@ export function createFixtureBridge(
           pairingChecks += 1;
           if (pairingChecks === 1) set(withConnection(state, { retryAt: Date.now() + 5000 }));
           else {
+            // Paired afresh: a new pairing, so a new target.
+            target += 1;
             const loadedNow = loaded(Date.now());
             const next = search.ids
               ? { ...loadedNow, transcripts: withMessageIds(loadedNow.transcripts) }
@@ -769,6 +901,7 @@ export function createFixtureBridge(
         const code = state.connection.error?.code ?? "";
         if (code.startsWith("PAIRING_")) {
           // Trying again sends a new pairing request.
+          target += 1;
           set(withConnection(idle(), { status: "connecting", gatewayUrl: GATEWAY_URL }));
           setTimeout(() => set(pairing()), 400);
           return;
@@ -797,11 +930,38 @@ export function createFixtureBridge(
       case "reloadSession":
       case "openSession": {
         // A history the state no longer holds, or that failed since, is read again: loading at
-        // once, as the engine shows it, then loaded as a delayed answer a test can hold.
+        // once, as the engine shows it, then loaded as a delayed answer a test can hold. As in
+        // the engine, a reread needs a hold, and opening a task some view already holds reads
+        // nothing unless its history failed.
         const { key } = command;
         const history = histories[key];
         const current = state.transcripts[key];
-        if (!history || history === current || (current && current.status !== "error")) return;
+        const viewers = holds.get(key) ?? new Set<string>();
+        if (command.type === "reloadSession") {
+          if (!viewers.has(view)) throw new Error(NOT_OPEN_IN_VIEW);
+          if (
+            command.failed !== undefined &&
+            (current?.status !== "error" || current.error !== command.failed)
+          )
+            return;
+        }
+        let restored = false;
+        if (command.type === "openSession") {
+          // A duplicate open from the same view is a no-op, as the real ViewerSession has it.
+          if (viewers.has(view)) return;
+          const held = viewers.size > 0;
+          holds.set(key, viewers.add(view));
+          restored = view === PAGE_VIEW && pageOmitted.delete(key);
+          if (held && current && current.status !== "error") {
+            if (restored) publish();
+            return;
+          }
+        }
+        if (!history || history === current || (current && current.status !== "error")) {
+          if (restored) publish();
+          return;
+        }
+        reads.push(key);
         const reading = { ...history, status: "loading" as const, error: null };
         set({ ...state, transcripts: { ...state.transcripts, [key]: reading } });
         // Only onto the read it answers: a disconnect or a replacement since has the last word.
@@ -812,10 +972,32 @@ export function createFixtureBridge(
         );
         return;
       }
-      case "closeSession":
+      case "closeSession": {
+        releaseHold(command.key, view);
         // Answered as a delayed answer, so a test can hold a close while the page moves on.
         return new Promise<void>((resolve) => deferred(resolve, 0));
+      }
       case "requestAccess":
+        return;
+      // The offer's one request waits for the owner; `clawtrateFixture.setState` decides it.
+      case "requestFullControl":
+        // It replaces any access request under way: that one's held answer no longer lands.
+        latestAccessRequest += 1;
+        set(
+          withConnection(state, {
+            fullOffer: "settings",
+            upgrade: {
+              ...initialState.connection.upgrade,
+              status: "pending",
+              scopes: [...FULL_SCOPES],
+              requestId: "up-full-0001",
+              approveCommand: "openclaw devices approve up-full-0001",
+            },
+          }),
+        );
+        return;
+      case "dismissFullControl":
+        set(withConnection(state, { fullOffer: "settings" }));
         return;
       case "resolveApproval": {
         const { key, approvalId, decision } = command;
@@ -1017,8 +1199,13 @@ export function createFixtureBridge(
       ? setupInfo(FIXTURE_INFO, setupName)
       : name === "access-pinned"
         ? { ...FIXTURE_INFO, readOnly: true }
-        : FIXTURE_INFO,
-    getState: () => state,
+        : name === "connect-full" ||
+            name === "access-narrowed" ||
+            name === "access-offer" ||
+            options.fullPairing
+          ? { ...FIXTURE_INFO, fullControl: true }
+          : FIXTURE_INFO,
+    getState: () => snapshot,
     subscribe(listener) {
       listeners.add(listener);
       startSteps();
@@ -1040,11 +1227,36 @@ export function createFixtureBridge(
     },
     setState: (change) => set(change(state)),
     sent,
+    reads,
+    holds: (key) => holds.get(key)?.size ?? 0,
+    sendFrom: async (view, command) => {
+      await apply(command, view);
+    },
+    onReopenRefused(listener) {
+      reopenRefusals.add(listener);
+      return () => reopenRefusals.delete(listener);
+    },
+    refuseReopen(key, error) {
+      if (!releaseHold(key, PAGE_VIEW) && key in state.transcripts) {
+        pageOmitted.add(key);
+        publish();
+      }
+      for (const listener of reopenRefusals) listener(key, error);
+    },
     badge: null,
     refuse: (type: string) => void railRefused.add(type),
     raceArchive: () => void (railRace.archive = true),
     hold: timers.hold,
     release: timers.release,
+    holdSnapshots: () => {
+      holdSnapshots = true;
+    },
+    releaseSnapshots: () => {
+      holdSnapshots = false;
+      if (!snapshotPending) return;
+      snapshotPending = false;
+      publish();
+    },
     computerRefusals: () => computer?.refusals() ?? 0,
   };
 }

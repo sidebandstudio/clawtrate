@@ -56,6 +56,8 @@ async function startOwnHost(): Promise<Host> {
 /** The interface on a host, paired with the gateway as a new device (operator.read). */
 async function pairedPage(browser: Browser, host: Host): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  // These checks are the cards and their Raw: with "Show commands" on (conversation.md, 7.11).
+  await context.addInitScript(() => localStorage.setItem("clawtrate.commands", "show"));
   const next = await context.newPage();
   await next.goto(host.url);
   await next.getByRole("button", { name: "Use the development gateway" }).click();

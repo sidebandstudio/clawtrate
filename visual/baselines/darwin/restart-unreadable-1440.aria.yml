@@ -1,0 +1,20 @@
+- dialog "Settings":
+  - navigation "Settings":
+    - heading "Settings" [level=2]
+    - button "Gateway"
+    - button "Accounts"
+    - button "Conversation"
+    - button "Usage"
+    - button "Machines"
+    - button "Check-ins"
+    - button "Updates"
+    - button "Advanced"
+  - region "Updates":
+    - button "Close settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - group "Update status":
+      - term: Updates
+      - definition: This build's version couldn't be read. It can't check for updates.
+      - paragraph: Clawtrate couldn't read the running version.
+    - status: This build's version couldn't be read. It can't check for updates. Clawtrate couldn't read the running version.

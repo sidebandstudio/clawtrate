@@ -286,7 +286,15 @@ export function AdminBar({
   let body: ReactNode;
   let action: ReactNode = null;
   let tone: "danger" | undefined;
-  if (info.readOnly) {
+  if (connection.status === "connected" && connection.fullPairing && !info.readOnly) {
+    // A full pairing the gateway granted less: its limit stands, and nothing asks again (§2).
+    // Said only while connected: a drop clears the scopes until the next hello.
+    body = (
+      <>
+        <b>OpenClaw granted less than full control.</b> {need}
+      </>
+    );
+  } else if (info.readOnly) {
     body = (
       <>
         <b>Read-only.</b> {need} This connection only reads.
@@ -354,7 +362,7 @@ export function AdminBar({
       </button>
     );
   }
-  if (connection.status !== "connected" || info.readOnly) action = null;
+  if (connection.status !== "connected" || info.readOnly || connection.fullPairing) action = null;
   const pending = status === "pending";
   return (
     <section
@@ -393,22 +401,28 @@ export function AdminBar({
 
 /**
  * "Admin access granted. You can change this now." for 4 seconds after the
- * grant, then the screen's own action takes the bar's place.
+ * grant, then the screen's own action takes the bar's place. Only while the
+ * connection the grant came on still holds admin: a drop, a revoke or another
+ * gateway ends it at once.
  */
 export function useGranted(connection: ConnectionState): boolean {
-  const [granted, setGranted] = useState(false);
+  // The gateway address and device the grant came on, or null.
+  const [granted, setGranted] = useState<string | null>(null);
   const [had, setHad] = useState(connection.canAdmin);
+  const on = `${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}`;
+  const live = connection.status === "connected" && connection.canAdmin;
   if (connection.canAdmin !== had) {
     setHad(connection.canAdmin);
     if (connection.canAdmin && askingAdmin(connection) && connection.upgrade.status === "approved")
-      setGranted(true);
+      setGranted(on);
   }
+  if (granted !== null && (!live || granted !== on)) setGranted(null);
   useEffect(() => {
-    if (!granted) return;
-    const timer = setTimeout(() => setGranted(false), 4000);
+    if (granted === null) return;
+    const timer = setTimeout(() => setGranted(null), 4000);
     return () => clearTimeout(timer);
   }, [granted]);
-  return granted;
+  return granted !== null && live && granted === on;
 }
 
 export function GrantedBar() {

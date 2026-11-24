@@ -2,6 +2,7 @@ export * from "./types.ts";
 export * from "./store.ts";
 export * from "./host.ts";
 export * from "./mapping.ts";
+export * from "./avatar.ts";
 export * from "./runs.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";
@@ -11,6 +12,8 @@ export * from "./action-feed.ts";
 export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
+export * from "./pictures.ts";
+export * from "./bot-names.ts";
 export * from "./computer.ts";
 export * from "./machine.ts";
 export * as computerWords from "./computer-words.ts";
@@ -37,6 +40,7 @@ export {
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./machines.ts";
+export * from "./bot-delete.ts";
 export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
@@ -53,6 +57,7 @@ export * from "./owners.ts";
 export * from "./remote-bridge.ts";
 export { utf8Length } from "./encoding.ts";
 export * from "./scopes.ts";
+export { protectedGatewayUrl } from "./gateway-url.ts";
 export * from "./setup.ts";
 export * from "./bridge.ts";
 export * from "./connect-errors.ts";
@@ -84,6 +89,8 @@ export {
   SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
   validateGatewayUrl,
+  hasUnsettledWork,
+  type ProvedRoute,
   type SetupEndpointCheck,
   type ClientOptions,
   type ConnectOptions,

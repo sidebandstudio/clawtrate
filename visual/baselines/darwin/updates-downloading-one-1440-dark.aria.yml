@@ -1,0 +1,26 @@
+- dialog "Settings":
+  - navigation "Settings":
+    - heading "Settings" [level=2]
+    - button "Gateway"
+    - button "Accounts"
+    - button "Conversation"
+    - button "Usage"
+    - button "Machines"
+    - button "Check-ins"
+    - button "Updates"
+    - button "Advanced"
+  - region "Updates":
+    - button "Close settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - paragraph: This build can't install updates itself.
+    - term: Version
+    - definition:
+      - text: Clawtrate 0.1.0
+      - paragraph: This copy is a Stable build.
+    - group "Update status":
+      - term: Updates
+      - definition:
+        - text: Downloading Clawtrate 0.2.0… 41,000 of 120,000 bytes
+        - progressbar "Downloading Clawtrate 0.2.0"
+    - status: Downloading Clawtrate 0.2.0… 30% This build can't install updates itself.

@@ -3,12 +3,14 @@
 // development gateway runs, the tests that need one are skipped.
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import {
   closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -18,6 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, createPublicKey, randomBytes } from "node:crypto";
+import { createServer, type AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -37,6 +40,7 @@ import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { debuggingPort } from "./desktop-driver.ts";
 import { quitWithin } from "./quit.ts";
+import { dictionaryRequests, requestsSoFar } from "./net-log.ts";
 import {
   CHECKOUT,
   bundleIdentifier,
@@ -46,6 +50,7 @@ import {
   processesUsing,
 } from "./global-setup.ts";
 import {
+  askToClose,
   integrityLevels,
   mainWindowTitle,
   taskbarOverlayDescription,
@@ -61,6 +66,8 @@ const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
 const APP_LOG = process.env.CLAWTRATE_PACKAGED_LOG ?? "";
 const SANDBOX = process.env.CLAWTRATE_PACKAGED_SANDBOX!;
 const RECORD = process.env.CLAWTRATE_PACKAGED_RECORD ?? "";
+/** Where the runner writes the first app's exit status once it has reaped it. */
+const APP_EXIT = process.env.CLAWTRATE_PACKAGED_EXIT ?? "";
 /** A made-up key for the scripted API-key sign-in: its account is `acme:packaged`. */
 const TYPED_KEY = "clawtrate-dev-key.acme.packaged";
 
@@ -408,11 +415,14 @@ function runEndpoint() {
   return endpoint;
 }
 
-test("pairs with its own development gateway instance and shows the seeded bots", async () => {
-  test.skip(WINDOWS, NO_GATEWAY);
+/** Pairs the app global setup started with the run's instance, from its connect screen. */
+async function pair(): Promise<void> {
   const endpoint = runEndpoint();
+  // The address-and-token form is under Advanced, which the first test opens; run alone, nothing has.
+  const address = page.getByPlaceholder("Gateway address");
+  if (!(await address.isVisible())) await page.getByRole("button", { name: "Advanced" }).click();
 
-  await page.getByPlaceholder("Gateway address").fill(endpoint.url);
+  await address.fill(endpoint.url);
   await page.getByPlaceholder("Gateway token, for pairing").fill(endpoint.token);
   await page.getByRole("button", { name: "Connect" }).click();
 
@@ -431,6 +441,11 @@ test("pairs with its own development gateway instance and shows the seeded bots"
     "Otto",
     "Pip",
   ]);
+}
+
+test("pairs with its own development gateway instance and shows the seeded bots", async () => {
+  test.skip(WINDOWS, NO_GATEWAY);
+  await pair();
   await page.getByRole("button", { name: /^Otto, \d+ tasks?/ }).click();
   await page
     .getByRole("list", { name: "Otto's tasks" })
@@ -562,6 +577,152 @@ test("stays on its own content", async () => {
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
 });
 
+test("F-393: checking spelling asks for no dictionary", async () => {
+  // Windows checks spelling with its own checker. For a language it has no
+  // checker for, Chromium falls back to a Hunspell dictionary and downloads it
+  // the first time, in a request the browser process makes outside the
+  // session's request filter. Faroese has a Hunspell dictionary, and a
+  // Windows without Faroese installed has no checker for it, so a second copy
+  // of the app with Faroese as its spelling language would take that path as
+  // it starts. Its network log, complete once it has quit, shows every
+  // request, and none may be for a dictionary, from a host or from a file.
+  // macOS builds no Hunspell fallback, so nothing asks for one there either.
+  test.setTimeout(120_000);
+  // A new folder each time: one that already holds a dictionary never asks for it.
+  const spelling = realpathSync.native(
+    mkdtempSync(join(process.env.CLAWTRATE_PACKAGED_PLACE!, "spelling-")),
+  );
+  const netLog = join(spelling, "net-log.json");
+  // macOS keeps a sandboxed app's data in its sandbox's folder, so the copy gets
+  // a sandbox of its own, as the Keychain check's launches do. Windows reads no
+  // sandbox and keeps its data in the folder the launch names, so the copy names
+  // a new one and passes the run's sandbox, as the second launch does.
+  let data = join(spelling, "data");
+  let sandbox = SANDBOX;
+  if (WINDOWS) mkdirSync(data);
+  else {
+    const own = writeSandbox({ instance: INSTANCE, parent: spelling });
+    data = realpathSync.native(own.appData);
+    sandbox = own.file;
+  }
+  writeFileSync(
+    join(data, "Preferences"),
+    JSON.stringify({ spellcheck: { dictionaries: ["fo"] } }),
+  );
+  // A home, temporary folder and working folder of its own, as every packaged launch has.
+  const place = launchPlace(spelling);
+  // Straight to the pictures' port: a proxy the system names could be asked for them.
+  const copyFlags = [`--log-net-log=${netLog}`, "--no-proxy-server"];
+  let copy: ChildProcess;
+  if (WINDOWS) {
+    // Windows keeps no run record. Node puts the copy in a job object that
+    // Windows closes when this worker exits, so the copy ends with it.
+    copy = spawn(packagedExecutable(APP), [...launchArgs(data, sandbox, CHECKOUT), ...copyFlags], {
+      cwd: place.cwd,
+      env: place.env,
+      stdio: "ignore",
+    });
+  } else {
+    // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
+    const gated = gatedSpawn(
+      spawn,
+      packagedExecutable(APP),
+      [...launchArgs(data, sandbox, CHECKOUT), ...copyFlags],
+      { cwd: place.cwd, env: place.env, stdio: "ignore" },
+    );
+    copy = gated.child;
+    // Until the record names it, a failure aborts the gate, so the copy never starts.
+    try {
+      const found = processIdentity(copy.pid!);
+      if (found.state !== "alive") throw new Error("could not record the copy's process");
+      recordSuccessor(RECORD, { pid: copy.pid!, identity: found.identity });
+    } catch (error) {
+      gated.abort();
+      throw error;
+    }
+    gated.release();
+  }
+  // A copy that cannot start emits `error` and may never emit `exit`: either ends the wait.
+  const exited = new Promise((resolve) => {
+    copy.once("exit", resolve);
+    copy.once("error", resolve);
+  });
+  // Pictures for the copy's page to ask for, from a port on this machine that refuses them.
+  const pictures = createServer((socket) => socket.destroy());
+  const soFar = () => {
+    try {
+      return requestsSoFar(readFileSync(netLog, "utf8"));
+    } catch (error) {
+      // Chromium may not have created the file yet, or may hold it on Windows.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "EBUSY") throw error;
+      return [];
+    }
+  };
+  let view: Browser | undefined;
+  let left: number[];
+  try {
+    await once(pictures.listen(0, "127.0.0.1"), "listening");
+    const picturesAt = `https://127.0.0.1:${(pictures.address() as AddressInfo).port}/`;
+    view = await chromium.connectOverCDP(`http://127.0.0.1:${await debuggingPort(data, copy)}`);
+    await expect
+      .poll(() => view!.contexts().flatMap((context) => context.pages()).length)
+      .toBeGreaterThan(0);
+    const shown = view.contexts().flatMap((context) => context.pages())[0]!;
+    await expect(shown.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+    // Chromium writes events only once 15 are waiting, and an idle app logs
+    // none, so a request can sit unwritten until the app quits. Each picture
+    // the page asks for adds events, and events are written in the order they
+    // happen, so asking for one more picture until one shows brings every
+    // earlier event to disk, a dictionary request at startup included, and
+    // shows the log is being written.
+    let picture = 0;
+    await expect
+      .poll(
+        async () => {
+          await shown.evaluate((url) => {
+            new Image().src = url;
+          }, `${picturesAt}${picture++}.png`);
+          return soFar().some((url) => url.startsWith(picturesAt));
+        },
+        { timeout: 30_000, message: "the log on disk shows a picture's request" },
+      )
+      .toBe(true);
+    // Windows refuses the close message until the window is shown.
+    if (WINDOWS)
+      await expect.poll(() => mainWindowTitle(copy.pid!), { timeout: 20_000 }).toBe("Clawtrate");
+    const quit = await quitWithin(
+      () => {
+        if (WINDOWS) expect(askToClose(copy.pid!), "asking the copy to close").toBeNull();
+        else copy.kill("SIGTERM");
+      },
+      () => exited,
+      async () => view?.close(),
+      15_000,
+    );
+    expect(quit, "the copy quits within 15 seconds").toBe(true);
+    expect(copy.exitCode, "the copy's exit code").toBe(0);
+  } finally {
+    pictures.close();
+    // Whatever is left is ended by PID: nothing outlives the test.
+    if (copy.exitCode === null && copy.signalCode === null) {
+      // Only the copy: on Windows this ends its process alone, not its tree.
+      copy.kill("SIGKILL");
+      // Bounded: a copy that could not be ended never exits. The list below names it.
+      await Promise.race([exited, sleep(10_000)]);
+    }
+    // Its helpers end by themselves once it has. Any left fail the test, listed
+    // but not ended: only the copy was started here.
+    for (let i = 0; i < 50 && processesUsing(data).length > 0; i += 1) await sleep(200);
+    left = processesUsing(data);
+  }
+  expect(left, "the copy's processes end within 10 seconds of it").toEqual([]);
+  expect(
+    dictionaryRequests(readFileSync(netLog, "utf8")),
+    "the dictionaries the network log shows requests for",
+  ).toEqual([]);
+});
+
 test("opens with the same pairing and tasks after a newer build takes its place", async () => {
   // An update in place quits the app and starts a newer build of the same
   // bundle id, name and data folder. Here the newer build is a copy of this
@@ -570,9 +731,14 @@ test("opens with the same pairing and tasks after a newer build takes its place"
   test.skip(WINDOWS, NO_GATEWAY);
   test.setTimeout(300_000);
   const gateway = join(USER_DATA, "gateway");
-  const key = readFileSync(join(gateway, "device-key.pem"));
   const state = () =>
     JSON.parse(readFileSync(join(gateway, "state.json"), "utf8")) as Record<string, string>;
+  const paired = () =>
+    existsSync(join(gateway, "state.json")) &&
+    Object.keys(state()).some((name) => name.startsWith("deviceToken:"));
+  // Run alone (`--grep`), no earlier test has paired the app.
+  if (!paired()) await pair();
+  const key = readFileSync(join(gateway, "device-key.pem"));
   const before = state();
   expect(before.connection).toBeTruthy();
   expect(Object.keys(before).some((name) => name.startsWith("deviceToken:"))).toBe(true);
@@ -593,13 +759,10 @@ test("opens with the same pairing and tasks after a newer build takes its place"
   // with the teardown's own bounds: 15 seconds for the app, 10 for its helpers.
   // Asked while the debugging client is attached, as the teardown asks; the
   // 15 seconds start at SIGTERM, and closing that client runs alongside.
+  // Gone once the runner that started the app has reaped it and written how it ended.
   const firstGone = async () => {
     for (const end = Date.now() + 20_000; Date.now() < end; await sleep(100)) {
-      // The runner that started the app reaps it; until then `ps` shows a zombie.
-      const state = spawnSync("ps", ["-o", "stat=", "-p", String(APP_PID)], {
-        encoding: "utf8",
-      }).stdout.trim();
-      if (!state || state.startsWith("Z")) return;
+      if (existsSync(APP_EXIT)) return;
     }
     await new Promise(() => undefined);
   };
@@ -610,6 +773,11 @@ test("opens with the same pairing and tasks after a newer build takes its place"
     15_000,
   );
   expect(firstQuit, "the app quits within 15 seconds, as an update asks it").toBe(true);
+  // A crash on the way out (SIGSEGV, another code) is not the quit an update asks for.
+  expect(
+    JSON.parse(readFileSync(APP_EXIT, "utf8")),
+    "the app quits cleanly, as an update asks it",
+  ).toEqual({ code: 0, signal: null });
   // From the app's exit: its helpers' own 10 seconds.
   await expect
     .poll(() => processesUsing(USER_DATA), {
@@ -739,8 +907,9 @@ test("opens with the same pairing and tasks after a newer build takes its place"
       status.code === 0,
       `the newer build quits cleanly, not with ${JSON.stringify(status)}`,
     ).toBe(true);
-    expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
+    // First, so a helper that could not be ended names why it is still listed.
     expect(unsignalled, "every helper left could be ended").toEqual([]);
+    expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
   }
 });
 
@@ -926,9 +1095,19 @@ test("keeps this device's credentials in the Keychain: a fresh build moves them 
   const secrets = [...tokens, "PRIVATE KEY"];
 
   try {
-    expect(await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-1"))).toBe(
-      deviceId,
-    );
+    // With the Keychain, the Mac app's host pairs with full control (docs/decisions.md, "On in
+    // the packaged Mac app, for a protected address"); its interface is told so.
+    const fullControl = async (view: Page) => {
+      const info = await view.evaluate(async () => {
+        const host = (window as unknown as { clawtrateHost: { hello(): Promise<unknown> } })
+          .clawtrateHost;
+        return ((await host.hello()) as { info: { fullControl?: boolean } }).info;
+      });
+      expect(info.fullControl).toBe(true);
+    };
+    expect(
+      await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-1"), fullControl),
+    ).toBe(deviceId);
     // Moved: the sealed record, and the files without a credential or the key.
     expect(readdirSync(folder).sort()).toEqual(["credentials.bin", "state.json"]);
     expect(Object.keys(state()).some((key) => key.startsWith("deviceToken:"))).toBe(false);

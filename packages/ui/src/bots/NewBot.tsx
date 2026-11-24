@@ -4,11 +4,12 @@
 // and a request for access; Create clears it.
 
 import type { AccountsState, Bot, ConnectionState, HostInfo } from "@clawtrate/core";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { firstChoice } from "@clawtrate/core";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { Character, CHARACTER_COLORS, type BodyName } from "../Avatar.tsx";
 import { BackIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
+import { AvatarPicker, PicturePreview, pictureFor, type PictureDraft } from "./AvatarPicker.tsx";
 import { Connect } from "./Connect.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { AdminBar, GrantedBar, Note, useAnnouncer, useGranted } from "./parts.tsx";
@@ -16,32 +17,23 @@ import { ModelPair } from "./ModelPair.tsx";
 import { recall, remember } from "./memory.ts";
 import { defaultAccount, defaultRef, firstEffort, firstModel, providerName } from "./words.ts";
 
-export const BODIES: BodyName[] = [
-  "pebble",
-  "block",
-  "arch",
-  "bloom",
-  "disc",
-  "hex",
-  "drop",
-  "gem",
-];
-const COLOR_NAMES = ["Green", "Blue", "Orange", "Violet", "Yellow", "Pink", "Sky", "Lime"];
-
 type Draft = {
   name: string;
-  body: BodyName;
-  color: string;
+  /** Null until the person changes the picture: the new bot then gets the Clawling its id gives. */
+  picture: PictureDraft | null;
   /** An account id, `GATEWAY_CHOICE`, or null: nothing chosen. */
   account: string | null;
   model: string | null;
   effort: string | null;
 };
 
+/** What New bot shows before the picture is changed: an example, not what is sent. */
+const STARTER: PictureDraft = { choice: firstChoice("clawling", "blue"), upload: null };
+const PICTURE_FAILED = "Couldn't draw that picture. Choose it again, or choose another.";
+
 const freshDraft = (): Draft => ({
   name: "",
-  body: "drop",
-  color: "#ff6f9c",
+  picture: null,
   account: null,
   model: null,
   effort: null,
@@ -50,53 +42,6 @@ const freshDraft = (): Draft => ({
 /** Kept until the app quits: closing the dialog does not lose what was entered. */
 type Kept = { draft: Draft; step: "look" | "account" | "connect" };
 const KEPT = "new-bot";
-
-/** The size of the picture New bot sends: the drawn character, rasterised. */
-const PICTURE_PX = 128;
-
-/**
- * The picture of a drawn character, as a PNG data URL the gateway keeps with
- * the bot. A raster, because the app shows only raster pictures from the
- * gateway (`safeAvatarUrl`). Null when it cannot be drawn: the bot then gets
- * the character its id gives.
- */
-async function pictureOf(svg: SVGElement | null | undefined): Promise<string | null> {
-  if (!svg) return null;
-  let markup = svg.outerHTML;
-  if (!markup.includes("xmlns="))
-    markup = markup.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
-  try {
-    const image = new Image(PICTURE_PX, PICTURE_PX);
-    image.src = `data:image/svg+xml;base64,${btoa(markup)}`;
-    await image.decode();
-    const canvas = document.createElement("canvas");
-    canvas.width = PICTURE_PX;
-    canvas.height = PICTURE_PX;
-    canvas.getContext("2d")?.drawImage(image, 0, 0, PICTURE_PX, PICTURE_PX);
-    return canvas.toDataURL("image/png");
-  } catch {
-    return null;
-  }
-}
-
-/** A radio group of one tab stop: arrows move and choose, Home and End go to the ends. */
-function onRadioKeys<T>(values: readonly T[], current: T, choose: (value: T) => void) {
-  return (event: KeyboardEvent<HTMLDivElement>) => {
-    const index = values.indexOf(current);
-    let next: number | null = null;
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (index + 1) % values.length;
-    else if (event.key === "ArrowLeft" || event.key === "ArrowUp")
-      next = (index - 1 + values.length) % values.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = values.length - 1;
-    if (next === null) return;
-    event.preventDefault();
-    // Focus moves now, as the key is handled: a key pressed straight after (Tab) acts from the
-    // radio it reached, and this handler leaves no focus move for a later frame.
-    event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
-    choose(values[next]!);
-  };
-}
 
 export function NewBot({
   accounts,
@@ -119,6 +64,52 @@ export function NewBot({
     () => recall<Kept>(KEPT)?.step ?? "look",
   );
   const [announcer, announce] = useAnnouncer();
+  const [pictureFailed, setPictureFailed] = useState(false);
+  const [pictureBusy, setPictureBusy] = useState(false);
+  // This opening of the dialog: whether it still stands, the gateway it was opened on, the draft
+  // as it is now, and whether a Create is being prepared or sent.
+  const open = useRef(true);
+  // The gateway it was opened on: its address, and the first identity seen for it on the
+  // connection the dialog opened on. Results are acted on only while the connected gateway's
+  // identity positively matches that one, so a reconnect to the same gateway, such as the one
+  // that grants admin access, keeps the dialog's work, and an unknown identity never counts.
+  const [gateway] = useState(() => connection.gatewayUrl);
+  const [firstConnection] = useState(() => connection.connectedAt);
+  const [openedOn, setOpenedOn] = useState(connection.gatewayId);
+  // The host's target as it opened: a Connect, Disconnect or switch since refuses what it sends.
+  const [target] = useState(connection.target);
+  if (
+    openedOn === null &&
+    connection.gatewayId !== null &&
+    connection.gatewayUrl === gateway &&
+    connection.connectedAt === firstConnection
+  )
+    setOpenedOn(connection.gatewayId);
+  const now$ = useRef(connection);
+  const latest = useRef(draft);
+  const pending = useRef(false);
+  const [preparing, setPreparing] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  // Layout effects, so the guard changes as the dialog is committed, before a Create can resume.
+  useLayoutEffect(() => {
+    open.current = true;
+    return () => {
+      open.current = false;
+    };
+  }, []);
+  useLayoutEffect(() => {
+    now$.current = connection;
+    latest.current = draft;
+  });
+  const matchesGateway = (now: ConnectionState) =>
+    now.status === "connected" &&
+    now.gatewayUrl === gateway &&
+    now.target === target &&
+    now.gatewayId !== null &&
+    now.gatewayId === openedOn;
+  const canSubmitHere = matchesGateway(connection);
+  const stands = () => open.current && matchesGateway(now$.current) && latest.current === draft;
+  const shown = draft.picture ?? STARTER;
   const previewRef = useRef<HTMLSpanElement>(null);
   const granted = useGranted(connection);
   const admin = connection.canAdmin;
@@ -193,17 +184,49 @@ export function NewBot({
   const busy = creation?.status === "creating" || creation?.status === "checking";
   const create = async () => {
     if (!draft.account || !listedChoice || !provider || !draft.model || busy) return;
-    announce("Creating the bot");
+    // One Create at a time, for this opening of the dialog and the gateway it was opened on.
+    if (pending.current) return;
+    pending.current = true;
+    setPreparing(true);
+    const sent = draft;
+    try {
+      // A picture the person chose must be drawn to be sent; if it can't be, nothing is created.
+      const avatar = sent.picture
+        ? await pictureFor(sent.picture, previewRef.current?.querySelector("svg"))
+        : null;
+      // Checked again right before sending: a dialog closed, or a gateway changed, while the
+      // picture was drawn sends nothing.
+      if (!stands()) return;
+      if (sent.picture && !avatar) {
+        setPictureFailed(true);
+        announce(PICTURE_FAILED);
+        return;
+      }
+      setPictureFailed(false);
+      announce("Creating the bot");
+      await send(sent, avatar);
+    } finally {
+      pending.current = false;
+      if (open.current) setPreparing(false);
+    }
+  };
+  const send = async (sent: Draft, avatar: string | null) => {
+    if (!sent.account || !provider || !sent.model) return;
     try {
       const { botId, missing } = await bridge.invoke({
         type: "createBot",
-        name: draft.name.trim(),
-        avatar: await pictureOf(previewRef.current?.querySelector("svg")),
-        account: draft.account === GATEWAY_CHOICE ? null : draft.account,
+        name: sent.name.trim(),
+        avatar,
+        account: sent.account === GATEWAY_CHOICE ? null : sent.account,
         provider,
-        model: draft.model,
-        effort: draft.effort,
+        model: sent.model,
+        effort: sent.effort,
+        // The host refuses it unless this is still the gateway, and the target, it names.
+        stamp: { gatewayId: now$.current.gatewayId, target },
       });
+      // An answer for an opening that has gone, from a gateway or connection since replaced, or for
+      // a draft changed since, closes, clears and selects nothing.
+      if (!stands()) return;
       remember(KEPT, null);
       // The bot exists; what did not land is said here, and finished by its id.
       if (missing.length > 0) {
@@ -214,20 +237,29 @@ export function NewBot({
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      announce("Could not create the bot");
+      if (stands()) announce("Could not create the bot");
     }
   };
   const partial = creation?.status === "partial" ? creation : null;
   const finish = async () => {
-    if (!partial?.botId) return;
+    // Bound as Create is: this opening, on the gateway it was opened on.
+    if (!partial?.botId || finishing || !stands()) return;
+    setFinishing(true);
     try {
-      const { botId, missing } = await bridge.invoke({ type: "finishBot", botId: partial.botId });
-      if (missing.length > 0) return;
+      const { botId, missing } = await bridge.invoke({
+        type: "finishBot",
+        botId: partial.botId,
+        // The host refuses it unless this is still the gateway, and the target, it names.
+        stamp: { gatewayId: now$.current.gatewayId, target },
+      });
+      if (!stands() || missing.length > 0) return;
       announce(`Created ${partial.name}`);
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      announce(`Could not finish ${partial.name}`);
+      if (stands()) announce(`Could not finish ${partial.name}`);
+    } finally {
+      if (open.current) setFinishing(false);
     }
   };
 
@@ -262,9 +294,7 @@ export function NewBot({
     );
     body = (
       <>
-        <span className="b-preview" role="img" aria-label={`${name}'s picture`} ref={previewRef}>
-          <Character spec={{ body: draft.body, color: draft.color, tilt: 0, look: [0.6, 0] }} />
-        </span>
+        <PicturePreview draft={shown} label={`${name}'s picture`} previewRef={previewRef} />
         <label className="visually-hidden" htmlFor="b-name">
           Name
         </label>
@@ -280,63 +310,16 @@ export function NewBot({
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              setStep("account");
+              // Not while a chosen picture is still being read.
+              if (!pictureBusy) setStep("account");
             }
           }}
         />
-        <p className="b-label" id="b-shape-label">
-          Shape
-        </p>
-        <div
-          className="b-shapes"
-          role="radiogroup"
-          aria-labelledby="b-shape-label"
-          onKeyDown={onRadioKeys(BODIES, draft.body, (body) =>
-            setDraft((was) => ({ ...was, body })),
-          )}
-        >
-          {BODIES.map((body) => (
-            <button
-              key={body}
-              type="button"
-              className="b-shape"
-              role="radio"
-              aria-checked={body === draft.body}
-              tabIndex={body === draft.body ? 0 : -1}
-              aria-label={body}
-              onClick={() => setDraft((was) => ({ ...was, body }))}
-            >
-              <Character spec={{ body, color: draft.color, tilt: 0, look: [0.6, 0] }} />
-            </button>
-          ))}
-        </div>
-        <p className="b-label" id="b-color-label">
-          Colour
-        </p>
-        <div
-          className="b-colors"
-          role="radiogroup"
-          aria-labelledby="b-color-label"
-          onKeyDown={onRadioKeys(
-            CHARACTER_COLORS,
-            draft.color as (typeof CHARACTER_COLORS)[number],
-            (color) => setDraft((was) => ({ ...was, color })),
-          )}
-        >
-          {CHARACTER_COLORS.map((color, index) => (
-            <button
-              key={color}
-              type="button"
-              className="b-color"
-              role="radio"
-              aria-checked={color === draft.color}
-              tabIndex={color === draft.color ? 0 : -1}
-              aria-label={COLOR_NAMES[index]}
-              style={{ ["--swatch" as string]: color }}
-              onClick={() => setDraft((was) => ({ ...was, color }))}
-            />
-          ))}
-        </div>
+        <AvatarPicker
+          draft={shown}
+          onChange={(picture) => setDraft((was) => ({ ...was, picture }))}
+          onBusy={setPictureBusy}
+        />
       </>
     );
     foot = (
@@ -345,9 +328,10 @@ export function NewBot({
         className="button"
         data-variant="primary"
         data-size="lg"
+        disabled={pictureBusy}
         onClick={() => setStep("account")}
       >
-        Next
+        {pictureBusy ? "Reading the picture…" : "Next"}
       </button>
     );
   } else if (step === "account") {
@@ -366,14 +350,27 @@ export function NewBot({
     const who = provider ? providerName(provider) : null;
     body = (
       <>
-        <span
-          className="b-preview"
-          style={{ ["--avatar-create" as string]: "56px", marginBottom: 10 }}
-          aria-hidden="true"
-          ref={previewRef}
-        >
-          <Character spec={{ body: draft.body, color: draft.color, tilt: 0, look: [0.6, 0] }} />
-        </span>
+        <PicturePreview draft={shown} label={null} previewRef={previewRef} small />
+        {pictureFailed && (
+          <div className="b-upload">
+            <p className="b-field-error" role="alert">
+              {PICTURE_FAILED}
+            </p>
+            <button
+              type="button"
+              className="button"
+              data-variant="quiet"
+              data-size="sm"
+              onClick={() => {
+                // The bot then gets the Clawling its id gives; the name and account stay.
+                setDraft((was) => ({ ...was, picture: null }));
+                setPictureFailed(false);
+              }}
+            >
+              Use the default picture
+            </button>
+          </div>
+        )}
         <p className="b-lead">
           Choose the account {name} runs on. The sign-in stays on your gateway.
         </p>
@@ -511,12 +508,15 @@ export function NewBot({
                 className="button"
                 data-variant="primary"
                 data-size="sm"
+                disabled={!canSubmitHere || finishing}
                 onClick={() => void finish()}
               >
                 Finish {partial.name}
               </button>
-              {/* A bot the gateway's list doesn't show yet can't be opened. */}
-              {!partial.missing.includes("listed") && (
+              {/* A bot the gateway's list doesn't show yet can't be opened. One whose first-run
+                  questions are still on isn't opened as it is: that would drop the Finish that
+                  turns them off, and its first reply would ask for a name and a picture. */}
+              {!partial.missing.includes("listed") && !partial.missing.includes("identity") && (
                 <button
                   type="button"
                   className="button"
@@ -538,12 +538,28 @@ export function NewBot({
           className="button"
           data-variant="primary"
           data-size="lg"
-          disabled={busy || partial !== null || !draft.account || !listedChoice || !draft.model}
+          disabled={
+            busy ||
+            preparing ||
+            partial !== null ||
+            !draft.account ||
+            !listedChoice ||
+            !draft.model ||
+            !canSubmitHere
+          }
           onClick={() => void create()}
           data-testid="create"
         >
-          {busy ? "Creating…" : "Create"}
+          {busy || preparing ? "Creating…" : "Create"}
         </button>
+        {!canSubmitHere && (
+          <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
+            {connection.gatewayUrl !== gateway ||
+            (connection.status === "connected" && connection.gatewayId !== null)
+              ? "Reopen New bot to use this gateway. Your draft is kept."
+              : "Waiting for the gateway to say which gateway it is."}
+          </p>
+        )}
         {!draft.account && !busy && (
           <p className="b-hint" style={{ textAlign: "center", margin: 0 }}>
             Choose an account, or let the gateway choose.

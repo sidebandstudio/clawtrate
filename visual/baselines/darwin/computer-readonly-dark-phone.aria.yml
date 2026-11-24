@@ -1,0 +1,77 @@
+- region "Conversation":
+  - button "Back to bots"
+  - button "Juniper, Library e-book apps compared. Show details.": Juniper
+  - button "Juniper's computer. Show the computer"
+  - button "Hide work panel" [pressed]
+  - region "Transcript":
+    - heading "Library e-book apps compared" [level=1]
+    - paragraph: "Context: 5,716 of 128,000 tokens"
+    - text: Today 3:00 PM
+    - paragraph: Which e-book app does my library use, and is it any good?
+    - paragraph:
+      - text: Most public libraries use one of three lending platforms. Yours lists
+      - strong: Libby by OverDrive
+      - text: on its catalogue page, and it is
+      - emphasis: the easiest of the three
+      - text: to start with.
+    - paragraph:
+      - text: Sign in with your card number on
+      - link "the library's help page":
+        - /url: https://example.org/library/help
+      - text: ", then choose"
+      - code: Add a library
+      - text: if it asks twice.
+    - 'region "Juniper asks: Sign in to your library account, then hand the browser back."':
+      - heading "Sign in to your library account, then hand the browser back." [level=3]
+      - radiogroup "Sign in to your library account, then hand the browser back.":
+        - listitem:
+          - radio "I'm done I signed in. Carry on." [disabled]
+        - listitem:
+          - radio "Skip Check the holds another way." [disabled]
+      - paragraph: You can read this question but not answer it from this device.
+      - button "Request access"
+    - paragraph:
+      - text: Juniper is waiting for an approval or an answer. This device can't see it on a read-only connection.
+      - button "Request access"
+    - 'group "Juniper, thinking: Waiting for an answer."': Waiting for an answer
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Juniper's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- button "Close work panel"
+- dialog "Work":
+  - button "Close work panel"
+  - heading "Juniper" [level=2]
+  - paragraph: research
+  - tablist "Work":
+    - tab "Details"
+    - tab "Files"
+    - tab "Computer" [selected]
+    - tab "Settings"
+  - tabpanel "Computer":
+    - region "Screen":
+      - heading "Screen" [level=3]
+      - paragraph: Watching needs a connection that can send. This device is read-only.
+      - button "Request access"
+    - region "Machine":
+      - heading "Machine" [level=3]
+      - term: Command approval target
+      - definition: Not reported in this task.
+      - term: Set for Juniper
+      - definition: "Commands: not set Not resolved: the gateway chooses where each of Juniper's commands runs. Where one ran is only in its own result."
+      - term: Browser
+      - definition: Not reported.
+    - region "Recent actions":
+      - heading "Recent actions" [level=3]
+      - list:
+        - listitem:
+          - button "Used the browser, 5:38 PM. Show in chat":
+            - time: 5:38 PM
+            - text: Used the browser
+        - listitem:
+          - button "Opened the page, 5:38 PM. Show in chat":
+            - time: 5:38 PM
+            - text: Opened the page
+  - status
+- status

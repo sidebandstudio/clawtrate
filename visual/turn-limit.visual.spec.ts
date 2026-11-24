@@ -2,17 +2,21 @@
 // its default, and that a change reaches the host. The engine's half is
 // packages/core/test/turn-limit.test.ts; the card it leads to is checked in
 // live.behaviour.visual.spec.ts.
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 
-async function openPane(page: Page, theme: "light" | "dark" = "light") {
+async function openPane(
+  page: Page,
+  theme: "light" | "dark" = "light",
+  section: "Conversation" | "Advanced" = "Conversation",
+) {
   await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, theme);
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("button", { name: "Conversation", exact: true }).click();
-  await expect(settings.getByRole("heading", { name: "Conversation", level: 3 })).toBeVisible();
+  await settings.getByRole("button", { name: section, exact: true }).click();
+  await expect(settings.getByRole("heading", { name: section, level: 3 })).toBeVisible();
   return settings;
 }
 
@@ -56,6 +60,35 @@ test.describe("the turn time limit", () => {
     await expect(
       page.getByRole("dialog", { name: "Settings" }).getByLabel("Turn time limit"),
     ).toHaveValue("20");
+  });
+
+  test("F-519: Settings → Advanced has Show external channel chats, off by default, and a change reaches the host", async ({
+    page,
+  }) => {
+    const settings = await openPane(page, "light", "Advanced");
+    // Not in Conversation any more.
+    await settings.getByRole("button", { name: "Conversation", exact: true }).click();
+    await expect(settings.getByRole("switch", { name: "Show external channel chats" })).toHaveCount(
+      0,
+    );
+    await settings.getByRole("button", { name: "Advanced", exact: true }).click();
+    const toggle = settings.getByRole("switch", { name: "Show external channel chats" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(toggle).toHaveAccessibleDescription(/main conversation always shows/);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                clawtrateFixture: { getState(): { showChannelChats?: boolean } };
+              }
+            ).clawtrateFixture.getState().showChannelChats,
+        ),
+      )
+      .toBe(true);
   });
 });
 

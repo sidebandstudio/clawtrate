@@ -1,8 +1,10 @@
 // Every state of every card (conversation.md sections 10 to 13) matches its
 // approved baseline in light and dark, at desktop width and at phone width.
 // Each scene is built from the engine's own state (apps/desktop/src/fixture/cards.ts).
-import { expect, test, type Locator, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
+// These checks are the cards themselves, Raw included: they open with "Show commands" on
+// (docs/design/conversation.md, 7.11); visual/quiet.visual.spec.ts checks the cards without it.
+import { test, type Locator, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
 const CARD =
   '[data-testid="approval-card"], [data-testid="question-card"], [data-testid="messaged-card"], ' +
@@ -196,7 +198,7 @@ for (const size of [WIDE, PHONE]) {
       test.use({ ...contextFor(size, theme), viewport: { width: size.width, height: 2400 } });
       for (const shot of SHOTS) {
         test(`${shot.rows}: ${shot.name} matches its baseline`, async ({ page }) => {
-          await openFixture(page, `scene=${shot.scene}`, theme);
+          await openFixture(page, `commands=show&scene=${shot.scene}`, theme);
           const cards = page.locator(CARD);
           await expect(cards.first()).toBeVisible();
           const card = shot.pick ? shot.pick(page) : page.getByTestId(testIdOf(shot.scene)).last();

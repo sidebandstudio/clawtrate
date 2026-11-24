@@ -1,5 +1,6 @@
 import {
   browserUse,
+  gatewayStamp,
   type AccountsState,
   type Bot,
   type ComputerState,
@@ -8,8 +9,9 @@ import {
   type Task,
   type Transcript,
 } from "@clawtrate/core";
-import { useCallback, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
+import { EditPicture } from "./bots/EditPicture.tsx";
 import { useBridge } from "./bridge.tsx";
 import { stampTime } from "./format.ts";
 import { CloseIcon } from "./icons.tsx";
@@ -19,6 +21,14 @@ import { FilesTab } from "./work/FilesTab.tsx";
 import type { FileRequest } from "./work/links.tsx";
 import { TabBar } from "./work/TabBar.tsx";
 import "./work/files.css";
+
+/** One opening of Edit picture, and what it is bound to. */
+type PictureSession = {
+  token: number;
+  botId: string;
+  gateway: string | null;
+  connectedAt: number | null;
+};
 
 /** The pane's tabs, in the order the designs give (work-pane.md §1, bots.md §8). */
 export const WORK_TABS = [
@@ -60,6 +70,7 @@ export function WorkPanel({
   onShowQuestion,
   onRequestAccess,
   onOpenMachines,
+  onDeleteBot,
   accounts,
   bots,
   tasks,
@@ -90,6 +101,8 @@ export function WorkPanel({
   onRequestAccess: (() => void) | null;
   /** Settings, on Machines: where a node's settings are. */
   onOpenMachines?: (() => void) | undefined;
+  /** Delete bot…, from the bot's settings. */
+  onDeleteBot?: ((bot: Bot) => void) | undefined;
   accounts: AccountsState;
   bots: readonly Bot[];
   /** The bot's tasks, for a run in progress when its account changes. */
@@ -103,6 +116,25 @@ export function WorkPanel({
   const name = bot?.name ?? "This bot";
   // The pane's announcements, polite, as the conversation's live region speaks.
   const [announcement, setAnnouncement] = useState("");
+  // Each opening of Edit picture is a session with its own token, bound to the bot, the gateway
+  // and the connection it was opened on. It ends when any of them, or admin access, changes.
+  const [pictureSession, setPictureSession] = useState<PictureSession | null>(null);
+  const tokens = useRef(0);
+  const current = useRef<number | null>(null);
+  const canEditPicture = connection.canAdmin && online;
+  const gatewayKey = connection.gatewayUrl;
+  const editing =
+    pictureSession !== null &&
+    canEditPicture &&
+    pictureSession.botId === bot?.id &&
+    pictureSession.gateway === gatewayKey &&
+    pictureSession.connectedAt === connectedAt;
+  // Settled while rendering, so an ended session is gone before anything can reopen it.
+  if (pictureSession !== null && !editing) setPictureSession(null);
+  const liveToken = editing ? pictureSession.token : null;
+  useEffect(() => {
+    current.current = liveToken;
+  }, [liveToken]);
   const announce = useCallback((text: string) => {
     setAnnouncement("");
     requestAnimationFrame(() => setAnnouncement(text));
@@ -131,7 +163,41 @@ export function WorkPanel({
       </button>
       {bot && (
         <div className="work-hero">
-          <Avatar bot={bot} />
+          {canEditPicture ? (
+            <button
+              type="button"
+              className="work-picture"
+              aria-label={`Change ${bot.name}'s picture`}
+              title="Change picture"
+              onClick={() =>
+                setPictureSession({
+                  token: ++tokens.current,
+                  botId: bot.id,
+                  gateway: gatewayKey,
+                  connectedAt,
+                })
+              }
+            >
+              <Avatar bot={bot} />
+            </button>
+          ) : (
+            <Avatar bot={bot} />
+          )}
+          {editing && (
+            <EditPicture
+              key={pictureSession.token}
+              bot={bot}
+              stamp={gatewayStamp(connection)}
+              canSave={canEditPicture}
+              onClose={() => {
+                const token = pictureSession.token;
+                setPictureSession((open) => (open?.token === token ? null : open));
+              }}
+              onSaved={() => {
+                if (current.current === pictureSession.token) announce("Picture saved");
+              }}
+            />
+          )}
           <h2>{bot.name}</h2>
           {bot.theme && <p>{bot.theme}</p>}
         </div>
@@ -252,6 +318,7 @@ export function WorkPanel({
               info={info}
               visible={tab === "settings"}
               announce={announce}
+              onDeleteBot={onDeleteBot ? () => onDeleteBot(bot) : null}
             />
           ) : (
             <p className="work-note">Pick a bot to see its settings.</p>

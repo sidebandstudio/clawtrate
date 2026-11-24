@@ -22,8 +22,10 @@
   "dependencies": {
     "@clawtrate/core": "workspace:*",
     "@clawtrate/ui": "workspace:*",
+    "json5": "2.2.3",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "undici": "7.30.2",
     "ws": "8.22.2"
   },
   "devDependencies": {

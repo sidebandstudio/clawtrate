@@ -912,8 +912,15 @@ textarea {
    and, under it, the status strip. Text scrolling up fades out before it
    reaches the pill, and when the strip is showing it fades out before it
    reaches the strip. The transcript itself never reflows. */
+@property --transcript-mask-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 .transcript {
   --clear: calc(var(--header-height) + 6px);
+  --transcript-mask-start: calc(var(--clear) - 34px);
   position: relative;
   flex: 1;
   overflow-y: auto;
@@ -923,10 +930,14 @@ textarea {
   scroll-padding-bottom: var(--space-8);
   -webkit-mask-image: linear-gradient(
     to bottom,
-    transparent calc(var(--clear) - 34px),
+    transparent var(--transcript-mask-start),
     #000 var(--clear)
   );
-  mask-image: linear-gradient(to bottom, transparent calc(var(--clear) - 34px), #000 var(--clear));
+  mask-image: linear-gradient(
+    to bottom,
+    transparent var(--transcript-mask-start),
+    #000 var(--clear)
+  );
 }
 
 /* The floor under a followed end (TranscriptView's pinAt): the scrollable
@@ -945,12 +956,7 @@ textarea {
    edge and its gap, and appears over the last 8px of the band. */
 .conversation[data-strip="true"] .transcript {
   --clear: calc(var(--header-height) + var(--strip-band));
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent calc(var(--clear) - 8px),
-    #000 var(--clear)
-  );
-  mask-image: linear-gradient(to bottom, transparent calc(var(--clear) - 8px), #000 var(--clear));
+  --transcript-mask-start: calc(var(--clear) - 8px);
 }
 
 .transcript-inner {
@@ -1532,6 +1538,20 @@ textarea {
 .work-hero .avatar {
   width: var(--avatar-hero);
   height: var(--avatar-hero);
+}
+
+/* new: on admin the picture is a button that opens Edit picture (bots.md section 8). */
+.work-picture {
+  display: inline-grid;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+}
+
+.work-picture:hover {
+  background: var(--bg-hover);
 }
 
 .work-hero h2 {
@@ -2159,24 +2179,6 @@ textarea {
   height: 100%;
 }
 
-.presence > .avatar svg {
-  transform-origin: 50% 85%;
-}
-
-.presence[data-state="working"] > .avatar svg {
-  animation: bob calc(var(--loop-work) / 2) var(--ease-in-out) infinite alternate;
-}
-
-.presence[data-state="waiting"] > .avatar svg {
-  transform-origin: 50% 50%;
-  animation: lean var(--loop-nudge) var(--ease-in-out) infinite;
-}
-
-.presence[data-state="blocked"] > .avatar svg,
-.presence[data-state="failed"] > .avatar svg {
-  transform: translateY(5%) rotate(5deg);
-}
-
 .presence::before {
   content: "";
   position: absolute;
@@ -2233,25 +2235,6 @@ textarea {
 
 .bot[aria-current="true"] .presence {
   --presence-surface: color-mix(in srgb, var(--bg-rail), var(--text) 8%);
-}
-
-@keyframes bob {
-  from {
-    transform: translateY(3%);
-  }
-  to {
-    transform: translateY(-6%);
-  }
-}
-
-@keyframes lean {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.1);
-  }
 }
 
 /* The states the conversation components bring, as 12 px marks. */
@@ -3014,4 +2997,63 @@ textarea {
 
 .rail-notice .button[data-size="sm"] {
   flex: none;
+}
+
+/* The consent line above a pairing card's button (setup-effortless.md §2). */
+.consent {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.consent-line {
+  margin: 0;
+}
+
+.consent-more {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.consent-points {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.2em;
+}
+
+.consent-points[hidden] {
+  display: none;
+}
+
+.consent-points li + li {
+  margin-top: 4px;
+}
+
+/* The one-time offer of full control (FullControl.tsx): wide enough for the consent line. */
+.b-dialog[data-kind="confirm"]:has(.full-offer) {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.full-offer .consent {
+  margin: 0 0 var(--space-5);
+}
+
+.full-offer .consent-line,
+.full-offer .consent-points {
+  margin-bottom: 0;
+  font-size: var(--text-sm);
+}
+
+.full-offer .command {
+  margin-bottom: var(--space-5);
+}
+
+.settings-full {
+  margin-top: var(--space-4);
 }

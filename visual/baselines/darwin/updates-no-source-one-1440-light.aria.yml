@@ -1,0 +1,23 @@
+- dialog "Settings":
+  - navigation "Settings":
+    - heading "Settings" [level=2]
+    - button "Gateway"
+    - button "Accounts"
+    - button "Conversation"
+    - button "Usage"
+    - button "Machines"
+    - button "Check-ins"
+    - button "Updates"
+    - button "Advanced"
+  - region "Updates":
+    - button "Close settings"
+    - heading "Updates" [level=3]
+    - paragraph: Applies on this device.
+    - term: Version
+    - definition:
+      - text: Clawtrate 0.1.0
+      - paragraph: This copy is a Stable build.
+    - group "Update status":
+      - term: Updates
+      - definition: "This copy can't check for updates: no update source is set up for it."
+    - status: "This copy can't check for updates: no update source is set up for it."

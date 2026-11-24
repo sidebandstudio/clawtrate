@@ -23,7 +23,13 @@
 
 // The module, not the package: the package brings the DOM, which the node-typed tests lack.
 import { zonedTime } from "../../../../packages/ui/src/routines/schedule.ts";
-import { changedFields, savedAs } from "@clawtrate/core";
+import {
+  changedFields,
+  gatewayStamp,
+  sameStamp,
+  savedAs,
+  type GatewayStamp,
+} from "@clawtrate/core";
 import type {
   BridgeCommand,
   ClawtrateState,
@@ -547,8 +553,8 @@ export function routineCommands(now: number, params: RoutineParams) {
     // A write names the gateway its draft came from, as the engine refuses one
     // that does not (routines.ts `blocked`): a save before the identity is read,
     // or after another gateway confirmed, is not sent.
-    const bound = (gateway: string | null) =>
-      gateway !== null && gateway === get().connection.gatewayId;
+    const bound = (stamp: GatewayStamp | undefined) =>
+      sameStamp(stamp, gatewayStamp(get().connection));
     const later = <T>(ms: number, value: () => T) =>
       new Promise<T>((resolve) => setTimeout(() => resolve(value()), ms));
     // How the next save ends; a refusal or a conflict once, then saves work.
@@ -560,7 +566,7 @@ export function routineCommands(now: number, params: RoutineParams) {
     switch (command.type) {
       case "createRoutine": {
         if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
-        if (!bound(command.gateway))
+        if (!bound(command.stamp))
           return Promise.resolve({ status: "not-sent", reason: "gateway" });
         const input: NewRoutine = command.input;
         const made = base({
@@ -595,7 +601,7 @@ export function routineCommands(now: number, params: RoutineParams) {
       // a found routine is compared with what the save sent by `savedAs`.
       case "checkRoutineCreate":
         return later(300, () => null).then(() => {
-          if (!bound(command.gateway)) throw new Error("Another gateway is connected now.");
+          if (!bound(command.stamp)) throw new Error("Another gateway is connected now.");
           // The write lands at the first check; a later one reads what the gateway has now.
           const made = drafts.get(command.key);
           drafts.delete(command.key);
@@ -607,7 +613,7 @@ export function routineCommands(now: number, params: RoutineParams) {
         });
       case "checkRoutineUpdate":
         return later(300, () => null).then(() => {
-          if (!bound(command.gateway)) throw new Error("Another gateway is connected now.");
+          if (!bound(command.stamp)) throw new Error("Another gateway is connected now.");
           const routine = kept(command.id);
           return routine ? savedAs(routine, routine.text, command) : { status: "missing" };
         });
@@ -616,13 +622,13 @@ export function routineCommands(now: number, params: RoutineParams) {
         return answer(command.id, () => null)
           .then(() => later(300, () => null))
           .then(() => {
-            if (command.gateway !== undefined && !bound(command.gateway))
+            if (command.stamp !== undefined && !bound(command.stamp))
               throw new Error("Another gateway is connected now.");
             return kept(command.id) ?? null;
           });
       case "updateRoutine": {
         if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
-        if (!bound(command.gateway))
+        if (!bound(command.stamp))
           return Promise.resolve({ status: "not-sent", reason: "gateway" });
         const routine = kept(command.id);
         if (!routine) return Promise.resolve({ status: "deleted" });

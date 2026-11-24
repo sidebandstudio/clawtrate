@@ -157,7 +157,7 @@ No new tokens.
 - One choice list with two rows, each opening the next screen (a chevron at its end):
   - "This computer", with "Clawtrate looks for OpenClaw here." under it.
   - "Another computer", with "A computer you reach with SSH, such as a server or a desktop at home." under it.
-- Under the list, two quiet links on one line: "Have a setup code?" and "Advanced". "Advanced" opens the address-and-token form exactly as it was built (`connect.html`, F-493).
+- Under the list, two quiet links on one line: "Have a setup code?" and "Advanced". "Advanced" opens the address-and-token form exactly as it was built (`connect.html`, F-493). In the packaged Mac app the form also shows `setup-effortless.md` §2's consent line above Connect for a `wss://` address that isn't loopback, where the first pairing asks for full control (F-522).
 - One hint (13, faint): "New to OpenClaw? Choose where it should run, and Clawtrate offers to set it up there." On Windows the hint is "New to OpenClaw? Choose Another computer to use or set up OpenClaw on a Mac or a Linux computer." (section 10).
 
 The person never chooses between "I already use OpenClaw" and "I am new to OpenClaw"; those are the two results of the look (section 6). The row of bots stands along the foot as before, and is hidden below 640 px of height.
@@ -322,6 +322,8 @@ Wherever the gateway waits for its owner (F-500): the access bar's "Requested" s
 
 In this version the approval is manual. The page shows the approve command for the selected profile, in the command block with its copy button, and says where to run it: "On devbox, approve this request for the default profile:" over `openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942` (Clawtrate's own profile: `openclaw --profile clawtrate devices approve …`). On an address route, where Clawtrate doesn't know the profile: "Run this on the gateway's computer, with `--profile <name>` if the gateway doesn't use the default profile." The waiting line and "Check now" follow the pairing screen; the waiting and retry state is as built.
 
+A device paired with less before full control isn't sent up one tier at a time: in the packaged Mac app, at a protected address, it is offered full control once, and its one request waits here like any other (`setup-effortless.md` §6, F-500).
+
 "Approve from here", which would run the approve command for the person, is not in this version: OpenClaw's approve command can follow a compatible replacement of the request, so the exact request, device, role and scopes can't yet be enforced at the moment of approval (research §2). It waits for that check (F-500, `todo`).
 
 ## 10. Setting OpenClaw up (macOS and Linux, on this computer)
@@ -480,7 +482,7 @@ One gateway can be reached by several routes: this computer, SSH, an address on 
 
 The rows this design governs are in `docs/parity.md`. Statuses do not change. In this version:
 
-- **F-500, F-506 and F-507** stay `todo`: no code is handed to a phone and nothing is approved for the person.
+- **F-500, F-506 and F-507** stay `todo`: no code is handed to a phone and nothing is approved for the person. F-500 now carries `setup-effortless.md` §6, whose offer for a remote pairing is built; this Mac's upgrade waits for §3's send gate.
 - **F-510 to F-512** stay `todo`: the Tailscale row is read-only, with OpenClaw's own instructions.
 - **F-501 to F-505** are macOS and Linux only, on this computer; remote setup, cancelling (F-502) and removal (F-514) wait for their proofs. **F-517** is for installing on Windows, `todo`.
 - **F-513** keeps ordered failover and failback, with one token per route.

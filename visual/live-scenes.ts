@@ -8,6 +8,8 @@ import { paintedFinal } from "./fixture.ts";
 export const LIVE_VIEWS: Array<{
   scene: string;
   rows: string;
+  /** More of the fixture's address, after the scene's. */
+  query?: string;
   ready: (page: Page) => Promise<void>;
 }> = [
   {
@@ -86,6 +88,13 @@ export const LIVE_VIEWS: Array<{
     scene: "run-thinking",
     rows: "F-081 F-085",
     ready: (page) => expect(page.getByTestId("status-line")).toContainText("Thinking"),
+  },
+  {
+    scene: "run-reasoning",
+    rows: "F-529",
+    // The thinking under the status line shows with "Show thinking" on (F-551).
+    query: "&thinking=show",
+    ready: (page) => expect(page.getByTestId("status-thought")).toContainText("transcode cache"),
   },
   {
     scene: "run-working",

@@ -6,10 +6,28 @@
     <title>Clawtrate — Your OpenClaw bots, in one app</title>
     <meta
       name="description"
-      content="Clawtrate is a free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar. Open action cards and answer approvals in the conversation. Beta for Mac."
+      content="Clawtrate is a free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar. Read what each bot says and answer its approvals in the conversation. Beta for Mac."
     />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#101112" />
+    <!-- The link preview. tools/brand/src/make-cards.ts draws social.png. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Clawtrate" />
+    <meta property="og:url" content="https://clawtrate.dev/" />
+    <meta property="og:title" content="Your OpenClaw bots, in one app" />
+    <meta
+      property="og:description"
+      content="Clawtrate is a free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar. Read what each bot says and answer its approvals in the conversation. Beta for Mac."
+    />
+    <meta property="og:image" content="https://clawtrate.dev/social.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="The Clawtrate logo and name, the words Your OpenClaw agents, orchestrated, and a row of Claws along the bottom."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" href="favicon.png" sizes="32x32" />
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <link
@@ -75,7 +93,7 @@
           <h1 id="hero-title" class="rise">Your OpenClaw bots, in one app.</h1>
           <p class="lede rise">
             A free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar.
-            Open action cards and answer approvals in the conversation.
+            Read what each bot says and answer its approvals in the conversation.
           </p>
           <div class="get rise">
             <a class="btn btn-primary" href="download/mac/" data-claw-cue="hero-claw">
@@ -1069,17 +1087,38 @@
                 </div>
                 <p class="card-foot" data-when="pending">Example expiry: 28 minutes.</p>
               </div>
-              <p class="event" data-when="allowed">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.25 8.5 3 3 6.5-7" /></svg>
-                Ran <code>mv</code> on media-box
-              </p>
               <p class="bubble bot" data-when="allowed">
                 Done. The disk is now at 61%, and the cache is in <code>/srv/scratch</code> if you
                 want it back.
               </p>
+              <details class="run" data-when="allowed">
+                <summary class="event">
+                  Worked for 4s <span aria-hidden="true">·</span> 1 action
+                  <svg class="run-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="m6 3.5 4.5 4.5L6 12.5" />
+                  </svg>
+                </summary>
+                <p class="run-card">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.25 8.5 3 3 6.5-7" /></svg>
+                  Ran a command
+                </p>
+              </details>
               <p class="bubble bot" data-when="denied">
                 Understood. I left the cache where it is and changed nothing.
               </p>
+              <details class="run" data-when="denied">
+                <summary class="event">
+                  Worked for 3s <span aria-hidden="true">·</span> 1 action
+                  <span aria-hidden="true">·</span> <span class="run-failed">1 failed</span>
+                  <svg class="run-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="m6 3.5 4.5 4.5L6 12.5" />
+                  </svg>
+                </summary>
+                <p class="run-card">
+                  Didn't run a command
+                  <span class="run-state">Denied</span>
+                </p>
+              </details>
             </div>
             <p class="demo-live" aria-live="polite"></p>
           </div>
@@ -1196,7 +1235,10 @@
             <h3>Bots and their tasks, one list.</h3>
             <p>
               Bots live in the sidebar with their tasks underneath, leaving the middle for the
-              conversation. Tool calls appear in action cards you can open to see the details.
+              conversation. Approvals, questions and messages to other bots stay in the
+              conversation. A run's other actions wait behind one line under the reply, which opens
+              to plain-words cards. Turn on Show commands in Settings → Advanced to see each command
+              and its raw call.
             </p>
           </div>
           <div class="stage stage-blue rise">
@@ -1384,7 +1426,11 @@
               <li>
                 Send messages, watch replies stream in, and ask your gateway to steer or stop a run
               </li>
-              <li>Open action cards to see raw tool calls</li>
+              <li>
+                A run's actions in one line that opens to plain-words cards, with approvals,
+                questions and messages to other bots kept in view. Commands and raw calls show when
+                you turn them on in Settings → Advanced.
+              </li>
               <li>Approvals and questions answered in place</li>
               <li>Cards for bot-to-bot messages and T3 Code calls reported by your gateway</li>
               <li>A task's files in the Work pane beside the conversation</li>

@@ -18,7 +18,7 @@ import { useBridge } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
 import { clockTime } from "../format.ts";
 import { BackIcon, ChevronIcon, EyeIcon, LockIcon, WarnIcon } from "../icons.tsx";
-import { AdminBar, GrantedBar, Note, Select, useGranted } from "../bots/parts.tsx";
+import { AdminBar, GrantedBar, Note, Select } from "../bots/parts.tsx";
 import {
   credentialWords,
   hostWords,
@@ -210,6 +210,7 @@ export function RunsOnPage({
   nameOf,
   connection,
   info,
+  granted,
   announce,
   onBack,
 }: {
@@ -220,11 +221,12 @@ export function RunsOnPage({
   nameOf: (id: string) => string;
   connection: ConnectionState;
   info: HostInfo;
+  /** Whether admin was just granted, detected by the owner so a reconnect's new key can't drop it. */
+  granted: boolean;
   announce: (text: string) => void;
   onBack: () => void;
 }) {
   const bridge = useBridge();
-  const granted = useGranted(connection);
   const admin = connection.canAdmin && !info.readOnly;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -260,17 +262,18 @@ export function RunsOnPage({
       </h3>
     </div>
   );
-  const foot = granted ? (
-    <GrantedBar />
-  ) : !admin ? (
-    <div className="b-panel-foot">
-      <AdminBar
-        connection={connection}
-        info={info}
-        need={`Changing where ${botName} runs needs admin access.`}
-      />
-    </div>
-  ) : null;
+  const foot =
+    granted && admin ? (
+      <GrantedBar />
+    ) : !admin ? (
+      <div className="b-panel-foot">
+        <AdminBar
+          connection={connection}
+          info={info}
+          need={`Changing where ${botName} runs needs admin access.`}
+        />
+      </div>
+    ) : null;
   // A save's outcome stays shown when the read after it fails.
   const saveLines = (
     <>

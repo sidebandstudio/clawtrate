@@ -31,6 +31,7 @@ import {
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
+import { ManageGroup } from "./DeleteBot.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
@@ -70,6 +71,7 @@ export function BotSettings({
   announce,
   usagePage = null,
   extraGroups = null,
+  onDeleteBot = null,
 }: {
   bot: Bot;
   accounts: AccountsState;
@@ -84,6 +86,8 @@ export function BotSettings({
   usagePage?: ReactNode;
   /** Groups after the Model group on the tab's first page (Usage). */
   extraGroups?: ReactNode;
+  /** Opens Delete bot… for this bot; absent where the host offers no delete. */
+  onDeleteBot?: (() => void) | null;
 }) {
   const bridge = useBridge();
   const [view, setView] = useState<View>("main");
@@ -215,6 +219,9 @@ export function BotSettings({
           nameOf={nameOf}
           connection={connection}
           info={info}
+          // The grant is detected here, where a reconnect's new scopes and connect time don't
+          // remount the detector, not inside the page that this key does remount.
+          granted={granted}
           announce={announce}
           onBack={() => go("main", "[data-bs='runs-on']")}
         />
@@ -226,7 +233,7 @@ export function BotSettings({
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         <BotMemory
-          key={`${bot.id}\n${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}\n${memoryGateway ?? ""}`}
+          key={`${bot.id}\n${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}\n${memoryGateway ?? ""}\n${connection.target}`}
           botId={bot.id}
           visible={visible}
           name={name}
@@ -284,6 +291,7 @@ export function BotSettings({
         <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}
+        <ManageGroup bot={bot} onDelete={onDeleteBot} />
       </div>
     );
   }
@@ -420,6 +428,7 @@ export function BotSettings({
         <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}
+        <ManageGroup bot={bot} onDelete={onDeleteBot} />
         {foot}
       </div>
     );

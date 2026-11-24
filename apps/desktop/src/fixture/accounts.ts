@@ -19,6 +19,7 @@
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking|partial   how New bot's Create goes
+//   finish=release|release-failed   New bot's Finish answers, or is refused, on releaseFinish()
 //   admin=grant               a request for admin access is approved after a moment, or on
 //                             release if a test holds answers
 //   defacct=1                 the gateway's default model names an account (openai:work)
@@ -26,13 +27,16 @@
 import {
   ADMIN_SCOPES,
   INTERACTIVE_SCOPES,
+  gatewayStamp,
   initialAccountsState,
+  sameStamp,
   type AccountsState,
   type BotBinding,
   type BridgeCommand,
   type ClawtrateState,
   type GatewayAccount,
   type LockEvidence,
+  type MissingStep,
   type SignInState,
 } from "@clawtrate/core";
 
@@ -54,6 +58,13 @@ export type AccountParams = {
   keyfails: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
+  /**
+   * How Edit picture's save ends: never answered, refused, answered with a list that differs, or
+   * answered when the page calls `releasePictureSave()`.
+   */
+  picturesave: "hold" | "refused" | "unconfirmed" | "release" | null;
+  /** New bot's Finish answered, or refused, when the page calls `releaseFinish()`. */
+  finish: "release" | "release-failed" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -73,6 +84,17 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     keyread: params.get("keyread") === "fail",
+    picturesave:
+      params.get("picturesave") === "hold" ||
+      params.get("picturesave") === "refused" ||
+      params.get("picturesave") === "unconfirmed" ||
+      params.get("picturesave") === "release"
+        ? (params.get("picturesave") as "hold" | "refused" | "unconfirmed" | "release")
+        : null,
+    finish:
+      params.get("finish") === "release" || params.get("finish") === "release-failed"
+        ? (params.get("finish") as "release" | "release-failed")
+        : null,
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -94,6 +116,8 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   labels: null,
   keyfails: false,
   keyread: false,
+  picturesave: null,
+  finish: null,
 };
 
 const MINUTE = 60_000;
@@ -995,6 +1019,11 @@ export function accountCommand(
       }));
       return Promise.resolve();
     case "createBot": {
+      // As the host does: nothing is sent for a gateway other than the one connected.
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
       const name = command.name.trim() || "New bot";
       put((a) => ({
         ...a,
@@ -1014,9 +1043,22 @@ export function accountCommand(
         );
         return new Promise(() => {});
       }
+      // create=release: the answer comes when the page calls `releaseCreate()`.
+      const answer = (run: () => void) =>
+        params.create === "release" || params.create === "release-failed"
+          ? ((globalThis as unknown as { releaseCreate: () => void }).releaseCreate = run)
+          : later(500, run);
+      // As the host does (`forgetGatewayState`): what a gateway answers after another has
+      // replaced it changes nothing kept; only the reply goes back.
+      const asked = get().connection.gatewayId;
       return new Promise((resolve, reject) =>
-        later(500, () => {
-          if (params.create === "failed") {
+        answer(() => {
+          if (get().connection.gatewayId !== asked) {
+            if (params.create === "release-failed") reject(new Error("Could not create the bot."));
+            else resolve({ botId: "made-elsewhere", missing: [] });
+            return;
+          }
+          if (params.create === "failed" || params.create === "release-failed") {
             put((a) =>
               a.creation
                 ? { ...a, creation: { ...a.creation, status: "failed", error: "refused" } }
@@ -1031,6 +1073,12 @@ export function accountCommand(
               .replace(/[^a-z0-9]+/g, "-")
               .replace(/^-|-$/g, "") || "new-bot";
           const ref = `${command.provider}/${command.model}${command.account ? `@${command.account}` : ""}`;
+          const missing: MissingStep[] =
+            params.create === "partial"
+              ? ["task"]
+              : params.create === "partial-identity"
+                ? ["identity"]
+                : [];
           const state = get();
           set({
             ...state,
@@ -1052,14 +1100,18 @@ export function accountCommand(
               creation: {
                 name,
                 // create=partial: the bot exists, and its first task was not made.
-                status: params.create === "partial" ? "partial" : "created",
+                // create=partial-identity: the bot exists, and its name was not written into
+                // its IDENTITY.md, so OpenClaw's first-run questions are still on.
+                status: missing.length > 0 ? "partial" : "created",
                 slow: false,
                 botId: id,
                 error:
                   params.create === "partial"
                     ? `${name} was created, but its first task was not made: the gateway did not answer.`
-                    : null,
-                missing: params.create === "partial" ? ["task"] : [],
+                    : params.create === "partial-identity"
+                      ? `${name} was created, but OpenClaw's first-run questions were not turned off: the gateway did not answer.`
+                      : null,
+                missing,
                 uncertain: false,
               },
               bindings: [
@@ -1068,17 +1120,48 @@ export function accountCommand(
               ],
             },
           });
-          resolve({ botId: id, missing: params.create === "partial" ? ["task"] : [] });
+          resolve({ botId: id, missing });
         }),
       );
     }
-    case "finishBot":
-      put((a) =>
-        a.creation
-          ? { ...a, creation: { ...a.creation, status: "created", missing: [], error: null } }
-          : a,
-      );
-      return Promise.resolve({ botId: command.botId, missing: [] });
+    case "finishBot": {
+      // As the host does: nothing is sent for a gateway other than the one connected.
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
+      const asked = get().connection.gatewayId;
+      const done = () => {
+        // What a gateway answers after another has replaced it changes nothing kept.
+        if (get().connection.gatewayId !== asked) return;
+        put((a) =>
+          a.creation
+            ? { ...a, creation: { ...a.creation, status: "created", missing: [], error: null } }
+            : a,
+        );
+      };
+      if (params.finish === null) {
+        done();
+        return Promise.resolve({ botId: command.botId, missing: [] });
+      }
+      // A second Finish cannot take the answer already held for the first caller.
+      const fixture = globalThis as unknown as { releaseFinish?: () => void };
+      if (fixture.releaseFinish)
+        return Promise.reject(new Error("That bot is already being finished."));
+      return new Promise((resolve, reject) => {
+        const release = () => {
+          if (fixture.releaseFinish !== release) return;
+          delete fixture.releaseFinish;
+          if (params.finish === "release-failed") {
+            reject(new Error("Could not finish the bot."));
+            return;
+          }
+          done();
+          resolve({ botId: command.botId, missing: [] });
+        };
+        fixture.releaseFinish = release;
+      });
+    }
     case "dismissBotCreation":
       put((a) => ({ ...a, creation: null }));
       return Promise.resolve();
@@ -1110,6 +1193,33 @@ export function accountCommand(
         }),
       }));
       return Promise.resolve();
+    }
+    case "setBotPicture": {
+      // As the host does: nothing is sent for a gateway other than the one connected.
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
+      if (params.picturesave === "hold") return new Promise(() => {});
+      if (params.picturesave === "refused")
+        return Promise.reject(new Error("agents.update: INVALID_REQUEST (a gateway's own words)"));
+      if (params.picturesave === "unconfirmed") return Promise.resolve({ confirmed: false });
+      const save = () => {
+        const state = get();
+        set({
+          ...state,
+          bots: state.bots.map((bot) =>
+            bot.id === command.botId ? { ...bot, avatarUrl: command.avatar } : bot,
+          ),
+        });
+        return { confirmed: true };
+      };
+      if (params.picturesave === "release")
+        return new Promise((resolve) => {
+          (globalThis as unknown as { releasePictureSave: () => void }).releasePictureSave = () =>
+            resolve(save());
+        });
+      return Promise.resolve(save());
     }
     case "removeBotFallbacks":
       put((a) => ({

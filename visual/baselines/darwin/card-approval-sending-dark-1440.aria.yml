@@ -1,0 +1,15 @@
+- region "Otto wants to run a command. Needs approval.":
+  - heading "Otto wants to run a command" [level=3]
+  - text: Needs approval
+  - paragraph:
+    - text: Run
+    - code: mv /srv/media/transcode-cache /srv/scratch/transcode-cache
+    - text: on media-box.
+  - list:
+    - listitem: This can't be undone
+  - group: Show full request
+  - paragraph: Sending your decision…
+  - button "Allow once" [disabled]
+  - button "Deny"
+  - paragraph: Expires in 28 minutes; the command is not run if it does.
+  - button "Raw"

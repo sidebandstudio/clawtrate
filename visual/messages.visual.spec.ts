@@ -2,15 +2,31 @@
 // more beside it, reactions as badges under it, and a thread assembled around
 // a message and its replies (parity F-066, F-067, F-283). The gateway's half
 // is proven in e2e/preview.spec.ts.
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { test, type Locator, type Page } from "@playwright/test";
 import type { ClawtrateState, MessageReaction } from "../packages/core/src/index.ts";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  contextFor,
+  expect,
+  NOW,
+  openFixture,
+  OTTO_DISK,
+  settle,
+  SIZES,
+  THEMES,
+} from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
 
 const open = (page: Page, scene = "message-actions", theme: "light" | "dark" = "light") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed`, theme);
+
+const openWithWork = (page: Page) =>
+  openFixture(
+    page,
+    `scene=message-actions&${OTTO_DISK}&panel=closed&commands=show&thinking=show`,
+    "light",
+  );
 
 /** Otto's first answer: a bubble of its own, with a reply to it later in the task. */
 const answer = (page: Page) =>
@@ -52,6 +68,53 @@ const names = (locator: Locator) =>
 
 const shown = (locator: Locator) =>
   locator.evaluate((el) => Number(getComputedStyle(el).opacity) === 1);
+
+/**
+ * Fingers on the screen, through the browser's own touch input, so that they drift, scroll and
+ * lift the way real ones do. A pointer event made by hand does none of that. Each one goes down on
+ * a message's bubble and moves by an offset from there.
+ */
+async function touchScreen(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const down = new Map<number, { x: number; y: number }>();
+  const send = (type: "touchStart" | "touchMove" | "touchEnd", ids = [...down.keys()]) =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: ids.map((id) => ({ id, ...down.get(id)!, radiusX: 10, radiusY: 10, force: 1 })),
+    });
+  return async (turn: Locator) => {
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    const id = down.size + 1;
+    const at = (dx: number, dy: number) => down.set(id, { x: box.x + 30 + dx, y: box.y + 20 + dy });
+    at(0, 0);
+    await send("touchStart");
+    return {
+      move: (dx: number, dy: number) => (at(dx, dy), send("touchMove")),
+      // A touchEnd lifts the points it carries, or all of them when it carries none: one finger
+      // of several lifts alone, with a pointerup of its own.
+      lift: async () => {
+        await send("touchEnd", down.size > 1 ? [id] : []);
+        down.delete(id);
+      },
+    };
+  };
+}
+
+/** One finger down on a message's bubble. */
+const fingerOn = async (turn: Locator) => (await touchScreen(turn.page()))(turn);
+
+/**
+ * Otto's answer, ready to hold. The page's timers stop, so the long press cannot end before the
+ * finger has drifted, however slow the page: the check runs them.
+ */
+async function holdReady(page: Page) {
+  await page.clock.install({ time: NOW });
+  await open(page);
+  const turn = answer(page);
+  await turn.scrollIntoViewIfNeeded();
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  return turn;
+}
 
 /**
  * The points of a control's 44 px touch area, across it from its centre, where a touch does not
@@ -144,9 +207,9 @@ async function fingerDown(page: Page, x: number, y: number): Promise<() => Promi
   return () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
 
-/** A new message from Otto at the end of the open task, as the gateway's next event would add it. */
-async function addMessage(page: Page): Promise<void> {
-  await page.evaluate(() => {
+/** New messages from Otto at the end of the open task, as the gateway would add them. */
+async function addMessage(page: Page, count = 1): Promise<void> {
+  await page.evaluate((count) => {
     const fixture = (
       window as unknown as {
         clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
@@ -155,25 +218,26 @@ async function addMessage(page: Page): Promise<void> {
     fixture.setState((state) => {
       const task = "agent:otto:disk-space";
       const transcript = state.transcripts[task]!;
-      const item = {
-        id: "row-new:1",
-        role: "assistant" as const,
-        timestamp: (transcript.items.at(-1)!.timestamp ?? 0) + 60_000,
-        blocks: [
-          { kind: "text" as const, text: "The cache is back under 2 GB.", messageId: "row-new" },
-        ],
-        model: null,
-        messageId: "row-new",
-      };
+      const items = Array.from({ length: count }, (_, index) => {
+        const messageId = `row-new-${index + 1}`;
+        return {
+          id: `${messageId}:1`,
+          role: "assistant" as const,
+          timestamp: (transcript.items.at(-1)!.timestamp ?? 0) + 60_000 * (index + 1),
+          blocks: [{ kind: "text" as const, text: "The cache is back under 2 GB.", messageId }],
+          model: null,
+          messageId,
+        };
+      });
       return {
         ...state,
         transcripts: {
           ...state.transcripts,
-          [task]: { ...transcript, items: [...transcript.items, item] },
+          [task]: { ...transcript, items: [...transcript.items, ...items] },
         },
       };
     });
-  });
+  }, count);
 }
 
 /** Set the reactions on messages of the open task, by row, as the gateway's next event would. */
@@ -304,6 +368,9 @@ test.describe("message actions", () => {
     await page.keyboard.press("Enter");
     const menu = page.getByRole("menu", { name: "More" });
     await expect(menu.getByRole("menuitem")).toHaveText(["Copy text", "Copy message ID"]);
+    await expect(menu.getByRole("menuitem", { name: "Copy text" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByRole("menuitem", { name: "Copy message ID" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
     await expect(actions.getByRole("button", { name: "More" })).toBeFocused();
@@ -806,6 +873,252 @@ test.describe("message actions with a mouse on a touch screen", () => {
 test.describe("message actions on a phone", () => {
   test.use(contextFor(PHONE, "light"));
 
+  test("F-066: a quiet conversation leaves a held message its touch targets below the header", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: PHONE.height });
+    await open(page);
+    const message = progress(page);
+    const bubble = message.locator(".msg > .bubble").last();
+    const header = (await page.locator(".conversation-header").boundingBox())!;
+    await bubble.evaluate(
+      (el, top) => {
+        el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().top - top;
+      },
+      header.y + header.height + 10,
+    );
+    await settle(page);
+    await expect(page.getByTestId("status-strip")).not.toBeVisible();
+    await holdOn(message);
+    const actions = message.getByTestId("message-actions");
+    const buttons = actions.getByRole("button");
+    await expect(buttons).toHaveCount(3);
+    for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+    expect(await coversNext(message)).toEqual([]);
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        discovery: { ...state.discovery, status: "error", error: "Try again" },
+      }));
+    });
+    await expect(page.getByTestId("status-strip").getByRole("button")).toBeVisible();
+    await expect
+      .poll(async () =>
+        (await actions.getAttribute("data-open")) === "true"
+          ? (await Promise.all((await buttons.all()).map(unreached))).flat()
+          : [],
+      )
+      .toEqual([]);
+  });
+
+  test("F-066: a held message keeps its actions while partly visible and loses them offscreen", async ({
+    page,
+  }) => {
+    await open(page);
+    await addMessage(page, 60);
+    const message = answer(page);
+    const bubble = message.locator(".msg > .bubble").last();
+    const actions = message.getByTestId("message-actions");
+    const transcript = page.getByTestId("transcript");
+    await bubble.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await settle(page);
+    const finger = await fingerOn(message);
+    await expect(actions).toHaveAttribute("data-open", "true");
+    await finger.lift();
+
+    const header = (await page.locator(".conversation-header").boundingBox())!;
+    const edge = header.y + header.height;
+    const anchor = (await bubble.boundingBox())!;
+    await transcript.evaluate(
+      (el, by) => (el.scrollTop += by),
+      anchor.y + anchor.height / 2 - edge,
+    );
+    await settle(page);
+    const partial = (await bubble.boundingBox())!;
+    expect(partial.y).toBeLessThan(edge);
+    expect(partial.y + partial.height).toBeGreaterThan(edge);
+    await expect(actions).toHaveAttribute("data-open", "true");
+    const buttons = actions.getByRole("button");
+    await expect(buttons).toHaveCount(3);
+    for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+
+    await transcript.evaluate((el) => (el.scrollTop += 2300));
+    await settle(page);
+    const offscreen = (await bubble.boundingBox())!;
+    expect(offscreen.y + offscreen.height).toBeLessThan(edge - 2000);
+    await expect(actions).not.toHaveAttribute("data-open", "true");
+  });
+
+  test("F-066: pinch zoom keeps the full touch targets on screen or closes the held actions", async ({
+    page,
+  }) => {
+    await open(page);
+    const message = page.locator('[data-message="row-9"]');
+    const bubble = message.locator(".msg > .bubble").last();
+    const actions = message.getByTestId("message-actions");
+    const buttons = actions.getByRole("button");
+    await bubble.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await settle(page);
+    const finger = await fingerOn(message);
+    await expect(actions).toHaveAttribute("data-open", "true");
+    await finger.lift();
+
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1.5 });
+    await settle(page);
+    expect(await page.evaluate(() => window.visualViewport!.width)).toBeCloseTo(260);
+    await expect(actions).toHaveAttribute("data-open", "true");
+    await expect(buttons).toHaveCount(3);
+    const clipped = await buttons.evaluateAll((elements) => {
+      const screen = window.visualViewport!;
+      return elements.flatMap((el) => {
+        const box = el.getBoundingClientRect();
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        return x - 22 < screen.offsetLeft ||
+          x + 22 > screen.offsetLeft + screen.width ||
+          y - 22 < screen.offsetTop ||
+          y + 22 > screen.offsetTop + screen.height
+          ? [{ name: el.getAttribute("aria-label"), x, y }]
+          : [];
+      });
+    });
+    expect(clipped).toEqual([]);
+
+    const bar = (await actions.boundingBox())!;
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 3.5 });
+    await settle(page);
+    expect(await page.evaluate(() => window.visualViewport!.width)).toBeLessThan(bar.width);
+    await expect(actions).not.toHaveAttribute("data-open", "true");
+  });
+
+  test("F-066: dismissing a focused touch toolbar gives up its hit targets", async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => {} } });
+    });
+    const message = page.locator('[data-message="row-9"]');
+    await message.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await settle(page);
+    const actions = message.getByTestId("message-actions");
+    const more = actions.getByRole("button", { name: "More" });
+    const finger = await fingerOn(message);
+    await expect(actions).toHaveAttribute("data-open", "true");
+    await finger.lift();
+    await more.tap();
+    await page.getByRole("menuitem", { name: "Copy message ID" }).tap();
+    await expect(page.getByTestId("announcer")).toHaveText("Copied message ID");
+    await expect(more).toBeFocused();
+    await expect(actions).toHaveAttribute("data-pointer", "touch");
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 3.5 });
+    await expect(actions).not.toHaveAttribute("data-open", "true");
+    await expect(actions).toHaveCSS("pointer-events", "none");
+    await expect(page.getByTestId("transcript")).toBeFocused();
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+    await settle(page);
+    expect(
+      await more.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return hit !== null && !el.closest('[role="toolbar"]')!.contains(hit);
+      }),
+    ).toBe(true);
+  });
+
+  test("F-066: a thread leaves held actions in the exposed part of the chat", async ({ page }) => {
+    await page.setViewportSize({ width: 650, height: PHONE.height });
+    await open(page);
+    await page.getByTestId("reply-quote").tap();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    await expect(thread).toBeVisible();
+    const message = page.locator('.transcript [data-message="row-9"]');
+    const bubble = message.locator(".msg > .bubble").last();
+    await bubble.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await settle(page);
+    const box = (await bubble.boundingBox())!;
+    const side = (await thread.boundingBox())!;
+    expect(box.x + 30).toBeLessThan(side.x);
+    expect(box.x + box.width).toBeGreaterThan(side.x);
+    const finger = await fingerOn(message);
+    const actions = message.getByTestId("message-actions");
+    await expect(actions).toHaveAttribute("data-open", "true");
+    await finger.lift();
+    const buttons = actions.getByRole("button");
+    await expect(buttons).toHaveCount(3);
+    for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+  });
+
+  test("F-066: a held message hidden by the status strip mask loses its actions", async ({
+    page,
+  }) => {
+    await open(page);
+    await addMessage(page, 60);
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        discovery: { ...state.discovery, status: "error", error: "Try again" },
+      }));
+    });
+    const strip = page.getByTestId("status-strip");
+    await expect(strip).toBeVisible();
+    const message = answer(page);
+    const bubble = message.locator(".msg > .bubble").last();
+    await bubble.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await settle(page);
+    const actions = message.getByTestId("message-actions");
+    const finger = await fingerOn(message);
+    await expect(actions).toHaveAttribute("data-open", "true");
+    await finger.lift();
+    const edge = await strip.evaluate((el) => el.getBoundingClientRect().bottom);
+    await bubble.evaluate((el, edge) => {
+      el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().bottom - edge - 1;
+    }, edge);
+    await settle(page);
+    const bottom = await bubble.evaluate((el) => el.getBoundingClientRect().bottom);
+    expect(bottom).toBeGreaterThan(edge);
+    expect(bottom).toBeLessThan(edge + 2);
+    await expect(actions).not.toHaveAttribute("data-open", "true");
+  });
+
+  test("F-066: Tab and Enter still open More after a touch hold is dismissed", async ({ page }) => {
+    await open(page);
+    const message = answer(page);
+    await message.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await settle(page);
+    await holdOn(message);
+    const actions = message.getByTestId("message-actions");
+    const touchWidth = (await actions.boundingBox())!.width;
+    await page
+      .getByTestId("transcript")
+      .dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, isPrimary: true });
+    await expect(actions).not.toHaveAttribute("data-open", "true");
+    const first = actions.getByRole("button", { name: "Add a reaction" });
+    await first.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(actions.getByRole("button", { name: "More" })).toBeFocused();
+    await page.setViewportSize({ width: 390, height: 168 });
+    await page.keyboard.press("Enter");
+    const menu = page.getByRole("menu", { name: "More" });
+    await expect(menu.getByRole("menuitem")).toHaveText(["Copy text", "Copy message ID"]);
+    expect((await actions.boundingBox())!.width).toBeLessThan(touchWidth);
+    await page.keyboard.press("Escape");
+    await expect(actions.getByRole("button", { name: "More" })).toBeFocused();
+  });
+
   test("F-066: a second finger on a message is no touch and hold: nothing opens once the fingers lift", async ({
     page,
   }) => {
@@ -839,6 +1152,229 @@ test.describe("message actions on a phone", () => {
     await expect(buttons).toHaveCount(3);
     for (const button of await buttons.all())
       await expect.poll(() => unreached(button)).toEqual([]);
+  });
+
+  test("F-066: touch and hold shows a message's actions though the finger drifts a few px", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const finger = await fingerOn(turn);
+    for (const dx of [3, 0, 3, 1]) await finger.move(dx, 2);
+    await page.clock.runFor(600);
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: a finger that moves 30 px is a scroll, not a touch and hold: nothing opens", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const finger = await fingerOn(turn);
+    for (const dy of [10, 20, 30]) await finger.move(0, -dy);
+    await page.clock.runFor(600);
+    await finger.lift();
+    await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+  });
+
+  test("F-066: a finger held on a message keeps its text from being selected until it lifts", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const text = turn.locator(".msg > .bubble").last();
+    const finger = await fingerOn(turn);
+    await expect(text).toHaveCSS("user-select", "none");
+    await page.clock.runFor(600);
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    // Still, once the actions show, though the finger drifts past the slop: the system's own long
+    // press can come a little later.
+    await finger.move(11, 0);
+    await expect(text).toHaveCSS("user-select", "none");
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    await finger.lift();
+    await expect(text).toHaveCSS("user-select", "auto");
+  });
+
+  test("F-066: a finger that moves 11 px before the long press ends its wait: nothing opens", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const text = turn.locator(".msg > .bubble").last();
+    const finger = await fingerOn(turn);
+    await finger.move(0, 11);
+    await page.clock.runFor(600);
+    // The browser has not taken the finger, so this slop is what ended the wait.
+    await expect(text).toHaveCSS("user-select", "none");
+    await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+    await finger.lift();
+    await expect(text).toHaveCSS("user-select", "auto");
+  });
+
+  test("F-066: a second finger down anywhere is no touch and hold, nor the start of one, while both stay down", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const finger = await touchScreen(page);
+    const first = await finger(turn);
+    // On another message: outside the first one, and a hold of its own if a second finger could start one.
+    const second = await finger(
+      page.getByTestId("transcript-turn").filter({ hasText: "Keep an eye on it" }),
+    );
+    await page.clock.runFor(600);
+    await expect(turn.locator(".msg > .bubble").last()).toHaveCSS("user-select", "none");
+    await expect(page.locator('[data-testid="message-actions"][data-open="true"]')).toHaveCount(0);
+    await second.lift();
+    // The first finger is still down, and still keeps its message's text unselectable.
+    await expect(turn.locator(".msg > .bubble").last()).toHaveCSS("user-select", "none");
+    await first.lift();
+    await expect(turn.locator(".msg > .bubble").last()).toHaveCSS("user-select", "auto");
+  });
+
+  test("F-066: a mouse moving over a held message leaves the touch and hold to the finger", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    const finger = await fingerOn(turn);
+    await page.mouse.move(box.x + 120, box.y + 40);
+    await page.mouse.move(box.x + 160, box.y + 60);
+    await page.clock.runFor(600);
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: when the text under a held finger goes, the hold ends with it: nothing opens, and the text is selectable", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    // By its id, since the text that finds it goes.
+    const id = await turn.getByTestId("message").last().getAttribute("data-message");
+    const message = page.locator(`[data-testid="message"][data-message="${id}"]`);
+    const text = message.locator(".msg > .bubble");
+    const finger = await fingerOn(turn);
+    // A move: from there the browser holds the finger to the text it went down on.
+    await finger.move(1, 1);
+    await text
+      .locator("p")
+      .first()
+      .evaluate((el) => el.remove());
+    // The browser lets go of the finger before its next event.
+    await finger.move(2, 1);
+    await page.clock.runFor(600);
+    await expect(text).toHaveCSS("user-select", "auto");
+    await expect(message.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: the transcript scrolling under a held finger ends its wait: nothing opens", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const text = turn.locator(".msg > .bubble").last();
+    const finger = await fingerOn(turn);
+    // Away and back: the message is where it started by the time the long press would open.
+    for (const dy of [-40, 40])
+      await page.getByTestId("transcript").evaluate(
+        (el, by) =>
+          new Promise((scrolled) => {
+            el.addEventListener("scroll", scrolled, { once: true });
+            el.scrollTop += by;
+          }),
+        dy,
+      );
+    await page.clock.runFor(600);
+    await expect(text).toHaveCSS("user-select", "none");
+    await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: the browser's own long press on a held message opens its actions, and not the browser's menu", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const finger = await fingerOn(turn);
+    // As Chromium sends it, before this long press is due: the page's timers stay stopped.
+    const shut = await turn
+      .locator(".msg > .bubble")
+      .last()
+      .evaluate(
+        (el) =>
+          !el.dispatchEvent(
+            new PointerEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              pointerType: "touch",
+            }),
+          ),
+      );
+    expect(shut).toBe(true);
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: a right-click on a held message is the mouse's own: it opens nothing and keeps the browser's menu", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    // Seen after the page's own handlers: a prevented menu is one the browser does not show.
+    await page.evaluate(() =>
+      window.addEventListener("contextmenu", (event) => {
+        (window as unknown as { menuShut: boolean }).menuShut = event.defaultPrevented;
+      }),
+    );
+    const finger = await fingerOn(turn);
+    await page.mouse.click(box.x + 120, box.y + 20, { button: "right" });
+    expect(await page.evaluate(() => (window as unknown as { menuShut: boolean }).menuShut)).toBe(
+      false,
+    );
+    await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: on a touch screen, a mouse over a message shows its actions, and a touch hides them", async ({
+    page,
+  }) => {
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    const actions = turn.getByTestId("message-actions");
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    // This screen reports no hover, as Chromium can for a touch screen in tablet mode with a mouse.
+    expect(await page.evaluate(() => matchMedia("(any-hover: hover)").matches)).toBe(false);
+    await page.mouse.move(box.x + 30, box.y + 20);
+    await expect.poll(() => shown(actions)).toBe(true);
+    await page.touchscreen.tap(box.x + 30, box.y + 20);
+    // pointer-events changes at once, where the opacity fades.
+    await expect(actions).toHaveCSS("pointer-events", "none");
+    // The mouse moving on over the same message shows them again, without leaving it first.
+    await page.mouse.move(box.x + 40, box.y + 24);
+    await expect.poll(() => shown(actions)).toBe(true);
+  });
+
+  test("F-066: a finger lifting from a message leaves its actions to a mouse still over it", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    const finger = await fingerOn(turn);
+    // The mouse comes onto the message while the finger is down; the finger lifts before the hold.
+    await page.mouse.move(box.x + 120, box.y + 40);
+    await page.mouse.move(box.x + 160, box.y + 60);
+    await finger.lift();
+    // pointer-events changes at once, where the opacity fades.
+    await expect(turn.getByTestId("message-actions")).toHaveCSS("pointer-events", "auto");
+  });
+
+  test("F-066: a tap on a message leaves its actions hidden", async ({ page }) => {
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    await page.touchscreen.tap(box.x + 30, box.y + 20);
+    // The tap leaves :hover on the message, as iOS does, until the next tap elsewhere.
+    await expect.poll(() => turn.evaluate((el) => el.matches(":hover"))).toBe(true);
+    // pointer-events changes at once, where the opacity fades.
+    await expect(turn.getByTestId("message-actions")).toHaveCSS("pointer-events", "none");
   });
 });
 
@@ -874,7 +1410,7 @@ for (const width of [320, 390]) {
     test("F-066: a held message just under the header, with no room beside it or above it, shows its actions under it, each with its 44 px hit area", async ({
       page,
     }) => {
-      await open(page);
+      await openWithWork(page);
       const message = progress(page);
       const bubble = message.locator(".msg > .bubble");
       // Its top 10 px under the header: above it, the bar would lie under the header.
@@ -993,7 +1529,7 @@ for (const width of [320, 390, 430]) {
       test(`F-066 F-283: ${whose} message held just under the header shows its actions clear of its reactions and replies link and of the next message, each control with its 44 px hit area`, async ({
         page,
       }) => {
-        await open(page);
+        await openWithWork(page);
         await react(page, { [row]: SIX });
         const message = page.locator(`[data-message="${row}"]`);
         // Its top 10 px under the header: the bar has no room above it.
@@ -1085,7 +1621,7 @@ for (const width of [320, 390, 430]) {
     test("F-066: lifting the finger that held a message presses nothing in its actions, though Reply opened under it", async ({
       page,
     }) => {
-      await open(page);
+      await openWithWork(page);
       // Your reply, the last message: at the transcript's foot, its actions open over its bubble.
       const message = page.locator('[data-message="row-reply"]');
       const actions = message.getByTestId("message-actions");
@@ -1107,10 +1643,17 @@ for (const width of [320, 390, 430]) {
         ),
       );
       await expect(actions).not.toHaveAttribute("data-open", "true");
+      await expect(actions).toHaveCSS("pointer-events", "none");
+      expect(
+        await message.evaluate(
+          (unit, point) => unit.contains(document.elementFromPoint(point.x, point.y)),
+          { x, y },
+        ),
+      ).toBe(true);
       await page.evaluate(() => {
-        const w = window as unknown as { clicks: number };
-        w.clicks = 0;
-        window.addEventListener("click", () => w.clicks++, true);
+        const w = window as unknown as { clicks: Event[] };
+        w.clicks = [];
+        window.addEventListener("click", (event) => w.clicks.push(event), true);
       });
       const lift = await fingerDown(page, x, y);
       await expect(actions).toHaveAttribute("data-open", "true", { timeout: 3000 });
@@ -1120,11 +1663,18 @@ for (const width of [320, 390, 430]) {
         [x, y],
       );
       expect(under).toBe("Reply in a thread");
+      await page.keyboard.press("Shift");
       await lift();
       // The lift's click came and pressed nothing: the actions stay open, and no thread opens.
       await expect
-        .poll(() => page.evaluate(() => (window as unknown as { clicks: number }).clicks))
-        .toBe(1);
+        .poll(() =>
+          page.evaluate(() =>
+            (window as unknown as { clicks: Event[] }).clicks.map(
+              (event) => event.defaultPrevented,
+            ),
+          ),
+        )
+        .toEqual([true]);
       await settle(page);
       await expect(page.getByRole("dialog", { name: "Thread" })).toBeHidden();
       await expect(actions).toHaveAttribute("data-open", "true");
@@ -1260,9 +1810,12 @@ for (const size of SIZES) {
         await open(page, "message-actions", theme);
         const turn = report(page);
         await turn.scrollIntoViewIfNeeded();
-        // A phone has no mouse: there a touch and hold shows the actions.
-        if (size.phone) await holdOn(turn);
-        else await turn.locator(".msg > .bubble").last().hover();
+        // A phone has no hover: there the actions show after a touch and hold.
+        if (size.phone) {
+          const finger = await fingerOn(turn);
+          await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+          await finger.lift();
+        } else await turn.locator(".msg > .bubble").last().hover();
         await expect.poll(() => shown(turn.getByTestId("message-actions"))).toBe(true);
         await settle(page);
         await expect(page).toHaveScreenshot(`messages-actions-${theme}-${size.name}.png`);

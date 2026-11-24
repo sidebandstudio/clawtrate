@@ -301,6 +301,13 @@ app.on("web-contents-created", (_event, contents) => {
  */
 function lockDownSession(): void {
   const ses = session.defaultSession;
+  // For a language Windows has no spell checker for, Chromium downloads a
+  // dictionary from Google's servers, and the filter below never sees that
+  // request. Until the person can choose such a download (F-393), Windows
+  // checks no spelling: with no languages, Chromium loads no checker and asks
+  // for no dictionary. macOS downloads none. Linux, where Hunspell is the only
+  // checker, keeps Chromium's download.
+  if (process.platform === "win32") ses.setSpellCheckerLanguages([]);
   ses.webRequest.onBeforeRequest((details, callback) => {
     const allowed =
       isAppContent(details.url) ||
@@ -391,7 +398,11 @@ async function main(): Promise<void> {
         KEYCHAIN_CHECK,
         hasSwitch(MOCK_KEYCHAIN_SWITCH),
       )
-        ? { secretBox: safeStorageBox(safeStorage, process.platform) }
+        ? {
+            secretBox: safeStorageBox(safeStorage, process.platform),
+            // With the Keychain, a first pairing over a protected address asks for full control.
+            fullAccess: true,
+          }
         : {}),
       // A sandboxed or refused start (every development build and automated run) has no
       // development gateway, doesn't auto-connect and never resumes a saved gateway.
@@ -452,6 +463,7 @@ async function main(): Promise<void> {
         window.webContents.send("clawtrate:update:changed", snapshot);
     },
   });
+  app.on("will-quit", () => updates.quitting());
   app.on("quit", () => updates.shutdown());
   ipcMain.handle("clawtrate:update:restart", (_event, id: unknown) => updates.restart(id));
   ipcMain.handle("clawtrate:update:get", () => updates.get());

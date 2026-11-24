@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { EXPIRES_MS, admit, decline } from "../lib/ledger.js";
+import { describe, expect, it, vi } from "vitest";
+import { EXPIRES_MS, ORPHAN_MS, RETAIN_MS, admit, decline, publishGrant } from "../lib/ledger.js";
 import { Records } from "../lib/records.js";
-import { load, memoryStore } from "./harness.ts";
+import { load, memoryStore, type Store } from "./harness.ts";
+
+type Ledger = Parameters<typeof admit>[0];
 
 const T = 1_800_000_000_000;
 const entry = (id: string, digest: string, source: object, bot: string, at = T) => ({
@@ -78,6 +80,255 @@ describe("the records", () => {
     expect((await records.ledger()).proposals).toEqual({});
   });
 
+  // Wall time and the monotonic clock the sweep measures an hour on, moved independently.
+  const clocks = () => {
+    const c = { wall: T, mono: 0 };
+    return { c, now: () => c.wall, monotonic: () => c.mono };
+  };
+  const on = (store: Store, versions: Store, k = clocks()) => ({
+    k,
+    records: new Records(store, versions, { now: k.now, monotonic: k.monotonic }),
+  });
+  /** A proposal superseding an open one, or a grant version replacing gv1: each publication's change. */
+  type Change = (l: Ledger, at: number) => unknown;
+  async function publications(
+    records: Records,
+  ): Promise<Record<"proposal" | "grant", (id: string, digest: string) => Change>> {
+    await propose(records, "old", { kind: "bot", bot: "pip" }, "pip");
+    const g1 = await records.persist("gv1", { v: 1 });
+    await records.publish("gv1", g1, (l, at) =>
+      publishGrant(l, "g", { version: "gv1", digest: g1, expiresAt: at + 1e12 }, null, at),
+    );
+    return {
+      proposal: (id: string, digest: string) => (l: Ledger, at: number) =>
+        admit(l, entry(id, digest, { kind: "bot", bot: "main" }, "pip", at), at),
+      grant: (id: string, digest: string) => (l: Ledger, at: number) =>
+        publishGrant(l, "g", { version: id, digest, expiresAt: at + 1e12 }, 1, at),
+    };
+  }
+
+  it("a failed delete is finished by a fresh Records over both stores, whether the body is still there or not, and the old publication stays refused", async () => {
+    for (const kind of ["proposal", "grant"] as const)
+      for (const body of ["present", "already deleted"]) {
+        const [store, versions] = [memoryStore(), memoryStore()];
+        const { k, records } = on(store, versions);
+        const change = (await publications(records))[kind];
+        const id = `${kind}-late`;
+        const digest = await records.persist(id, { id });
+        await records.sweepOrphans();
+        k.c.mono += ORPHAN_MS;
+        versions.faults.failNextDelete = true;
+        await expect(records.sweepOrphans()).rejects.toThrow("the delete failed");
+        expect((await records.ledger()).sweeping).toBe(id);
+        await expect(records.publish(id, digest, change(id, digest))).rejects.toMatchObject({
+          reason: "unpublishable",
+        });
+        if (body === "already deleted") versions.rows.delete(`v:${id}`);
+        const fresh = on(store, versions).records;
+        expect(await fresh.sweepOrphans()).toEqual([id]);
+        expect([(await fresh.ledger()).sweeping, versions.rows.has(`v:${id}`)]).toEqual([
+          null,
+          false,
+        ]);
+        k.c.wall = T + 40 * 24 * 60 * 60 * 1000;
+        await expect(records.publish(id, digest, change(id, digest))).rejects.toMatchObject({
+          reason: "unpublishable",
+        });
+        const ledger = await records.ledger();
+        expect([Object.hasOwn(ledger.proposals, id), ledger.grants.g?.version]).toEqual([
+          false,
+          "gv1",
+        ]);
+      }
+  });
+
+  it("the sweep wins: a publisher held after reading its body conflicts, then is refused, and the entry it would replace is unchanged", async () => {
+    for (const kind of ["proposal", "grant"] as const) {
+      const [store, versions] = [memoryStore(), memoryStore()];
+      const { k, records } = on(store, versions);
+      const change = (await publications(records))[kind];
+      const before = await records.ledger();
+      const digest = await records.persist("newer", { id: "newer" });
+      // Held after its body read, at the ledger update that would publish it.
+      const publishes = (value: unknown) => {
+        const v = value as Ledger | undefined;
+        return Boolean(v?.proposals?.newer) || v?.grants?.g?.version === "newer";
+      };
+      const held = store.hold("ledger", "cas", publishes);
+      const published = outcome(records.publish("newer", digest, change("newer", digest)));
+      await held.reached;
+      await records.sweepOrphans();
+      k.c.mono += ORPHAN_MS;
+      expect(await records.sweepOrphans()).toEqual(["newer"]);
+      const conflicts = store.stats.conflicts;
+      held.release();
+      expect(await published).toBe("unpublishable");
+      expect(store.stats.conflicts).toBeGreaterThan(conflicts);
+      const after = await records.ledger();
+      expect([after.proposals, after.grants]).toEqual([before.proposals, before.grants]);
+    }
+  });
+
+  it("the publisher wins: a sweep held before its marker conflicts, and the published body stays readable", async () => {
+    const [store, versions] = [memoryStore(), memoryStore()];
+    const { k, records } = on(store, versions);
+    const change = (await publications(records)).proposal;
+    const digest = await records.persist("newer", { id: "newer" });
+    await records.sweepOrphans();
+    k.c.mono += ORPHAN_MS;
+    const held = store.hold(
+      "ledger",
+      "cas",
+      (value) => (value as { sweeping?: string })?.sweeping === "newer",
+    );
+    const swept = records.sweepOrphans();
+    await held.reached;
+    const conflicts = store.stats.conflicts;
+    await records.publish("newer", digest, change("newer", digest));
+    held.release();
+    expect(await swept).toEqual([]);
+    expect(store.stats.conflicts).toBe(conflicts + 1);
+    expect(await records.version("newer", digest)).toEqual({ id: "newer" });
+    expect((await records.ledger()).sweeping).toBeNull();
+  });
+
+  it("an hour of continuous non-reference: a replaced grant, a retired request and a body written while the wall clock was set back", async () => {
+    const [store, versions] = [memoryStore(), memoryStore()];
+    const { k, records } = on(store, versions);
+    await propose(records, "retired", { kind: "bot", bot: "pip" }, "pip");
+    const { digest } = (await records.ledger()).proposals.retired;
+    await records.transact((l, at) => decline(l, "retired", digest, "dev", at));
+    const g1 = await records.persist("gv1", { v: 1 });
+    await records.publish("gv1", g1, (l, at) =>
+      publishGrant(l, "g", { version: "gv1", digest: g1, expiresAt: at + 1e13 }, null, at),
+    );
+    k.c.wall = T + RETAIN_MS;
+    await records.transact(() => {});
+    const g2 = await records.persist("gv2", { v: 2 });
+    await records.publish("gv2", g2, (l, at) =>
+      publishGrant(l, "g", { version: "gv2", digest: g2, expiresAt: at + 1e13 }, 1, at),
+    );
+    k.c.wall = T - 2 * ORPHAN_MS;
+    await records.persist("rollback", { id: "rollback" });
+    k.c.wall = T + RETAIN_MS;
+    expect(await records.sweepOrphans()).toEqual([]);
+    k.c.mono += ORPHAN_MS - 1;
+    expect(await records.sweepOrphans()).toEqual([]);
+    k.c.mono += 1;
+    expect((await records.sweepOrphans()).sort()).toEqual(["gv1", "retired", "rollback"]);
+    expect([...versions.rows.keys()]).toEqual(["v:gv2"]);
+  });
+
+  it("publishing a version clears its age: replaced later, it waits a fresh hour", async () => {
+    const [store, versions] = [memoryStore(), memoryStore()];
+    const { k, records } = on(store, versions);
+    const g1 = await records.persist("gv1", { v: 1 });
+    await records.publish("gv1", g1, (l, at) =>
+      publishGrant(l, "g", { version: "gv1", digest: g1, expiresAt: at + 1e13 }, null, at),
+    );
+    const g2 = await records.persist("gv2", { v: 2 });
+    await records.sweepOrphans();
+    k.c.mono += ORPHAN_MS;
+    await records.publish("gv2", g2, (l, at) =>
+      publishGrant(l, "g", { version: "gv2", digest: g2, expiresAt: at + 1e13 }, 1, at),
+    );
+    const g3 = await records.persist("gv3", { v: 3 });
+    await records.publish("gv3", g3, (l, at) =>
+      publishGrant(l, "g", { version: "gv3", digest: g3, expiresAt: at + 1e13 }, 2, at),
+    );
+    // gv2 was aged before it was published; replaced now, its hour starts again.
+    expect(await records.sweepOrphans()).toEqual([]);
+    k.c.mono += ORPHAN_MS;
+    expect((await records.sweepOrphans()).sort()).toEqual(["gv1", "gv2"]);
+  });
+
+  it("notifies readers when a proposal expires during cleanup and stays quiet for private cleanup writes", async () => {
+    const { c, now, monotonic } = clocks();
+    const onChange = vi.fn();
+    const records = new Records(memoryStore(), memoryStore(), { now, monotonic, onChange });
+    await propose(records, "published", { kind: "bot", bot: "pip" }, "pip");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    onChange.mockClear();
+    await records.persist("orphan", { id: "orphan" });
+    await records.sweepOrphans();
+    expect(onChange).not.toHaveBeenCalled();
+    c.mono += ORPHAN_MS;
+    c.wall += EXPIRES_MS;
+    expect(await records.sweepOrphans()).toEqual(["orphan"]);
+    expect((await records.ledger()).proposals.published.state).toBe("expired");
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unreadable row on the first page doesn't stop cleanup: later orphans go after the hour, through the same Records or a fresh one", async () => {
+    for (const via of ["same", "fresh"] as const) {
+      const [store, versions] = [memoryStore(), memoryStore()];
+      const first = on(store, versions);
+      await first.records.persist("a-unreadable", { id: "a-unreadable" });
+      versions.faults.corrupt.add("v:a-unreadable");
+      const orphans = Array.from({ length: 20 }, (_, n) => `orphan-${String(n).padStart(2, "0")}`);
+      for (const id of orphans) await first.records.persist(id, { id });
+      const { k, records } = via === "same" ? first : on(store, versions);
+      expect(await records.sweepOrphans()).toEqual([]);
+      k.c.mono += ORPHAN_MS;
+      expect((await records.sweepOrphans()).sort()).toEqual(["a-unreadable", ...orphans]);
+      expect(versions.rows.size).toBe(0);
+    }
+  });
+
+  it("an unreadable row the ledger refers to is never deleted; reads and publication behave as before", async () => {
+    const [store, versions] = [memoryStore(), memoryStore()];
+    const { k, records } = on(store, versions);
+    await propose(records, "a-referenced", { kind: "bot", bot: "pip" }, "pip");
+    const { digest } = (await records.ledger()).proposals["a-referenced"];
+    versions.faults.corrupt.add("v:a-referenced");
+    for (const id of ["orphan-1", "orphan-2"]) await records.persist(id, { id });
+    await records.sweepOrphans();
+    k.c.mono += ORPHAN_MS;
+    expect((await records.sweepOrphans()).sort()).toEqual(["orphan-1", "orphan-2"]);
+    expect(versions.rows.has("v:a-referenced")).toBe(true);
+    expect(await records.version("a-referenced", digest)).toBeNull();
+    k.c.mono += 10 * ORPHAN_MS;
+    expect(await records.sweepOrphans()).toEqual([]);
+    await expect(
+      propose(records, "newer", { kind: "bot", bot: "main" }, "otto"),
+    ).resolves.toBeTruthy();
+    expect((await records.ledger()).proposals["a-referenced"].state).toBe("open");
+  });
+
+  it("an unreadable row nothing refers to is reclaimed like any orphan: after its hour, not before", async () => {
+    const [store, versions] = [memoryStore(), memoryStore()];
+    const { k, records } = on(store, versions);
+    await records.persist("unreadable", { id: "unreadable" });
+    versions.faults.corrupt.add("v:unreadable");
+    expect(await records.sweepOrphans()).toEqual([]);
+    k.c.mono += ORPHAN_MS - 1;
+    expect(await records.sweepOrphans()).toEqual([]);
+    k.c.mono += 1;
+    expect(await records.sweepOrphans()).toEqual(["unreadable"]);
+    expect([versions.rows.size, (await records.ledger()).sweeping]).toEqual([0, null]);
+  });
+
+  it("a full store of 512 versions is reclaimed page by page, and takes new records again", async () => {
+    const [store, versions] = [memoryStore(), memoryStore({ maxEntries: 512 })];
+    const { k, records } = on(store, versions);
+    const scan = versions.entriesInKeyRange.bind(versions);
+    const limits: number[] = [];
+    versions.entriesInKeyRange = (range) => (limits.push(range.limit), scan(range));
+    for (let i = 0; i < 512; i += 1) await records.persist(`o${String(i).padStart(3, "0")}`, { i });
+    await expect(records.persist("one-more", { i: 512 })).rejects.toMatchObject({
+      reason: "records-full",
+    });
+    expect(await records.sweepOrphans()).toEqual([]);
+    k.c.mono += ORPHAN_MS;
+    expect(await records.sweepOrphans()).toHaveLength(512);
+    expect(versions.rows.size).toBe(0);
+    expect((await records.ledger()).orphanAges).toBeUndefined();
+    await expect(records.persist("one-more", { i: 512 })).resolves.toBeTypeOf("string");
+    // At most 16 rows decoded per page, so at most 16 MiB of JSON at the store's 1 MiB per value.
+    expect(Math.max(...limits)).toBe(16);
+    // 1,500 store calls through the stand-in; on a loaded machine that takes longer than 5 s.
+  }, 60_000);
+
   it("reopening Records over the same stores: before publication nothing was admitted, after it the entry is there once", async () => {
     const [store, versions] = [memoryStore(), memoryStore()];
     const unpublished = await new Records(store, versions, { now: () => T }).persist("u", {
@@ -109,6 +360,17 @@ describe("the records", () => {
 });
 
 describe("the plugin's methods", () => {
+  it("leaves the last version slot for a current grant update after a stale retry", async () => {
+    const host = load({ versions: memoryStore({ maxEntries: 3 }), startService: false });
+    const input = { scope: "see", bots: ["pip"] };
+    const grant = (await host.call("relay.grants.set", input)).payload!;
+    const update = (expectedGeneration: number) =>
+      host.call("relay.grants.set", { ...input, id: grant.id, expectedGeneration });
+    expect((await update(1)).payload?.generation).toBe(2);
+    expect(reasonOf(await update(1))).toBe("grant-generation");
+    expect((await update(2)).payload?.generation).toBe(3);
+  });
+
   const setup = async () => {
     const host = load({ now: () => T });
     const grant = (
@@ -186,20 +448,42 @@ describe("the plugin's methods", () => {
     );
   });
 
-  it("permissions come from the grant at the generation given, and a grant can't be changed", async () => {
+  it("permissions come from the generation that supplied them, in both orders", async () => {
     const { host, grant, suggest } = await setup();
+    const narrow = { id: grant.id, expectedGeneration: 1, scope: "suggest", bots: ["pip"] };
     const instructions = { fields: { instructions: { agents: { text: "x", baseHash: null } } } };
-    const reads = host.dispatched.length;
-    expect(reasonOf(await suggest(instructions, 2))).toBe("grant-generation");
-    expect(host.dispatched.length).toBe(reads);
-    const change = { id: grant.id, scope: "suggest", bots: ["pip"] };
-    expect(reasonOf(await host.call("relay.grants.set", change))).toBe("invalid");
-    const narrow = (await host.call("relay.grants.set", { scope: "suggest", bots: ["pip"] }))
-      .payload!;
-    const fromNarrow = { grant: narrow.id, generation: 1, bot: "pip", ...instructions };
-    expect(reasonOf(await host.call("relay.propose", fromNarrow))).toBe("instructions");
+    expect(
+      reasonOf(await host.call("relay.grants.set", { id: grant.id, scope: "see", bots: ["pip"] })),
+    ).toBe("invalid");
+    const held = host.versions.hold("v:p_");
+    const late = suggest(instructions);
+    await held.reached;
+    expect((await host.call("relay.grants.set", narrow)).payload).toMatchObject({
+      generation: 2,
+      includeInstructions: false,
+    });
+    held.release();
+    expect(reasonOf(await late)).toBe("grant-generation");
+    expect(reasonOf(await suggest(instructions, 1))).toBe("grant-generation");
+    expect(reasonOf(await suggest(instructions, 2))).toBe("instructions");
+    // A request naming the next generation isn't checked against the current, wider one.
+    const ahead = host.versions.hold("v:p_");
+    const early = suggest(instructions, 3);
+    const where = await Promise.race([
+      early.then(() => "answered"),
+      ahead.reached.then(() => "held"),
+    ]);
+    if (where === "held") await host.call("relay.grants.set", { ...narrow, expectedGeneration: 2 });
+    ahead.release();
+    expect([where, reasonOf(await early)]).toEqual(["answered", "grant-generation"]);
+    // A pending update can't bring access back after a revocation.
+    const update = host.versions.hold("v:gv_");
+    const pending = host.call("relay.grants.set", { ...narrow, expectedGeneration: 2 });
+    await update.reached;
     await host.call("relay.grants.set", { id: grant.id, revoke: true });
-    expect(reasonOf(await suggest(instructions, 2))).toBe("grant-revoked");
+    update.release();
+    expect(reasonOf(await pending)).toBe("grant-generation");
+    expect(reasonOf(await suggest({}, 3))).toBe("grant-revoked");
   });
 
   it("a suggestion admitted before the revocation is withdrawn on every device; one after is refused", async () => {
@@ -327,7 +611,9 @@ describe("the plugin's methods", () => {
       "records-full",
     ]);
     // Answering can't free a stored version, so the refusal doesn't say it would.
-    expect((await more(3)).error?.message).not.toMatch(/answer/i);
+    expect((await more(3)).error?.message).toBe(
+      "Clawtrate's request records on this gateway are full. Try again after the gateway clears older records.",
+    );
     const first = sent[0]!;
     expect(
       (await host.call("proposals.decline", { id: first.proposalId, digest: first.digest })).ok,
@@ -503,5 +789,81 @@ describe("the plugin's methods", () => {
     expect((await reopened.call("relay.grants.get", { id: g.id })).payload).toMatchObject({
       revoked: "expired",
     });
+  });
+
+  it("a grant update lives no longer than the generation it read: an expiry or a retention end at commit refuses it", async () => {
+    let now = T;
+    const host = load({ now: () => now });
+    const update = (id: unknown, expectedGeneration: number) =>
+      host.call("relay.grants.set", {
+        id,
+        expectedGeneration,
+        scope: "suggest",
+        bots: ["pip"],
+        expiresAt: T + 1e12,
+      });
+    const g = (
+      await host.call("relay.grants.set", { scope: "suggest", bots: ["pip"], expiresAt: T + 1000 })
+    ).payload!;
+    now = T + 999;
+    host.store.faults.beforeCommit = () => (now = T + 1000);
+    expect(reasonOf(await update(g.id, 1))).toBe("expired");
+    host.store.faults.beforeCommit = () => {};
+    expect((await host.call("relay.grants.get", { id: g.id })).payload).toMatchObject({
+      revoked: "expired",
+      generation: 2,
+    });
+    now = T;
+    const r = (await host.call("relay.grants.set", { scope: "suggest", bots: ["pip"] })).payload!;
+    await host.call("relay.grants.set", { id: r.id, revoke: true });
+    now = T + RETAIN_MS - 1;
+    host.store.faults.beforeCommit = () => (now = T + RETAIN_MS);
+    expect(reasonOf(await update(r.id, 2))).toBe("expired");
+    host.store.faults.beforeCommit = () => {};
+    expect(reasonOf(await host.call("relay.grants.get", { id: r.id }))).toBe("grant-missing");
+  });
+
+  it("the service finishes a pending deletion at start, sweeps hourly, and clears its timer when stopped", async () => {
+    let mono = 0;
+    const [store, versions] = [memoryStore(), memoryStore({ maxEntries: 512 })];
+    const seed = new Records(store, versions, { now: () => T, monotonic: () => mono });
+    await seed.persist("pending", { id: "pending" });
+    await seed.transact((l) => {
+      l.sweeping = "pending";
+    });
+    await seed.persist("orphan", { id: "orphan" });
+    const timers: { tick: () => Promise<unknown>; ms: number }[] = [];
+    const set = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      tick: () => Promise<unknown>,
+      ms: number,
+    ) => {
+      timers.push({ tick, ms });
+      return 7;
+    }) as unknown as typeof setInterval);
+    const cleared = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    try {
+      const host = load({
+        store,
+        versions,
+        now: () => T,
+        monotonic: () => mono,
+        startService: false,
+      });
+      await host.start();
+      expect(timers.map((t) => t.ms)).toEqual([60 * 60 * 1000]);
+      expect([versions.rows.has("v:pending"), versions.rows.has("v:orphan")]).toEqual([
+        false,
+        true,
+      ]);
+      expect((await seed.ledger()).sweeping).toBeNull();
+      mono += ORPHAN_MS;
+      await timers[0]!.tick();
+      expect(versions.rows.has("v:orphan")).toBe(false);
+      host.stop();
+      expect(cleared).toHaveBeenCalledWith(7);
+    } finally {
+      set.mockRestore();
+      cleared.mockRestore();
+    }
   });
 });

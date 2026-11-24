@@ -9,3 +9,8 @@ assets/brand/generated.json
 docs/research
 docs/parity.md
 docs/design/prototype
+apps/mobile/ios
+apps/mobile/build
+apps/mobile/.expo
+# Text snapshots are compared byte for byte with what the visual tests read from the page.
+visual/baselines/**/*.aria.yml

@@ -31,10 +31,12 @@ import {
   MAX_ACCESS_WAITERS,
   MAX_FOREIGN_READ_SESSIONS,
   MAX_OPENED_READS,
+  MAX_BOT_DELETES,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
   MAX_OUTCOME_LOOKUPS,
+  MAX_FILE_READS,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
@@ -55,6 +57,7 @@ import {
   MAX_QUEUED_INPUTS,
 } from "./computer.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
+import { MAX_CHECKED_RUN_CHARS, MAX_CHECKED_RUNS, MAX_NAME_ERROR_CHARS } from "./bot-names.ts";
 import {
   MAX_WAITING_ID_CHARS,
   MAX_WAITING_MARKERS,
@@ -71,6 +74,7 @@ import {
   MAX_FILE_NAME_CHARS,
   MAX_ID_CHARS,
   MAX_LISTED_TASKS,
+  MAX_NAME_CHARS,
   MAX_OUTBOX,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_RUN_LIST,
@@ -174,6 +178,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Tasks the engine follows, as their runs describe them.
   // A task's read on opening, while it is on its way.
   openedReads: { max: MAX_OPENED_READS, each: ID, row: "bookkeeping" },
+  // Bot deletes under way, by gateway and bot: two ids, each within `ID` as JSON, and the
+  // separator between them, which JSON escapes to six characters (`\u0000`).
+  botDeletes: { max: MAX_BOT_DELETES, each: 2 * ID + 4, row: "bookkeeping" },
   "waiting.held": { max: MAX_WAITING_SESSIONS, each: WAITING_HELD_CHARS, row: "bookkeeping" },
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
@@ -252,6 +259,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
+  // Settings reads a stop ends: connection commands run one at a time, each with one read.
+  stopWaiters: { max: 1, each: 0, row: null },
+  // Startups still reading: a host starts once, and again only after a stop.
+  startReads: { max: 1, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
   // Each failed request's log policy; an entry lives only as long as that error object.
@@ -271,6 +282,20 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
+  // Names bots wrote for themselves (`bot-names.ts`): one card per listed bot, the reads under
+  // way (one per bot, within the file reads), and the bots whose file is too long to read.
+  "botNames.proposals": {
+    max: MAX_BOTS,
+    each: 2 * ID + 2 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + SHORT,
+    row: "bookkeeping",
+  },
+  "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },
+  "botNames.skipped": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  "botNames.checkedRuns": {
+    max: MAX_CHECKED_RUNS,
+    each: MAX_CHECKED_RUN_CHARS,
+    row: "bookkeeping",
+  },
   "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
@@ -302,7 +327,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
  */
 export const CLIENT_NOT_WALKED: Record<string, string> = {
   writes:
-    "shared by clients of the host store; one writer per live pairing, one token per unresolved refusal, one rotation count per token key an access request rotated and one grant (a flag and a number) per token key written, removed or read",
+    "shared by clients of the host store; one writer per live pairing, one token per unresolved refusal, one rotation count per token key an access request rotated, one grant (a flag and a number) per token key written, removed or read and one retired shared gateway token per gateway URL whose device token was saved",
   host: "the host's own objects: its socket factory, storage and signer",
   protocol: "the official client package's protocol client; its requests time out",
   auth: "the official client package's device-auth lifecycle and this connection's token store",
@@ -312,6 +337,9 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
   "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
+  "botNames.ctx": "the client's own functions, handed to the bot names engine",
+  "botNames.declines":
+    "Not now as read from the host's storage, at most `MAX_NAME_DECLINES` names, each bounded when read",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
 };
 
@@ -325,6 +353,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   accounts: "AccountsEngine",
   routines: "RoutinesEngine",
   usage: "UsageEngine",
+  botNames: "BotNames",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
   computer: "ComputerViews",
