@@ -89,8 +89,12 @@ test.describe("bot name behaviour", () => {
     const notNow = card(page).getByRole("button", { name: "Not now" });
     await notNow.focus();
     await page.keyboard.press("Space");
+    // It carries the stamp of the card's read too, so it answers only that card.
+    const { gatewayId, target } = await page.evaluate(
+      () => (window as unknown as Fixture).clawtrateFixture.getState().connection,
+    );
     expect(await sent(page)).toEqual([
-      { type: "declineBotName", botId: "new-bot", name: "Johnny" },
+      { type: "declineBotName", botId: "new-bot", name: "Johnny", stamp: { gatewayId, target } },
     ]);
     await expect(card(page)).toHaveCount(0);
     await expect(page.locator(".title-pill-name")).toHaveText("New bot");
