@@ -13,6 +13,7 @@ import type {
   TranscriptBlock,
   TranscriptItem,
   Transcript,
+  ChatFile,
   ChatPicture,
   SentAttachment,
 } from "./types.ts";
@@ -308,6 +309,76 @@ function assistantPictures(content: unknown): ChatPicture[] {
   });
 }
 
+/** The longest file name shown or offered for saving. */
+export const MAX_FILE_NAME_LENGTH = 255;
+
+/**
+ * A file name a gateway gave, safe to show and to offer for saving: its last
+ * path part only, with control and direction-changing characters taken out,
+ * at most `MAX_FILE_NAME_LENGTH` long with its extension kept. "File" when
+ * nothing is left.
+ */
+export function cleanFileName(raw: unknown): string {
+  const last = (typeof raw === "string" ? raw : "").split(/[/\\]/).at(-1) ?? "";
+  const name = last
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .trim()
+    .replace(/^\.+$/, "");
+  if (!name) return "File";
+  if ([...name].length <= MAX_FILE_NAME_LENGTH) return name;
+  const dot = name.lastIndexOf(".");
+  const extension = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : "";
+  return [...name.slice(0, name.length - extension.length)]
+    .slice(0, MAX_FILE_NAME_LENGTH - 1 - extension.length)
+    .join("")
+    .concat("…", extension);
+}
+
+/** A media type as the gateway names it, lower-cased, or null for anything else. */
+const mediaType = (value: unknown): string | null => {
+  const type = str(value);
+  return type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null;
+};
+
+/** Blocks of a bot's message that are never a file it hands over. */
+const NOT_FILES = new Set([
+  "text",
+  "thinking",
+  "redacted_thinking",
+  "toolCall",
+  "tool_use",
+  "image",
+]);
+
+/**
+ * The files that aren't pictures a bot's message hands over (F-115), in its
+ * order: `attachment` blocks (documents), `audio` and `video` blocks, any other
+ * block that names an artifact, and `attachment_error` blocks, which name a
+ * file the gateway couldn't hand over. A block missing a field still gives a
+ * file, from what it has. The address a block names is never kept, so never used.
+ */
+function assistantFiles(content: unknown): ChatFile[] {
+  return arr(content).flatMap((part) => {
+    const block = asRecord(part);
+    const type = str(block?.type);
+    if (!block || !type || NOT_FILES.has(type)) return [];
+    const failed = type === "attachment_error";
+    const fact = type === "attachment" || failed ? (asRecord(block.attachment) ?? {}) : block;
+    const artifactId = failed ? null : str(fact.artifactId);
+    if (!failed && type !== "attachment" && !artifactId) return [];
+    const size = num(fact.sizeBytes);
+    return [
+      {
+        artifactId,
+        name: cleanFileName(str(fact.label) ?? str(fact.fileName) ?? str(fact.title)),
+        mimeType: mediaType(fact.mimeType),
+        sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
+      },
+    ];
+  });
+}
+
 /** Most files one message may carry (`chat.send`'s own limit, as `attachments.ts` keeps it). */
 const MAX_SENT_ATTACHMENTS = 20;
 const MAX_SENT_NAME_CHARS = 255;
@@ -503,6 +574,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         }
         const runId = str(info.runId);
         const pictures = assistantPictures(message.content);
+        const files = assistantFiles(message.content);
         const prompt = pictures.length > 0 ? imagePrompt(runId, items) : null;
         for (const picture of pictures) picture.prompt = prompt;
         if (runId !== null && runId === precedingRun) {
@@ -517,7 +589,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           item = previous;
         } else {
           // An empty row starts no turn: a later row of its run gets one of its own, never the last.
-          if (blocks.length === 0 && pictures.length === 0) return;
+          if (blocks.length === 0 && pictures.length === 0 && files.length === 0) return;
           currentRun = runId;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           // It names no run, so it is a turn of its own.
@@ -535,6 +607,15 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           return true;
         });
         if (added.length > 0) item.pictures = [...(item.pictures ?? []), ...added];
+        // Files likewise: once each, where it first came; one the gateway couldn't hand over has no id.
+        const handed = new Set((item.files ?? []).map((file) => file.artifactId));
+        const more = files.filter((file) => {
+          if (file.artifactId !== null && handed.has(file.artifactId)) return false;
+          handed.add(file.artifactId);
+          if (rowId) file.messageId = rowId;
+          return true;
+        });
+        if (more.length > 0) item.files = [...(item.files ?? []), ...more];
         if (cutByGateway) item.truncated = true;
         if (rowId) {
           for (const block of blocks)

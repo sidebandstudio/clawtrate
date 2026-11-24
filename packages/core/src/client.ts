@@ -150,9 +150,11 @@ import {
   MAX_PICTURE_BYTES,
   ownPictureRead,
   readChatPicture,
+  type ChatPictureContext,
   type ChatPictureRead,
   type SentPictureRead,
 } from "./pictures.ts";
+import { readChatFile, type ChatFileRead } from "./chat-files.ts";
 import type {
   ApprovalInstructions,
   ClawtrateHost,
@@ -6870,6 +6872,24 @@ export class ClawtrateClient {
     artifactId: string,
     options: FileReadOptions = {},
   ): Promise<ChatPictureRead> {
+    return this.readHandedOver("picture", options, (ctx) => readChatPicture(ctx, key, artifactId));
+  }
+
+  /** A file the bot handed over in the task that isn't a picture (`chat-files.ts`), the same way. */
+  async readChatFile(
+    key: string,
+    artifactId: string,
+    options: FileReadOptions = {},
+  ): Promise<ChatFileRead> {
+    return this.readHandedOver("file", options, (ctx) => readChatFile(ctx, key, artifactId));
+  }
+
+  /** A picture or file a bot handed over, read through the download the gateway issues. */
+  private async readHandedOver<R extends { status: string }>(
+    noun: string,
+    options: FileReadOptions,
+    read: (ctx: ChatPictureContext) => Promise<R>,
+  ): Promise<R | { status: "failed"; message: string }> {
     // A turn hands over up to four pictures and a task can hold several such turns, all drawn
     // at once: a picture waits up to 30 s for one of the file reads' places, and of the
     // transfers' that carry a picture to its viewer, instead of failing.
@@ -6882,22 +6902,22 @@ export class ClawtrateClient {
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
     // The task and picture are the connection's it was asked on: never read on a later one.
     if (generation !== this.generation)
-      return { status: "failed", message: "The connection changed while this picture waited." };
+      return { status: "failed", message: `The connection changed while this ${noun} waited.` };
     // A viewer that left while the picture waited asks for nothing.
     this.checkNotWithdrawn(options.owner);
     const gatewayUrl = this.state.connection.gatewayUrl ?? "";
-    const read = await this.fileRead(
-      (ctx) =>
-        readChatPicture({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }, key, artifactId),
+    const answer = await this.fileRead(
+      (ctx) => read({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }),
       options,
     );
     // Bytes that arrive after a switch to another gateway are the old one's: none reach a viewer.
     if (generation !== this.generation) {
-      if (read.status === "content" && read.transfer.id)
-        this.fileTransfers.release(options.owner ?? DIRECT_CALLER, read.transfer.id);
-      return { status: "failed", message: "The connection changed while this picture was read." };
+      const transfer = (answer as { transfer?: { id: string | null } }).transfer;
+      if (answer.status === "content" && transfer?.id)
+        this.fileTransfers.release(options.owner ?? DIRECT_CALLER, transfer.id);
+      return { status: "failed", message: `The connection changed while this ${noun} was read.` };
     }
-    return read;
+    return answer;
   }
 
   /**

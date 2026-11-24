@@ -313,6 +313,23 @@ export type ChatPicture = {
 };
 
 /**
+ * A file that isn't a picture the gateway put on a bot's message (F-115): an
+ * `attachment` block (a document), an `audio` or `video` block, or an
+ * `attachment_error` block for one it couldn't hand over. `name` is the
+ * gateway's, cleaned (`cleanFileName`); `mimeType` and `sizeBytes` are its
+ * words, shown as text. `artifactId` is null when there is nothing to read:
+ * an `attachment_error`, or a block that named no id. Read with `readChatFile`.
+ */
+export type ChatFile = {
+  artifactId: string | null;
+  name: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  /** The row that carried it (`__openclaw.id`), as for a picture. */
+  messageId?: string;
+};
+
+/**
  * A file a person sent with their message, as the gateway's history names it
  * (`__openclaw.media`, OpenClaw 2026.10.6): its name, type and size, never the
  * reference the gateway keeps it under. Clawtrate loads none from the gateway
@@ -333,6 +350,8 @@ export type TranscriptItem = {
   model: string | null;
   /** The pictures the bot's messages of this item hand over, in their order. Absent when none. */
   pictures?: ChatPicture[];
+  /** The other files the bot's messages of this item hand over, in their order. Absent when none. */
+  files?: ChatFile[];
   /** The files a person's message carried, in the order sent. Absent when none. */
   attachments?: SentAttachment[];
   /**
