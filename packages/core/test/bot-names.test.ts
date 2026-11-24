@@ -937,6 +937,43 @@ describe("F-552: a bot that takes a name", () => {
     expect(requests).not.toContain("agents.update");
   });
 
+  it("F-552: a Rename already made elsewhere while the gateway check is out is done, and sends nothing", async () => {
+    const requests: string[] = [];
+    const names = engine({
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+    });
+    await names.ctxRun();
+    // Another client renames the bot to the card's name while the gateway check is out.
+    names.sameGateway = async () => void (names.bots[0] = { ...names.bots[0]!, name: "Johnny" });
+    await names.engine.accept("new-bot", "Johnny", STAMP);
+    expect(requests).not.toContain("agents.update");
+    expect(names.published.at(-1)).toEqual([]);
+  });
+
+  it("F-552: a run whose end found every file read busy is checked when its end comes again", async () => {
+    let free = 0;
+    const requests: string[] = [];
+    const names = engine({
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+      takeRead: () => {
+        if (free === 0) return null;
+        free -= 1;
+        return () => void (free += 1);
+      },
+    });
+    await names.engine.afterRun("new-bot", "run-busy");
+    expect(requests).toEqual([]);
+    free = 1;
+    await names.engine.afterRun("new-bot", "run-busy");
+    expect(requests).toEqual(["agents.files.get"]);
+  });
+
   it("F-552: a picture that lives only in the file stays there after Rename", async () => {
     const own = "- Avatar: data:image/png;base64,QUJD";
     const { gateway, bot, takeName } = namingGateway((name) =>

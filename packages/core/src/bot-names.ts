@@ -132,18 +132,21 @@ export class BotNames {
    */
   async afterRun(botId: string, runId?: string): Promise<void> {
     if (!this.ctx.canRename() || this.reading.has(botId) || this.skipped.has(botId)) return;
-    if (runId !== undefined && runId.length <= MAX_CHECKED_RUN_CHARS) {
-      if (this.checkedRuns.has(runId)) return;
-      this.checkedRuns.add(runId);
-      if (this.checkedRuns.size > MAX_CHECKED_RUNS)
-        this.checkedRuns.delete(this.checkedRuns.values().next().value!);
-    }
+    const counted = runId !== undefined && runId.length <= MAX_CHECKED_RUN_CHARS;
+    if (counted && this.checkedRuns.has(runId)) return;
     const bot = this.ctx.bots().find((each) => each.id === botId);
     // The gateway's default bot takes its name in OpenClaw's own first run, which saves the config
     // too, and the gateway renames an implicit `main` only through its config (R13, R16).
     if (!bot || bot.isDefault) return;
     const release = this.ctx.takeRead();
     if (!release) return;
+    // Counted only once its read has a slot: an end that found every read busy can be checked
+    // when it comes again.
+    if (counted) {
+      this.checkedRuns.add(runId);
+      if (this.checkedRuns.size > MAX_CHECKED_RUNS)
+        this.checkedRuns.delete(this.checkedRuns.values().next().value!);
+    }
     const epoch = this.epoch;
     // Where this read is made: a card drawn from it is for that gateway and that target only.
     const stamp = this.ctx.stamp();
@@ -238,6 +241,8 @@ export class BotNames {
       if (epoch !== this.epoch) throw new Error("The connection changed, so nothing was sent.");
       // The list as it stands after that wait, with no wait between this look and the write.
       const still = this.ctx.bots().find((each) => each.id === botId);
+      // Renamed to this name meanwhile, as at the first look: done, and nothing to send.
+      if (still?.name === name) return this.drop(botId);
       if (still?.name !== open.from) {
         this.drop(botId);
         throw new Error(
