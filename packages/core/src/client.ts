@@ -4246,6 +4246,13 @@ export class ClawtrateClient {
         }));
       return stopping;
     });
+    // An action's Stop of a run not named yet keeps its check before the wait for write access:
+    // the send's answer can name the run meanwhile, and its abort must find the check. With no
+    // room left for it, the Stop is given up now rather than sent unbound later.
+    if (options.bound && !run.bound && !this.keepDeferredStop(key, runId, options.bound)) {
+      this.updateActivity(key, (activity) => revertStop(activity, runId, TOO_MANY_STOPS));
+      return;
+    }
     try {
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       this.checkNotWithdrawn(options.owner);
@@ -4258,10 +4265,7 @@ export class ClawtrateClient {
       if (!current.bound) {
         if (options.taskOnly && options.owner)
           this.unsentStops.set(`${key}\u0000${runId}`, options.owner);
-        // The abort sent once the run is named stays on the action's connection, as this one would.
-        // With no room left for its check, the Stop is given up rather than sent unbound later.
-        if (options.bound && !this.keepDeferredStop(key, runId, options.bound))
-          this.updateActivity(key, (activity) => revertStop(activity, runId, TOO_MANY_STOPS));
+        // The abort sent once the run is named stays on the action's connection: its check is kept.
         return;
       }
       await this.abortRun(key, current.id, options.bound);
@@ -4272,16 +4276,21 @@ export class ClawtrateClient {
   }
 
   /**
-   * Keep a deferred Stop's check (the action's connection) until its run settles. Checks whose
-   * runs are no longer stopping are let go first; a check still waiting is never let go for a
-   * newer one. False when `MAX_DEFERRED_STOPS` are all still waiting.
+   * Keep a deferred Stop's check (the action's connection) until its run ends. Checks whose runs
+   * have ended are let go first; a check still needed is never let go for a newer one. False when
+   * `MAX_DEFERRED_STOPS` are all still needed.
    */
   private keepDeferredStop(key: string, runId: string, bound: () => boolean): boolean {
     for (const held of [...this.deferredStops.keys()]) {
       const [task, id] = held.split("\u0000") as [string, string];
       const activity = this.state.transcripts[task];
       const run = activity?.runs.find((each) => each.id === id || each.messageId === id);
-      if (run?.state !== "stopping") this.deferredStops.delete(held);
+      // Still stopping, or stopped with no known outcome after a Stop: a history read that names
+      // it can still abort it (`readTranscript`), and that abort needs the check.
+      const needed =
+        run?.state === "stopping" ||
+        (run?.state === "stopped" && !run.outcomeKnown && run.stopRequestedAt !== null);
+      if (!needed) this.deferredStops.delete(held);
     }
     if (this.deferredStops.size >= MAX_DEFERRED_STOPS) return false;
     this.deferredStops.set(`${key}\u0000${runId}`, bound);
