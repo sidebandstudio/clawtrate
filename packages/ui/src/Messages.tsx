@@ -812,15 +812,15 @@ function ThreadView({
     const body = text.trim();
     const botId = botIdFromSessionKey(env.taskKey);
     if (!body || !botId) return;
-    const id = messageId;
+    const submitted = drafts[messageId];
     const finishHandoff = beginHandoff();
     try {
       const { key } = await bridge.invoke({ type: "createTask", botId, text: body, label: null });
       void bridge.send({ type: "closeSession", key });
-      change(id, (now) => (now.text.trim() === body ? { text: "", error: null } : now));
+      change(messageId, (now) => (now === submitted ? { text: "", error: null } : now));
       env.announce("Started as a new task");
     } catch (failure) {
-      change(id, (now) => ({
+      change(messageId, (now) => ({
         ...now,
         error: failure instanceof Error ? failure.message : String(failure),
       }));

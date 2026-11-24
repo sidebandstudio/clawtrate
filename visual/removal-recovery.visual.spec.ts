@@ -9,6 +9,7 @@ type Controls = {
   };
   refuseSend?: () => void;
   acceptSend?: () => void;
+  acceptCreate?: () => void;
 };
 
 const diskTitle = "Disk almost full on the media box";
@@ -124,5 +125,54 @@ for (const outcome of ["refusal", "acceptance"] as const) {
       await page.evaluate(() => (window as unknown as Controls).acceptSend!());
     }
     await expect(header).toContainText("Rotate the logs");
+  });
+}
+
+for (const edit of ["retyped", "untouched"] as const) {
+  test(`F-278: delayed new-task success clears only the submitted revision when a reopened reply is ${edit}`, async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=message-actions&${OTTO_DISK}&panel=closed`, "light");
+    await page.evaluate(() => {
+      const controls = window as unknown as Controls;
+      const fixture = controls.clawtrateFixture;
+      const invoke = fixture.invoke.bind(fixture);
+      fixture.invoke = (command) =>
+        command.type === "createTask"
+          ? new Promise((resolve) => {
+              controls.acceptCreate = () => resolve({ key: "agent:otto:new-task" });
+            })
+          : invoke(command);
+    });
+    const original = page.getByTestId("reply-quote");
+    const field = page.getByTestId("thread-input");
+    const words = "Keep this reply.";
+    await original.click();
+    await field.fill(words);
+    await removeDiskTask(page);
+    await page.getByRole("button", { name: "Start a new task with this message" }).click();
+    await expect
+      .poll(() => page.evaluate(() => !!(window as unknown as Controls).acceptCreate))
+      .toBe(true);
+    await field.press("Escape");
+    await expect(field).toHaveCount(0);
+    await original.click();
+    await expect(field).toHaveValue(words);
+    if (edit === "retyped") {
+      await field.fill("");
+      await expect(field).toHaveValue("");
+      await field.fill(words);
+    }
+    await field.press("Escape");
+    const other = page.getByTestId("message").filter({ has: page.getByTestId("reactions") });
+    await other.getByRole("button", { name: "Reply in a thread" }).press("Enter");
+    await expect(field).toHaveValue("");
+    await field.fill(words);
+    await page.evaluate(() => (window as unknown as Controls).acceptCreate!());
+    await expect(page.getByTestId("announcer")).toHaveText("Started as a new task");
+    await expect(field).toHaveValue(words);
+    await field.press("Escape");
+    await original.click();
+    await expect(field).toHaveValue(edit === "retyped" ? words : "");
   });
 }
