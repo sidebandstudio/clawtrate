@@ -145,7 +145,7 @@ export async function withWindowsGateway<T>(name: string, launch: () => Promise<
     );
   };
   try {
-    await start(inst, { runId });
+    await start(inst, { runId, seed: "pairing" });
     const close = await launch();
     return async () => {
       try {

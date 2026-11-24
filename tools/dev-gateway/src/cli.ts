@@ -1083,7 +1083,7 @@ const RUN_ID_PATTERN = /^[0-9a-f]{48}$/;
 export async function start(
   inst: DevInstance,
   options: {
-    seed?: boolean;
+    seed?: boolean | "pairing";
     runId?: string;
     plugins?: string[];
     accounts?: boolean;
@@ -1287,7 +1287,7 @@ export async function start(
     assertInside(filesWorkspace, inst.stateDir);
     seedWorkspaceFiles(filesWorkspace);
     // Unseeded starts are for checks that need a running gateway, not its data.
-    if (options.seed !== false) await seed(inst);
+    if (options.seed !== false) await seed(inst, options.seed === "pairing");
   });
 }
 
@@ -1884,7 +1884,7 @@ async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void>
   }
 }
 
-export async function seed(inst: DevInstance): Promise<void> {
+export async function seed(inst: DevInstance, pairingOnly = false): Promise<void> {
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
   if (!(await gatewayHealthy(inst))) {
@@ -1902,8 +1902,14 @@ export async function seed(inst: DevInstance): Promise<void> {
   // Configuring the bots rewrote the config; it must still keep every guarantee.
   assertSandboxed(inst, instancePorts(inst));
   await assertExecDenied(inst);
-  await Promise.all(SEED_BOTS.map((bot) => seedConversations(inst, bot)));
-  await seedScenarioExamples(inst);
+  const bots = pairingOnly ? SEED_BOTS.filter((bot) => bot.id === SHELL_BOT) : SEED_BOTS;
+  await Promise.all(bots.map((bot) => seedConversations(inst, bot)));
+  await seedScenarioExamples(
+    inst,
+    pairingOnly
+      ? SCENARIO_EXAMPLES.filter((example) => example.slug === "failed-step")
+      : SCENARIO_EXAMPLES,
+  );
   console.log("Seed complete");
 }
 
@@ -1946,9 +1952,12 @@ export async function openOperator(
  * it sends each prompt, answers the question and resolves the approval. Runs
  * one example at a time, after the scripted tasks, then unpairs itself.
  */
-async function seedScenarioExamples(inst: DevInstance): Promise<void> {
+async function seedScenarioExamples(
+  inst: DevInstance,
+  examples: typeof SCENARIO_EXAMPLES,
+): Promise<void> {
   const keys = new Map<string, Set<string>>();
-  for (const botId of new Set(SCENARIO_EXAMPLES.map((example) => example.botId))) {
+  for (const botId of new Set(examples.map((example) => example.botId))) {
     keys.set(botId, await existingSessionKeys(inst, botId));
   }
   console.log(
@@ -1956,7 +1965,7 @@ async function seedScenarioExamples(inst: DevInstance): Promise<void> {
   );
   const op = await openOperator(inst, SEED_CLIENT, SEED_SCOPES, SEED_CAPS);
   try {
-    for (const example of SCENARIO_EXAMPLES) {
+    for (const example of examples) {
       const key = sessionKeyFor(example.botId, example.slug);
       const bot = SEED_BOTS.find((b) => b.id === example.botId)?.name ?? example.botId;
       if (keys.get(example.botId)?.has(key)) {
