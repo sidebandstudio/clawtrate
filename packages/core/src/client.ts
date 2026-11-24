@@ -1989,9 +1989,21 @@ export class ClawtrateClient {
             : null;
         const channelChats =
           (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
-        // In the names' queue, so a rename sent meanwhile starts from what was read.
-        const names = await this.queueGatewayNames(async () =>
-          readGatewayNames(await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null)),
+        // In the names' queue, so a rename sent meanwhile starts from what was read. A stop ends
+        // the wait, so a read that never answers can't hold the queue for later starts and
+        // renames. A failed or abandoned read is null: the names already held stay.
+        const names = await this.queueGatewayNames(() =>
+          this.raceStop<GatewayNames | null>(
+            stops,
+            async () => {
+              try {
+                return readGatewayNames(await this.host.storage.get(GATEWAY_NAMES_KEY));
+              } catch {
+                return null;
+              }
+            },
+            null,
+          ),
         );
         // A startup stopped while it read keeps nothing: the next one reads again. A preference
         // the person set meanwhile is newer than what was read.
@@ -2004,7 +2016,8 @@ export class ClawtrateClient {
           this.turnLimitMs = limit * 60_000;
         if (sets.channelChats === this.preferenceSets.channelChats)
           this.showChannelChats = channelChats;
-        if (sets.gatewayNames === this.preferenceSets.gatewayNames) this.gatewayNames = names;
+        if (names !== null && sets.gatewayNames === this.preferenceSets.gatewayNames)
+          this.gatewayNames = names;
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
