@@ -401,12 +401,15 @@ export async function switcherSnapshot(after: number) {
   return { ...decodePng(readFileSync(png)), savedAt: snapshot.time };
 }
 
-/** The screen now, whole, as pixels. */
-export function frame(): { width: number; data: Uint8Array } {
+/**
+ * The screen now, whole, as pixels. On iPhone Duo it is the display in use, and
+ * `pointsWide` is that display's width in points.
+ */
+export function frame(): { width: number; data: Uint8Array; pointsWide: number | null } {
   const file = join(OUTPUT, "frame.png");
-  screenshot(file);
+  const shown = screenshot(file);
   const image = decodePng(readFileSync(file));
-  return { width: image.width, data: image.data };
+  return { width: image.width, data: image.data, pointsWide: shown?.width ?? null };
 }
 
 /**
@@ -418,8 +421,9 @@ export async function moves(
   region: { x1: number; y1: number; x2: number; y2: number },
   pointsWide: number,
 ): Promise<boolean> {
-  const crop = ({ width, data }: { width: number; data: Uint8Array }) => {
-    const scale = width / pointsWide;
+  const crop = ({ width, data, pointsWide: shown }: ReturnType<typeof frame>) => {
+    // As in `screen`: a side safe area can keep every element narrower than the display.
+    const scale = width / (shown ?? pointsWide);
     const out: number[] = [];
     for (let y = Math.round(region.y1 * scale); y < Math.round(region.y2 * scale); y += 1)
       for (let x = Math.round(region.x1 * scale); x < Math.round(region.x2 * scale); x += 1) {
