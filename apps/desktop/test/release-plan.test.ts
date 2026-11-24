@@ -197,9 +197,12 @@ it("binds the build receipt to its name, source, date, compiled feed address and
   });
   expect(plan(c).issues).toHaveLength(5);
 });
-it("checks version syntax, both track mismatches, commit, date and the HTTPS feed location", () => {
+it("checks version syntax, a dated version on Stable, commit, date and the HTTPS feed location", () => {
+  // Three numbers can be a Beta build (F-559); a dated version is never a Stable one.
+  expect(plan({ ...c, version: "0.1.0", track: "nightly" }).issues).not.toContain(
+    "Version and track must match.",
+  );
   for (const [version, track] of [
-    ["0.1.0", "nightly"],
     ["0.1.1-beta.20261119.1", "stable"],
     ["bad", "stable"],
     ["0.1.0", "bad"],

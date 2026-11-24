@@ -65,7 +65,7 @@ import {
   TEAM_ID,
   type LatestMac,
 } from "./beta-files.ts";
-import { nightlyVersion } from "./candidate-version.ts";
+import { nightlyVersion, shortLine } from "./candidate-version.ts";
 import { OUTPUT_VARIABLE } from "./output.ts";
 import { RESERVATION_FILE, reserve, reservedBy } from "./reservation.ts";
 import { APP_ID, PRODUCT_NAME } from "./config.ts";
@@ -474,12 +474,50 @@ export function buildEnvironment(
     APPLE_KEYCHAIN_PROFILE: NOTARY_PROFILE,
     // The Beta track only: a beta build has no Stable feed until Stable opens.
     CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: BETA_FEED_URL,
+    // The release's track, which three numbers alone don't name (candidate-build.ts).
+    TRACK: "nightly",
     SOURCE_DATE_EPOCH: String(epoch),
     // Which reserved staging folder the build may start from (reservation.ts).
     ...(reservation ? { CLAWTRATE_RELEASE_RESERVATION: reservation } : {}),
     // Where electron-builder writes: this run's own folder (output.ts).
     ...(output ? { [OUTPUT_VARIABLE]: output } : {}),
   };
+}
+
+/**
+ * The next beta's version. Below 0.2.0 it is the checked-in version with its
+ * patch raised, the UTC day and the next run number. From 0.2.0 on it is three
+ * numbers: on the checked-in `X.Y` line, one more than the highest last number
+ * any tag uses there, or the checked-in `X.Y.Z` when none does. The middle
+ * number is raised by hand in package.json. A three-number beta needs the
+ * legacy feed pinned first, so the copies that read it can reach it.
+ */
+export function nextBeta(
+  current: string,
+  tags: readonly string[],
+  now: Date,
+  pin: string | null = LEGACY_BETA_PIN,
+): string {
+  const base = parseVersion(current);
+  if (!base || base.length !== 3) stop("apps/desktop/package.json needs an X.Y.Z version.");
+  if (!shortLine(base)) {
+    const day = now.toISOString().slice(0, 10).replaceAll("-", "");
+    const next = `${base[0]}.${base[1]}.${base[2] + 1}`;
+    return nightlyVersion(current, now, String(nextRun(tags, next, day)));
+  }
+  if (pin === null)
+    stop(
+      `Betas of ${current} have three numbers, and copies from before ${BETA_FEED_URL} can reach one only through the pinned legacy feed. Set LEGACY_BETA_PIN to the last dated beta first. Nothing was built.`,
+    );
+  let last = base[2] - 1;
+  for (const tag of tags) {
+    const used = tag.startsWith("v") ? parseVersion(tag.slice(1)) : null;
+    if (used?.length === 3 && used[0] === base[0] && used[1] === base[1])
+      last = Math.max(last, used[2]);
+  }
+  const version = `${base[0]}.${base[1]}.${last + 1}`;
+  if (!parseVersion(version)) stop("The beta version exceeds the update version limits.");
+  return version;
 }
 
 /** The next run number of `base` on `day` that no tag has used. */
@@ -1034,11 +1072,9 @@ async function prepareLocked(
   ).version;
   const stable = parseVersion(current);
   if (!stable || stable.length !== 3) stop("apps/desktop/package.json needs an X.Y.Z version.");
-  const day = releaseDate.slice(0, 10).replaceAll("-", "");
   const local = existsSync(staging) ? readdirSync(staging).map((name) => `v${name}`) : [];
   const tags = [...githubTags(runner, githubReleases(runner)), ...local];
-  const next = `${stable[0]}.${stable[1]}.${stable[2] + 1}`;
-  const version = nightlyVersion(current, now, String(nextRun(tags, next, day)));
+  const version = nextBeta(current, tags, now);
   requireNewest(version, tags);
   const tag = betaTag(version);
   const out = join(staging, version);
@@ -1222,7 +1258,13 @@ async function prepareLocked(
     // The feed records the address both apps were just checked to read; installed
     // builds ignore the field, and the site requires it of a pinned beta.
     const feed = {
-      ...makeFeed({ version, releaseDate, folder: releaseFolder(tag), dir: temp }),
+      ...makeFeed({
+        version,
+        releaseDate,
+        folder: releaseFolder(tag),
+        dir: temp,
+        track: "nightly",
+      }),
       buildFeed: BETA_FEED_URL,
     };
     const feedText = `${JSON.stringify(feed, null, 2)}\n`;
@@ -1241,7 +1283,7 @@ async function prepareLocked(
     checkBetaFiles(tag, feedText, latestText);
     writeFileSync(join(out, FEED_NAME), feedText);
     writeFileSync(join(out, LATEST_MAC_NAME), latestText);
-    writeFileSync(join(out, "notes.md"), releaseNotes(version, commit, zips));
+    writeFileSync(join(out, "notes.md"), releaseNotes(version, commit, zips, releaseDate));
     const plan: ReleasePlan = {
       version,
       tag,
@@ -1281,9 +1323,11 @@ export function releaseNotes(
   version: string,
   commit: string,
   files: ReadonlyArray<{ name: string; sha256: string }>,
+  releaseDate: string,
 ): string {
   return [
-    `Clawtrate ${version}, a beta for macOS, built from ${commit}.`,
+    // The date and commit stay here for support, now that the version doesn't hold the date.
+    `Clawtrate ${version}, a beta for macOS, built from ${commit} on ${releaseDate.slice(0, 10)}.`,
     "",
     "Install it from https://clawtrate.dev, or choose Check for Updates in a beta already installed.",
     "Apple silicon takes the arm64 zip and Intel Macs the x64 zip. Both are signed with a Developer ID and notarized by Apple.",
@@ -1367,7 +1411,7 @@ export function stagedRelease(
     if (latest[arch as keyof typeof MAC_ARCHITECTURES].sha256 !== zip.sha256)
       stop(`latest-mac.json's ${arch} file is not ${zip.name} as prepared.`);
   });
-  const notes = releaseNotes(version, plan.commit, zips);
+  const notes = releaseNotes(version, plan.commit, zips, plan.releaseDate);
   if (readFileSync(join(dir, "notes.md"), "utf8") !== notes)
     stop("notes.md is not the notes this release's record makes.");
   return { plan, notes };

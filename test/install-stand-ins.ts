@@ -41,7 +41,8 @@ export type StandIns = {
   close(): Promise<void>;
 };
 
-export async function standIns(): Promise<StandIns> {
+/** The stand-ins, serving a beta of `version`: dated, or three numbers from 0.2.0 on. */
+export async function standIns(version = VERSION): Promise<StandIns> {
   const root = mkdtempSync(join(tmpdir(), "clawtrate-install-"));
   const bin = join(root, "bin");
   const applications = join(root, "Applications");
@@ -56,7 +57,7 @@ export async function standIns(): Promise<StandIns> {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
-<key>CFBundleShortVersionString</key><string>${VERSION}</string>
+<key>CFBundleShortVersionString</key><string>${version}</string>
 </dict></plist>
 `,
   );
@@ -76,8 +77,8 @@ export async function standIns(): Promise<StandIns> {
   const server = createServer((request, response) => {
     if (request.url === "/feed/latest-mac.json") {
       const entry = (file: string) => ({
-        version: VERSION,
-        url: `${prefix}v${VERSION}/Clawtrate-${VERSION}-${file}.zip`,
+        version,
+        url: `${prefix}v${version}/Clawtrate-${version}-${file}.zip`,
         sha256,
       });
       response.writeHead(200, { "content-type": "application/json" });
@@ -88,7 +89,7 @@ export async function standIns(): Promise<StandIns> {
           teamIdentifier: TEAM,
         }),
       );
-    } else if (request.url?.startsWith(`/releases/v${VERSION}/Clawtrate-${VERSION}-mac-`)) {
+    } else if (request.url?.startsWith(`/releases/v${version}/Clawtrate-${version}-mac-`)) {
       response.writeHead(200, { "content-type": "application/zip" });
       response.end(zip);
     } else {

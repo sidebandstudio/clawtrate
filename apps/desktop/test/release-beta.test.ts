@@ -43,6 +43,7 @@ const realFs = await vi.importActual<typeof Fs>("node:fs");
 import {
   buildEnvironment,
   main,
+  nextBeta,
   nextRun,
   NOTARY_PROFILE,
   p12Bytes,
@@ -75,6 +76,7 @@ import { signingPlan, signingProblems } from "../packaging/signing.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
 import {
   BETA_FEED_URL,
+  betaTag,
   LEGACY_BETA_FEED_URL,
   checkBetaFiles,
   makeLatestMac,
@@ -441,6 +443,7 @@ describe("the build's environment", () => {
       APPLE_KEYCHAIN: signing.keychain,
       APPLE_KEYCHAIN_PROFILE: NOTARY_PROFILE,
       CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: BETA_FEED_URL,
+      TRACK: "nightly",
       SOURCE_DATE_EPOCH: "1790000000",
     });
     // F-559: a beta reads the new folder alone; the legacy one is only for earlier betas.
@@ -458,6 +461,42 @@ describe("the build's environment", () => {
 });
 
 describe("versions", () => {
+  const PIN = "0.1.1-beta.20261124.9";
+  it("F-559: below 0.2.0 a beta is dated, as before", () => {
+    expect(
+      nextBeta("0.1.0", ["v0.1.1-beta.20261120.1"], new Date("2026-11-20T10:00:00Z"), null),
+    ).toBe("0.1.1-beta.20261120.2");
+  });
+
+  it("F-559: from 0.2.0 on a beta has three numbers, one past the line's highest, starting at the checked-in one", () => {
+    const now = new Date("2026-12-01T10:00:00Z");
+    const dated = ["v0.1.1-beta.20261124.9", "v0.1.1-beta.20261124.10"];
+    expect(nextBeta("0.2.0", dated, now, PIN)).toBe("0.2.0");
+    expect(nextBeta("0.2.0", [...dated, "v0.2.0"], now, PIN)).toBe("0.2.1");
+    expect(nextBeta("0.2.0", [...dated, "v0.2.0", "v0.2.9", "v0.2.1"], now, PIN)).toBe("0.2.10");
+    // The middle number is raised by hand, and the last starts again.
+    expect(nextBeta("0.3.0", [...dated, "v0.2.0", "v0.2.4"], now, PIN)).toBe("0.3.0");
+    expect(nextBeta("0.3.0", ["v0.2.4", "v0.3.0", "v0.3.1"], now, PIN)).toBe("0.3.2");
+    // Tags that aren't a version of this line count for nothing.
+    expect(
+      nextBeta("0.2.0", ["v0.2.3-beta.20261201.1", "0.2.5", "vnext", "v1.2.7"], now, PIN),
+    ).toBe("0.2.0");
+  });
+
+  it("F-559: makes no three-numbered beta while the legacy feed is not pinned", async () => {
+    expect(
+      await stopped(() => nextBeta("0.2.0", ["v0.1.1-beta.20261124.9"], new Date(), null)),
+    ).toBe(
+      `Betas of 0.2.0 have three numbers, and copies from before ${BETA_FEED_URL} can reach one only through the pinned legacy feed. Set LEGACY_BETA_PIN to the last dated beta first. Nothing was built.`,
+    );
+  });
+
+  it("F-559: a beta's tag is v and its version, dated or three numbers", () => {
+    expect(betaTag("0.2.0")).toBe("v0.2.0");
+    expect(betaTag("0.1.1-beta.20261124.2")).toBe("v0.1.1-beta.20261124.2");
+    for (const bad of ["v0.2.0", "0.2", "02.0.0", "0.2.0 "]) expect(() => betaTag(bad)).toThrow();
+  });
+
   it("takes the next run number of the day that no tag has used", () => {
     expect(nextRun([], "0.1.1", "20261120")).toBe(1);
     expect(
@@ -1348,7 +1387,7 @@ describe("what publishing accepts as the prepared release", () => {
     )}\n`;
     writeFileSync(join(dir, "feed.json"), feedText);
     writeFileSync(join(dir, "latest-mac.json"), latestText);
-    writeFileSync(join(dir, "notes.md"), releaseNotes(VERSION, COMMIT, zips));
+    writeFileSync(join(dir, "notes.md"), releaseNotes(VERSION, COMMIT, zips, plan.releaseDate));
     const file = (name: string, text: string) => ({
       name,
       size: Buffer.byteLength(text),
@@ -2425,9 +2464,16 @@ describe("stopping a release while it builds", () => {
 
 describe("the beta's release notes", () => {
   it("say an existing OpenClaw is connected with its address and token under Advanced, and why", () => {
-    const notes = releaseNotes("0.2.0-beta.1", "0123456789abcdef", [
-      { name: "Clawtrate-0.2.0-beta.1-mac-arm64.zip", sha256: "a".repeat(64) },
-    ]);
+    const notes = releaseNotes(
+      "0.2.0",
+      "0123456789abcdef",
+      [{ name: "Clawtrate-0.2.0-mac-arm64.zip", sha256: "a".repeat(64) }],
+      "2026-12-01T10:00:00.000Z",
+    );
+    // F-559: the date and the commit, for support, since the version holds neither.
+    expect(notes.split("\n")[0]).toBe(
+      "Clawtrate 0.2.0, a beta for macOS, built from 0123456789abcdef on 2026-12-01.",
+    );
     expect(notes).toContain("asks for your gateway's address and token under Advanced");
     expect(notes).toContain("running OpenClaw's own program before you agree");
     // Nothing offers a connection without typing on an existing install.

@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FILE_KEYS, type FileKey } from "../src/main/update/feed.ts";
-import { parseVersion, versionTrack } from "../src/main/update/version.ts";
+import { fitsTrack, parseVersion, versionTrack } from "../src/main/update/version.ts";
 import { artifactName, sha512Base64 } from "./feed.ts";
 import { releaseDate } from "./update-defines.ts";
 import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
@@ -40,7 +40,11 @@ function build(dir: string, version: string) {
   const parsed = parseVersion(version);
   if (!parsed || !process.env.SOURCE_DATE_EPOCH)
     throw new Error("Expected candidate version and epoch.");
-  const feedAddresses = compiledAddresses(versionTrack(parsed), process.env);
+  // The track is the release's (TRACK), not the version's shape: a Beta build can have three numbers.
+  const track = process.env.TRACK || versionTrack(parsed);
+  if ((track !== "stable" && track !== "nightly") || !fitsTrack(parsed, track))
+    throw new Error("Version does not match track.");
+  const feedAddresses = compiledAddresses(track, process.env);
   const buildDate = releaseDate(process.env, new Date());
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const manifest = join(app, "package.json");

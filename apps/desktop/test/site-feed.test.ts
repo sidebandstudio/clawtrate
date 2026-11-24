@@ -117,11 +117,21 @@ describe("which release the site takes", () => {
       row("0.1.1-beta.20261122.2", {
         assets: row("0.1.1-beta.20261122.2").assets.filter((asset) => !asset.name.includes("x64")),
       }),
-      row("0.1.1"),
+      // A Stable release is not a prerelease.
+      row("0.1.1", { prerelease: false }),
       { ...row("0.1.2-beta.20261123.1"), tag_name: "0.1.2-beta.20261123.1" },
     ];
     expect(newestBeta(rows)?.tag_name).toBe("v0.1.1-beta.20261120.10");
     expect(newestBeta([row("0.1.1-beta.20261121.1", { draft: true })])).toBeNull();
+  });
+
+  it("F-559: takes a three-numbered beta, which is newer than every dated one before it", () => {
+    const rows = [row("0.1.1-beta.20261124.3"), row("0.2.0"), row("0.2.1"), row("0.2.10")];
+    expect(newestBeta(rows)?.tag_name).toBe("v0.2.10");
+    expect(newestBeta(rows.slice(0, 2))?.tag_name).toBe("v0.2.0");
+    expect(
+      newestBeta([row("0.1.1-beta.20261124.3"), row("0.2.0", { draft: true })])?.tag_name,
+    ).toBe("v0.1.1-beta.20261124.3");
   });
 });
 
@@ -195,7 +205,7 @@ describe("what a beta's release page says it adds", () => {
       row("0.1.1-beta.20261120.9", { body: "No list here." }),
       listed("0.1.1-beta.20261120.11", "A draft", { draft: true }),
       listed("0.1.1-beta.20261120.12", "Not a beta", { prerelease: false }),
-      listed("0.1.1", "A Stable build"),
+      listed("0.1.1", "A Stable build", { prerelease: false }),
       listed("0.1.1-beta.20261120.1", "First"),
     ];
     expect(betaNotes(rows)).toEqual([
@@ -915,9 +925,9 @@ describe("F-559: the two Beta feed folders", () => {
     (
       change: (row: ReleaseRow) => ReleaseRow | null = (each) => each,
       recorded: string | null = BETA_FEED_URL,
+      versions = [OLD, PINNED, NEWEST],
     ): Get =>
     async (url) => {
-      const versions = [OLD, PINNED, NEWEST];
       const own = (version: string) =>
         files(version, version === PINNED ? (recorded ?? undefined) : undefined);
       if (url.startsWith("https://api.github.com/"))
@@ -1026,6 +1036,44 @@ describe("F-559: the two Beta feed folders", () => {
       `The legacy Beta feed is pinned to ${PINNED}, which is not a published beta with its files, so nothing deploys.`,
     );
     expect(existsSync(output)).toBe(false);
+  });
+
+  it("the switch: unpinned, a three-numbered newest beta deploys nothing", async () => {
+    await expect(
+      assembleSite(source, output, github(undefined, undefined, [OLD, PINNED, "0.2.0"]), "t", null),
+    ).rejects.toThrow(
+      "The newest beta, 0.2.0, has three numbers, and the legacy Beta feed is not pinned, so nothing deploys.",
+    );
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it("the switch: an old copy takes the pinned dated beta, which takes 0.2.0, which takes 0.2.1", async () => {
+    const outputs = join(root, "github-output");
+    const step = async (newest: string) => {
+      rmSync(output, { recursive: true, force: true });
+      const get = github(undefined, undefined, [OLD, PINNED, "0.2.0", newest]);
+      expect(await main([source, output], { GITHUB_OUTPUT: outputs }, get, PINNED)).toBe(0);
+    };
+    await step("0.2.0");
+    expect(await check(LEGACY_BETA_FOLDER, OLD)).toMatchObject({
+      kind: "available",
+      version: PINNED,
+    });
+    expect(await check(LEGACY_BETA_FOLDER, PINNED)).toEqual({ kind: "up-to-date", latest: PINNED });
+    expect(await check(BETA_FOLDER, PINNED)).toMatchObject({ kind: "available", version: "0.2.0" });
+    expect(read("download/mac", "index.html")).toBe("<p>0.2.0</p>");
+    await step("0.2.1");
+    expect(await check(BETA_FOLDER, "0.2.0")).toMatchObject({
+      kind: "available",
+      version: "0.2.1",
+    });
+    expect(await check(LEGACY_BETA_FOLDER, OLD)).toMatchObject({
+      kind: "available",
+      version: PINNED,
+    });
+    expect(
+      parseWhatsNew(read(BETA_FOLDER, "whats-new.json"))!.map((build) => build.version),
+    ).toEqual(["0.2.1", "0.2.0", PINNED, OLD]);
   });
 
   it.each([

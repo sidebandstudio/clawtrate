@@ -5,7 +5,7 @@
 
 import { GITHUB_RELEASE_ASSETS } from "../src/main/update/address.ts";
 import { parseFeed, type FileKey } from "../src/main/update/feed.ts";
-import { parseVersion, versionTrack } from "../src/main/update/version.ts";
+import { fitsTrack, formatVersion, parseVersion } from "../src/main/update/version.ts";
 import { artifactName } from "./feed.ts";
 
 export const REPOSITORY = "sidebandstudio/clawtrate";
@@ -47,9 +47,11 @@ export interface LatestMac {
 export const TEAM_ID = /^[A-Z0-9]{10}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
+/** A beta's tag: `v` and its version, dated or three numbers, as the app writes it. */
 export function betaTag(version: string): string {
   const parsed = parseVersion(version);
-  if (!parsed || versionTrack(parsed) !== "nightly") throw new Error(`${version} is not a beta.`);
+  if (!parsed || !fitsTrack(parsed, "nightly") || formatVersion(parsed) !== version)
+    throw new Error(`${version} is not a beta.`);
   return `v${version}`;
 }
 

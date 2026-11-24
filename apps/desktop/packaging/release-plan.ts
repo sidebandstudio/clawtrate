@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { MAX_DOWNLOAD_BYTES, MAX_FEED_BYTES } from "../src/main/update/engine.ts";
 import { FEED_FORMAT, FILE_KEYS, parseFeed, parseReleaseDate } from "../src/main/update/feed.ts";
-import { isNewer, parseVersion, versionTrack } from "../src/main/update/version.ts";
+import { fitsTrack, isNewer, parseVersion } from "../src/main/update/version.ts";
 import { artifactName, makeFeed, sha512Base64 } from "./feed.ts";
 
 function fullCommit(commit: string) {
@@ -58,7 +58,7 @@ export function plan(candidate: Candidate) {
   const validTrack = track === "stable" || track === "nightly";
   const validCommit = fullCommit(commit);
   const validDate = parseReleaseDate(buildDate) === buildDate;
-  if (!validTrack || !parsed || versionTrack(parsed) !== track)
+  if (!validTrack || !parsed || !fitsTrack(parsed, track))
     issues.push("Version and track must match.");
   if (!validCommit) issues.push("Expected a full source commit.");
   if (!validDate) issues.push("Expected a UTC build date.");
@@ -194,9 +194,12 @@ export function plan(candidate: Candidate) {
 
 /** Assemble once. Rechecks read the retained feed without repairing it. */
 export function assemble(candidate: Candidate) {
-  const { dir, version, buildDate, commit, feedUrl } = candidate;
+  const { dir, version, buildDate, commit, feedUrl, track } = candidate;
+  const parsed = parseVersion(version);
   if (
-    !parseVersion(version) ||
+    !parsed ||
+    (track !== "stable" && track !== "nightly") ||
+    !fitsTrack(parsed, track) ||
     !fullCommit(commit) ||
     parseReleaseDate(buildDate) !== buildDate ||
     !feedAddresses(candidate.track, feedUrl, candidate.otherFeedUrl)
@@ -211,6 +214,7 @@ export function assemble(candidate: Candidate) {
     version,
     releaseDate: buildDate,
     folder: new URL(version + "/", feedUrl).href,
+    track,
   });
   writeFileSync(
     join(dir, "update-feed.json"),
