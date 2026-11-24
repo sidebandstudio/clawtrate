@@ -14,6 +14,7 @@ import {
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { ChatPictureRead } from "./pictures.ts";
+import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
@@ -317,6 +318,9 @@ export type BridgeCommand =
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
+  /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
+  | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
+  | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
   | {
       type: "setBotPicture";
@@ -1159,6 +1163,20 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "checkLock":
     case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
+    case "acceptBotName":
+      return {
+        type: "acceptBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "declineBotName":
+      return {
+        type: "declineBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "finishBot":
       return {
         type: "finishBot",
@@ -1960,6 +1978,10 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
+      case "acceptBotName":
+        return client.acceptBotName(command.botId, command.name, command.stamp);
+      case "declineBotName":
+        return client.declineBotName(command.botId, command.name, command.stamp);
       case "setBotPicture":
         return client.setBotPicture(command.botId, command.avatar, command.stamp);
       case "refreshCheckIns":

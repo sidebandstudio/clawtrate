@@ -21,6 +21,7 @@ import {
   type RefObject,
 } from "react";
 import { AccessBar } from "./AccessBar.tsx";
+import { NameCard } from "./bots/NameCard.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
 import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
@@ -1166,7 +1167,7 @@ export function Conversation({
             onClick={onOpenPanel}
           >
             <Avatar bot={bot} />
-            <span className="title-pill-name">{bot.name}</span>
+            <bdi className="title-pill-name">{bot.name}</bdi>
             {task && <span className="title-pill-task">{task.title}</span>}
           </button>
         ) : (
@@ -1203,6 +1204,7 @@ export function Conversation({
       </header>
       {body}
       {task && bot && <UsageNotes bot={bot} canSet={!info.readOnly} />}
+      {task && bot && <NameCard bot={bot} connection={connection} onAnnounce={onAnnounce} />}
       {task && bot && interactive && (
         <Composer
           key={`composer:${connection.gatewayUrl ?? ""}:${task.key}`}
