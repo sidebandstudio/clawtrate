@@ -1843,13 +1843,42 @@ export class AccountsEngine {
     await this.removeFallbacks(botId);
   }
 
-  /** Change a bot's account, or to no fixed account, with its model and effort (section 11). */
+  /**
+   * The context a bot setting writes through: `beforeSend` runs before each request, told
+   * whether this setting has sent a write yet, and `check` runs it between steps.
+   */
+  private checked(beforeSend?: (sent: boolean) => void): {
+    ctx: AccountsContext;
+    check: () => void;
+  } {
+    if (!beforeSend) return { ctx: this.ctx, check: () => {} };
+    const base = this.ctx;
+    let wrote = false;
+    const check = () => beforeSend(wrote);
+    return {
+      check,
+      ctx: {
+        ...base,
+        request: async (method, params, options) => {
+          check();
+          if (method !== "config.get") wrote = true;
+          return base.request(method, params, options);
+        },
+      },
+    };
+  }
+
+  /**
+   * Change a bot's account, or to no fixed account, with its model and effort (section 11).
+   * `beforeSend` runs before each request: the host's check that the screen's gateway is here.
+   */
   async changeAccount(
     botId: string,
     account: string | null,
     provider: string,
     model: string,
     effort: string | null,
+    beforeSend?: (sent: boolean) => void,
   ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     if (account && accountProvider(account) !== provider)
@@ -1862,8 +1891,17 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
-      await this.writeModel(botId, { provider, model, account }, effort, false);
-      await this.recordIntent(botId, account ? { mode: "account", account } : { mode: "gateway" });
+      const { ctx, check } = this.checked(beforeSend);
+      await this.writeModel(botId, { provider, model, account }, effort, false, ctx);
+      // Before the record is kept here as well as sent: the gateway it is for is still the one.
+      check();
+      await this.recordIntent(
+        botId,
+        account ? { mode: "account", account } : { mode: "gateway" },
+        ctx,
+      );
+      // After the last answer: a change whose gateway has gone meanwhile is not shown as saved.
+      check();
       this.setWrite({
         what: "account",
         target: botId,
@@ -1884,8 +1922,13 @@ export class AccountsEngine {
     await this.checkLock(botId);
   }
 
-  /** The bot's model and effort, keeping its account. */
-  async setModel(botId: string, model: string, effort: string | null): Promise<void> {
+  /** The bot's model and effort, keeping its account. `beforeSend` as for `changeAccount`. */
+  async setModel(
+    botId: string,
+    model: string,
+    effort: string | null,
+    beforeSend?: (sent: boolean) => void,
+  ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     const binding = this.ctx.get().bindings.find((b) => b.botId === botId);
     if (!binding?.provider) throw new Error("Choose an account first.");
@@ -1897,12 +1940,16 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
+      const { ctx, check } = this.checked(beforeSend);
       await this.writeModel(
         botId,
         { provider: binding.provider, model, account: binding.account },
         effort,
         false,
+        ctx,
       );
+      // After the last answer: a change whose gateway has gone meanwhile is not shown as saved.
+      check();
       this.setWrite({
         what: "model",
         target: botId,
@@ -1924,7 +1971,7 @@ export class AccountsEngine {
   }
 
   /** "Remove fallbacks": the bot's model keeps its account; its fallback list becomes empty. */
-  async removeFallbacks(botId: string): Promise<void> {
+  async removeFallbacks(botId: string, beforeSend?: (sent: boolean) => void): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     this.setWrite({
       what: "fallbacks",
@@ -1934,9 +1981,13 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
-      await this.patch({ agents: { entries: { [botId]: { model: { fallbacks: [] } } } } }, [
-        `agents.entries.${botId}.model.fallbacks`,
-      ]);
+      const { ctx, check } = this.checked(beforeSend);
+      await this.patch(
+        { agents: { entries: { [botId]: { model: { fallbacks: [] } } } } },
+        [`agents.entries.${botId}.model.fallbacks`],
+        ctx,
+      );
+      check();
       this.unwritten.delete(botId);
       this.setWrite({
         what: "fallbacks",

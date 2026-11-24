@@ -47,6 +47,7 @@ import { Markdown } from "../Markdown.tsx";
 import { Note } from "../bots/parts.tsx";
 import { Calendar } from "./Calendar.tsx";
 import { useKeyedRead } from "./read.ts";
+import { shownStamp } from "../stamp.ts";
 import {
   fullWhen,
   ownerOf,
@@ -833,7 +834,9 @@ export function RoutinesView({
   // Kept fewer routines than the gateway has: one bot's are read from the gateway when chosen.
   const [botRead, retryBot] = useKeyedRead(
     store.omitted > 0 && nav.bot !== null
-      ? `${gateway}:${nav.bot}:${store.revision}:${store.omitted}`
+      ? // A host started again starts at another target (a random one, so a repeat is only very
+        // unlikely), so a list read before a host restarted is read again.
+        `${gateway}:${state.connection.target}:${nav.bot}:${store.revision}:${store.omitted}`
       : null,
     () => bridge.invoke({ type: "readBotRoutines", botId: nav.bot! }),
   );
@@ -934,7 +937,12 @@ export function RoutinesView({
   // Every way into a write passes here: below admin nothing opens.
   const admin = canAdmin(state.connection, info);
   const granted = useGranted(state.connection);
-  const actions = useRoutineActions(announce, store.routines, store.listedOn);
+  const actions = useRoutineActions(
+    announce,
+    store.routines,
+    store.listedOn,
+    shownStamp(state.connection),
+  );
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [deleting, setDeleting] = useState<Routine | null>(null);
   const [menu, setMenu] = useState<{ routine: Routine; x: number; y: number } | null>(null);
@@ -945,10 +953,12 @@ export function RoutinesView({
   if (!admin && deleting) setDeleting(null);
   // A row's menu and the delete confirmation hold a routine from the list they were
   // opened on; actions send the list now shown. When another connection's list
-  // arrives they close in this render, so an old row never goes out with the new list.
-  const [openedOn, setOpenedOn] = useState(store.listedOn);
-  if (openedOn !== store.listedOn) {
-    setOpenedOn(store.listedOn);
+  // arrives, or the host's target moves (a restarted host can keep the list's number),
+  // they close in this render, so an old row never goes out with the new list.
+  const listKey = `${store.listedOn}:${state.connection.target}`;
+  const [openedOn, setOpenedOn] = useState(listKey);
+  if (openedOn !== listKey) {
+    setOpenedOn(listKey);
     setMenu(null);
     setDeleting(null);
   }
@@ -1270,6 +1280,7 @@ export function RoutinesView({
         <DeleteRoutine
           routine={deleting}
           listedOn={store.listedOn}
+          shown={shownStamp(state.connection)}
           onCancel={() => setDeleting(null)}
           onDeleted={() => {
             announce(`Deleted ${deleting.name}`);

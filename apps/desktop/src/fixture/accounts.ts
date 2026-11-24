@@ -1145,6 +1145,20 @@ export function accountCommand(
       }));
       return Promise.resolve();
     case "disconnectAccount":
+      // As the host does (`requireSameGateway`): a confirmation from before the target moved,
+      // with no connection open, or for another gateway, removes nothing.
+      if (command.stamp.target !== get().connection.target)
+        return Promise.reject(
+          new Error(
+            "The connection changed since this screen was read, so nothing was sent. Look again, then try again.",
+          ),
+        );
+      if (get().connection.status !== "connected")
+        return Promise.reject(new Error("Not connected to the gateway."));
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
       put((a) => ({
         ...a,
         accounts: a.accounts.filter((x) => x.id !== command.profileId),

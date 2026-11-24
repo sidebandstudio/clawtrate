@@ -18,6 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { screenStamp, shownStamp } from "../stamp.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -169,9 +170,12 @@ export function BotSettings({
   const focusIn = useCallback((selector: string) => {
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
   }, []);
+  // The host's target when Change account opened: the choice made there goes only to that gateway.
+  const changeOpenedOn = useRef(shownStamp(connection));
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
+    if (next === "change" && view !== "change") changeOpenedOn.current = shownStamp(connection);
     if (next !== "change") setPick(null);
     focusIn(focus);
   };
@@ -361,6 +365,8 @@ export function BotSettings({
           : "";
     const wordText = bindingWord(binding, age);
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
+    // Where the page shown was read: a restored copy has the same bot ids.
+    const shownOn = shownStamp(connection);
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
       try {
@@ -369,6 +375,7 @@ export function BotSettings({
           botId: bot.id,
           model: nextModel,
           effort: nextEffort,
+          stamp: await screenStamp(bridge, shownOn),
         });
         announce(nextModel !== model ? "Model saved" : "Effort saved");
       } catch (failure) {
@@ -547,6 +554,7 @@ export function BotSettings({
           provider: targetProvider,
           model,
           effort,
+          stamp: await screenStamp(bridge, changeOpenedOn.current),
         });
         announce(
           toGateway
@@ -685,6 +693,24 @@ export function BotSettings({
 
   // --- The Account page --------------------------------------------------------------------
   const page: ReactNode[] = [];
+  // Where the page shown was read; a refusal is said under the page.
+  const shownOn = shownStamp(connection);
+  const removeFallbacks = async () => {
+    setError(null);
+    try {
+      await bridge.invoke({
+        type: "removeBotFallbacks",
+        botId: bot.id,
+        stamp: await screenStamp(bridge, shownOn),
+      });
+      return true;
+    } catch (failure) {
+      setError(
+        `Couldn't remove the fallbacks: ${failure instanceof Error ? failure.message : String(failure)}`,
+      );
+      return false;
+    }
+  };
   const changeButton = (label: string, primary: boolean) =>
     admin && (
       <div className="b-actions" style={{ marginTop: 14 }} key="change">
@@ -1072,12 +1098,7 @@ export function BotSettings({
           </p>
           {admin && (
             <div className="b-actions">
-              <button
-                type="button"
-                className="button"
-                data-size="sm"
-                onClick={() => void bridge.send({ type: "removeBotFallbacks", botId: bot.id })}
-              >
+              <button type="button" className="button" data-size="sm" onClick={removeFallbacks}>
                 Try again
               </button>
             </div>
@@ -1099,10 +1120,7 @@ export function BotSettings({
                 className="button"
                 data-size="sm"
                 onClick={() =>
-                  void bridge.send({ type: "removeBotFallbacks", botId: bot.id }).then(
-                    () => announce("Fallbacks removed"),
-                    () => {},
-                  )
+                  removeFallbacks().then((done) => done && announce("Fallbacks removed"))
                 }
               >
                 Remove fallbacks
@@ -1118,6 +1136,11 @@ export function BotSettings({
     <div ref={rootRef} className="b-tab" data-testid="bot-settings" data-word={word ?? undefined}>
       {sub("Account", "main", "[data-bs='account']")}
       {page}
+      {error && (
+        <p className="b-field-error" role="alert">
+          {error}
+        </p>
+      )}
       {foot}
     </div>
   );

@@ -9,6 +9,7 @@ import type { ArchivedList, ArchivedTask, Bot, Task } from "@clawtrate/core";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -17,6 +18,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useBridge } from "./bridge.tsx";
+import type { ShownStamp } from "./stamp.ts";
 import { rowTime } from "./format.ts";
 import { ChevronIcon } from "./icons.tsx";
 
@@ -305,6 +307,7 @@ export function ArchivedGroup({
   open,
   onToggle,
   onMenu,
+  shown: drawnOn,
   now,
 }: {
   bot: Bot;
@@ -314,11 +317,26 @@ export function ArchivedGroup({
   gone: ReadonlyMap<string, number | null>;
   open: boolean;
   onToggle: () => void;
-  onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
+  /** A row's menu gets the stamp of the read the row came from (`ShownStamp`). */
+  onMenu: (
+    task: ArchivedTask,
+    trigger: HTMLElement,
+    x: number,
+    y: number,
+    shown: ShownStamp,
+  ) => void;
+  /** Where the rail is drawn now: each read keeps it, and a new target reads again. */
+  shown: ShownStamp;
   now: number;
 }) {
   const bridge = useBridge();
-  const [list, setList] = useState<ArchivedList | null>(null);
+  // Where the rows shown were read: a row read on one connection acts there and nowhere else.
+  const [list, setList] = useState<(ArchivedList & { shown: ShownStamp }) | null>(null);
+  const asked = useRef(drawnOn);
+  useLayoutEffect(() => {
+    asked.current = drawnOn;
+  });
+  const target = drawnOn.target;
   const [error, setError] = useState<string | null>(null);
   const keys = tasks.map((task) => task.key).join("\n");
   const goneKeys = [...gone].map(([key, at]) => `${key} ${at}`).join("\n");
@@ -326,10 +344,11 @@ export function ArchivedGroup({
   useEffect(() => {
     if (!open) return;
     let live = true;
+    const shown = asked.current;
     bridge.invoke({ type: "listArchived", botId: bot.id }).then(
       (next) => {
         if (!live) return;
-        setList(next);
+        setList({ ...next, shown });
         setError(null);
       },
       (failure: unknown) =>
@@ -338,7 +357,7 @@ export function ArchivedGroup({
     return () => {
       live = false;
     };
-  }, [open, bridge, bot.id, keys, goneKeys]);
+  }, [open, bridge, bot.id, keys, goneKeys, target]);
   // Hidden only while the gateway still lists that same archive of the task.
   const shown = list && {
     ...list,
@@ -356,6 +375,7 @@ export function ArchivedGroup({
       event.currentTarget,
       fromKeyboard ? rect.left + 40 : event.clientX,
       fromKeyboard ? rect.bottom - 6 : event.clientY,
+      list?.shown ?? drawnOn,
     );
   };
 

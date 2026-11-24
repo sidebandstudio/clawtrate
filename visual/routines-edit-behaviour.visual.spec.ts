@@ -6,7 +6,7 @@
 // are made up (apps/desktop/src/fixture/routines.ts).
 import type { ClawtrateState, ConnectionState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
+import { contextFor, moveTarget, NOW, openFixture, sentStamp, SIZES } from "./fixture.ts";
 
 const ADMIN = "scene=main&routines=on&access=admin";
 const READ = "scene=main&routines=on";
@@ -58,6 +58,15 @@ async function connectionValue(page: Page, field: "gatewayId") {
 }
 
 /** Change the fixture's connection, as the host's next snapshot would. */
+async function connectionTarget(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      (
+        window as unknown as { clawtrateFixture: { getState: () => ClawtrateState } }
+      ).clawtrateFixture.getState().connection.target,
+  );
+}
+
 async function setConnection(page: Page, change: Partial<ConnectionState>) {
   await page.evaluate((change) => {
     const fixture = (
@@ -520,6 +529,24 @@ test.describe("1440", () => {
     });
   });
 
+  test("#450: a delete confirmation sends the stamp it opened with, not the host's now", async ({
+    page,
+  }) => {
+    await openPage(page, "Plan the week");
+    await view(page).getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Delete…" }).click();
+    const dialog = page.getByTestId("routine-delete");
+    const before = {
+      gatewayId: await connectionValue(page, "gatewayId"),
+      target: await connectionTarget(page),
+    };
+    // Another gateway names itself on the same target, with the list's number kept: the dialog
+    // stays, and sends the gateway it was opened for, which the host compares and refuses.
+    await setConnection(page, { gatewayId: "another-gateway" });
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect.poll(() => sentStamp(page, "removeRoutine")).toEqual(before);
+  });
+
   test("F-352: delete asks first, says what it loses, and the routine leaves the list; a failure keeps the dialog", async ({
     page,
   }) => {
@@ -570,6 +597,16 @@ test.describe("1440", () => {
     await page.getByRole("menu").getByRole("menuitem", { name: "Delete…" }).click();
     await expect(page.getByTestId("routine-delete")).toBeVisible();
     await listed(2);
+    await expect(page.getByTestId("routine-delete")).toHaveCount(0);
+    // The host's target moves with the list's number kept, as after a host restart: both close.
+    await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
+    await expect(page.getByRole("menu")).toBeVisible();
+    await moveTarget(page);
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
+    await page.getByRole("menu").getByRole("menuitem", { name: "Delete…" }).click();
+    await expect(page.getByTestId("routine-delete")).toBeVisible();
+    await moveTarget(page);
     await expect(page.getByTestId("routine-delete")).toHaveCount(0);
   });
 
