@@ -331,7 +331,7 @@ test.describe("the default conversation (7.11)", () => {
     }
   });
 
-  test("F-551 F-531 F-519: Settings → Advanced holds Show commands, Show thinking and Show external channel chats, all off; Show thinking brings the thinking back at once, is kept, and leaves the commands hidden", async ({
+  test("F-551 F-531 F-519 F-563: Settings → Advanced holds Show commands, Show thinking, Show external channel chats and Show sessions from other tools, all off; Show thinking brings the thinking back at once, is kept, and leaves the commands hidden", async ({
     page,
   }) => {
     await open(page, "actions-repeat");
@@ -344,15 +344,23 @@ test.describe("the default conversation (7.11)", () => {
     await expect(commands).toHaveAttribute("aria-checked", "false");
     await expect(thinking).toHaveAttribute("aria-checked", "false");
     await expect(thinking).toHaveAccessibleDescription(/Thought lines/);
-    // The three switches, in this order.
+    // The four switches, in this order: the two that hide other apps' sessions as a pair.
     expect(
       await settings
         .getByRole("switch")
         .evaluateAll((all) => all.map((s) => s.getAttribute("aria-labelledby"))),
-    ).toEqual(["show-commands-label", "show-thinking-label", "channel-chats-label"]);
+    ).toEqual([
+      "show-commands-label",
+      "show-thinking-label",
+      "channel-chats-label",
+      "other-tools-label",
+    ]);
     await expect(
       settings.getByRole("switch", { name: "Show external channel chats" }),
     ).toHaveAttribute("aria-checked", "false");
+    const others = settings.getByRole("switch", { name: "Show sessions from other tools" });
+    await expect(others).toHaveAttribute("aria-checked", "false");
+    await expect(others).toHaveAccessibleDescription(/API client, a scheduled routine/);
     await thinking.click();
     await expect(thinking).toHaveAttribute("aria-checked", "true");
     expect(await page.evaluate(() => localStorage.getItem("clawtrate.thinking"))).toBe("show");
@@ -439,7 +447,7 @@ for (const size of SIZES) {
       await expect(page).toHaveScreenshot(`quiet-default-${size.name}.png`);
     });
 
-    test(`F-551 F-519: Settings → Advanced, at ${size.name}`, async ({ page }) => {
+    test(`F-551 F-519 F-563: Settings → Advanced, at ${size.name}`, async ({ page }) => {
       await open(page, "actions-failed");
       await page.keyboard.press("ControlOrMeta+,");
       const settings = page.getByRole("dialog", { name: "Settings" });

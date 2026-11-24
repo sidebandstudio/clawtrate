@@ -1039,7 +1039,8 @@ export function Conversation({
       ) : (
         <EmptyState title="No bots to show" body="This gateway has no bots yet." />
       );
-  } else if (taskCount === 0) {
+  } else if (taskCount === 0 && !task) {
+    // A task opened from elsewhere (a routine's run, a search) shows though the list holds none.
     body = (
       <EmptyState
         bot={bot}

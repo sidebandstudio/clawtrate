@@ -765,6 +765,7 @@ const task = flagged<Task>()({
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
+  otherTool: FLAG,
   channel: NAME,
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
@@ -896,6 +897,7 @@ const SESSION_ROW_FIELDS = [
   "classification",
   "contextTokens",
   "createdAt",
+  "createdVia",
   "derivedTitle",
   "displayName",
   "groupChannel",
@@ -1288,6 +1290,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
   voiceChanges: NUMBER,
+  showOtherToolSessions: FLAG,
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
 });

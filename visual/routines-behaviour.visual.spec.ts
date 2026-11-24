@@ -6,7 +6,8 @@ import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { contextFor, openFixture, SIZES } from "./fixture.ts";
 
-const ROUTINES = "scene=main&routines=on";
+// "Show sessions from other tools" on, so a routine's latest run is a row under its bot (F-193).
+const ROUTINES = "scene=main&routines=on&others=show";
 const size = (name: string) => SIZES.find((each) => each.name === name)!;
 const view = (page: Page) => page.getByTestId("routines-view");
 const rail = (page: Page, bot: string) =>
@@ -233,7 +234,7 @@ test.describe("1440", () => {
   test("F-024: a bot whose routine is running shows the working mark and the routine's name", async ({
     page,
   }) => {
-    await openFixture(page, "scene=main&routines=running", "light");
+    await openFixture(page, "scene=main&routines=running&others=show", "light");
     const marlow = page.getByTestId("bot-list").getByRole("button", { name: /^Marlow\b/ });
     await expect(marlow).toHaveAttribute("data-state", "working");
     await expect(marlow).toContainText("Running Morning digest");
@@ -291,7 +292,7 @@ test.describe("1440", () => {
   });
 
   test("F-193: a running row follows the same run into its conversation", async ({ page }) => {
-    await openFixture(page, "scene=main&routines=running", "light");
+    await openFixture(page, "scene=main&routines=running&others=show", "light");
     await rail(page, "Marlow").click();
     await expect(view(page).getByTestId("run-starting")).toHaveText("Running…");
     await change(
@@ -307,7 +308,7 @@ test.describe("1440", () => {
   test("F-193: a running row whose routine is removed stops loading and says the run is gone", async ({
     page,
   }) => {
-    await openFixture(page, "scene=main&routines=running", "light");
+    await openFixture(page, "scene=main&routines=running&others=show", "light");
     await rail(page, "Marlow").click();
     await expect(view(page).getByTestId("run-starting")).toHaveText("Running…");
     await change(

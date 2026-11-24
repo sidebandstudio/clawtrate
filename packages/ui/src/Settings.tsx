@@ -160,8 +160,9 @@ function DeviceSwitch({
 }
 
 /**
- * "Show commands" and "Show thinking", both off by default (conversation.md, 7.11), and whether
- * chats from Discord, Telegram and other channels are listed, off by default (F-519).
+ * "Show commands" and "Show thinking", both off by default (conversation.md, 7.11), whether
+ * chats from Discord, Telegram and other channels are listed, off by default (F-519), and
+ * whether sessions other tools opened are listed, off by default (F-563).
  */
 function AdvancedPane({ announce }: { announce: (text: string) => void }) {
   const commands = useShowCommands();
@@ -170,6 +171,17 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
   const state = useClawtrateState();
   const showChannelChats = state.showChannelChats === true;
   const [channelError, setChannelError] = useState<string | null>(null);
+  const showOtherTools = state.showOtherToolSessions === true;
+  const [otherToolsError, setOtherToolsError] = useState<string | null>(null);
+  const toggleOtherTools = () => {
+    const on = !showOtherTools;
+    setOtherToolsError(null);
+    void send({ type: "setShowOtherToolSessions", on }).then(
+      () => announce(on ? "Sessions from other tools shown" : "Sessions from other tools hidden"),
+      (failure: unknown) =>
+        setOtherToolsError(failure instanceof Error ? failure.message : String(failure)),
+    );
+  };
   const toggleChannelChats = () => {
     const on = !showChannelChats;
     setChannelError(null);
@@ -220,6 +232,29 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
       {channelError && (
         <div className="form-error" role="alert">
           {channelError}
+        </div>
+      )}
+      <div className="b-field channel-chats-field">
+        <span id="other-tools-label">Show sessions from other tools</span>
+        <button
+          type="button"
+          className="b-switch"
+          role="switch"
+          aria-checked={showOtherTools}
+          aria-labelledby="other-tools-label"
+          aria-describedby="other-tools-note"
+          data-testid="other-tool-sessions"
+          onClick={toggleOtherTools}
+        />
+      </div>
+      <p className="b-hint" id="other-tools-note">
+        Off by default. Sessions that an API client, a scheduled routine or another tool started
+        with a bot stay out of the task list, its previews and its unread marks. A routine&apos;s
+        runs open from Routines. One that is waiting for your approval or answer always shows.
+      </p>
+      {otherToolsError && (
+        <div className="form-error" role="alert">
+          {otherToolsError}
         </div>
       )}
     </>

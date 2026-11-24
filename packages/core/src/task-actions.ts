@@ -9,6 +9,7 @@
 // gateway's `sessions.changed`.
 
 import { externalChannelOf } from "./channels.ts";
+import { isOtherToolSession } from "./origins.ts";
 import { asRecord, mapSessionRow, plainPreview, type RawRecord } from "./mapping.ts";
 
 /** The longest label the gateway takes (`SESSION_LABEL_MAX_LENGTH`). */
@@ -182,15 +183,19 @@ export function mapArchivedRow(row: RawRecord, botId: string): ArchivedTask | nu
   };
 }
 
-/** A bot's archived tasks; chats from external channels only with `showChannelChats`, as the list. */
+/**
+ * A bot's archived tasks; chats from external channels only with `showChannelChats`, and sessions
+ * another tool opened only with `showOtherToolSessions`, as the list.
+ */
 export async function listArchived(
   ctx: TaskActionContext,
   botId: string,
-  options: { showChannelChats?: boolean } = {},
+  options: { showChannelChats?: boolean; showOtherToolSessions?: boolean } = {},
 ): Promise<ArchivedList> {
   const tasks: ArchivedTask[] = [];
   let more: boolean;
-  // A page of channel chats left out lists nothing, so read on until the group is full.
+  // A page of channel chats or other tools' sessions left out lists nothing, so read on until the
+  // group is full.
   for (let pages = 1, offset = 0; ; pages += 1) {
     const params = archivedListParams(botId);
     const result = asRecord(
@@ -200,6 +205,7 @@ export async function listArchived(
     for (const entry of rows) {
       const row = asRecord(entry);
       if (row && options.showChannelChats !== true && externalChannelOf(row)) continue;
+      if (row && options.showOtherToolSessions !== true && isOtherToolSession(row)) continue;
       const task = row && mapArchivedRow(row, botId);
       if (task) tasks.push(task);
     }

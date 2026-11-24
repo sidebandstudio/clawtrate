@@ -844,6 +844,7 @@ export function Shell({
           onOpenSettings={onOpenSettings}
           onNewBot={interactive ? openNewBot : null}
           routines={state.routines.routines}
+          showRoutineRuns={state.showOtherToolSessions === true}
           routinesOpen={routinesOpen}
           onOpenRoutines={() => openRoutines(ROUTINES_HOME)}
           onOpenRoutineRun={(id, runAt) =>
