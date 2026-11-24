@@ -60,6 +60,7 @@ import {
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import type { ReadStamp } from "./types.ts";
 
 /** What the engine needs from the client. */
 export type AccountsContext = {
@@ -81,6 +82,8 @@ export type AccountsContext = {
   gateway(): Promise<string | null>;
   /** The identity the connection has read so far, without asking: null until it is known. */
   gatewayNow(): string | null;
+  /** Where a read made now is made: the identity, the target and the connection's hello. */
+  readStamp(): ReadStamp;
   /** The host's target now (`ConnectionState.target`). */
   target(): number;
   /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
@@ -237,6 +240,8 @@ export class AccountsEngine {
     if (!ctx.connected()) return;
     // A reset since the read began (another gateway) retires it: nothing it read is published.
     const resets = this.resets;
+    // Where this read is made: its requests all go now, and a close ends every one of them.
+    const readOn = ctx.readStamp();
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
     try {
       const bots = ctx.bots();
@@ -250,7 +255,7 @@ export class AccountsEngine {
       if (resets !== this.resets) return;
       this.readPrefs(prefs);
       const at = ctx.now();
-      ctx.update((a) => this.compose(a, config, views, a.models, at));
+      ctx.update((a) => ({ ...this.compose(a, config, views, a.models, at), readOn }));
       // The default bot's picker, the Model menu's rows (section 9), asked once the accounts are
       // published and in the same read, so it never overlaps another account read or what a
       // read is awaited for (a new bot's first task): the gateway refuses it alongside the reads

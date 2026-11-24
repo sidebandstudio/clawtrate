@@ -377,6 +377,7 @@ import {
   type ClawtrateState,
   type ConnectionState,
   type GatewayStamp,
+  type ReadStamp,
   type DiscoveryState,
   type MessageReaction,
   type ScopeUpgradeState,
@@ -1637,6 +1638,11 @@ export class ClawtrateClient {
     refreshBots: () => this.refreshBots(),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
+    readStamp: () => ({
+      gatewayId: this.state.connection.gatewayId,
+      target: this.target,
+      connectedAt: this.state.connection.connectedAt,
+    }),
     target: () => this.target,
     createMainTask: async (botId) => {
       const generation = this.generation;
@@ -8764,7 +8770,13 @@ export class ClawtrateClient {
     const failures: string[] = [];
     if (agents.status !== "fulfilled") failures.push(`bots: ${errorMessage(agents.reason)}`);
     if (sessions.status === "fulfilled") {
-      this.replaceRows(sessions.value.rows);
+      // The rows are this connection's, and so is the identity read on it.
+      this.replaceRows(sessions.value.rows, {
+        gatewayId: await gatewayId,
+        target: this.target,
+        connectedAt: this.state.connection.connectedAt,
+      });
+      if (!current()) return;
       if (read.sessionsChanged) await this.refreshSessions(generation);
     } else {
       failures.push(`tasks: ${errorMessage(sessions.reason)}`);
@@ -8848,9 +8860,15 @@ export class ClawtrateClient {
     }
   }
 
-  private replaceRows(rows: Map<string, RawRecord>): void {
+  /**
+   * A whole task list, read on the connection `read` names: the rows shown and where they were
+   * read change together, so a row's write never carries an identity its read didn't have.
+   */
+  private replaceRows(rows: Map<string, RawRecord>, read: ReadStamp): void {
     this.rows = rows;
+    // The rows first: between the two, a row shown with the earlier stamp is refused, never sent.
     this.publishTasks();
+    this.setDiscovery({ tasksRead: read });
   }
 
   private publishTasks(): void {
@@ -8920,7 +8938,11 @@ export class ClawtrateClient {
             const botId = rowBotOf(key, row);
             if (botId && this.removedDuringRead.has(botId)) rows.delete(key);
           }
-          this.replaceRows(rows);
+          this.replaceRows(rows, {
+            gatewayId: this.state.connection.gatewayId,
+            target: this.target,
+            connectedAt: this.state.connection.connectedAt,
+          });
           this.setDiscovery({ partial });
         } catch (error) {
           this.logFailure("warn", "sessions.list", error);

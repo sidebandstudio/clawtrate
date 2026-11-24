@@ -808,12 +808,19 @@ export function Rail({
     setFocusTask({ key: next, bot: bot.id });
   };
 
+  /**
+   * Where the task list the rail shows was read (`discovery.tasksRead`). After a reconnect the
+   * rows stay until the new list arrives, and the identity of the gateway that answered can be
+   * known first: a row acts with the stamp of its own read, never the connection's at the click.
+   */
+  const listedOn = (): ShownStamp => discovery.tasksRead ?? shownStamp(connection);
+
   const archive = (bot: Bot, task: Task, trigger: HTMLElement | null) => {
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     // Where the row was listed: a restored copy has the same keys, so the host sends it nowhere else.
-    const shown = shownStamp(connection);
+    const shown = listedOn();
     const act = async (stop: boolean) => {
       const { stoppedRun } = await bridge.invoke({
         type: "archiveTask",
@@ -865,8 +872,8 @@ export function Rail({
     task: { key: string; title: string; status?: Task["status"]; archivedAt?: number | null },
     trigger: HTMLElement | null,
     listed: boolean,
-    // Where the row was drawn; a menu that holds its task passes the stamp it opened with.
-    shown: ShownStamp = shownStamp(connection),
+    // Where the row was read; a menu that holds its task passes the stamp it opened with.
+    shown: ShownStamp = listedOn(),
   ) => {
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);

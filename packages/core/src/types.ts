@@ -151,6 +151,13 @@ export const sameStamp = (a: GatewayStamp | null | undefined, b: GatewayStamp | 
   a.gatewayId === b.gatewayId &&
   a.target === b.target;
 
+/**
+ * Where a list the screen draws was read: its stamp, and the connection (its hello) it was read
+ * on. A row's write carries it, so a row read before a reconnect never takes the identity of the
+ * gateway that answers it.
+ */
+export type ReadStamp = GatewayStamp & { connectedAt: number | null };
+
 /** The stamp of what is read on the connection as it is now. */
 export const gatewayStamp = (
   connection: Pick<ConnectionState, "gatewayId" | "target">,
@@ -446,6 +453,8 @@ export type DiscoveryState = {
   error: string | null;
   /** True when the gateway reported more tasks than the client loaded. */
   partial: boolean;
+  /** Where the task list shown was read (`ReadStamp`); null before the first list. */
+  tasksRead: ReadStamp | null;
 };
 
 export type ClawtrateState = {
@@ -628,6 +637,7 @@ export const initialDiscoveryState: DiscoveryState = {
   status: "idle",
   error: null,
   partial: false,
+  tasksRead: null,
 };
 
 export const initialState: ClawtrateState = {

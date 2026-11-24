@@ -1094,6 +1094,134 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
+  // #505: the rows the rail shows carry the stamp of the read that listed them
+  // (`discovery.tasksRead`), not the connection's at the click.
+  /** A, listing KEY, on the reconnect that `reconnect` makes; its next task list held. */
+  const listing = (fake: AccountsGateway) => {
+    const row = { key: KEY, agentId: "otto", sessionId: "s-logs", updatedAt: 10 };
+    let hold: Promise<unknown> | null = null;
+    const list = async () => {
+      if (hold) await hold;
+      return { sessions: [row], hasMore: false };
+    };
+    fake.gateway.handlers["sessions.subscribe"] = async () => ({
+      subscribed: true,
+      list: await list(),
+    });
+    fake.gateway.handlers["sessions.list"] = list;
+    return { hold: (until: Promise<unknown>) => void (hold = until) };
+  };
+  /** A drops and comes back; the identity it names is published, the task list not yet. */
+  const reconnectAs = async (client: ClawtrateClient, a: AccountsGateway, identity: string) => {
+    const was = client.state.connection.connectedAt;
+    a.identity = identity;
+    a.gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.connectedAt !== was &&
+        client.state.connection.gatewayId === identity,
+    );
+  };
+  const taskRowActions = async (client: ClawtrateClient) => {
+    const viewer = createBridgeSession(client);
+    const stamp = () => screenStamp(viewOf(client), client.state.discovery.tasksRead!);
+    const archive = viewer.apply({
+      type: "archiveTask",
+      key: KEY,
+      stop: false,
+      stamp: await stamp(),
+    });
+    const remove = viewer.apply({ type: "deleteTask", key: KEY, stamp: await stamp() });
+    return Promise.all(
+      [archive, remove].map((each) =>
+        each.then(
+          () => "sent",
+          (e: Error) => e.message,
+        ),
+      ),
+    );
+  };
+
+  it("Tasks: a row listed before another gateway answered the reconnect at the same address can't act there, though its identity is published first", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    const list = listing(a);
+    await reconnectAs(client, a, "gateway-a");
+    await until(() => client.state.discovery.tasksRead?.gatewayId === "gateway-a");
+    expect(client.state.tasksByBot.otto?.map((task) => task.key)).toContain(KEY);
+    const listed = client.state.discovery.tasksRead!;
+    // Another gateway answers, and names itself before its task list arrives.
+    const later = deferred<void>();
+    list.hold(later.promise);
+    await reconnectAs(client, a, "gateway-x");
+    expect(client.state.tasksByBot.otto?.map((task) => task.key)).toContain(KEY);
+    expect(client.state.discovery.tasksRead).toEqual(listed);
+    expect(await taskRowActions(client)).toEqual([
+      "This change was made for another gateway, so nothing was sent.",
+      "This change was made for another gateway, so nothing was sent.",
+    ]);
+    expect(sentOf(a, TASK_WRITES)).toEqual([]);
+    // Its list arrives: the rows are its own now, and the same actions go there.
+    later.resolve();
+    await until(() => client.state.discovery.tasksRead?.gatewayId === "gateway-x");
+    expect(await taskRowActions(client)).toEqual(["sent", "sent"]);
+    expect(sentOf(a, TASK_WRITES).map((each) => each.method)).toContain("sessions.delete");
+    client.stop();
+  });
+
+  it("Tasks: a row listed before a plain reconnect to the same gateway acts as soon as it is back, before the list is read again", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    const list = listing(a);
+    await reconnectAs(client, a, "gateway-a");
+    await until(() => client.state.discovery.tasksRead?.gatewayId === "gateway-a");
+    list.hold(new Promise(() => {}));
+    await reconnectAs(client, a, "gateway-a");
+    expect(await taskRowActions(client)).toEqual(["sent", "sent"]);
+    client.stop();
+  });
+
+  it("A bot's settings: a change from accounts read before another gateway answered the reconnect can't go there until they are read again", async () => {
+    const { client, a } = await twoGateways();
+    expect(client.state.accounts.readOn?.gatewayId).toBe("gateway-a");
+    const read = client.state.accounts.readOn!;
+    // Another gateway answers at the same address; its accounts aren't read yet.
+    const get = a.gateway.handlers["config.get"]!;
+    const later = deferred<void>();
+    a.gateway.handlers["config.get"] = async (params) => {
+      await later.promise;
+      return get(params);
+    };
+    await reconnectAs(client, a, "gateway-x");
+    expect(client.state.accounts.readOn).toEqual(read);
+    const viewer = createBridgeSession(client);
+    const changes = async () => {
+      const stamp = await screenStamp(viewOf(client), client.state.accounts.readOn!);
+      // One after another, as a person makes them: each patch is held to the config it read.
+      const outcomes: string[] = [];
+      for (const command of [ACCOUNT, MODEL, FALLBACKS])
+        outcomes.push(
+          await viewer.apply({ ...command, stamp }).then(
+            () => "sent",
+            (error: Error) => error.message,
+          ),
+        );
+      return outcomes;
+    };
+    expect(await changes()).toEqual(
+      Array(3).fill("This change was made for another gateway, so nothing was sent."),
+    );
+    expect(sentOf(a, SETTING_WRITES)).toEqual([]);
+    // Read again on it, the same changes go there.
+    a.gateway.handlers["config.get"] = get;
+    later.resolve();
+    await client.refreshAccounts();
+    expect(client.state.accounts.readOn?.gatewayId).toBe("gateway-x");
+    expect(await changes()).toEqual(["sent", "sent", "sent"]);
+    client.stop();
+  });
+
   it("the gateway's identity, when its first read fails, is read again on the same connection, and a stamp taken then goes", async () => {
     const { client, a } = await twoGateways();
     tasks(a);

@@ -561,6 +561,44 @@ test("F-490: a read-only connection shows a bot's settings with every value, and
   );
 });
 
+test("#505: Change account sends the stamp of the accounts it shows, not the identity now connected", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  type Stamped = {
+    clawtrateFixture: {
+      setState(change: (state: ClawtrateState) => ClawtrateState): void;
+    };
+  };
+  // The accounts shown were read on this connection; then another gateway answers a reconnect
+  // at the same address and names itself before they are read again.
+  const read = await page.evaluate(() => {
+    let read = { gatewayId: null as string | null, target: 0 };
+    (window as unknown as Stamped).clawtrateFixture.setState((state) => {
+      read = { gatewayId: state.connection.gatewayId, target: state.connection.target };
+      return {
+        ...state,
+        accounts: {
+          ...state.accounts,
+          readOn: { ...read, connectedAt: state.connection.connectedAt },
+        },
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+      };
+    });
+    return read;
+  });
+  expect(read.gatewayId).not.toBeNull();
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => sentStamp(page, "changeBotAccount")).toEqual(read);
+});
+
 test("#450: Change account, a Disconnect confirmation and a typed key send the target they opened with", async ({
   page,
 }) => {

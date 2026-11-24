@@ -17,7 +17,7 @@ function state(
   return {
     ...initialState,
     connection: { ...initialState.connection, status, gatewayUrl: "ws://127.0.0.1:19001" },
-    discovery: { status: discovery, error: null, partial: false },
+    discovery: { status: discovery, error: null, partial: false, tasksRead: null },
   };
 }
 
