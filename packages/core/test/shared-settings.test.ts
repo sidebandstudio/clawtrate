@@ -57,6 +57,19 @@ const saved = (storage: { data: Map<string, string> }) => {
   return raw ? (JSON.parse(raw) as { url: string; token: string | null }) : null;
 };
 
+/**
+ * Wait for every change queued so far on the store's shared write queue, a setup's save among
+ * them: a client with no gateway queues a Suspend behind them, which changes nothing.
+ */
+async function writesSettled(storage: ReturnType<typeof memoryStorage>): Promise<void> {
+  const probe = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+  try {
+    await probe.suspend();
+  } finally {
+    probe.stop();
+  }
+}
+
 /** A gateway that pairs B only with a setup code's request, and connects A with its device token. */
 function setupGateway() {
   const gateway = new FakeGateway();
@@ -1234,8 +1247,7 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       await until(() => storage.data.has(tokenKey(URL_B)));
       holdC.release();
       await until(() => other.state.connection.status === "connected");
-      await until(() => storage.data.has(tokenKey(URL_C)));
-      await sleep(30);
+      await until(() => saved(storage)?.url === URL_C);
       expect(saved(storage)).toEqual({ url: URL_C, token: null });
       const restarted = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
       try {
@@ -1274,7 +1286,7 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       expect(saved(storage)).toBeNull();
       hold.release();
       await until(() => client.state.connection.status === "connected");
-      await sleep(30);
+      await writesSettled(storage);
       expect(saved(storage)).toBeNull();
       const restarted = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
       try {
@@ -1316,7 +1328,7 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       afterToken.resolve();
       await connecting;
       await until(() => client.state.connection.status === "connected");
-      await sleep(30);
+      await writesSettled(storage);
       expect(saved(storage)).toEqual({ url: URL_B, token: "typed-B" });
     } finally {
       afterToken.resolve();
