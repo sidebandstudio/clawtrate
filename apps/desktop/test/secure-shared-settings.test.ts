@@ -153,4 +153,71 @@ describe("clients sharing a secure store", () => {
       client.stop();
     }
   });
+
+  it("suspending while migration supplies the token does not keep it alive after another client's pairing retires it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-secure-shared-"));
+    dirs.push(dir);
+    writeFileSync(
+      join(dir, STATE_FILE),
+      JSON.stringify({ connection: JSON.stringify({ url: URL_A, token: "legacy-bootstrap" }) }),
+    );
+    const credentials = createSecureCredentials({ dataDir: dir, box });
+    let tokenWritten = false;
+    let stopOther = () => {};
+    const set = credentials.storage.set;
+    const storage = {
+      ...credentials.storage,
+      set: async (key: string, value: string) => {
+        await set(key, value);
+        if (!tokenWritten && key.startsWith("deviceToken:")) {
+          tokenWritten = true;
+          stopOther();
+        }
+      },
+    };
+    const host = (gateway: FakeGateway) => ({
+      ...testHost(gateway),
+      storage,
+      signer: credentials.signer,
+      secureCredentials: credentials.secure,
+    });
+    const record = async () => JSON.parse((await storage.get("connection")) ?? "null") as unknown;
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const pairing = new FakeGateway();
+    pairing.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk((params as { scopes: string[] }).scopes, "issued-A"),
+    });
+    const client = new ClawtrateClient(host(closed), FAST);
+    const other = new ClawtrateClient(host(pairing), FAST);
+    stopOther = () => other.stop();
+    try {
+      await client.start();
+      // Suspend while migration still supplies the earlier build's gateway token.
+      await client.suspend();
+      expect(await record()).toEqual({ url: URL_A, token: "legacy-bootstrap", suspended: true });
+      // Another client pairs and stops right after its device-token write, before hello cleanup.
+      await other.start({ resume: false });
+      await other.connectWithSetupCode({
+        url: URL_A,
+        bootstrapToken: CODE,
+        expiresAtMs: Date.now() + 600_000,
+      });
+      await until(() => tokenWritten);
+      // Both a fresh store and the running store now see the migrated token retired.
+      const fresh = createSecureCredentials({ dataDir: dir, box });
+      expect(JSON.parse((await fresh.storage.get("connection")) ?? "null")).toEqual({
+        url: URL_A,
+        token: null,
+        suspended: true,
+      });
+      expect(await record()).toEqual({ url: URL_A, token: null, suspended: true });
+      await client.suspend();
+      expect(await record()).toEqual({ url: URL_A, token: null, suspended: true });
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });
