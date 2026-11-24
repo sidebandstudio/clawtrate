@@ -95,6 +95,55 @@
   background: var(--bg-selected);
 }
 
+.mb-tile-wrap {
+  position: relative;
+}
+
+.mb-tile-more {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-3);
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.mb-tile-more:hover,
+.mb-tile-more[aria-expanded="true"] {
+  background: var(--bg-selected);
+}
+
+.mb-menu {
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+}
+
+.mb-menu .mb-hint {
+  margin: 0;
+}
+
+.mb-menu-item {
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mb-menu-item:hover {
+  background: var(--bg-selected);
+}
+
 .mb-tile .mb-name {
   max-width: 100%;
   overflow: hidden;

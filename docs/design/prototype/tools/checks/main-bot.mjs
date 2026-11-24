@@ -170,6 +170,17 @@ await check("MB-20 the Main Bot's tile comes first, with the gold star, and the 
   }
 });
 
+await check("MB-21 changing the Main Bot is offered only with Clawtrate's bot tools", async ({ page, open, width }) => {
+  if (width === "phone") return;
+  await open("view=first&existing=1");
+  await page.getByRole("button", { name: "Juniper options" }).click();
+  assert.equal(await page.getByRole("menuitem", { name: "Replace with different bot" }).count(), 1);
+  await open("view=first&existing=1&plugin=missing");
+  await page.getByRole("button", { name: "Juniper options" }).click();
+  assert.equal(await page.getByRole("menuitem", { name: "Replace with different bot" }).count(), 0);
+  await has(page, '[data-testid="main-menu-note"]', "Changing the Main Bot needs Clawtrate's bot tools on your gateway.");
+});
+
 await check("MB-05 Save without a name writes nothing", async ({ page, open }) => {
   await open("view=first");
   await page.getByTestId("guided").getByRole("button", { name: "Save" }).click();

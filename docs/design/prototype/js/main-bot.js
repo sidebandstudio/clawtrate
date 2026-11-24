@@ -34,6 +34,7 @@
     step: p.get("step"),
     sheet: false,
     alsoMain: false,
+    mainMenu: false,
   };
   const AUTONOMY = { "hands-off": "Hands-off", ask: "Ask before acting" };
   const MAIN = "clawtrate-main-bot";
@@ -152,7 +153,8 @@
     const m = shown().find((b) => b.main);
     const tile = m
       ? `<div class="mb-tile-wrap"><button type="button" class="mb-tile" data-bot="${m.id}" data-testid="main-tile"${m.id === selected ? ' aria-current="true"' : ""} aria-label="${esc(`${m.name}, Main Bot`)}">` +
-        `${claw(m.name, 56, { star: true })}<strong class="mb-name" data-testid="rail-name-${m.id}" title="${esc(m.name)}">${esc(m.name)}</strong></button></div>`
+        `${claw(m.name, 56, { star: true })}<strong class="mb-name" data-testid="rail-name-${m.id}" title="${esc(m.name)}">${esc(m.name)}</strong></button>` +
+        `<button type="button" class="mb-tile-more" data-act="main-menu" aria-expanded="${state.mainMenu}" aria-label="${esc(`${m.name} options`)}">⋯</button>${mainMenu()}</div>`
       : "";
     const rows = shown()
       .filter((b) => !b.main)
@@ -174,6 +176,17 @@
       `<button type="button" class="mb-round" aria-label="New">+</button></div>${tile}<ul class="mb-list">${rows}</ul>` +
       `<div class="mb-rail-foot"><button type="button" class="mb-gw"><span class="mb-dot"></span><span><strong>Home gateway</strong><span>Connected</span></span>${count}</button></div></nav>`
     );
+  }
+
+  // The Main Bot's menu. Changing which bot is the Main Bot needs the plugin's
+  // gateway-wide record (section 4); without the plugin it isn't offered.
+  function mainMenu() {
+    if (!state.mainMenu) return "";
+    const body =
+      state.plugin === "missing"
+        ? `<p class="mb-hint" data-testid="main-menu-note">Changing the Main Bot needs Clawtrate's bot tools on your gateway.</p>`
+        : `<button type="button" class="mb-menu-item" role="menuitem" data-act="replace-main">Replace with different bot</button>`;
+    return `<div class="mb-menu" role="${state.plugin === "missing" ? "group" : "menu"}" data-testid="main-menu" aria-label="Main Bot options">${body}</div>`;
   }
 
   function header(bot) {
@@ -885,8 +898,8 @@
     if (t.dataset.choose) {
       const choice = t.dataset.choose;
       state.autonomy = choice;
-      // Setup always writes the new-bot default. A Main Bot never set up is
-      // newly managed and takes the choice; an existing one only with the opt-in.
+      // Setup always writes the new-bot default. The Main Bot the first run makes
+      // is new and takes the choice; one made already only with the opt-in.
       gateway.newBots = choice;
       if (!state.existing || state.alsoMain) botById(MAIN).autonomy = choice;
       say(AUTONOMY[choice]);
@@ -901,6 +914,11 @@
     }
     const act = t.dataset.act;
     const id = t.closest("article")?.dataset.id;
+    if (act === "main-menu") {
+      state.mainMenu = !state.mainMenu;
+      renderChat();
+      return root.querySelector('[data-act="main-menu"]')?.focus();
+    }
     if (act === "sheet") {
       state.sheet = true;
       renderSetup();
