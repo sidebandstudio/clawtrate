@@ -2442,8 +2442,9 @@ export class ClawtrateClient {
       throw new Error(`At most ${this.trackedLimit} tasks can be open at once.`);
     }
     const count = this.openSessions.get(key) ?? 0;
+    const before = count === 0 ? this.keptKeys() : null;
     this.openSessions.set(key, count + 1);
-    if (count === 0) this.relistIfHidden(key);
+    if (before) this.relistIfHidden(key, before);
     if (count > 0) {
       // A view coming to a task whose history failed asks for it, as a first open would,
       // unless a read already under way will settle it.
@@ -2520,8 +2521,9 @@ export class ClawtrateClient {
       this.openSessions.set(key, count - 1);
       return;
     }
+    const before = this.keptKeys();
     this.openSessions.delete(key);
-    this.relistIfHidden(key);
+    this.relistIfHidden(key, before);
     const transcript = this.state.transcripts[key];
     if (transcript && hasUnsettledWork(transcript)) {
       this.retained.add(key);
@@ -2536,13 +2538,6 @@ export class ClawtrateClient {
   /** Whether the row cap keeps a task ahead of the others: it waits for the person, or is open. */
   private readonly keeps = (key: string): boolean => this.waits(key) || this.openSessions.has(key);
 
-  /**
-   * How many held rows the cap keeps for now (`keeps`), the person's own and other tools' alike.
-   * When fewer are kept with the list full, the list is read again, so a task one pushed out comes
-   * back: a waiting or open row never costs a task for longer than it waits or is open.
-   */
-  private keptRows = 0;
-
   /** Counts changes to what waits, so a list read can tell whether one came while it ran. */
   private waitingEpoch = 0;
 
@@ -2554,20 +2549,20 @@ export class ClawtrateClient {
    * After what waits changed: the list again, and, for a task that waits but whose row the
    * client does not hold, the list read again so it is listed until answered.
    */
-  private waitingChanged(before?: ReadonlySet<string>): void {
+  private waitingChanged(before: ReadonlySet<string>): void {
     this.waitingEpoch += 1;
     this.publishTasks(before);
     if (this.waiting.keys().some(this.unheldWait)) this.scheduleRefresh(this.generation);
   }
 
   /**
-   * Opening or leaving a task changes what the cap keeps (`keptRows`). One a switch may hide is
-   * listed while open, so for it the tasks are listed again.
+   * Opening or leaving a task changes what the cap keeps (`releaseKeptRows`), from `before`. One a
+   * switch may hide is listed while open, so for it the tasks are listed again.
    */
-  private relistIfHidden(key: string): void {
+  private relistIfHidden(key: string, before: ReadonlySet<string>): void {
     const row = this.rows.get(capId(key, MAX_ID_CHARS));
-    if (row && isElsewhere(row)) this.publishTasks();
-    else if (row) this.releaseKeptRows();
+    if (row && isElsewhere(row)) this.publishTasks(before);
+    else if (row) this.releaseKeptRows(before);
   }
 
   /** Whether events and reloads for this task are followed: a viewer has it open, or it is kept for its work. */
@@ -2612,7 +2607,8 @@ export class ClawtrateClient {
       delete transcripts[key];
       return { ...state, transcripts };
     });
-    if (this.waiting.unhold(key)) this.publishTasks();
+    const before = this.keptKeys();
+    if (this.waiting.unhold(key)) this.publishTasks(before);
   }
 
   /**
@@ -8616,8 +8612,11 @@ export class ClawtrateClient {
       this.scheduleRefresh(this.generation);
   }
 
-  /** `before`: the rows the cap kept before a change that can swap them (`releaseKeptRows`). */
-  private publishTasks(before?: ReadonlySet<string>): void {
+  /**
+   * `before`: the rows the cap kept before the change being published (`keptKeys`). Without it,
+   * those kept when publishing starts, so a row that settles here is still seen to leave.
+   */
+  private publishTasks(before: ReadonlySet<string> = this.keptKeys()): void {
     // Channel chats and other tools' sessions are grouped too: one that waits for the person stays
     // listed while it waits, so an approval or question it asks is never out of sight (F-519).
     const tasksByBot = groupTasks(this.rows.values(), {
@@ -8663,15 +8662,15 @@ export class ClawtrateClient {
     this.releaseKeptRows(before);
   }
 
-  /** Read the list again when a row the cap kept stops being kept with the list full. */
-  private releaseKeptRows(before?: ReadonlySet<string>): void {
+  /**
+   * Read the list again when a row the cap kept before a change (`before`) is no longer kept and
+   * the list is full, so a task it pushed out comes back: a waiting or open row never costs a task
+   * for longer than it waits or is open.
+   */
+  private releaseKeptRows(before: ReadonlySet<string>): void {
+    if (this.rows.size < MAX_LISTED_TASKS) return;
     const kept = this.keptKeys();
-    // A change that can stop one task waiting and start another at once (`replaceQuestions`)
-    // passes the keys kept before it, and any that left counts. Every other change is one gateway
-    // event, which changes what is kept for one task, so a smaller count says one left.
-    const released = before ? [...before].some((key) => !kept.has(key)) : kept.size < this.keptRows;
-    this.keptRows = kept.size;
-    if (released && this.rows.size >= MAX_LISTED_TASKS) this.scheduleRefresh(this.generation);
+    if ([...before].some((key) => !kept.has(key))) this.scheduleRefresh(this.generation);
   }
 
   /** The keys of the held rows the cap keeps for now (`keeps`); built for one call, not kept. */
@@ -8874,7 +8873,9 @@ export class ClawtrateClient {
     }));
     // The rail describes a task the engine follows by the same runs the conversation shows.
     const transcript = this.state.transcripts[key];
-    if (transcript && this.waiting.hold(key, fromActivity(transcript))) this.publishTasks();
+    // An open task is kept whatever its runs say, so only another's hold can change what is kept.
+    const before = this.openSessions.has(key) ? undefined : this.keptKeys();
+    if (transcript && this.waiting.hold(key, fromActivity(transcript))) this.publishTasks(before);
   }
 
   /**
@@ -9178,7 +9179,10 @@ export class ClawtrateClient {
         return;
       case "agent": {
         const payload = asRecord(event.payload);
-        if (payload && this.waiting.onAgent(payload, this.now())) this.waitingChanged();
+        if (payload) {
+          const before = this.keptKeys();
+          if (this.waiting.onAgent(payload, this.now())) this.waitingChanged(before);
+        }
         this.handleAgent(event);
         return;
       }
@@ -9203,7 +9207,10 @@ export class ClawtrateClient {
       }
       case "question.requested": {
         const record = asRecord(event.payload);
-        if (record && this.waiting.onQuestionRequested(record, this.now())) this.waitingChanged();
+        if (record) {
+          const before = this.keptKeys();
+          if (this.waiting.onQuestionRequested(record, this.now())) this.waitingChanged(before);
+        }
         const key = typeof record?.sessionKey === "string" ? record.sessionKey : null;
         if (record && key && this.tracked(key)) {
           this.updateActivity(key, (activity, ctx) =>
@@ -9234,12 +9241,13 @@ export class ClawtrateClient {
         if (card) {
           const admitted = admitApproval(card);
           // Its task waits, whether a followed task shows the card or it is kept unrouted.
+          const before = this.keptKeys();
           if (
             admitted.status === "pending" &&
             !this.approvalOutcomes.has(admitted.id) &&
             this.waiting.restoreApproval(admitted, this.now())
           )
-            this.waitingChanged();
+            this.waitingChanged(before);
           this.routeApproval(admitted);
         }
         return;
@@ -9254,7 +9262,8 @@ export class ClawtrateClient {
               ? "plugin"
               : "system-agent";
         const resolution = parseApprovalResolved(event.payload, kind);
-        if (resolution && this.waiting.onApprovalResolved(resolution.id)) this.publishTasks();
+        const before = this.keptKeys();
+        if (resolution && this.waiting.onApprovalResolved(resolution.id)) this.publishTasks(before);
         // Kept even when no card has arrived yet: its request or list entry may come later.
         if (resolution) this.noteApprovalOutcome(resolution);
         return;
@@ -9268,7 +9277,8 @@ export class ClawtrateClient {
         if (!payload || typeof id !== "string") return;
         // Read from the runs as they were, told once the transcript records the closure.
         const closed = this.questionClosures(id, payload.status);
-        if (this.waiting.onQuestionResolved(id)) this.publishTasks();
+        const before = this.keptKeys();
+        if (this.waiting.onQuestionResolved(id)) this.publishTasks(before);
         for (const [key, activity] of [...this.foreign.entries()]) {
           if (activity.runs.some((run) => run.pendingCards.some((card) => card.id === id)))
             this.updateForeign(key, (each) => foreignQuestionResolved(each, payload));
@@ -9719,6 +9729,7 @@ export class ClawtrateClient {
   private async loadWaitingApprovals(generation: number): Promise<void> {
     if (!this.holds(APPROVALS_SCOPE)) return;
     let changed = false;
+    let before: ReadonlySet<string> | null = null;
     for (const source of APPROVAL_SOURCES) {
       try {
         const value = await this.request(source.method, {});
@@ -9731,14 +9742,16 @@ export class ClawtrateClient {
             : [];
         for (const item of items) {
           const card = source.parse(item);
-          if (card?.status === "pending")
+          if (card?.status === "pending") {
+            before ??= this.keptKeys();
             changed = this.waiting.restoreApproval(card, this.now()) || changed;
+          }
         }
       } catch (error) {
         this.logFailure("warn", source.method, error);
       }
     }
-    if (changed) this.waitingChanged();
+    if (changed && before) this.waitingChanged(before);
   }
 
   /** The questions pending at a connect, for the rail's waiting state (needs `operator.questions`). */

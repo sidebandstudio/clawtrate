@@ -582,6 +582,60 @@ describe("F-563: Show sessions from other tools", () => {
     client.stop();
   });
 
+  it("F-563: a question answered at a full list gives the place back, though a connect's approvals made another task wait meanwhile", async () => {
+    const own = Array.from({ length: MAX_LISTED_TASKS }, (_, index) => ({
+      key: `agent:pip:dashboard:${String(index).padStart(8, "0")}-0000`,
+      agentId: "pip",
+      createdVia: "operator",
+      updatedAt: 1_000 + index,
+    }));
+    const api = { ...rows()[0]!, updatedAt: 99_999 };
+    const { client, gateway, keys } = await connected({}, [...own, api], true);
+    const asked = {
+      id: "q-api",
+      sessionKey: API,
+      runId: "r1",
+      status: "pending",
+      createdAtMs: 100_000,
+    };
+    gateway.handlers["question.list"] = () => ({ questions: [asked] });
+    gateway.emit("question.requested", asked);
+    await until(() => keys().includes(API) && !keys().includes(own[0]!.key));
+    // At the next connect, one of the person's listed tasks has an approval pending, read before
+    // the other approval lists answer.
+    const plugins = deferred<unknown>();
+    gateway.handlers["exec.approval.list"] = () => [
+      {
+        id: "ap-own",
+        request: {
+          command: "uname -s",
+          host: "gateway",
+          agentId: "pip",
+          sessionKey: own[250]!.key,
+          runId: "r2",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 100_000,
+        expiresAtMs: 9_000_000_000_000,
+      },
+    ];
+    gateway.handlers["plugin.approval.list"] = () => plugins.promise;
+    gateway.handlers["openclaw.approval.list"] = () => [];
+    const lists = gateway.calls("plugin.approval.list").length;
+    gateway.dropAll();
+    await until(() => gateway.calls("plugin.approval.list").length > lists);
+    // The API client's question is answered meanwhile: one kept task for another.
+    gateway.handlers["question.list"] = () => ({ questions: [] });
+    gateway.emit("question.resolved", { id: "q-api" });
+    plugins.resolve([]);
+    await until(() => keys().includes(own[0]!.key));
+    expect(keys()).not.toContain(API);
+    expect(client.state.tasksByBot.pip!.find((task) => task.key === own[250]!.key)?.status).toBe(
+      "waiting",
+    );
+    client.stop();
+  });
+
   it("F-563: search results are filtered by the switches as they are when the results arrive", async () => {
     const { client, gateway } = await connected();
     await client.setShowChannelChats(true);
