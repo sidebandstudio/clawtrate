@@ -37,6 +37,7 @@ import {
   MAX_APPROVAL_READERS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
+  MAX_SENT_PICTURE_MESSAGES,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
@@ -259,6 +260,18 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: null,
     opaque: "file content, counted in `outboxFiles`",
   },
+  // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
+  sentPictures: {
+    max: MAX_SENT_PICTURE_MESSAGES,
+    each: 3 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
+    row: "outboxFiles",
+  },
+  "sentPictures.*.files": {
+    max: MAX_ATTACHMENTS_PER_MESSAGE,
+    each: N + MAX_FILE_NAME_CHARS,
+    row: null,
+    opaque: "picture content, counted in `outboxFiles`",
+  },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Settings reads a stop ends: connection commands run one at a time, each with one read.
@@ -329,7 +342,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
  */
 export const CLIENT_NOT_WALKED: Record<string, string> = {
   writes:
-    "shared by clients of the host store; one writer per live pairing, one token per unresolved refusal, one rotation count per token key an access request rotated and one grant (a flag and a number) per token key written, removed or read",
+    "shared by clients of the host store; one writer per live pairing, one token per unresolved refusal, one rotation count per token key an access request rotated, one grant (a flag and a number) per token key written, removed or read and one retired shared gateway token per gateway URL whose device token was saved",
   host: "the host's own objects: its socket factory, storage and signer",
   protocol: "the official client package's protocol client; its requests time out",
   auth: "the official client package's device-auth lifecycle and this connection's token store",
