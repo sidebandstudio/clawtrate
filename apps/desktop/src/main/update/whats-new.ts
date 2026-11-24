@@ -5,7 +5,8 @@
 // never changes, fails or delays the check. This module has no Node API, so the
 // site assembly uses the same rules.
 
-import { formatVersion, isNewer, parseVersion, versionTrack } from "./version.ts";
+import type { UpdateTrack } from "@clawtrate/core";
+import { fitsTrack, formatVersion, isNewer, parseVersion } from "./version.ts";
 
 /** The file beside each track's feed. */
 export const WHATS_NEW_FILE = "whats-new.json";
@@ -111,15 +112,16 @@ export interface WhatsNewView {
  * What the Updates pane shows from the builds a check read. The file is
  * unsigned, so it decides nothing and shows only what matches: the offered
  * build's list only when the file lists exactly that version (otherwise the
- * file is stale and nothing shows for the update), the builds on its track
- * strictly between the running one and the offered one only beside it, newest first,
- * and the running build's own list only for exactly its version. Undefined
- * when there is nothing to show.
+ * file is stale and nothing shows for the update), the builds that can be on
+ * the checked track strictly between the running one and the offered one only
+ * beside it, newest first, and the running build's own list only for exactly
+ * its version. Undefined when there is nothing to show.
  */
 export function whatsNewView(
   builds: readonly BuildNotes[],
   runningVersion: string | null,
   offeredVersion: string | null,
+  track: UpdateTrack,
 ): WhatsNewView | undefined {
   const running = parseVersion(runningVersion);
   if (!running) return undefined;
@@ -134,12 +136,10 @@ export function whatsNewView(
         offer,
         ...builds
           .map((build) => ({ build, version: parseVersion(build.version)! }))
-          // On the offered build's track: a Stable release is not a Beta build skipped.
+          // On the checked track: a dated beta is not a Stable build skipped.
           .filter(
             ({ version }) =>
-              versionTrack(version) === versionTrack(offered!) &&
-              isNewer(version, running) &&
-              isNewer(offered!, version),
+              fitsTrack(version, track) && isNewer(version, running) && isNewer(offered!, version),
           )
           .sort((a, b) => (isNewer(a.version, b.version) ? -1 : 1))
           .map(({ build }) => build),

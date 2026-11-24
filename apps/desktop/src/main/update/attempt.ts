@@ -1,6 +1,6 @@
 import type { UpdateAttemptOutcome, UpdateTrack } from "@clawtrate/core";
 import { parseReleaseDate } from "./feed.ts";
-import { formatVersion, isNewer, parseVersion, versionTrack } from "./version.ts";
+import { fitsTrack, formatVersion, isNewer, parseVersion } from "./version.ts";
 
 interface Attempt {
   target: string;
@@ -42,11 +42,13 @@ export function readAttempt(value: unknown): Attempt {
   const target = parseVersion(value.target),
     from = parseVersion(value.from);
   const time = parseReleaseDate(value.time);
+  const track = value.track === "stable" || value.track === "nightly" ? value.track : null;
   if (
     !target ||
     !from ||
     !isNewer(target, from) ||
-    versionTrack(target) !== value.track ||
+    !track ||
+    !fitsTrack(target, track) ||
     !time ||
     value.phase !== "handoff"
   )
@@ -54,7 +56,7 @@ export function readAttempt(value: unknown): Attempt {
   return {
     target: formatVersion(target),
     from: formatVersion(from),
-    track: versionTrack(target),
+    track,
     time,
     phase: "handoff",
     ...("marksQuit" in value && value.marksQuit === true && { marksQuit: true as const }),
