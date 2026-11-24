@@ -97,19 +97,38 @@ const onBar = async (control: Locator, actions: Locator) =>
     await actions.elementHandle(),
   );
 
-/** The bubbles after a message that its actions lie over, by their first words. */
+/**
+ * The bubbles after a message that its actions lie over, or the touch areas of their buttons, by
+ * their first words.
+ */
 const coversNext = (message: Locator) =>
   message.evaluate((unit) => {
-    const bar = unit.querySelector(".msg-actions")!.getBoundingClientRect();
+    const bar = unit.querySelector(".msg-actions")!;
+    const areas = [bar.getBoundingClientRect()];
+    for (const button of bar.querySelectorAll(":scope > button")) {
+      const box = button.getBoundingClientRect();
+      const hit = getComputedStyle(button, "::after");
+      const width = Math.max(box.width, Number.parseFloat(hit.width) || 0);
+      const height = Math.max(box.height, Number.parseFloat(hit.height) || 0);
+      areas.push(
+        new DOMRect(
+          box.x + (box.width - width) / 2,
+          box.y + (box.height - height) / 2,
+          width,
+          height,
+        ),
+      );
+    }
     return [...document.querySelectorAll(".transcript .msg > .bubble")]
       .filter((each) => unit.compareDocumentPosition(each) === Node.DOCUMENT_POSITION_FOLLOWING)
       .filter((each) => {
         const box = each.getBoundingClientRect();
-        return (
-          box.top < bar.bottom &&
-          box.bottom > bar.top &&
-          box.left < bar.right &&
-          box.right > bar.left
+        return areas.some(
+          (area) =>
+            box.top < area.bottom &&
+            box.bottom > area.top &&
+            box.left < area.right &&
+            box.right > area.left,
         );
       })
       .map((each) => each.textContent!.slice(0, 30));
