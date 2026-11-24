@@ -9314,11 +9314,16 @@ export class ClawtrateClient {
    * asked for through the same request as sending (`ensureScope`) only when an
    * action needs it, by the viewer that started it.
    */
-  private actionContext(owner: object | null): TaskActionContext & SidebarContext {
+  /** With `stamp`, each request is sent only while the host keeps the target the screen read on. */
+  private actionContext(
+    owner: object | null,
+    stamp?: GatewayStamp,
+  ): TaskActionContext & SidebarContext {
     const generation = this.generation;
     return {
       request: async (method, params) => {
         this.checkNotWithdrawn(owner);
+        if (stamp) this.requireSameTarget(stamp);
         if (generation !== this.generation) throw new Error("Switched to another gateway.");
         try {
           return await this.request(method, params);
@@ -9419,11 +9424,16 @@ export class ClawtrateClient {
     await markTask(this.actionContext(options.owner ?? null), key, unread);
   }
 
+  /**
+   * With `stamp` (where the rail listed the task), nothing is sent unless the host still has that
+   * target and that gateway connected: a restored copy has the same task keys.
+   */
   async archiveTask(
     key: string,
-    options: { stop?: boolean; owner?: object } = {},
+    options: { stop?: boolean; owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<ArchiveResult> {
-    return archiveTask(this.actionContext(options.owner ?? null), key, {
+    if (options.stamp) await this.requireSameGateway(options.stamp);
+    return archiveTask(this.actionContext(options.owner ?? null, options.stamp), key, {
       stop: options.stop === true,
     });
   }
@@ -9432,8 +9442,13 @@ export class ClawtrateClient {
     await restoreTask(this.actionContext(options.owner ?? null), key);
   }
 
-  async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
-    await deleteTask(this.actionContext(options.owner ?? null), key);
+  /** With `stamp`, as for `archiveTask`. */
+  async deleteTask(
+    key: string,
+    options: { owner?: object; stamp?: GatewayStamp } = {},
+  ): Promise<void> {
+    if (options.stamp) await this.requireSameGateway(options.stamp);
+    await deleteTask(this.actionContext(options.owner ?? null, options.stamp), key);
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */

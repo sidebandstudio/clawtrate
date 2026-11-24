@@ -7,7 +7,7 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE, avatarFor } from "@clawtrate/core";
+import { ACTIVE_RUN_MESSAGE, avatarFor, gatewayStamp } from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -776,8 +776,15 @@ export function Rail({
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
+    // Where the row was listed: a restored copy has the same keys, so the host sends it nowhere else.
+    const stamp = gatewayStamp(connection);
     const act = async (stop: boolean) => {
-      const { stoppedRun } = await bridge.invoke({ type: "archiveTask", key: task.key, stop });
+      const { stoppedRun } = await bridge.invoke({
+        type: "archiveTask",
+        key: task.key,
+        stop,
+        stamp,
+      });
       setAnnouncement(`Archived ${task.title}.`);
       // The gateway's archive ends anything running in the task: a run that had just started,
       // seen to end as stopped on its own end event, is said here, with the way back.
@@ -825,6 +832,7 @@ export function Rail({
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
+    const stamp = gatewayStamp(connection);
     setDialog({
       title: `Delete “${task.title}”?`,
       body: (
@@ -838,7 +846,7 @@ export function Rail({
       ),
       confirm: { label: "Delete", tone: "danger" },
       onConfirm: async () => {
-        await bridge.invoke({ type: "deleteTask", key: task.key });
+        await bridge.invoke({ type: "deleteTask", key: task.key, stamp });
         setAnnouncement(`Deleted ${task.title}.`);
         if (listed) await afterRemoval(bot, task as Task, remaining, next);
         else {

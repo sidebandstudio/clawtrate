@@ -502,11 +502,58 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
-  it("Machines: a removal from a renderer keeps its stamp, and one without a stamp is refused", () => {
+  /** Both gateways have the task "agent:otto:logs", as a restored copy would. */
+  const KEY = "agent:otto:logs";
+  const tasks = (fake: AccountsGateway) => {
+    fake.gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-logs", status: "done", archived: false },
+    });
+    fake.gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    fake.gateway.handlers["sessions.delete"] = () => ({ ok: true });
+  };
+  const TASK_WRITES = ["sessions.patch", "sessions.delete"];
+
+  it("Tasks: an archive or a delete listed on one gateway reaches neither after a switch to another with the same id", async () => {
+    const { client, a, b, switchToB } = await twoGateways();
+    tasks(a);
+    tasks(b);
+    const stamp = gatewayStamp(client.state.connection);
+    await switchToB();
+    const viewer = createBridgeSession(client);
+    await expect(
+      viewer.apply({ type: "archiveTask", key: KEY, stop: false, stamp }),
+    ).rejects.toThrow(CONNECTION_CHANGED);
+    await expect(viewer.apply({ type: "deleteTask", key: KEY, stamp })).rejects.toThrow(
+      CONNECTION_CHANGED,
+    );
+    expect(sentOf(a, TASK_WRITES)).toEqual([]);
+    expect(sentOf(b, TASK_WRITES)).toEqual([]);
+    client.stop();
+  });
+
+  it("Tasks: an archive and a delete go with no switch, and after a dropped connection's reconnect", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    const viewer = createBridgeSession(client);
+    const stamp = gatewayStamp(client.state.connection);
+    await viewer.apply({ type: "archiveTask", key: KEY, stop: false, stamp });
+    expect(a.gateway.calls("sessions.patch")).toHaveLength(1);
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => ready(client, URL_A) && client.state.connection.connectedAt !== was);
+    expect(client.state.connection.target).toBe(stamp.target);
+    await viewer.apply({ type: "deleteTask", key: KEY, stamp });
+    expect(a.gateway.calls("sessions.delete")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("Machines and tasks: a command from a renderer keeps its stamp, and one without a stamp is refused", () => {
     const stamp = { gatewayId: "gateway-a", target: 4 };
     for (const command of [
       { type: "removeMachine", nodeId: "node-1", stamp },
       { type: "removeDevice", deviceId: "phone-1", stamp },
+      { type: "archiveTask", key: KEY, stop: true, stamp },
+      { type: "deleteTask", key: KEY, stamp },
     ] as const) {
       expect(parseBridgeCommand(command)).toEqual(command);
       const { stamp: _stamp, ...bare } = command;

@@ -366,11 +366,14 @@ export type BridgeCommand =
   | { type: "pinTask"; key: string; pinned: boolean }
   /** Mark unread or read; `opened` is the read of opening a task, made only while the connection writes. */
   | { type: "markTask"; key: string; unread: boolean; opened: boolean }
-  /** Archive; `stop` stops an active run first ("Stop and archive"). */
-  | { type: "archiveTask"; key: string; stop: boolean }
+  /**
+   * Archive; `stop` stops an active run first ("Stop and archive"). `stamp` is where the rail
+   * listed the task: a restored copy has the same keys, so nothing goes anywhere else.
+   */
+  | { type: "archiveTask"; key: string; stop: boolean; stamp: GatewayStamp }
   | { type: "restoreTask"; key: string }
-  /** Delete a task and its transcript, stopping an active run first. */
-  | { type: "deleteTask"; key: string }
+  /** Delete a task and its transcript, stopping an active run first. `stamp` as for archiving. */
+  | { type: "deleteTask"; key: string; stamp: GatewayStamp }
   /** A bot's archived tasks, read now. */
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
@@ -1608,9 +1611,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         opened: command.opened === undefined ? false : flag(command.opened),
       };
     case "archiveTask":
-      return { type: "archiveTask", key: sessionKey(command.key), stop: flag(command.stop) };
-    case "restoreTask":
+      return {
+        type: "archiveTask",
+        key: sessionKey(command.key),
+        stop: flag(command.stop),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "deleteTask":
+      return {
+        type: "deleteTask",
+        key: sessionKey(command.key),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "restoreTask":
       return { type: command.type, key: sessionKey(command.key) };
     case "computerShow":
       return { type: "computerShow", key: sessionKey(command.key) };
@@ -2247,11 +2260,11 @@ class ViewerSession implements BridgeSession {
       case "markTask":
         return client.markTask(command.key, command.unread, { owner, opened: command.opened });
       case "archiveTask":
-        return client.archiveTask(command.key, { stop: command.stop, owner });
+        return client.archiveTask(command.key, { stop: command.stop, owner, stamp: command.stamp });
       case "restoreTask":
         return client.restoreTask(command.key, { owner });
       case "deleteTask":
-        return client.deleteTask(command.key, { owner });
+        return client.deleteTask(command.key, { owner, stamp: command.stamp });
       case "listArchived":
         return client.listArchived(command.botId);
       case "changeSidebar":
