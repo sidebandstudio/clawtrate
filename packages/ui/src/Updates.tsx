@@ -14,7 +14,7 @@ import {
   inspectionFailureLine,
   cleanupLine,
 } from "./update-restart.ts";
-import { WarnIcon } from "./icons.tsx";
+import { ChevronIcon, WarnIcon } from "./icons.tsx";
 import "./styles/updates.css";
 
 const names = { stable: "Stable", nightly: "Beta" };
@@ -224,6 +224,34 @@ function focusResultOnRemoval(button: HTMLButtonElement | null) {
     };
 }
 
+/**
+ * One build's list of what it adds (F-554), behind a disclosure: plain lines,
+ * no links. The offered build's is open; the others wait to be opened.
+ */
+function WhatsNew({
+  title,
+  lines,
+  open = false,
+}: {
+  title: string;
+  lines: readonly string[];
+  open?: boolean;
+}) {
+  return (
+    <details className="b-disclosure whats-new" data-testid="whats-new" open={open}>
+      <summary>
+        <ChevronIcon />
+        {title}
+      </summary>
+      <ul className="b-disclosure-body whats-new-lines">
+        {lines.map((line, index) => (
+          <li key={index}>{line}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function Updates({
   snapshot: s,
   pending,
@@ -340,6 +368,9 @@ export function Updates({
           </div>
         </dl>
       )}
+      {s.whatsNew?.running && (
+        <WhatsNew title="What's new in this build" lines={s.whatsNew.running} />
+      )}
       {source && s.tracks.length === 2 && (
         <fieldset disabled={locked || !!confirm} role="radiogroup" aria-label="Update track">
           <legend>Update track</legend>
@@ -437,6 +468,15 @@ export function Updates({
           </>
         )}
       </div>
+      {/* Notes from the site, not the app's own status: outside the status group, under their build. */}
+      {s.whatsNew?.coming.map((build, index) => (
+        <WhatsNew
+          key={build.version}
+          title={`What's new in ${build.version}`}
+          lines={build.items}
+          open={index === 0}
+        />
+      ))}
       {confirm && state.kind === "verified" && (
         <Confirm
           fallbackFocus={result}

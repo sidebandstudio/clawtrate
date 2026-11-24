@@ -10,6 +10,7 @@ export {
 export {
   ActionScope,
   ItemFeed,
+  TurnPictures,
   RunFeed,
   RunLine,
   runCalls,

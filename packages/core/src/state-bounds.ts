@@ -152,6 +152,7 @@ import type {
   ClawtrateState,
   ConnectionError,
   ConnectionState,
+  GatewayStamp,
   DiscoveryState,
   MessageReaction,
   PairingRequest,
@@ -587,6 +588,7 @@ const picture = object<ChatPicture>()({
   width: NUMBER,
   height: NUMBER,
   sizeBytes: NUMBER,
+  messageId: ID,
 });
 const sentAttachment = object<SentAttachment>()({
   fileName: text(MAX_FILE_NAME_CHARS),
@@ -713,6 +715,7 @@ const connection = object<ConnectionState>()({
   error: connectionError,
   retryAt: NUMBER,
   connectedAt: NUMBER,
+  target: NUMBER,
   paired: FLAG,
   sendLimits: object<SendLimits>()({
     imageBytes: NUMBER,
@@ -1193,7 +1196,7 @@ const checkInSave = object<CheckInSave>()({
 export const CHECK_INS: Bound = object<CheckInsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
-  gatewayId: ID,
+  stamp: object<GatewayStamp>()({ gatewayId: ID, target: NUMBER }),
   scheduler: FLAG,
   readBotIds: list(MAX_BOTS, ID),
   jobs: list(MAX_BOTS, checkInJob),

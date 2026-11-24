@@ -12,8 +12,13 @@ import { join } from "node:path";
 import { solidPng } from "../packages/core/test/sent-attachments-rows.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
-import { IMAGE_PROMPT } from "../tools/dev-gateway/src/scenarios.ts";
+import {
+  IMAGE_PROMPT,
+  SEND_PICTURE_AFTER,
+  SEND_PICTURE_TEXT,
+} from "../tools/dev-gateway/src/scenarios.ts";
 import { scriptedPicture } from "../tools/dev-gateway/src/scripted-images.ts";
+import { trailMap } from "../tools/dev-gateway/src/seed-files.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -123,6 +128,60 @@ test("F-535: a picture the bot makes with image_generate shows in the conversati
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(390);
   await page.emulateMedia({ colorScheme: null });
+});
+
+test("F-535: a picture the bot sends with its message tool shows under that message, as the bytes the gateway staged", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const key = "agent:pip:e2e-send-picture";
+  const task = "A picture sent from the end-to-end run";
+  await gatewayCall("sessions.create", { key, agentId: "pip", label: task });
+  // Sent as a person's message from a client, so the gateway runs the send as its reply in the task.
+  await gatewayCall("chat.send", {
+    sessionKey: key,
+    message: "#send-picture",
+    idempotencyKey: "e2e-send-picture",
+  });
+  await expect
+    .poll(
+      async () => {
+        const history = await gatewayCall<{
+          messages: Array<{ model?: string; content?: unknown }>;
+        }>("chat.history", { sessionKey: key, limit: 50 });
+        return history.messages.some(
+          (message) =>
+            message.model === "delivery-mirror" &&
+            Array.isArray(message.content) &&
+            message.content.some((part: { type?: string }) => part.type === "image"),
+        );
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+
+  const gatewayPort = String(listInstances().find((row) => row.name === INSTANCE)!.gatewayPort);
+  const toGateway: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).port === gatewayPort) toGateway.push(request.url());
+  });
+
+  await openShell(page);
+  await openTask(page, "Pip", task);
+  const turn = page.getByTestId("transcript-turn").filter({ hasText: SEND_PICTURE_TEXT });
+  const picture = turn.getByRole("img", { name: "A picture the bot handed over" });
+  await expect(picture).toBeVisible({ timeout: 30_000 });
+  await expect(turn.getByTestId("picture")).toHaveCount(1);
+  expect(await picture.getAttribute("src")).toBe(
+    `data:image/png;base64,${trailMap().toString("base64")}`,
+  );
+  // Under the message's bubble, above what the bot said after sending it.
+  const shown = (await picture.boundingBox())!;
+  const bubble = (await turn.getByText(SEND_PICTURE_TEXT).boundingBox())!;
+  const after = (await turn.getByText(SEND_PICTURE_AFTER).boundingBox())!;
+  expect(shown.y).toBeGreaterThan(bubble.y);
+  expect(shown.y + shown.height).toBeLessThan(after.y);
+  expect(toGateway).toEqual([]);
 });
 
 // A picture a person attaches (#451), sent through the composer of a host of this test's own,

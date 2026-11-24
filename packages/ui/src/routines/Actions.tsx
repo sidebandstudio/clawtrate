@@ -5,6 +5,8 @@
 
 import {
   fieldsOf,
+  gatewayStamp,
+  sameStamp,
   sameSchedule,
   type ConnectionState,
   type HostInfo,
@@ -488,9 +490,10 @@ function ZoneDialog({
   const bridge = useBridge();
   // A rewrite names the gateway the routines were read from; the engine refuses
   // a write for another (routines.ts `blocked`).
-  const gateway = useClawtrateState().connection.gatewayId;
-  // The gateway the writes went to: the host refuses a read-back on any other.
-  const sentTo = useRef(gateway);
+  const connection = useClawtrateState().connection;
+  // The stamp as the dialog opened, identity and target together: a change of either since then
+  // refuses a rewrite. Opened before the identity was known, Save stays off until it is reopened.
+  const [stamp] = useState(() => gatewayStamp(connection));
   const [zone, setZone] = useState("auto");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ZoneResult | null>(null);
@@ -515,7 +518,8 @@ function ZoneDialog({
         const current = await bridge.invoke({
           type: "readRoutine",
           id: routine.id,
-          gateway: sentTo.current,
+          // Where the writes went: the host refuses a read-back anywhere else.
+          stamp,
         });
         if (current && sameSchedule(current.schedule, schedule)) changed.push(routine.name);
         else if (current?.schedule.tz && current.schedule.tz !== schedule.tz)
@@ -581,7 +585,6 @@ function ZoneDialog({
       return;
     }
     setReconfirm(false);
-    sentTo.current = gateway;
     const outcome: ZoneResult = { changed: [], notes: [], pending: [] };
     for (const routine of next) {
       const original = fieldsOf(routine);
@@ -593,7 +596,7 @@ function ZoneDialog({
           original,
           edit: { ...original, schedule },
           expected: { ...original, updatedAt: routine.updatedAt },
-          gateway,
+          stamp,
         });
         if (answer.status === "saved") outcome.changed.push(routine.name);
         else if (answer.status === "unknown") outcome.pending.push({ routine, schedule });
@@ -605,7 +608,9 @@ function ZoneDialog({
                 ? "changed elsewhere"
                 : answer.status === "deleted"
                   ? "the routine was deleted"
-                  : "nothing was sent";
+                  : answer.status === "not-sent" && answer.reason === "changed"
+                    ? "the connection changed since this was opened, so nothing was sent"
+                    : "nothing was sent";
           outcome.notes.push(`Couldn't change ${routine.name} (${reason}).`);
         }
       } catch {
@@ -615,8 +620,14 @@ function ZoneDialog({
     await settle(outcome);
   };
   const needsCheck = result && result.pending.length > 0;
+  // Writes whose result never came are read back only where they went. Once the connection has
+  // moved on, that read can't be made: their outcome stays unknown, and the person may leave.
+  const here = sameStamp(stamp, gatewayStamp(connection));
+  const unreachable = !!needsCheck && !here;
   const close = () => {
-    if (!busy && !needsCheck) onClose();
+    if (busy || (needsCheck && !unreachable)) return;
+    if (unreachable) onChecking(false);
+    onClose();
   };
   return (
     <Dialog kind="settings" labelledBy="r-zone-title" onClose={close} testId="routines-zone-dialog">
@@ -641,6 +652,8 @@ function ZoneDialog({
                 {result.notes.join(" ")}
                 {needsCheck &&
                   ` Couldn't confirm the time zone of ${result.pending.map(({ routine }) => routine.name).join(", ")}.`}
+                {unreachable &&
+                  " The connection changed since the change was sent, so Clawtrate can't check it here: whether it took effect is unknown."}
               </p>
             </Note>
           )}
@@ -672,6 +685,17 @@ function ZoneDialog({
         </div>
         <footer className="b-foot">
           <div className="b-actions">
+            {unreachable && (
+              <button
+                type="button"
+                className="button"
+                data-variant="quiet"
+                disabled={busy}
+                onClick={close}
+              >
+                Close
+              </button>
+            )}
             {needsCheck ? (
               <button
                 type="button"
@@ -702,8 +726,8 @@ function ZoneDialog({
                 type="button"
                 className="button"
                 data-variant="primary"
-                // Until the gateway confirms who it is, its routines can't be named in a write.
-                disabled={busy || changes.length === 0 || gateway === null}
+                // Only on the gateway the dialog opened on, confirmed: its routines are named in the write.
+                disabled={busy || changes.length === 0 || !here}
                 onClick={() => void save()}
               >
                 {busy ? "Saving…" : "Save"}

@@ -22,7 +22,7 @@ import {
   type RoutineFields,
   type RoutinesState,
 } from "../src/routines.ts";
-import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
+import { FAST, grantingGateway, stampOn, URL_A } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const JOB = "b848f781-dd42-4069-ba05-d104990bec2c";
@@ -80,6 +80,8 @@ function engine(
     /** The connection's confirmed gateway identity; null means not read yet. */
     identity?: string | null;
     withdrawn?: (owner: object) => boolean;
+    /** The host's target; 0 unless a test moves it. */
+    target?: () => number;
   } = { admin: false, connected: true },
 ) {
   let state: RoutinesState = start;
@@ -107,6 +109,7 @@ function engine(
     admin: () => access.admin,
     identity: () => (access.identity === undefined ? "gateway-1" : access.identity),
     withdrawn: access.withdrawn ?? (() => false),
+    target: access.target ?? (() => 0),
   });
   return { routines, requests, state: () => state };
 }
@@ -951,7 +954,7 @@ describe("F-189: creating a routine", () => {
 
   it("sends nothing for a draft that never learned its gateway, though a gateway is confirmed now", async () => {
     const { routines, requests } = engine({ "cron.add": () => job() }, initialRoutinesState, ADMIN);
-    expect(await routines.create(input, "draft-1", {}, null)).toMatchObject({
+    expect(await routines.create(input, "draft-1", {}, stampOn(null))).toMatchObject({
       status: "not-sent",
       reason: "gateway",
     });
@@ -967,7 +970,7 @@ describe("F-189: creating a routine", () => {
       ADMIN,
     );
     expect(
-      await routines.create(input, "draft-1", {}, "the gateway the draft was opened on"),
+      await routines.create(input, "draft-1", {}, stampOn("the gateway the draft was opened on")),
     ).toMatchObject({ status: "not-sent", reason: "gateway" });
     expect(
       await routines.update(
@@ -976,12 +979,12 @@ describe("F-189: creating a routine", () => {
         { ...fieldsOf(expected), name: "x" },
         expected,
         {},
-        "another gateway",
+        stampOn("another gateway"),
       ),
     ).toMatchObject({ status: "not-sent", reason: "gateway" });
     expect(requests).toEqual([]);
     // Its own gateway, confirmed: the write goes out.
-    expect(await routines.create(input, "draft-2", {}, "gateway-1")).toMatchObject({
+    expect(await routines.create(input, "draft-2", {}, stampOn("gateway-1"))).toMatchObject({
       status: "saved",
     });
     expect(requests.map((r) => r.method)).toEqual(["cron.add"]);
@@ -1067,7 +1070,7 @@ describe("F-189: creating a routine", () => {
         hasMore: false,
       }),
     });
-    expect(await routines.checkCreate("draft-1", input, "gateway-1")).toEqual({
+    expect(await routines.checkCreate("draft-1", input, stampOn("gateway-1"))).toEqual({
       status: "missing",
     });
     const found = engine({
@@ -1079,7 +1082,7 @@ describe("F-189: creating a routine", () => {
         hasMore: false,
       }),
     });
-    expect(await found.routines.checkCreate("draft-1", input, "gateway-1")).toMatchObject({
+    expect(await found.routines.checkCreate("draft-1", input, stampOn("gateway-1"))).toMatchObject({
       status: "matches",
       routine: { id: "mine" },
     });
@@ -1093,7 +1096,11 @@ describe("F-189: creating a routine", () => {
       initialRoutinesState,
       access,
     );
-    const find = routines.checkCreate("draft-1", fieldsOf(parseRoutine(job())!), "gateway-1");
+    const find = routines.checkCreate(
+      "draft-1",
+      fieldsOf(parseRoutine(job())!),
+      stampOn("gateway-1"),
+    );
     void find.catch(() => {});
     await Promise.resolve();
     // The connection drops and another gateway answers while the list is out.
@@ -1112,7 +1119,11 @@ describe("F-189: creating a routine", () => {
     };
     const payload = (message: string) => ({ kind: "agentTurn", message, toolsAllow: ["*"] });
     const read = (overrides: Record<string, unknown>) =>
-      engine({ "cron.get": () => job(overrides) }).routines.checkUpdate(JOB, sent, "gateway-1");
+      engine({ "cron.get": () => job(overrides) }).routines.checkUpdate(
+        JOB,
+        sent,
+        stampOn("gateway-1"),
+      );
     expect(
       await read({ name: "Evening digest", payload: payload("Summarise today's notes.") }),
     ).toMatchObject({ status: "matches" });
@@ -1132,7 +1143,7 @@ describe("F-189: creating a routine", () => {
         "cron.get": () => {
           throw missing(JOB);
         },
-      }).routines.checkUpdate(JOB, sent, "gateway-1"),
+      }).routines.checkUpdate(JOB, sent, stampOn("gateway-1")),
     ).toEqual({ status: "missing" });
   });
 
@@ -1142,7 +1153,11 @@ describe("F-189: creating a routine", () => {
     const sent = { original: opened, edit: { ...opened, name: "Mine" }, expected: theirs };
     const payload = (message: string) => ({ kind: "agentTurn", message, toolsAllow: ["*"] });
     const read = (overrides: Record<string, unknown>) =>
-      engine({ "cron.get": () => job(overrides) }).routines.checkUpdate(JOB, sent, "gateway-1");
+      engine({ "cron.get": () => job(overrides) }).routines.checkUpdate(
+        JOB,
+        sent,
+        stampOn("gateway-1"),
+      );
     expect(await read({ payload: payload("Their instruction.") })).toEqual({
       status: "unchanged",
     });
@@ -1167,7 +1182,7 @@ describe("F-189: creating a routine", () => {
           ],
           hasMore: false,
         }),
-      }).routines.checkCreate("draft-1", input, "gateway-1");
+      }).routines.checkCreate("draft-1", input, stampOn("gateway-1"));
     expect(await listed(long)).toMatchObject({ status: "matches" });
     expect(await listed(other)).toMatchObject({ status: "changed" });
     const sent = { original: opened, edit: input, expected: opened };
@@ -1175,7 +1190,7 @@ describe("F-189: creating a routine", () => {
       engine({ "cron.get": () => job({ payload: payload(message) }) }).routines.checkUpdate(
         JOB,
         sent,
-        "gateway-1",
+        stampOn("gateway-1"),
       );
     expect(await read(long)).toMatchObject({ status: "matches" });
     expect(await read(other)).toMatchObject({ status: "changed" });
@@ -1186,7 +1201,7 @@ describe("F-189: creating a routine", () => {
     expect(
       await engine({
         "cron.get": () => job({ name: "Mine", payload: payload(long) }),
-      }).routines.checkUpdate(JOB, rename, "gateway-1"),
+      }).routines.checkUpdate(JOB, rename, stampOn("gateway-1")),
     ).toMatchObject({ status: "matches" });
   });
 
@@ -1451,7 +1466,7 @@ describe("F-189: changing a routine", () => {
       identity: null,
     });
     // The zone save's write went nowhere it could name, so a matching read proves nothing.
-    await expect(routines.readOne(JOB, null)).rejects.toThrow();
+    await expect(routines.readOne(JOB, stampOn(null))).rejects.toThrow();
     expect(requests).toEqual([]);
     // A read that names no gateway, as the page's own reads do, still reads.
     expect(await routines.readOne(JOB)).toMatchObject({ id: JOB });

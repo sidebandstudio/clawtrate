@@ -4,7 +4,7 @@
 // owns the dialog: it opens it for one bot, and closes it when that bot, the
 // connection or admin access goes.
 
-import type { Bot } from "@clawtrate/core";
+import type { Bot, GatewayStamp } from "@clawtrate/core";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useBridge } from "../bridge.tsx";
 import { CloseIcon } from "../icons.tsx";
@@ -27,14 +27,14 @@ const same = (a: PictureDraft, b: PictureDraft) =>
 
 export function EditPicture({
   bot,
-  gatewayId,
+  stamp,
   canSave,
   onClose,
   onSaved,
 }: {
   bot: Bot;
-  /** The gateway this opening is for: nothing is written to another. */
-  gatewayId: string | null;
+  /** Where the pane is read now (`GatewayStamp`): nothing is written anywhere else. */
+  stamp: GatewayStamp;
   /** Admin access on a live connection: what saving needs. */
   canSave: boolean;
   onClose: () => void;
@@ -53,10 +53,12 @@ export function EditPicture({
   const live = useRef(true);
   const allowed = useRef(canSave);
   // The gateway's identity as the pane has it now, sent with the picture for the host to check.
-  const gateway = useRef(gatewayId);
+  const gateway = useRef(stamp.gatewayId);
   useLayoutEffect(() => {
-    gateway.current = gatewayId;
-  }, [gatewayId]);
+    gateway.current = stamp.gatewayId;
+  }, [stamp.gatewayId]);
+  // The host's target as the dialog opened: a Connect, Disconnect or switch since refuses the save.
+  const [target] = useState(stamp.target);
   useLayoutEffect(() => {
     allowed.current = canSave;
   }, [canSave]);
@@ -80,7 +82,7 @@ export function EditPicture({
         type: "setBotPicture",
         botId: bot.id,
         avatar,
-        gatewayId: gateway.current,
+        stamp: { gatewayId: gateway.current, target },
       });
       if (!stands()) return;
       if (!confirmed) {

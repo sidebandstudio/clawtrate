@@ -1,0 +1,27 @@
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:20 PM
+    - paragraph: Send me the picture for the newsletter.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Here is the picture.
+    - figure:
+      - button "A picture the bot handed over":
+        - img "A picture the bot handed over"
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: It fits the top of the newsletter.
+    - toolbar "Message actions":
+      - button "More"
+    - group: Worked 1 action
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status
