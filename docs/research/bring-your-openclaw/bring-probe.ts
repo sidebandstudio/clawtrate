@@ -14,9 +14,12 @@
 //              read at the read tier, and which writes into another bot's
 //              workspace the gateway accepts (admin), refuses, or lacks
 //   skills     a workspace skill seen per bot; a copy into the person's library
+//   selection  whether a new task of each bot shows the library copy selected
 //   jobs       a job moved to another bot and back with cron.update: its id,
 //              definition, revision, state and history, and runs either side
 //   scopes     the same reads and writes at the read and write tiers
+//   record     a put-back record carried in the job's own description, written in
+//              the same cron.update as the move; and a move while a run is going
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -137,7 +140,8 @@ async function seedSource(admin: OperatorSession): Promise<string> {
   // No gateway method writes a workspace skill (see the research note), so the
   // fixture writes one file into this development instance's own workspace.
   const ws = String((await call(admin, "agents.files.get", { agentId: SOURCE, name: "AGENTS.md" })).value.workspace ?? "");
-  if (!ws.startsWith(inst.home)) throw new Error("The source workspace is not inside the instance");
+  const inside = path.relative(inst.home, ws);
+  if (!ws || inside === "" || inside.startsWith("..") || path.isAbsolute(inside)) throw new Error("The source workspace is not inside the instance");
   mkdirSync(path.join(ws, "skills", "disk-check"), { recursive: true });
   writeFileSync(path.join(ws, "skills", "disk-check", "SKILL.md"), SOURCE_SKILL);
   console.log(`  fixture: wrote skills/disk-check/SKILL.md in ${SOURCE}'s workspace on disk`);
@@ -345,7 +349,63 @@ async function selection(): Promise<void> {
   show(`skills.workshop.list ${SOURCE}`, await call(reader, "skills.workshop.list", { agentId: SOURCE }), (v) => Object.keys(v));
 }
 
-const experiments: Record<string, () => Promise<void>> = { knowledge, skills, selection, jobs, scopes };
+// The record Clawtrate would keep on a moved job: its last line of `description`.
+const MARK = "[clawtrate:brought-in";
+function withMark(original: unknown, fields: Rec): string {
+  const line = `${MARK} ${JSON.stringify(fields)}]`;
+  const text = typeof original === "string" ? original : "";
+  return text ? `${text}\n\n${line}` : line;
+}
+
+async function record(): Promise<void> {
+  const admin = await connect("admin", ADMIN);
+  const reader = await connect("read", READ);
+  const base = { schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "Europe/Lisbon" }, wakeMode: "now", sessionTarget: "isolated" };
+  const bots = list((await call(reader, "agents.list", {})).value.agents);
+  const created = bots.find((b) => b.id === SOURCE)?.createdAt ?? null;
+  console.log(`  agents.list ${SOURCE} createdAt: ${created === null ? "absent" : "present"}`);
+  const cases: Array<[string, Rec]> = [
+    ["no description", { name: "Rec plain", agentId: SOURCE, payload: { kind: "agentTurn", message: "Check." }, delivery: { mode: "none" }, ...base }],
+    ["a description", { name: "Rec described", agentId: SOURCE, description: "Checks the backups each weekday.", payload: { kind: "agentTurn", message: "Check." }, delivery: { mode: "none" }, ...base }],
+    ["announce to last", { name: "Rec announce", agentId: SOURCE, payload: { kind: "agentTurn", message: "Summarise." }, delivery: { mode: "announce", channel: "last" }, ...base }],
+  ];
+  for (const [label, params] of cases) {
+    console.log(`\nJob with ${label}`);
+    const added = await call(admin, "cron.add", params);
+    if (!added.ok) { show("cron.add", added); continue; }
+    const id = String(added.value.id);
+    const original = (await call(reader, "cron.get", { id })).value;
+    const changeDelivery = rec(original.delivery).mode === "announce";
+    const fields = { from: SOURCE, fromCreatedAt: created, at: "2026-11-24T10:00:00Z", ...(changeDelivery ? { delivery: original.delivery } : {}) };
+    const patch: Rec = { agentId: TARGET, description: withMark(original.description, fields), ...(changeDelivery ? { delivery: { mode: "none" } } : {}) };
+    const moved = await call(admin, "cron.update", { id, patch, expectedConfigRevision: original.configRevision });
+    show("move with the record in description", moved, (v) => ({ agentId: v.agentId, description: v.description, revision: String(v.configRevision).slice(0, 14) }));
+    const seen = (await call(reader, "cron.list", { includeDisabled: true, limit: 200 })).value;
+    const row = list(seen.jobs).find((j) => j.id === id) ?? {};
+    console.log(`  read device, cron.list description: ${JSON.stringify(row.description ?? null)}`);
+    const text = String(rec(moved.value).description ?? "");
+    const markAt = text.lastIndexOf(MARK);
+    const kept = JSON.parse(text.slice(markAt + MARK.length + 1, -1)) as Rec;
+    const before = text.slice(0, markAt).replace(/\n\n$/, "");
+    const back = await call(admin, "cron.update", { id, patch: { agentId: kept.from, description: before, ...(kept.delivery ? { delivery: kept.delivery } : {}) }, expectedConfigRevision: moved.value.configRevision });
+    show("put back from the record", back, (v) => ({ agentId: v.agentId ?? null, description: v.description ?? null, delivery: v.delivery ?? null }));
+    console.log(`  revision equals the original: ${back.value.configRevision === original.configRevision}`);
+  }
+
+  console.log("\nA move while a run is going");
+  const slow = await call(admin, "cron.add", { name: "Rec slow", agentId: SOURCE, payload: { kind: "agentTurn", message: "Take your time. #slow 8" }, delivery: { mode: "none" }, ...base });
+  if (slow.ok) {
+    const id = String(slow.value.id);
+    show("cron.run without waiting", await call(admin, "cron.run", { id, mode: "force", waitTimeoutMs: 1 }), (v) => ({ ran: v.ran, enqueued: v.enqueued }));
+    await new Promise((r) => setTimeout(r, 1500));
+    const during = (await call(reader, "cron.get", { id })).value;
+    console.log(`  state.runningAtMs set: ${rec(during.state).runningAtMs !== undefined}`);
+    show("cron.update agentId during the run", await call(admin, "cron.update", { id, patch: { agentId: TARGET }, expectedConfigRevision: during.configRevision }), (v) => ({ agentId: v.agentId }));
+    show("cron.get after", await call(reader, "cron.get", { id }), (v) => ({ agentId: v.agentId }));
+  }
+}
+
+const experiments: Record<string, () => Promise<void>> = { knowledge, skills, selection, jobs, scopes, record };
 const run = experiments[experiment ?? ""];
 if (!run) throw new Error(`experiment must be one of ${Object.keys(experiments).join(", ")}`);
 try {
