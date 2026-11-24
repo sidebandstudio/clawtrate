@@ -6450,7 +6450,15 @@ export class ClawtrateClient {
     this.request("sessions.describe", { key }).then(
       (answer) => {
         if (generation !== this.generation || !this.tracked(key)) return;
-        if (sessions().some((session, index) => session !== before[index])) return;
+        if (
+          sessions().some(
+            (session, index) =>
+              session != null &&
+              session !== before[index] &&
+              (before[index] != null || !before.includes(session)),
+          )
+        )
+          return;
         const holds = sessionNamed(asRecord(asRecord(answer)?.session));
         this.refuseWaiting(
           key,

@@ -153,7 +153,14 @@ describe("F-278 F-277: a task deleted or archived elsewhere while a message writ
     ({ gone: { outbox: messages } }) as unknown as ClawtrateState["transcripts"];
 
   it("stays on screen while the message is on its way, queued or held, and once it was refused, for whatever reason", () => {
-    for (const status of ["sending", "awaiting-access", "checking", "queued", "held"] as const) {
+    for (const status of [
+      "sending",
+      "awaiting-access",
+      "checking",
+      "queued",
+      "held",
+      "not-sent",
+    ] as const) {
       expect(keptOnScreen(gone, "otto", [other], holding({ status }))).toBe(gone);
     }
     const refused = holding({ status: "failed", error: TASK_DELETED_ELSEWHERE });

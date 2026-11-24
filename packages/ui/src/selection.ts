@@ -152,6 +152,7 @@ export function keptOnScreen(
       message.status === "awaiting-access" ||
       message.status === "checking" ||
       message.status === "queued" ||
+      message.status === "not-sent" ||
       message.status === "held" ||
       message.status === "failed",
   );
