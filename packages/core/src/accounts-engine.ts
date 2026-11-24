@@ -256,16 +256,24 @@ export class AccountsEngine {
       if (resets !== this.resets) return;
       this.readPrefs(prefs);
       const at = ctx.now();
+      // Read before the gateway named itself on this connection, and named since: the read is its.
+      const now = ctx.readStamp();
+      const read =
+        readOn.gatewayId === null &&
+        now.target === readOn.target &&
+        now.connectedAt === readOn.connectedAt
+          ? { ...readOn, gatewayId: now.gatewayId }
+          : readOn;
       ctx.update((a) => {
         // The catalog is kept only for the same gateway, named on both reads: one read on
         // another (an answer at the same address after a reconnect) is never shown beside this
         // read's stamp. The picker below reads this one's.
         const same =
-          readOn.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === readOn.gatewayId;
+          read.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === read.gatewayId;
         return {
           ...this.compose(a, config, views, same ? a.models : [], at),
           ...(same ? {} : { modelsCut: initialAccountsState.modelsCut }),
-          readOn,
+          readOn: read,
         };
       });
       // The default bot's picker, the Model menu's rows (section 9), asked once the accounts are

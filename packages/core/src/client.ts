@@ -4163,6 +4163,15 @@ export class ClawtrateClient {
       }
       return next;
     });
+    // The run is named now: a deferred Stop's check, kept under the message id, moves to the run's
+    // own id, which the run keeps once history holds its message and drops the message id.
+    if (runId && runId !== messageId) {
+      const check = this.deferredStops.get(`${key}\u0000${messageId}`);
+      if (check) {
+        this.deferredStops.delete(`${key}\u0000${messageId}`);
+        this.deferredStops.set(`${key}\u0000${runId}`, check);
+      }
+    }
     // Stop was pressed before the gateway had taken the send: abort the run it named now.
     if (runId && !command && message.mode !== "steer") {
       const run = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
@@ -4276,6 +4285,13 @@ export class ClawtrateClient {
     } catch (error) {
       this.noteMissingScope(error);
       this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+      // Given up (withdrawn, or no write access): its check goes with it, wherever it was moved,
+      // so no later Stop of the run takes this action's connection.
+      if (deferred) {
+        for (const [held, check] of this.deferredStops)
+          if (check === options.bound && held.startsWith(`${key}\u0000`))
+            this.deferredStops.delete(held);
+      }
     }
   }
 
@@ -9811,6 +9827,9 @@ export class ClawtrateClient {
       this.rows = newestRows([...this.rows.values(), created.row]);
       this.publishTasks();
     }
+    // Made while the rows shown were read on an earlier connection: the list is read again, so
+    // the task joins rows of this connection's own read.
+    if (!this.rowsReadHere()) this.scheduleRefresh(this.generation);
     return created.key;
   }
 
