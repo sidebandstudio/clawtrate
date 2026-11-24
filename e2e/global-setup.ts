@@ -147,7 +147,7 @@ export function startHost(
   instance: string,
   staticDir: string,
   dataDir: string,
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; env?: Record<string, string> } = {},
 ) {
   const gated: Gated = gatedSpawn(
     spawn,
@@ -169,7 +169,7 @@ export function startHost(
       ...(options.readOnly ? ["--read-only"] : []),
     ],
     // The instance is named by the flag alone, never inherited from the environment.
-    { cwd: ROOT, env: cliEnv(), stdio: ["ignore", "pipe", "inherit"] },
+    { cwd: ROOT, env: { ...cliEnv(), ...options.env }, stdio: ["ignore", "pipe", "inherit"] },
   );
   const host = gated.child;
   const url = new Promise<string>((resolve, reject) => {
