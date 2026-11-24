@@ -8,6 +8,7 @@
 
 import {
   botIdFromSessionKey,
+  gatewayStamp,
   mainTaskKey,
   type Bot,
   type CheckInsState,
@@ -920,7 +921,12 @@ export function RoutinesView({
   // Every way into a write passes here: below admin nothing opens.
   const admin = canAdmin(state.connection, info);
   const granted = useGranted(state.connection);
-  const actions = useRoutineActions(announce, store.routines, store.listedOn);
+  const actions = useRoutineActions(
+    announce,
+    store.routines,
+    store.listedOn,
+    gatewayStamp(state.connection),
+  );
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [deleting, setDeleting] = useState<Routine | null>(null);
   const [menu, setMenu] = useState<{ routine: Routine; x: number; y: number } | null>(null);
@@ -1256,6 +1262,7 @@ export function RoutinesView({
         <DeleteRoutine
           routine={deleting}
           listedOn={store.listedOn}
+          stamp={gatewayStamp(state.connection)}
           onCancel={() => setDeleting(null)}
           onDeleted={() => {
             announce(`Deleted ${deleting.name}`);

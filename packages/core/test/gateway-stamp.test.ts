@@ -591,7 +591,107 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
-  it("Machines, tasks and a bot's settings: a command from a renderer keeps its stamp, and one without a stamp is refused", () => {
+  /** Both gateways have the routine "job-1", as a restored copy would. */
+  const JOB = {
+    id: "job-1",
+    agentId: "otto",
+    name: "Water the plants",
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    schedule: { kind: "every", everyMs: 3_600_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "Water them" },
+    delivery: { mode: "none" },
+    state: {},
+  };
+  const routines = (fake: AccountsGateway) => {
+    fake.gateway.handlers["cron.status"] = () => ({ enabled: true });
+    fake.gateway.handlers["cron.list"] = () => ({ jobs: [JOB], hasMore: false });
+    fake.gateway.handlers["cron.update"] = (params) => ({
+      ...JOB,
+      ...(params as { patch: object }).patch,
+    });
+    fake.gateway.handlers["cron.run"] = () => ({ ok: true, enqueued: true, runId: "run-1" });
+    fake.gateway.handlers["cron.remove"] = () => ({ removed: true });
+  };
+  const ROUTINE_WRITES = ["cron.update", "cron.run", "cron.remove"];
+  /** A row's three actions, from the list `listedOn` read where `stamp` says. */
+  const rowActions = (listedOn: number, stamp: GatewayStamp) =>
+    [
+      { type: "setRoutineEnabled", id: "job-1", enabled: false, listedOn, stamp },
+      { type: "runRoutineNow", id: "job-1", listedOn, stamp },
+      { type: "removeRoutine", id: "job-1", listedOn, stamp },
+    ] as const;
+  const listed = async (client: ClawtrateClient) => {
+    const viewer = createBridgeSession(client);
+    const was = client.state.routines.revision;
+    await viewer.apply({ type: "refreshRoutines" });
+    await until(
+      () => client.state.routines.status === "loaded" && client.state.routines.revision !== was,
+    );
+    return viewer;
+  };
+
+  it("Routines: a row's switch, Run now and Delete read on one gateway reach neither after a switch to another with the same id", async () => {
+    const { client, a, b, switchToB } = await twoGateways();
+    routines(a);
+    routines(b);
+    await listed(client);
+    const listedOn = client.state.routines.listedOn;
+    const stamp = gatewayStamp(client.state.connection);
+    await switchToB();
+    const viewer = await listed(client);
+    for (const command of rowActions(listedOn, stamp))
+      expect(await viewer.apply(command)).toEqual({ status: "not-sent", reason: "changed" });
+    expect(sentOf(a, ROUTINE_WRITES)).toEqual([]);
+    expect(sentOf(b, ROUTINE_WRITES)).toEqual([]);
+    client.stop();
+  });
+
+  it("Routines: a page kept across a restarted host is refused, though the new host's list has the same number", async () => {
+    const { client: first, a, b, host } = await twoGateways();
+    routines(a);
+    routines(b);
+    await listed(first);
+    const stamp = gatewayStamp(first.state.connection);
+    first.stop();
+    const second = new ClawtrateClient(host, FAST);
+    await second.start();
+    await until(() => ready(second, URL_A));
+    await second.connect({ url: URL_B });
+    await until(() => ready(second, URL_B));
+    const viewer = await listed(second);
+    // The second host's list counter started again: the page's list can have the number of the
+    // list read now, and the counter alone can't tell the two apart.
+    for (const command of rowActions(second.state.routines.listedOn, stamp))
+      expect(await viewer.apply(command)).toEqual({ status: "not-sent", reason: "changed" });
+    expect(sentOf(a, ROUTINE_WRITES)).toEqual([]);
+    expect(sentOf(b, ROUTINE_WRITES)).toEqual([]);
+    second.stop();
+  });
+
+  it("Routines: a row's actions go with no switch, and after a dropped connection's reconnect", async () => {
+    const { client, a } = await twoGateways();
+    routines(a);
+    let viewer = await listed(client);
+    const stamp = gatewayStamp(client.state.connection);
+    const [pause, run] = rowActions(client.state.routines.listedOn, stamp);
+    expect(await viewer.apply(pause)).toMatchObject({ status: "saved" });
+    expect(await viewer.apply(run)).toMatchObject({ status: "started" });
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => ready(client, URL_A) && client.state.connection.connectedAt !== was);
+    viewer = await listed(client);
+    // The rows of the list read since, with the stamp kept across the reconnect.
+    const [, , remove] = rowActions(client.state.routines.listedOn, stamp);
+    expect(await viewer.apply(remove)).toEqual({ status: "removed" });
+    expect(a.gateway.calls("cron.remove")).toEqual([{ id: "job-1" }]);
+    client.stop();
+  });
+
+  it("Machines, tasks, a bot's settings and routines: a command from a renderer keeps its stamp, and one without a stamp is refused", () => {
     const stamp = { gatewayId: "gateway-a", target: 4 };
     for (const command of [
       { type: "removeMachine", nodeId: "node-1", stamp },
@@ -601,6 +701,7 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
       { ...ACCOUNT, stamp },
       { ...MODEL, stamp },
       { ...FALLBACKS, stamp },
+      ...rowActions(3, stamp),
     ] as const) {
       expect(parseBridgeCommand(command)).toEqual(command);
       const { stamp: _stamp, ...bare } = command;

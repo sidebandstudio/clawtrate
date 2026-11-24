@@ -102,10 +102,21 @@ async function bridgeCommand(command: Record<string, unknown>): Promise<unknown>
       new Promise<unknown>((resolve, reject) => {
         const socket = new WebSocket(`ws://${location.host}/bridge`);
         socket.onmessage = (event) => {
-          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
-          if (message.type === "hello")
-            socket.send(JSON.stringify({ type: "command", id: "do", command }));
-          else if (message.id === "do") {
+          const message = JSON.parse(String(event.data)) as {
+            type: string;
+            id?: string;
+            state?: { connection: { gatewayId: string | null; target: number } };
+          };
+          if (message.type === "hello") {
+            // A command that names where it was read takes the stamp of the state the host sent.
+            const connection = message.state?.connection;
+            const stamp = connection && {
+              gatewayId: connection.gatewayId,
+              target: connection.target,
+            };
+            const sent = command.stamp === "now" ? { ...command, stamp } : command;
+            socket.send(JSON.stringify({ type: "command", id: "do", command: sent }));
+          } else if (message.id === "do") {
             socket.close();
             resolve(message);
           }
@@ -253,7 +264,12 @@ test("on the read tier nothing that writes is offered, and a write sent anyway i
   await openPage(job.name);
   await expect(view().getByTestId("routine-actions")).toHaveCount(0);
   // The bridge's own commands are refused below admin as well: nothing reaches the gateway.
-  const answer = (await bridgeCommand({ type: "removeRoutine", id: job.id, listedOn: 0 })) as {
+  const answer = (await bridgeCommand({
+    type: "removeRoutine",
+    id: job.id,
+    listedOn: 0,
+    stamp: "now",
+  })) as {
     value?: unknown;
   };
   expect(JSON.stringify(answer)).toContain('"not-sent"');

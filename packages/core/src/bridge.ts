@@ -290,10 +290,19 @@ export type BridgeCommand =
       expected: RoutineRevision;
       stamp: GatewayStamp;
     }
-  /** `listedOn` is the routines list the row came from (`RoutinesState.listedOn`). */
-  | { type: "setRoutineEnabled"; id: string; enabled: boolean; listedOn: number }
-  | { type: "runRoutineNow"; id: string; listedOn: number }
-  | { type: "removeRoutine"; id: string; listedOn: number }
+  /**
+   * `listedOn` is the routines list the row came from (`RoutinesState.listedOn`), and `stamp`
+   * where it was read: a list number starts again with the host, the stamp's target does not.
+   */
+  | {
+      type: "setRoutineEnabled";
+      id: string;
+      enabled: boolean;
+      listedOn: number;
+      stamp: GatewayStamp;
+    }
+  | { type: "runRoutineNow"; id: string; listedOn: number; stamp: GatewayStamp }
+  | { type: "removeRoutine"; id: string; listedOn: number; stamp: GatewayStamp }
   | { type: "readGatewayHooks" }
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
   /** Read the accounts, sign-ins, bindings and catalogue again. */
@@ -1180,6 +1189,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         id: id(command.id, "routine id"),
         enabled: flag(command.enabled),
         listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "runRoutineNow":
     case "removeRoutine":
@@ -1187,6 +1197,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: command.type,
         id: id(command.id, "routine id"),
         listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "readRoutine":
       return {
@@ -2021,11 +2032,17 @@ class ViewerSession implements BridgeSession {
           command.stamp,
         );
       case "setRoutineEnabled":
-        return client.setRoutineEnabled(command.id, command.enabled, owner, command.listedOn);
+        return client.setRoutineEnabled(
+          command.id,
+          command.enabled,
+          owner,
+          command.listedOn,
+          command.stamp,
+        );
       case "runRoutineNow":
-        return client.runRoutineNow(command.id, owner, command.listedOn);
+        return client.runRoutineNow(command.id, owner, command.listedOn, command.stamp);
       case "removeRoutine":
-        return client.removeRoutine(command.id, owner, command.listedOn);
+        return client.removeRoutine(command.id, owner, command.listedOn, command.stamp);
       case "readGatewayHooks":
         return client.readGatewayHooks();
       case "refreshAccounts":

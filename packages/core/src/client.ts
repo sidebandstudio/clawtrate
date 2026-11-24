@@ -5926,24 +5926,27 @@ export class ClawtrateClient {
     enabled: boolean,
     owner: object | null = null,
     listedOn?: number,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
-    return this.routines.setEnabled(id, enabled, owner, listedOn);
+    return this.routines.setEnabled(id, enabled, owner, listedOn, stamp);
   }
 
   runRoutineNow(
     id: string,
     owner: object | null = null,
     listedOn?: number,
+    stamp?: GatewayStamp,
   ): Promise<RoutineRunNow> {
-    return this.routines.runNow(id, owner, listedOn);
+    return this.routines.runNow(id, owner, listedOn, stamp);
   }
 
   removeRoutine(
     id: string,
     owner: object | null = null,
     listedOn?: number,
+    stamp?: GatewayStamp,
   ): Promise<RoutineRemove> {
-    return this.routines.remove(id, owner, listedOn);
+    return this.routines.remove(id, owner, listedOn, stamp);
   }
 
   /** The gateway's inbound hooks, read with admin; null below it. */
