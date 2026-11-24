@@ -5,7 +5,7 @@
 // keeps it. Two test gateways at two addresses, with made-up bots and files.
 
 import { describe, expect, it } from "vitest";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
 import { pictureWithChoice } from "../src/avatar.ts";
 import { ADMIN_SCOPES, FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
@@ -406,6 +406,15 @@ describe("the offer of full control on a stale screen", () => {
     expect(b.gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
     expect(client.state.connection.fullOffer).toBe("offer");
     client.stop();
+  });
+
+  it("F-549: an accept or a dismissal from a renderer keeps its stamp, and one without a stamp is refused", () => {
+    const stamp = { gatewayId: "gateway-a", target: 4 };
+    for (const type of ["requestFullControl", "dismissFullControl"] as const) {
+      const command = { type, gatewayUrl: WSS_A, deviceId: "device-1", stamp };
+      expect(parseBridgeCommand(command)).toEqual(command);
+      expect(() => parseBridgeCommand({ type, gatewayUrl: WSS_A, deviceId: "device-1" })).toThrow();
+    }
   });
 
   it("F-549: the reconnect that brings the offer's grant keeps the target, so its own answer is taken", async () => {
