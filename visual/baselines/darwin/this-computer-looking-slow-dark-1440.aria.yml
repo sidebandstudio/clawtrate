@@ -1,4 +1,3 @@
-- status
 - main:
   - button "Back"
   - heading "Looking on this computer" [level=2]

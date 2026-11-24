@@ -14,6 +14,7 @@ import {
   type SVGProps,
 } from "react";
 import { copyText, selectContents } from "../clipboard.ts";
+import { useShowCommands } from "../preferences.ts";
 import type { Row } from "./model.ts";
 import type { RawContent } from "./raw.ts";
 
@@ -430,7 +431,11 @@ export function useRawDisclosure(load?: () => void, initiallyOpen = false): RawD
   return { open, id, toggle, onPanelKey };
 }
 
-/** A card's last row: its actions, then Raw at the right, then the Raw panel. */
+/**
+ * A card's last row: its actions, then Raw at the right, then the Raw panel.
+ * Raw only with "Show commands" on (conversation.md, 7.11); the card's own
+ * words, such as the command an approval asks about, stay either way.
+ */
 export function CardFoot({
   children,
   disclosure,
@@ -440,6 +445,8 @@ export function CardFoot({
   disclosure: RawDisclosure;
   raw: RawContent;
 }) {
+  const [commandsShown] = useShowCommands();
+  if (!commandsShown) return children ? <div className="card-actions">{children}</div> : null;
   return (
     <>
       <div className="card-actions">

@@ -1,0 +1,175 @@
+name: Real update
+
+# The real update check (docs/development/releases.md, "Check that the previous release updates
+# in place"). A published Developer ID release, opened through Launch Services on GitHub-hosted
+# Macs that are discarded afterwards, downloads the Beta feed's offer, inspects it and restarts
+# into it in place. It writes to the login keychain and replaces an app in /Applications, so it
+# runs only here, never on a person's Mac. By hand or from the release job:
+#
+#   gh workflow run real-update.yml [-f previous=<version>] [-f candidate=<version>]
+#
+# Empty inputs take the two newest published releases. The `real-update-summary` artifact holds
+# the answer as JSON: `verdict` is passed, failed or inconclusive (the feed offered a newer release
+# than the candidate, such as a release published while the run went). The run fails only when an
+# image failed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      previous:
+        description: The published release installed first (empty takes the second newest)
+        type: string
+        default: ""
+      candidate:
+        description: The version the Beta feed must offer it (empty takes the newest release)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+run-name: Real update ${{ inputs.previous || 'previous' }} to ${{ inputs.candidate || 'latest' }}
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      previous: ${{ steps.pick.outputs.previous }}
+      candidate: ${{ steps.pick.outputs.candidate }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ inputs.previous }}
+          CANDIDATE: ${{ inputs.candidate }}
+        run: |
+          newest=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 2 --json tagName --jq '.[].tagName' | sed 's/^v//')
+          candidate=${CANDIDATE:-$(printf '%s\n' "$newest" | sed -n 1p)}
+          previous=${PREVIOUS:-$(printf '%s\n' "$newest" | sed -n 2p)}
+          for version in "$previous" "$candidate"; do
+            case "$version" in *[!0-9A-Za-z.-]* | '') echo "not a version: '$version'"; exit 1 ;; esac
+          done
+          echo "previous $previous, candidate $candidate"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+
+  update:
+    needs: versions
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS 15, the newest generally available image, and the newest preview image.
+        runner: [macos-15, macos-26, xcode-27]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      PREVIOUS: ${{ needs.versions.outputs.previous }}
+      EXPECT: ${{ needs.versions.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - run: sw_vers && uname -m && echo "OUT=$RUNNER_TEMP/real-update" >> "$GITHUB_ENV"
+      - name: Make a disposable keychain the default
+        run: |
+          path="$RUNNER_TEMP/clawtrate-check-$(openssl rand -hex 8).keychain-db"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$path"
+          security set-keychain-settings -lut 3600 "$path"
+          security unlock-keychain -p "$password" "$path"
+          # shellcheck disable=SC2046 # one keychain path per line, none with spaces
+          security list-keychains -d user -s "$path" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -d user -s "$path"
+      - name: Install the previous release where install.sh puts it
+        run: |
+          case "$(uname -m)" in arm64) file=arm64 ;; *) file=x64 ;; esac
+          dir="$RUNNER_TEMP/previous"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/Clawtrate.zip" \
+            "https://github.com/sidebandstudio/clawtrate/releases/download/v$PREVIOUS/Clawtrate-$PREVIOUS-mac-$file.zip"
+          ditto -x -k "$dir/Clawtrate.zip" "$dir/unpacked"
+          test ! -e /Applications/Clawtrate.app
+          ditto "$dir/unpacked/Clawtrate.app" /Applications/Clawtrate.app
+          codesign --verify --deep --strict --verbose=2 /Applications/Clawtrate.app
+          spctl --assess --type execute --verbose=2 /Applications/Clawtrate.app
+          mkdir -p "$OUT"
+          # The helper from a shell, as #383 ran it: expected running-signature-untrusted.
+          env -i PATH=/usr/bin:/bin /Applications/Clawtrate.app/Contents/Helpers/ClawtrateUpdateInspection \
+            --running-signature dev.clawtrate.desktop | tee "$OUT/helper-from-shell.txt"
+      - name: Build the running-signature probe
+        run: |
+          xcrun clang -fobjc-arc -Wall -Werror -O2 -framework Foundation -framework Security \
+            e2e-packaged/real-update/running-signature-probe.m -o "$RUNNER_TEMP/running-signature-probe"
+      - name: Record exec and exit events, where the runner allows it
+        run: |
+          sudo -n sh -c 'eslogger exec exit > "$1/eslogger.jsonl" 2> "$1/eslogger.err" & echo $! > "$1/eslogger.pid"' \
+            sh "$RUNNER_TEMP" || echo "eslogger did not start"
+          # Process accounting as well: it marks a process that a signal ended or that dumped core.
+          sudo -n touch /var/account/acct && sudo -n accton /var/account/acct || echo "accounting did not start"
+          sleep 2
+          cat "$RUNNER_TEMP/eslogger.err" || true
+      - name: Run the real update check
+        run: |
+          node e2e-packaged/real-update/check.ts --app /Applications/Clawtrate.app --out "$OUT" \
+            --probe "$RUNNER_TEMP/running-signature-probe" --expect "$EXPECT"
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          mkdir -p "$OUT"
+          sw_vers > "$OUT/sw_vers.txt"
+          if [ -f "$RUNNER_TEMP/eslogger.pid" ]; then
+            sudo -n kill "$(cat "$RUNNER_TEMP/eslogger.pid")" || true
+            cp "$RUNNER_TEMP/eslogger.err" "$OUT/" || true
+            grep -E 'ClawtrateUpdateInspection|ShipIt' "$RUNNER_TEMP/eslogger.jsonl" > "$OUT/eslogger-update.jsonl" || true
+          fi
+          sudo -n accton || true
+          lastcomm 2>/dev/null | grep -E '^(ClawtrateUpdat|Clawtrate|ShipIt)' > "$OUT/lastcomm.txt" || true
+          log show --last 30m --info --debug --style compact --predicate \
+            'process BEGINSWITH "Clawtrate" OR process == "ShipIt" OR process == "amfid" OR process == "syspolicyd" OR (process == "kernel" AND eventMessage CONTAINS[c] "clawtrate") OR eventMessage CONTAINS "ClawtrateUpdateInspection"' \
+            > "$OUT/unified-log.txt" 2>&1 || true
+          for dir in "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
+            find "$dir" -iname '*Clawtrate*' -exec cp {} "$OUT/" \; 2>/dev/null || true
+          done
+          cat "$OUT/result.json" || true
+          cat "$OUT/running-signature.txt" || true
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-update-${{ matrix.runner }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/real-update/
+          retention-days: 7
+
+  # One machine-readable answer for the release job: each image's verdict, and the run's. The
+  # job fails only when an image failed; an inconclusive run (the feed offered a newer release
+  # than the candidate) passes it, and the summary's `verdict` says so.
+  summary:
+    needs: [versions, update]
+    if: always() && needs.versions.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: real-update-*
+          path: results
+      - name: Summarize
+        env:
+          PREVIOUS: ${{ needs.versions.outputs.previous }}
+          CANDIDATE: ${{ needs.versions.outputs.candidate }}
+        run: node e2e-packaged/real-update/summary.ts results macos-15 macos-26 xcode-27
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-update-summary
+          path: real-update-summary.json
+          if-no-files-found: error
+          retention-days: 30

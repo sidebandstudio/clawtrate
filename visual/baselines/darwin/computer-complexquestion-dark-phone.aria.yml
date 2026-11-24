@@ -1,4 +1,3 @@
-- status
 - region "Conversation":
   - button "Back to bots"
   - button "Juniper, Library e-book apps compared. Show details.": Juniper
@@ -22,9 +21,6 @@
       - text: ", then choose"
       - code: Add a library
       - text: if it asks twice.
-    - group:
-      - text: Used the browser · 2 actions
-      - time: 2.4s
     - 'region "Juniper asks: Sign in to your library account, then hand the browser back."':
       - heading "Sign in to your library account, then hand the browser back." [level=3]
       - button "Dismiss Juniper's question"
@@ -38,8 +34,7 @@
       - textbox "Type your own answer"
       - button "Send answer" [disabled]
       - text: Nothing chosen yet
-      - button "Raw"
-    - button "Juniper, waiting for you. Nothing running to show.": Waiting for you
+    - group "Juniper, waiting for you.": Waiting for you
     - status
   - text: Juniper asked you a question
   - button "Review"

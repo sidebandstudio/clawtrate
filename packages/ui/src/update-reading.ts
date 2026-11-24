@@ -58,7 +58,21 @@ export class UpdateReading {
     for (const listener of this.listeners) listener();
   }
   private accept = (next: DesktopUpdateSnapshot) => {
-    if (next.revision <= (this.value.snapshot?.revision ?? -1)) return;
+    const current = this.value.snapshot;
+    // Newer by `revision`, or, at the same revision, by `listsRevision`: only what
+    // the builds add changed (F-554).
+    if (
+      current &&
+      (next.revision < current.revision ||
+        (next.revision === current.revision &&
+          (next.listsRevision ?? 0) <= (current.listsRevision ?? 0)))
+    )
+      return;
+    if (current && next.revision === current.revision) {
+      // Only what the builds add changed (F-554): the screen's own feedback stays.
+      this.set({ snapshot: next });
+      return;
+    }
     if (
       this.choice &&
       (next.pendingTrack === this.choice.track ||

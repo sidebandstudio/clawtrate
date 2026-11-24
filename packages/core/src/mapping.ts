@@ -11,6 +11,8 @@ import type {
   ToolResult,
   TranscriptBlock,
   TranscriptItem,
+  ChatPicture,
+  SentAttachment,
 } from "./types.ts";
 
 export type RawRecord = Record<string, unknown>;
@@ -272,6 +274,64 @@ function prettyArguments(value: unknown): string {
   return JSON.stringify(value === undefined ? null : value, null, 2);
 }
 
+/**
+ * The pictures a bot's message hands over: its `image` blocks that the gateway
+ * holds as artifacts. The address a block names is never kept, so never used.
+ */
+function assistantPictures(content: unknown): ChatPicture[] {
+  const size = (value: unknown) => {
+    const n = num(value);
+    return n !== null && Number.isInteger(n) && n > 0 ? n : null;
+  };
+  return arr(content).flatMap((part) => {
+    const block = asRecord(part);
+    const artifactId = block?.type === "image" ? str(block.artifactId) : null;
+    if (!block || !artifactId) return [];
+    return [
+      {
+        artifactId,
+        alt: str(block.alt),
+        prompt: null,
+        mimeType: str(block.mimeType),
+        width: size(block.width),
+        height: size(block.height),
+        sizeBytes: size(block.sizeBytes),
+      },
+    ];
+  });
+}
+
+/** Most files one message may carry (`chat.send`'s own limit, as `attachments.ts` keeps it). */
+const MAX_SENT_ATTACHMENTS = 20;
+const MAX_SENT_NAME_CHARS = 255;
+
+/**
+ * The files a person's row carried: the gateway's `__openclaw.media` entries, in
+ * their order, by name, type and size. The `media://inbound` reference an entry
+ * names is the gateway's own and is never kept, so never used.
+ */
+function sentAttachments(info: RawRecord): SentAttachment[] {
+  return arr(info.media)
+    .slice(0, MAX_SENT_ATTACHMENTS)
+    .flatMap((entry) => {
+      const fact = asRecord(entry);
+      if (!fact) return [];
+      // An entry with no name is still a file the message carried.
+      const name = str(fact.fileName) ?? (fact.kind === "image" ? "Picture" : "File");
+      const size = num(fact.sizeBytes);
+      const type = str(fact.contentType);
+      return [
+        {
+          fileName:
+            name.length > MAX_SENT_NAME_CHARS ? `${name.slice(0, MAX_SENT_NAME_CHARS - 1)}…` : name,
+          mimeType:
+            type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null,
+          sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
+        },
+      ];
+    });
+}
+
 function assistantBlocks(content: unknown): TranscriptBlock[] {
   if (typeof content === "string") return content.trim() ? [{ kind: "text", text: content }] : [];
   const blocks: TranscriptBlock[] = [];
@@ -300,6 +360,31 @@ function assistantBlocks(content: unknown): TranscriptBlock[] {
     }
   }
   return blocks;
+}
+
+/**
+ * The description an earlier `image_generate` call asked for, when `runId` is the
+ * turn the gateway runs by itself to deliver that call's background task
+ * (`image_generate:<taskId>:ok:…`): the call whose result named the task.
+ */
+function imagePrompt(runId: string | null, items: TranscriptItem[]): string | null {
+  const task = runId ? /^image_generate:(tool:image_generate:[^:\s]+):ok:/.exec(runId)?.[1] : null;
+  if (!task) return null;
+  for (const item of [...items].reverse())
+    for (const block of item.blocks)
+      if (
+        block.kind === "tool-call" &&
+        block.name === "image_generate" &&
+        block.result?.text.includes(`(${task})`)
+      ) {
+        try {
+          const prompt = asRecord(JSON.parse(block.argumentsText))?.prompt;
+          return typeof prompt === "string" && prompt.trim() ? prompt.trim() : null;
+        } catch {
+          return null;
+        }
+      }
+  return null;
 }
 
 function meta(message: RawRecord): RawRecord {
@@ -382,7 +467,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           });
           return;
         }
-        if (!text.trim()) return;
+        const attachments = sentAttachments(info);
+        // A message that is only files still shows: its files are what it said.
+        if (!text.trim() && attachments.length === 0) return;
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
@@ -390,8 +477,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           id,
           role: "user",
           timestamp,
-          blocks: [{ kind: "text", text }],
+          blocks: text.trim() ? [{ kind: "text", text }] : [],
           model: null,
+          ...(attachments.length > 0 ? { attachments } : {}),
           ...(cutByGateway ? { truncated: true } : {}),
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
@@ -407,6 +495,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           if (block.kind === "tool-call" && block.callId) pendingCalls.set(block.callId, block);
         }
         const runId = str(info.runId);
+        const pictures = assistantPictures(message.content);
+        const prompt = pictures.length > 0 ? imagePrompt(runId, items) : null;
+        for (const picture of pictures) picture.prompt = prompt;
         if (runId !== null && runId === precedingRun) {
           for (const user of pendingUsers) user.steered = true;
         }
@@ -418,14 +509,24 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           previous.blocks.push(...blocks);
           item = previous;
         } else {
+          // An empty row starts no turn: a later row of its run gets one of its own, never the last.
+          if (blocks.length === 0 && pictures.length === 0) return;
           currentRun = runId;
-          if (blocks.length === 0) return;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           items.push(item);
         }
-        if (cutByGateway) item.truncated = true;
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
         const rowId = str(info.id);
+        // The same picture twice in one turn is drawn once, where it first came.
+        const held = new Set((item.pictures ?? []).map((picture) => picture.artifactId));
+        const added = pictures.filter((picture) => {
+          if (held.has(picture.artifactId)) return false;
+          held.add(picture.artifactId);
+          if (rowId) picture.messageId = rowId;
+          return true;
+        });
+        if (added.length > 0) item.pictures = [...(item.pictures ?? []), ...added];
+        if (cutByGateway) item.truncated = true;
         if (rowId) {
           for (const block of blocks)
             if (block.kind === "text" && block.text.trim()) {

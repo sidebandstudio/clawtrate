@@ -20,6 +20,9 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
+  "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
+  "apps/desktop/src/main/mac-install.ts:RESULTS": "static, the helper's eight result lines",
+  "apps/desktop/src/main/mac-install.ts:HELPER_STEPS": "static, the helper's eleven step names",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
   "packages/core/src/computer.ts:BUSY_REASONS": "static, the plugin's five busy codes",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
@@ -34,6 +37,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/file-paths.ts:filePathsOf>paths":
     "one call's paths, at most `MAX_STEP_PATHS`, returned to the caller",
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
+  "packages/core/src/pictures.ts:SIGNATURES.image/png": "static, one byte signature",
+  "packages/core/src/pictures.ts:SIGNATURES.image/jpeg": "static, one byte signature",
+  "packages/core/src/pictures.ts:SIGNATURES.image/gif": "static, two byte signatures",
+  "packages/core/src/pictures.ts:SIGNATURES.image/webp": "static, one byte signature",
   "packages/core/src/files.ts:PICTURE_EXTENSIONS": "static, nine extensions",
   "packages/core/src/files.ts:AUDIO_EXTENSIONS": "static, nine extensions",
   "packages/core/src/files.ts:VIDEO_EXTENSIONS": "static, six extensions",
@@ -46,6 +53,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/client.ts:APPROVAL_CAPS": "static, three caps",
   "packages/core/src/client.ts:APPROVAL_SOURCES": "static, three list readers",
   "packages/core/src/client.ts:NAMED_CONNECT_CODES": "static, the pinned protocol's connect codes",
+  "packages/core/src/client.ts:OFFER_ANSWERS": "static, the five answers to the full-control offer",
   "packages/core/src/runs.ts:TERMINAL_RUN_STATES": "static, the terminal run states",
   "packages/core/src/runs.ts:TIMEOUT_PHASES": "static, five phases",
   "packages/core/src/runs.ts:HARD_TIMEOUT_PHASES": "static, three phases",
@@ -170,6 +178,8 @@ const ALLOWED: Record<string, string> = {
     "renderer; commands awaiting an answer, each answered by the host or rejected when the socket closes",
   "packages/core/src/remote-bridge.ts:createRemoteBridge>wanted":
     "renderer; the tasks the host accepted as open, at most `MAX_VIEWER_OPEN_TASKS`, plus opens in flight",
+  "packages/core/src/remote-bridge.ts:createRemoteBridge>reopenRefusals":
+    "renderer; one per listener for refused reopens, removed by its unsubscribe",
   // Hosts.
   "apps/desktop/src/main/index.ts:main>sessions":
     "one bridge session per open window, removed when it closes",

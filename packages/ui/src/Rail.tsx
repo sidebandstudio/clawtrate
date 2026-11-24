@@ -1883,7 +1883,7 @@ export function Rail({
           <Presence bot={bot} state={summary.state} primary={bot.isDefault} />
           <span className="bot-text">
             <span className="bot-line">
-              <span className="bot-name">{bot.name}</span>
+              <bdi className="bot-name">{bot.name}</bdi>
               {bot.theme && <span className="bot-label">{bot.theme}</span>}
               <time className="bot-time">{time(tasks, summary)}</time>
             </span>

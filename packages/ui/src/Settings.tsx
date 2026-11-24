@@ -10,6 +10,8 @@ import {
   scopeSatisfied,
   type AccountsState,
   type Bot,
+  type BotVoiceAnswer,
+  type GatewayStamp,
   type CheckInsState,
   type ConnectionState,
   type HostInfo,
@@ -18,7 +20,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
-import { useClawtrateState, useCommand } from "./bridge.tsx";
+import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
@@ -28,11 +30,12 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
-import { notGranted } from "./FullControl.tsx";
+import { FullControlAsk, isFullRequest, notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayTitle } from "./format.ts";
+import { useShowCommands, useShowThinking } from "./preferences.ts";
 import { useForget } from "./forget.ts";
-import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
+import { BackIcon, ChevronIcon, CloseIcon, ExternalIcon } from "./icons.tsx";
 
 // The width below which a section replaces the list instead of sitting beside it (bots.css).
 const NARROW = "(max-width: 687px)";
@@ -90,27 +93,81 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
 }
 
 export type SettingsSection =
-  "gateway" | "accounts" | "conversation" | "usage" | "machines" | "checkins" | "updates";
+  | "gateway"
+  | "accounts"
+  | "conversation"
+  | "usage"
+  | "machines"
+  | "checkins"
+  | "updates"
+  | "advanced";
 type Section = SettingsSection;
 /** The sections Settings registers, in its order, each with the line search shows for it. */
 export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["gateway", "Gateway", "The gateway, its address and this device"],
   ["accounts", "Accounts", "Provider accounts the bots run on"],
-  ["conversation", "Conversation", "How long a bot's turn may run"],
+  ["conversation", "Conversation", "How long a bot's turn may run, and how the bots talk"],
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
   ["checkins", "Check-ins", "When each bot checks in on its own"],
   ["updates", "Updates", "Clawtrate's own updates"],
+  ["advanced", "Advanced", "Showing commands, thinking and external channel chats"],
 ];
 
 /**
- * How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100).
- * Whether chats from Discord, Telegram and other channels are listed; off by default (F-519).
+ * A switch kept on this device, off by default, that changes what the
+ * conversation shows (conversation.md, 7.11). It applies at once.
  */
-function ConversationPane({ announce }: { announce: (text: string) => void }) {
+function DeviceSwitch({
+  id,
+  label,
+  note,
+  said,
+  value: [shown, setShown],
+  announce,
+}: {
+  id: string;
+  label: string;
+  note: string;
+  /** What is announced once it is on, and once it is off. */
+  said: [string, string];
+  value: [boolean, (shown: boolean) => void];
+  announce: (text: string) => void;
+}) {
+  return (
+    <div className="b-field device-switch">
+      <span className="device-switch-row">
+        <span id={`${id}-label`}>{label}</span>
+        <button
+          type="button"
+          className="b-switch"
+          role="switch"
+          aria-checked={shown}
+          aria-labelledby={`${id}-label`}
+          aria-describedby={`${id}-note`}
+          data-testid={id}
+          onClick={() => {
+            setShown(!shown);
+            announce(shown ? said[1] : said[0]);
+          }}
+        />
+      </span>
+      <p className="b-hint" id={`${id}-note`}>
+        {note}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * "Show commands" and "Show thinking", both off by default (conversation.md, 7.11), and whether
+ * chats from Discord, Telegram and other channels are listed, off by default (F-519).
+ */
+function AdvancedPane({ announce }: { announce: (text: string) => void }) {
+  const commands = useShowCommands();
+  const thinking = useShowThinking();
   const send = useCommand();
   const state = useClawtrateState();
-  const minutes = state.turnLimitMinutes ?? 50;
   const showChannelChats = state.showChannelChats === true;
   const [channelError, setChannelError] = useState<string | null>(null);
   const toggleChannelChats = () => {
@@ -122,6 +179,67 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
         setChannelError(failure instanceof Error ? failure.message : String(failure)),
     );
   };
+  return (
+    <>
+      <DeviceSwitch
+        id="show-commands"
+        label="Show commands"
+        note="Shows each action as its own card with its command or call, in the conversation and the Computer tab."
+        said={["Commands shown", "Commands hidden"]}
+        value={commands}
+        announce={announce}
+      />
+      <DeviceSwitch
+        id="show-thinking"
+        label="Show thinking"
+        note="Shows a bot's reasoning: Thought lines in the conversation, and its thinking while it works."
+        said={["Thinking shown", "Thinking hidden"]}
+        value={thinking}
+        announce={announce}
+      />
+      <div className="b-field channel-chats-field">
+        <span id="channel-chats-label">Show external channel chats</span>
+        <button
+          type="button"
+          className="b-switch"
+          role="switch"
+          aria-checked={showChannelChats}
+          aria-labelledby="channel-chats-label"
+          aria-describedby="channel-chats-note"
+          data-testid="channel-chats"
+          onClick={toggleChannelChats}
+        />
+      </div>
+      <p className="b-hint" id="channel-chats-note">
+        Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp,
+        Signal or another channel stay out of the task list, its previews and its unread marks. A
+        bot's main conversation always shows. If the gateway sends a channel's direct messages to
+        it, which it does unless its <code>session.dmScope</code> setting gives each channel
+        conversation its own session, those messages still appear there.
+      </p>
+      {channelError && (
+        <div className="form-error" role="alert">
+          {channelError}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100).
+ * How the bots talk (F-527).
+ */
+function ConversationPane({
+  announce,
+  canWrite,
+}: {
+  announce: (text: string) => void;
+  canWrite: boolean;
+}) {
+  const send = useCommand();
+  const state = useClawtrateState();
+  const minutes = state.turnLimitMinutes ?? 50;
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const commit = () => {
@@ -174,32 +292,373 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
           {error}
         </div>
       )}
-      <div className="b-field channel-chats-field">
-        <span id="channel-chats-label">Show external channel chats</span>
-        <button
-          type="button"
-          className="b-switch"
-          role="switch"
-          aria-checked={showChannelChats}
-          aria-labelledby="channel-chats-label"
-          aria-describedby="channel-chats-note"
-          data-testid="channel-chats"
-          onClick={toggleChannelChats}
-        />
+      <BotVoicePane canWrite={canWrite} announce={announce} />
+    </>
+  );
+}
+
+/** The voice plugin's page in Clawtrate's own repository: how to set it up, and what it covers. */
+const VOICE_README =
+  "https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md";
+const VOICE_SETUP = `${VOICE_README}#turning-it-on-for-a-gateway`;
+const VOICE_LIMITS = `${VOICE_README}#where-the-guide-doesnt-reach`;
+
+function VoiceLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a
+      className="button"
+      data-variant="quiet"
+      data-size="sm"
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+    >
+      {children} <ExternalIcon />
+    </a>
+  );
+}
+
+const VoiceSetupLink = () => <VoiceLink href={VOICE_SETUP}>How to set it up</VoiceLink>;
+
+/** One of the two hook settings, what it must be, and whether it blocks the hook now. */
+function HookSetting({
+  name,
+  rule,
+  permits,
+}: {
+  name: string;
+  rule: string;
+  permits: boolean | undefined;
+}) {
+  return (
+    <li data-testid={`bot-voice-${name}`}>
+      <code>{name}</code> {rule}
+      {permits === undefined ? "" : permits ? " It does." : " It doesn't, so it blocks the hook."}
+    </li>
+  );
+}
+
+/**
+ * F-527: the voice plugin's setting, as the gateway reads it back, and whether the gateway
+ * permits its prompt hook. Those are separate facts, and neither says that every run got the
+ * guide: the gateway doesn't build a system prompt for every run (VOICE_LIMITS). The plugin
+ * changes what the bots are asked to do; nothing here rewrites what a bot wrote. The value is
+ * read again after every new hello, after the gateway reports a change (the plugin's event, or
+ * its plugins changing), and after a save that failed. Until then whatever was read last, a
+ * missing plugin and a refusal included, is shown as unconfirmed.
+ */
+function BotVoicePane({
+  canWrite,
+  announce,
+}: {
+  canWrite: boolean;
+  announce: (text: string) => void;
+}) {
+  const bridge = useBridge();
+  const { connection, voiceChanges } = useClawtrateState();
+  const connected = connection.status === "connected";
+  const [stored, setVoice] = useState<BotVoiceAnswer | null>(null);
+  // Only the connected gateway's own answer is shown: after a switch, the last one's is dropped.
+  // Same identity and same host target, or not this connection's at all (`GatewayStamp`).
+  const here = (stamp: GatewayStamp | undefined) =>
+    stamp?.gatewayId === connection.gatewayId && stamp.target === connection.target;
+  const voice = here(stored?.stamp) ? stored : null;
+  // Which read the value shown answers: a new hello, a reported change or a retry asks for another.
+  const [readsDone, setReadsDone] = useState<string | null>(null);
+  // A failed read, with the read it answered: a newer read, a retry or a switch, hides it.
+  const [failedRead, setReadError] = useState<{ message: string; key: string } | null>(null);
+  // A refused or lost save, with where its setting was read: shown only on that same connection.
+  const [failedSave, setSaveError] = useState<{ message: string; stamp: GatewayStamp } | null>(
+    null,
+  );
+  const saveError = failedSave !== null && here(failedSave.stamp) ? failedSave.message : null;
+  // The save on its way, with where its setting was read: it holds back only that same
+  // connection's switch, and only its own answer clears it.
+  const [pending, setPending] = useState<{ stamp: GatewayStamp } | null>(null);
+  const saving = pending !== null && here(pending.stamp);
+  // The latest save asked for, and the connection on screen now, for a save's late answer.
+  const lastSave = useRef<object | null>(null);
+  const shownOn = useRef({ gatewayId: connection.gatewayId, target: connection.target });
+  useEffect(() => {
+    shownOn.current = { gatewayId: connection.gatewayId, target: connection.target };
+  }, [connection.gatewayId, connection.target]);
+  const [reads, setReads] = useState(0);
+  // Each time the link comes back, the browser's to the host or the host's to the gateway, the
+  // read after it is a new one: an answer from before never confirms it.
+  const [link, setLink] = useState({ connected, n: 0 });
+  if (link.connected !== connected) setLink({ connected, n: link.n + (connected ? 1 : 0) });
+  // A new hello, a reported change, a retry, a reconnect or the gateway naming itself: another read.
+  const readKey = [
+    reads,
+    link.n,
+    connection.connectedAt ?? "",
+    voiceChanges ?? 0,
+    connection.gatewayId ?? "",
+    connection.target,
+  ].join(":");
+  const error = failedRead?.key === readKey ? failedRead.message : null;
+  // The key now, for a save's answer that arrives after a newer read was asked for.
+  const keyNow = useRef(readKey);
+  useEffect(() => {
+    keyNow.current = readKey;
+  }, [readKey]);
+  // A save's answer that arrives after the pane closed belongs to no screen: it is dropped.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!connected) return;
+    let live = true;
+    bridge.invoke({ type: "readBotVoice" }).then(
+      (read) => {
+        if (!live) return;
+        setVoice(read);
+        setReadsDone(readKey);
+        setReadError(null);
+      },
+      (failure: unknown) =>
+        live &&
+        setReadError({
+          message: failure instanceof Error ? failure.message : String(failure),
+          key: readKey,
+        }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [bridge, readKey, connected]);
+  // True while the value shown is the gateway's latest answer to this connection.
+  const fresh = readsDone === readKey;
+  const confirmed = connected && fresh;
+  const retry = (
+    <div className="b-actions">
+      <button type="button" className="button" onClick={() => setReads((n) => n + 1)}>
+        Try again
+      </button>
+    </div>
+  );
+
+  if (!voice)
+    return error ? (
+      <div className="b-note" data-tone="danger" role="alert" data-testid="bot-voice">
+        <div>
+          <p>Couldn't read the bots' voice setting. {error}</p>
+          {retry}
+        </div>
       </div>
-      <p className="b-hint" id="channel-chats-note">
-        Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp,
-        Signal or another channel stay out of the task list, its previews and its unread marks. A
-        bot's main conversation always shows. If the gateway sends a channel's direct messages to
-        it, which it does unless its <code>session.dmScope</code> setting gives each channel
-        conversation its own session, those messages still appear there.
+    ) : (
+      <p className="b-hint" data-testid="bot-voice">
+        {connected
+          ? "Reading the bots' voice setting from the gateway…"
+          : "The bots' voice setting is read once Clawtrate is connected."}
       </p>
-      {channelError && (
-        <div className="form-error" role="alert">
-          {channelError}
+    );
+
+  // A gateway that doesn't say which gateway it is: a change can't be tied to it, so none is offered.
+  if (stored?.stamp.gatewayId === null && connected && fresh)
+    return (
+      <div className="b-note" data-tone="warn" data-testid="bot-voice">
+        <div>
+          <p data-testid="bot-voice-unidentified">
+            The gateway didn't say which gateway it is, so Clawtrate can't tie a change to it. Bot
+            voice isn't available on this connection.
+          </p>
+          {retry}
+        </div>
+      </div>
+    );
+
+  // Whether what follows is the gateway's latest answer, for every kind of answer.
+  const freshness = confirmed ? null : (
+    <div data-testid="bot-voice-freshness">
+      {!connected ? (
+        <p className="b-hint">Not connected. This is what the gateway said when last read.</p>
+      ) : error ? (
+        <>
+          <div className="form-error" role="alert">
+            Couldn't read the setting again. {error} This is what the gateway said when last read.
+          </div>
+          {retry}
+        </>
+      ) : (
+        <p className="b-hint">Checking with the gateway. This is what it said when last read.</p>
+      )}
+    </div>
+  );
+
+  if (voice.status === "missing")
+    return (
+      <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
+        {freshness}
+        <div className="b-note">
+          <div>
+            <p>
+              Bot voice needs Clawtrate's voice plugin, <code>clawtrate-voice</code>, on the
+              gateway. Without it the bots talk the way their own instructions say.
+            </p>
+            <div className="b-actions">
+              <VoiceSetupLink />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  if (voice.status === "refused")
+    return (
+      <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
+        {freshness}
+        <div className="b-note" data-tone="warn">
+          <div>
+            <p data-testid="bot-voice-refused">
+              {voice.advertised
+                ? "The gateway has Clawtrate's voice plugin, but it won't show this connection the setting. The plugin on the gateway may be a different version from the one this Clawtrate works with."
+                : "Clawtrate can't tell whether the gateway has its voice plugin. The gateway refused to show the setting, which it also does when the plugin isn't there."}{" "}
+              The gateway said: {voice.message}
+            </p>
+            <div className="b-actions">
+              <VoiceSetupLink />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  const change = (on: boolean) => {
+    // Bound to the gateway whose setting is on screen: the host refuses it for any other.
+    const asked = { key: readKey, stamp: voice.stamp };
+    setPending(asked);
+    lastSave.current = asked;
+    setSaveError(null);
+    // Superseded once the pane closes or a newer read is asked for: its answer then neither
+    // replaces that read nor is announced.
+    const current = () => mounted.current && keyNow.current === asked.key;
+    void bridge.invoke({ type: "setBotVoice", on, stamp: asked.stamp }).then(
+      (read) => {
+        if (!mounted.current) return;
+        setPending((now) => (now === asked ? null : now));
+        if (!current()) return;
+        setVoice(read);
+        setReadsDone(asked.key);
+        if (read.status === "read") announce(`Bot voice ${read.on ? "on" : "off"}`);
+      },
+      (failure: unknown) => {
+        if (!mounted.current) return;
+        setPending((now) => (now === asked ? null : now));
+        // A failure is this screen's while it is the latest save on the connection it was made
+        // on, even after a newer read: that read may predate what the gateway stored.
+        const on = shownOn.current;
+        if (
+          lastSave.current !== asked ||
+          on.gatewayId !== asked.stamp.gatewayId ||
+          on.target !== asked.stamp.target
+        )
+          return;
+        // Refused, or the answer was lost: either way, what the gateway holds is read back.
+        setSaveError({
+          message: failure instanceof Error ? failure.message : String(failure),
+          stamp: asked.stamp,
+        });
+        setReads((n) => n + 1);
+      },
+    );
+  };
+  const onOff = voice.on ? "On" : "Off";
+  const settings = voice.hookSettings;
+  return (
+    <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
+      <div className="facts">
+        <div className="b-row">
+          <span className="b-row-main">
+            <span id="bot-voice-label">Bot voice</span>
+            <small data-testid="bot-voice-state">
+              {confirmed
+                ? `${onOff}, as the gateway reads it${voice.changedAt === null ? ", by default" : ""}.`
+                : connected
+                  ? `${onOff} when last read. Checking with the gateway…`
+                  : `${onOff} when last read. Not connected, so it isn't confirmed.`}
+            </small>
+          </span>
+          <button
+            type="button"
+            className="b-switch"
+            role="switch"
+            aria-checked={voice.on}
+            aria-labelledby="bot-voice-label"
+            aria-describedby="bot-voice-note"
+            aria-busy={saving || undefined}
+            // Unavailable while its own save is on its way, and still focused.
+            aria-disabled={saving || undefined}
+            disabled={!canWrite || !confirmed}
+            data-testid="bot-voice-switch"
+            onClick={() => {
+              if (!saving) change(!voice.on);
+            }}
+          />
+        </div>
+      </div>
+      <p className="b-hint" id="bot-voice-note">
+        While it's on, a voice guide is added to a bot's system prompt each time the gateway runs
+        the plugin's hook, if its config permits the hook. The guide asks the bots to talk plainly
+        and kindly, with no em dashes. Turned off, each bot talks the way its own instructions say.
+        {!canWrite && " Changing it needs write access."}
+      </p>
+      <dl className="facts bot-voice-hook">
+        <div>
+          <dt>Prompt hook permitted</dt>
+          <dd data-testid="bot-voice-hook" className="b-wrap-value">
+            {!confirmed ? "Not confirmed yet." : voice.hook === "allowed" ? "Yes" : "No"}
+          </dd>
+        </div>
+      </dl>
+      <div className="b-actions bot-voice-limits">
+        <VoiceLink href={VOICE_LIMITS}>Where the guide doesn't reach</VoiceLink>
+      </div>
+      {confirmed && voice.hook !== "allowed" && (
+        <div className="b-note" data-tone="warn" data-testid="bot-voice-blocked">
+          <div>
+            <p>
+              The gateway's config doesn't permit the voice plugin's prompt hook, so no bot gets the
+              guide. Under <code>plugins.entries.clawtrate-voice.hooks</code> both of these must
+              permit it:
+            </p>
+            <ul>
+              <HookSetting
+                name="allowConversationAccess"
+                rule="must be true."
+                permits={settings?.allowConversationAccess}
+              />
+              <HookSetting
+                name="allowPromptInjection"
+                rule="must not be false."
+                permits={settings?.allowPromptInjection}
+              />
+            </ul>
+            <p>Then restart the gateway. Clawtrate doesn't change the gateway's config.</p>
+            <div className="b-actions">
+              <VoiceSetupLink />
+            </div>
+          </div>
         </div>
       )}
-    </>
+      {saveError !== null && (
+        <div className="form-error" role="alert">
+          {saveError}
+        </div>
+      )}
+      {freshness}
+      <details className="b-disclosure" data-testid="bot-voice-guide">
+        <summary>
+          <ChevronIcon />
+          What the guide asks the bots to do
+        </summary>
+        <div className="b-disclosure-body">
+          <pre className="bot-voice-guide">{voice.guide}</pre>
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -438,14 +897,17 @@ export function Settings({
               : "None while not connected"}
           </dd>
         </div>
-        {connection.status === "connected" && connection.fullPairing && (
-          <div>
-            <dt>Access</dt>
-            <dd data-testid="gateway-access">
-              {missing.length === 0 ? "Full control" : "Less than full control"}
-            </dd>
-          </div>
-        )}
+        {connection.status === "connected" &&
+          (connection.fullPairing || connection.fullOffer !== null) && (
+            <div>
+              <dt>Access</dt>
+              <dd data-testid="gateway-access">
+                {connection.fullPairing && missing.length === 0
+                  ? "Full control"
+                  : "Less than full control"}
+              </dd>
+            </div>
+          )}
         {connection.serverVersion && (
           <div>
             <dt>Gateway</dt>
@@ -461,13 +923,19 @@ export function Settings({
           {`OpenClaw granted less than full control. Not granted: ${missing.join(", ")}. This device keeps what was granted.`}
         </p>
       )}
+      {/* The one-time offer stays here once answered (setup-effortless.md §6). */}
+      {!info.readOnly &&
+        connection.status === "connected" &&
+        connection.fullOffer !== null &&
+        connection.gatewayId !== null && <FullControlAsk connection={connection} />}
       {problem && (
         <div className="form-error" role="alert" data-testid="gateway-problem">
           <strong>{problem.title}</strong>
           {problem.message}
         </div>
       )}
-      {!info.readOnly && rePairProblem && !holdsAll && (
+      {/* The owner's decision on the full-control request shows whatever this device holds. */}
+      {!info.readOnly && rePairProblem && (!holdsAll || isFullRequest(connection)) && (
         <div className="form-error" role="alert" data-testid="repair-problem">
           {rePairProblem}
         </div>
@@ -556,7 +1024,12 @@ export function Settings({
             ? {
                 title: "Conversation",
                 back: toNav,
-                body: <ConversationPane announce={announce} />,
+                body: (
+                  <ConversationPane
+                    announce={announce}
+                    canWrite={connection.canWrite && !info.readOnly}
+                  />
+                ),
                 foot: null,
               }
             : section === "usage"
@@ -570,7 +1043,14 @@ export function Settings({
                       foot: null,
                       body: <Updates waitingMessages={waitingMessages} {...updateReading} />,
                     }
-                  : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+                  : section === "advanced"
+                    ? {
+                        title: "Advanced",
+                        back: toNav,
+                        foot: null,
+                        body: <AdvancedPane announce={announce} />,
+                      }
+                    : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">

@@ -1,6 +1,7 @@
-import type { DesktopUpdateSnapshot, UpdateTrack } from "@clawtrate/core";
+import type { DesktopUpdateSnapshot, UpdateInspectionFailure, UpdateTrack } from "@clawtrate/core";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { Confirm } from "./bots/Dialog.tsx";
 import {
   downloadBlocked,
@@ -8,8 +9,12 @@ import {
   restartCapability,
   refusalLine,
   attemptLine,
+  inspectionFailure,
+  inspectionFailureDetails,
+  inspectionFailureLine,
+  cleanupLine,
 } from "./update-restart.ts";
-import { WarnIcon } from "./icons.tsx";
+import { ChevronIcon, WarnIcon } from "./icons.tsx";
 import "./styles/updates.css";
 
 const names = { stable: "Stable", nightly: "Beta" };
@@ -165,6 +170,51 @@ function preferenceLine(s: DesktopUpdateSnapshot) {
   }
 }
 
+/** Why the last inspection failed, in plain words, and its full record to copy. */
+function FailureDetails({
+  failure,
+  runningVersion,
+}: {
+  failure: UpdateInspectionFailure;
+  runningVersion: string | null;
+}) {
+  const [copied, setCopied] = useState<CopyResult | null>(null);
+  const record = useRef<HTMLPreElement>(null);
+  const details = inspectionFailureDetails(failure, runningVersion);
+  useEffect(() => {
+    if (copied === "manual" && record.current) selectContents(record.current);
+  }, [copied]);
+  return (
+    <div className="update-failure">
+      <p>{inspectionFailureLine(failure)}</p>
+      <div className="b-actions">
+        <button
+          type="button"
+          className="button"
+          onClick={() => void copyText(details).then(setCopied)}
+        >
+          Copy details
+        </button>
+      </div>
+      {copied === "copied" && (
+        <p className="b-hint" role="status">
+          Copied the details.
+        </p>
+      )}
+      {copied === "manual" && (
+        <>
+          <p className="b-hint" role="status">
+            Couldn't copy. The details are selected: press Command-C to copy them.
+          </p>
+          <pre ref={record} className="update-failure-record">
+            {details}
+          </pre>
+        </>
+      )}
+    </div>
+  );
+}
+
 // React detaches this ref before removing the focused button. Progress updates
 // never move focus, and the result stays in the dialog's normal reading order.
 function focusResultOnRemoval(button: HTMLButtonElement | null) {
@@ -172,6 +222,34 @@ function focusResultOnRemoval(button: HTMLButtonElement | null) {
     return () => {
       if (document.activeElement === button) button.closest<HTMLElement>(".update-result")?.focus();
     };
+}
+
+/**
+ * One build's list of what it adds (F-554), behind a disclosure: plain lines,
+ * no links. The offered build's is open; the others wait to be opened.
+ */
+function WhatsNew({
+  title,
+  lines,
+  open = false,
+}: {
+  title: string;
+  lines: readonly string[];
+  open?: boolean;
+}) {
+  return (
+    <details className="b-disclosure whats-new" data-testid="whats-new" open={open}>
+      <summary>
+        <ChevronIcon />
+        {title}
+      </summary>
+      <ul className="b-disclosure-body whats-new-lines">
+        {lines.map((line, index) => (
+          <li key={index}>{line}</li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 export function Updates({
@@ -234,6 +312,12 @@ export function Updates({
     unavailable !== line
       ? unavailable
       : null;
+  const failure = inspectionFailure(s);
+  // Under the message it explains: the notice above, or else the update result.
+  const failureInNotice = !!failure && installNotice === refusalLine("inspection-failed");
+  const failureDetails = failure && (
+    <FailureDetails failure={failure} runningVersion={s.runningVersion} />
+  );
   const confirm = capability && !pending && capability.offerId === confirmId;
   if (confirmId && !confirm) setConfirmId(null);
   const locked = handoffLocked(state);
@@ -261,7 +345,14 @@ export function Updates({
       {installNotice && (
         <div className="b-note" data-tone="warn">
           <WarnIcon />
-          <p>{installNotice}</p>
+          {failureInNotice ? (
+            <div>
+              <p>{installNotice}</p>
+              {failureDetails}
+            </div>
+          ) : (
+            <p>{installNotice}</p>
+          )}
         </div>
       )}
       {s.runningVersion && (
@@ -276,6 +367,9 @@ export function Updates({
             </dd>
           </div>
         </dl>
+      )}
+      {s.whatsNew?.running && (
+        <WhatsNew title="What's new in this build" lines={s.whatsNew.running} />
       )}
       {source && s.tracks.length === 2 && (
         <fieldset disabled={locked || !!confirm} role="radiogroup" aria-label="Update track">
@@ -337,6 +431,8 @@ export function Updates({
             </dd>
           </div>
         </dl>
+        {!failureInNotice && failureDetails}
+        {cleanupLine(s) && <p className="b-hint">{cleanupLine(s)}</p>}
         {notice && !pending && <p>{notice}</p>}
         {attempt && <p>{attempt}</p>}
         {message && <p>{message}</p>}
@@ -372,6 +468,15 @@ export function Updates({
           </>
         )}
       </div>
+      {/* Notes from the site, not the app's own status: outside the status group, under their build. */}
+      {s.whatsNew?.coming.map((build, index) => (
+        <WhatsNew
+          key={build.version}
+          title={`What's new in ${build.version}`}
+          lines={build.items}
+          open={index === 0}
+        />
+      ))}
       {confirm && state.kind === "verified" && (
         <Confirm
           fallbackFocus={result}

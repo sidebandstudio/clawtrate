@@ -59,6 +59,55 @@
   overflow-wrap: anywhere;
 }
 
+/* A provider's limit (F-235): the share used and the reset read first, over a
+   thicker bar; which provider and window, and the gateway's time, quieter above. */
+.c-limit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 18px;
+}
+
+.c-limit-which {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.c-limit-figures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  color: var(--text);
+}
+
+.c-limit-share {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.c-limit-reset {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.c-limit .c-meter-bar {
+  height: 10px;
+  border-radius: 5px;
+}
+
+.c-limit .c-meter-bar > span {
+  border-radius: 5px;
+}
+
+.c-limit[data-tone="warn"] .c-meter-bar > span {
+  background: var(--warn);
+}
+
 /* Bars, for usage by bot or by source: name, bar, figure. */
 .c-bars {
   margin: 0;

@@ -1,5 +1,3 @@
-- banner: Clawtrate
-- status
 - navigation "Bots":
   - button "Routines"
   - 'button "Sort bots: Recent activity"'
@@ -44,7 +42,6 @@
         - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
-  - button "Settings"
 - region "Conversation":
   - button "Juniper, Library e-book apps compared. Show details.": Juniper ·Library e-book apps compared
   - button "Juniper's computer. Show the computer"
@@ -67,9 +64,6 @@
       - text: ", then choose"
       - code: Add a library
       - text: if it asks twice.
-    - group:
-      - text: Used the browser · 2 actions
-      - time: 2.4s
     - 'region "Juniper asks: Sign in to your library account, then hand the browser back."':
       - heading "Sign in to your library account, then hand the browser back." [level=3]
       - button "Dismiss Juniper's question"
@@ -82,8 +76,7 @@
       - textbox "Type your own answer Send this answer":
         - /placeholder: Type your own answer
       - button "Send this answer" [disabled]
-      - button "Raw"
-    - button "Juniper, waiting for you. Nothing running to show.": Waiting for you
+    - group "Juniper, waiting for you.": Waiting for you
     - status
   - text: Juniper asked you a question
   - button "Review"

@@ -1,5 +1,3 @@
-- banner: Clawtrate
-- status
 - navigation "Bots":
   - button "Routines"
   - 'button "Sort bots: Recent activity"'
@@ -41,7 +39,6 @@
         - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
-  - button "Settings"
 - region "Conversation":
   - button "Pip, Plan the week. Show details.": Pip ·Plan the week
   - button "Show work panel"
@@ -51,9 +48,7 @@
     - text: Today 3:07 PM
     - paragraph: Plan my week. Keep Thursday clear.
     - paragraph: On it. Checking your calendar first.
-    - group: Read this-week.md 2 lines
     - paragraph: Reading Thursday's notes now. The table is next.
-    - group: Read thursday.md 1 line
     - paragraph: Thursday is empty, so I kept it that way.
     - paragraph: Here is the week, with Thursday kept clear.
     - table:
@@ -95,6 +90,7 @@
           - cell "Dinner out"
           - cell "Birthday dinner"
           - cell "Plan next week"
+    - group: 2 actions
     - status
   - region "Access":
     - text: Read-only. You can follow Pip's work here. Approvals and questions aren't shown on this connection.

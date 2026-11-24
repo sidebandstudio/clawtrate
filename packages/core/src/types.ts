@@ -84,6 +84,12 @@ export type ConnectionState = {
    * or null. Local only: never sent to the gateway.
    */
   gatewayName: string | null;
+  /**
+   * The host's target: raised whenever the host is pointed at a gateway anew (a Connect, a
+   * Disconnect, a switch of saved gateway, a new pairing), kept across a reconnect to the same
+   * one. With `gatewayId` it is what a screen read is stamped with (`GatewayStamp`).
+   */
+  target: number;
   serverVersion: string | null;
   protocol: number | null;
   /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
@@ -104,6 +110,13 @@ export type ConnectionState = {
    * narrower grant is kept, said, and never asked again by itself.
    */
   fullPairing: boolean;
+  /**
+   * The one-time offer of full control to a pairing made with less, at a protected address
+   * on a host with secure storage (setup-effortless.md §6): `offer` until the person answers
+   * it, `settings` once they have (it stays in Settings, Gateway, Access), null where it
+   * doesn't apply. Read again at each hello.
+   */
+  fullOffer: "offer" | "settings" | null;
   upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
@@ -122,6 +135,26 @@ export type ConnectionState = {
    */
   sendLimits: SendLimits | null;
 };
+
+/**
+ * Where a screen's values were read: the gateway's identity and the host's target then. A write
+ * that must reach that same gateway carries it back, and the host sends nothing unless both
+ * still hold (`ClawtrateClient.requireSameGateway`).
+ */
+export type GatewayStamp = { gatewayId: string | null; target: number };
+
+/** Whether two stamps name the same gateway on the same target: an unknown identity never does. */
+export const sameStamp = (a: GatewayStamp | null | undefined, b: GatewayStamp | null | undefined) =>
+  a != null &&
+  b != null &&
+  a.gatewayId !== null &&
+  a.gatewayId === b.gatewayId &&
+  a.target === b.target;
+
+/** The stamp of what is read on the connection as it is now. */
+export const gatewayStamp = (
+  connection: Pick<ConnectionState, "gatewayId" | "target">,
+): GatewayStamp => ({ gatewayId: connection.gatewayId, target: connection.target });
 
 /** What one message may carry (`ConnectionState.sendLimits`). Sizes in bytes. */
 export type SendLimits = {
@@ -257,6 +290,40 @@ export type TranscriptBlock =
       result: ToolResult | null;
     };
 
+/**
+ * A picture the gateway put on a bot's message (an `image` block with an
+ * `artifactId`), read with `readChatPicture` by that id. `alt` is the gateway's
+ * text for it, the file name it gave the picture; the sizes are its own.
+ * `prompt` is the description an `image_generate` call of this transcript asked
+ * for, when the message is the gateway's completion of that call's task.
+ */
+export type ChatPicture = {
+  artifactId: string;
+  alt: string | null;
+  prompt: string | null;
+  mimeType: string | null;
+  width: number | null;
+  height: number | null;
+  sizeBytes: number | null;
+  /**
+   * The row that carried it (`__openclaw.id`): a message the bot sent with its
+   * message tool is a row of its own, and the picture is drawn with that row's text.
+   */
+  messageId?: string;
+};
+
+/**
+ * A file a person sent with their message, as the gateway's history names it
+ * (`__openclaw.media`, OpenClaw 2026.10.6): its name, type and size, never the
+ * reference the gateway keeps it under. Clawtrate loads none from the gateway
+ * (#469); a picture is shown only from the sending app's own copy (`readSentPicture`).
+ */
+export type SentAttachment = {
+  fileName: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+};
+
 export type TranscriptItem = {
   /** Stable display key. */
   id: string;
@@ -264,6 +331,10 @@ export type TranscriptItem = {
   timestamp: number | null;
   blocks: TranscriptBlock[];
   model: string | null;
+  /** The pictures the bot's messages of this item hand over, in their order. Absent when none. */
+  pictures?: ChatPicture[];
+  /** The files a person's message carried, in the order sent. Absent when none. */
+  attachments?: SentAttachment[];
   /**
    * The gateway cut a row of this item to its display length
    * (`__openclaw.truncated`): present and true only then. Its text, here or
@@ -417,6 +488,11 @@ export type ClawtrateState = {
    */
   showChannelChats?: boolean;
   /**
+   * Counts the times the gateway said the voice plugin's setting may have changed: its
+   * `changed` event, or `plugins.changed`. Settings reads `readBotVoice` again when it moves.
+   */
+  voiceChanges?: number;
+  /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
    * does not read it.
@@ -447,8 +523,30 @@ export type ClawtrateState = {
    * Absent where a host does not read them.
    */
   usage?: UsageState;
+  /**
+   * Names bots wrote for themselves that wait for the person (`bot-names.ts`): one card each in
+   * that bot's conversation. Absent until the first.
+   */
+  botNames?: NameProposal[];
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
+};
+
+/**
+ * A bot's IDENTITY.md names it otherwise than the gateway's config does (#424): the card in
+ * its conversation, whose Rename saves `name` with `agents.update`.
+ */
+export type NameProposal = {
+  botId: string;
+  /** The file's name made plain, exactly as Rename saves it (`plainName`). */
+  name: string;
+  /** The bot's name when the file was read; Rename sends nothing once the bot is named otherwise. */
+  from: string;
+  /** Where the file was read (`gatewayStamp`): Rename sends only there. */
+  stamp: GatewayStamp;
+  /** `renaming` while Rename is out; `failed` with `error` when it didn't land. */
+  status: "open" | "renaming" | "failed";
+  error: string | null;
 };
 
 /**
@@ -499,6 +597,7 @@ export const initialConnectionState: ConnectionState = {
   gatewayUrl: null,
   gatewayId: null,
   gatewayName: null,
+  target: 0,
   serverVersion: null,
   protocol: null,
   scopes: [],
@@ -508,6 +607,7 @@ export const initialConnectionState: ConnectionState = {
   canApprove: false,
   canAdmin: false,
   fullPairing: false,
+  fullOffer: null,
   upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,

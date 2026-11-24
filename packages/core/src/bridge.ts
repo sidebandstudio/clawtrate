@@ -5,6 +5,7 @@
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import { utf8Length } from "./encoding.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
+import type { BotVoiceAnswer } from "./voice.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -13,6 +14,8 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
+import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
+import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
@@ -24,7 +27,8 @@ import {
   type SidebarPrefs,
 } from "./sidebar.ts";
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
-import type { ClawtrateState, TranscriptItem } from "./types.ts";
+import { MAX_MESSAGE_LINE_CHARS } from "./state-bounds.ts";
+import type { ClawtrateState, GatewayStamp, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
 import type { SetupHost, SetupOffer } from "./setup.ts";
 import {
@@ -80,6 +84,13 @@ import {
   type PlacementPart,
   type PlacementParts,
 } from "./machines.ts";
+import {
+  MAX_SHARED_NAMES,
+  MAX_SHOWN_NAME_CHARS,
+  type BotDeleteOutcome,
+  type BotDeleteRead,
+  type BotDeleteReview,
+} from "./bot-delete.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -99,11 +110,24 @@ export type BridgeCommand =
   | { type: "retry" }
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string }
-  /** Read a task this viewer holds again, as the retry of a failed history read. */
-  | { type: "reloadSession"; key: string }
+  /**
+   * Read a task this viewer holds again, as the retry of a failed history read.
+   * With `failed`, the host reads only if the task is still in `error` with that error.
+   */
+  | { type: "reloadSession"; key: string; failed?: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
+  /**
+   * The one-time offer of full control (setup-effortless.md §6), for the gateway and device
+   * it was shown for: accept it (one request for the six), or "Keep current access".
+   */
+  | {
+      type: "requestFullControl" | "dismissFullControl";
+      gatewayUrl: string;
+      deviceId: string;
+      stamp: GatewayStamp;
+    }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -121,6 +145,10 @@ export type BridgeCommand =
   | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
   /** The "Turn time limit", in minutes, for every run this client starts (F-100). */
   | { type: "setTurnLimit"; minutes: number }
+  /** Whether the voice guide is added to the bots' prompts, as the gateway's voice plugin reads it back. */
+  | { type: "readBotVoice" }
+  /** Turn the voice guide on or off for the gateway's bots; needs operator.write. */
+  | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
@@ -186,8 +214,8 @@ export type BridgeCommand =
       type: "writeMemory";
       botId: string;
       path: string;
-      /** The gateway identity that supplied the draft, from `gateway.identity.get`. */
-      gatewayId: string | null;
+      /** Where the draft was read (`GatewayStamp`): nothing is written anywhere else. */
+      stamp: GatewayStamp;
       expectedHash: string | null;
       content: string | null;
     }
@@ -206,6 +234,13 @@ export type BridgeCommand =
     }
   /** The checkout's patch for one of a task's files. */
   | { type: "readCheckoutDiff"; key: string; path: string }
+  /** A picture the bot handed over in the task, by the id its message gave (`ChatPictureRead`). */
+  | { type: "readChatPicture"; key: string; artifactId: string }
+  /**
+   * A picture you sent, from this app's own copy (`SentPictureRead`): by the outgoing message's
+   * id, or the key history stored its row under, and its place among the message's files.
+   */
+  | { type: "readSentPicture"; key: string; messageKey: string; index: number }
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
@@ -227,13 +262,13 @@ export type BridgeCommand =
       sessionKey: string | null;
     }
   // Changing routines (automation.md sections 9 and 10). The engine refuses each below admin.
-  // `gateway` is the one a draft was opened on: a write waits for it to match.
-  | { type: "createRoutine"; input: NewRoutine; key: string; gateway: string | null }
+  // `stamp` is where a draft was opened: a write waits for it to match.
+  | { type: "createRoutine"; input: NewRoutine; key: string; stamp: GatewayStamp }
   /**
    * After a create whose answer never came: the routine its draft made, found
    * by the draft's key, against `input`. Refused when any other gateway answers.
    */
-  | { type: "checkRoutineCreate"; key: string; input: RoutineFields; gateway: string | null }
+  | { type: "checkRoutineCreate"; key: string; input: RoutineFields; stamp: GatewayStamp }
   /** After an edit whose answer never came, as `updateRoutine` was sent it. */
   | {
       type: "checkRoutineUpdate";
@@ -241,13 +276,13 @@ export type BridgeCommand =
       original: RoutineFields;
       edit: RoutineFields;
       expected: RoutineFields;
-      gateway: string | null;
+      stamp: GatewayStamp;
     }
   /**
    * One routine as the gateway has it now; reads only. With `gateway`, a
    * read-back of a write: answered by any other gateway, it is refused.
    */
-  | { type: "readRoutine"; id: string; gateway?: string | null }
+  | { type: "readRoutine"; id: string; stamp?: GatewayStamp }
   /** `original` is what the editor opened with; only what differs from it is written. */
   | {
       type: "updateRoutine";
@@ -255,7 +290,7 @@ export type BridgeCommand =
       original: RoutineFields;
       edit: RoutineFields;
       expected: RoutineRevision;
-      gateway: string | null;
+      stamp: GatewayStamp;
     }
   /** `listedOn` is the routines list the row came from (`RoutinesState.listedOn`). */
   | { type: "setRoutineEnabled"; id: string; enabled: boolean; listedOn: number }
@@ -289,12 +324,12 @@ export type BridgeCommand =
       provider: string;
       model: string;
       effort: string | null;
-      /** The gateway New bot was opened on; nothing is created on another. */
-      gatewayId: string | null;
+      /** Where New bot was read (`GatewayStamp`); nothing is created anywhere else. */
+      stamp: GatewayStamp;
     }
   | { type: "dismissBotCreation" }
   /** Finish a bot whose creation is partial, by its id, on the gateway New bot was showing. */
-  | { type: "finishBot"; botId: string; gatewayId: string | null }
+  | { type: "finishBot"; botId: string; stamp: GatewayStamp }
   | {
       type: "changeBotAccount";
       botId: string;
@@ -305,13 +340,16 @@ export type BridgeCommand =
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
+  /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
+  | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
+  | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
   | {
       type: "setBotPicture";
       botId: string;
       avatar: string;
-      /** The gateway Edit picture was opened on; nothing is written to another. */
-      gatewayId: string | null;
+      /** Where Edit picture was read (`GatewayStamp`); nothing is written anywhere else. */
+      stamp: GatewayStamp;
     }
   // Check-ins (`check-ins.ts`). Saving needs admin.
   | { type: "refreshCheckIns"; botId?: string }
@@ -411,10 +449,31 @@ export type BridgeCommand =
   | { type: "renameMachine"; nodeId: string; name: string }
   | { type: "removeMachine"; nodeId: string }
   | { type: "renameDevice"; deviceId: string; name: string }
-  | { type: "removeDevice"; deviceId: string };
+  | { type: "removeDevice"; deviceId: string }
+  // Deleting a bot (`bot-delete.ts`). The read is `operator.read`; the delete needs admin.
+  /** What the delete dialog lists for a bot, read now. */
+  | { type: "readBotDelete"; botId: string }
+  /**
+   * `stamp` is where the dialog read, `reviewed` what it showed of the bot, and `typed` what the
+   * person typed to confirm.
+   */
+  | {
+      type: "deleteBot";
+      botId: string;
+      stamp: GatewayStamp;
+      deleteFiles: boolean;
+      reviewed: BotDeleteReview;
+      typed: string;
+    };
 
 /** What each command answers with. */
-export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
+export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "readBotDelete" }
+  ? BotDeleteRead
+  : C extends { type: "deleteBot" }
+    ? BotDeleteOutcome
+    : BridgeResultRest<C>;
+
+type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
   : C extends { type: "sendAgain" }
     ? { messageId: string }
@@ -559,16 +618,30 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                                                   }
                                                                                                 ? MemoryList
                                                                                                 : C extends {
-                                                                                                      type: "readMemory";
+                                                                                                      type:
+                                                                                                        | "readBotVoice"
+                                                                                                        | "setBotVoice";
                                                                                                     }
-                                                                                                  ? MemoryDocument
+                                                                                                  ? BotVoiceAnswer
                                                                                                   : C extends {
-                                                                                                        type:
-                                                                                                          | "checkRoutineCreate"
-                                                                                                          | "checkRoutineUpdate";
+                                                                                                        type: "readMemory";
                                                                                                       }
-                                                                                                    ? RoutineSaveCheck
-                                                                                                    : void;
+                                                                                                    ? MemoryDocument
+                                                                                                    : C extends {
+                                                                                                          type:
+                                                                                                            | "checkRoutineCreate"
+                                                                                                            | "checkRoutineUpdate";
+                                                                                                        }
+                                                                                                      ? RoutineSaveCheck
+                                                                                                      : C extends {
+                                                                                                            type: "readChatPicture";
+                                                                                                          }
+                                                                                                        ? ChatPictureRead
+                                                                                                        : C extends {
+                                                                                                              type: "readSentPicture";
+                                                                                                            }
+                                                                                                          ? SentPictureRead
+                                                                                                          : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -619,6 +692,12 @@ export type ClawtrateBridge = {
    * save dialog). Absent where the host has none: a browser downloads instead.
    */
   save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /**
+   * Hear of a task this view had open that the host refused to open again after the
+   * bridge reconnected on its own: the view no longer holds it, and `error` says why.
+   * Absent where a bridge never reopens tasks itself (the desktop's IPC).
+   */
+  onReopenRefused?(listener: (key: string, error: string) => void): () => void;
 };
 
 /**
@@ -714,6 +793,29 @@ function botId(value: unknown): string {
 function flag(value: unknown): boolean {
   if (typeof value !== "boolean") throw new Error("invalid flag");
   return value;
+}
+
+/** What a delete dialog showed of a bot, field by field. */
+function deleteReview(value: unknown): BotDeleteReview {
+  const review = record(value, "review");
+  const folder = review.folder;
+  if (folder !== "own" && folder !== "shared" && folder !== "unknown")
+    throw new Error("invalid folder");
+  if (!Array.isArray(review.sharedWith) || review.sharedWith.length > MAX_SHARED_NAMES)
+    throw new Error("invalid names");
+  return {
+    nameDigest: nullable(review.nameDigest, (v) => {
+      if (typeof v !== "string" || !/^[a-f0-9]{64}$/.test(v)) throw new Error("invalid name");
+      return v;
+    }),
+    createdAt: nullable(review.createdAt, (v) =>
+      count(v, Number.MAX_SAFE_INTEGER, "creation record"),
+    ),
+    workspace: nullable(review.workspace, (v) => shortText(v, MAX_PATH_CHARS, "path")),
+    folder,
+    sharedWith: review.sharedWith.map((v) => shortText(v, MAX_SHOWN_NAME_CHARS, "name")),
+    sharedOmitted: count(review.sharedOmitted, Number.MAX_SAFE_INTEGER, "count"),
+  };
 }
 
 /** One change to the budgets, checked field by field. */
@@ -913,9 +1015,13 @@ function oneOf<T extends string>(value: unknown, options: readonly T[], what: st
   return value as T;
 }
 
-/** The gateway a draft was opened on, or null when the editor did not know it. */
-function optionalGateway(value: unknown): string | null {
-  return value === null || value === undefined ? null : shortText(value, 256, "gateway");
+/** Where a screen was read (`GatewayStamp`): the gateway's identity, or null, and the host's target. */
+function gatewayStampOf(value: unknown): GatewayStamp {
+  const stamp = record(value, "gateway stamp");
+  return {
+    gatewayId: stamp.gatewayId === null ? null : id(stamp.gatewayId, "gateway"),
+    target: count(stamp.target, Number.MAX_SAFE_INTEGER, "gateway stamp"),
+  };
 }
 
 function routineFields(value: Record<string, unknown>): RoutineFields {
@@ -984,7 +1090,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "saveCheckIn",
         saveId: id(command.saveId, "save"),
         botId: botId(command.botId),
-        gatewayId: id(command.gatewayId, "gateway"),
+        stamp: gatewayStampOf(command.stamp),
         every: every(command.every),
         prompt: prompt(command.prompt),
         was: { every: every(was.every), prompt: prompt(was.prompt) },
@@ -1025,7 +1131,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "createRoutine",
         input: { ...routineFields(input), botId: botId(input.botId) },
         key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
-        gateway: optionalGateway(command.gateway),
+        stamp: gatewayStampOf(command.stamp),
       };
     }
     case "checkRoutineCreate":
@@ -1033,7 +1139,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "checkRoutineCreate",
         key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
         input: routineFields(record(command.input, "routine")),
-        gateway: optionalGateway(command.gateway),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "checkRoutineUpdate":
       return {
@@ -1042,7 +1148,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         original: routineFields(record(command.original, "routine")),
         edit: routineFields(record(command.edit, "routine")),
         expected: routineFields(record(command.expected, "routine")),
-        gateway: optionalGateway(command.gateway),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "updateRoutine": {
       const expected = record(command.expected, "routine revision");
@@ -1055,7 +1161,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         original: routineFields(record(command.original, "routine")),
         edit: routineFields(record(command.edit, "routine")),
         expected: { ...routineFields(expected), updatedAt },
-        gateway: optionalGateway(command.gateway),
+        stamp: gatewayStampOf(command.stamp),
       };
     }
     case "setRoutineEnabled":
@@ -1076,7 +1182,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: command.type,
         id: id(command.id, "routine id"),
-        ...(command.gateway === undefined ? {} : { gateway: optionalGateway(command.gateway) }),
+        ...(command.stamp === undefined ? {} : { stamp: gatewayStampOf(command.stamp) }),
       };
     case "readGatewayHooks":
       return { type: "readGatewayHooks" };
@@ -1089,11 +1195,25 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "checkLock":
     case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
+    case "acceptBotName":
+      return {
+        type: "acceptBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "declineBotName":
+      return {
+        type: "declineBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "finishBot":
       return {
         type: "finishBot",
         botId: botId(command.botId),
-        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "startSignIn":
       return {
@@ -1138,12 +1258,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
-        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "setBotPicture":
       return {
         type: "setBotPicture",
-        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
+        stamp: gatewayStampOf(command.stamp),
         botId: botId(command.botId),
         avatar: shortText(command.avatar, 32_768, "picture"),
       };
@@ -1188,6 +1308,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       if (typeof command.name !== "string" || command.name.length > 1000)
         throw new Error("invalid name");
       return { type: "nameGateway", gatewayUrl: command.gatewayUrl, name: command.name };
+    case "requestFullControl":
+    case "dismissFullControl":
+      if (
+        typeof command.gatewayUrl !== "string" ||
+        command.gatewayUrl.length > MAX_GATEWAY_URL_CHARS
+      )
+        throw new Error("invalid url");
+      return {
+        type: command.type,
+        gatewayUrl: command.gatewayUrl,
+        deviceId: id(command.deviceId, "device id"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "connectDevGateway":
     case "suspend":
     case "retry":
@@ -1227,6 +1360,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       if (typeof command.minutes !== "number" || !Number.isInteger(command.minutes))
         throw new Error("invalid turn limit");
       return { type: "setTurnLimit", minutes: command.minutes };
+    case "readBotVoice":
+      return { type: "readBotVoice" };
+    case "setBotVoice":
+      if (typeof command.on !== "boolean") throw new Error("invalid voice setting");
+      return {
+        type: "setBotVoice",
+        on: command.on,
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "setShowChannelChats":
       if (typeof command.on !== "boolean") throw new Error("invalid channel chats setting");
       return { type: "setShowChannelChats", on: command.on };
@@ -1364,13 +1506,33 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "openSession":
     case "closeSession":
-    case "reloadSession":
       return { type: command.type, key: sessionKey(command.key) };
+    case "reloadSession":
+      return {
+        type: "reloadSession",
+        key: sessionKey(command.key),
+        ...(command.failed === undefined
+          ? {}
+          : { failed: shortText(command.failed, MAX_MESSAGE_LINE_CHARS, "error") }),
+      };
     case "listTaskFiles":
       return { type: "listTaskFiles", key: sessionKey(command.key) };
     case "readTaskFile":
     case "readCheckoutDiff":
       return { type: command.type, key: sessionKey(command.key), path: filePath(command.path) };
+    case "readChatPicture":
+      return {
+        type: "readChatPicture",
+        key: sessionKey(command.key),
+        artifactId: id(command.artifactId, "picture id"),
+      };
+    case "readSentPicture":
+      return {
+        type: "readSentPicture",
+        key: sessionKey(command.key),
+        messageKey: id(command.messageKey, "message key"),
+        index: count(command.index, MAX_ATTACHMENTS_PER_MESSAGE - 1, "file index"),
+      };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
     case "readMemory":
@@ -1384,7 +1546,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         throw new Error("invalid memory path");
       const target = { botId: botId(command.botId), path };
       if (command.type === "readMemory") return { type: command.type, ...target };
-      const { content, expectedHash, gatewayId } = command;
+      const { content, expectedHash, stamp } = command;
       if (
         content !== null &&
         (typeof content !== "string" || utf8Length(content) > MAX_MEMORY_BYTES)
@@ -1400,7 +1562,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         ...target,
         content,
         expectedHash,
-        gatewayId: gatewayId === null ? null : id(gatewayId, "gateway identity"),
+        stamp: gatewayStampOf(stamp),
       };
     }
     case "listWorkspace":
@@ -1572,6 +1734,17 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             : id(command.baseHash, "hash"),
       };
     }
+    case "readBotDelete":
+      return { type: "readBotDelete", botId: botId(command.botId) };
+    case "deleteBot":
+      return {
+        type: "deleteBot",
+        botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+        deleteFiles: flag(command.deleteFiles),
+        reviewed: deleteReview(command.reviewed),
+        typed: shortText(command.typed, MAX_SHOWN_NAME_CHARS, "typed text"),
+      };
     case "setBotWorkspace":
       return {
         type: "setBotWorkspace",
@@ -1783,9 +1956,13 @@ class ViewerSession implements BridgeSession {
       }
       case "reloadSession":
         if (!this.open.has(command.key)) throw new Error(NOT_OPEN_IN_VIEW);
-        return client.reloadSession(command.key);
+        return client.reloadSession(command.key, command.failed);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
+      case "requestFullControl":
+        return client.requestFullControl(command);
+      case "dismissFullControl":
+        return client.dismissFullControl(command);
       case "refreshRoutines":
         return client.refreshRoutines();
       case "readBotRoutines":
@@ -1803,13 +1980,13 @@ class ViewerSession implements BridgeSession {
           }),
         );
       case "createRoutine":
-        return client.createRoutine(command.input, command.key, owner, command.gateway);
+        return client.createRoutine(command.input, command.key, owner, command.stamp);
       case "checkRoutineCreate":
-        return client.checkRoutineCreate(command.key, command.input, command.gateway);
+        return client.checkRoutineCreate(command.key, command.input, command.stamp);
       case "checkRoutineUpdate":
-        return client.checkRoutineUpdate(command.id, command, command.gateway);
+        return client.checkRoutineUpdate(command.id, command, command.stamp);
       case "readRoutine":
-        return client.readRoutine(command.id, command.gateway);
+        return client.readRoutine(command.id, command.stamp);
       case "updateRoutine":
         return client.updateRoutine(
           command.id,
@@ -1817,7 +1994,7 @@ class ViewerSession implements BridgeSession {
           command.edit,
           command.expected,
           owner,
-          command.gateway,
+          command.stamp,
         );
       case "setRoutineEnabled":
         return client.setRoutineEnabled(command.id, command.enabled, owner, command.listedOn);
@@ -1859,12 +2036,12 @@ class ViewerSession implements BridgeSession {
             model: command.model,
             effort: command.effort,
           },
-          command.gatewayId,
+          command.stamp,
         );
       case "dismissBotCreation":
         return client.dismissBotCreation();
       case "finishBot":
-        return client.finishBot(command.botId, command.gatewayId);
+        return client.finishBot(command.botId, command.stamp);
       case "changeBotAccount":
         return client.changeBotAccount(
           command.botId,
@@ -1877,8 +2054,12 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
+      case "acceptBotName":
+        return client.acceptBotName(command.botId, command.name, command.stamp);
+      case "declineBotName":
+        return client.declineBotName(command.botId, command.name, command.stamp);
       case "setBotPicture":
-        return client.setBotPicture(command.botId, command.avatar, command.gatewayId);
+        return client.setBotPicture(command.botId, command.avatar, command.stamp);
       case "refreshCheckIns":
         return client.refreshCheckIns(command.botId);
       case "saveCheckIn":
@@ -1886,7 +2067,7 @@ class ViewerSession implements BridgeSession {
           command.saveId,
           command.botId,
           {
-            gatewayId: command.gatewayId,
+            stamp: command.stamp,
             every: command.every,
             prompt: command.prompt,
             was: command.was,
@@ -1955,6 +2136,10 @@ class ViewerSession implements BridgeSession {
         return client.stopRun(this.mine(command.key), command.runId, { owner });
       case "setTurnLimit":
         return client.setTurnLimit(command.minutes);
+      case "readBotVoice":
+        return client.readBotVoice();
+      case "setBotVoice":
+        return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":
         return client.setShowChannelChats(command.on);
       case "readComposerMenu":
@@ -2011,6 +2196,19 @@ class ViewerSession implements BridgeSession {
         return client.readTaskFile(this.mine(command.key), command.path, this.fileOptions());
       case "readCheckoutDiff":
         return client.readCheckoutDiff(this.mine(command.key), command.path, this.fileOptions());
+      case "readChatPicture":
+        return client.readChatPicture(
+          this.mine(command.key),
+          command.artifactId,
+          this.fileOptions(),
+        );
+      case "readSentPicture":
+        return client.readSentPicture(
+          this.mine(command.key),
+          command.messageKey,
+          command.index,
+          this.fileOptions(),
+        );
       case "listMemory":
         return client.listMemory(command.botId);
       case "readMemory":
@@ -2019,7 +2217,7 @@ class ViewerSession implements BridgeSession {
         return client.writeMemory(
           command.botId,
           command.path,
-          command.gatewayId,
+          command.stamp,
           command.expectedHash,
           command.content,
         );
@@ -2135,6 +2333,19 @@ class ViewerSession implements BridgeSession {
         );
       case "setBotWorkspace":
         return client.setBotWorkspace(command.botId, command.path);
+      case "readBotDelete":
+        return client.readBotDelete(command.botId);
+      case "deleteBot":
+        return client.deleteBot(
+          {
+            botId: command.botId,
+            stamp: command.stamp,
+            deleteFiles: command.deleteFiles,
+            reviewed: command.reviewed,
+            typed: command.typed,
+          },
+          { owner },
+        );
       case "setMachineDefaults":
         return client.setMachineDefaults(command.machineId, command.choice, command.expectedHash, {
           owner,
@@ -2152,9 +2363,15 @@ class ViewerSession implements BridgeSession {
 
   apply<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>> {
     if (this.inFlight >= MAX_VIEWER_PENDING_COMMANDS) {
-      return Promise.reject(
-        new Error("Too many requests are waiting; try again when they finish."),
-      );
+      const busy = "Too many requests are waiting; try again when they finish.";
+      // A delete refused here never reached the host's client: its outcome says nothing was
+      // sent, as the host's other refusals do, so the viewer doesn't take it for a lost answer.
+      if (command.type === "deleteBot")
+        return Promise.resolve({
+          kind: "not-sent",
+          message: `${busy} Nothing was sent.`,
+        } as BridgeResultFor<C>);
+      return Promise.reject(new Error(busy));
     }
     this.inFlight += 1;
     return this.run(command).finally(() => {

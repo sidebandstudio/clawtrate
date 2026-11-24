@@ -23,6 +23,8 @@ import {
   type MachineFacts,
   type NodeRecord,
   type QuestionCard,
+  type Run,
+  type Step,
   type Transcript,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -39,7 +41,8 @@ import {
   ScreenIcon,
 } from "../icons.tsx";
 import { hostWords } from "../machines/words.ts";
-import { readPreference, writePreference } from "../preferences.ts";
+import { readPreference, useShowCommands, writePreference } from "../preferences.ts";
+import { commandRowWords } from "./command-row.ts";
 import { pictureWords, useFrames, useNow, type FrameCanvases, type Picture } from "./frames.ts";
 import { machineReader } from "./machine-reads.ts";
 import { ScreenView } from "./ScreenView.tsx";
@@ -1253,19 +1256,30 @@ function RecentSections({
   onShowInChat: (stepId: string) => void;
 }) {
   const [all, setAll] = useState(false);
+  // Plain words unless the person chose to see commands (conversation.md, 7.11).
+  const [commandsShown] = useShowCommands();
   const actions = useMemo(
     () =>
       transcript
         ? recentActions(transcript, (step, run) => {
-            const line = lineOf(callFromStep(step, run));
+            const line = lineOf(callFromStep(step, run), commandsShown ? {} : { quiet: true });
             return `${line.verb} ${line.object}`.trim();
           })
         : [],
     // Steps change with every event; their count and the transcript are enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [transcript, steps],
+    [transcript, steps, commandsShown],
   );
   const commands = useMemo(() => (transcript ? commandRows(transcript) : []), [transcript]);
+  // Each command's step and run, for the outcome its card reads.
+  const stepOf = useMemo(() => {
+    const index = new Map<string, { step: Step; run: Run }>();
+    for (const run of transcript?.runs ?? [])
+      for (const step of run.steps) index.set(step.id, { step, run });
+    return (id: string) => index.get(id);
+    // Steps change with every event; their count and the transcript are enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transcript, steps]);
   const shown = all ? actions : actions.slice(0, 8);
   return (
     <>
@@ -1310,34 +1324,32 @@ function RecentSections({
         <section className="work-section computer-section" aria-labelledby="computer-commands">
           <h3 id="computer-commands">Commands</h3>
           <ul className="command-list" data-testid="computer-commands">
-            {commands.map((row) => (
-              <li key={row.stepId} className="command-row">
-                <code>{row.command}</code>
-                <span>
-                  {row.running ? (
-                    <>{glyph("working")}Running</>
+            {commands.map((row) => {
+              // How each went, as the gateway established it; plain words unless commands are shown.
+              const said = commandRowWords(row, stepOf(row.stepId), commandsShown);
+              return (
+                <li key={row.stepId} className="command-row">
+                  {commandsShown ? (
+                    <code>{said.label}</code>
                   ) : (
-                    <>
-                      {row.end?.kind === "timed-out"
-                        ? "Timed out"
-                        : row.end
-                          ? `exit ${row.end.code}`
-                          : "Ended"}
-                      {row.durationMs !== null ? ` · ${(row.durationMs / 1000).toFixed(1)}s` : ""}
-                    </>
+                    <span className="command-plain">{said.label}</span>
                   )}
-                </span>
-                <button
-                  type="button"
-                  className="link-button"
-                  data-tone="muted"
-                  aria-label={`Show ${row.command} in the chat`}
-                  onClick={() => onShowInChat(row.stepId)}
-                >
-                  Show in chat
-                </button>
-              </li>
-            ))}
+                  <span>
+                    {said.running && glyph("working")}
+                    {said.state}
+                  </span>
+                  <button
+                    type="button"
+                    className="link-button"
+                    data-tone="muted"
+                    aria-label={said.showName}
+                    onClick={() => onShowInChat(row.stepId)}
+                  >
+                    Show in chat
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

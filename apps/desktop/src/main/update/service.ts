@@ -6,6 +6,7 @@ import type {
   DesktopUpdateFailure,
   KeyValueStore,
   UpdateTrack,
+  UpdateInspectionFailure,
   UpdateInstallRefusal,
 } from "@clawtrate/core";
 import { randomUUID } from "node:crypto";
@@ -15,8 +16,10 @@ import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
 import { watchUpdateFile } from "../update-file-watch.ts";
 import { UpdateEngine } from "./engine.ts";
 import type { UpdateInstaller } from "./install.ts";
-import { readAttempt, attemptOutcome } from "./attempt.ts";
+import { readAttempt, attemptOutcome, type UpdateQuit } from "./attempt.ts";
 import { readCheck, type StoredUpdatePreferences } from "./preferences.ts";
+import { whatsNewView, type BuildNotes } from "./whats-new.ts";
+import { readWhatsNew } from "./whats-new-read.ts";
 import { fileKeyFor } from "./feed.ts";
 import { formatVersion, parseVersion, versionTrack } from "./version.ts";
 
@@ -31,6 +34,11 @@ export interface UpdateServiceOptions {
   releaseDate: string | null;
   store: Pick<KeyValueStore, "get" | "set"> & {
     readPreferences?: () => Promise<StoredUpdatePreferences>;
+    /** Records, synchronously, that the app quit after a handoff. */
+    markQuit?: (quit: UpdateQuit) => void;
+    readQuit?: () => Promise<UpdateQuit | null>;
+    /** Drops the attempt and its quit record once the attempted version is running. */
+    forgetAttempt?: () => Promise<void>;
   };
   changed: (snapshot: DesktopUpdateSnapshot) => void;
   installer?: UpdateInstaller;
@@ -67,6 +75,8 @@ export class DesktopUpdateService {
   private switching = false;
   private closed = false;
   private nativeSubmitted = false;
+  /** The attempt handed off in this run, and when the app was asked to quit for it. */
+  private handoff: { time: string; quitAskedAt: number | null } | null = null;
   private readonly shutdownSignal = new AbortController();
   private readonly options: UpdateServiceOptions;
   private snapshot: DesktopUpdateSnapshot;
@@ -77,11 +87,17 @@ export class DesktopUpdateService {
 
   static async start(options: UpdateServiceOptions): Promise<DesktopUpdateService> {
     const version = parseVersion(options.version);
-    const runningTrack = version && versionTrack(version);
     const tracks = (["stable", "nightly"] as const).flatMap((track) => {
       const address = checkFeedAddress(options.feeds[track], options.loopbackHttpForTests);
       return address.ok ? [{ track, source: address.url.hostname }] : [];
     });
+    // Three numbers don't name a track (issue #438): a build with only a Beta feed is a
+    // Beta build. Otherwise the version's shape decides, as it always has.
+    const runningTrack =
+      version &&
+      (version.length === 3 && tracks.length === 1 && tracks[0]!.track === "nightly"
+        ? "nightly"
+        : versionTrack(version));
     let selectedTrack =
       tracks.find((t) => t.track === runningTrack)?.track ?? tracks[0]?.track ?? null;
     let lastCheck: DesktopUpdateSnapshot["lastCheck"] = null;
@@ -108,7 +124,16 @@ export class DesktopUpdateService {
       try {
         const raw = stored ? null : await options.store.get("attempt");
         const attempt = stored?.prefs.attempt ?? (raw ? readAttempt(JSON.parse(raw)) : null);
-        if (attempt) lastAttempt = attemptOutcome(attempt, version ? formatVersion(version) : null);
+        if (attempt)
+          lastAttempt = attemptOutcome(
+            attempt,
+            version ? formatVersion(version) : null,
+            (await options.store.readQuit?.().catch(() => null)) ?? null,
+          );
+        // Reported this once; a later start on another version, a downgrade by hand
+        // included, is not this attempt's result.
+        if (lastAttempt?.kind === "target-running")
+          await options.store.forgetAttempt?.().catch(() => {});
       } catch {
         preferenceIssue = "attempt-not-read";
       }
@@ -161,6 +186,55 @@ export class DesktopUpdateService {
     this.options.installer?.retire?.();
   }
 
+  /** The builds' lists the current check read (F-554); null before a check and when it read none. */
+  private notes: { engine: UpdateEngine; track: UpdateTrack; builds: BuildNotes[] } | null = null;
+
+  /** The snapshot with what the current check's lists say for its state (F-554). */
+  private withNotes(snapshot: DesktopUpdateSnapshot): DesktopUpdateSnapshot {
+    const rest = { ...snapshot };
+    delete rest.whatsNew;
+    // Kept until the check has its answer: while it still says Checking, nothing shows.
+    const notes =
+      this.notes && this.notes.engine === this.engine && snapshot.state.kind !== "checking"
+        ? this.notes
+        : null;
+    const view =
+      notes &&
+      whatsNewView(
+        notes.builds,
+        snapshot.runningVersion,
+        "version" in snapshot.state ? snapshot.state.version : null,
+        notes.track,
+      );
+    return view ? { ...rest, whatsNew: view } : rest;
+  }
+
+  /**
+   * Reads the builds' lists beside the feed, after `engine`'s check has its
+   * answer. Its result, or its failure, changes only what the pane lists: no
+   * state the updater reads, and never the check.
+   */
+  private async readNotes(
+    engine: UpdateEngine,
+    track: UpdateTrack,
+    feed: URL,
+    runningVersion: string,
+  ) {
+    const builds = await readWhatsNew(feed, `Clawtrate/${runningVersion}`);
+    if (this.closed || this.engine !== engine || !builds) return;
+    this.notes = { engine, track, builds };
+    // Its own counter: `revision`, which commands are checked against, stays as it is.
+    this.snapshot = this.withNotes({
+      ...this.snapshot,
+      listsRevision: (this.snapshot.listsRevision ?? 0) + 1,
+    });
+    try {
+      this.options.changed(this.snapshot);
+    } catch {
+      // A closing renderer cannot change what a check found.
+    }
+  }
+
   private publish(state: DesktopUpdateState) {
     let install = idleCapability(this.options.installer);
     if (state.kind === "verified") install = this.pendingInstall ?? install;
@@ -172,19 +246,34 @@ export class DesktopUpdateService {
       state.reason !== "installer-failed" &&
       state.reason !== "mac-updater-refused"
     )
-      install = { kind: "unavailable-in-this-build", reason: state.reason };
+      install = {
+        kind: "unavailable-in-this-build",
+        reason: state.reason,
+        ...(state.failure && { failure: state.failure }),
+      };
     this.pendingInstall = null;
     if (install.kind === "restart-available" && !this.fileWatch?.current()) {
       this.retireFile();
       install = { kind: "unavailable-in-this-build", reason: "artifact-changed" };
       state = { kind: "failed", stage: "download", reason: "artifact-changed", retry: "check" };
     }
-    this.snapshot = { ...this.snapshot, state, install, revision: this.snapshot.revision + 1 };
+    this.snapshot = this.withNotes({
+      ...this.snapshot,
+      state,
+      install,
+      revision: this.snapshot.revision + 1,
+    });
     try {
       this.options.changed(this.snapshot);
     } catch {
       // A closing renderer cannot interrupt hashing or change a transfer result.
     }
+  }
+
+  /** The installer's record of why an inspection failed, for that refusal only. */
+  private failureFor(reason: string): { failure?: UpdateInspectionFailure } {
+    const failure = reason === "inspection-failed" && this.options.installer?.inspectionFailure;
+    return failure ? { failure } : {};
   }
 
   private get restarting() {
@@ -245,6 +334,21 @@ export class DesktopUpdateService {
     this.snapshot = { ...this.snapshot, pendingTrack: null };
     this.publish(state);
     return this.reply("accepted");
+  }
+
+  /**
+   * Main only, from `will-quit`: the app is about to exit. After a handoff, record that it got
+   * this far, so the next start can tell a quit that finished from one that was stopped.
+   */
+  quitting(now = Date.now()): void {
+    if (!this.handoff) return;
+    const { time, quitAskedAt } = this.handoff;
+    // No quit time when nothing asked the app to quit for the update (an unconfirmed handoff).
+    this.options.store.markQuit?.({
+      attempt: time,
+      // The wall clock can move back between the two: a quit is still a quit, of no time.
+      ...(quitAskedAt !== null && { ms: Math.max(0, now - quitAskedAt) }),
+    });
   }
 
   shutdown(): void {
@@ -364,6 +468,7 @@ export class DesktopUpdateService {
       },
     });
     this.engine = engine;
+    this.notes = null;
     await this.runWork(
       engine,
       { kind: "checking" },
@@ -380,6 +485,14 @@ export class DesktopUpdateService {
         if (this.engine !== engine) return;
         const result = await engine.check();
         if (this.engine !== engine) return;
+        // What the builds add (F-554): read once, only after the check has its answer from
+        // the feed, and never awaited, so it neither decides nor delays anything.
+        const feed = checkFeedAddress(
+          this.options.feeds[selectedTrack],
+          this.options.loopbackHttpForTests,
+        );
+        if (feed.ok && (result.kind === "available" || result.kind === "up-to-date"))
+          void this.readNotes(engine, selectedTrack, feed.url, runningVersion);
         this.clearIssue("update-folder-unavailable");
         const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
         if (lastCheck) {
@@ -469,12 +582,19 @@ export class DesktopUpdateService {
               return downloadFailure("artifact-changed");
             }
             if (reason) this.retireFile();
+            const cleanup = installer.cleanupFailure;
             install = reason
-              ? { kind: "unavailable-in-this-build", reason }
+              ? {
+                  kind: "unavailable-in-this-build",
+                  reason,
+                  ...this.failureFor(reason),
+                  ...(cleanup && { cleanup }),
+                }
               : {
                   kind: "restart-available",
                   offerId: id,
                   ...(installer.completesOnQuit && { completesOnQuit: true }),
+                  ...(cleanup && { cleanup }),
                 };
           }
           this.pendingInstall = install;
@@ -514,7 +634,7 @@ export class DesktopUpdateService {
         UpdateInstallRefusal | "attempt-not-saved" | "installer-failed" | "mac-updater-refused",
     ) => {
       this.retireFile();
-      this.publish({ kind: "handoff-failed", version, reason });
+      this.publish({ kind: "handoff-failed", version, reason, ...this.failureFor(reason) });
       return this.reply("accepted");
     };
     this.publish({ kind: "preparing", version, offerId: id });
@@ -525,24 +645,32 @@ export class DesktopUpdateService {
     if (this.closed) return this.reply("superseded");
     if (refused) return fail(refused);
     if (!this.fileWatch?.current()) return fail("artifact-changed");
+    const time = new Date().toISOString();
+    const attempt = { target: version, track: selectedTrack, from: runningVersion, time };
     try {
       await this.options.store.set(
         "attempt",
         JSON.stringify({
-          target: version,
-          track: selectedTrack,
-          from: runningVersion,
-          time: new Date().toISOString(),
+          ...attempt,
           phase: "handoff",
+          ...(this.options.store.markQuit && { marksQuit: true }),
         }),
       );
     } catch {
       return this.closed ? this.reply("superseded") : fail("attempt-not-saved");
     }
+    // A failure before anything reached the system owes no quit: the attempt is kept without
+    // that mark, so the next start doesn't report a quit that never had to happen.
+    const failBeforeHandoff = async (reason: Parameters<typeof fail>[0]) => {
+      await this.options.store
+        .set("attempt", JSON.stringify({ ...attempt, phase: "handoff" }))
+        .catch(() => {});
+      return fail(reason);
+    };
     if (this.closed) return this.reply("superseded");
     this.publish({ kind: "handing-off", version, offerId: id });
     if (this.closed) return this.reply("superseded");
-    if (!this.fileWatch?.current()) return fail("artifact-changed");
+    if (!this.fileWatch?.current()) return failBeforeHandoff("artifact-changed");
     let handed = false;
     const reason = await installer
       .launch(
@@ -551,11 +679,14 @@ export class DesktopUpdateService {
         () => {
           if (!this.closed && !handed && installer.completesOnQuit) {
             handed = true;
+            this.handoff = { time, quitAskedAt: Date.now() };
             this.publish({ kind: "handed-to-system", version, offerId: id });
           }
         },
         () => {
           this.nativeSubmitted = true;
+          // macOS may install it on any later quit.
+          this.handoff ??= { time, quitAskedAt: null };
         },
       )
       .catch(() => "installer-failed" as const);
@@ -566,7 +697,7 @@ export class DesktopUpdateService {
       this.publish({ kind: "handoff-unconfirmed", version, offerId: id });
       return this.reply("accepted");
     }
-    if (reason) return fail(reason);
+    if (reason) return failBeforeHandoff(reason);
     this.options.quitAfterLaunch?.();
     return this.reply("accepted");
   }

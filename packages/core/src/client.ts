@@ -3,6 +3,13 @@
 
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
+  readVoice,
+  setVoice,
+  VOICE_CHANGED_EVENT,
+  VOICE_GET,
+  type BotVoiceAnswer,
+} from "./voice.ts";
+import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
   GatewayProtocolClient,
@@ -15,6 +22,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
+import { fromBase64 } from "./bytes.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -24,6 +32,7 @@ import {
   type CreateBotInput,
   type CreatedBot,
 } from "./accounts-engine.ts";
+import { BotNames } from "./bot-names.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -58,6 +67,15 @@ import {
   type PlacementPart,
   type PlacementParts,
 } from "./machines.ts";
+import {
+  deleteBot,
+  wholeRoster,
+  readBotDelete,
+  type BotDeleteContext,
+  type BotDeleteOutcome,
+  type BotDeleteRead,
+  type DeleteRequest,
+} from "./bot-delete.ts";
 import {
   admitApproval,
   applyApprovalRequested,
@@ -124,6 +142,15 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
+import {
+  isDrawnPicture,
+  isShownPictureType,
+  MAX_PICTURE_BYTES,
+  ownPictureRead,
+  readChatPicture,
+  type ChatPictureRead,
+  type SentPictureRead,
+} from "./pictures.ts";
 import type {
   ApprovalInstructions,
   ClawtrateHost,
@@ -198,8 +225,11 @@ import {
   parkAfterStop,
   markQuestion,
   mergeHistoryRuns,
+  gatewayRunning,
   queueLocalRun,
+  requeueLocalRun,
   RawTable,
+  namesOutgoing,
   reconcileOutbox,
   historyQueuePairs,
   MAX_QUEUE_ALIASES,
@@ -249,7 +279,12 @@ import {
   WRITE_SCOPE,
 } from "./scopes.ts";
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
-import { protectedGatewayUrl, validateGatewayUrl } from "./gateway-url.ts";
+import {
+  endpointSpellings,
+  gatewayEndpoint,
+  protectedGatewayUrl,
+  validateGatewayUrl,
+} from "./gateway-url.ts";
 import {
   GATEWAY_NAMES_KEY,
   gatewayNameFor,
@@ -330,11 +365,14 @@ import {
 } from "./computer.ts";
 import { readMachine, type MachineFacts } from "./machine.ts";
 import {
+  gatewayStamp,
   initialConnectionState,
   initialScopeUpgrade,
   initialState,
+  sameStamp,
   type ClawtrateState,
   type ConnectionState,
+  type GatewayStamp,
   type DiscoveryState,
   type MessageReaction,
   type ScopeUpgradeState,
@@ -348,6 +386,10 @@ import {
 export const REQUESTED_SCOPES = ["operator.read"] as const;
 /** Why forgetting a gateway was refused: another viewer chose a different one meanwhile. */
 export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose again.";
+
+/** Why a write stamped on an earlier connection target is not sent (`requireSameGateway`). */
+export const CONNECTION_CHANGED =
+  "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 
 /** Disconnect refused because another gateway is selected now: the one asked for is no longer there. */
 export class GatewayChangedError extends Error {
@@ -413,10 +455,35 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
  * content the host keeps.
  */
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+/**
+ * Messages history confirmed whose pictures this client keeps to show, from
+ * the copy it sent, while their task stays open (Clawtrate doesn't load a
+ * person's picture from the gateway, #469). Their bytes share `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes'
+ * files and give way, oldest first, to a new message's.
+ */
+export const MAX_SENT_PICTURE_MESSAGES = 32;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
+
+/** What the offer of full control was shown for: its gateway, this device, and its stamp. */
+export type FullControlBinding = { gatewayUrl: string; deviceId: string; stamp: GatewayStamp };
+
+/** Why core starts no further scope request for a full pairing (setup-effortless.md §2). */
+export const FULL_PAIRING_LIMIT =
+  "This device's full pairing holds what the gateway granted; it asks for no more.";
+
+/**
+ * The person's answer to the offer of full control, per device and gateway endpoint: asked
+ * (sent, not yet decided), granted, narrower, refused or dismissed ("Keep current access").
+ */
+type OfferAnswer = "asked" | "granted" | "narrower" | "refused" | "dismissed";
+const OFFER_ANSWERS: readonly string[] = ["asked", "granted", "narrower", "refused", "dismissed"];
 /** Reads on opening a task on their way at once; past it, one more waits for the next opening. */
 export const MAX_OPENED_READS = 16;
+/** Bot deletes under way at once, from every viewer. */
+export const MAX_BOT_DELETES = 8;
+/** One bot on one gateway, as the delete's bookkeeping keys it. */
+const deleteKey = (gatewayId: string, botId: string) => `${gatewayId}\u0000${botId}`;
 /**
  * Approval outcomes the gateway reported, kept by id apart from the visible
  * cards so a request or list entry that arrives after its resolution can never
@@ -525,6 +592,23 @@ export type ConnectionSettings = {
   token: string | null;
   /** The user chose Disconnect: stay disconnected, across restarts, until Reconnect. */
   suspended?: boolean;
+  /**
+   * The host's name for the proved route this gateway was set up through (local
+   * connect's profile folder, `SetupEndpointCheck.route`). While it is set, every
+   * socket of every connection to it, after a restart too, comes from
+   * `ClientOptions.localConnect` for this name; with none, nothing is opened.
+   */
+  route?: string;
+};
+
+/**
+ * Sockets the host proves itself (local connect, docs/design/setup-effortless.md
+ * §3): each one's far end before its first byte, and again, by `verify`, just
+ * before its credential. `verify` is about the latest socket `createSocket` made.
+ */
+export type ProvedRoute = {
+  createSocket: WebSocketFactory;
+  verify: (signal: AbortSignal) => Promise<boolean>;
 };
 
 export type ConnectOptions = { url: string; token?: string | null };
@@ -573,6 +657,12 @@ export type ClientOptions = {
    * `readOnly`. A device paired before keeps what it holds.
    */
   fullAccess?: boolean;
+  /**
+   * Local connect: the proved sockets for a gateway saved with `route`, asked as
+   * each connection to it opens, or null when the host can't prove that route
+   * (then nothing is opened). Off in every shipped host.
+   */
+  localConnect?: (url: string, route: string) => ProvedRoute | null;
 };
 
 /** A file sent with a message, as `chat.send` takes it: base64 content. */
@@ -617,6 +707,11 @@ type Plan = GatewayBrowserDeviceAuthPlan;
  */
 type StoredDeviceToken = {
   token: string;
+  /**
+   * The proved route (`ConnectionSettings.route`) this token was saved over: it goes only on a
+   * socket of that route, proved again last, never on a typed address's.
+   */
+  route?: string;
   grantedScopes: string[];
   heldScopes: string[];
   /** This client asked for admin itself and the gateway granted it: connect asks for it again. */
@@ -649,6 +744,25 @@ type ConnectionWrites = {
    * an approved rotation whose reads of the saved record fail.
    */
   grants: Map<string, { full: boolean; held: number } | null>;
+  /** Bumped by every write or removal of the saved settings record, by any client on the store. */
+  settingsRevision: number;
+  /**
+   * The settings write or removal currently in flight on this store, if any: records the revision
+   * it settled at once storage returns, so a startup read that overlapped publication can reconcile.
+   */
+  inFlightSettings: { settledRevision: number | null } | null;
+  /** Numbered choices made on this store (Connect, setup, Reconnect, real Forget), newest last. */
+  choices: number;
+  /**
+   * The choice number of the latest committed choice (a Connect, a setup's save, a Reconnect, or
+   * a Forget that removed a saved record). An older setup steps aside once a newer choice commits.
+   */
+  chosen: number;
+  /**
+   * For each gateway URL, the shared gateway token a pairing on this store replaced with a device
+   * token. It stays retired if that device token is refused later, until a Connect to that URL.
+   */
+  retiredShared: Map<string, string>;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
 
@@ -762,7 +876,10 @@ export type SetupEndpointCheck = {
   /**
    * Whether the host's dialog consent still holds (its two minutes), asked just before the
    * first frame that carries a credential, a saved token's included. Once a hello is in, the
-   * consent is used and isn't asked again.
+   * consent is used and isn't asked again. On a plain `connect` it decides only whether a first
+   * pairing over the proved route asks for the six, before each such request until the gateway
+   * holds one pending, whose retries keep the six: without it the same token asks for read, as a
+   * typed address does, and the connection goes on.
    */
   consent?: () => boolean;
   /**
@@ -770,6 +887,18 @@ export type SetupEndpointCheck = {
    * of it, retries included: local connect's, each proved before a byte goes.
    */
   createSocket?: WebSocketFactory;
+  /**
+   * The far end of the latest socket `createSocket` made, proved again: asked last before
+   * the frame that carries a credential, after the plan's final storage read, so nothing
+   * but the send follows it. Failing sends nothing, as `verify` failing does.
+   */
+  prove?: (signal: AbortSignal) => Promise<boolean>;
+  /**
+   * The host's name for the route `createSocket` proves (local connect's profile folder),
+   * saved with the gateway (`ConnectionSettings.route`): once setup ends, and after a
+   * restart, every socket of the connection comes from `ClientOptions.localConnect`.
+   */
+  route?: string;
 };
 
 /**
@@ -780,14 +909,21 @@ export type SetupEndpointCheck = {
 export const SETUP_LISTENER_READS_MS = 10_000;
 
 function setupCheckFor(url: string, setup: SetupEndpointCheck) {
-  if (!setup.check && !setup.verify && !setup.consent && !setup.createSocket) return null;
+  if (!setup.check && !setup.verify && !setup.consent && !setup.createSocket && !setup.prove)
+    return null;
   return {
     url,
     check: setup.check ?? (() => true),
     ...(setup.verify ? { verify: setup.verify } : {}),
     ...(setup.consent ? { consent: setup.consent } : {}),
     ...(setup.createSocket ? { createSocket: setup.createSocket } : {}),
+    ...(setup.prove ? { prove: setup.prove } : {}),
   };
+}
+
+/** A setup's gateway, with the proved route it was set up through, if any. */
+function setupSettings(url: string, setup: SetupEndpointCheck): ConnectionSettings {
+  return { url, token: null, ...(setup.route !== undefined ? { route: setup.route } : {}) };
 }
 
 /** A setup connection's first device token, held in memory until its grant is checked. */
@@ -1107,6 +1243,8 @@ export class ClawtrateClient {
     consent?: () => boolean;
     /** The host's own sockets for this setup (local connect's), in place of `createWebSocket`. */
     createSocket?: WebSocketFactory;
+    /** The far end of `createSocket`'s latest socket proved again, last before its credential. */
+    prove?: (signal: AbortSignal) => Promise<boolean>;
   } | null = null;
   /**
    * A connection the host's setup opened, from its first socket through its
@@ -1143,6 +1281,10 @@ export class ClawtrateClient {
    * lost, from the moment the refusal is accepted, before its removal runs.
    */
   private fullEligible = false;
+  /** The route the open connection's gateway was saved with, as the host gave it (false: none). */
+  private savedRoute: { url: string; sockets: ProvedRoute | false } | null = null;
+  /** The pending request a first pairing sent the six in, with consent: its retries ask for them. */
+  private fullPending: string | null = null;
   /** This attempt's plans have used a saved token: one gone since was lost. */
   private planHadToken = false;
   /**
@@ -1190,6 +1332,36 @@ export class ClawtrateClient {
   /** Each failed request's log policy, as it was when the request went out. */
   private readonly dispatchedQuiet = new WeakMap<object, boolean>();
   private settings: ConnectionSettings | null = null;
+  /**
+   * The store's settings revision when this client last read or wrote the saved record, or null
+   * before it did. Any other revision is a record another client on this store saved or forgot
+   * since (`recordSeen`).
+   */
+  private seenRevision: number | null = null;
+  /**
+   * When startup read the saved record while a settings write was in flight (for instance, the
+   * secure store publishing a new record before retiring an earlier token), the snapshot and the
+   * write it overlapped, reconciled once that write has settled.
+   */
+  private pendingSeen: {
+    before: number;
+    write: { settledRevision: number | null };
+    raw: string | null;
+  } | null = null;
+  /** A setup's gateway and the choice number from when the person chose it. */
+  private setupChosen: { url: string; choice: number } | null = null;
+  /**
+   * While `start` reads the saved settings. A Disconnect, Suspend or Retry sent meanwhile waits
+   * for `read`, settled once they are in `settings` or with the error that stopped the read, so
+   * it acts on the saved gateway; `start` waits for those `commands` before it opens anything.
+   */
+  private restoring: {
+    read: Promise<{ failed: false } | { failed: true; error: unknown }>;
+    release: (outcome: { failed: false } | { failed: true; error: unknown }) => void;
+    commands: Promise<unknown>[];
+  } | null = null;
+  /** Each Disconnect, Suspend or Retry that acted on the gateway, counted as it does. */
+  private connectionCommands = 0;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
   private generation = 0;
@@ -1205,6 +1377,8 @@ export class ClawtrateClient {
   private turnLimitMs = DEFAULT_TURN_LIMIT_MS;
   /** "Show external channel chats": the person's choice, off until they turn it on. */
   private showChannelChats = false;
+  /** How often the person set each preference: a startup read begun before a change doesn't undo it. */
+  private readonly preferenceSets = { turnLimit: 0, channelChats: 0 };
   /**
    * The person this connection acts for, as the gateway names them (`users.self` profile id):
    * which reactions are this person's own. Read once per connection; null until then, or when
@@ -1222,6 +1396,8 @@ export class ClawtrateClient {
   /** Reads of the bot list in the order they were asked, and the latest shown. */
   private botsIssued = 0;
   private botsShown = 0;
+  /** Deletes under way, by gateway and bot: a second one waits for no answer, it is refused. */
+  private readonly botDeletes = new Set<string>();
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -1272,6 +1448,10 @@ export class ClawtrateClient {
   private readonly writes: ConnectionWrites;
   /** A host stop cancels socket opens requested before it, including ones still saving settings. */
   private stops = 0;
+  /** Each settings read still out, ended by `stop()` so it can't hold the shared queue. */
+  private readonly stopWaiters = new Set<() => void>();
+  /** Every startup still reading, released by `stop()`: a later `start()` replaces `restoring`. */
+  private readonly startReads = new Set<{ release: (outcome: { failed: false }) => void }>();
   /** The current attempt reached hello. */
   private attemptGreeted = false;
   /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
@@ -1281,10 +1461,26 @@ export class ClawtrateClient {
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
   /**
-   * What the request under way asks for: the interactive tier, admin with it, or
-   * (`held`) the scopes the connection held when device access was asked for.
+   * What the request under way asks for: the interactive tier, admin with it,
+   * (`held`) the scopes the connection held when device access was asked for, or (`full`)
+   * the six, the offer of full control accepted.
    */
-  private upgradeTier: "interactive" | "admin" | "held" = "interactive";
+  private upgradeTier: "interactive" | "admin" | "held" | "full" = "interactive";
+  /**
+   * The saved spelling of an address whose pairing is kept under another spelling of the
+   * same endpoint (`endpointSpellings`), for the address the connection opened last: it is
+   * the same pairing.
+   */
+  private tokenAlias: { url: string; spelling: string } | null = null;
+  /** The answer to the full-control offer for the current gateway and device, read at each open. */
+  private offerAnswer: OfferAnswer | "unread" | null = null;
+  /**
+   * The accept of the full-control offer under way, from before its answer is saved until the
+   * gateway settles its request: an accept that comes meanwhile (a double click, another window)
+   * joins it, so one choice sends one request. Released when the save fails, or when the
+   * connection stops before the gateway answers, to try again.
+   */
+  private fullAttempt: Promise<void> | null = null;
   /** The scopes a `held` request keeps, as the connection held them when it was made. */
   private heldBase: readonly string[] = [];
   /** The access request under way also asks for device access (`operator.pairing`). */
@@ -1307,6 +1503,20 @@ export class ClawtrateClient {
     { task: string; files: OutgoingAttachment[]; bytes: number }
   >();
   private attachmentBytes = 0;
+  /** Pictures of messages history confirmed, by message id, oldest first (`MAX_SENT_PICTURE_MESSAGES`). */
+  private readonly sentPictures = new Map<
+    string,
+    {
+      task: string;
+      mode: OutgoingMessage["mode"];
+      runId: string | null;
+      files: { index: number; mimeType: string; content: string }[];
+      /** Its files named as pictures whose bytes aren't one: never drawn, so not kept. */
+      notPictures: number[];
+      bytes: number;
+    }
+  >();
+  private sentPictureBytes = 0;
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /**
@@ -1364,6 +1574,12 @@ export class ClawtrateClient {
   private searches = 0;
   /** Changes with every hello and every close, so work started on one connection never runs on the next. */
   private epoch = 0;
+  /**
+   * The host's target (`ConnectionState.target`): raised when the host is pointed at a gateway
+   * anew, kept across reconnects to the same one. Never lowered, so no earlier screen matches.
+   * From the clock, so a restarted host never hands out a number a page kept from the last one.
+   */
+  private target = Date.now();
   /** The gateway's identity as read on the connection of `epoch`, once asked. */
   private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
   /** Check-in reads begun; only the latest one's answer is shown. */
@@ -1389,6 +1605,7 @@ export class ClawtrateClient {
     refreshBots: () => this.refreshBots(),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
+    target: () => this.target,
     createMainTask: async (botId) => {
       const generation = this.generation;
       await this.request("sessions.create", {
@@ -1415,6 +1632,42 @@ export class ClawtrateClient {
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     identity: () => this.state.connection.gatewayId,
     withdrawn: (owner) => this.withdrawnOwners.has(owner),
+    target: () => this.target,
+  });
+  /** Names bots wrote for themselves, waiting for the person (`bot-names.ts`); its state is `botNames`. */
+  private readonly botNames = new BotNames({
+    request: (method, params) => this.request(method, params),
+    bots: () => this.state.bots,
+    canRename: () =>
+      this.state.connection.status === "connected" &&
+      this.state.connection.canAdmin &&
+      !this.options.readOnly,
+    gateway: () => this.state.connection.gatewayId ?? this.state.connection.gatewayUrl,
+    stamp: () => gatewayStamp(this.state.connection),
+    sameGateway: async (stamp) => {
+      await this.requireSameGateway(stamp);
+    },
+    storage: {
+      get: (key) => this.host.storage.get(key),
+      set: (key, value) => this.host.storage.set(key, value),
+      delete: (key) => this.host.storage.delete(key),
+    },
+    takeRead: () => {
+      if (this.fileReads >= MAX_FILE_READS) return null;
+      this.fileReads += 1;
+      let released = false;
+      return () => {
+        if (!released) this.fileReads -= 1;
+        released = true;
+      };
+    },
+    refreshBots: () => this.refreshBots(),
+    missingScope: (error) => {
+      this.noteMissingScope(error);
+      return isMissingScope(error);
+    },
+    publish: (botNames) => this.store.update((state) => ({ ...state, botNames })),
+    log: (message) => this.log("warn", message),
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -1466,6 +1719,8 @@ export class ClawtrateClient {
    * views and the control. Tickets, streams, frames, generations and queued
    * input stay in it; only codes and plain facts reach the state.
    */
+  /** Whether the latest hello's `features.methods` lists the voice plugin's read, or null when it listed none. */
+  private voiceAdvertised: boolean | null = null;
   private readonly computer: ComputerViews = new ComputerViews({
     request: (method, params) => this.request(method, params),
     openStream: (url) => {
@@ -1502,6 +1757,11 @@ export class ClawtrateClient {
       refusals: 0,
       rotations: new Map(),
       grants: new Map(),
+      settingsRevision: 0,
+      inFlightSettings: null,
+      choices: 0,
+      chosen: 0,
+      retiredShared: new Map(),
     };
     connectionWrites.set(host.storage, this.writes);
     this.options = options;
@@ -1519,10 +1779,95 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
+  /** Run a read, or abandon it with `fallback` if `stop()` runs first. */
+  private async raceStop<T>(stops: number, read: () => Promise<T>, fallback: T): Promise<T> {
+    if (stops !== this.stops) return fallback;
+    let stop!: () => void;
+    const stopped = new Promise<T>((resolve) => (stop = () => resolve(fallback)));
+    this.stopWaiters.add(stop);
+    try {
+      return await Promise.race([read(), stopped]);
+    } finally {
+      this.stopWaiters.delete(stop);
+    }
+  }
+
+  /** Read the saved gateway, or abandon the read if `stop()` runs first. */
+  private readSavedSettings(stops: number): Promise<ConnectionSettings | null> {
+    return this.raceStop(stops, () => this.savedSettings(), null);
+  }
+
   /** Written first: settings the host could not save are never the ones in use. */
   private async saveSettings(settings: ConnectionSettings): Promise<void> {
-    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(settings));
+    await this.writeRecord(settings);
     this.settings = settings;
+  }
+
+  /** Saved as a choice the person made: any setup chosen before `choice` steps aside. */
+  private async saveChoice(
+    settings: ConnectionSettings,
+    choice: number = ++this.writes.choices,
+  ): Promise<void> {
+    await this.saveSettings(settings);
+    if (choice > this.writes.chosen) this.writes.chosen = choice;
+  }
+
+  /** The saved record alone; this client's settings stay as they are. */
+  private async writeRecord(record: ConnectionSettings): Promise<void> {
+    const write: { settledRevision: number | null } = { settledRevision: null };
+    this.writes.inFlightSettings = write;
+    try {
+      await this.host.storage.set(SETTINGS_KEY, JSON.stringify(record));
+      const rev = ++this.writes.settingsRevision;
+      write.settledRevision = rev;
+      this.seenRevision = rev;
+      this.pendingSeen = null;
+    } finally {
+      if (this.writes.inFlightSettings === write) this.writes.inFlightSettings = null;
+    }
+  }
+
+  private async forgetRecord(): Promise<void> {
+    const write: { settledRevision: number | null } = { settledRevision: null };
+    this.writes.inFlightSettings = write;
+    try {
+      await this.host.storage.delete(SETTINGS_KEY);
+      const rev = ++this.writes.settingsRevision;
+      write.settledRevision = rev;
+      this.seenRevision = rev;
+      this.pendingSeen = null;
+    } finally {
+      if (this.writes.inFlightSettings === write) this.writes.inFlightSettings = null;
+    }
+  }
+
+  /**
+   * Whether the saved record is the one this client last read or wrote. Any other is another
+   * client's on this store, saved or forgotten since, and this client changes in it only what it
+   * means to change.
+   */
+  private recordSeen(saved?: ConnectionSettings | null): boolean {
+    if (this.seenRevision === this.writes.settingsRevision) return true;
+    const pending = this.pendingSeen;
+    if (!pending || saved === undefined) return false;
+    const expected = pending.write.settledRevision ?? pending.before;
+    if (expected !== this.writes.settingsRevision) return false;
+    const savedRaw = saved === null ? null : JSON.stringify(saved);
+    if (savedRaw !== pending.raw) return false;
+    this.seenRevision = expected;
+    this.pendingSeen = null;
+    return true;
+  }
+
+  /**
+   * The choice number a setup for `url` may save under, or null once a newer choice committed on
+   * this store (including a Connect to the same URL or a real Forget). Non-choices — a token
+   * clear, a suspension, or Back from an empty store — leave `chosen` alone. Decided without
+   * reading the store, so nothing runs between a save's check that its socket is live and its write.
+   */
+  private setupMaySave(url: string): number | null {
+    const chosen = this.setupChosen;
+    return chosen?.url === url && chosen.choice >= this.writes.chosen ? chosen.choice : null;
   }
 
   /**
@@ -1540,6 +1885,23 @@ export class ClawtrateClient {
   }
 
   /**
+   * A Disconnect, Suspend or Retry, queued. Sent while `start` reads the saved gateway, it waits
+   * for that read and fails if the read did.
+   */
+  private connectionCommand(change: (stops: number) => Promise<void>): Promise<void> {
+    const stops = this.stops;
+    const restoring = this.restoring;
+    const run = this.changeConnection(async () => {
+      const outcome = await restoring?.read;
+      if (stops !== this.stops) return;
+      if (outcome?.failed) throw outcome.error;
+      return change(stops);
+    });
+    restoring?.commands.push(run);
+    return run;
+  }
+
+  /**
    * Resume the saved gateway by default. With `resume: false`, skip reading
    * the gateway settings. With `resume: "disconnected"`, load the saved
    * gateway so the host can offer it as a choice without opening a socket.
@@ -1548,30 +1910,112 @@ export class ClawtrateClient {
     const stops = this.stops;
     const selection = this.selectionApplied;
     const prior = this.settings;
-    const identity = await this.loadIdentity();
-    if (stops !== this.stops) return;
-    this.setConnection({ deviceId: identity.deviceId });
-    this.gatewayNames = readGatewayNames(
-      await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null),
-    );
-    // A turn limit the person chose earlier, unless the host was given one.
-    if (this.options.turnLimitMs === undefined) {
-      const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
-      if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
+    // Published before the first wait: a command sent while the identity loads waits too.
+    const commands = this.connectionCommands;
+    type ReadOutcome = { failed: false } | { failed: true; error: unknown };
+    let release!: (outcome: ReadOutcome) => void;
+    const read = new Promise<ReadOutcome>((resolve) => (release = resolve));
+    const restoring = { read, release, commands: [] as Promise<unknown>[] };
+    this.restoring = restoring;
+    this.startReads.add(restoring);
+    let settings: ConnectionSettings | null;
+    let outcome: ReadOutcome = { failed: false };
+    try {
+      try {
+        const identity = await this.loadIdentity();
+        if (stops !== this.stops) return;
+        this.setConnection({ deviceId: identity.deviceId });
+        // A turn limit the person chose earlier, unless the host was given one.
+        const sets = { ...this.preferenceSets };
+        const limit =
+          this.options.turnLimitMs === undefined
+            ? Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null))
+            : null;
+        const channelChats =
+          (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
+        const names = readGatewayNames(
+          await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null),
+        );
+        // A startup stopped while it read keeps nothing: the next one reads again. A preference
+        // the person set meanwhile is newer than what was read.
+        if (stops !== this.stops) return;
+        if (
+          sets.turnLimit === this.preferenceSets.turnLimit &&
+          limit !== null &&
+          validTurnLimit(limit)
+        )
+          this.turnLimitMs = limit * 60_000;
+        if (sets.channelChats === this.preferenceSets.channelChats)
+          this.showChannelChats = channelChats;
+        // A name given meanwhile is newer than what was read.
+        if (this.gatewayNames.length === 0) this.gatewayNames = names;
+        this.store.update((state) => ({
+          ...state,
+          turnLimitMinutes: this.turnLimitMs / 60_000,
+          showChannelChats: this.showChannelChats,
+        }));
+        if (options.resume === false) return;
+        // Startup needs to open the socket without waiting for another client's credential write.
+        // A write that lands during the read may or may not be in what it returned, so the record
+        // is read again, twice at most, until no write lands across a read — unless a command
+        // queued meanwhile, which acts on the gateway already captured. A command queued while a
+        // reread was pending discards that reread and its revision. Only an uncontended read
+        // claims its revision, so the record and revision this client keeps go together.
+        let before = this.writes.settingsRevision;
+        let writingBefore = this.writes.inFlightSettings;
+        settings = await this.savedSettings();
+        for (
+          let again = 0;
+          again < 2 &&
+          stops === this.stops &&
+          restoring.commands.length === 0 &&
+          before !== this.writes.settingsRevision;
+          again += 1
+        ) {
+          const rereadBefore = this.writes.settingsRevision;
+          const rereadWriting = this.writes.inFlightSettings;
+          const reread = await this.savedSettings();
+          if (restoring.commands.length > 0) break;
+          before = rereadBefore;
+          writingBefore = rereadWriting;
+          settings = reread;
+        }
+        const after = this.writes.settingsRevision;
+        const inFlight = this.writes.inFlightSettings ?? writingBefore;
+        const uncontended = before === after && inFlight === null;
+        if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
+          return;
+        this.settings = settings;
+        this.seenRevision = uncontended ? before : null;
+        this.pendingSeen =
+          !uncontended && before === after && inFlight !== null
+            ? {
+                before,
+                write: inFlight,
+                raw: settings === null ? null : JSON.stringify(settings),
+              }
+            : null;
+      } catch (error) {
+        outcome = { failed: true, error };
+        throw error;
+      } finally {
+        release(outcome);
+      }
+      // Publish before clearing `restoring` so commands sent from this notification wait ahead of resume.
+      if (restoring.commands.length > 0 && settings) {
+        this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
+      }
+    } finally {
+      if (this.restoring === restoring) this.restoring = null;
+      this.startReads.delete(restoring);
     }
-    this.showChannelChats =
-      (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
-    this.store.update((state) => ({
-      ...state,
-      turnLimitMinutes: this.turnLimitMs / 60_000,
-      showChannelChats: this.showChannelChats,
-    }));
-    if (options.resume === false) return;
-    // Startup needs to open the socket without waiting for another client's credential write.
-    const settings = await this.savedSettings();
-    if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
-      return;
-    this.settings = settings;
+    // A Disconnect, Suspend or Retry sent during the read (or its notification) decides what
+    // happens to the gateway. One that was refused leaves it to startup.
+    if (restoring.commands.length > 0) {
+      await Promise.allSettled(restoring.commands);
+      if (stops !== this.stops || selection !== this.selectionApplied) return;
+    }
+    if (commands !== this.connectionCommands) return;
     if (settings && (settings.suspended || options.resume === "disconnected")) {
       this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
@@ -1579,8 +2023,13 @@ export class ClawtrateClient {
     if (settings) await this.open();
   }
 
-  /** Connect to a gateway. A token is only needed until this device is paired. */
-  async connect(options: ConnectOptions): Promise<void> {
+  /**
+   * Connect to a gateway. A token is only needed until this device is paired. `setup` is for a
+   * host's own setup only: the address form passes none. With local connect's proved sockets
+   * and the person's consent it is the route a first pairing at this computer's gateway may ask
+   * for full access on (docs/design/setup-effortless.md §3).
+   */
+  async connect(options: ConnectOptions, setup: SetupEndpointCheck = {}): Promise<void> {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     const endsAtStart = this.eligibilityEnds;
@@ -1595,7 +2044,13 @@ export class ClawtrateClient {
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       const token = options.token?.trim() || null;
       const switched = this.settings?.url !== url;
-      await this.saveSettings({ url, token });
+      // Over a proved route, the gateway is saved with that route, and so is its token.
+      await this.saveChoice({
+        url,
+        token,
+        ...(setup.createSocket && setup.route !== undefined ? { route: setup.route } : {}),
+      });
+      this.writes.retiredShared.delete(url);
       // The selection changes only once this choice was valid and saved: a refused one leaves
       // the connection that stays open its own, and its attempt as it was.
       this.selectionApplied = selection;
@@ -1606,10 +2061,10 @@ export class ClawtrateClient {
       this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
-      this.setupCheck = null;
+      this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = null;
       this.pairingSeen = null;
-      if (stops === this.stops) await this.open();
+      if (stops === this.stops) await this.open({ newTarget: true });
     });
   }
 
@@ -1646,7 +2101,8 @@ export class ClawtrateClient {
       this.planHadToken = false;
       this.typedAttempt = null;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
-      this.settings = { url, token: null };
+      this.settings = setupSettings(url, setup);
+      this.setupChosen = { url, choice: ++this.writes.choices };
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = { url, reuse: false };
@@ -1655,7 +2111,7 @@ export class ClawtrateClient {
         bootstrapToken: options.bootstrapToken,
         expiresAtMs: options.expiresAtMs,
       };
-      if (stops === this.stops) await this.open();
+      if (stops === this.stops) await this.open({ newTarget: true });
     });
   }
 
@@ -1676,11 +2132,12 @@ export class ClawtrateClient {
       this.selectionApplied = selection;
       if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
-      this.settings = { url: target, token: null };
+      this.settings = setupSettings(target, setup);
+      this.setupChosen = { url: target, choice: ++this.writes.choices };
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(target, setup);
       this.setupIntent = { url: target, reuse: true };
-      if (stops === this.stops) await this.open();
+      if (stops === this.stops) await this.open({ newTarget: true });
     });
   }
 
@@ -1732,7 +2189,7 @@ export class ClawtrateClient {
    */
   async disconnect(gatewayUrl?: string, selection?: number): Promise<void> {
     const asked = ++this.selectionAsked;
-    return this.changeConnection(async () => {
+    return this.connectionCommand(async (stops) => {
       if (!this.settings) return;
       if (gatewayUrl !== undefined && this.settings.url !== gatewayUrl) {
         throw new GatewayChangedError();
@@ -1742,11 +2199,16 @@ export class ClawtrateClient {
         throw new GatewayChangedError();
       }
       // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
-      // and stays the selection it was. Another client on this store may have saved a different
-      // gateway since this one was chosen; that record is the other client's and stays.
-      if ((await this.savedSettings())?.url === this.settings.url) {
-        await this.host.storage.delete(SETTINGS_KEY);
+      // and stays the selection it was. A record another client on this store saved or changed
+      // since is that client's, and stays, even for this gateway.
+      const saved = await this.readSavedSettings(stops);
+      if (!this.settings || stops !== this.stops) return;
+      if (saved === null || this.recordSeen(saved)) {
+        await this.forgetRecord();
+        // A real deletion (not Back on an empty store) is a choice that blocks older setup saves.
+        if (saved !== null) this.writes.chosen = ++this.writes.choices;
       }
+      this.connectionCommands += 1;
       this.selectionApplied = asked;
       this.abandonAccessRequest("Disconnected from the gateway.");
       this.close();
@@ -1759,11 +2221,16 @@ export class ClawtrateClient {
       this.raw.clear();
       this.retained.clear();
       this.forgetGatewayState();
+      this.target += 1;
       this.store.set({
         ...initialState,
         turnLimitMinutes: this.turnLimitMs / 60_000,
         showChannelChats: this.showChannelChats,
-        connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
+        connection: {
+          ...initialConnectionState,
+          deviceId: this.identity?.deviceId ?? null,
+          target: this.target,
+        },
       });
     });
   }
@@ -1773,17 +2240,52 @@ export class ClawtrateClient {
    * reconnects at once, keeping what is already on screen.
    */
   async retryNow(): Promise<void> {
-    const stops = this.stops;
+    let reload: number | null = null;
     // The reload runs outside the queue: it changes nothing saved.
-    const reload = await this.changeConnection(async () => {
-      if (!this.settings || stops !== this.stops) return null;
-      if (this.setupIntent?.refusal === "pairing-changed") return null;
+    await this.connectionCommand(async (stops) => {
+      if (!this.settings) return;
+      if (this.setupIntent?.refusal === "pairing-changed") return;
       if (this.protocol?.connected && this.state.connection.status === "connected") {
-        return this.generation;
+        reload = this.generation;
+        return;
       }
-      if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
-      if (stops === this.stops) await this.open();
-      return null;
+      if (this.settings.suspended) {
+        // Reconnect is the person's latest choice, as Connect is. A record of this gateway keeps
+        // what is in it now: another client, or the store itself, may have changed its token.
+        const saved = await this.readSavedSettings(stops);
+        if (!this.settings || stops !== this.stops) return;
+        if (saved?.url === this.settings.url) {
+          await this.saveChoice({ ...saved, suspended: false });
+        } else if (this.recordSeen(saved)) {
+          await this.saveChoice({ ...this.settings, suspended: false });
+        } else {
+          // Another client saved another gateway or forgot this one since. Drop this client's
+          // token when a pairing on this store retired it, even if that device token was refused
+          // since, or a device token has replaced it (or on a secure store, where switching
+          // retired any migrated token and typed tokens stay in memory only). Keep it when it is
+          // still this gateway's only credential on a plain-file store.
+          const { token, url } = this.settings;
+          const dropToken =
+            token !== null &&
+            (this.host.credentialStatus !== undefined ||
+              this.writes.retiredShared.get(url) === token ||
+              (await this.raceStop(stops, () => this.hasDeviceToken(url), true)));
+          if (!this.settings || stops !== this.stops) return;
+          await this.saveChoice({
+            ...this.settings,
+            ...(dropToken ? { token: null } : {}),
+            suspended: false,
+          });
+        }
+      }
+      if (stops !== this.stops) return;
+      // Counted once it opens: one whose open failed, or was stopped, leaves startup to open the
+      // saved gateway. A stop frees the queue at once: the open, still reading this device's
+      // token, gives up at its next check and writes nothing, so another client's change needn't
+      // wait for that read.
+      await this.raceStop(stops, () => this.open(), undefined);
+      if (stops !== this.stops) return;
+      this.connectionCommands += 1;
     });
     if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
   }
@@ -1793,23 +2295,50 @@ export class ClawtrateClient {
    * pairing and what is on screen. `retryNow` reconnects.
    */
   async suspend(): Promise<void> {
-    return this.changeConnection(async () => {
+    return this.connectionCommand(async (stops) => {
       if (!this.settings) return;
       // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
+      // Taken before the read: a refusal during it ends the attempt and drops its token from memory.
       const url = this.settings.url;
-      const typed = this.typedTokenEnds(url);
-      await this.saveSettings({
-        ...this.settings,
-        suspended: true,
-        ...(typed ? { token: null } : {}),
-      });
+      const typed = this.typedTokenEnds(url) ? this.settings.token : null;
+      // Read the current record so another client's gateway or newer token stays intact.
+      const saved = await this.readSavedSettings(stops);
+      if (!this.settings || stops !== this.stops) return;
+      if (saved?.url === url) {
+        // From the record as it is now: another client, or the store itself, may have changed
+        // its token since. Only the suspension and the typed token, if it is still the one
+        // saved, change.
+        await this.saveSettings({
+          ...saved,
+          suspended: true,
+          ...(typed && saved.token === typed ? { token: null } : {}),
+        });
+      } else if (this.recordSeen(saved)) {
+        await this.saveSettings({
+          ...this.settings,
+          suspended: true,
+          ...(typed ? { token: null } : {}),
+        });
+      } else {
+        // Another client saved another gateway or forgot this one since, and a restart opens what
+        // it left.
+        this.settings = { ...this.settings, suspended: true, ...(typed ? { token: null } : {}) };
+      }
+      this.connectionCommands += 1;
       // Only once that is saved does the attempt end: a Disconnect that failed keeps it.
       this.endAttempt(url);
       // The connection stops: writes waiting for access fail, as on any lost connection.
       // Runs are kept as they are and reconciled with history after Reconnect.
       this.abandonAccessRequest("Disconnected from the gateway.");
       this.close();
-      this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
+      this.target += 1;
+      this.setConnection({
+        status: "disconnected",
+        retryAt: null,
+        error: null,
+        pairing: null,
+        target: this.target,
+      });
     });
   }
 
@@ -1835,6 +2364,7 @@ export class ClawtrateClient {
    */
   private endTypedAttempt(url: string): void {
     const selection = this.typedAttempt?.selection;
+    const token = this.typedAttempt?.token;
     const typed = this.typedTokenEnds(url);
     this.endAttempt(url);
     if (!typed || !this.settings) return;
@@ -1843,7 +2373,13 @@ export class ClawtrateClient {
       const current = this.settings;
       if (!current || current.url !== url || this.selectionApplied !== selection) return;
       if (current.token !== null) return;
-      await this.saveSettings(current);
+      // Only from the record as it is now, and only while it still holds this token: another
+      // client on this store may have saved another gateway, or forgotten this one, since.
+      const saved = await this.savedSettings();
+      if (saved?.url !== url || saved.token !== token) return;
+      // This client's settings take the record it wrote, a suspension another client saved
+      // with it, so Reconnect lifts that suspension.
+      await this.saveSettings({ ...saved, token: null });
     }).catch(() => this.log("warn", "Could not drop the gateway token from this device."));
   }
 
@@ -1892,7 +2428,14 @@ export class ClawtrateClient {
   /** Stop without forgetting anything. Used when the host process exits. */
   stop(): void {
     this.stops += 1;
+    // A command waiting for startup's read no longer holds other clients' writes.
+    for (const restoring of this.startReads) restoring.release({ failed: false });
+    this.startReads.clear();
+    this.restoring = null;
+    for (const stop of this.stopWaiters) stop();
     this.close();
+    this.target += 1;
+    this.setConnection({ target: this.target });
   }
 
   /** Open a transcript. Calls are counted; the last matching close releases it. */
@@ -1906,7 +2449,8 @@ export class ClawtrateClient {
     const count = this.openSessions.get(key) ?? 0;
     this.openSessions.set(key, count + 1);
     if (count > 0) {
-      // A view coming to a task whose history failed asks for it, as a first open would.
+      // A view coming to a task whose history failed asks for it, as a first open would,
+      // unless a read already under way will settle it.
       if (this.state.transcripts[key]?.status === "error") this.reloadSession(key);
       return;
     }
@@ -1925,9 +2469,32 @@ export class ClawtrateClient {
    * failed read. Closing and opening again would not read while another viewer
    * holds the task, since only the first open reads.
    */
-  reloadSession(key: string): void {
+  reloadSession(key: string, failed?: string): void {
     if (!this.openSessions.has(key)) throw new Error("That task isn't open.");
     const current = this.state.transcripts[key];
+    if (failed !== undefined && (current?.status !== "error" || current.error !== failed)) return;
+    const load = this.loads.get(key);
+    if (load) {
+      // A read already under way settles this task; coalescing avoids queuing a second read
+      // behind it (for instance from a second Try again before the loading snapshot arrives).
+      if (current?.status !== "error") return;
+      // Capture the incarnation before publishing loading: a synchronous store listener can close
+      // every hold and reopen the same key, replacing it before this call returns.
+      const incarnation = this.incarnations.get(key);
+      this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
+      // A read that published its failure while this retry arrived (its listeners run before it
+      // ends) settles nothing more: still loading once it ends, the task is read again. A close
+      // and reopen between here and then is a different task, so its incarnation must still match.
+      void load.done.then(() => {
+        if (
+          this.openSessions.has(key) &&
+          this.incarnations.get(key) === incarnation &&
+          this.state.transcripts[key]?.status === "loading"
+        )
+          this.reloadSession(key);
+      });
+      return;
+    }
     if (current?.status === "error")
       this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
     if (this.state.connection.status === "connected") void this.loadTranscript(key, false, null);
@@ -1990,6 +2557,7 @@ export class ClawtrateClient {
     for (const message of this.state.transcripts[key]?.outbox ?? []) {
       this.dropAttachments(message.id);
     }
+    for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
     this.recipients.delete(key);
     for (const readKey of [...this.approvalReads.keys()])
       if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
@@ -2050,6 +2618,11 @@ export class ClawtrateClient {
   async requestAccess(tier: "interactive" | "admin" | "pairing" = "interactive"): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
+    // A full pairing's grant is the gateway's limit, a narrower one too: nothing asks again,
+    // whatever calls this (setup-effortless.md §2).
+    if (this.holdsFullPairing()) throw new Error(FULL_PAIRING_LIMIT);
+    // The six asked for already cover any tier: a smaller ask never replaces that request.
+    if (this.upgradeWanted && this.upgradeTier === "full") return;
     // A request for admin is never narrowed by a later one for less, and device access
     // (`operator.pairing`) is asked for only by name, added to the scopes the connection
     // holds and nothing else: from a read connection it asks for no power to send or answer.
@@ -2077,12 +2650,147 @@ export class ClawtrateClient {
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
 
-  private tierScopes(tier: "interactive" | "admin" | "held"): readonly string[] {
-    return tier === "admin" ? ADMIN_SCOPES : tier === "held" ? this.heldBase : INTERACTIVE_SCOPES;
+  private tierScopes(tier: "interactive" | "admin" | "held" | "full"): readonly string[] {
+    return tier === "full"
+      ? FULL_SCOPES
+      : tier === "admin"
+        ? ADMIN_SCOPES
+        : tier === "held"
+          ? this.heldBase
+          : INTERACTIVE_SCOPES;
+  }
+
+  /**
+   * Accept the offer of full control (setup-effortless.md §6): one `device.scopes.requestUpgrade`
+   * for the six, in their order, which the gateway's owner decides once. The answer is saved
+   * before the request goes, so the offer never shows by itself again. An approval saves the
+   * grant as a full pairing, a narrower one too, and nothing asks again; a refusal is saved.
+   * Bound to the gateway and device the offer was shown for, and to its stamp (`GatewayStamp`):
+   * an offer read before a Connect, a Disconnect or a switch sends nothing, even to a gateway
+   * that reports the same identity. The reconnect that brings the grant keeps the target.
+   */
+  async requestFullControl(binding: FullControlBinding): Promise<void> {
+    if (this.options.readOnly)
+      throw new Error("This host only reads; it does not ask for more access.");
+    if (!sameStamp(binding.stamp, gatewayStamp(this.state.connection)))
+      throw new Error(CONNECTION_CHANGED);
+    const generation = this.generation;
+    const offered = () =>
+      sameStamp(binding.stamp, gatewayStamp(this.state.connection)) &&
+      generation === this.generation &&
+      this.state.connection.status === "connected" &&
+      this.state.connection.fullOffer !== null &&
+      // A full pairing asks for nothing more, even before the next hello moves the offer away.
+      !this.holdsFullPairing() &&
+      this.state.connection.gatewayUrl === binding.gatewayUrl &&
+      this.state.connection.deviceId === binding.deviceId &&
+      this.settings?.url === binding.gatewayUrl;
+    if (!offered()) throw new Error("Full control isn't offered on this connection.");
+    // Reserved before the save starts: an accept that overlaps this one joins it, even if the
+    // gateway settles it first, so it never sends a request of its own.
+    if (this.fullAttempt) return this.fullAttempt;
+    if (this.scopeUpgrade && this.upgradeTier === "full") return;
+    const attempt = (async () => {
+      // Saved first: an answer that can't be kept would let the offer ask again.
+      if (!(await this.answerOffer("asked", binding)))
+        throw new Error("Clawtrate couldn't save this choice. Try again.");
+      if (!offered()) throw new Error("The connection changed. Try again from Settings.");
+      if (this.scopeUpgrade && this.upgradeTier === "full") return;
+      this.scopeUpgrade?.cancelScopeUpgrade();
+      this.scopeUpgrade = null;
+      this.upgradeTier = "full";
+      this.pairingWanted = false;
+      this.upgradeWanted = true;
+      this.startUpgrade();
+    })();
+    this.fullAttempt = attempt;
+    // A failed save sends nothing: the person may try again. Otherwise the gateway's answer to
+    // the request releases it (`startUpgrade`), or leaving the gateway does.
+    attempt.catch(() => {
+      if (this.fullAttempt === attempt) this.fullAttempt = null;
+    });
+    return attempt;
+  }
+
+  /** "Keep current access": the offer is answered, and shows by itself no more. */
+  async dismissFullControl(binding: FullControlBinding): Promise<void> {
+    const connection = this.state.connection;
+    if (
+      !sameStamp(binding.stamp, gatewayStamp(connection)) ||
+      connection.fullOffer !== "offer" ||
+      connection.gatewayUrl !== binding.gatewayUrl ||
+      connection.deviceId !== binding.deviceId
+    )
+      return;
+    await this.answerOffer("dismissed", binding);
+  }
+
+  private offerKey(url: string, deviceId: string): string {
+    return `fullControlOffer:${encodeURIComponent(gatewayEndpoint(url) ?? url)}:${deviceId}`;
+  }
+
+  /** The saved answer; one that can't be read counts as answered, so nothing asks twice. */
+  private async loadOfferAnswer(
+    url: string,
+    deviceId: string,
+  ): Promise<OfferAnswer | "unread" | null> {
+    try {
+      const raw = await this.host.storage.get(this.offerKey(url, deviceId));
+      if (raw === null) return null;
+      const answer = asRecord(JSON.parse(raw))?.answer;
+      return typeof answer === "string" && OFFER_ANSWERS.includes(answer)
+        ? (answer as OfferAnswer)
+        : "unread";
+    } catch {
+      return "unread";
+    }
+  }
+
+  /**
+   * Saves the answer for the gateway and device it was given for, and, while that gateway is
+   * the one in use, moves the offer to Settings. Resolves false when it couldn't be kept; this
+   * session counts it as answered anyway.
+   */
+  private async answerOffer(
+    answer: OfferAnswer,
+    at: { gatewayUrl: string; deviceId: string },
+  ): Promise<boolean> {
+    if (this.settings?.url === at.gatewayUrl && this.state.connection.deviceId === at.deviceId) {
+      this.offerAnswer = answer;
+      if (this.state.connection.fullOffer === "offer")
+        this.setConnection({ fullOffer: "settings" });
+    }
+    try {
+      await this.host.storage.set(
+        this.offerKey(at.gatewayUrl, at.deviceId),
+        JSON.stringify({ answer }),
+      );
+      return true;
+    } catch {
+      this.log("warn", "Could not save the answer to the full-control offer.");
+      return false;
+    }
+  }
+
+  /**
+   * Whether this connection is offered full control, and where (`ConnectionState.fullOffer`):
+   * only at a protected address. This Mac's upgrade presents the shared token on a proved
+   * socket instead, and isn't built.
+   */
+  private offerFor(scopes: readonly string[]): "offer" | "settings" | null {
+    const url = this.settings?.url;
+    if (!url || !this.fullAccess || !protectedGatewayUrl(url)) return null;
+    if (this.holdsFullPairing() || this.isSetup(url)) return null;
+    // Only a device the gateway paired: a hello that left no saved token offers nothing.
+    const deviceId = this.state.connection.deviceId;
+    if (!deviceId || !this.writes.grants.get(this.tokenKey(url, deviceId, "operator"))) return null;
+    if (FULL_SCOPES.every((scope) => scopes.includes(scope))) return null;
+    return this.offerAnswer === null ? "offer" : "settings";
   }
 
   /** What an access request asks for: its tier, device access when asked for or held. */
   private upgradeTarget(): string[] {
+    if (this.upgradeTier === "full") return [...FULL_SCOPES];
     const keepPairing = this.pairingWanted || this.state.connection.scopes.includes(PAIRING_SCOPE);
     return [...this.tierScopes(this.upgradeTier), ...(keepPairing ? [PAIRING_SCOPE] : [])];
   }
@@ -2108,6 +2816,16 @@ export class ClawtrateClient {
   }
 
   private startUpgrade(): void {
+    // A full pairing asks for nothing more, a request queued before its grant was known too.
+    if (this.holdsFullPairing()) {
+      if (!this.upgradeWanted) return;
+      this.upgradeWanted = false;
+      this.pairingWanted = false;
+      const waiters = this.accessWaiters;
+      this.accessWaiters = [];
+      for (const waiter of waiters) waiter.reject(new Error(FULL_PAIRING_LIMIT));
+      return;
+    }
     const protocol = this.protocol;
     const identity = this.identity;
     const url = this.settings?.url;
@@ -2117,6 +2835,11 @@ export class ClawtrateClient {
     const tier = this.upgradeTier;
     const target = this.upgradeTarget();
     const askedPairing = target.includes(PAIRING_SCOPE);
+    const asked = { gatewayUrl: url, deviceId: identity.deviceId };
+    // The gateway's answer ends the person's accept of the offer: a later one is a new choice.
+    const settled = () => {
+      if (tier === "full") this.fullAttempt = null;
+    };
     const upgrade = new GatewayScopeUpgrade({
       request: (method, params, options) => protocol.request(method, params, options),
       tokenStore: {
@@ -2157,12 +2880,13 @@ export class ClawtrateClient {
                 : current?.fullGrant
                   ? current.heldScopes
                   : null;
+            // Full control accepted: the grant is a full pairing's, held by name, a narrower one too.
             await this.writeToken(
               url,
               deviceId,
               role,
-              fullHeld
-                ? fullUpgrade(fullHeld, token, target, scopes)
+              fullHeld || tier === "full"
+                ? fullUpgrade(fullHeld ?? [], token, target, scopes)
                 : grantRecord(token, scopes, target),
             );
             const key = this.tokenKey(url, deviceId, role);
@@ -2202,11 +2926,20 @@ export class ClawtrateClient {
         (outcome) => {
           if (this.scopeUpgrade !== upgrade) return;
           this.scopeUpgrade = null;
+          settled();
           if (outcome.status === "approved") {
             // Judged on what is kept (the store's rule), so an approval is never one the saved
             // record can't hold: an admin grant for a write request keeps neither.
             const kept = withinAsked(outcome.scopes, target);
-            if (
+            // Full control's grant is the limit, whatever it is: kept, said, and never asked again.
+            if (tier === "full")
+              void this.answerOffer(
+                FULL_SCOPES.every((scope) => outcome.scopes.includes(scope))
+                  ? "granted"
+                  : "narrower",
+                asked,
+              );
+            else if (
               (tier !== "held" &&
                 !scopeSatisfied(kept, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) ||
               (askedPairing && !kept.includes(PAIRING_SCOPE))
@@ -2225,6 +2958,8 @@ export class ClawtrateClient {
             this.setUpgrade({ status: "approved", error: null });
             return;
           }
+          if (tier === "full" && outcome.status === "rejected")
+            void this.answerOffer("refused", asked);
           this.failAccess(new AccessRequestError(outcome.status));
         },
         (error: unknown) => {
@@ -2235,6 +2970,7 @@ export class ClawtrateClient {
             // The connection dropped while waiting. Ask again after the next hello.
             return;
           }
+          settled();
           this.failAccess(new AccessRequestError("error", errorMessage(error)));
         },
       );
@@ -2252,6 +2988,7 @@ export class ClawtrateClient {
   private abandonAccessRequest(reason: string): void {
     this.scopeUpgrade?.cancelScopeUpgrade();
     this.scopeUpgrade = null;
+    this.fullAttempt = null;
     this.upgradeWanted = false;
     this.pairingWanted = false;
     const waiters = this.accessWaiters;
@@ -2288,6 +3025,13 @@ export class ClawtrateClient {
         ),
       );
     }
+    // A full pairing asks for nothing more: what it doesn't hold, while it is connected or
+    // doesn't mean to hold, it never will by asking (setup-effortless.md §2).
+    if (
+      this.holdsFullPairing() &&
+      (connection.status === "connected" || !connection.requestedScopes.includes(scope))
+    )
+      return Promise.reject(new Error(FULL_PAIRING_LIMIT));
     if (this.accessWaiters.length >= MAX_ACCESS_WAITERS) {
       return Promise.reject(
         new Error("Too many operations are waiting for access; try again when they finish."),
@@ -2349,9 +3093,20 @@ export class ClawtrateClient {
     return this.accessWaiters.length;
   }
 
+  /**
+   * Resolves once the task's current read queue is idle, or at once if none runs,
+   * for tests that need a late duplicate read to have been queued already.
+   */
+  historyReadsSettled(key: string): Promise<void> {
+    return this.loads.get(key)?.done ?? Promise.resolve();
+  }
+
   /** Reject every operation waiting for access, without changing what is being asked for. */
   private rejectAccessWaiters(error: Error): void {
     this.upgradeWanted = false;
+    // An accept of full control ends here unanswered, so a later one asks again. A request
+    // still under way keeps blocking a second one (`scopeUpgrade`).
+    this.fullAttempt = null;
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
     for (const waiter of waiters) waiter.reject(error);
@@ -2464,6 +3219,11 @@ export class ClawtrateClient {
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
       this.attachmentBytes += bytes;
+      // Pictures kept only to be shown give way to files still to go out.
+      for (const id of this.sentPictures.keys()) {
+        if (this.attachmentBytes + this.sentPictureBytes <= MAX_RETAINED_ATTACHMENT_BYTES) break;
+        this.dropSentPictures(id);
+      }
     }
     this.updateActivity(key, (activity) => {
       const withMessage = { ...activity, outbox: [...activity.outbox, message] };
@@ -2497,6 +3257,56 @@ export class ClawtrateClient {
     if (!kept) return;
     this.attachmentContent.delete(messageId);
     this.attachmentBytes -= kept.bytes;
+  }
+
+  /**
+   * Once history holds a message, keep the pictures it carried that a
+   * conversation draws, from the copy sent, so its own message can still show
+   * them; its other files are let go. Room is made by dropping the oldest kept.
+   */
+  private keepSentPictures(message: OutgoingMessage): void {
+    const kept = this.attachmentContent.get(message.id);
+    this.dropAttachments(message.id);
+    if (!kept) return;
+    const named = kept.files.flatMap((file, index) =>
+      isShownPictureType(file.mimeType) && decodedBytes(file.content) <= MAX_PICTURE_BYTES
+        ? [{ index, mimeType: file.mimeType, content: file.content }]
+        : [],
+    );
+    // Bytes that aren't the picture they are named as would never be drawn: not kept.
+    const files = named.filter((file) => isDrawnPicture(file.mimeType, fromBase64(file.content)));
+    const notPictures = named.filter((file) => !files.includes(file)).map((file) => file.index);
+    const bytes = files.reduce((sum, file) => sum + decodedBytes(file.content), 0);
+    if (named.length === 0 || this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) return;
+    for (const id of this.sentPictures.keys()) {
+      if (
+        this.sentPictures.size < MAX_SENT_PICTURE_MESSAGES &&
+        this.attachmentBytes + this.sentPictureBytes + bytes <= MAX_RETAINED_ATTACHMENT_BYTES
+      )
+        break;
+      this.dropSentPictures(id);
+    }
+    this.sentPictures.set(message.id, {
+      task: kept.task,
+      mode: message.mode,
+      runId: message.runId,
+      files,
+      notPictures,
+      bytes,
+    });
+    this.sentPictureBytes += bytes;
+  }
+
+  private dropSentPictures(messageId: string): void {
+    const kept = this.sentPictures.get(messageId);
+    if (!kept) return;
+    this.sentPictures.delete(messageId);
+    this.sentPictureBytes -= kept.bytes;
+  }
+
+  /** Decoded bytes of pictures kept to show for messages history holds, for tests and diagnostics. */
+  get keptPictureBytes(): number {
+    return this.sentPictureBytes;
   }
 
   /** Decoded bytes of files held for outgoing messages, for tests and diagnostics. */
@@ -2598,6 +3408,14 @@ export class ClawtrateClient {
       return this.retryMessage(key, id);
     }
     const transcript = this.state.transcripts[key]!;
+    // The gateway is running a run under this message's own id: the message is out, and nothing
+    // goes again (as when a held one is released).
+    if (gatewayRunning(transcript, messageId)) {
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { status: "sent", error: null, runId: messageId }),
+      );
+      return;
+    }
     const active = activeRun(transcript);
     // A message that came from the queue keeps that origin through every attempt, until
     // it starts or is removed: it starts now with no run active, and otherwise waits
@@ -2615,11 +3433,16 @@ export class ClawtrateClient {
     const held = active?.state !== "stopping" && questionPending(transcript, active);
     const status = held ? "held" : mode === "queue" && active ? "queued" : "sending";
     this.updateActivity(key, (activity) => {
-      // A run the gateway refused never started; the retry is a new attempt.
+      // A run the gateway refused never started, and one under this id that ended is over: the
+      // retry is a new attempt, and its id names one run.
       const cleared = {
         ...activity,
         runs: activity.runs.filter(
-          (run) => !(run.id === messageId && run.origin === "local" && !run.bound),
+          (run) =>
+            !(
+              run.id === messageId &&
+              ((run.origin === "local" && !run.bound) || isTerminal(run.state))
+            ),
         ),
       };
       const next = updateMessage(cleared, messageId, {
@@ -3096,6 +3919,14 @@ export class ClawtrateClient {
 
   /** Deliver one outgoing message with `chat.send`, once write access is held. */
   private async deliver(key: string, messageId: string): Promise<void> {
+    // A message cancelled while it waited its turn (its bot deleted, say) stays cancelled.
+    const waiting = () => {
+      const status = this.outgoing(key, messageId)?.status;
+      return status === "sending" || status === "awaiting-access";
+    };
+    // Every delivery is enqueued while its message is sending; one cancelled meanwhile asks for
+    // nothing, not even access.
+    if (!waiting()) return;
     if (!this.state.connection.canWrite) {
       this.updateActivity(key, (activity) =>
         updateMessage(activity, messageId, { status: "awaiting-access" }),
@@ -3104,7 +3935,7 @@ export class ClawtrateClient {
     try {
       await this.ensureScope(WRITE_SCOPE);
     } catch (error) {
-      this.failDelivery(key, messageId, error, true);
+      if (waiting()) this.failDelivery(key, messageId, error, true);
       return;
     }
     let message = this.outgoing(key, messageId);
@@ -5076,32 +5907,32 @@ export class ClawtrateClient {
     input: NewRoutine,
     key: string,
     owner: object | null = null,
-    gateway?: string | null,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
-    return this.routines.create(input, key, owner, gateway);
+    return this.routines.create(input, key, owner, stamp);
   }
 
   /** One routine as the gateway has it now. */
-  readRoutine(id: string, gateway?: string | null): Promise<Routine | null> {
-    return this.routines.readOne(id, gateway);
+  readRoutine(id: string, stamp?: GatewayStamp): Promise<Routine | null> {
+    return this.routines.readOne(id, stamp);
   }
 
   /** What the gateway shows of a create whose answer never came, by its draft's key. */
   checkRoutineCreate(
     key: string,
     input: RoutineFields,
-    gateway: string | null,
+    stamp: GatewayStamp,
   ): Promise<RoutineSaveCheck> {
-    return this.routines.checkCreate(key, input, gateway);
+    return this.routines.checkCreate(key, input, stamp);
   }
 
   /** What the gateway shows of an edit whose answer never came. */
   checkRoutineUpdate(
     id: string,
     sent: { original: RoutineFields; edit: RoutineFields; expected: RoutineFields },
-    gateway: string | null,
+    stamp: GatewayStamp,
   ): Promise<RoutineSaveCheck> {
-    return this.routines.checkUpdate(id, sent, gateway);
+    return this.routines.checkUpdate(id, sent, stamp);
   }
 
   updateRoutine(
@@ -5110,11 +5941,11 @@ export class ClawtrateClient {
     edit: RoutineFields,
     expected: RoutineRevision,
     owner: object | null = null,
-    gateway?: string | null,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
     if (jsonTextLength(id) > MAX_ID_CHARS)
       return Promise.resolve({ status: "refused", error: "That routine id is too long." });
-    return this.routines.update(id, original, edit, expected, owner, gateway);
+    return this.routines.update(id, original, edit, expected, owner, stamp);
   }
 
   setRoutineEnabled(
@@ -5208,24 +6039,22 @@ export class ClawtrateClient {
   }
 
   /**
-   * Create a bot. With `gatewayId` (the gateway the person was looking at, null when that
-   * gateway names none), nothing is sent unless it is still the gateway connected.
+   * Create a bot. With `stamp` (where the person's screen was read), nothing is sent unless the
+   * host still has that target and that gateway connected.
    */
-  async createBot(input: CreateBotInput, gatewayId?: string | null): Promise<CreatedBot> {
-    if (gatewayId === undefined) return this.accounts.createBot(input);
-    await this.requireSameGateway(gatewayId);
-    // Checked there: known, and the connected gateway's. The whole write stays bound to it.
-    return this.accounts.createBot(input, gatewayId as string);
+  async createBot(input: CreateBotInput, stamp?: GatewayStamp): Promise<CreatedBot> {
+    if (stamp === undefined) return this.accounts.createBot(input);
+    // Checked there: both known and current. The whole write stays bound to them.
+    return this.accounts.createBot(input, await this.requireSameGateway(stamp));
   }
 
   /**
    * Finish a bot whose creation is partial, by its id: what is missing, never a second bot. With
-   * `gatewayId`, as for `createBot`, nothing is sent unless it is still the gateway connected.
+   * `stamp`, as for `createBot`, nothing is sent unless it is still the gateway connected.
    */
-  async finishBot(botId: string, gatewayId?: string | null): Promise<CreatedBot> {
-    if (gatewayId === undefined) return this.accounts.finishBot(botId);
-    await this.requireSameGateway(gatewayId);
-    return this.accounts.finishBot(botId, gatewayId as string);
+  async finishBot(botId: string, stamp?: GatewayStamp): Promise<CreatedBot> {
+    if (stamp === undefined) return this.accounts.finishBot(botId);
+    return this.accounts.finishBot(botId, await this.requireSameGateway(stamp));
   }
 
   dismissBotCreation(): void {
@@ -5250,40 +6079,67 @@ export class ClawtrateClient {
     return this.accounts.removeFallbacks(botId);
   }
 
+  /**
+   * Rename on a name card: `name` and `gatewayId` must be the ones it shows (`bot-names.ts`).
+   * Nothing is sent unless that gateway is still the one connected.
+   */
+  acceptBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
+    if (this.options.readOnly) return Promise.reject(new Error("This host only reads."));
+    return this.botNames.accept(botId, name, stamp);
+  }
+
+  /** Not now on a name card: kept on this device for that bot and that name. */
+  declineBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
+    return this.botNames.decline(botId, name, stamp);
+  }
+
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
   async setBotPicture(
     botId: string,
     avatar: string,
-    gatewayId?: string | null,
+    stamp?: GatewayStamp,
   ): Promise<{ confirmed: boolean }> {
-    if (gatewayId === undefined) return this.accounts.setBotPicture(botId, avatar);
-    await this.requireSameGateway(gatewayId);
-    return this.accounts.setBotPicture(botId, avatar, gatewayId as string);
+    if (stamp === undefined) return this.accounts.setBotPicture(botId, avatar);
+    return this.accounts.setBotPicture(botId, avatar, await this.requireSameGateway(stamp));
+  }
+
+  /** Refuse a write whose screen was read before the host was last pointed at a gateway anew. */
+  private requireSameTarget(stamp: GatewayStamp): void {
+    if (this.target !== stamp.target) throw new Error(CONNECTION_CHANGED);
   }
 
   /**
-   * Refuse a change unless it was made for the gateway connected now, as a check-in save does:
-   * both identities known and equal, and the same connection before and after reading this
-   * one's. A missing identity on either side is a refusal, never a match.
+   * Refuse a change unless it was made for the gateway connected now. The screen's read was
+   * stamped (`GatewayStamp`): the host must still have the target it had then, so no Connect,
+   * Disconnect, switch or new pairing came between that read and now, and the gateway's
+   * identity must be known on both sides and equal, read on one connection that is still the
+   * one open. A missing identity on either side is a refusal, never a match. The answer is the
+   * write's binding: a write that dispatches later checks the target again before it sends.
    */
-  private async requireSameGateway(gatewayId: string | null): Promise<void> {
+  private async requireSameGateway(
+    stamp: GatewayStamp,
+  ): Promise<{ gatewayId: string; target: number }> {
     const protocol = this.protocol;
     const epoch = this.epoch;
     const alive = () =>
       protocol !== null &&
       this.protocol === protocol &&
       this.epoch === epoch &&
-      this.state.connection.status === "connected";
+      this.state.connection.status === "connected" &&
+      this.target === stamp.target;
+    this.requireSameTarget(stamp);
     if (!alive()) throw new Error("Not connected to the gateway.");
+    const gatewayId = stamp.gatewayId;
     if (gatewayId === null)
       throw new Error("The gateway hasn't said which gateway it is, so nothing was sent.");
     const here = await this.readGatewayIdentity();
     // A bot command can be the first to identify this connection after discovery got no ID.
     this.confirmGatewayIdentity(here, alive);
-    if (!alive()) throw new Error("The connection changed before the change was sent.");
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
     // `gatewayId` is known here, so a gateway that names none (null) never matches it.
     if (here !== gatewayId)
       throw new Error("This change was made for another gateway, so nothing was sent.");
+    return { gatewayId, target: stamp.target };
   }
 
   // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------
@@ -5307,6 +6163,7 @@ export class ClawtrateClient {
         };
       },
       gateway: () => this.readGatewayIdentity(),
+      target: () => this.target,
       begin: () => {
         const mine = (this.checkInReads += 1);
         return () => mine === this.checkInReads;
@@ -5328,14 +6185,14 @@ export class ClawtrateClient {
   }
 
   /** Save one bot's check-ins; the outcome is `checkIns.save` with this `saveId`. */
-  saveCheckIn(
+  async saveCheckIn(
     saveId: string,
     botId: string,
     draft: CheckInDraft,
     owner?: object | null,
   ): Promise<void> {
-    if (!this.state.connection.canAdmin)
-      return Promise.reject(new AdminNeededError("Changing check-ins"));
+    if (!this.state.connection.canAdmin) throw new AdminNeededError("Changing check-ins");
+    await this.requireSameGateway(draft.stamp);
     return saveCheckIn(this.checkInsContext(owner), saveId, botId, draft);
   }
 
@@ -5399,6 +6256,153 @@ export class ClawtrateClient {
     return this.machines.removeDevice(deviceId);
   }
 
+  // Deleting a bot (`bot-delete.ts`) ------------------------------------------------------
+
+  /**
+   * What the delete dialog lists for a bot, from `agents.list`, read now, with the identity of
+   * the gateway it was read from. A gateway that names none is not offered a delete.
+   */
+  async readBotDelete(botId: string): Promise<BotDeleteRead> {
+    const link = this.deleteLink();
+    const target = this.target;
+    if (!link.alive()) throw new Error("Not connected to the gateway.");
+    const gatewayId = await this.readGatewayIdentity();
+    this.confirmGatewayIdentity(gatewayId, link.alive);
+    if (!link.alive()) throw new Error("The connection changed while reading. Read again.");
+    if (gatewayId === null)
+      throw new Error(
+        "The gateway hasn't said which gateway it is, so Clawtrate can't delete from it.",
+      );
+    return readBotDelete(this.botDeleteContext(link, { gatewayId, target }), botId);
+  }
+
+  /**
+   * Delete a bot (admin), with what the gateway answered and the bot list read after it. Sent
+   * only to the gateway the dialog read, on the target it was read on (`requireSameGateway`), and
+   * the reads before and after it go over the same connection. One delete per gateway and bot at a time, whichever viewer asks.
+   */
+  async deleteBot(
+    request: DeleteRequest,
+    options: { owner?: object } = {},
+  ): Promise<BotDeleteOutcome> {
+    // Every refusal before the send is an outcome, never a rejection: a viewer that sees a
+    // rejection can't tell it from a reply lost on the way, and treats it as unconfirmed.
+    const notSent = (message: string): BotDeleteOutcome => ({ kind: "not-sent", message });
+    // Ids are checked whole, never cut, by their JSON length, before anything is kept for them.
+    if (
+      jsonTextLength(request.botId) > MAX_ID_CHARS ||
+      jsonTextLength(String(request.stamp.gatewayId)) > MAX_ID_CHARS
+    )
+      return notSent("This delete names a bot or gateway Clawtrate can't take. Nothing was sent.");
+    const key = deleteKey(String(request.stamp.gatewayId), request.botId);
+    if (this.botDeletes.has(key))
+      return notSent(
+        "This bot is already being deleted from another window. Nothing more was sent.",
+      );
+    if (this.botDeletes.size >= MAX_BOT_DELETES)
+      return notSent("Too many deletes are under way. Nothing was sent; try again in a moment.");
+    this.botDeletes.add(key);
+    try {
+      const link = this.deleteLink();
+      let bound: { gatewayId: string; target: number };
+      try {
+        bound = await this.requireSameGateway(request.stamp);
+      } catch (error) {
+        return notSent(errorMessage(error));
+      }
+      if (!link.alive()) return notSent("The connection changed before the delete was sent.");
+      return await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
+    } finally {
+      this.botDeletes.delete(key);
+    }
+  }
+
+  /**
+   * The connection open now, on the target set now: its requests are refused once it closes,
+   * another replaces it or the host is pointed at a gateway anew.
+   */
+  private deleteLink(): {
+    alive: () => boolean;
+    request: (method: string, params: unknown) => Promise<unknown>;
+  } {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === target &&
+      this.state.connection.status === "connected";
+    return {
+      alive,
+      request: (method, params) =>
+        protocol && alive() ? protocol.request(method, params) : Promise.reject(new NotSentError()),
+    };
+  }
+
+  /**
+   * One connection's reads for a delete. A read is shown as the bot list only when it is whole
+   * and no newer read has been shown; one that isn't current decides nothing either.
+   */
+  private botDeleteContext(
+    link: ReturnType<ClawtrateClient["deleteLink"]>,
+    stamp: { gatewayId: string; target: number },
+    owner?: object,
+  ): BotDeleteContext {
+    return {
+      stamp,
+      wanted: () => !(owner && this.withdrawnOwners.has(owner)),
+      request: link.request,
+      readBots: async () => {
+        const issued = ++this.botsIssued;
+        const result = await link.request("agents.list", {});
+        const shown = wholeRoster(result) && link.alive() && this.newestBots(issued);
+        if (shown) this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+        // Asked again whenever it matters: a newer list shown since, or another connection, ends it.
+        return { result, current: () => shown && link.alive() && this.botsShown === issued };
+      },
+      // The one evidence that the bot is gone, acted on as it arrives, whatever follows.
+      deleted: (botId) => this.dropQueuedFor(botId),
+      admin: () =>
+        this.options.readOnly !== true &&
+        this.holds(ADMIN_SCOPE) &&
+        this.state.connection.scopes.includes(ADMIN_SCOPE),
+    };
+  }
+
+  /**
+   * The gateway answered that it deleted the bot: its tasks' queued and held messages in this
+   * host never go. Once, on that answer alone; the bot leaves the rail as any list change does.
+   */
+  private dropQueuedFor(botId: string): void {
+    const keys = Object.keys(this.state.transcripts).filter(
+      (key) => botIdFromSessionKey(key) === botId,
+    );
+    for (const key of keys) {
+      this.cancelAllQueued(key);
+      this.updateActivity(key, (activity) => {
+        let next = activity;
+        for (const message of activity.outbox) {
+          // Held, promoted from the queue but not yet out (as when a run ends in the same batch
+          // as this answer), or still waiting for write access: it never leaves.
+          const unsent =
+            message.status === "held" ||
+            (message.status === "sending" && message.leftAt == null) ||
+            message.status === "awaiting-access";
+          if (!unsent) continue;
+          this.dropAttachments(message.id);
+          next = updateMessage(next, message.id, { status: "cancelled" });
+          // Every message cancelled here takes the local run it started, if the gateway never
+          // named it, so no run is left showing as active.
+          if (message.mode !== "steer" && findRun(next, message.id))
+            next = dropUnboundRun(next, message.id);
+        }
+        return next;
+      });
+    }
+  }
+
   /** Read the bot list again, after a bot was created. */
   private async refreshBots(): Promise<void> {
     const generation = this.generation;
@@ -5406,6 +6410,7 @@ export class ClawtrateClient {
     const result = await this.request("agents.list", {});
     if (generation !== this.generation || !this.newestBots(issued)) return;
     this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+    this.botNames.onBots(this.state.bots);
   }
 
   /**
@@ -5431,14 +6436,18 @@ export class ClawtrateClient {
     if (this.fileReads >= MAX_FILE_READS)
       throw new Error("Other files are being read; try again in a moment.");
     this.fileReads += 1;
+    const owner = options.owner ?? DIRECT_CALLER;
     try {
-      return await read({
+      const result = await read({
         request: (method, params) => this.request(method, params),
         transfers: this.fileTransfers,
-        owner: options.owner ?? DIRECT_CALLER,
+        owner,
         ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
         now: () => this.now(),
       });
+      // A viewer that went away while this read ran can't release what it started: drop it now.
+      if (this.withdrawnOwners.has(owner)) this.fileTransfers.release(owner);
+      return result;
     } finally {
       this.fileReads -= 1;
     }
@@ -5459,20 +6468,91 @@ export class ClawtrateClient {
   async writeMemory(
     botId: string,
     path: string,
-    gatewayId: string | null,
+    stamp: GatewayStamp,
     expectedHash: string | null,
     content: string | null,
   ) {
     if (this.options.readOnly || !this.state.connection.canAdmin)
       throw new Error("Changing memory requires admin access.");
+    // The target half of the shared guard; `writeMemory` asks the gateway who it is itself, on
+    // the request just before the write.
+    this.requireSameTarget(stamp);
     await writeMemory(
-      (method, params) => this.request(method, params),
+      // Each of its requests is still held to the target its screen was read under.
+      (method, params) =>
+        this.target === stamp.target
+          ? this.request(method, params)
+          : Promise.reject(new Error(CONNECTION_CHANGED)),
       botId,
       path,
-      gatewayId,
+      stamp.gatewayId,
       expectedHash,
       content,
     );
+  }
+
+  /**
+   * Whether the voice guide is added to the bots' prompts, read now from the gateway's voice
+   * plugin, stamped with where it was read. The identity is null when the gateway names none or
+   * the connection changed during the read, so it is never shown as another's.
+   */
+  async readBotVoice(): Promise<BotVoiceAnswer> {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === target &&
+      this.state.connection.status === "connected";
+    const gatewayId = await this.readGatewayIdentity();
+    this.confirmGatewayIdentity(gatewayId, alive);
+    const voice = await readVoice(
+      (method, params) => this.request(method, params),
+      this.voiceAdvertised,
+    );
+    return { ...voice, stamp: { gatewayId: alive() ? gatewayId : null, target } };
+  }
+
+  /** Settings reads the voice setting again (`state.voiceChanges`). */
+  private voiceChanged(): void {
+    this.store.update((state) => ({ ...state, voiceChanges: (state.voiceChanges ?? 0) + 1 }));
+  }
+
+  /**
+   * Turn the voice guide on or off for the bots on the gateway (operator.write). `stamp` is where
+   * the setting on screen was read: unless that gateway and target still hold, nothing is sent.
+   * Nor is it sent once `owner`, the viewer that asked, is withdrawn.
+   */
+  async setBotVoice(
+    on: boolean,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<BotVoiceAnswer> {
+    if (this.options.readOnly || !this.state.connection.canWrite)
+      throw new Error("Changing how the bots talk needs write access.");
+    // The connection the guard checks is the one the change goes out on: captured first,
+    // checked again after the guard, and the request refused if it closed or moved on.
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === stamp.target &&
+      this.state.connection.status === "connected";
+    await this.requireSameGateway(stamp);
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
+    this.checkNotWithdrawn(owner);
+    const voice = await setVoice(
+      (method, params) =>
+        protocol && alive()
+          ? protocol.request(method, params)
+          : Promise.reject(new Error(CONNECTION_CHANGED)),
+      on,
+    );
+    return { ...voice, stamp };
   }
 
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
@@ -5515,6 +6595,77 @@ export class ClawtrateClient {
     options: FileReadOptions = {},
   ): Promise<CheckoutDiff> {
     return this.fileRead((ctx) => readCheckoutDiff(ctx, key, path), options);
+  }
+
+  /** A picture the bot handed over in the task (`pictures.ts`), sharing the file reads' limit. */
+  async readChatPicture(
+    key: string,
+    artifactId: string,
+    options: FileReadOptions = {},
+  ): Promise<ChatPictureRead> {
+    // A turn hands over up to four pictures and a task can hold several such turns, all drawn
+    // at once: a picture waits up to 30 s for one of the file reads' places, and of the
+    // transfers' that carry a picture to its viewer, instead of failing.
+    const generation = this.generation;
+    for (
+      let waited = 0;
+      (this.fileReads >= MAX_FILE_READS || this.fileTransfers.full()) && waited < 300;
+      waited += 1
+    )
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+    // The task and picture are the connection's it was asked on: never read on a later one.
+    if (generation !== this.generation)
+      return { status: "failed", message: "The connection changed while this picture waited." };
+    // A viewer that left while the picture waited asks for nothing.
+    this.checkNotWithdrawn(options.owner);
+    const gatewayUrl = this.state.connection.gatewayUrl ?? "";
+    const read = await this.fileRead(
+      (ctx) =>
+        readChatPicture({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }, key, artifactId),
+      options,
+    );
+    // Bytes that arrive after a switch to another gateway are the old one's: none reach a viewer.
+    if (generation !== this.generation) {
+      if (read.status === "content" && read.transfer.id)
+        this.fileTransfers.release(options.owner ?? DIRECT_CALLER, read.transfer.id);
+      return { status: "failed", message: "The connection changed while this picture was read." };
+    }
+    return read;
+  }
+
+  /**
+   * A picture a person sent with a message in this task, from this client's
+   * own copy: by the outgoing message's id while the outbox holds it, or by
+   * the key history stored its row under (`namesOutgoing`) once it is there.
+   * `index` is the file's place among the message's attachments. Nothing is
+   * asked of the gateway: without a copy here the answer is `not-kept`, and
+   * for a file whose bytes aren't the picture it is named as, `not-a-picture`.
+   */
+  async readSentPicture(
+    key: string,
+    messageKey: string,
+    index: number,
+    options: FileReadOptions = {},
+  ): Promise<SentPictureRead> {
+    for (let waited = 0; this.fileTransfers.full() && waited < 300; waited += 1)
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+    // A viewer that left while the picture waited is given nothing.
+    this.checkNotWithdrawn(options.owner);
+    const outgoing = this.state.transcripts[key]?.outbox.find((each) => each.id === messageKey);
+    const sending = outgoing ? this.attachmentContent.get(outgoing.id) : undefined;
+    const kept = sending
+      ? undefined
+      : [...this.sentPictures.entries()].find(
+          ([id, each]) =>
+            each.task === key &&
+            namesOutgoing(messageKey, { id, mode: each.mode, runId: each.runId }),
+        )?.[1];
+    if (kept?.notPictures.includes(index)) return { status: "not-a-picture" };
+    const file = sending ? sending.files[index] : kept?.files.find((each) => each.index === index);
+    if (!file) return { status: "not-kept" };
+    return ownPictureRead(file, (bytes) =>
+      this.fileTransfers.start(options.owner ?? DIRECT_CALLER, bytes, options.maxChars),
+    );
   }
 
   /** The next part of a file on its way to this viewer. */
@@ -5797,9 +6948,14 @@ export class ClawtrateClient {
           if (now && now.state !== "stopping" && message.mode !== "queue") {
             next = updateMessage(next, id, { status: "sending", mode: "steer", runId: now.id });
             steered.push(id);
+          } else if (gatewayRunning(next, id)) {
+            // The gateway is running a run under this message's own id: the message is out.
+            next = updateMessage(next, id, { status: "sent", runId: id });
           } else {
             next = updateMessage(next, id, { status: "queued", mode: "queue", runId: null });
-            next = queueLocalRun(
+            // A message held after it started its own run (a question came with the run's end)
+            // queues again in that run's place: one run per message, in the order written.
+            next = requeueLocalRun(
               next,
               next.outbox.find((each) => each.id === id)!,
               this.now(),
@@ -5812,10 +6968,16 @@ export class ClawtrateClient {
     }
     const current = this.state.transcripts[key];
     if (!current) return;
+    // Only a message still queued is started: a queued run whose message was cancelled or taken
+    // back meanwhile never sends it.
     const next =
       activeRun(current) || questionPending(current)
         ? undefined
-        : current.runs.find((run) => run.state === "queued");
+        : current.runs.find(
+            (run) =>
+              run.state === "queued" &&
+              current.outbox.find((message) => message.id === run.id)?.status === "queued",
+          );
     if (next) {
       this.updateActivity(key, (activity) =>
         // It keeps `mode: "queue"`: if the gateway refuses to start it, the
@@ -5862,7 +7024,7 @@ export class ClawtrateClient {
    */
   async nameGateway(gatewayUrl: string, name: string): Promise<void> {
     if (this.state.connection.gatewayUrl !== gatewayUrl) throw new GatewayChangedError();
-    const next = withGatewayName(this.gatewayNames ?? [], gatewayUrl, name);
+    const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
     await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
     this.gatewayNames = next;
     this.store.update((state) => ({ ...state }));
@@ -5879,6 +7041,7 @@ export class ClawtrateClient {
       );
     // Kept first: a limit the host could not keep is not taken, and the old one and its timers stay.
     await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
+    this.preferenceSets.turnLimit += 1;
     this.turnLimitMs = minutes * 60_000;
     this.store.update((state) => ({ ...state, turnLimitMinutes: minutes }));
     for (const [timerKey, timer] of this.turnTimers) {
@@ -5896,6 +7059,7 @@ export class ClawtrateClient {
   async setShowChannelChats(on: boolean): Promise<void> {
     // Kept first: a choice the host could not keep is not taken.
     await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
+    this.preferenceSets.channelChats += 1;
     this.showChannelChats = on;
     this.store.update((state) => ({ ...state, showChannelChats: on }));
     this.publishTasks();
@@ -5990,8 +7154,19 @@ export class ClawtrateClient {
     });
   }
 
-  private async open(options?: { keepPendingAnswer: boolean }): Promise<void> {
-    this.close(options);
+  /** `newTarget`: the person pointed the host at a gateway anew, so no earlier screen's write goes. */
+  private async open(options?: {
+    keepPendingAnswer?: boolean;
+    newTarget?: boolean;
+  }): Promise<void> {
+    this.close({ keepPendingAnswer: options?.keepPendingAnswer === true });
+    if (options?.newTarget) {
+      // A subscriber told of the new target may stop the client: then this open ends here.
+      const before = this.generation;
+      this.target += 1;
+      this.setConnection({ target: this.target });
+      if (this.generation !== before) return;
+    }
     const settings = this.settings;
     if (!settings) return;
     const generation = ++this.generation;
@@ -6011,6 +7186,7 @@ export class ClawtrateClient {
         showChannelChats: this.showChannelChats,
         connection: {
           ...initialConnectionState,
+          target: this.target,
           status: "error",
           gatewayUrl: settings.url,
           deviceId: identity.deviceId,
@@ -6024,13 +7200,47 @@ export class ClawtrateClient {
       return;
     }
 
-    // Full access goes only over a protected route (`protectedGatewayUrl`): elsewhere this
-    // device asks for read, as before, and a full pairing's token there asks for read too.
+    // Full access goes only over a protected route: a protected address (`protectedGatewayUrl`),
+    // or this computer's gateway when every socket of the connection is proved (`socketsProved`,
+    // setup-effortless.md §3). Elsewhere this device asks for read, as before, and a full
+    // pairing's token there asks for read too. What a first pairing may ask for on that route
+    // is `firstPairingMayAskFull`'s. Only a plain connect's token takes the proved route: a setup
+    // code, and setup's reuse of a saved pairing, ask for read there.
     const full = this.options.fullAccess === true && !this.options.readOnly;
-    const routed = full && protectedGatewayUrl(settings.url);
+    // A gateway set up through local connect: every socket of this connection is the host's
+    // proved one, once setup's own sockets end; false when the host can't prove it.
+    const route =
+      typeof settings.route !== "string"
+        ? null
+        : (this.options.localConnect?.(settings.url, settings.route) ?? false);
+    this.savedRoute = route === null ? null : { url: settings.url, sockets: route };
+    const proved = !this.setupIntent && !this.setupCode && this.socketsProved(settings.url);
+    const routed = full && (protectedGatewayUrl(settings.url) || proved);
+    // Every socket of this connection, retries included, is the proved route's, also after
+    // setup's check ends at its first read: a full pairing's token never falls back to the
+    // host's own socket here.
+    const provedSocket =
+      proved && this.setupCheck?.createSocket
+        ? { createSocket: this.setupCheck.createSocket, prove: this.setupCheck.prove }
+        : undefined;
     const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
     this.fullAccess = routed && secure;
+    // The same device at another spelling of this address is the same pairing (§6): a protected
+    // address with no record of its own uses the one saved at another wss:// spelling of its
+    // endpoint.
+    // Only a protected address, whatever else may ask for the six: a token moves toward wss://.
+    this.tokenAlias = null;
+    const offerable = this.fullAccess && protectedGatewayUrl(settings.url);
+    const spelling = offerable ? await this.pairingSpelling(settings.url, identity.deviceId) : null;
+    if (generation !== this.generation) return;
+    if (spelling) this.tokenAlias = { url: settings.url, spelling };
+    // Read first, kept only while this open is current: a superseded read never lands.
+    const offerAnswer = offerable
+      ? await this.loadOfferAnswer(settings.url, identity.deviceId)
+      : null;
+    if (generation !== this.generation) return;
+    this.offerAnswer = offerAnswer;
     const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
@@ -6055,6 +7265,7 @@ export class ClawtrateClient {
           }),
       connection: {
         ...initialConnectionState,
+        target: this.target,
         status: hasData ? "reconnecting" : "connecting",
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
@@ -6099,6 +7310,8 @@ export class ClawtrateClient {
     // plan waits for, and the signal both reads share, ended when the socket closes or their time is up.
     type SocketReads = {
       check: ClawtrateClient["setupCheck"];
+      /** The host's second proof of this socket, asked last before its credential (local connect). */
+      prove: ((signal: AbortSignal) => Promise<boolean>) | undefined;
       reads: AbortController;
       /** Settles when the reads end: the socket closed or was replaced, or their time is up. */
       ended: Promise<false>;
@@ -6150,10 +7363,29 @@ export class ClawtrateClient {
         endReads(current);
         current = null;
         const check = this.setupCheck?.url === settings.url ? this.setupCheck : null;
+        // The setup's own proved sockets, with their last proof, retries after its check ended
+        // included; else, for a gateway saved with a route, the host's proved route.
+        const own = check?.createSocket
+          ? { createSocket: check.createSocket, prove: check.prove }
+          : provedSocket;
+        const fromRoute = own ? null : route;
+        // A gateway set up through local connect opens no socket the host can't prove.
+        if (fromRoute === false) {
+          if (generation === this.generation)
+            this.setConnection({
+              status: "error",
+              retryAt: null,
+              error: {
+                code: "LOCAL_UNVERIFIED",
+                message: `Clawtrate couldn't verify what is listening at ${hostOf(settings.url)}.`,
+                hint: null,
+              },
+            });
+          throw new Error("this gateway's sockets can't be proved");
+        }
         try {
-          socket = check?.createSocket
-            ? check.createSocket(settings.url)
-            : this.host.createWebSocket(settings.url);
+          const create = own?.createSocket ?? (fromRoute ? fromRoute.createSocket : undefined);
+          socket = create ? create(settings.url) : this.host.createWebSocket(settings.url);
         } catch (error) {
           // A setup socket that couldn't start is a terminal path: its code goes.
           if (this.isSetup(settings.url)) this.dropSetupCredentials();
@@ -6163,6 +7395,7 @@ export class ClawtrateClient {
         const ended = new Promise<false>((resolve) => (end = () => resolve(false)));
         const mine: SocketReads = {
           check,
+          prove: own ? own.prove : fromRoute ? fromRoute.verify : undefined,
           reads: new AbortController(),
           ended,
           end,
@@ -6232,6 +7465,23 @@ export class ClawtrateClient {
         rotationsAtPlan = this.writes.rotations.get(key) ?? 0;
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         stillCurrent();
+        // A token saved over a proved route goes only on a socket of that route, proved again
+        // last (local connect): never on a typed address's, or once the settings lost the route.
+        const offRoute = (held: StoredDeviceToken | null) =>
+          held?.route !== undefined && (settings.route !== held.route || !mine?.prove);
+        if (offRoute(token)) {
+          this.close();
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            error: {
+              code: "LOCAL_UNVERIFIED",
+              message: `Clawtrate couldn't verify what is listening at ${hostOf(settings.url)}.`,
+              hint: null,
+            },
+          });
+          throw new Error("this device's token goes only through the route it was saved over");
+        }
         if (token && !this.writes.grants.has(key)) this.writes.grants.set(key, grantBits(token));
         // A saved token this attempt used is gone: lost, so no full pairing replaces it by itself.
         if (token) this.planHadToken = true;
@@ -6343,7 +7593,7 @@ export class ClawtrateClient {
           }
           if (
             plan.selectedAuth.usingStoredDeviceToken &&
-            saved?.token.trim() !== plan.selectedAuth.storedToken
+            (saved?.token.trim() !== plan.selectedAuth.storedToken || offRoute(saved))
           )
             throw new Error("the saved device token changed");
           // The signed scopes against what the saved record holds now: a grant narrowed or a
@@ -6355,6 +7605,23 @@ export class ClawtrateClient {
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
+        }
+        // Last, after the plan's final read: the host proves the far end of this very socket
+        // again (local connect), so nothing but the send follows the proof. A refusal sends
+        // nothing; a setup socket's ends its setup as a change, any other's is retried.
+        if (mine?.prove) {
+          const signal = mine.reads.signal;
+          const holds =
+            !signal.aborted &&
+            (await Promise.race([mine.prove(signal).catch(() => false), mine.ended]));
+          stillCurrent();
+          if (!holds || signal.aborted) {
+            if (setup && mine.check && mine.ours()) {
+              this.setupEndpointChanged(mine.check.url, generation);
+              this.close();
+            }
+            throw new Error("the far end of this socket couldn't be proved again");
+          }
         }
         this.setConnection({ requestedScopes: [...requested] });
         return plan;
@@ -6441,6 +7708,17 @@ export class ClawtrateClient {
               ? { asked: context.plan.scopes, granted: hello.auth.scopes ?? [] }
               : undefined,
           );
+        }
+        // A pairing made by this hello, not one this device kept: whatever a screen read before
+        // was read under another pairing, so the host's target is new.
+        if (
+          issued &&
+          !context.plan.selectedAuth.usingStoredDeviceToken &&
+          generation === this.generation &&
+          live()
+        ) {
+          this.target += 1;
+          this.setConnection({ target: this.target });
         }
         // A full pairing's record narrows to what this hello granted of what was signed for,
         // whether or not the token changed.
@@ -6564,7 +7842,9 @@ export class ClawtrateClient {
           await this.changeConnection(async () => {
             const current = this.settings;
             if (!live() || generation !== this.generation || current?.url !== settings.url) return;
-            await this.saveSettings(current);
+            const choice = this.setupMaySave(settings.url);
+            if (choice === null) return;
+            await this.saveChoice(current, choice);
           });
           return;
         }
@@ -6580,7 +7860,9 @@ export class ClawtrateClient {
               this.close();
               return;
             }
-            await this.saveSettings(current);
+            const choice = this.setupMaySave(settings.url);
+            if (choice === null) return;
+            await this.saveChoice(current, choice);
             return;
           }
           if (!current.token) return;
@@ -6592,9 +7874,17 @@ export class ClawtrateClient {
           if (!paired || !live()) return;
           try {
             // Read at the moment of the write: another client on this store may have saved a
-            // different gateway or forgotten this one since, and neither is written over.
-            if ((await this.savedSettings())?.url !== settings.url || !live()) return;
-            await this.saveSettings({ ...current, token: null });
+            // different gateway, forgotten this one or changed its record since. Only this
+            // hello's secret goes, from the record as it is now.
+            const saved = await this.savedSettings();
+            if (saved?.url !== settings.url || !live()) return;
+            if (saved.token === current.token) {
+              // This client's settings take the record it wrote, with what another client
+              // changed in it, a suspension for one, so Reconnect lifts that suspension.
+              await this.writeRecord({ ...saved, token: null });
+              this.settings = { ...saved, token: null };
+            } else this.settings = { ...current, token: null };
+            this.writes.retiredShared.set(settings.url, current.token);
           } catch {
             // The settings keep the secret, so the next hello tries again; this one goes on.
             this.log("warn", "Could not remove the shared gateway token from this device.");
@@ -6742,6 +8032,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    this.botNames.reset();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
@@ -6769,12 +8060,14 @@ export class ClawtrateClient {
     this.approvalReads.clear();
     for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
     this.attachmentContent.clear();
+    this.sentPictures.clear();
+    this.sentPictureBytes = 0;
   }
 
   private invalidateCheckIns(): void {
     const checkIns = this.state.checkIns;
-    if (checkIns?.gatewayId)
-      this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
+    if (checkIns?.stamp)
+      this.store.update((state) => ({ ...state, checkIns: { ...checkIns, stamp: null } }));
   }
 
   private close(options?: { keepPendingAnswer: boolean }): void {
@@ -6900,6 +8193,15 @@ export class ClawtrateClient {
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
       if (requestId) this.pairingSeen = seen;
+      // The gateway keeps this request's six whatever a retry asks (a smaller one only refreshes
+      // it), so a first pairing that sent them with consent keeps asking for them while it waits.
+      if (
+        requestId &&
+        plan &&
+        !plan.selectedAuth.usingStoredDeviceToken &&
+        plan.scopes.some((scope) => !READ_SCOPES.includes(scope))
+      )
+        this.fullPending = seen;
       // A setup connection shows this device, the scopes it asked for and the gateway's
       // pending-devices instruction, never the request's own fields.
       const scopes =
@@ -7027,6 +8329,7 @@ export class ClawtrateClient {
       canApprove: scopeSatisfied(scopes, APPROVALS_SCOPE),
       canAdmin: scopes.includes(ADMIN_SCOPE),
       fullPairing: this.fullAccess && this.holdsFullPairing(),
+      fullOffer: this.offerFor(scopes),
       pairing: null,
       error: null,
       retryAt: null,
@@ -7054,9 +8357,11 @@ export class ClawtrateClient {
     // connection while control was held read the browser's leases again before offering anything.
     this.computer.reconnected();
     const methods = asRecord(hello.features)?.methods;
-    this.computer.hello(
-      Array.isArray(methods) ? methods.filter((m): m is string => typeof m === "string") : [],
-    );
+    const listed = Array.isArray(methods)
+      ? methods.filter((m): m is string => typeof m === "string")
+      : null;
+    this.voiceAdvertised = listed === null ? null : listed.includes(VOICE_GET);
+    this.computer.hello(listed ?? []);
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;
@@ -7155,6 +8460,7 @@ export class ClawtrateClient {
             ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
+          if (newest) this.botNames.onBots(this.state.bots);
         }
         return result;
       }),
@@ -7331,6 +8637,17 @@ export class ClawtrateClient {
   }
 
   /**
+   * A `sessions.changed` with `phase: "message"` for an open task: a message of it
+   * changed in place. The gateway writes a picture a turn hands over into its
+   * message after the turn ends, with no `session.message`, so history is read again.
+   */
+  private noteMessageChange(payload: unknown): void {
+    const row = asRecord(payload);
+    const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
+    if (row?.phase === "message" && key && this.tracked(key)) this.scheduleHistory(key);
+  }
+
+  /**
    * Apply a `sessions.changed` event with the same membership rules as the list.
    * A known row is merged and re-checked. An unknown row whose key is not ruled
    * out cannot prove membership from the payload, so the filtered list is
@@ -7339,6 +8656,7 @@ export class ClawtrateClient {
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.discoveryRead) this.discoveryRead.sessionsChanged = true;
     this.noteRunChange(payload);
+    this.noteMessageChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
     // Rows are kept under the id cap.
@@ -7507,6 +8825,9 @@ export class ClawtrateClient {
       };
       while (next) {
         await this.readTranscript(key, next.subscribe, next.resync);
+        // If `releaseTask` dropped this entry while the read was in flight, stop instead of
+        // running queued work under a reopened task's new incarnation.
+        if (this.loads.get(key) !== entry) break;
         next = entry.again;
         entry.again = null;
       }
@@ -7611,10 +8932,10 @@ export class ClawtrateClient {
         parkAfterStop(current, { ...current, runs }, this.now()),
         messages,
       );
-      // History holds these now: their files are no longer needed.
+      // History holds these now: only their pictures are kept, to be shown.
       for (const message of current.outbox) {
         if (!reconciled.outbox.some((each) => each.id === message.id))
-          this.dropAttachments(message.id);
+          this.keepSentPictures(message);
       }
       const activity = markUnconfirmed(reconciled);
       const items = mapHistory(messages);
@@ -7733,6 +9054,9 @@ export class ClawtrateClient {
     const phase = asRecord(payload.data)?.phase;
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
+      // Only while a viewer has the task open: a task kept for its unsettled work reads nothing.
+      const botId = botIdFromSessionKey(key);
+      if (botId && this.openSessions.has(key)) void this.botNames.afterRun(botId, payload.runId);
     }
   }
 
@@ -7746,6 +9070,12 @@ export class ClawtrateClient {
         for (const key of Object.keys(this.state.transcripts)) {
           if (this.tracked(key)) void this.readToolMap(key, generation);
         }
+        // The voice plugin may have come or gone, so the hello's list no longer says.
+        this.voiceAdvertised = null;
+        this.voiceChanged();
+        return;
+      case VOICE_CHANGED_EVENT:
+        this.voiceChanged();
         return;
       case "session.message": {
         const key = asRecord(event.payload)?.sessionKey;
@@ -8333,6 +9663,10 @@ export class ClawtrateClient {
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
+    // The host pointed anew (Suspend, Disconnect, a fresh pairing): no name card or skipped file
+    // read before counts, even on a reconnect to the same address.
+    if (patch.target !== undefined && patch.target !== this.state.connection.target)
+      this.botNames.reset();
     const scrubbed = this.scrubConnection(patch);
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
   }
@@ -8516,13 +9850,44 @@ export class ClawtrateClient {
   }
 
   /**
+   * Whether every socket of the connection to `url` comes from a proved route to this computer's
+   * gateway (setup-effortless.md §3): local connect's sockets, each proved when dialled and again
+   * before its credential. Those are the setup's own factory with its last proof, or the route the
+   * gateway was saved with, as the host gives it. The one place a proved route is named, for the
+   * full-access gate.
+   */
+  private socketsProved(url: string): boolean {
+    const check = this.setupCheck?.url === url ? this.setupCheck : null;
+    // The setup's own factory, when it has one, makes every socket: its last proof decides.
+    if (check?.createSocket) return !!check.prove;
+    return this.savedRoute?.url === url && !!this.savedRoute.sockets;
+  }
+
+  /**
+   * Whether a first pairing at `url` may ask for the six, given full access: always at a
+   * protected address; over a proved route only while the person's consent for it holds. It is
+   * asked here, before each first-pairing credential, until the first hello spends it or the
+   * gateway holds such a request pending. Full access over that route is a plain connect's alone,
+   * so a loopback setup code still starts read-only (F-509).
+   */
+  private firstPairingMayAskFull(url: string): boolean {
+    if (protectedGatewayUrl(url)) return true;
+    if (this.fullPending !== null && this.fullPending === this.pairingSeen) return true;
+    const consent = this.setupCheck?.url === url ? this.setupCheck.consent : undefined;
+    return consent?.() === true;
+  }
+
+  /**
    * The scopes a connect asks for. A read-only host asks for read. With no saved token, a
    * first pairing asks for all six with full access, and read otherwise. A saved token asks
    * for exactly what it holds, except that a setup connection reusing it asks for read.
    */
   private scopesToAsk(url: string, token: StoredDeviceToken | null): string[] {
     if (this.options.readOnly) return [...READ_SCOPES];
-    if (!token) return this.fullAccess && this.fullEligible ? [...FULL_SCOPES] : [...READ_SCOPES];
+    if (!token)
+      return this.fullAccess && this.fullEligible && this.firstPairingMayAskFull(url)
+        ? [...FULL_SCOPES]
+        : [...READ_SCOPES];
     // A full pairing's token is used for more than read only while full access holds.
     if (token.fullGrant && !this.fullAccess) return [...READ_SCOPES];
     // A setup reusing this device's saved pairing asks for read alone, as its consent says,
@@ -8536,13 +9901,15 @@ export class ClawtrateClient {
     deviceId: string,
     role: string,
     includeRejected = false,
+    // A key captured earlier: a removal compares and deletes the same record it named.
+    key = this.tokenKey(url, deviceId, role),
   ): Promise<StoredDeviceToken | null> {
-    const key = this.tokenKey(url, deviceId, role);
     const raw = await this.host.storage.get(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
     if (typeof parsed.token !== "string") return null;
     if (!includeRejected && this.writes.rejected.get(key)?.has(parsed.token.trim())) return null;
+    const route = typeof parsed.route === "string" ? { route: parsed.route } : {};
     if (parsed.fullGrant === true) {
       const held = Array.isArray(parsed.heldScopes)
         ? FULL_SCOPES.filter((scope) => parsed.heldScopes!.includes(scope))
@@ -8552,9 +9919,11 @@ export class ClawtrateClient {
         grantedScopes: Array.isArray(parsed.grantedScopes) ? [...parsed.grantedScopes] : held,
         heldScopes: held,
         fullGrant: true,
+        ...route,
       };
     }
     return {
+      ...route,
       token: parsed.token,
       // Earlier builds stored the grant as `scopes`.
       grantedScopes: parsed.grantedScopes ?? parsed.scopes ?? [],
@@ -8577,7 +9946,12 @@ export class ClawtrateClient {
     record: StoredDeviceToken,
   ): Promise<void> {
     const key = this.tokenKey(url, deviceId, role);
-    await this.host.storage.set(key, JSON.stringify(record));
+    // Saved over a proved route, a token keeps that route, and goes on no other socket.
+    const route = record.route ?? (this.settings?.url === url ? this.settings.route : undefined);
+    await this.host.storage.set(
+      key,
+      JSON.stringify(route === undefined ? record : { ...record, route }),
+    );
     this.writes.grants.set(key, grantBits(record));
   }
 
@@ -8593,9 +9967,27 @@ export class ClawtrateClient {
     return this.writes.grants.get(this.tokenKey(url, deviceId, "operator"))?.full === true;
   }
 
-  /** Device tokens are scoped to one gateway, so a token is never offered to another. */
+  /**
+   * Device tokens are scoped to one gateway, so a token is never offered to another. An address
+   * whose pairing is saved under another spelling of its endpoint uses that record (`tokenAlias`).
+   */
   private tokenKey(url: string, deviceId: string, role: string): string {
-    return `deviceToken:${encodeURIComponent(url)}:${deviceId}:${role}`;
+    return `deviceToken:${encodeURIComponent(this.tokenAlias?.url === url ? this.tokenAlias.spelling : url)}:${deviceId}:${role}`;
+  }
+
+  /**
+   * Another protected spelling of this address's endpoint with this device's saved pairing, when
+   * the address has none of its own: the first found, in `endpointSpellings`'s order.
+   */
+  private async pairingSpelling(url: string, deviceId: string): Promise<string | null> {
+    const key = (each: string) => `deviceToken:${encodeURIComponent(each)}:${deviceId}:operator`;
+    if ((await this.host.storage.get(key(url))) !== null) return null;
+    for (const each of endpointSpellings(url))
+      // Only a protected spelling: a pairing saved at ws:// sent its token unencrypted, and a
+      // full grant must never be kept where ws:// reads it.
+      if (protectedGatewayUrl(each) && (await this.host.storage.get(key(each))) !== null)
+        return each;
+    return null;
   }
 
   /**
@@ -8704,7 +10096,7 @@ export class ClawtrateClient {
         this.endEligibility(url);
         this.writes.refusals += 1;
         await this.changeConnection(async () => {
-          const existing = await this.loadToken(url, deviceId, role, true);
+          const existing = await this.loadToken(url, deviceId, role, true, key);
           if (existing?.token.trim() === rejected) {
             await this.host.storage.delete(key);
             this.writes.grants.set(key, null);

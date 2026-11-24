@@ -1,4 +1,3 @@
-- status
 - main "Routines":
   - button "Back to Nightly backup check, all runs"
   - heading "Nightly backup check" [level=1]

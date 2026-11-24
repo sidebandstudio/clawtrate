@@ -17,6 +17,8 @@ import {
 } from "../src/fixture/routines.ts";
 
 const GATEWAY = "fixture-gateway";
+// Where the fixture's screens are read: its gateway, on the host's first target.
+const STAMP = { gatewayId: GATEWAY, target: 0 };
 
 /** One fixture bridge's routine host, with admin on a confirmed gateway. */
 function host(params: Partial<RoutineParams> = {}) {
@@ -71,7 +73,7 @@ const editOf = (routine: Routine, change: Partial<RoutineFields>) => {
     original,
     edit: { ...original, ...change },
     expected: { ...original, updatedAt: routine.updatedAt },
-    gateway: GATEWAY,
+    stamp: STAMP,
   } as BridgeCommand;
 };
 
@@ -96,10 +98,10 @@ describe("the fixture's routine host", () => {
     const other = host();
     const input = fields("In doubt");
     const create = { type: "createRoutine", input: { ...input, botId: "otto" }, key: "draft-0001" };
-    expect(await sent.ask({ ...create, gateway: GATEWAY } as BridgeCommand)).toMatchObject({
+    expect(await sent.ask({ ...create, stamp: STAMP } as BridgeCommand)).toMatchObject({
       status: "unknown",
     });
-    const check = { type: "checkRoutineCreate", key: "draft-0001", input, gateway: GATEWAY };
+    const check = { type: "checkRoutineCreate", key: "draft-0001", input, stamp: STAMP };
     expect(await other.ask(check as BridgeCommand)).toEqual({ status: "missing" });
     expect(other.routines().some((each) => each.name === "In doubt")).toBe(false);
     expect(await sent.ask(check as BridgeCommand)).toMatchObject({ status: "matches" });
@@ -113,9 +115,9 @@ describe("the fixture's routine host", () => {
       type: "createRoutine",
       input: { ...input, botId: "otto" },
       key: "draft-0001",
-      gateway: GATEWAY,
+      stamp: STAMP,
     } as BridgeCommand);
-    const check = { type: "checkRoutineCreate", key: "draft-0001", input, gateway: GATEWAY };
+    const check = { type: "checkRoutineCreate", key: "draft-0001", input, stamp: STAMP };
     const found = await ask<{ status: string; routine: Routine }>(check as BridgeCommand);
     expect(found.status).toBe("matches");
     await ask({ type: "removeRoutine", id: found.routine.id } as BridgeCommand);
@@ -141,7 +143,7 @@ describe("the fixture's routine host", () => {
       original,
       edit: { ...original, name: "Morning digest, short" },
       expected: { ...original, updatedAt: digest.updatedAt },
-      gateway: GATEWAY,
+      stamp: STAMP,
     } as BridgeCommand);
     const remove = send({ type: "removeRoutine", id: DIGEST } as BridgeCommand);
     await vi.runAllTimersAsync();
@@ -190,7 +192,7 @@ describe("the fixture's routine host", () => {
         original,
         edit: { ...original, schedule: { ...original.schedule, expr: "0 5 * * 1" } },
         expected: { ...original, updatedAt: backup.updatedAt },
-        gateway: GATEWAY,
+        stamp: STAMP,
       } as BridgeCommand),
     ).toMatchObject({ status: "saved" });
     expect(await runs()).toEqual(after);
@@ -204,7 +206,7 @@ describe("the fixture's routine host", () => {
         type: "createRoutine",
         input: { ...fields(name), botId: "otto" },
         key: "draft-0001",
-        gateway: GATEWAY,
+        stamp: STAMP,
       } as BridgeCommand);
     const first = await create("Weekly reading list");
     const second = await create("Weekly reading list, short");
@@ -222,7 +224,7 @@ describe("the fixture's routine host", () => {
         type: "createRoutine",
         input: { ...fields(key), botId: "otto" },
         key,
-        gateway: GATEWAY,
+        stamp: STAMP,
       } as BridgeCommand);
     const first = await create("draft-0001");
     const second = await create("draft-0002");
@@ -334,12 +336,12 @@ describe("the fixture's routine host", () => {
         type: "createRoutine",
         input: { ...fields(name), botId: "otto" },
         key: "draft-0001",
-        gateway: GATEWAY,
+        stamp: STAMP,
       } as BridgeCommand);
     expect(await create("First")).toMatchObject({ status: "unknown" });
     const saved = await create("Second");
     expect(saved.status).toBe("saved");
-    const check = { type: "checkRoutineCreate", key: "draft-0001", gateway: GATEWAY };
+    const check = { type: "checkRoutineCreate", key: "draft-0001", stamp: STAMP };
     expect(await ask({ ...check, input: fields("Second") } as BridgeCommand)).toMatchObject({
       status: "matches",
     });
@@ -383,7 +385,7 @@ describe("the fixture's routine host", () => {
       type: "createRoutine",
       input: { ...fields("Reading list"), botId: "otto" },
       key: "draft-0001",
-      gateway: GATEWAY,
+      stamp: STAMP,
     } as BridgeCommand;
     const { routine } = await ask<{ routine: Routine }>(create);
     const started = send({ type: "runRoutineNow", id: routine.id } as BridgeCommand);
@@ -408,7 +410,7 @@ describe("the fixture's routine host", () => {
       type: "createRoutine",
       input: { ...fields("Reading list"), botId: "otto" },
       key: "draft-queued",
-      gateway: GATEWAY,
+      stamp: STAMP,
     } as BridgeCommand;
     const { routine } = await ask<{ routine: Routine }>(create);
     const started = send({ type: "runRoutineNow", id: routine.id, listedOn: 0 });
@@ -431,7 +433,7 @@ describe("the fixture's routine host", () => {
         type: "createRoutine",
         input: { ...fields(name), botId: "otto" },
         key,
-        gateway: GATEWAY,
+        stamp: STAMP,
       } as BridgeCommand);
     await create("First");
     await ask({ type: "runRoutineNow", id } as BridgeCommand);
@@ -453,7 +455,7 @@ describe("the fixture's routine host", () => {
         type: "createRoutine",
         input: { ...fields(name), botId: "otto" },
         key,
-        gateway: GATEWAY,
+        stamp: STAMP,
       } as BridgeCommand);
     await create("First");
     const started = await ask<{ runId: string }>({ type: "runRoutineNow", id } as BridgeCommand);
@@ -484,7 +486,7 @@ describe("the fixture's routine host", () => {
       type: "createRoutine",
       input: { ...fields("Morning digest again"), botId: "marlow" },
       key: DIGEST.replace(/^routine-/u, ""),
-      gateway: GATEWAY,
+      stamp: STAMP,
     } as BridgeCommand);
     expect(await ask({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand)).toEqual([]);
   });
@@ -527,7 +529,7 @@ describe("the fixture's routine host", () => {
         original,
         edit,
         expected: { ...original, updatedAt: digest.updatedAt },
-        gateway: GATEWAY,
+        stamp: STAMP,
       } as BridgeCommand);
     const renamed = update({ ...original, name: "Morning digest, short" });
     const retexted = update({ ...original, text: "Summarise only what changed." });

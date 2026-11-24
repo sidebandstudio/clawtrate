@@ -701,6 +701,24 @@ button.b-choice:hover {
   height: 44px;
 }
 
+/* Settings → Advanced: a switch kept on this device and its name on one line. */
+.device-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.b-field > .device-switch-row {
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+.device-switch .b-hint {
+  margin: 0;
+}
+
 .b-field-error {
   margin: 0;
   padding: 0 4px;
@@ -1144,6 +1162,88 @@ button.b-open > .icon {
   background: color-mix(in srgb, var(--danger-soft) 70%, var(--danger) 12%);
 }
 
+/* new: Delete bot…: a card of 480 px with what goes and what stays, a full-height
+   sheet below the one-pane width. Paths wrap anywhere; nothing in a line is cut. */
+.b-dialog[data-kind="delete"] {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.b-dialog[data-kind="delete"] .b-head h2 {
+  padding: 8px 0;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.b-delete-lead {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.b-dialog[data-kind="delete"] .b-list,
+.b-delete-result {
+  overflow-wrap: anywhere;
+}
+
+.b-delete-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 18px 2px 0;
+  font-size: var(--text-md);
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.b-delete-check input {
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--danger);
+}
+
+.b-delete-check[data-disabled] {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.b-delete-folder {
+  margin: 4px 2px 0 30px;
+}
+
+/* No box above it: the note lines up with the lists. */
+.b-delete-folder[data-alone] {
+  margin: 8px 2px 0;
+}
+
+.b-delete-actions {
+  justify-content: flex-end;
+}
+
+.b-delete-result {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.b-delete-result li + li {
+  margin-top: 6px;
+}
+
+.b-delete-result li[data-tone="warn"] {
+  color: var(--text);
+}
+
+.b-delete-result li[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.b-delete-open {
+  margin: 0 2px;
+}
+
 /* A bot's settings, in the Work pane ------------------------------------------- */
 
 /* The tab's groups: the Work pane's group word. */
@@ -1239,7 +1339,8 @@ button.b-open > .icon {
 /* Below the one-pane width a dialog is a full-height sheet, as on the phone. */
 @media (max-width: 687px) {
   .b-dialog,
-  .b-dialog[data-kind="settings"] {
+  .b-dialog[data-kind="settings"],
+  .b-dialog[data-kind="delete"] {
     width: 100vw;
     height: calc(100dvh - 8px);
     max-height: none;
@@ -1257,7 +1358,8 @@ button.b-open > .icon {
     border-radius: var(--radius-lg);
   }
 
-  .b-confirm .b-actions {
+  .b-confirm .b-actions,
+  .b-delete-actions {
     flex-direction: column-reverse;
     align-items: stretch;
   }
@@ -1460,4 +1562,21 @@ button.b-open > .icon {
   min-width: 0;
   width: 100%;
   resize: vertical;
+}
+
+/* Delete bot…: what doesn't come back, said by the button, and the name typed to confirm. */
+.b-delete-confirm {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 12px;
+}
+
+/* The text to type, with the name's spaces as they are. */
+.b-delete-label {
+  white-space: pre-wrap;
+}
+.b-delete-final {
+  margin: 0;
+  font-weight: 600;
+  color: var(--danger);
 }

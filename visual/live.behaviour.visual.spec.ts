@@ -310,7 +310,10 @@ test.describe("sending", () => {
     expect(Date.now() - sent).toBeLessThan(1000);
     await expect(line.getByTestId("status-phrase")).toHaveText("Thinking");
     await expect(line.locator(".presence")).toHaveAttribute("data-state", "thinking");
-    await expect(line).toHaveAccessibleName("Otto, thinking. Nothing running to show.");
+    // Nothing to bring into view: a plain line, not a control (7.11).
+    await expect(line).toHaveAccessibleName("Otto, thinking.");
+    await expect(line).not.toHaveAttribute("tabindex");
+    expect(await line.evaluate((el) => el.tagName)).toBe("DIV");
     // The gateway has not reported when the run started: no clock.
     await expect(line.locator(".status-elapsed")).toHaveCount(0);
   });
@@ -535,7 +538,11 @@ test("F-074: files can be dragged into the composer or pasted into its field", a
   });
   await expect(page.locator(".attachments .chip")).toHaveText([/dragged\.txt/, /pasted\.png/]);
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.getByTestId("outgoing")).toContainText("dragged.txt, pasted.png");
+  // Each file is on the message, in the order added (F-557).
+  await expect(page.getByTestId("outgoing").getByTestId("sent-files").locator("> *")).toHaveText([
+    /dragged\.txt/,
+    /pasted\.png/,
+  ]);
 });
 
 test("F-282: Start as new task with files attached keeps the words and the files, and says why", async ({
@@ -559,7 +566,8 @@ test.describe("the status line", () => {
   test("F-082 F-086 F-087: a running step's title is the phrase, the avatar works, and the phrase is its own tooltip", async ({
     page,
   }) => {
-    await open(page, "run-working");
+    // With commands shown the phrase is the card's own words (7.8); F-529 checks the default.
+    await open(page, "run-working", "&commands=show");
     const line = page.getByTestId("status-line");
     await expect(line.getByTestId("status-phrase")).toHaveText("Reading backup-2026-11-15.log");
     await expect(line.locator(".presence")).toHaveAttribute("data-state", "working");
@@ -720,7 +728,8 @@ test.describe("the status line", () => {
   test("F-163: an approval card the reader has open stays open when its run settles into history, and Raw stays usable", async ({
     page,
   }) => {
-    await open(page, "run-waiting");
+    // Raw on a card: with "Show commands" on (conversation.md, 7.11).
+    await open(page, "run-waiting", "&commands=show");
     const card = page.getByTestId("approval-card");
     await card.getByRole("button", { name: "Allow", exact: true }).click();
     await expect(card.locator(".tag")).toHaveText("Allowed once", { timeout: 5_000 });
@@ -941,7 +950,7 @@ test.describe("Stop", () => {
   test("F-299: after a stop, completed actions and their results stay in the transcript, under the note", async ({
     page,
   }) => {
-    await open(page, "run-stopped");
+    await open(page, "run-stopped", "&commands=show");
     // History now holds the stopped turn: its message, and a tool call that completed with its result.
     await page.evaluate(() => {
       const fixture = (
@@ -1504,7 +1513,8 @@ test.describe("keyboard", () => {
     );
     await expect(field(page)).toBeFocused();
 
-    await open(page, "run-working");
+    // A status line that can hold focus: one with a card to show, with commands shown (7.11).
+    await open(page, "run-working", "&commands=show");
     await page.getByTestId("status-line").focus();
     await setRun(page, { state: "completed", textComplete: true, endedAt: Date.now() });
     await expect(page.getByTestId("status-line")).toHaveCount(0);
@@ -1900,7 +1910,8 @@ test.describe("errors and resync", () => {
     await open(page, "offline-send");
     await expect(page.locator(".app")).toHaveAttribute("data-connection", "lost");
     await expect(page.getByTestId("status-phrase")).toHaveText(
-      "Reconnecting. Last seen reading backup-2026-11-15.log",
+      // The default status line names the kind of work (conversation.md, 7.11).
+      "Reconnecting. Last seen reading files",
     );
     const moving = await page.evaluate(() =>
       [...document.querySelectorAll(".presence, .presence svg, .status-phrase, .glyph")].some(
@@ -1964,7 +1975,8 @@ test.describe("errors and resync", () => {
     // Connected is not caught up: nothing moves, the line and the composer stay as they were.
     await expect(page.locator(".app")).toHaveAttribute("data-connection", "lost");
     await expect(page.getByTestId("status-phrase")).toHaveText(
-      "Reconnecting. Last seen reading backup-2026-11-15.log",
+      // The default status line names the kind of work (conversation.md, 7.11).
+      "Reconnecting. Last seen reading files",
     );
     await expect(page.locator(".status-elapsed")).toHaveCount(0);
     await expect(field(page)).toHaveAttribute(
@@ -1979,7 +1991,8 @@ test.describe("errors and resync", () => {
     await set("loaded");
     await expect(page.getByTestId("status-strip")).toContainText("Synced");
     await expect(page.locator(".app")).not.toHaveAttribute("data-connection", "lost");
-    await expect(page.getByTestId("status-phrase")).toHaveText("Reading backup-2026-11-15.log");
+    // The default status line names the kind of work (conversation.md, 7.11).
+    await expect(page.getByTestId("status-phrase")).toHaveText("Reading files");
     await expect(field(page)).toHaveAttribute("placeholder", "Message Otto");
   });
 

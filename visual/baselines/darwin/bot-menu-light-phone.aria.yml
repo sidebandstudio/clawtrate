@@ -1,6 +1,5 @@
-- status
 - navigation "Bots":
-  - text: Clawtrate
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Routines"
   - 'button "Sort bots: Manual, this device only"'
   - button "Search"
@@ -48,8 +47,6 @@
         - text: Both are on Saturday's route, pharmacy first because it closes at noon.
       - button "More for Quartermaster of the Family Calendar and Errands"
   - status
-  - button "127.0.0.1:18789, connected. Open the gateway menu."
-  - button "Settings"
   - menu "Juniper":
     - menuitem "Show tasks"
     - separator

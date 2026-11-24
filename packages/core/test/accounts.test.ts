@@ -31,7 +31,7 @@ import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { identityFile } from "../src/accounts-engine.ts";
 import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
-import { FAST, URL_A } from "./client-harness.ts";
+import { FAST, stampOn, URL_A } from "./client-harness.ts";
 import {
   deferred,
   GatewayError,
@@ -728,7 +728,7 @@ describe("a bot left half-made", () => {
   it("keeps an uncertain Create when every recovery read fails and finishes it once the list returns", async () => {
     const { client, fake, accounts } = await accountsClient();
     const viewer = createBridgeSession(client);
-    const command = { type: "createBot", ...input, gatewayId: "gateway-a" } as const;
+    const command = { type: "createBot", ...input, stamp: stampOn("gateway-a", client) } as const;
     const list = fake.gateway.handlers["agents.list"]!;
     const create = fake.gateway.handlers["agents.create"]!;
     try {
@@ -948,7 +948,7 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
 
   it("names the bot, and names a picture only when one was chosen, in lines the gateway reads", () => {
     expect(identityFile("  Maple \n Leaf ", false)).toBe(
-      "# IDENTITY.md - Who Am I?\n\n- **Name:** Maple Leaf\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n",
+      "# IDENTITY.md - Who Am I?\n\n- **Name:** Maple Leaf\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above and tell them it shows once they confirm it in Clawtrate.\n",
     );
     const withPicture = identityFile("Maple", true);
     expect(withPicture).toMatch(/^- \*\*Picture:\*\* chosen in Clawtrate/m);

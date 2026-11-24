@@ -553,9 +553,14 @@ test.describe("a failed history", () => {
   type Fixture = {
     setState(change: (state: ClawtrateState) => ClawtrateState): void;
     send(command: Command): Promise<unknown>;
+    sendFrom(view: string, command: Command): Promise<unknown>;
+    refuseReopen(key: string, error: string): void;
     hold(): void;
     release(): void;
+    holdSnapshots(): void;
+    releaseSnapshots(): void;
     reads: string[];
+    sent: Command[];
     holds(key: string): number;
   };
   type Refusal = { type: string; key: string; error: string; afterMs?: number; held?: boolean };
@@ -574,11 +579,22 @@ test.describe("a failed history", () => {
         ).length,
       key,
     );
+  const reloads = (page: Page, key = KEY) =>
+    page.evaluate(
+      (key) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.sent.filter(
+          (each) => each.type === "reloadSession" && each.key === key,
+        ).length,
+      key,
+    );
   /** What another view, such as a second web tab, asks of the same host. */
   const otherView = (page: Page, type: "openSession" | "closeSession") =>
     page.evaluate(
       ([type, key]) =>
-        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.send({ type, key }),
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.sendFrom("other", {
+          type,
+          key,
+        }),
       [type, KEY] as const,
     );
   /**
@@ -672,6 +688,28 @@ test.describe("a failed history", () => {
     await expect.poll(() => holds(page)).toBe(0);
   });
 
+  test("F-105: a duplicate open from the same view reads a failed task no more than once", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    await fail(page, false);
+    await expect(page.getByText("Could not load this conversation")).toBeVisible();
+    const before = await reads(page);
+    // The same view opens the task it already holds, as the real ViewerSession has it: a no-op.
+    await page.evaluate(
+      (key) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.send({
+          type: "openSession",
+          key,
+        }),
+      KEY,
+    );
+    await page.waitForTimeout(150);
+    expect(await reads(page)).toBe(before);
+    expect(await holds(page)).toBe(1);
+  });
+
   test("F-105: Try again opens a task whose open was refused once a slot frees up, and reads it once", async ({
     page,
   }) => {
@@ -695,7 +733,7 @@ test.describe("a failed history", () => {
   }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
     await refuse(page, [
-      { type: "openSession", key: BACKUP, error: SLOTS, afterMs: 1500 },
+      { type: "openSession", key: BACKUP, error: SLOTS, held: true },
       { type: "openSession", key: CERT, error: SLOTS },
     ]);
     await unload(page, [BACKUP, CERT]);
@@ -704,7 +742,8 @@ test.describe("a failed history", () => {
     await expect(page.locator(".title-pill-task")).toHaveText("Certificate renewal warning");
     await expect(page.getByText(SLOTS)).toBeVisible();
     // The task left behind is refused after the open one.
-    await page.waitForTimeout(2000);
+    await answer(page);
+    await settle(page);
     await expect(page.getByText(SLOTS)).toBeVisible();
     await page.getByRole("button", { name: "Try again" }).click();
     await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
@@ -721,16 +760,76 @@ test.describe("a failed history", () => {
     // Another view holds the task; the host dropped this view's hold, as after a reconnect
     // whose reopen it refused, so it refuses this view's reread.
     await otherView(page, "openSession");
-    await otherView(page, "closeSession");
-    await refuse(page, [
-      { type: "reloadSession", key: KEY, error: "That task isn't open in this view." },
-    ]);
+    await page.evaluate(
+      (key) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.send({
+          type: "closeSession",
+          key,
+        }),
+      KEY,
+    );
+    expect(await holds(page)).toBe(1);
     await fail(page, false);
     const before = await reads(page);
 
     await page.getByRole("button", { name: "Try again" }).click();
     await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
     expect(await reads(page)).toBe(before + 1);
+    expect(await holds(page)).toBe(2);
+    expect(errors).toEqual([]);
+  });
+
+  test("F-105: a task the host refuses to open again after a reconnect says why and offers Try again", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    const before = await reads(page);
+    await page.evaluate(
+      ([key, error]) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.refuseReopen(
+          key,
+          error,
+        ),
+      [KEY, SLOTS] as const,
+    );
+    await expect(page.getByText("Could not load this conversation")).toBeVisible();
+    await expect(page.getByText(SLOTS)).toBeVisible();
+    expect(await holds(page)).toBe(0);
+
+    // A slot has freed up: Try again, refused as a reread, opens the task again.
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    expect(await reads(page)).toBe(before + 1);
+    expect(await holds(page)).toBe(1);
+  });
+
+  test("F-105: refusing a reopen while another view holds the task shows why without crashing the page", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    await otherView(page, "openSession");
+    expect(await holds(page)).toBe(2);
+
+    await page.evaluate(
+      ([key, error]) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.refuseReopen(
+          key,
+          error,
+        ),
+      [KEY, SLOTS] as const,
+    );
+    await expect(page.getByText("Could not load this conversation")).toBeVisible();
+    await expect(page.getByText(SLOTS)).toBeVisible();
+    expect(await holds(page)).toBe(1);
+    expect(errors).toEqual([]);
+
+    // Once a slot frees up, Try again opens the task again without re-reading the shared history.
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
     expect(await holds(page)).toBe(2);
     expect(errors).toEqual([]);
   });
@@ -810,6 +909,72 @@ test.describe("a failed history", () => {
       (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.release(),
     );
     await expect.poll(() => reads(page)).toBe(before + 1);
+    await expect(page.getByTestId("transcript-turn")).toHaveCount(turns);
+    expect(await holds(page)).toBe(1);
+  });
+
+  test("F-105: two quick clicks on Try again read a failed task once, not twice", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    const turns = await page.getByTestId("transcript-turn").count();
+    expect(turns).toBeGreaterThan(0);
+    await fail(page, true);
+    const note = page.locator(".load-note");
+    await expect(note).toContainText("Couldn't refresh this conversation.");
+    const reloadsBefore = await reloads(page);
+
+    // The read is held, so a second click lands while the first reload is still in flight.
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.hold(),
+    );
+    // Two clicks in one turn, before React removes the button: only the first sends a command.
+    await page.evaluate(() => {
+      const button = [...document.querySelectorAll(".load-note button")].find(
+        (each) => each.textContent?.trim() === "Try again",
+      ) as HTMLButtonElement | undefined;
+      button?.click();
+      button?.click();
+    });
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.release(),
+    );
+    await page.waitForTimeout(150);
+    expect(await reloads(page)).toBe(reloadsBefore + 1);
+    expect(await holds(page)).toBe(1);
+  });
+
+  test("F-105: clicking Try again a second time before the loading snapshot arrives still reads once", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    const turns = await page.getByTestId("transcript-turn").count();
+    expect(turns).toBeGreaterThan(0);
+    await fail(page, true);
+    const note = page.locator(".load-note");
+    await expect(note).toContainText("Couldn't refresh this conversation.");
+    const before = await reads(page);
+    const reloadsBefore = await reloads(page);
+
+    // Hold both the read's answer and state snapshots so the first command settles while Try again
+    // is still visible, then send a second click in a later turn.
+    await page.evaluate(() => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      fixture.hold();
+      fixture.holdSnapshots();
+    });
+    await note.getByRole("button", { name: "Try again" }).click();
+    await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+    await note.getByRole("button", { name: "Try again" }).click();
+
+    await page.evaluate(() => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      fixture.releaseSnapshots();
+      fixture.release();
+    });
+    await expect(note).toHaveCount(0);
+    await expect.poll(() => reads(page)).toBe(before + 1);
+    expect(await reloads(page)).toBe(reloadsBefore + 1);
     await expect(page.getByTestId("transcript-turn")).toHaveCount(turns);
     expect(await holds(page)).toBe(1);
   });

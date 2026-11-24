@@ -1,4 +1,4 @@
-import { test } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import { contextFor, expect, openFixture, settle, showList, SIZES, THEMES } from "./fixture.ts";
 
 const states = [
@@ -158,4 +158,107 @@ test("F-030: opens Updates from the footer and keeps keyboard focus on the chose
   await page.keyboard.press("Escape");
   await expect(entry).toHaveCount(0);
   await expect(page.locator(".gateway-pill")).toBeFocused();
+});
+
+/** Settings → Updates on a Beta build, as the fixture's address chooses it. */
+async function openBetaUpdates(page: Page, state: string, extra = "") {
+  await openFixture(page, `scene=main&updates=${state}&buildTrack=nightly&tracks=two${extra}`);
+  await page.keyboard.press("ControlOrMeta+,");
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  await expect(page.locator(".updates-section")).toBeVisible();
+}
+const sections = (page: Page) => page.getByTestId("whats-new");
+
+test.describe("what an update adds", () => {
+  test.use(contextFor(SIZES[0]!));
+
+  test("F-554: nothing before a check; after it, the offer's list open, a skipped build's and this build's closed, as plain text", async ({
+    page,
+  }) => {
+    await openBetaUpdates(page, "not-checked");
+    await expect(sections(page)).toHaveCount(0);
+    await page.getByRole("button", { name: "Check for Updates" }).click();
+    await expect(page.getByRole("group", { name: "Update status" })).toContainText("0.2.0");
+    await expect(sections(page).locator(":scope > summary")).toHaveText([
+      "What's new in this build",
+      "What's new in 0.2.0-beta.20261116.1",
+      "What's new in 0.1.1-beta.20261115.4",
+    ]);
+    const [running, offered, skipped] = await sections(page).all();
+    await expect(offered!).toHaveAttribute("open", "");
+    await expect(skipped!).not.toHaveAttribute("open");
+    await expect(running!).not.toHaveAttribute("open");
+    await expect(offered!.getByRole("listitem")).toHaveText([
+      "Settings shows what an update adds (#457)",
+      "The download page lists what each beta added (#456)",
+      "Conversations hide a bot's thinking unless you turn it on (#447)",
+    ]);
+    await skipped!.locator(":scope > summary").click();
+    await expect(skipped!.getByRole("listitem")).toHaveText([
+      "iPhone Settings can show chats from Discord, Telegram and others (#441)",
+      "Holding a message on a touch screen opens its actions (#380)",
+    ]);
+    await expect(page.locator(".updates-section").getByRole("link")).toHaveCount(0);
+  });
+
+  test("F-554: with nothing newer only this build's list shows; no lists, or the Stable source, show none", async ({
+    page,
+  }) => {
+    await openBetaUpdates(page, "nothing-newer", "&track=nightly");
+    await expect(sections(page).locator(":scope > summary")).toHaveText([
+      "What's new in this build",
+    ]);
+    await openBetaUpdates(page, "offered", "&track=nightly&whatsNew=none");
+    await expect(page.getByRole("group", { name: "Update status" })).toContainText("0.2.0");
+    await expect(sections(page)).toHaveCount(0);
+    await openBetaUpdates(page, "offered", "&track=stable");
+    await expect(page.getByRole("group", { name: "Update status" })).toContainText("0.2.0");
+    await expect(sections(page)).toHaveCount(0);
+  });
+});
+
+for (const size of SIZES)
+  test.describe(`what an update adds at ${size.name}`, () => {
+    test.use(contextFor(size));
+    test(`F-554: an offer's lists at ${size.name}`, async ({ page }) => {
+      await openBetaUpdates(page, "offered", "&track=nightly");
+      await expect(sections(page)).toHaveCount(3);
+      await settle(page);
+      await expect(page.getByRole("dialog")).toHaveScreenshot(
+        `updates/whats-new-offered-${size.name}.png`,
+      );
+    });
+    test(`F-554: this build's list, opened, at ${size.name}`, async ({ page }) => {
+      await openBetaUpdates(page, "nothing-newer", "&track=nightly");
+      await sections(page).locator(":scope > summary").click();
+      await expect(sections(page).getByRole("listitem").first()).toBeVisible();
+      await settle(page);
+      await expect(page.getByRole("dialog")).toHaveScreenshot(
+        `updates/whats-new-running-${size.name}.png`,
+      );
+    });
+  });
+
+test.describe("what this build added, by keyboard", () => {
+  test.use(contextFor(SIZES[0]!, "light"));
+
+  test("F-554: this build's list opens from the keyboard, light, at 1440", async ({ page }) => {
+    await openFixture(
+      page,
+      "scene=main&updates=nothing-newer&buildTrack=nightly&tracks=two&track=nightly",
+      "light",
+    );
+    await page.keyboard.press("ControlOrMeta+,");
+    await page.getByRole("button", { name: "Updates", exact: true }).click();
+    const summary = sections(page).locator(":scope > summary");
+    await summary.focus();
+    await expect(summary).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(sections(page)).toHaveAttribute("open", "");
+    await expect(sections(page).getByRole("listitem").first()).toBeVisible();
+    await settle(page);
+    await expect(page.getByRole("dialog")).toHaveScreenshot(
+      "updates/whats-new-keyboard-light-1440.png",
+    );
+  });
 });

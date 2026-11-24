@@ -670,29 +670,42 @@ export function createSecureCredentials(options: {
         // committed, and the earlier sealed copy is removed after it. A copy left by a failed
         // removal or a stop in between no longer matches the settings, so it is never used, and
         // the next start removes it.
-        const current = await mode();
-        const kept =
-          current.kind === "locked" ? undefined : (await credentials()).values[SETTINGS_KEY];
-        const earlier = kept === undefined ? null : parseSettings(kept);
-        const replaced =
-          earlier !== null &&
-          (earlier.url !== next.url ||
-            (next.token !== null && earlier.token !== next.token) ||
-            hasOwnToken(await credentials(), earlier.url));
+        let shouldRetire = false;
         // The retirement is part of the settings commit, and stays whatever is selected later.
         await queued(async () => {
-          await mode();
+          const current = await mode();
+          const creds =
+            current.kind === "locked"
+              ? null
+              : current.kind === "secure"
+                ? current.sealed.credentials
+                : current.credentials;
+          const kept = creds?.values[SETTINGS_KEY];
+          const earlier = kept === undefined ? null : parseSettings(kept);
+          const replaced =
+            earlier !== null &&
+            (earlier.url !== next.url ||
+              (next.token !== null && earlier.token !== next.token) ||
+              (creds !== null && hasOwnToken(creds, earlier.url)));
+          shouldRetire = replaced;
+          const fromEarlier =
+            earlier !== null &&
+            settings[EARLIER_RETIRED_KEY] !== "true" &&
+            earlier.url === next.url &&
+            earlier.token === next.token;
           // A typed token stays in this process, for its address only, published with its settings.
+          // A token still supplied by migration stays in the sealed record instead of `typed`, so
+          // retiring that record with a device token clears reads in this process too.
           await keepSettings(
             {
               ...settings,
               [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }),
               ...(replaced ? { [EARLIER_RETIRED_KEY]: "true" } : {}),
             },
-            next.token === null ? null : { url: next.url, token: next.token },
+            next.token === null || fromEarlier ? null : { url: next.url, token: next.token },
           );
         });
-        if (replaced) await retireEarlier();
+        if (shouldRetire) await retireEarlier();
       },
       delete: async (key) => {
         if (isCredentialKey(key))

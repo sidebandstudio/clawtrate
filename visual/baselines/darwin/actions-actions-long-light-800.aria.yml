@@ -1,5 +1,3 @@
-- banner: Clawtrate
-- status
 - navigation "Bots":
   - button "Routines"
   - 'button "Sort bots: Recent activity"'
@@ -47,7 +45,6 @@
         - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
-  - button "Settings"
 - region "Conversation":
   - button "Otto, Disk almost full on the media box. Show details.": Otto ·Disk almost full on the media box
   - button "Otto's computer. Show the computer"

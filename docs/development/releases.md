@@ -180,6 +180,12 @@ It makes the release a draft again and reads it back to report that GitHub lists
 
 Withdrawing the only published beta leaves the site as it was: with no beta to fill the download page from, the Site workflow deploys nothing, so the last deployment keeps serving the withdrawn feed and the script says so. Cut a fixed beta, or unpublish the Pages site in the repository's settings until there is one. GitHub's download addresses can keep answering from caches for a while; the signed trial is where to see how long. The app may still show the offer, and a cached download can still answer. Copies already downloaded stay on those Macs, and the engine never downgrades, so whoever installed the withdrawn beta needs a newer one: fix the problem and cut the next beta. Keep the draft as the record, and never reuse its version; the script counts drafts.
 
+### What's new on the download page
+
+The same lists reach the app: the site also writes them to `updates/beta/whats-new.json`, which Settings → Updates reads when someone checks for an update, to show what the offered build and any skipped ones add.
+
+The download page lists what each of the newest betas added, in a section a visitor opens. It reads that from each release's page on GitHub: the last line reading `What's new:` and the `- ` lines after it, so the list goes at the end of the notes. `pnpm release:beta` does not write that list, so whoever publishes a beta adds it to the release's notes afterwards (one line per change a person would notice, ending with the pull request's number as `(#123)`; at most 30 lines of at most 200 characters are read), then runs `gh workflow run site.yml --ref main` so the page is assembled again. A release with no such list is left off the page.
+
 ### Rolling back after the credentials move
 
 The first release with secure storage moves each data folder's device key and tokens into `credentials.bin` ([decisions.md](../decisions.md), "Rolling back after the move"). From that release on, a rollback is a newer signed build that reads that record; never reinstall an earlier build over a person's data folder. To run an earlier build for comparison, give it a separate, disposable data folder.
@@ -187,6 +193,60 @@ The first release with secure storage moves each data folder's device key and to
 ### What only a signed build shows
 
 The tests and the unsigned launch check show the release files, the redirect rule and that a newer build opens the same data folder, device key and saved connection. Two consecutive Developer ID beta builds are needed to show that Squirrel.Mac accepts the successor's designated requirement and hands the app over, and that the person's pairing and tasks are there after the real restart. That is the owner's trial.
+
+### Check that the previous release updates in place
+
+The [Real update](../../.github/workflows/real-update.yml) workflow runs a real signed release through a whole update on GitHub-hosted Macs that are discarded afterwards: macOS 15, the newest generally available image and the newest preview image. It installs the previous release into `/Applications` as `install.sh` does, opens it through Launch Services with its own data folder, and drives Settings → Updates over the Chrome DevTools protocol ([check.ts](../../e2e-packaged/real-update/check.ts)): check, download, inspection, Restart to Update. An image passes only when the system updater replaced the bundle with the candidate, that copy's signature meets the previous release's designated requirement, and the app that reopens runs the replacement's code (its CDHash matches the installed bundle's). Never run `check.ts` on a person's Mac: the app writes to the login keychain and replaces itself.
+
+```sh
+gh workflow run real-update.yml -f previous=<the release before> -f candidate=<the release just published>
+```
+
+Both inputs are optional: empty ones take the two newest published releases. The app reads the live Beta feed, so the candidate must be what the feed offers when each image checks.
+
+Each image ends with one of three verdicts, and so does the run ([verdict.ts](../../e2e-packaged/real-update/verdict.ts)):
+
+- **passed**: the image updated in place.
+- **failed**: it didn't: no offer, an offer without a version or of an older version than the candidate, a refused inspection, no restart offered, or a replacement that doesn't meet the checks above; also an image that left no result, such as one cancelled or timed out before the check finished.
+- **inconclusive**: the feed offered a newer release than the candidate, so the run couldn't test it. That happens when a release is published while the run goes, or when the feed has moved past an explicit `candidate`. The run page shows a warning for it. It is never a pass. Run the check again with the versions the feed now offers.
+
+The run is failed if any image failed, otherwise inconclusive if any image was, otherwise passed. Its conclusion is red only when it failed, so read the verdict from the `real-update-summary` artifact, `real-update-summary.json`:
+
+```json
+{
+  "previous": "0.1.1-beta.20261123.6",
+  "candidate": "0.1.1-beta.20261123.7",
+  "verdict": "passed",
+  "passed": true,
+  "images": {
+    "macos-15": {
+      "verdict": "passed",
+      "passed": true,
+      "outcome": "updated in place",
+      "system": "15.7.2",
+      "offered": "0.1.1-beta.20261123.7",
+      "installed": "0.1.1-beta.20261123.7",
+      "install": { "kind": "restart-available", "offerId": "…" }
+    }
+  }
+}
+```
+
+`images` has one entry per image (`macos-15`, `macos-26`, `xcode-27`), so a caller can weigh the preview image apart. The run's step summary gives the same answer in one line per image. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
+
+**For the release job.** Read `real-update-summary.json`, never the run's conclusion, because an inconclusive run is green.
+
+- **Pause releases** when a release image (`macos-15`, `macos-26`) `failed`, when a verdict is anything other than the three values above, and when the run has no `real-update-summary` artifact (the `versions` job failed, or the run was cancelled before its summary). A failure on the preview image alone (`xcode-27`) is a warning, not a pause.
+- **A release counts as checked** when at least one release image `passed` and no release image `failed`, whatever the run's own `verdict` and whatever the preview image did. An image that started after a newer release was published ends `inconclusive`, which says nothing against an image that passed.
+- **A release with no passing release image** isn't recorded as checked, and isn't a reason to pause by itself. A release counts here when its check was started or couldn't be started; one from before the check existed doesn't. After three such releases in a row, hold the next release until the newest one's check has a passing or failing release image. Nothing newer is published in that time, so the images still waiting are offered the candidate.
+- **The hold always waits on a check.** If the newest release's check never completed and none is running, dispatch a new one for it, with the release before it as `previous`, and hold on that. If its check completed with every release image inconclusive, whatever the preview image did, the feed offers something newer than the release job knows of: don't hold, and log a warning.
+- **A release asked for by name**, a named commit or a forced release, skips the hold. It skips neither a pause nor the wait for a running check.
+- **A run that hasn't finished** when the release job stops waiting is read when it does finish, for up to 24 hours: a late pass still counts, and a late failure still pauses.
+- **Pass `previous` and `candidate` explicitly**, so that a release published before the `versions` job starts can't change the pair.
+
+It can pass only when the previous release has the fix for [#383](https://github.com/sidebandstudio/clawtrate/issues/383): every earlier build fails at inspection, which is what the check showed on macOS 26 with `0.1.1-beta.20261122.4`. So it is meaningful from the second release after that fix.
+
+The app reads only the update source compiled into it, over HTTPS checked against the roots bundled with it, so a released build can be offered only what the live Beta feed offers. The check therefore runs right after `--publish`, not before it. A failure there on a release image (`macos-15`, `macos-26`) pauses releases, and the release job withdraws nothing itself: its pause message names the version, the failed images and the run. A person or an agent then reads the run and withdraws the beta (above) when it shows that the previous beta really can't update to it, because a failure can be the check's or the runner's and not the build's, and withdrawing changes what every installed copy is offered. A failure on the preview image alone is the warning described above. A preview image is not the newest macOS a person may run, and a hosted Mac is not a person's Mac: if the check passes and a person's Mac still fails, Settings → Updates shows why the inspection failed, and "Copy details" gives the record for the issue.
 
 ### The owner's signed trial
 
