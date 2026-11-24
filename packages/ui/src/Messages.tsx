@@ -627,6 +627,33 @@ export function reconcileReplyReceipts(
   return delivered;
 }
 
+/** A reply's words, where they go, and why the last send of them was refused. */
+type ThreadDraft = Draft & { error: string | null };
+const useThreadDrafts = createHandoffDraft<Record<string, ThreadDraft>>((drafts) =>
+  Object.values(drafts).some((draft) => Boolean(draft.text)),
+);
+
+export function TaskThreads({
+  messageId,
+  draftKey,
+  onClose,
+}: {
+  messageId: string | null;
+  draftKey: string;
+  onClose: () => void;
+}) {
+  const env = useMessages();
+  const replyDrafts = useThreadDrafts(draftKey, () => ({}));
+  const [drafts, , handingOff] = replyDrafts;
+  useHoldsWords(
+    env?.taskKey ?? "",
+    env !== null && (handingOff || Object.values(drafts).some((draft) => draft.text.trim())),
+  );
+  return messageId !== null ? (
+    <ThreadView messageId={messageId} replyDrafts={replyDrafts} onClose={onClose} />
+  ) : null;
+}
+
 /**
  * A message and its replies, with a field to reply from. The gateway keeps no thread, so it is
  * assembled here from its own reply references and nothing else: the message, then each row
@@ -634,19 +661,13 @@ export function reconcileReplyReceipts(
  * its way shows as the main composer shows it: held, queued, not sent, failed or sent, with the
  * same recovery.
  */
-/** A reply's words, where they go, and why the last send of them was refused. */
-type ThreadDraft = Draft & { error: string | null };
-const useThreadDrafts = createHandoffDraft<Record<string, ThreadDraft>>((drafts) =>
-  Object.values(drafts).some((draft) => Boolean(draft.text)),
-);
-
-export function ThreadView({
+function ThreadView({
   messageId,
-  draftKey,
+  replyDrafts: [drafts, setDrafts, , beginHandoff],
   onClose,
 }: {
   messageId: string;
-  draftKey: string;
+  replyDrafts: ReturnType<typeof useThreadDrafts>;
   onClose: () => void;
 }) {
   const env = useMessages();
@@ -654,7 +675,6 @@ export function ThreadView({
   // Each thread keeps its own words and error, so a send refused after another thread was opened
   // comes back to the thread it was typed in, not the one on screen. Each keeps the session it was
   // started in too, with the message it replies to: it goes there only (F-278).
-  const [drafts, setDrafts, handingOff, beginHandoff] = useThreadDrafts(draftKey, () => ({}));
   const {
     text,
     error,
@@ -669,11 +689,6 @@ export function ThreadView({
     setParents((all) => ({ ...all, [messageId]: shownSession }));
   const parent = parents[messageId];
   const bindTo = parent ?? shownSession;
-  // Its words keep the task on screen should it leave the list (`keptOnScreen`).
-  useHoldsWords(
-    env?.taskKey ?? "",
-    env !== null && (handingOff || Object.values(drafts).some((draft) => draft.text.trim())),
-  );
   /** One change to a thread's draft: its words, their session and its error together. */
   const change = (id: string, next: (now: ThreadDraft) => ThreadDraft) =>
     setDrafts((all) => ({ ...all, [id]: next(all[id] ?? { text: "", error: null }) }));

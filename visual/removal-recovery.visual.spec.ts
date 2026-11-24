@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { openFixture, OTTO_DISK } from "./fixture.ts";
 
@@ -8,7 +8,38 @@ type Controls = {
     setState: (change: (state: ClawtrateState) => ClawtrateState) => void;
   };
   refuseSend?: () => void;
+  acceptSend?: () => void;
 };
+
+const diskTitle = "Disk almost full on the media box";
+
+async function removeDiskTask(page: Page) {
+  await page.evaluate(() =>
+    (window as unknown as Controls).clawtrateFixture.setState((state) => ({
+      ...state,
+      tasksByBot: {
+        ...state.tasksByBot,
+        otto: state.tasksByBot.otto!.filter((task) => task.key !== "agent:otto:disk-space"),
+      },
+    })),
+  );
+  await expect(page.getByTestId("task").filter({ hasText: diskTitle })).toHaveCount(0);
+}
+
+async function delaySend(page: Page) {
+  await page.evaluate(() => {
+    const controls = window as unknown as Controls;
+    const fixture = controls.clawtrateFixture;
+    const invoke = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "sendMessage"
+        ? new Promise((resolve, reject) => {
+            controls.refuseSend = () => reject(new Error("Host refused before queuing."));
+            controls.acceptSend = () => resolve({ messageId: "accepted-reply" });
+          })
+        : invoke(command);
+  });
+}
 
 for (const editor of ["composer", "thread"] as const) {
   for (const order of ["list removal", "closing and reopening the editor"] as const) {
@@ -16,17 +47,7 @@ for (const editor of ["composer", "thread"] as const) {
       page,
     }) => {
       await openFixture(page, `scene=message-actions&${OTTO_DISK}&panel=closed`, "light");
-      await page.evaluate(() => {
-        const controls = window as unknown as Controls;
-        const fixture = controls.clawtrateFixture;
-        const invoke = fixture.invoke.bind(fixture);
-        fixture.invoke = (command) =>
-          command.type === "sendMessage"
-            ? new Promise((_, reject) => {
-                controls.refuseSend = () => reject(new Error("Host refused before queuing."));
-              })
-            : invoke(command);
-      });
+      await delaySend(page);
       if (editor === "thread") await page.getByTestId("reply-quote").click();
       const field = page.getByTestId(`${editor}-input`);
       await field.fill("First draft.");
@@ -69,4 +90,39 @@ for (const editor of ["composer", "thread"] as const) {
       }
     });
   }
+}
+
+for (const outcome of ["refusal", "acceptance"] as const) {
+  test(`F-278: a pending reply keeps its task after the thread closes and the row disappears, through ${outcome}`, async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=message-actions&${OTTO_DISK}&panel=closed`, "light");
+    await delaySend(page);
+    const openThread = page.getByTestId("reply-quote");
+    await openThread.click();
+    const field = page.getByTestId("thread-input");
+    await field.fill("Recover this reply.");
+    await field.press("Enter");
+    await expect(field).toHaveValue("");
+    await field.press("Escape");
+    await expect(field).toHaveCount(0);
+    await removeDiskTask(page);
+    const header = page.locator(".conversation-header");
+    await expect(header).toContainText(diskTitle);
+    if (outcome === "refusal") {
+      await page.evaluate(() => (window as unknown as Controls).refuseSend!());
+      await expect(header).toContainText(diskTitle);
+      await openThread.click();
+      await expect(field).toHaveValue("Recover this reply.");
+      await expect(page.getByRole("alert")).toContainText("Host refused before queuing.");
+      await expect(page.getByRole("button", { name: "Send reply" })).toBeDisabled();
+      await expect(
+        page.getByRole("button", { name: "Start a new task with this message" }),
+      ).toBeVisible();
+      await page.getByTestId("thread-waits").getByRole("button", { name: "Delete" }).click();
+    } else {
+      await page.evaluate(() => (window as unknown as Controls).acceptSend!());
+    }
+    await expect(header).toContainText("Rotate the logs");
+  });
 }

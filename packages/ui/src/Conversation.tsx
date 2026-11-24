@@ -34,7 +34,7 @@ import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
+import { itemText, MessageProvider, MessageUnit, ReplyQuote, TaskThreads } from "./Messages.tsx";
 import { Pictures } from "./Pictures.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
@@ -471,19 +471,17 @@ function TranscriptView({
           </CardScope>
         </div>
       </div>
-      {thread && (
-        <MessageProvider env={messageEnv}>
-          <ThreadView
-            draftKey={draftKey}
-            messageId={thread.messageId}
-            onClose={() => {
-              const from = thread.from;
-              setThread(null);
-              requestAnimationFrame(() => from?.focus());
-            }}
-          />
-        </MessageProvider>
-      )}
+      <MessageProvider env={messageEnv}>
+        <TaskThreads
+          draftKey={draftKey}
+          messageId={thread?.messageId ?? null}
+          onClose={() => {
+            const from = thread?.from;
+            setThread(null);
+            requestAnimationFrame(() => from?.focus());
+          }}
+        />
+      </MessageProvider>
       {live.needsYou && !atEnd ? (
         <button
           type="button"
