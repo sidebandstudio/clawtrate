@@ -568,16 +568,23 @@ describe("an archive or a delete bound to the connection it began on", () => {
     return { client, gateway, stamp: gatewayStamp(client.state.connection) };
   }
 
-  it("an archive that waits for an access grant goes through once the same gateway grants it", async () => {
-    const { client, gateway, stamp } = await granted("gateway-a");
-    const target = stamp.target;
-    expect(await outcome(client.archiveTask("agent:pip:main", { stamp }))).toBe("done");
-    expect(client.state.connection.target).toBe(target);
-    expect(gateway.calls("sessions.patch")).toEqual([
-      { key: "agent:pip:main", archived: true, expectedSessionId: "s-main" },
-    ]);
-    client.stop();
-  });
+  for (const type of ["archive", "delete"] as const)
+    it(`${type === "archive" ? "an archive" : "a delete"} that waits for an access grant goes through once the same gateway grants it`, async () => {
+      const { client, gateway, stamp } = await granted("gateway-a");
+      gateway.handlers["sessions.delete"] = () => ({ ok: true });
+      const target = stamp.target;
+      const acting =
+        type === "archive"
+          ? client.archiveTask("agent:pip:main", { stamp })
+          : client.deleteTask("agent:pip:main", { stamp });
+      expect(await outcome(acting)).toBe("done");
+      expect(client.state.connection.target).toBe(target);
+      expect(gateway.calls("sessions.patch")).toEqual([
+        { key: "agent:pip:main", archived: true, expectedSessionId: "s-main" },
+      ]);
+      expect(gateway.calls("sessions.delete")).toHaveLength(type === "delete" ? 1 : 0);
+      client.stop();
+    });
 
   it("an archive that waits for an access grant is refused when another gateway answers the grant's reconnect", async () => {
     const { client, gateway, stamp } = await granted("gateway-x");
