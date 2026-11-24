@@ -16,7 +16,7 @@ interface FailedTest {
 
 export interface HostState {
   /** The host's own reading; null when it gave none in time, or why it couldn't be asked. */
-  readonly reading: DesktopUpdateSnapshot | null | { error: string };
+  readonly reading: DesktopUpdateSnapshot | null | { error: "page closed" | "host read failed" };
   readonly steps: Step[] | null;
   readonly requests: readonly string[];
   readonly rendererRequests: readonly string[];
@@ -44,9 +44,18 @@ export function hostStateAtFailure(
       requests: [...requests],
       rendererRequests: [...rendererRequests],
     };
-    const reading = await Promise.race([ask(), pause(timeoutMs, null, { ref: false })]).catch(
-      (cause: unknown) => ({ error: String(cause) }),
-    );
+    let reading: HostState["reading"];
+    try {
+      reading = await Promise.race([ask(), pause(timeoutMs, null, { ref: false })]);
+    } catch (cause) {
+      reading = {
+        error:
+          cause instanceof Error &&
+          cause.message.includes("Target page, context or browser has been closed")
+            ? "page closed"
+            : "host read failed",
+      };
+    }
     const state = { reading, ...seen };
     try {
       const file = join(test.outputDir, "host-state.json");

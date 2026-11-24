@@ -129,18 +129,36 @@ it("stops waiting for a host that never answers, and keeps what it read without 
   });
 });
 
-it("keeps why a closed page couldn't be asked, and resolves when the results folder can't be written", async () => {
+it.each([
+  ["page.evaluate: Target page, context or browser has been closed", "page closed"],
+  ["Unexpected host read failure", "host read failed"],
+])("F-231: keeps local paths out of both outputs for %s", async (message, reason) => {
+  const test = failedTest();
+  const error = new Error(`${message}\nD:\\fixture-private-path\\updates`);
+  const capture = hostStateAtFailure(test, dir.path, [], [], async () => {
+    throw error;
+  });
+  const state = await capture();
+  const line = statusLine(state);
+  const attachment = written(test);
+  expect(JSON.parse(line).reading).toEqual({ error: reason });
+  expect(attachment).toMatchObject({ reading: { error: reason } });
+  expect(line).not.toContain("fixture-private-path");
+  expect(JSON.stringify(attachment)).not.toContain("fixture-private-path");
+});
+
+it("resolves when the results folder can't be written", async () => {
   const blocked = join(dir.path, "a-file");
   writeFileSync(blocked, "");
   const test = failedTest(join(blocked, "results"));
   const closed = new Error("Target page, context or browser has been closed");
   const capture = hostStateAtFailure(test, dir.path, [], [], () => Promise.reject(closed));
   const state = await capture();
-  expect(state.reading).toEqual({ error: String(closed) });
+  expect(state.reading).toEqual({ error: "page closed" });
   expect(test.attached).toEqual([]);
   expect(JSON.parse(statusLine(state))).toEqual({
     requests: [],
-    reading: { error: String(closed) },
+    reading: { error: "page closed" },
     steps: null,
   });
 });
