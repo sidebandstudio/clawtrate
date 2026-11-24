@@ -482,11 +482,7 @@ export const SCENARIOS: Scenario[] = [
           });
         },
       },
-      // Said only when the edit was made.
-      (ctx) =>
-        ctx.results.some((result) => result.name === "edit")
-          ? [say(`${takenName(ctx.prompt)} it is. It shows once you confirm it in Clawtrate.`)]
-          : [],
+      (ctx) => [say(`${takenName(ctx.prompt)} it is. It shows once you confirm it in Clawtrate.`)],
     ],
   },
   {
