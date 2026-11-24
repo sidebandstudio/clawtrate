@@ -150,6 +150,38 @@ describe("F-519: Show external channel chats", () => {
       }
     });
 
+  it("F-519: what the person sets while startup reads the preferences stays, and both are kept", async () => {
+    const storage = memoryStorage({ "show-channel-chats": "false", "turn-limit-minutes": "30" });
+    const gate = deferred<void>();
+    let held = false;
+    const get = storage.get;
+    storage.get = async (read) => {
+      const value = await get(read);
+      if (read === "show-channel-chats" && !held) {
+        held = true;
+        await gate.promise;
+      }
+      return value;
+    };
+    const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+    try {
+      const starting = client.start();
+      await until(() => held);
+      await client.setTurnLimit(45);
+      await client.setShowChannelChats(true);
+      gate.resolve();
+      await starting;
+      expect(client.state).toMatchObject({ showChannelChats: true, turnLimitMinutes: 45 });
+      expect(Object.fromEntries(storage.data)).toMatchObject({
+        "show-channel-chats": "true",
+        "turn-limit-minutes": "45",
+      });
+    } finally {
+      gate.resolve();
+      client.stop();
+    }
+  });
+
   it("F-519: a choice the host could not keep is not taken", async () => {
     const { client, storage, keys } = await connected();
     storage.set = () => Promise.reject(new Error("The disk is full."));

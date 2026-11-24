@@ -1348,6 +1348,8 @@ export class ClawtrateClient {
   private turnLimitMs = DEFAULT_TURN_LIMIT_MS;
   /** "Show external channel chats": the person's choice, off until they turn it on. */
   private showChannelChats = false;
+  /** How often the person set each preference: a startup read begun before a change doesn't undo it. */
+  private readonly preferenceSets = { turnLimit: 0, channelChats: 0 };
   /**
    * The person this connection acts for, as the gateway names them (`users.self` profile id):
    * which reactions are this person's own. Read once per connection; null until then, or when
@@ -1893,16 +1895,24 @@ export class ClawtrateClient {
         if (stops !== this.stops) return;
         this.setConnection({ deviceId: identity.deviceId });
         // A turn limit the person chose earlier, unless the host was given one.
+        const sets = { ...this.preferenceSets };
         const limit =
           this.options.turnLimitMs === undefined
             ? Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null))
             : null;
         const channelChats =
           (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
-        // A startup stopped while it read keeps nothing: the next one reads again.
+        // A startup stopped while it read keeps nothing: the next one reads again. A preference
+        // the person set meanwhile is newer than what was read.
         if (stops !== this.stops) return;
-        if (limit !== null && validTurnLimit(limit)) this.turnLimitMs = limit * 60_000;
-        this.showChannelChats = channelChats;
+        if (
+          sets.turnLimit === this.preferenceSets.turnLimit &&
+          limit !== null &&
+          validTurnLimit(limit)
+        )
+          this.turnLimitMs = limit * 60_000;
+        if (sets.channelChats === this.preferenceSets.channelChats)
+          this.showChannelChats = channelChats;
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
@@ -6916,6 +6926,7 @@ export class ClawtrateClient {
       );
     // Kept first: a limit the host could not keep is not taken, and the old one and its timers stay.
     await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
+    this.preferenceSets.turnLimit += 1;
     this.turnLimitMs = minutes * 60_000;
     this.store.update((state) => ({ ...state, turnLimitMinutes: minutes }));
     for (const [timerKey, timer] of this.turnTimers) {
@@ -6933,6 +6944,7 @@ export class ClawtrateClient {
   async setShowChannelChats(on: boolean): Promise<void> {
     // Kept first: a choice the host could not keep is not taken.
     await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
+    this.preferenceSets.channelChats += 1;
     this.showChannelChats = on;
     this.store.update((state) => ({ ...state, showChannelChats: on }));
     this.publishTasks();
