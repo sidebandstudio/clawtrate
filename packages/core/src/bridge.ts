@@ -13,7 +13,8 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
-import type { ChatPictureRead } from "./pictures.ts";
+import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
+import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
@@ -114,6 +115,16 @@ export type BridgeCommand =
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
+  /**
+   * The one-time offer of full control (setup-effortless.md §6), for the gateway and device
+   * it was shown for: accept it (one request for the six), or "Keep current access".
+   */
+  | {
+      type: "requestFullControl" | "dismissFullControl";
+      gatewayUrl: string;
+      deviceId: string;
+      stamp: GatewayStamp;
+    }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -218,6 +229,11 @@ export type BridgeCommand =
   | { type: "readCheckoutDiff"; key: string; path: string }
   /** A picture the bot handed over in the task, by the id its message gave (`ChatPictureRead`). */
   | { type: "readChatPicture"; key: string; artifactId: string }
+  /**
+   * A picture you sent, from this app's own copy (`SentPictureRead`): by the outgoing message's
+   * id, or the key history stored its row under, and its place among the message's files.
+   */
+  | { type: "readSentPicture"; key: string; messageKey: string; index: number }
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
@@ -317,6 +333,9 @@ export type BridgeCommand =
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
+  /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
+  | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
+  | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
   | {
       type: "setBotPicture";
@@ -605,7 +624,11 @@ type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage"
                                                                                                           type: "readChatPicture";
                                                                                                         }
                                                                                                       ? ChatPictureRead
-                                                                                                      : void;
+                                                                                                      : C extends {
+                                                                                                            type: "readSentPicture";
+                                                                                                          }
+                                                                                                        ? SentPictureRead
+                                                                                                        : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -1159,6 +1182,20 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "checkLock":
     case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
+    case "acceptBotName":
+      return {
+        type: "acceptBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "declineBotName":
+      return {
+        type: "declineBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "finishBot":
       return {
         type: "finishBot",
@@ -1249,6 +1286,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       )
         throw new Error("invalid url");
       return { type: "disconnect", gatewayUrl: command.gatewayUrl };
+    case "requestFullControl":
+    case "dismissFullControl":
+      if (
+        typeof command.gatewayUrl !== "string" ||
+        command.gatewayUrl.length > MAX_GATEWAY_URL_CHARS
+      )
+        throw new Error("invalid url");
+      return {
+        type: command.type,
+        gatewayUrl: command.gatewayUrl,
+        deviceId: id(command.deviceId, "device id"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "connectDevGateway":
     case "suspend":
     case "retry":
@@ -1444,6 +1494,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "readChatPicture",
         key: sessionKey(command.key),
         artifactId: id(command.artifactId, "picture id"),
+      };
+    case "readSentPicture":
+      return {
+        type: "readSentPicture",
+        key: sessionKey(command.key),
+        messageKey: id(command.messageKey, "message key"),
+        index: count(command.index, MAX_ATTACHMENTS_PER_MESSAGE - 1, "file index"),
       };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
@@ -1869,6 +1926,10 @@ class ViewerSession implements BridgeSession {
         return client.reloadSession(command.key, command.failed);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
+      case "requestFullControl":
+        return client.requestFullControl(command);
+      case "dismissFullControl":
+        return client.dismissFullControl(command);
       case "refreshRoutines":
         return client.refreshRoutines();
       case "readBotRoutines":
@@ -1960,6 +2021,10 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
+      case "acceptBotName":
+        return client.acceptBotName(command.botId, command.name, command.stamp);
+      case "declineBotName":
+        return client.declineBotName(command.botId, command.name, command.stamp);
       case "setBotPicture":
         return client.setBotPicture(command.botId, command.avatar, command.stamp);
       case "refreshCheckIns":
@@ -2098,6 +2163,13 @@ class ViewerSession implements BridgeSession {
         return client.readChatPicture(
           this.mine(command.key),
           command.artifactId,
+          this.fileOptions(),
+        );
+      case "readSentPicture":
+        return client.readSentPicture(
+          this.mine(command.key),
+          command.messageKey,
+          command.index,
           this.fileOptions(),
         );
       case "listMemory":

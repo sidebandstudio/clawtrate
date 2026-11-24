@@ -274,6 +274,8 @@ test("F-020: a working bot's avatar animates, and its row is named <Bot>, workin
   await expect(otto).toHaveAccessibleName(/^Otto, working,/);
   const presence = otto.locator(".presence");
   await expect(presence).toHaveAttribute("data-state", "working");
+  // The rail holds a presence still until its observer reports it in view.
+  await expect(presence).toHaveAttribute("data-onscreen", "");
   // The ring travels round the avatar, and the creature bobs and snaps its claws.
   expect(await presence.evaluate((el) => getComputedStyle(el, "::before").animationName)).toBe(
     "orbit",
@@ -294,6 +296,7 @@ test("F-020: a working bot's avatar animates, and its row is named <Bot>, workin
   await expect(bot(page, "Pip").locator("svg.creature")).toHaveAttribute("data-muted", "");
   // An idle bot is still.
   const marlow = bot(page, "Marlow").locator(".presence");
+  await expect(marlow).toHaveAttribute("data-onscreen", "");
   expect(await marlow.evaluate((el) => getComputedStyle(el, "::before").opacity)).toBe("0");
   expect(
     await marlow
@@ -328,6 +331,8 @@ test("F-020: a working bot's avatar animates, and its row is named <Bot>, workin
 test("F-020: with reduced motion the working ring holds still", async ({ page }) => {
   await openFixture(page, `scene=main&${OTTO_DISK}&motion=reduce`, "light");
   const presence = bot(page, "Otto").locator(".presence");
+  // In view, so only reduced motion holds it still.
+  await expect(presence).toHaveAttribute("data-onscreen", "");
   expect(await presence.evaluate((el) => getComputedStyle(el, "::before").animationName)).toBe(
     "none",
   );

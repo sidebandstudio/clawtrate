@@ -76,12 +76,12 @@ jobs:
       - run: pnpm test
 
   # The suite runs one test at a time against one gateway, so it is split by file across three
-  # runners, each with a gateway of its own.
+  # runners, each with a gateway of its own. The first shard holds the slowest files (#485).
   e2e:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

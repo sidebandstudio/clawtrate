@@ -21,6 +21,7 @@ import {
   type RefObject,
 } from "react";
 import { AccessBar } from "./AccessBar.tsx";
+import { NameCard } from "./bots/NameCard.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
 import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
@@ -42,6 +43,7 @@ import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
+import { SentFiles } from "./SentFiles.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 
@@ -85,6 +87,11 @@ function Turn({
               </div>
             ) : null,
           )}
+          <SentFiles
+            taskKey={taskKey}
+            messageKey={item.idempotencyKey ?? null}
+            files={item.attachments ?? []}
+          />
         </MessageUnit>
       )}
       {item.steered && (
@@ -392,6 +399,12 @@ function TranscriptView({
   let previous: number | null = null;
   const endingsBefore = live.endingsBefore;
   for (const item of transcript.items) {
+    if (item.role === "user") {
+      // What ended the turn before this message sits under that turn: above the time
+      // that introduces this message, which is not when that turn's work happened.
+      const before = endingsBefore.get(item.id);
+      if (before) rows.push(...before);
+    }
     const at = item.timestamp;
     if (
       at !== null &&
@@ -404,11 +417,6 @@ function TranscriptView({
       );
     }
     if (at !== null) previous = at;
-    if (item.role === "user") {
-      // What ended the turn before this message sits under that turn.
-      const before = endingsBefore.get(item.id);
-      if (before) rows.push(...before);
-    }
     rows.push(
       <CardSlot key={item.id} item={item}>
         {item.role === "system" ? (
@@ -1165,7 +1173,7 @@ export function Conversation({
             onClick={onOpenPanel}
           >
             <Avatar bot={bot} />
-            <span className="title-pill-name">{bot.name}</span>
+            <bdi className="title-pill-name">{bot.name}</bdi>
             {task && <span className="title-pill-task">{task.title}</span>}
           </button>
         ) : (
@@ -1202,6 +1210,7 @@ export function Conversation({
       </header>
       {body}
       {task && bot && <UsageNotes bot={bot} canSet={!info.readOnly} />}
+      {task && bot && <NameCard bot={bot} connection={connection} onAnnounce={onAnnounce} />}
       {task && bot && interactive && (
         <Composer
           key={`composer:${connection.gatewayUrl ?? ""}:${task.key}`}

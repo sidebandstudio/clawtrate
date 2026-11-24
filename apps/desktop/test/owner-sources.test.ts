@@ -20,6 +20,7 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
+  "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
   "apps/desktop/src/main/mac-install.ts:RESULTS": "static, the helper's eight result lines",
   "apps/desktop/src/main/mac-install.ts:HELPER_STEPS": "static, the helper's eleven step names",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
@@ -52,6 +53,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/client.ts:APPROVAL_CAPS": "static, three caps",
   "packages/core/src/client.ts:APPROVAL_SOURCES": "static, three list readers",
   "packages/core/src/client.ts:NAMED_CONNECT_CODES": "static, the pinned protocol's connect codes",
+  "packages/core/src/client.ts:OFFER_ANSWERS": "static, the five answers to the full-control offer",
   "packages/core/src/runs.ts:TERMINAL_RUN_STATES": "static, the terminal run states",
   "packages/core/src/runs.ts:TIMEOUT_PHASES": "static, five phases",
   "packages/core/src/runs.ts:HARD_TIMEOUT_PHASES": "static, three phases",
