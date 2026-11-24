@@ -29,6 +29,7 @@ import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { FullControlOffer } from "./FullControl.tsx";
 import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
@@ -97,6 +98,25 @@ export function Shell({
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
 
+  // The one-time offer of full control (setup-effortless.md §6): it opens once per gateway in
+  // this window while it is unanswered, stays open while its request runs, and once closed
+  // lives on in Settings only.
+  const [offerFor, setOfferFor] = useState<string | null>(null);
+  const [offerOpen, setOfferOpen] = useState(false);
+  const offerUrl = state.connection.gatewayUrl;
+  if (
+    !inert &&
+    !info.readOnly &&
+    state.connection.status === "connected" &&
+    state.connection.fullOffer === "offer" &&
+    // Bound to the gateway's identity, so shown only once it is known (`offerBinding`).
+    state.connection.gatewayId !== null &&
+    offerUrl !== offerFor
+  ) {
+    setOfferFor(offerUrl);
+    setOfferOpen(true);
+  }
+
   // When access arrives, the strip says so for four seconds; the conversation announces it.
   const connectedNow = state.connection.status === "connected";
   const [tier, setTier] = useState(interactive);
@@ -144,6 +164,8 @@ export function Shell({
   const overlay = mainWidth !== null && mainWidth < DOCK_FROM;
   // The Routines view takes the main pane, Work included: no drawer, scrim or inert rail behind it.
   const drawerOpen = panelOpen && overlay && !routines;
+  // While the offer of full control is open, its dialog keeps the keyboard, not the drawer behind.
+  const drawerKeys = drawerOpen && !offerOpen;
 
   const setPanel = useCallback((open: boolean) => {
     if (open) {
@@ -215,7 +237,7 @@ export function Shell({
   const openNewBot = useCallback(() => setNewBot(true), []);
   const mac = isMac();
   useEffect(() => {
-    if (inert || newBot || shortcuts || searchOpen) return;
+    if (inert || newBot || shortcuts || searchOpen || offerOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (mac ? event.metaKey : event.ctrlKey) &&
@@ -229,9 +251,10 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inert, newBot, shortcuts, searchOpen, mac, openPalette]);
+  }, [inert, newBot, shortcuts, searchOpen, offerOpen, mac, openPalette]);
   useEffect(() => {
-    if (!interactive || inert) return;
+    // The full-control offer keeps ⌘N, as it keeps ⌘K: nothing opens over it.
+    if (!interactive || inert || offerOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -245,7 +268,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interactive, inert]);
+  }, [interactive, inert, offerOpen]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -263,9 +286,9 @@ export function Shell({
         // ⌘[ in the conversation goes back to the file while "Back to <file>" is offered.
         event.preventDefault();
         backLinkRef.current();
-      } else if (event.key === "Escape" && drawerOpen && !deletingOpen) {
+      } else if (event.key === "Escape" && drawerKeys && !deletingOpen) {
         setPanel(false);
-      } else if (event.key === "Tab" && drawerOpen && !deletingOpen && panelRef.current) {
+      } else if (event.key === "Tab" && drawerKeys && !deletingOpen && panelRef.current) {
         // (The delete dialog, opened from the drawer, keeps Tab and Escape to itself.)
         // The drawer keeps focus inside itself.
         const items = [
@@ -288,7 +311,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel, drawerOpen, setPanel, deletingOpen]);
+  }, [togglePanel, drawerKeys, setPanel, deletingOpen]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
   const unread = unreadCount(
@@ -932,6 +955,14 @@ export function Shell({
             />
           )}
         </div>
+        {offerOpen && (
+          <FullControlOffer
+            // Each gateway's offer is its own: a switch shows that gateway's choices afresh.
+            key={offerFor ?? ""}
+            connection={state.connection}
+            onClose={() => setOfferOpen(false)}
+          />
+        )}
         {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
         {searchOpen && (
           <SearchPalette

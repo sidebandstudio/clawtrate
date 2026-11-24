@@ -3028,3 +3028,26 @@ textarea {
 .consent-points li + li {
   margin-top: 4px;
 }
+
+/* The one-time offer of full control (FullControl.tsx): wide enough for the consent line. */
+.b-dialog[data-kind="confirm"]:has(.full-offer) {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.full-offer .consent {
+  margin: 0 0 var(--space-5);
+}
+
+.full-offer .consent-line,
+.full-offer .consent-points {
+  margin-bottom: 0;
+  font-size: var(--text-sm);
+}
+
+.full-offer .command {
+  margin-bottom: var(--space-5);
+}
+
+.settings-full {
+  margin-top: var(--space-4);
+}

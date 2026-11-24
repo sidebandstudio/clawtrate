@@ -85,8 +85,10 @@
     },
     denied: { tag: "Denied", face: "blocked", say: "Denied. Otto changed nothing." },
   };
+  const runs = demo.querySelectorAll(".run");
   function show(state, focus) {
     demo.dataset.state = state;
+    runs.forEach((run) => (run.open = false));
     tag.textContent = states[state].tag;
     pill.dataset.state = states[state].face;
     live.textContent = states[state].say;

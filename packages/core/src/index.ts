@@ -13,6 +13,7 @@ export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
 export * from "./pictures.ts";
+export * from "./bot-names.ts";
 export * from "./computer.ts";
 export * from "./machine.ts";
 export * as computerWords from "./computer-words.ts";

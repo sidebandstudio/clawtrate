@@ -105,6 +105,13 @@ export type ConnectionState = {
    * narrower grant is kept, said, and never asked again by itself.
    */
   fullPairing: boolean;
+  /**
+   * The one-time offer of full control to a pairing made with less, at a protected address
+   * on a host with secure storage (setup-effortless.md §6): `offer` until the person answers
+   * it, `settings` once they have (it stays in Settings, Gateway, Access), null where it
+   * doesn't apply. Read again at each hello.
+   */
+  fullOffer: "offer" | "settings" | null;
   upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
@@ -492,8 +499,30 @@ export type ClawtrateState = {
    * Absent where a host does not read them.
    */
   usage?: UsageState;
+  /**
+   * Names bots wrote for themselves that wait for the person (`bot-names.ts`): one card each in
+   * that bot's conversation. Absent until the first.
+   */
+  botNames?: NameProposal[];
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
+};
+
+/**
+ * A bot's IDENTITY.md names it otherwise than the gateway's config does (#424): the card in
+ * its conversation, whose Rename saves `name` with `agents.update`.
+ */
+export type NameProposal = {
+  botId: string;
+  /** The file's name made plain, exactly as Rename saves it (`plainName`). */
+  name: string;
+  /** The bot's name when the file was read; Rename sends nothing once the bot is named otherwise. */
+  from: string;
+  /** Where the file was read (`gatewayStamp`): Rename sends only there. */
+  stamp: GatewayStamp;
+  /** `renaming` while Rename is out; `failed` with `error` when it didn't land. */
+  status: "open" | "renaming" | "failed";
+  error: string | null;
 };
 
 /**
@@ -553,6 +582,7 @@ export const initialConnectionState: ConnectionState = {
   canApprove: false,
   canAdmin: false,
   fullPairing: false,
+  fullOffer: null,
   upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,
