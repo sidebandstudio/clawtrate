@@ -45,6 +45,7 @@ import {
   SLOW_CREATE_MS,
   unreadEvidence,
   withoutSecret,
+  initialAccountsState,
   type AccountsState,
   type MissingStep,
   type AccountWrite,
@@ -255,7 +256,18 @@ export class AccountsEngine {
       if (resets !== this.resets) return;
       this.readPrefs(prefs);
       const at = ctx.now();
-      ctx.update((a) => ({ ...this.compose(a, config, views, a.models, at), readOn }));
+      ctx.update((a) => {
+        // The catalog is kept only for the same gateway, named on both reads: one read on
+        // another (an answer at the same address after a reconnect) is never shown beside this
+        // read's stamp. The picker below reads this one's.
+        const same =
+          readOn.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === readOn.gatewayId;
+        return {
+          ...this.compose(a, config, views, same ? a.models : [], at),
+          ...(same ? {} : { modelsCut: initialAccountsState.modelsCut }),
+          readOn,
+        };
+      });
       // The default bot's picker, the Model menu's rows (section 9), asked once the accounts are
       // published and in the same read, so it never overlaps another account read or what a
       // read is awaited for (a new bot's first task): the gateway refuses it alongside the reads
