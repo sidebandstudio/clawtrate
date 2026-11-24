@@ -24,19 +24,22 @@ for (const size of [WIDE, PHONE]) {
   for (const theme of THEMES) {
     test.describe(`pictures ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
-      const scenes = size === WIDE ? ["pictures", "pictures-failed"] : ["pictures"];
+      const scenes =
+        size === WIDE
+          ? ["pictures", "pictures-failed", "pictures-message"]
+          : ["pictures", "pictures-message"];
       for (const scene of scenes) {
         test(`F-535: ${scene} matches its baseline`, async ({ page }) => {
           await open(page, scene, theme);
           await expect(picture(page)).toHaveAttribute(
             "data-state",
-            scene === "pictures" ? "shown" : "failed",
+            scene === "pictures-failed" ? "failed" : "shown",
           );
-          if (scene === "pictures")
+          if (scene !== "pictures-failed")
             await expect
               .poll(() =>
-                page
-                  .getByRole("img", { name: ALT })
+                picture(page)
+                  .getByRole("img")
                   .evaluate((img: HTMLImageElement) => img.complete),
               )
               .toBe(true);
@@ -82,6 +85,29 @@ test.describe("pictures behaviour", () => {
         .filter({ hasText: "I asked for the picture" })
         .getByTestId("picture"),
     ).toHaveCount(0);
+  });
+
+  test("F-535: a picture sent with the message tool is drawn under that message's bubble, before the bot's next words, once", async ({
+    page,
+  }) => {
+    await open(page, "pictures-message", "dark");
+    const turn = page.getByTestId("transcript-turn").filter({ hasText: "Here is the picture." });
+    const img = turn.getByRole("img", { name: "A picture the bot handed over" });
+    await expect(img).toBeVisible();
+    await expect(turn.getByTestId("picture")).toHaveCount(1);
+    // Under the message's bubble, and above the line the bot said after sending it.
+    const bubble = (await turn.getByText("Here is the picture.").boundingBox())!;
+    const shown = (await img.boundingBox())!;
+    const after = (await turn.getByText("It fits the top of the newsletter.").boundingBox())!;
+    expect(shown.y).toBeGreaterThan(bubble.y);
+    expect(shown.y + shown.height).toBeLessThan(after.y);
+    expect(await sent(page)).toEqual([
+      {
+        type: "readChatPicture",
+        key: "agent:otto:disk-space",
+        artifactId: "artifact_managed_image_fbabd0fe-ab39-4db6-88ba-6bb4bb348ea3",
+      },
+    ]);
   });
 
   test("F-535: a picture that can't be loaded says why, and Try again shows it", async ({

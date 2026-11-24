@@ -18,6 +18,8 @@ import { UpdateEngine } from "./engine.ts";
 import type { UpdateInstaller } from "./install.ts";
 import { readAttempt, attemptOutcome, type UpdateQuit } from "./attempt.ts";
 import { readCheck, type StoredUpdatePreferences } from "./preferences.ts";
+import { whatsNewView, type BuildNotes } from "./whats-new.ts";
+import { readWhatsNew } from "./whats-new-read.ts";
 import { fileKeyFor } from "./feed.ts";
 import { formatVersion, parseVersion, versionTrack } from "./version.ts";
 
@@ -178,6 +180,49 @@ export class DesktopUpdateService {
     this.options.installer?.retire?.();
   }
 
+  /** The builds' lists the current check read (F-554); null before a check and when it read none. */
+  private notes: { engine: UpdateEngine; builds: BuildNotes[] } | null = null;
+
+  /** The snapshot with what the current check's lists say for its state (F-554). */
+  private withNotes(snapshot: DesktopUpdateSnapshot): DesktopUpdateSnapshot {
+    const rest = { ...snapshot };
+    delete rest.whatsNew;
+    // Kept until the check has its answer: while it still says Checking, nothing shows.
+    const notes =
+      this.notes && this.notes.engine === this.engine && snapshot.state.kind !== "checking"
+        ? this.notes.builds
+        : null;
+    const view =
+      notes &&
+      whatsNewView(
+        notes,
+        snapshot.runningVersion,
+        "version" in snapshot.state ? snapshot.state.version : null,
+      );
+    return view ? { ...rest, whatsNew: view } : rest;
+  }
+
+  /**
+   * Reads the builds' lists beside the feed, after `engine`'s check has its
+   * answer. Its result, or its failure, changes only what the pane lists: no
+   * state the updater reads, and never the check.
+   */
+  private async readNotes(engine: UpdateEngine, feed: URL, runningVersion: string) {
+    const builds = await readWhatsNew(feed, `Clawtrate/${runningVersion}`);
+    if (this.closed || this.engine !== engine || !builds) return;
+    this.notes = { engine, builds };
+    // Its own counter: `revision`, which commands are checked against, stays as it is.
+    this.snapshot = this.withNotes({
+      ...this.snapshot,
+      listsRevision: (this.snapshot.listsRevision ?? 0) + 1,
+    });
+    try {
+      this.options.changed(this.snapshot);
+    } catch {
+      // A closing renderer cannot change what a check found.
+    }
+  }
+
   private publish(state: DesktopUpdateState) {
     let install = idleCapability(this.options.installer);
     if (state.kind === "verified") install = this.pendingInstall ?? install;
@@ -200,7 +245,12 @@ export class DesktopUpdateService {
       install = { kind: "unavailable-in-this-build", reason: "artifact-changed" };
       state = { kind: "failed", stage: "download", reason: "artifact-changed", retry: "check" };
     }
-    this.snapshot = { ...this.snapshot, state, install, revision: this.snapshot.revision + 1 };
+    this.snapshot = this.withNotes({
+      ...this.snapshot,
+      state,
+      install,
+      revision: this.snapshot.revision + 1,
+    });
     try {
       this.options.changed(this.snapshot);
     } catch {
@@ -406,6 +456,7 @@ export class DesktopUpdateService {
       },
     });
     this.engine = engine;
+    this.notes = null;
     await this.runWork(
       engine,
       { kind: "checking" },
@@ -422,6 +473,14 @@ export class DesktopUpdateService {
         if (this.engine !== engine) return;
         const result = await engine.check();
         if (this.engine !== engine) return;
+        // What the builds add (F-554): read once, only after the check has its answer from
+        // the feed, and never awaited, so it neither decides nor delays anything.
+        const feed = checkFeedAddress(
+          this.options.feeds[selectedTrack],
+          this.options.loopbackHttpForTests,
+        );
+        if (feed.ok && (result.kind === "available" || result.kind === "up-to-date"))
+          void this.readNotes(engine, feed.url, runningVersion);
         this.clearIssue("update-folder-unavailable");
         const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
         if (lastCheck) {
