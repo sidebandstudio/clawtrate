@@ -6,6 +6,12 @@
 // request shows whether the guide reached the system prompt of each of the
 // four seeded bots. The switch showing at all proves the hello lists the
 // plugin's methods. The setting is left on, as it started.
+//
+// The instance is this file's own: started in its beforeAll and reset in its
+// afterAll, so only the shard that runs this file starts it. It is recorded,
+// with the preview host and its folder, in a run record of this file's own
+// before each starts, so a run killed outright is cleaned up by the next
+// `pnpm e2e`.
 import { expect, test, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -17,8 +23,15 @@ import { instancePorts, openInstance, openOperator } from "../tools/dev-gateway/
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { SYSTEM_PROMPT_PATH } from "../tools/dev-gateway/src/fake-provider.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
-import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import {
+  devGateway,
+  FORBIDDEN_PORTS,
+  listInstances,
+  resetInstance,
+  startHost,
+  stopChild,
+} from "./global-setup.ts";
 import {
   cleanUp,
   readRecord,
@@ -28,8 +41,21 @@ import {
   type RunRecord,
 } from "./run-record.ts";
 
+/**
+ * This spec's own run record, beside global setup's: its instance, its preview host and that
+ * host's data folder are written here before each starts, so an interrupted worker's instance is
+ * reset, its host stopped by PID and its folder removed by the next run's clean-up.
+ */
+const RECORDS = join(import.meta.dirname, "../tools/dev-gateway/.run/e2e");
+const record: RunRecord = {
+  run: randomBytes(4).toString("hex"),
+  runner: { pid: process.pid, identity: "" },
+  instances: [],
+  host: null,
+  dirs: [],
+};
 /** This spec's own seeded instance, with the voice plugin, which no other spec uses. */
-const INSTANCE = process.env.CLAWTRATE_E2E_VOICE!;
+const INSTANCE = `e2e-${record.run}-voice`;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const GUIDE = readFileSync(
   new URL("../plugins/clawtrate-voice/voice.md", import.meta.url),
@@ -59,20 +85,6 @@ async function present(key: string): Promise<Presence> {
     () => "unknown" as const,
   );
 }
-
-/**
- * This spec's own run record, beside global setup's: its preview host and that host's data
- * folder are written here before the host may start, so an interrupted worker's host is stopped
- * by PID and its folder removed by the next run's clean-up.
- */
-const RECORDS = join(import.meta.dirname, "../tools/dev-gateway/.run/e2e");
-const record: RunRecord = {
-  run: randomBytes(4).toString("hex"),
-  runner: { pid: process.pid, identity: "" },
-  instances: [],
-  host: null,
-  dirs: [],
-};
 
 /** A gateway method with an instance's own operator credentials, through the guarded runner. */
 async function gatewayCall<T>(method: string, params: unknown, instance = INSTANCE): Promise<T> {
@@ -119,10 +131,27 @@ let page: Page;
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async ({ browser }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(480_000);
+  // Recorded before anything starts: the instance, then the host's folder, then the host.
+  const self = processIdentity(process.pid);
+  if (self.state !== "alive") throw new Error("could not determine this worker's start time");
+  record.runner.identity = self.identity;
+  const runId = newRunId();
+  record.instances.push({ name: INSTANCE, runId });
+  saveRecord(RECORDS, record);
   // Its own gateway, never the one the other specs share: what it leaves stays there.
-  expect(INSTANCE, "the bot voice check's own instance").toBeTruthy();
   expect(INSTANCE).not.toBe(process.env.CLAWTRATE_DEV_INSTANCE);
+  // Seeded for its four bots, with the voice plugin and its conversation hook (F-527).
+  process.stdout.write(
+    devGateway(INSTANCE, "start", "--run-id", runId, "--with-plugin", "clawtrate-voice"),
+  );
+  const mine = listInstances().find((row) => row.name === INSTANCE);
+  if (!mine?.gatewayRunning) throw new Error(`instance ${INSTANCE} is not running`);
+  for (const port of [mine.gatewayPort, mine.providerPort]) {
+    if (port === null || FORBIDDEN_PORTS.includes(port)) {
+      throw new Error(`instance ${INSTANCE} is on port ${port}, which e2e never uses`);
+    }
+  }
   // And the shared gateway doesn't have the voice plugin at all: to its own operator, an admin,
   // the plugin's read is a method it doesn't know.
   await expect(
@@ -134,10 +163,6 @@ test.beforeAll(async ({ browser }) => {
     ["operator.read", "operator.write"],
     [],
   );
-  // Recorded before the host may start: its folder, then the host itself.
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this worker's start time");
-  record.runner.identity = self.identity;
   const data = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
   record.dirs.push(data);
   record.hostPending = true;
@@ -153,8 +178,9 @@ test.beforeAll(async ({ browser }) => {
     record.host = { pid: started.host.pid!, identity: found.identity };
     delete record.hostPending;
     saveRecord(RECORDS, record);
-    // What a later run's clean-up would read: the host by PID, and its folder.
+    // What a later run's clean-up would read: the instance, the host by PID, and its folder.
     expect(readRecord(recordPath(RECORDS, record.run))).toMatchObject({
+      instances: [{ name: INSTANCE, runId }],
       host: { pid: started.host.pid },
       dirs: [data],
     });
@@ -211,10 +237,14 @@ test.afterAll(async () => {
       await stopChild(host.child).catch(() => host!.child.kill("SIGKILL"));
       rmSync(host.data, { recursive: true, force: true });
     }
-    // The host is gone and its folder removed: the record goes too.
-    const problems = cleanUp(RECORDS, record, () => {});
+    // The host is gone and its folder removed, the instance is reset: the record goes too.
+    const problems = cleanUp(RECORDS, record, resetInstance);
     expect(problems, "the voice check's run record").toEqual([]);
     expect(existsSync(recordPath(RECORDS, record.run))).toBe(false);
+    expect(
+      listInstances().some((row) => row.name === INSTANCE),
+      "the voice check's instance",
+    ).toBe(false);
   }
   // Said after everything is closed: a task left behind would change later checks' lists.
   expect(left, "tasks this check couldn't remove").toEqual([]);
