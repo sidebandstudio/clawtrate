@@ -4,6 +4,7 @@ import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts"
 import { deferred, until } from "./fake-gateway.ts";
 
 const file = { fileName: "notes.txt", mimeType: "text/plain", type: "file", content: "aGk=" };
+const replacementFile = { ...file, fileName: "more.txt", content: "bW9yZQ==" };
 
 async function listedTask() {
   const gateway = grantingGateway();
@@ -25,7 +26,7 @@ async function listedTask() {
     task.client.sendMessage(KEY, `Keep ${sessionId}`, {
       mode: "queue",
       sessionId,
-      attachments: [file],
+      attachments: [sessionId === "session-b" ? replacementFile : file],
     });
   const park = () =>
     gateway.emit("chat", {
@@ -104,12 +105,12 @@ it.each([
       });
       gateway.handlers["sessions.patch"] = () => ({ ok: true });
       gateway.handlers["sessions.delete"] = () => ({ ok: true });
-      if (action.endsWith("delete") || action === "already deleted")
+      if (action === "delete" || action === "already deleted")
         await client.deleteTask(KEY, { sessionId: "session-b" });
       else
         await client.archiveTask(
           KEY,
-          action.endsWith("chosen session") ? {} : { sessionId: "session-b" },
+          action === "already archived without a chosen session" ? {} : { sessionId: "session-b" },
         );
       const message = (id: string) => transcript().outbox.find((item) => item.id === id);
       expect(message(first)).toMatchObject({
@@ -124,7 +125,7 @@ it.each([
               status: "failed",
               error:
                 action === "already deleted" ? TASK_DELETED_ELSEWHERE : TASK_ARCHIVED_ELSEWHERE,
-              attachments: [{ fileName: file.fileName }],
+              attachments: [{ fileName: replacementFile.fileName }],
             }
           : { status: "cancelled" },
       );
