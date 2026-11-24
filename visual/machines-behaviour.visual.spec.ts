@@ -1109,6 +1109,111 @@ test("F-046: a different gateway at the same URL does not inherit a pending comm
   expect(await commandsReads(page)).toBe(2);
 });
 
+test("F-046: confirming the gateway id while a command save is out keeps the reopened picker waiting and refreshes with the new revision", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  const { gatewayId, connectedAt } = await page.evaluate(
+    () =>
+      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.getState().connection,
+  );
+  expect(gatewayId).toBeTruthy();
+  await openRunsOn(page);
+  // Reconnect with admin while the gateway's identity reply is still held (gatewayId: null).
+  await patchConnection(page, { gatewayId: null, connectedAt: (connectedAt ?? 0) + 1 });
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
+  await expect(select).toBeEnabled();
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    const held = window as unknown as {
+      answerOtto?: () => Promise<unknown>;
+      commandsReads: number;
+    };
+    held.commandsReads = 0;
+    let heldOnce = false;
+    fixture.invoke = (command) => {
+      if (command.type === "setCommandMachine" && !heldOnce) {
+        heldOnce = true;
+        return new Promise((resolve, reject) => {
+          held.answerOtto = () =>
+            original(command).then(
+              (answer) => {
+                resolve(answer);
+                return answer;
+              },
+              (error) => {
+                reject(error);
+                throw error;
+              },
+            );
+        });
+      }
+      if (command.type === "readPlacement" && (command as { part?: string }).part === "commands")
+        return original(command).then((answer) => {
+          held.commandsReads += 1;
+          return answer;
+        });
+      return original(command);
+    };
+  });
+  await select.click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  // Confirm the gateway id while Otto's save is still pending, then close and reopen Work.
+  await patchConnection(page, { gatewayId });
+  await page.getByTestId("work-panel").getByRole("button", { name: "Close work panel" }).click();
+  await expect(page.getByTestId("work-panel")).toHaveCount(0);
+  const before = await commandsReads(page);
+  await page.keyboard.press("ControlOrMeta+\\");
+  await expect(page.getByTestId("work-panel")).toBeVisible();
+  await openRunsOn(page);
+  await expect.poll(() => commandsReads(page)).toBeGreaterThan(before);
+  await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
+  await expect(select).toBeDisabled();
+  // Once Otto's save succeeds, the reopened picker shows the new machine and sends c2 next.
+  await page.evaluate(() =>
+    (window as unknown as { answerOtto: () => Promise<unknown> }).answerOtto(),
+  );
+  await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
+  await expect(select).toBeEnabled();
+  await select.click();
+  await page.getByRole("menuitemradio", { name: /^media-box/ }).click();
+  await expect(announcer(page)).toHaveText(
+    "Saved and applied. Otto's command machine setting: media-box",
+  );
+  expect((await sent(page)).filter((c) => c.type === "setCommandMachine")).toMatchObject([
+    { baseHash: "c1" },
+    { baseHash: "c2" },
+  ]);
+});
+
+test("F-046: confirming the gateway id on the same connection reuses the placement read it already has", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  const { gatewayId, connectedAt } = await page.evaluate(
+    () =>
+      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.getState().connection,
+  );
+  expect(gatewayId).toBeTruthy();
+  await openRunsOn(page);
+  const before = (await sent(page)).filter((c) => c.type === "readPlacement").length;
+  // Reconnect with admin while the gateway's identity reply is still held.
+  await patchConnection(page, { gatewayId: null, connectedAt: (connectedAt ?? 0) + 1 });
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
+  await expect(select).toBeEnabled();
+  await expect
+    .poll(async () => (await sent(page)).filter((c) => c.type === "readPlacement").length - before)
+    .toBe(5);
+  // Confirming the identity on the same connection triggers no second five-part read.
+  await patchConnection(page, { gatewayId });
+  await page.waitForTimeout(150);
+  expect((await sent(page)).filter((c) => c.type === "readPlacement").length - before).toBe(5);
+  await expect(select).toBeEnabled();
+});
+
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
   page,
 }) => {

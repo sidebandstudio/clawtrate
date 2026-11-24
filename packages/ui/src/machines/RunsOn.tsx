@@ -56,24 +56,90 @@ export const connectionKey = (connection: ConnectionState) =>
     connection.scopes.join(" "),
   ].join("\n");
 
+const fallbackScope = (connection: ConnectionState) =>
+  `connection:${connection.target}\n${connectionKey(connection)}`;
+
+const confirmedScope = (gatewayId: string) => `gateway:${gatewayId}`;
+
 /**
  * Which gateway a placement save belongs to: its confirmed identity, or a key
  * local to this connection while that identity isn't known yet.
  */
 const placementScope = (connection: ConnectionState) =>
-  connection.gatewayId
-    ? `gateway:${connection.gatewayId}`
-    : `connection:${connection.target}\n${connectionKey(connection)}`;
+  connection.gatewayId ? confirmedScope(connection.gatewayId) : fallbackScope(connection);
 
-type SaveEntry = { pending: number; version: number };
+type SaveEntry = { pending: number; seq: number };
 
-const EMPTY_SAVE: SaveEntry = { pending: 0, version: 0 };
+const EMPTY_SAVE: SaveEntry = { pending: 0, seq: 0 };
+
+type SavesState = {
+  seq: number;
+  entries: Record<string, SaveEntry>;
+  redirects: Record<string, string>;
+};
+
+const EMPTY_SAVES: SavesState = { seq: 0, entries: {}, redirects: {} };
+
+const resolveScope = (state: SavesState, scope: string) => state.redirects[scope] ?? scope;
+
+function promoteScope(state: SavesState, fallback: string, confirmed: string): SavesState {
+  const carried = state.entries[fallback];
+  if (!carried && state.redirects[fallback] === confirmed) return state;
+  const redirects = { ...state.redirects, [fallback]: confirmed };
+  if (!carried) return { ...state, redirects };
+  const existing = state.entries[confirmed] ?? EMPTY_SAVE;
+  const entries = { ...state.entries };
+  delete entries[fallback];
+  entries[confirmed] = {
+    pending: existing.pending + carried.pending,
+    seq: Math.max(existing.seq, carried.seq),
+  };
+  return { ...state, entries, redirects };
+}
+
+function beginSave(state: SavesState, rawScope: string): SavesState {
+  const scope = resolveScope(state, rawScope);
+  const was = state.entries[scope] ?? EMPTY_SAVE;
+  return {
+    ...state,
+    entries: { ...state.entries, [scope]: { pending: was.pending + 1, seq: was.seq } },
+  };
+}
+
+function finishSave(state: SavesState, rawScope: string): SavesState {
+  const scope = resolveScope(state, rawScope);
+  const was = state.entries[scope] ?? EMPTY_SAVE;
+  const seq = state.seq + 1;
+  return {
+    ...state,
+    seq,
+    entries: {
+      ...state.entries,
+      [scope]: { pending: Math.max(0, was.pending - 1), seq },
+    },
+  };
+}
+
+function settleSave(state: SavesState, rawScope: string): SavesState {
+  const scope = resolveScope(state, rawScope);
+  const was = state.entries[scope] ?? EMPTY_SAVE;
+  const seq = state.seq + 1;
+  return {
+    ...state,
+    seq,
+    entries: {
+      ...state.entries,
+      [scope]: { pending: was.pending, seq },
+    },
+  };
+}
 
 type PlacementSaves = {
+  seq: number;
   entries: Record<string, SaveEntry>;
   begin: (scope: string) => () => void;
   settled: (scope: string) => void;
-  versionOf: (scope: string) => number;
+  seqOf: (scope: string) => number;
 };
 
 const PlacementSavesContext = createContext<PlacementSaves | null>(null);
@@ -84,46 +150,58 @@ const PlacementSavesContext = createContext<PlacementSaves | null>(null);
  * closing Work or switching bots keeps a save's pending state and refresh, and
  * another gateway at the same address is never affected by it.
  */
-export function PlacementSavesProvider({ children }: { children: ReactNode }) {
-  const [entries, setEntries] = useState<Record<string, SaveEntry>>({});
-  // Mirrors each scope's latest version synchronously so reads started before a
+export function PlacementSavesProvider({
+  connection,
+  children,
+}: {
+  connection: ConnectionState;
+  children: ReactNode;
+}) {
+  const [state, setState] = useState<SavesState>(EMPTY_SAVES);
+  const [unconfirmed, setUnconfirmed] = useState<string | null>(null);
+  const fallback = fallbackScope(connection);
+  if (!connection.gatewayId) {
+    if (unconfirmed !== fallback) setUnconfirmed(fallback);
+  } else if (unconfirmed !== null || state.entries[fallback]) {
+    const confirmed = confirmedScope(connection.gatewayId);
+    if (unconfirmed !== null) setUnconfirmed(null);
+    if (unconfirmed === fallback || state.entries[fallback]) {
+      setState((current) => promoteScope(current, fallback, confirmed));
+    }
+  }
+  // Mirrors the latest saves state synchronously so reads started before a
   // save settles are dropped immediately, before the reload render commits.
-  const versions = useRef(new Map<string, number>());
-  const versionOf = useCallback((scope: string) => versions.current.get(scope) ?? 0, []);
+  const mirror = useRef<SavesState>(EMPTY_SAVES);
+  useLayoutEffect(() => {
+    mirror.current = state;
+  }, [state]);
+  const seqOf = useCallback((scope: string) => {
+    const target = resolveScope(mirror.current, scope);
+    return mirror.current.entries[target]?.seq ?? 0;
+  }, []);
   const settled = useCallback((scope: string) => {
-    const next = (versions.current.get(scope) ?? 0) + 1;
-    versions.current.set(scope, next);
-    setEntries((all) => {
-      const was = all[scope] ?? EMPTY_SAVE;
-      return { ...all, [scope]: { pending: was.pending, version: next } };
-    });
+    mirror.current = settleSave(mirror.current, scope);
+    setState((current) => settleSave(current, scope));
   }, []);
   const begin = useCallback((scope: string) => {
-    setEntries((all) => {
-      const was = all[scope] ?? EMPTY_SAVE;
-      return { ...all, [scope]: { pending: was.pending + 1, version: was.version } };
-    });
+    mirror.current = beginSave(mirror.current, scope);
+    setState((current) => beginSave(current, scope));
     let ended = false;
     return () => {
       if (ended) return;
       ended = true;
-      const next = (versions.current.get(scope) ?? 0) + 1;
-      versions.current.set(scope, next);
-      setEntries((all) => {
-        const was = all[scope] ?? EMPTY_SAVE;
-        return {
-          ...all,
-          [scope]: { pending: Math.max(0, was.pending - 1), version: next },
-        };
-      });
+      mirror.current = finishSave(mirror.current, scope);
+      setState((current) => finishSave(current, scope));
     };
   }, []);
   const value = useMemo<PlacementSaves>(
-    () => ({ entries, begin, settled, versionOf }),
-    [entries, begin, settled, versionOf],
+    () => ({ seq: state.seq, entries: state.entries, begin, settled, seqOf }),
+    [state.seq, state.entries, begin, settled, seqOf],
   );
   return <PlacementSavesContext.Provider value={value}>{children}</PlacementSavesContext.Provider>;
 }
+
+type ReadBatch = { sessionId: number; generation: number; seq: number };
 
 /**
  * A bot's placement, its parts read when shown and again on `reload()`. A read
@@ -140,13 +218,32 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   // Every bot on a gateway writes against the same config revision.
   const scope = placementScope(connection);
   const entry = saves?.entries[scope] ?? EMPTY_SAVE;
+  const currentSeq = saves?.seq ?? 0;
   const savesBegin = saves?.begin ?? null;
   const savesSettled = saves?.settled ?? null;
-  const versionOf = saves?.versionOf ?? null;
-  const [held, setHeld] = useState<{
+  const seqOf = saves?.seqOf ?? null;
+  const connected = connection.status === "connected";
+  // Read again when the granted scopes change, not when a snapshot brings an equal list.
+  const key = `${botId}\n${connectionKey(connection)}`;
+  // Stay on the same session when this connection confirms its gateway id (null -> id);
+  // start a fresh session when the bot, connection, access or confirmed gateway changes.
+  const [session, setSession] = useState<{
     key: string;
+    gatewayId: string | null;
+    id: number;
+  }>(() => ({ key, gatewayId: connection.gatewayId, id: 0 }));
+  let sessionId = session.id;
+  if (session.key !== key) {
+    sessionId = session.id + 1;
+    setSession({ key, gatewayId: connection.gatewayId, id: sessionId });
+  } else if (session.gatewayId !== connection.gatewayId && connection.gatewayId !== null) {
+    sessionId = session.gatewayId === null ? session.id : session.id + 1;
+    setSession({ key, gatewayId: connection.gatewayId, id: sessionId });
+  }
+  const [held, setHeld] = useState<{
+    sessionId: number;
     parts: Partial<Placement>;
-    at: Partial<Record<PlacementPart, string>>;
+    at: Partial<Record<PlacementPart, ReadBatch>>;
   } | null>(null);
   // The latest local reload asked for, as rendered.
   const [generation, setGeneration] = useState(0);
@@ -156,26 +253,33 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   // Fallback pending count when rendered outside PlacementSavesProvider.
   const [localWriting, setLocalWriting] = useState(0);
   const writing = saves ? entry.pending : localWriting;
-  const version = saves ? entry.version : 0;
-  const connected = connection.status === "connected";
-  // Read again when the granted scopes change, not when a snapshot brings an equal list.
-  const key = `${botId}\n${connectionKey(connection)}`;
+  const [batch, setBatch] = useState<ReadBatch>(() => ({
+    sessionId,
+    generation: 0,
+    seq: currentSeq,
+  }));
+  if (batch.sessionId !== sessionId || batch.generation !== generation || batch.seq < entry.seq) {
+    setBatch({ sessionId, generation, seq: currentSeq });
+  }
+  const scopeRef = useRef(scope);
+  useLayoutEffect(() => {
+    scopeRef.current = scope;
+  }, [scope]);
   useEffect(() => {
     if (!active || !connected) return;
+    if (batch.sessionId !== sessionId) return;
     let live = true;
-    const at = generation;
-    const atVersion = version;
-    const stamp = `${scope}\n${at}:${atVersion}`;
+    const req = batch;
     const keep = (name: PlacementPart, part: Partial<Placement>) =>
       live &&
-      at === asked.current &&
-      (!versionOf || atVersion === versionOf(scope)) &&
+      req.generation === asked.current &&
+      (!seqOf || req.seq >= seqOf(scopeRef.current)) &&
       setHeld((was) => {
-        const same = was?.key === key;
+        const same = was?.sessionId === req.sessionId;
         return {
-          key,
+          sessionId: req.sessionId,
           parts: { ...(same ? was.parts : {}), ...part },
-          at: { ...(same ? was.at : {}), [name]: stamp },
+          at: { ...(same ? was.at : {}), [name]: req },
         };
       });
     for (const part of PLACEMENT_PARTS)
@@ -192,7 +296,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     return () => {
       live = false;
     };
-  }, [bridge, botId, active, connected, key, generation, version, scope, versionOf]);
+  }, [bridge, botId, active, connected, batch, sessionId, seqOf]);
   const reload = useCallback(() => {
     asked.current += 1;
     setGeneration(asked.current);
@@ -212,12 +316,12 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     if (savesSettled) savesSettled(scope);
     else reload();
   }, [savesSettled, scope, reload]);
-  // On a disconnect or another key, what was read is dropped before anything is derived.
-  if (held && (!connected || held.key !== key)) setHeld(null);
+  // On a disconnect or another session, what was read is dropped before anything is derived.
+  if (held && (!connected || held.sessionId !== sessionId)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>
     !connected
       ? { status: "error", message: "Not connected to the gateway." }
-      : ((held?.key === key ? held.parts[name] : undefined) ?? { status: "loading" });
+      : ((held?.sessionId === sessionId ? held.parts[name] : undefined) ?? { status: "loading" });
   const read: Placement = {
     commands: part("commands"),
     workspace: part("workspace"),
@@ -226,7 +330,12 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     credentials: part("credentials"),
   };
   const commandsCurrent =
-    writing === 0 && held?.key === key && held.at.commands === `${scope}\n${generation}:${version}`;
+    writing === 0 &&
+    held?.sessionId === sessionId &&
+    held.at.commands === batch &&
+    batch.sessionId === sessionId &&
+    batch.generation === generation &&
+    batch.seq >= entry.seq;
   return { read, reload, begin, settled, commandsCurrent };
 }
 

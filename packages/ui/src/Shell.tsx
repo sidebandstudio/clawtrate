@@ -717,7 +717,7 @@ export function Shell({
   }, [taskKey, open, send]);
 
   return (
-    <PlacementSavesProvider>
+    <PlacementSavesProvider connection={state.connection}>
       <div
         className="shell"
         ref={shellRef}
