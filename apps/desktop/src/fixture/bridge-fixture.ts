@@ -87,7 +87,13 @@ import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-in
 import { memoryCommands } from "./memory.ts";
 import { voiceCommands, type VoiceParams } from "./voice.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
-import { NO_SEARCH_PARAMS, searchCommands, withMessageIds, type SearchParams } from "./search.ts";
+import {
+  NO_SEARCH_PARAMS,
+  searchCommands,
+  searchHistories,
+  withMessageIds,
+  type SearchParams,
+} from "./search.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -678,7 +684,7 @@ export function createFixtureBridge(
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
-  let histories = state.transcripts;
+  let histories = { ...searchHistories(search), ...state.transcripts };
   const listeners = new Set<(state: ClawtrateState) => void>();
   // Tasks whose shared transcript is still kept (another view or unsettled work),
   // but omitted from this page's view after a refused reopen.

@@ -543,6 +543,7 @@ export function Rail({
   sidebar,
   newTaskHint = "⌘T",
   routines = [],
+  showRoutineRuns = false,
   routinesOpen = false,
   onOpenRoutines,
   onOpenRoutineRun,
@@ -585,6 +586,8 @@ export function Rail({
   newTaskHint?: string;
   /** The gateway's routines: a bot works while one of its routines runs (F-024), and each run shows under it (F-193). */
   routines?: Routine[];
+  /** List every routine's latest run under its bot, not only a failed one: with "Show sessions from other tools" on (F-563). */
+  showRoutineRuns?: boolean;
   routinesOpen?: boolean;
   onOpenRoutines?: () => void;
   /** Open a routine's run that started at `runAt`, or the routine itself (`null`) while it runs. */
@@ -597,6 +600,15 @@ export function Rail({
   const send = useCommand();
   const bridge = useBridge();
   const now = useMinuteClock();
+  /**
+   * A bot's routine runs listed under it: every recent one with "Show sessions from other tools"
+   * on, and otherwise only one whose latest run failed, which the person needs to know about and
+   * which leads to its routine (F-563).
+   */
+  const runsUnder = (bot: Bot) =>
+    recentRoutineRuns(bot, routines, now).filter(
+      (each) => showRoutineRuns || (each.runningAt === null && each.lastStatus === "error"),
+    );
   // The arrangement belongs to the gateway. Its identity arrives with its bots,
   // so the scope is settled only once there are bots.
   const roster = useRoster(
@@ -709,9 +721,7 @@ export function Rail({
     [matches, arranged],
   );
   const pinHasRoutines = (botId: string) =>
-    arranged.pinned.some(
-      (bot) => bot.id === botId && recentRoutineRuns(bot, routines, now).length > 0,
-    );
+    arranged.pinned.some((bot) => bot.id === botId && runsUnder(bot).length > 0);
   const owner = matches
     ? undefined
     : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
@@ -1892,8 +1902,7 @@ export function Rail({
     const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
-    const routineRuns =
-      place !== "search" && (open || !several) ? recentRoutineRuns(bot, routines, now) : [];
+    const routineRuns = place !== "search" && (open || !several) ? runsUnder(bot) : [];
     const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
     const latest = summary.latest;
@@ -2178,7 +2187,7 @@ export function Rail({
                   <TaskRows
                     bot={owner}
                     tasks={tasksByBot[owner.id] ?? []}
-                    routineRuns={recentRoutineRuns(owner, routines, now)}
+                    routineRuns={runsUnder(owner)}
                     onOpenRoutineRun={onOpenRoutineRun}
                     selection={selection}
                     onOpenTask={openTask}

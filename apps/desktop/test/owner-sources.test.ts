@@ -24,6 +24,10 @@ const ALLOWED: Record<string, string> = {
   "apps/desktop/src/main/mac-install.ts:RESULTS": "static, the helper's eight result lines",
   "apps/desktop/src/main/mac-install.ts:HELPER_STEPS": "static, the helper's eleven step names",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
+  "packages/core/src/origins.ts:OTHER_TOOL_VIA":
+    "static, the gateway's five createdVia values for other tools",
+  "packages/core/src/origins.ts:OTHER_TOOL_CLASS":
+    "static, the gateway's eleven route classes of other surfaces",
   "packages/core/src/computer.ts:BUSY_REASONS": "static, the plugin's five busy codes",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",

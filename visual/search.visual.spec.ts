@@ -17,7 +17,11 @@ for (const size of SIZES) {
 
       for (const scene of SCENES) {
         test(`F-033: the palette, ${scene.name}`, async ({ page }) => {
-          await openFixture(page, `scene=main&${OTTO_DISK}&search=on&routines=on`, theme);
+          await openFixture(
+            page,
+            `scene=main&${OTTO_DISK}&search=on&routines=on&others=show`,
+            theme,
+          );
           await page.keyboard.press("ControlOrMeta+K");
           const palette = page.getByTestId("search-palette");
           await expect(palette.getByRole("combobox", { name: "Search" })).toBeFocused();
