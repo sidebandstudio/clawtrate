@@ -28,6 +28,7 @@ import {
 } from "react";
 import { Avatar, type FaceState } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
+import { screenStamp, shownStamp, type ShownStamp } from "./stamp.ts";
 import { copyText } from "./clipboard.ts";
 import { gatewayLabel, rowTime } from "./format.ts";
 import { forgetFailure } from "./forget.ts";
@@ -297,7 +298,14 @@ function TaskRows({
     gone: ReadonlyMap<string, number | null>;
     open: boolean;
     onToggle: () => void;
-    onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
+    onMenu: (
+      task: ArchivedTask,
+      trigger: HTMLElement,
+      x: number,
+      y: number,
+      shown: ShownStamp,
+    ) => void;
+    shown: ShownStamp;
   };
   /** Rows shown before "Show all": fewer in one pane, so the rest of the list stays in view. */
   cap: number;
@@ -464,6 +472,7 @@ function TaskRows({
           open={archived.open}
           onToggle={archived.onToggle}
           onMenu={archived.onMenu}
+          shown={archived.shown}
           now={now}
         />
       )}
@@ -480,7 +489,15 @@ type MenuState =
   /** "Move to": the sections a bot can go to, in place of its menu. */
   | { kind: "move"; botId: string; trigger: HTMLElement; x: number; y: number }
   | { kind: "task"; botId: string; key: string; trigger: HTMLElement; x: number; y: number }
-  | { kind: "archived"; task: ArchivedTask; trigger: HTMLElement; x: number; y: number };
+  | {
+      kind: "archived";
+      task: ArchivedTask;
+      trigger: HTMLElement;
+      x: number;
+      y: number;
+      /** Where the menu was opened: its Delete goes only there. */
+      shown: ShownStamp;
+    };
 
 /** What a bot's line two says while one of its tasks waits for the person (F-021). */
 export function waitingWords(tasks: Task[]): string | null {
@@ -526,6 +543,7 @@ export function Rail({
   sidebar,
   newTaskHint = "⌘T",
   routines = [],
+  showRoutineRuns = false,
   routinesOpen = false,
   onOpenRoutines,
   onOpenRoutineRun,
@@ -568,6 +586,8 @@ export function Rail({
   newTaskHint?: string;
   /** The gateway's routines: a bot works while one of its routines runs (F-024), and each run shows under it (F-193). */
   routines?: Routine[];
+  /** List every routine's latest run under its bot, not only a failed one: with "Show sessions from other tools" on (F-563). */
+  showRoutineRuns?: boolean;
   routinesOpen?: boolean;
   onOpenRoutines?: () => void;
   /** Open a routine's run that started at `runAt`, or the routine itself (`null`) while it runs. */
@@ -580,6 +600,15 @@ export function Rail({
   const send = useCommand();
   const bridge = useBridge();
   const now = useMinuteClock();
+  /**
+   * A bot's routine runs listed under it: every recent one with "Show sessions from other tools"
+   * on, and otherwise only one whose latest run failed, which the person needs to know about and
+   * which leads to its routine (F-563).
+   */
+  const runsUnder = (bot: Bot) =>
+    recentRoutineRuns(bot, routines, now).filter(
+      (each) => showRoutineRuns || (each.runningAt === null && each.lastStatus === "error"),
+    );
   // The arrangement belongs to the gateway. Its identity arrives with its bots,
   // so the scope is settled only once there are bots.
   const roster = useRoster(
@@ -692,9 +721,7 @@ export function Rail({
     [matches, arranged],
   );
   const pinHasRoutines = (botId: string) =>
-    arranged.pinned.some(
-      (bot) => bot.id === botId && recentRoutineRuns(bot, routines, now).length > 0,
-    );
+    arranged.pinned.some((bot) => bot.id === botId && runsUnder(bot).length > 0);
   const owner = matches
     ? undefined
     : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
@@ -795,8 +822,15 @@ export function Rail({
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
+    // Where the row was listed: a restored copy has the same keys, so the host sends it nowhere else.
+    const shown = shownStamp(connection);
     const act = async (stop: boolean) => {
-      const { stoppedRun } = await bridge.invoke({ type: "archiveTask", key: task.key, stop });
+      const { stoppedRun } = await bridge.invoke({
+        type: "archiveTask",
+        key: task.key,
+        stop,
+        stamp: await screenStamp(bridge, shown),
+      });
       setAnnouncement(`Archived ${task.title}.`);
       // The gateway's archive ends anything running in the task: a run that had just started,
       // seen to end as stopped on its own end event, is said here, with the way back.
@@ -841,6 +875,8 @@ export function Rail({
     task: { key: string; title: string; status?: Task["status"]; archivedAt?: number | null },
     trigger: HTMLElement | null,
     listed: boolean,
+    // Where the row was drawn; a menu that holds its task passes the stamp it opened with.
+    shown: ShownStamp = shownStamp(connection),
   ) => {
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
@@ -859,7 +895,11 @@ export function Rail({
       ),
       confirm: { label: "Delete", tone: "danger" },
       onConfirm: async () => {
-        await bridge.invoke({ type: "deleteTask", key: task.key });
+        await bridge.invoke({
+          type: "deleteTask",
+          key: task.key,
+          stamp: await screenStamp(bridge, shown),
+        });
         setAnnouncement(`Deleted ${task.title}.`);
         if (listed) await afterRemoval(bot, task as Task, remaining, next);
         else {
@@ -920,9 +960,15 @@ export function Rail({
     );
   };
 
-  const openArchivedMenu = (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => {
+  const openArchivedMenu = (
+    task: ArchivedTask,
+    trigger: HTMLElement,
+    x: number,
+    y: number,
+    shown: ShownStamp,
+  ) => {
     setTip(null);
-    setMenu({ kind: "archived", task, trigger, x, y });
+    setMenu({ kind: "archived", task, trigger, x, y, shown });
   };
 
   const archivedProps = (bot: Bot) => ({
@@ -930,6 +976,7 @@ export function Rail({
     open: archivedOpen.has(bot.id),
     onToggle: () => toggleArchived(bot.id),
     onMenu: openArchivedMenu,
+    shown: shownStamp(connection),
   });
 
   const clickBot = (bot: Bot, count: number) => {
@@ -1752,7 +1799,7 @@ export function Rail({
   };
 
   /** An archived task's menu: Restore and Delete, when the connection writes. */
-  const archivedEntries = (task: ArchivedTask): MenuEntry[] => {
+  const archivedEntries = (task: ArchivedTask, shown: ShownStamp): MenuEntry[] => {
     const bot = bots.find((each) => each.id === task.botId);
     const trigger = menu?.trigger ?? null;
     if (!interactive || !bot) return [{ kind: "head", title: task.title, lines: ["Archived"] }];
@@ -1774,7 +1821,7 @@ export function Rail({
         tone: "danger",
         onSelect: () => {
           setMenu(null);
-          remove(bot, task, trigger, false);
+          remove(bot, task, trigger, false, shown);
         },
       },
     ];
@@ -1848,8 +1895,7 @@ export function Rail({
     const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
-    const routineRuns =
-      place !== "search" && (open || !several) ? recentRoutineRuns(bot, routines, now) : [];
+    const routineRuns = place !== "search" && (open || !several) ? runsUnder(bot) : [];
     const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
     const latest = summary.latest;
@@ -2134,7 +2180,7 @@ export function Rail({
                   <TaskRows
                     bot={owner}
                     tasks={tasksByBot[owner.id] ?? []}
-                    routineRuns={recentRoutineRuns(owner, routines, now)}
+                    routineRuns={runsUnder(owner)}
                     onOpenRoutineRun={onOpenRoutineRun}
                     selection={selection}
                     onOpenTask={openTask}
@@ -2356,7 +2402,7 @@ export function Rail({
             left: Math.max(8, Math.min(menu.x, window.innerWidth - 244)),
             top: Math.max(8, Math.min(menu.y, window.innerHeight - 140)),
           }}
-          entries={archivedEntries(menu.task)}
+          entries={archivedEntries(menu.task, menu.shown)}
           onClose={closeMenu}
           trigger={menu.trigger}
         />

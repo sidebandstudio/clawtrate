@@ -327,3 +327,41 @@ export const STATE_SCENES: StateScene[] = [
     },
   },
 ];
+
+type TargetFixture = {
+  clawtrateFixture: {
+    setState: (
+      change: (state: { connection: { target: number; gatewayId: string | null } }) => {
+        connection: { target: number; gatewayId: string | null };
+      },
+    ) => void;
+    sent: Array<Record<string, unknown>>;
+  };
+};
+
+/**
+ * Move the host's target on, as a Connect does, without changing anything else the screen keys
+ * its reads on; answers the stamp before (`GatewayStamp`). A dialog open across it must send
+ * that one, as it was drawn.
+ */
+export function moveTarget(page: Page): Promise<{ gatewayId: string | null; target: number }> {
+  return page.evaluate(() => {
+    let before = { gatewayId: null as string | null, target: 0 };
+    (window as unknown as TargetFixture).clawtrateFixture.setState((state) => {
+      before = { gatewayId: state.connection.gatewayId, target: state.connection.target };
+      return { ...state, connection: { ...state.connection, target: before.target + 1 } };
+    });
+    return before;
+  });
+}
+
+/** The stamp the last command of `type` the fixture was sent carried, or null when none was. */
+export function sentStamp(page: Page, type: string): Promise<unknown> {
+  return page.evaluate(
+    (type) =>
+      (window as unknown as TargetFixture).clawtrateFixture.sent
+        .filter((each) => each.type === type)
+        .at(-1)?.stamp ?? null,
+    type,
+  );
+}

@@ -107,6 +107,11 @@ export class WaitingIndex {
   /** Tasks whose runs the engine holds, as those runs describe them; they win over the events. */
   private readonly held = new Map<string, HeldTask>();
 
+  /** The tasks that have a marker: each one waits for the person. */
+  keys(): string[] {
+    return [...this.sessions.keys()];
+  }
+
   /** For tests and the retention registry: how many tasks have markers. */
   get size(): number {
     return this.sessions.size;

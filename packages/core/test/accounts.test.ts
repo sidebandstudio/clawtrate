@@ -28,6 +28,7 @@ import {
   type ClawtrateState,
 } from "../src/index.ts";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
+import { gatewayStamp } from "../src/types.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
@@ -61,7 +62,13 @@ describe("a model id", () => {
     for (const model of ids) {
       const refused = (() => {
         try {
-          parseBridgeCommand({ type: "setBotModel", botId: "otto", model, effort: null });
+          parseBridgeCommand({
+            type: "setBotModel",
+            botId: "otto",
+            model,
+            effort: null,
+            stamp: { gatewayId: "gateway-a", target: 4 },
+          });
           return false;
         } catch {
           return true;
@@ -1759,6 +1766,7 @@ describe("a typed API key leaves no trace", () => {
       provider: "globex",
       key: KEY,
       botId: null,
+      stamp: gatewayStamp(client.state.connection),
     });
     stop();
     expect(JSON.stringify(answer)).not.toContain(KEY);

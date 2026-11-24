@@ -16,6 +16,7 @@ import {
   MAX_NAME_CARDS,
   NAME_DECLINES_KEY,
   plainName,
+  UNCONFIRMED_AFTER_SWITCH,
 } from "../src/bot-names.ts";
 import { MAX_BOTS } from "../src/state-bounds.ts";
 import {
@@ -1315,6 +1316,25 @@ describe("F-552: a bot that takes a name", () => {
     gateway = "gw-b";
     expect(await names.engine.decline("new-bot", "Johnny", STAMP)).toBe(true);
     expect(JSON.parse(storage.data.get(NAME_DECLINES_KEY)!)).toEqual({ "gw-a\nnew-bot": "Johnny" });
+  });
+
+  it("F-552: a Rename sent just before the connection moves to another gateway isn't reported as done (#471)", async () => {
+    const requests: string[] = [];
+    const names = engine({
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+    });
+    await names.ctxRun();
+    // The update goes out, then the host moves to another gateway before the list is read back.
+    names.onUpdate = () => names.engine.reset();
+    await expect(names.engine.accept("new-bot", "Johnny", STAMP)).rejects.toThrow(
+      UNCONFIRMED_AFTER_SWITCH,
+    );
+    expect(requests.filter((each) => each === "agents.update")).toHaveLength(1);
+    // The next gateway's cards are left as they are: none here.
+    expect(names.published.at(-1)).toEqual([]);
   });
 
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
