@@ -13,6 +13,7 @@ export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
 export * from "./pictures.ts";
+export * from "./bot-names.ts";
 export * from "./computer.ts";
 export * from "./machine.ts";
 export * as computerWords from "./computer-words.ts";
@@ -39,6 +40,7 @@ export {
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./machines.ts";
+export * from "./bot-delete.ts";
 export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";

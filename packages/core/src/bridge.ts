@@ -14,6 +14,7 @@ import {
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { ChatPictureRead } from "./pictures.ts";
+import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
@@ -25,6 +26,7 @@ import {
   type SidebarPrefs,
 } from "./sidebar.ts";
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
+import { MAX_MESSAGE_LINE_CHARS } from "./state-bounds.ts";
 import type { ClawtrateState, GatewayStamp, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
 import type { SetupHost, SetupOffer } from "./setup.ts";
@@ -81,6 +83,13 @@ import {
   type PlacementPart,
   type PlacementParts,
 } from "./machines.ts";
+import {
+  MAX_SHARED_NAMES,
+  MAX_SHOWN_NAME_CHARS,
+  type BotDeleteOutcome,
+  type BotDeleteRead,
+  type BotDeleteReview,
+} from "./bot-delete.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -98,8 +107,11 @@ export type BridgeCommand =
   | { type: "retry" }
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string }
-  /** Read a task this viewer holds again, as the retry of a failed history read. */
-  | { type: "reloadSession"; key: string }
+  /**
+   * Read a task this viewer holds again, as the retry of a failed history read.
+   * With `failed`, the host reads only if the task is still in `error` with that error.
+   */
+  | { type: "reloadSession"; key: string; failed?: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
@@ -316,6 +328,9 @@ export type BridgeCommand =
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
+  /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
+  | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
+  | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
   | {
       type: "setBotPicture";
@@ -422,10 +437,31 @@ export type BridgeCommand =
   | { type: "renameMachine"; nodeId: string; name: string }
   | { type: "removeMachine"; nodeId: string }
   | { type: "renameDevice"; deviceId: string; name: string }
-  | { type: "removeDevice"; deviceId: string };
+  | { type: "removeDevice"; deviceId: string }
+  // Deleting a bot (`bot-delete.ts`). The read is `operator.read`; the delete needs admin.
+  /** What the delete dialog lists for a bot, read now. */
+  | { type: "readBotDelete"; botId: string }
+  /**
+   * `stamp` is where the dialog read, `reviewed` what it showed of the bot, and `typed` what the
+   * person typed to confirm.
+   */
+  | {
+      type: "deleteBot";
+      botId: string;
+      stamp: GatewayStamp;
+      deleteFiles: boolean;
+      reviewed: BotDeleteReview;
+      typed: string;
+    };
 
 /** What each command answers with. */
-export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
+export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "readBotDelete" }
+  ? BotDeleteRead
+  : C extends { type: "deleteBot" }
+    ? BotDeleteOutcome
+    : BridgeResultRest<C>;
+
+type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
   : C extends { type: "sendAgain" }
     ? { messageId: string }
@@ -634,6 +670,12 @@ export type ClawtrateBridge = {
    * save dialog). Absent where the host has none: a browser downloads instead.
    */
   save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /**
+   * Hear of a task this view had open that the host refused to open again after the
+   * bridge reconnected on its own: the view no longer holds it, and `error` says why.
+   * Absent where a bridge never reopens tasks itself (the desktop's IPC).
+   */
+  onReopenRefused?(listener: (key: string, error: string) => void): () => void;
 };
 
 /**
@@ -729,6 +771,29 @@ function botId(value: unknown): string {
 function flag(value: unknown): boolean {
   if (typeof value !== "boolean") throw new Error("invalid flag");
   return value;
+}
+
+/** What a delete dialog showed of a bot, field by field. */
+function deleteReview(value: unknown): BotDeleteReview {
+  const review = record(value, "review");
+  const folder = review.folder;
+  if (folder !== "own" && folder !== "shared" && folder !== "unknown")
+    throw new Error("invalid folder");
+  if (!Array.isArray(review.sharedWith) || review.sharedWith.length > MAX_SHARED_NAMES)
+    throw new Error("invalid names");
+  return {
+    nameDigest: nullable(review.nameDigest, (v) => {
+      if (typeof v !== "string" || !/^[a-f0-9]{64}$/.test(v)) throw new Error("invalid name");
+      return v;
+    }),
+    createdAt: nullable(review.createdAt, (v) =>
+      count(v, Number.MAX_SAFE_INTEGER, "creation record"),
+    ),
+    workspace: nullable(review.workspace, (v) => shortText(v, MAX_PATH_CHARS, "path")),
+    folder,
+    sharedWith: review.sharedWith.map((v) => shortText(v, MAX_SHOWN_NAME_CHARS, "name")),
+    sharedOmitted: count(review.sharedOmitted, Number.MAX_SAFE_INTEGER, "count"),
+  };
 }
 
 /** One change to the budgets, checked field by field. */
@@ -1108,6 +1173,20 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "checkLock":
     case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
+    case "acceptBotName":
+      return {
+        type: "acceptBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "declineBotName":
+      return {
+        type: "declineBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "finishBot":
       return {
         type: "finishBot",
@@ -1387,8 +1466,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "openSession":
     case "closeSession":
-    case "reloadSession":
       return { type: command.type, key: sessionKey(command.key) };
+    case "reloadSession":
+      return {
+        type: "reloadSession",
+        key: sessionKey(command.key),
+        ...(command.failed === undefined
+          ? {}
+          : { failed: shortText(command.failed, MAX_MESSAGE_LINE_CHARS, "error") }),
+      };
     case "listTaskFiles":
       return { type: "listTaskFiles", key: sessionKey(command.key) };
     case "readTaskFile":
@@ -1601,6 +1687,17 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             : id(command.baseHash, "hash"),
       };
     }
+    case "readBotDelete":
+      return { type: "readBotDelete", botId: botId(command.botId) };
+    case "deleteBot":
+      return {
+        type: "deleteBot",
+        botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+        deleteFiles: flag(command.deleteFiles),
+        reviewed: deleteReview(command.reviewed),
+        typed: shortText(command.typed, MAX_SHOWN_NAME_CHARS, "typed text"),
+      };
     case "setBotWorkspace":
       return {
         type: "setBotWorkspace",
@@ -1810,7 +1907,7 @@ class ViewerSession implements BridgeSession {
       }
       case "reloadSession":
         if (!this.open.has(command.key)) throw new Error(NOT_OPEN_IN_VIEW);
-        return client.reloadSession(command.key);
+        return client.reloadSession(command.key, command.failed);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
       case "requestFullControl":
@@ -1908,6 +2005,10 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
+      case "acceptBotName":
+        return client.acceptBotName(command.botId, command.name, command.stamp);
+      case "declineBotName":
+        return client.declineBotName(command.botId, command.name, command.stamp);
       case "setBotPicture":
         return client.setBotPicture(command.botId, command.avatar, command.stamp);
       case "refreshCheckIns":
@@ -2172,6 +2273,19 @@ class ViewerSession implements BridgeSession {
         );
       case "setBotWorkspace":
         return client.setBotWorkspace(command.botId, command.path);
+      case "readBotDelete":
+        return client.readBotDelete(command.botId);
+      case "deleteBot":
+        return client.deleteBot(
+          {
+            botId: command.botId,
+            stamp: command.stamp,
+            deleteFiles: command.deleteFiles,
+            reviewed: command.reviewed,
+            typed: command.typed,
+          },
+          { owner },
+        );
       case "setMachineDefaults":
         return client.setMachineDefaults(command.machineId, command.choice, command.expectedHash, {
           owner,
@@ -2189,9 +2303,15 @@ class ViewerSession implements BridgeSession {
 
   apply<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>> {
     if (this.inFlight >= MAX_VIEWER_PENDING_COMMANDS) {
-      return Promise.reject(
-        new Error("Too many requests are waiting; try again when they finish."),
-      );
+      const busy = "Too many requests are waiting; try again when they finish.";
+      // A delete refused here never reached the host's client: its outcome says nothing was
+      // sent, as the host's other refusals do, so the viewer doesn't take it for a lost answer.
+      if (command.type === "deleteBot")
+        return Promise.resolve({
+          kind: "not-sent",
+          message: `${busy} Nothing was sent.`,
+        } as BridgeResultFor<C>);
+      return Promise.reject(new Error(busy));
     }
     this.inFlight += 1;
     return this.run(command).finally(() => {

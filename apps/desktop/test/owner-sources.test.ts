@@ -20,6 +20,7 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
+  "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
   "apps/desktop/src/main/mac-install.ts:RESULTS": "static, the helper's eight result lines",
   "apps/desktop/src/main/mac-install.ts:HELPER_STEPS": "static, the helper's eleven step names",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
@@ -177,6 +178,8 @@ const ALLOWED: Record<string, string> = {
     "renderer; commands awaiting an answer, each answered by the host or rejected when the socket closes",
   "packages/core/src/remote-bridge.ts:createRemoteBridge>wanted":
     "renderer; the tasks the host accepted as open, at most `MAX_VIEWER_OPEN_TASKS`, plus opens in flight",
+  "packages/core/src/remote-bridge.ts:createRemoteBridge>reopenRefusals":
+    "renderer; one per listener for refused reopens, removed by its unsubscribe",
   // Hosts.
   "apps/desktop/src/main/index.ts:main>sessions":
     "one bridge session per open window, removed when it closes",
