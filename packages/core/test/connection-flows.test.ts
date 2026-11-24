@@ -2,7 +2,7 @@
 import { PROTOCOL_VERSION } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
-import { ClawtrateClient } from "../src/client.ts";
+import { ClawtrateClient, GatewayChangedError } from "../src/client.ts";
 import { MAX_GATEWAY_URL_CHARS } from "../src/gateway-url.ts";
 import { pairingEnded, protocolMismatch } from "../src/connect-errors.ts";
 import {
@@ -471,6 +471,358 @@ describe("connecting", () => {
     } finally {
       client.stop();
     }
+  });
+
+  describe("a command sent while the saved gateway is still being read at startup", () => {
+    /** A store whose read of `paused`, by default the saved gateway, waits until `release`. */
+    function pausedRead(paused = "connection") {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      const reading = deferred<void>();
+      const gate = deferred<void>();
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (key === paused) {
+          reading.resolve();
+          await gate.promise;
+        }
+        return get(key);
+      };
+      return { storage, reading: reading.promise, release: () => gate.resolve() };
+    }
+
+    it("F-457: Disconnect forgets the saved gateway, which then never opens", async () => {
+      const { storage, reading, release } = pausedRead();
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const forgetting = createBridgeSession(client).apply(
+          parseBridgeCommand({ type: "disconnect", gatewayUrl: URL }),
+        );
+        release();
+        await Promise.all([starting, forgetting]);
+        await sleep(100);
+        expect(gateway.sockets).toHaveLength(0);
+        expect(savedSettings(storage)).toBeNull();
+        expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-457: Disconnect sent before the saved gateway is read forgets it too", async () => {
+      // The turn limit is read before the saved gateway.
+      const { storage, reading, release } = pausedRead("turn-limit-minutes");
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const forgetting = createBridgeSession(client).apply(
+          parseBridgeCommand({ type: "disconnect", gatewayUrl: URL }),
+        );
+        release();
+        await Promise.all([starting, forgetting]);
+        await sleep(100);
+        expect(gateway.sockets).toHaveLength(0);
+        expect(savedSettings(storage)).toBeNull();
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-457: Suspend leaves the saved gateway offline, across a restart too", async () => {
+      const { storage, reading, release } = pausedRead();
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const suspending = createBridgeSession(client).apply(
+          parseBridgeCommand({ type: "suspend" }),
+        );
+        release();
+        await Promise.all([starting, suspending]);
+        await sleep(100);
+        expect(gateway.sockets).toHaveLength(0);
+        expect(savedSettings(storage)).toMatchObject({ url: URL, suspended: true });
+        expect(client.state.connection).toMatchObject({ status: "disconnected", gatewayUrl: URL });
+        client.stop();
+        const restarted = new ClawtrateClient(testHost(gateway, storage), FAST);
+        await restarted.start();
+        await sleep(100);
+        expect(gateway.sockets, "a restart does not open it either").toHaveLength(0);
+        restarted.stop();
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-457: a Disconnect of another gateway is refused, and the saved one still opens", async () => {
+      const { storage, reading, release } = pausedRead();
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const forgetting = client.disconnect(OTHER_URL);
+        release();
+        await expect(forgetting).rejects.toThrow(GatewayChangedError);
+        await starting;
+        await until(() => client.state.connection.status === "connected");
+        expect(gateway.sockets).toHaveLength(1);
+        expect(savedSettings(storage)?.url).toBe(URL);
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-457: a Disconnect fails when the saved gateway could not be read", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      const gate = deferred<void>();
+      const reading = deferred<void>();
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (key !== "connection") return get(key);
+        reading.resolve();
+        await gate.promise;
+        throw new Error("The disk could not be read.");
+      };
+      const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+      try {
+        const starting = client.start();
+        await reading.promise;
+        const forgetting = client.disconnect(URL);
+        gate.resolve();
+        await expect(starting).rejects.toThrow("The disk could not be read.");
+        await expect(forgetting).rejects.toThrow("The disk could not be read.");
+        expect(savedSettings(storage)?.url).toBe(URL);
+      } finally {
+        gate.resolve();
+        client.stop();
+      }
+    });
+
+    it("F-457: a Disconnect still fails when the saved gateway read rejects without a reason", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      const gate = deferred<void>();
+      const reading = deferred<void>();
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (key !== "connection") return get(key);
+        reading.resolve();
+        await gate.promise;
+        return Promise.reject(undefined);
+      };
+      const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+      try {
+        const starting = client.start();
+        await reading.promise;
+        const forgetting = client.disconnect(URL);
+        gate.resolve();
+        await expect(starting).rejects.toBeUndefined();
+        await expect(forgetting).rejects.toBeUndefined();
+        expect(savedSettings(storage)?.url).toBe(URL);
+      } finally {
+        gate.resolve();
+        client.stop();
+      }
+    });
+
+    it.each(["suspend", "disconnect"] as const)(
+      "F-457: stopping when startup shows the gateway keeps a queued %s from writing",
+      async (action) => {
+        const { storage, reading, release } = pausedRead();
+        const set = storage.set;
+        const remove = storage.delete;
+        let writes = 0;
+        storage.set = (key, value) => {
+          if (key === "connection") writes += 1;
+          return set(key, value);
+        };
+        storage.delete = (key) => {
+          if (key === "connection") writes += 1;
+          return remove(key);
+        };
+        const gateway = new FakeGateway();
+        const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+        const unsubscribe = client.store.subscribe(({ connection }) => {
+          if (connection.status !== "disconnected" || connection.gatewayUrl !== URL) return;
+          unsubscribe();
+          client.stop();
+        });
+        try {
+          const starting = client.start();
+          await reading;
+          const command = action === "suspend" ? client.suspend() : client.disconnect(URL);
+          release();
+          await Promise.all([starting, command]);
+          await sleep(50);
+          expect(writes).toBe(0);
+          expect(savedSettings(storage)).toEqual({ url: URL, token: null });
+          expect(gateway.sockets).toHaveLength(0);
+        } finally {
+          unsubscribe();
+          release();
+          client.stop();
+        }
+      },
+    );
+
+    it("F-457: a Disconnect sent from the restored-gateway notification stays ahead of startup's resume", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      const firstRead = deferred<void>();
+      const firstGate = deferred<void>();
+      const secondRead = deferred<void>();
+      const secondGate = deferred<void>();
+      const get = storage.get;
+      let reads = 0;
+      storage.get = async (key) => {
+        if (key !== "connection") return get(key);
+        reads += 1;
+        if (reads === 1) {
+          firstRead.resolve();
+          await firstGate.promise;
+        } else if (reads === 2) {
+          secondRead.resolve();
+          await secondGate.promise;
+        }
+        return get(key);
+      };
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      let forgetting: Promise<void> | null = null;
+      const unsubscribe = client.store.subscribe(({ connection }) => {
+        if (forgetting || connection.status !== "disconnected" || connection.gatewayUrl !== URL)
+          return;
+        unsubscribe();
+        forgetting = client.disconnect(URL);
+      });
+      try {
+        const starting = client.start();
+        await firstRead.promise;
+        const refused = client.disconnect(OTHER_URL);
+        firstGate.resolve();
+        await expect(refused).rejects.toThrow(GatewayChangedError);
+        await secondRead.promise;
+        await sleep(50);
+        expect(gateway.sockets, "startup waits for the queued Disconnect of A").toHaveLength(0);
+        secondGate.resolve();
+        await Promise.all([starting, forgetting]);
+        await sleep(50);
+        expect(gateway.sockets).toHaveLength(0);
+        expect(savedSettings(storage)).toBeNull();
+        expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+      } finally {
+        unsubscribe();
+        firstGate.resolve();
+        secondGate.resolve();
+        client.stop();
+      }
+    });
+
+    it("F-387: a Retry stopped while it opens doesn't stop the next startup from resuming", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      // The Retry's device-token read is held, then the next startup's saved-gateway read.
+      const token = deferred<void>();
+      const read = deferred<void>();
+      let holdToken = true;
+      let holdRead = false;
+      let tokenWaiting = false;
+      let readWaiting = false;
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (holdToken && key === tokenKey(URL)) {
+          holdToken = false;
+          tokenWaiting = true;
+          await token.promise;
+        }
+        if (holdRead && key === "connection") {
+          holdRead = false;
+          readWaiting = true;
+          await read.promise;
+        }
+        return get(key);
+      };
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        await client.start({ resume: "disconnected" });
+        const retrying = client.retryNow().catch(() => undefined);
+        await until(() => tokenWaiting);
+        client.stop();
+        holdRead = true;
+        const restarting = client.start();
+        await until(() => readWaiting);
+        // The old Retry finishes first, on the stopped generation.
+        token.resolve();
+        await retrying;
+        read.resolve();
+        await restarting;
+        await until(() => gateway.sockets.length === 1);
+      } finally {
+        token.resolve();
+        read.resolve();
+        client.stop();
+      }
+    });
+
+    it("F-387: a Retry whose open fails leaves startup to open the saved gateway", async () => {
+      const { storage, reading, release } = pausedRead();
+      // The device token's first read fails, so the Retry's open fails before any socket.
+      let failToken = true;
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (failToken && key === tokenKey(URL)) {
+          failToken = false;
+          throw new Error("The keychain is locked.");
+        }
+        return get(key);
+      };
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const retrying = createBridgeSession(client)
+          .apply(parseBridgeCommand({ type: "retry" }))
+          .then(
+            () => "fulfilled",
+            () => "rejected",
+          );
+        release();
+        await Promise.all([starting, retrying]);
+        expect(await retrying).toBe("rejected");
+        await until(() => gateway.sockets.length === 1);
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-387: Retry opens the saved gateway offered as a choice", async () => {
+      const { storage, reading, release } = pausedRead();
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start({ resume: "disconnected" });
+        await reading;
+        const retrying = createBridgeSession(client).apply(parseBridgeCommand({ type: "retry" }));
+        release();
+        await Promise.all([starting, retrying]);
+        await until(() => client.state.connection.status === "connected");
+        expect(client.state.connection.gatewayUrl).toBe(URL);
+        expect(gateway.sockets).toHaveLength(1);
+      } finally {
+        release();
+        client.stop();
+      }
+    });
   });
 
   it("a Reconnect that could not be saved fails again on the next try, and opens nothing", async () => {
