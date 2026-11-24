@@ -813,7 +813,10 @@ export function createFixtureBridge(
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
     if (command.type === "readChatPicture") return pictureAnswer();
-    if (command.type === "readSentPicture") return sentPictureAnswer(command);
+    if (command.type === "readSentPicture") {
+      await new Promise<void>((resolve) => deferred(resolve, 0));
+      return sentPictureAnswer(command);
+    }
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;

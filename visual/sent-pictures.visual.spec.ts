@@ -6,7 +6,17 @@
 // e2e/ui-pictures.spec.ts.
 import { test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
-import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  contextFor,
+  expect,
+  hold,
+  release,
+  openFixture,
+  OTTO_DISK,
+  settle,
+  SIZES,
+  THEMES,
+} from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
@@ -134,6 +144,7 @@ test.describe("sent pictures behaviour", () => {
   }) => {
     await open(page, "pictures-sent", "dark");
     await drawn(page, MINE);
+    await hold(page);
     await page.evaluate(() => {
       const fixture = (
         window as unknown as {
@@ -152,8 +163,18 @@ test.describe("sent pictures behaviour", () => {
       }));
     });
     const picture = page.getByTestId("sent-picture").filter({ hasText: "calendar.png" });
-    await expect(picture).toHaveAttribute("data-state", "not-kept");
+    await expect
+      .poll(
+        async () =>
+          (await sent(page)).filter(
+            (command) => "sessionId" in command && command.sessionId === "replacement",
+          ).length,
+      )
+      .toBeGreaterThan(0);
     await expect(page.getByRole("img", { name: MINE })).toHaveCount(0);
+    await expect(picture).toHaveAttribute("data-state", "loading");
+    await release(page);
+    await expect(picture).toHaveAttribute("data-state", "not-kept");
   });
 
   test("F-117: Tab reaches the preview, Enter opens it over the app with its text, focus stays inside, and Escape closes it back to the preview", async ({
