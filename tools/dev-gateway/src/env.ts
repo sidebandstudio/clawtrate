@@ -158,6 +158,8 @@ export type RunnerOptions = {
   /** The tool's run file, with the run id and PIDs `start` recorded. */
   runFile: string;
   bin?: string;
+  windowsCli?: string;
+  gate?: typeof gatedSpawn;
   spawnImpl?: typeof spawn;
   spawnSyncImpl?: typeof spawnSync;
   identify?: Identify;
@@ -177,6 +179,8 @@ export class OpenclawRunner {
   readonly stateDir: string;
   readonly runFile: string;
   private readonly bin: string;
+  private readonly windowsCli: string | undefined;
+  readonly gate: typeof gatedSpawn;
   private readonly spawnImpl: typeof spawn;
   private readonly spawnSyncImpl: typeof spawnSync;
   private readonly identify: Identify;
@@ -187,6 +191,9 @@ export class OpenclawRunner {
     this.stateDir = options.stateDir;
     this.runFile = options.runFile;
     this.bin = options.bin ?? OPENCLAW_BIN;
+    this.windowsCli = options.windowsCli;
+    if (this.windowsCli && !this.instance) throw new Error("Windows needs a named test profile");
+    this.gate = options.gate ?? gatedSpawn;
     this.spawnImpl = options.spawnImpl ?? spawn;
     this.spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
     this.identify = options.identify ?? processIdentity;
@@ -228,13 +235,32 @@ export class OpenclawRunner {
       stateDir: this.stateDir,
       gatewayPort: this.gatewayPort(),
     };
-    return { cwd: this.stateDir, env: openclawEnv(process.env, instance) };
+    const env = openclawEnv(process.env, instance);
+    if (this.windowsCli) {
+      Object.assign(env, {
+        USERPROFILE: env.HOME,
+        APPDATA: join(homedir(), "AppData", "Roaming"),
+        LOCALAPPDATA: join(homedir(), "AppData", "Local"),
+        TEMP: join(homedir(), "tmp"),
+        TMP: join(homedir(), "tmp"),
+        SystemRoot: process.env.SystemRoot,
+        OPENCLAW_NO_RESPAWN: "1",
+      });
+    }
+    return { cwd: this.stateDir, env };
+  }
+
+  private invocation(args: string[]): [string, string[]] {
+    const guarded = guardArgs(args, this.instance);
+    return this.windowsCli
+      ? [process.execPath, [this.windowsCli, ...guarded]]
+      : [this.bin, guarded];
   }
 
   /** Run an OpenClaw CLI command and wait for it. `input` is written to its stdin. */
   runSync(args: string[], options: { input?: string } = {}): RunResult {
     this.assertAllowed();
-    const result = this.spawnSyncImpl(this.bin, guardArgs(args, this.instance), {
+    const result = this.spawnSyncImpl(...this.invocation(args), {
       ...this.baseOptions(),
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
@@ -248,7 +274,7 @@ export class OpenclawRunner {
   run(args: string[]): Promise<RunResult> {
     return new Promise((resolve, reject) => {
       this.assertAllowed();
-      const child = this.spawnImpl(this.bin, guardArgs(args, this.instance), {
+      const child = this.spawnImpl(...this.invocation(args), {
         ...this.baseOptions(),
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -264,7 +290,7 @@ export class OpenclawRunner {
   /** Start a long-running OpenClaw process detached from this one, behind a gate (`gatedSpawn`). */
   spawnGated(args: string[], options: SpawnOptions): Gated {
     this.assertAllowed();
-    return gatedSpawn(this.spawnImpl, this.bin, guardArgs(args, this.instance), {
+    return this.gate(this.spawnImpl, ...this.invocation(args), {
       ...options,
       ...this.baseOptions(),
       detached: true,

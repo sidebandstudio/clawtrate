@@ -21,9 +21,8 @@ import { appEnv, debuggingPort } from "./desktop-driver.ts";
 // to them is printed as a note, not counted as a failure, since a snapshot
 // cannot show this run caused it.
 //
-// On Windows no development gateway runs, so the run starts no instances and
-// keeps no run record: it launches the app, the tests that need a gateway are
-// skipped, and the teardown asks the app to close and checks it did.
+// Hosted Windows checks pair with one named gateway. Local Windows launches
+// still check the app without installing or running OpenClaw.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -45,6 +44,7 @@ import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-setup.ts";
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
+import { hostedWindows, withWindowsGateway } from "./windows-gateway.ts";
 import {
   cleanUp,
   recordPath,
@@ -296,14 +296,19 @@ export const CHECKOUT = realpathSync(ROOT);
 function setupSandbox(dir: string, instance: string): { file: string; appData: string } {
   const parent = join(dir, "setup");
   mkdirSync(parent, { recursive: true });
-  const run = process.platform === "win32" ? { run: "0".repeat(48) } : {};
+  const run = process.platform === "win32" && !hostedWindows ? { run: "0".repeat(48) } : {};
   const sandbox = writeSandbox({ instance, parent, ...run });
   // The app keeps its data in the sandbox's own folder; the check passes and reads that one.
   return { file: sandbox.file, appData: realpathSync.native(sandbox.appData) };
 }
 
 export default async function globalSetup() {
-  if (process.platform === "win32") return windowsSetup();
+  if (process.platform === "win32") {
+    const name = `e2e-${randomBytes(4).toString("hex")}`;
+    if (!hostedWindows) return windowsSetup(name);
+    process.env.CLAWTRATE_DEV_INSTANCE = name;
+    return withWindowsGateway(name, () => windowsSetup(name));
+  }
   if (process.platform !== "darwin") throw new Error("the launch check runs on macOS and Windows");
   const app = packagedApp();
   if (!existsSync(app)) throw new Error(`${app} does not exist. Check the packaged app path.`);
@@ -504,14 +509,12 @@ async function macSetup(app: string, domain: string) {
 }
 
 /**
- * The Windows run: the packaged app alone, with a temporary data folder. No
- * development gateway runs on Windows, so there are no instances, no run
- * record and no listeners to protect. The app is asked to close the way
+ * The Windows app launch uses a temporary data folder. The app is asked to close the way
  * Windows asks at sign-out (a close message to its windows), and the run
  * fails if it or a helper is still running 15 seconds later; anything left
  * is then ended by PID so the machine is not left with it.
  */
-async function windowsSetup() {
+async function windowsSetup(name: string) {
   const app = packagedApp();
   const exe = packagedExecutable(app);
   if (!existsSync(exe)) throw new Error(`${exe} does not exist. Run \`pnpm package:win\` first.`);
@@ -557,7 +560,7 @@ async function windowsSetup() {
   };
 
   try {
-    const written = setupSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
+    const written = setupSandbox(dir, name);
     const sandbox = written.file;
     userData = written.appData;
     process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;

@@ -84,7 +84,6 @@ import {
   PROVIDER_PORT,
   assertInstanceStateDir,
   devStateDir,
-  gatedSpawn,
   instancePaths,
   parseJsonOutput,
   providerEnv,
@@ -1216,7 +1215,7 @@ export async function start(
       writeFreshConfig(inst, ports, runId, plugins, startOptions);
       const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
       spawnRecorded(inst, runId, "provider", () =>
-        gatedSpawn(
+        runner.gate(
           inst.spawn,
           process.execPath,
           [fileURLToPath(new URL("./provider-main.ts", import.meta.url))],

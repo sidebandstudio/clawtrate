@@ -1,6 +1,5 @@
 // The packaged app launches, shows its window and connect screen, and pairs
-// with a development gateway instance of this run's own. On Windows, where no
-// development gateway runs, the tests that need one are skipped.
+// with a development gateway instance of this run's own.
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -26,7 +25,8 @@ import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { devGateway } from "../e2e/global-setup.ts";
-import { openInstance } from "../tools/dev-gateway/src/cli.ts";
+import { approve, openInstance } from "../tools/dev-gateway/src/cli.ts";
+import { hostedWindows, windowsIdentity, windowsInstance } from "./windows-gateway.ts";
 import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { gatedSpawn, parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
@@ -85,7 +85,6 @@ function holds(path: string, value: string): string[] {
     : [];
 }
 const WINDOWS = process.platform === "win32";
-const NO_GATEWAY = "no development gateway runs on Windows";
 
 /** The app's direct children, as the system reports them: PID and full command line. */
 function helpers(): { pid: number; command: string }[] {
@@ -409,6 +408,7 @@ function runEndpoint() {
     home: homedir(),
     runDir: runDirFor(INSTANCE, join(ROOT, "tools/dev-gateway/.run")),
     checkout: realpathSync(ROOT),
+    ...(WINDOWS ? { identify: windowsIdentity } : {}),
   });
   if ("refusal" in endpoint) throw new Error(endpoint.refusal);
   expect(endpoint.url).toMatch(/^ws:\/\/127\.0\.0\.1:(19[2-9]\d\d)$/);
@@ -430,7 +430,8 @@ async function pair(): Promise<void> {
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  devGateway(INSTANCE, "approve");
+  if (WINDOWS) await approve(windowsInstance(INSTANCE));
+  else devGateway(INSTANCE, "approve");
 
   const bots = page.getByTestId("bot");
   await expect(bots).toHaveCount(4, { timeout: 20_000 });
@@ -444,7 +445,7 @@ async function pair(): Promise<void> {
 }
 
 test("pairs with its own development gateway instance and shows the seeded bots", async () => {
-  test.skip(WINDOWS, NO_GATEWAY);
+  test.skip(WINDOWS && !hostedWindows, "Windows pairing needs a disposable hosted runner");
   await pair();
   await page.getByRole("button", { name: /^Otto, \d+ tasks?/ }).click();
   await page
@@ -456,7 +457,7 @@ test("pairs with its own development gateway instance and shows the seeded bots"
 });
 
 test("sends a key typed into it to the gateway, and keeps it in none of its logs or data", async () => {
-  test.skip(WINDOWS, NO_GATEWAY);
+  test.skip(WINDOWS, "needs the Windows app log and settings shortcut");
   // Admin access first: only admin connections start a sign-in.
   await page.keyboard.press("Meta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
@@ -544,7 +545,7 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
 }
 
 test("F-023: the dock badge counts the unread tasks, and follows what the gateway says of them", async () => {
-  test.skip(WINDOWS, NO_GATEWAY);
+  test.skip(WINDOWS, "reads the macOS Dock badge");
   // macOS shows an app's badge only while it may post notifications (Electron's
   // setBadgeCount), a permission kept by bundle id that a check build never has.
   test.skip(true, "a check build's bundle id has never been allowed notifications");
@@ -573,7 +574,7 @@ test("F-023: the dock badge counts the unread tasks, and follows what the gatewa
 });
 
 test("keeps the device key and tokens in its own data folder, readable by the user only", () => {
-  test.skip(WINDOWS, `${NO_GATEWAY}, so the app has paired with none and written no key`);
+  test.skip(WINDOWS, "Windows device keys need an ACL check");
   const dir = join(USER_DATA, "gateway");
   expect(statSync(dir).mode & 0o777).toBe(0o700);
   const files = readdirSync(dir);
@@ -598,8 +599,11 @@ test("stays on its own content", async () => {
       bots: document.querySelectorAll('[data-testid="bot"]').length,
     };
   });
-  // Paired on macOS, so the seeded bots are still shown; on Windows the connect screen is.
-  expect(result).toEqual({ windowRefused: true, stayed: true, bots: WINDOWS ? 0 : 4 });
+  expect(result).toEqual({
+    windowRefused: true,
+    stayed: true,
+    bots: WINDOWS && !hostedWindows ? 0 : 4,
+  });
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
 });
 
@@ -754,7 +758,7 @@ test("opens with the same pairing and tasks after a newer build takes its place"
   // bundle id, name and data folder. Here the newer build is a copy of this
   // one with only its version raised and an ad hoc signature, so this shows
   // the paths a signed update keeps, not Squirrel's handoff itself.
-  test.skip(WINDOWS, NO_GATEWAY);
+  test.skip(WINDOWS, "needs a Windows installer upgrade");
   test.setTimeout(300_000);
   const gateway = join(USER_DATA, "gateway");
   const state = () =>

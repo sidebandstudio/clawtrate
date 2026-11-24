@@ -636,7 +636,7 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
         toolName: "read",
         isError: true,
         content: [
-          /^\{\n {2}"status": "error",\n {2}"tool": "read",\n {2}"error": "File not found: \S+\/workspace\/missing\/old-notes\.md\."\n\}$/,
+          /^\{\n {2}"status": "error",\n {2}"tool": "read",\n {2}"error": "File not found: \S+(\/|\\\\)workspace\1missing\1old-notes\.md\."\n\}$/,
         ],
       },
     ],

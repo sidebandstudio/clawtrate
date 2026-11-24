@@ -22,7 +22,7 @@
     "package:mac": "pnpm --filter @clawtrate/desktop package:mac",
     "package:win": "pnpm --filter @clawtrate/desktop package:win",
     "test:desktop-updates": "playwright test -c playwright.updates.config.ts",
-    "check:packaged": "playwright test -c playwright.packaged.config.ts",
+    "check:packaged": "node e2e-packaged/check.ts",
     "release:beta": "node apps/desktop/packaging/release-beta.ts",
     "mobile:build": "node apps/mobile/scripts/build.ts",
     "mobile:check": "node apps/mobile/scripts/check.ts",
