@@ -31,6 +31,7 @@ import {
   MAX_ACCESS_WAITERS,
   MAX_FOREIGN_READ_SESSIONS,
   MAX_OPENED_READS,
+  MAX_BOT_DELETES,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
@@ -175,6 +176,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Tasks the engine follows, as their runs describe them.
   // A task's read on opening, while it is on its way.
   openedReads: { max: MAX_OPENED_READS, each: ID, row: "bookkeeping" },
+  // Bot deletes under way, by gateway and bot: two ids, each within `ID` as JSON, and the
+  // separator between them, which JSON escapes to six characters (`\u0000`).
+  botDeletes: { max: MAX_BOT_DELETES, each: 2 * ID + 4, row: "bookkeeping" },
   "waiting.held": { max: MAX_WAITING_SESSIONS, each: WAITING_HELD_CHARS, row: "bookkeeping" },
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
