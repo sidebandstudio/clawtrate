@@ -31,6 +31,16 @@ type Fixture = {
     savedFiles: Array<{ name: string; data: string }>;
   };
 };
+/** The same place whatever a click scrolled before: the PDF's row in the middle of the view. */
+const centre = async (page: Page) => {
+  // Nothing hovered or focused, so no message's actions show; the follow-to-end has settled.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await settle(page);
+  await row(page, "reviews-draft.pdf").evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
+};
 const reads = (page: Page) =>
   page.evaluate(() =>
     (window as unknown as Fixture).clawtrateFixture.sent.filter(
@@ -48,7 +58,7 @@ for (const size of [WIDE, PHONE]) {
       test("F-115: ready, too large and not handed over match their baseline", async ({ page }) => {
         await open(page, theme);
         await expect(row(page, "reviews-draft.pdf")).toHaveAttribute("data-state", "ready");
-        await row(page, "reviews-draft.pdf").scrollIntoViewIfNeeded();
+        await centre(page);
         await settle(page);
         await expect(page).toHaveScreenshot(`bot-files-ready-${theme}-${size.name}.png`);
       });
@@ -62,11 +72,12 @@ for (const size of [WIDE, PHONE]) {
           .getByRole("button", { name: "Save reviews-draft.pdf" })
           .click();
         await expect(row(page, "reviews-draft.pdf")).toHaveAttribute("data-state", "saving");
-        await row(page, "reviews-draft.pdf").scrollIntoViewIfNeeded();
+        await centre(page);
         await settle(page);
         await expect(page).toHaveScreenshot(`bot-files-failed-saving-${theme}-${size.name}.png`);
         await release(page);
         await expect(row(page, "reviews-draft.pdf")).toHaveAttribute("data-state", "saved");
+        await centre(page);
         await settle(page);
         await expect(page).toHaveScreenshot(`bot-files-saved-${theme}-${size.name}.png`);
       });
