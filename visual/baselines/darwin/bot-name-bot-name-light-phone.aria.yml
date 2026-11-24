@@ -1,3 +1,4 @@
+- status
 - region "Conversation":
   - button "Back to bots"
   - button "New bot, Main. Show details.": New bot

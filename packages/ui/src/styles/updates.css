@@ -58,20 +58,6 @@
   display: block;
   margin-top: 6px;
 }
-.rail-top .update-entry {
-  display: none;
-}
-@container app (max-width:687px) {
-  .rail-top .update-entry {
-    display: grid;
-    width: var(--tap-min);
-    height: var(--tap-min);
-    margin-right: auto;
-  }
-  .rail-top:has(.update-entry) .rail-status {
-    margin-right: 0;
-  }
-}
 
 /* What a build adds (F-554): plain lines under a disclosure. */
 .whats-new {

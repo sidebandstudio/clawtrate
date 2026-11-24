@@ -1,3 +1,4 @@
+- status
 - dialog "Settings":
   - region "Conversation":
     - button "Close settings"

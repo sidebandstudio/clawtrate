@@ -1,3 +1,4 @@
+- status
 - region "Conversation":
   - button "Back to bots"
   - button "Juniper, Heat pump vs. gas furnace. Show details.": Juniper

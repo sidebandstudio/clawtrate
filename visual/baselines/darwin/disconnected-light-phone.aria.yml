@@ -1,3 +1,4 @@
+- status
 - region "Conversation":
   - status "Disconnected · showing saved messages":
     - strong: Disconnected

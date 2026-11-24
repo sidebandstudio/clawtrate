@@ -7,8 +7,8 @@ import { screenFor, setupHolds } from "./screen.ts";
 import { restartWaitingMessages } from "./update-restart.ts";
 import { Settings, type SettingsSection } from "./Settings.tsx";
 import { useDesktopUpdateSnapshot } from "./update-reading.ts";
-import { showUpdateFooter } from "./Updates.tsx";
 import { Shell } from "./Shell.tsx";
+import { Brand, TitleBar, UpdateAnnouncer, UpdateButton } from "./TitleBar.tsx";
 
 /**
  * Touch sizes when the primary pointer is coarse, and reduced motion when the
@@ -74,8 +74,8 @@ export function App({
       // first control on the screen now showing.
       else {
         const gateway =
-          opener?.classList.contains("update-entry") &&
-          [...document.querySelectorAll<HTMLElement>(".rail-status,.gateway-pill")].find(
+          opener?.classList.contains("update-button") &&
+          [...document.querySelectorAll<HTMLElement>(".gateway-pill")].find(
             (el) => el.getClientRects().length,
           );
         (gateway || document.querySelector<HTMLElement>(FIRST_CONTROL))?.focus();
@@ -115,8 +115,19 @@ export function App({
   // nothing that stands for the gateway's work moves; it is last seen.
   const [caughtUp, setCaughtUp] = useState(true);
   const lost = status !== "connected" || !caughtUp;
+  const waitingMessages = restartWaitingMessages(state);
+  const openUpdates = () => openSettings("updates");
   return (
     <div className="app" data-connection={lost ? "lost" : undefined}>
+      {screen === "shell" && (
+        <TitleBar
+          reading={updated}
+          waitingMessages={waitingMessages}
+          onOpenUpdates={openUpdates}
+          inert={settingsOpen}
+        />
+      )}
+      <UpdateAnnouncer reading={updated} />
       {settingsOpen && (
         <Settings
           connection={state.connection}
@@ -124,7 +135,7 @@ export function App({
           accounts={state.accounts}
           checkIns={state.checkIns}
           bots={state.bots}
-          waitingMessages={restartWaitingMessages(state)}
+          waitingMessages={waitingMessages}
           updateReading={updated}
           initialSection={openSection}
           onClose={closeSettings}
@@ -139,7 +150,17 @@ export function App({
           bubbles={bubbles}
           onBubbles={setBubbles}
           onUnreadCount={onUnreadCount}
-          updateEntry={showUpdateFooter(updated.snapshot, updated.pending)}
+          railTop={
+            <>
+              <Brand reading={updated} />
+              <UpdateButton
+                reading={updated}
+                waitingMessages={waitingMessages}
+                onOpenUpdates={openUpdates}
+                round
+              />
+            </>
+          }
           onOpenSettings={openSettings}
           inert={settingsOpen}
           onCaughtUp={setCaughtUp}

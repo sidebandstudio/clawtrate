@@ -32,7 +32,7 @@ import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
 import { FullControlAsk, isFullRequest, notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
-import { gatewayLabel } from "./format.ts";
+import { gatewayTitle } from "./format.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 import { useForget } from "./forget.ts";
 import { BackIcon, ChevronIcon, CloseIcon, ExternalIcon } from "./icons.tsx";
@@ -997,8 +997,7 @@ export function Settings({
       )}
       {connection.gatewayUrl && (
         <p className="settings-note">
-          {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
-          disconnected.{" "}
+          {gatewayTitle(connection)} keeps this device's pairing while it is disconnected.{" "}
           {connection.fullPairing
             ? ""
             : connection.canAdmin
