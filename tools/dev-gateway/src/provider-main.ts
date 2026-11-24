@@ -16,6 +16,7 @@ const server = startFakeProvider({
     ? { streamHoldFile: process.env.SCRIPTED_STREAM_HOLD_FILE }
     : {}),
   ...(pagesPort ? { pagesOrigin: `http://127.0.0.1:${pagesPort}` } : {}),
+  ...(process.env.SCRIPTED_SKILL_REVIEW === "1" ? { skillReview: true } : {}),
   ...(process.env.SCRIPTED_PROVIDER_DUMP ? { dumpPath: process.env.SCRIPTED_PROVIDER_DUMP } : {}),
 });
 server.on("listening", () => console.log(`scripted provider listening on 127.0.0.1:${port}`));

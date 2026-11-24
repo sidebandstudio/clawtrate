@@ -732,6 +732,14 @@ export function Rail({
 
   const runner = useActionRunner(setAnnouncement);
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  if (dialog?.botId && !bots.some((each) => each.id === dialog.botId)) setDialog(null);
+  const menuBotId =
+    menu && (menu.kind === "bot" || menu.kind === "move" || menu.kind === "task")
+      ? menu.botId
+      : menu?.kind === "archived"
+        ? menu.task.botId
+        : null;
+  if (menuBotId && !bots.some((each) => each.id === menuBotId)) setMenu(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   /** Bots whose Archived group is open. */
   const [archivedOpen, setArchivedOpen] = useState<Set<string>>(() => new Set());
@@ -815,6 +823,7 @@ export function Rail({
     };
     const askStop = () =>
       setDialog({
+        botId: bot.id,
         title: `Stop and archive “${task.title}”?`,
         body: <p>{bot.name} is still working on this task. Archiving it stops its run first.</p>,
         confirm: { label: "Stop and archive" },
@@ -847,6 +856,7 @@ export function Rail({
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     setDialog({
+      botId: bot.id,
       title: `Delete “${task.title}”?`,
       body: (
         <>
@@ -1504,6 +1514,7 @@ export function Rail({
                 const trigger = menu?.trigger ?? null;
                 setMenu(null);
                 setDialog({
+                  botId: bot.id,
                   title: `Rename “${only.title}”`,
                   body: <p>The new name shows in the list and at the top of the conversation.</p>,
                   confirm: { label: "Rename" },
@@ -1628,6 +1639,7 @@ export function Rail({
           const trigger = menu?.trigger ?? null;
           setMenu(null);
           setDialog({
+            botId: bot.id,
             title: "Move to a new section",
             body: <p>{bot.name} moves into the section; others can join it with Move to.</p>,
             confirm: { label: "Create section" },

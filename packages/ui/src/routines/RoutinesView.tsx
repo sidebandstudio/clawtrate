@@ -906,6 +906,20 @@ export function RoutinesView({
     nav.bot !== null && !shown && mode === "list"
       ? (bots.find((each) => each.id === nav.bot) ?? null)
       : null;
+  const botOptions = owners(bots, [...store.routines, ...fromBot]);
+  // A filtered bot that leaves the gateway's list and has no remaining routines clears the filter.
+  // Over a capped list, only the bot's own read can say it has none.
+  const filteredBotMissing =
+    nav.bot !== null &&
+    store.status === "loaded" &&
+    (store.omitted === 0 || botRead.status === "ready") &&
+    !botOptions.some((each) => each.id === nav.bot);
+  // Until then the filtered bot keeps its option, so the picker shows the filter it applies.
+  if (nav.bot !== null && !botOptions.some((each) => each.id === nav.bot))
+    botOptions.push(ownerOf(bots, nav.bot));
+  useEffect(() => {
+    if (filteredBotMissing) onNav({ ...nav, bot: null });
+  }, [filteredBotMissing, nav, onNav]);
   // Read in the list across bots too: its group heads say each bot's check-ins.
   const checkInsSection = useCheckInsSection({
     active: !shown && mode === "list",
@@ -1104,7 +1118,7 @@ export function RoutinesView({
                 onChange={(event) => onNav({ ...nav, bot: event.target.value || null })}
               >
                 <option value="">All bots</option>
-                {owners(bots, store.routines).map((each) => (
+                {botOptions.map((each) => (
                   <option key={each.id} value={each.id}>
                     {each.name}
                   </option>

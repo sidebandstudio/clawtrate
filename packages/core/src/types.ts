@@ -363,6 +363,12 @@ export type TranscriptItem = {
    */
   idempotencyKey?: string;
   /**
+   * The gateway's note that a background skill review saved or changed a skill
+   * (`isSkillChangeNote`), not something the bot said: present and true only then.
+   * With commands hidden it is not drawn and is not the task's preview.
+   */
+  skillNote?: true;
+  /**
    * History places this user row inside a run that began before it: the gateway took it into
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
    */

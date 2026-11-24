@@ -1,6 +1,13 @@
 // Deterministic reply plans for the scripted model.
 
-import { resolveRound, scenarioRounds, selectScenarios, type PlanContext } from "./scenarios.ts";
+import {
+  resolveRound,
+  scenarioRounds,
+  selectScenarios,
+  SKILL_REVIEW_PROMPT,
+  skillReviewReply,
+  type PlanContext,
+} from "./scenarios.ts";
 import { SEED_BOTS, type Round } from "./seed-data.ts";
 
 export type ChatContentPart = { type?: string; text?: string };
@@ -166,10 +173,27 @@ export function gatewayTurnPrompt(messages: ChatMessage[]): string | null {
   return GATEWAY_TURN_PROMPTS.find((start) => prompt.startsWith(start)) ?? null;
 }
 
+/** The tool results among these messages, each named by the call it answers. */
+function toolResults(messages: ChatMessage[]): { name: string; text: string }[] {
+  const names = new Map<string, string>();
+  for (const m of messages) {
+    for (const call of m.tool_calls ?? []) {
+      if (call.id && call.function?.name) names.set(call.id, call.function.name);
+    }
+  }
+  return messages
+    .filter((m) => m.role === "tool")
+    .map((m) => ({ name: names.get(m.tool_call_id ?? "") ?? "", text: messageText(m) }));
+}
+
 export function planReply(
   messages: ChatMessage[],
   tools: Set<string>,
-  options: { pagesOrigin?: string | null } = {},
+  options: {
+    pagesOrigin?: string | null;
+    /** Answer the gateway's background skill review (`--with-skill-review`). */
+    skillReview?: boolean;
+  } = {},
 ): ReplyStep[] {
   let lastUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -244,6 +268,25 @@ export function planReply(
   }
   if (isGatewayTurn(prompt) && !forwarded) return [{ kind: "text", text: SILENT_REPLY }];
 
+  // The gateway's background skill review, after the conversation it reviews, on an instance
+  // that reviews; elsewhere the prompt is like any other.
+  if (options.skillReview && prompt.startsWith(SKILL_REVIEW_PROMPT)) {
+    const facts = runtimeFacts(messages);
+    const reply = skillReviewReply(
+      messages
+        .slice(0, lastUserIndex)
+        .filter((m) => m.role === "user" && !isRuntimeContext(m))
+        .map((m) => ({ role: m.role, text: normalizePrompt(messageText(m)) })),
+      toolResults(after),
+      tools,
+    );
+    return resolveRound(
+      reply,
+      { ...facts, results: [] },
+      `${facts.sessionKey ?? ""}:review:${roundIndex}`,
+    );
+  }
+
   const scripted = scriptedTurns.get(prompt);
   if (scripted) {
     const rounds = usableRounds(scripted, tools);
@@ -254,20 +297,12 @@ export function planReply(
 
   const selection = selectScenarios(raw);
   if (selection.length > 0) {
-    const names = new Map<string, string>();
-    for (const m of after) {
-      for (const call of m.tool_calls ?? []) {
-        if (call.id && call.function?.name) names.set(call.id, call.function.name);
-      }
-    }
     const facts = runtimeFacts(messages);
     const ctx: PlanContext = {
       ...facts,
       pagesOrigin: options.pagesOrigin ?? null,
       prompt,
-      results: after
-        .filter((m) => m.role === "tool")
-        .map((m) => ({ name: names.get(m.tool_call_id ?? "") ?? "", text: messageText(m) })),
+      results: toolResults(after),
     };
     const round = scenarioRounds(selection)[roundIndex];
     if (!round) return [{ kind: "text", text: "That covers it." }];

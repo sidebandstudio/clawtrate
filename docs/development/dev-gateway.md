@@ -113,6 +113,14 @@ pnpm dev-gateway start --instance tools --with-http-api
 
 `--with-http-api` (named instances only) turns on the gateway's OpenAI-compatible HTTP API, `POST /v1/chat/completions`, on the instance's own loopback port, behind its token (`connection.json`). A request with `model: "openclaw/<bot>"` and a `user` opens the session `agent:<bot>:openai-user:<user>`, as an API client's does. A routine run in a session of its own (`cron.add` with `sessionTarget: "session:<id>"`, then `cron.run` with `mode: "force"`) gives a scheduled run's. Clawtrate leaves both out of a bot's task list until "Show sessions from other tools" is on ([which tool opened a session](../research/session-origins.md)). `e2e/other-tools.spec.ts` starts an instance of its own with it.
 
+## Background skill reviews
+
+```bash
+pnpm dev-gateway start --instance skills --with-skill-review
+```
+
+A development gateway denies `skill_workshop`, so it never reviews a task for a skill to save. `--with-skill-review` (named instances only) offers it to every bot. The gateway then reviews a task in the background once it has made ten model calls since its last review, after 30 seconds with nothing running. Send `#learn`: one turn of ten model calls. Its review lists the bot's learned skills, saves `trail-check` (or `trail-check-2` and so on), and the gateway writes its note into the task: "💾 Learned: created `trail-check` (check the trail before a hike). Say "undo" to revert this skill change." Every other review the scripted model answers with `NO_REPLY`, so it saves nothing. [What reaches a client](../research/skill-notes.md) records the note's rows and events. `e2e/skill-notes.spec.ts` starts an instance of its own with it, and removes it when it ends, so a shard of `pnpm e2e` that does not run that file starts none.
+
 ## Migrating from an older version
 
 Earlier versions of the tool recorded no process start times, so this version cannot prove anything about the state they left and refuses it for good: it never signals its processes, starts it over or deletes it. Move it aside once, by hand, from the checkout that started it. For the default instance:
@@ -144,6 +152,7 @@ The scripted model can put a run into every situation the live conversation has 
 | `#read`            | read your instructions                 | One file read: the bot's own AGENTS.md.                                                                                                                                                                                         | any bot                         |
 | `#reply-to <id>`   | answer that message                    | Text beside a folder listing, then an answer tagged as a reply to the message id after the directive. The gateway keeps that id on the answer's row (`openclawDelivery.replyToId`), never on a row with a call.                 | any bot                         |
 | `#read-six`        | read six files                         | Six file reads in a row, with nothing between them.                                                                                                                                                                             | any bot                         |
+| `#learn`           | learn from this                        | Ten model calls in one turn: nine file reads, then text. With `--with-skill-review`, the gateway's background review then saves a skill and adds its note to the task about 30 seconds later.                                   | any bot                         |
 | `#list`            | list your files                        | One folder listing of the bot's workspace.                                                                                                                                                                                      | any bot                         |
 | `#write`           | write a note                           | One file write in the bot's workspace (notes/scratch.md).                                                                                                                                                                       | any bot                         |
 | `#edit`            | edit a note                            | A file write, then an edit of the same file (notes/edit-me.md).                                                                                                                                                                 | any bot                         |
