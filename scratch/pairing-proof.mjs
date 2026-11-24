@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
-const batch = "cancel";
+const batch = "two";
 const env = { ...process.env, CLAWTRATE_PROOF_CHILD: "1" };
 if (batch === "cancel") {
   const proof = spawnSync(
