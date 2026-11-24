@@ -13,9 +13,16 @@ import { AvatarPicker, PicturePreview, pictureFor, type PictureDraft } from "./A
 import { Connect } from "./Connect.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { AdminBar, GrantedBar, Note, useAnnouncer, useGranted } from "./parts.tsx";
-import { ModelPair } from "./ModelPair.tsx";
+import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
 import { recall, remember } from "./memory.ts";
-import { defaultAccount, defaultRef, firstEffort, firstModel, providerName } from "./words.ts";
+import {
+  defaultAccount,
+  defaultRef,
+  effortFor,
+  firstEffort,
+  firstModel,
+  providerName,
+} from "./words.ts";
 
 type Draft = {
   name: string;
@@ -147,18 +154,20 @@ export function NewBot({
       ? (gw?.provider ?? null)
       : (accounts.accounts.find((a) => a.id === value)?.provider ?? null);
   const provider = providerOf(draft.account);
+  // "View more" for this dialog, and the effort resolved once from the model's row: what Effort
+  // shows and what Create sends.
+  const list = useModelList(provider ?? "", connection, step === "account");
+  const shownEffort = effortFor(rowFor(accounts, provider, draft.model, list), draft.effort);
+
+  // The model chosen at first for an account (section 4); null until its provider's rows arrive.
+  const firstFor = (value: string, forProvider: string) =>
+    value === GATEWAY_CHOICE && gw ? gw.model : firstModel(accounts, forProvider);
 
   function choose(value: string) {
     const nextProvider = providerOf(value);
     setDraft((was) => {
       const keepModel = nextProvider && providerOf(was.account) === nextProvider ? was.model : null;
-      const model =
-        keepModel ??
-        (nextProvider
-          ? value === GATEWAY_CHOICE && gw
-            ? gw.model
-            : firstModel(accounts, nextProvider)
-          : null);
+      const model = keepModel ?? (nextProvider ? firstFor(value, nextProvider) : null);
       return {
         ...was,
         account: value,
@@ -167,6 +176,21 @@ export function NewBot({
       };
     });
   }
+
+  // An account chosen before its provider's rows arrived gets its first model when they do.
+  // A model the person chose is never null, so it is never replaced.
+  const lateModel =
+    draft.account && provider && !draft.model ? firstFor(draft.account, provider) : null;
+  if (lateModel && provider)
+    setDraft((was) =>
+      was.model === null && was.account === draft.account
+        ? {
+            ...was,
+            model: lateModel,
+            effort: firstEffort(accounts, provider, lateModel, was.effort),
+          }
+        : was,
+    );
 
   // Once, when the accounts arrive and nothing is chosen yet.
   const [autoChosen, setAutoChosen] = useState(false);
@@ -188,7 +212,7 @@ export function NewBot({
     if (pending.current) return;
     pending.current = true;
     setPreparing(true);
-    const sent = draft;
+    const sent = { ...draft, effort: shownEffort };
     try {
       // A picture the person chose must be drawn to be sent; if it can't be, nothing is created.
       const avatar = sent.picture
@@ -458,15 +482,13 @@ export function NewBot({
             <ModelPair
               accounts={accounts}
               provider={provider}
+              anyAccount={draft.account === GATEWAY_CHOICE}
               model={draft.model}
-              effort={draft.effort}
+              list={list}
+              effort={shownEffort}
               disabled={!admin}
-              onModel={(model) =>
-                setDraft((was) => ({
-                  ...was,
-                  model,
-                  effort: firstEffort(accounts, provider, model, was.effort),
-                }))
+              onModel={(model, row) =>
+                setDraft((was) => ({ ...was, model, effort: effortFor(row, was.effort) }))
               }
               onEffort={(effort) => setDraft((was) => ({ ...was, effort }))}
             />

@@ -2,10 +2,12 @@
 // does and the line it prints, the constants it writes for the update engine,
 // and the feed it writes for its artifacts. Every value here is made up.
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { artifactName, makeFeed } from "../packaging/feed.ts";
 import {
@@ -15,7 +17,12 @@ import {
   signingProblems,
   signingSummary,
 } from "../packaging/signing.ts";
-import { releaseDate, updateDefines } from "../packaging/update-defines.ts";
+import {
+  checkoutCommit,
+  releaseDate,
+  updateDefines,
+  withCommit,
+} from "../packaging/update-defines.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
 
 const APP = join(import.meta.dirname, "..");
@@ -217,7 +224,52 @@ describe("the constants the build writes for the update engine", () => {
       __CLAWTRATE_UPDATE_FEED__: "null",
       __CLAWTRATE_NIGHTLY_UPDATE_FEED__: "null",
       __CLAWTRATE_RELEASE_DATE__: JSON.stringify("2026-11-19T12:00:00.000Z"),
+      __CLAWTRATE_COMMIT__: "null",
     });
+  });
+
+  it("F-561: carries the build's commit for support, and only a full one", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    expect(updateDefines({ CLAWTRATE_COMMIT: commit }, now).__CLAWTRATE_COMMIT__).toBe(
+      JSON.stringify(commit),
+    );
+    for (const bad of ["", "0123456", "main", `${commit}0`])
+      expect(updateDefines({ CLAWTRATE_COMMIT: bad }, now).__CLAWTRATE_COMMIT__).toBe("null");
+    // A full commit written in capitals is the same commit.
+    expect(
+      updateDefines({ CLAWTRATE_COMMIT: commit.toUpperCase() }, now).__CLAWTRATE_COMMIT__,
+    ).toBe(JSON.stringify(commit));
+  });
+
+  it("F-561: an empty or unusable CLAWTRATE_COMMIT never hides the checkout's commit", () => {
+    const head = checkoutCommit(APP)!;
+    expect(head).toMatch(/^[0-9a-f]{40}$/);
+    for (const unusable of [undefined, "", "  ", "main", "0123456"])
+      expect(withCommit({ CLAWTRATE_COMMIT: unusable }, APP).CLAWTRATE_COMMIT).toBe(head);
+    const named = "0123456789abcdef0123456789abcdef01234567";
+    expect(withCommit({ CLAWTRATE_COMMIT: named.toUpperCase() }, APP).CLAWTRATE_COMMIT).toBe(named);
+    // Outside a checkout there is none, and git's complaint stays out of the build's output.
+    const outside = mkdtempSync(join(tmpdir(), "clawtrate-no-checkout-"));
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { checkoutCommit } from ${JSON.stringify(pathToFileURL(join(APP, "packaging/update-defines.ts")).href)};` +
+            `console.log(String(checkoutCommit(${JSON.stringify(outside)})));`,
+        ],
+        {
+          cwd: outside,
+          encoding: "utf8",
+          env: { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() },
+        },
+      );
+      expect(run.stdout.trim()).toBe("undefined");
+      expect(run.stderr).not.toMatch(/git repository/i);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("records signing requests separately for each platform", () => {
@@ -276,7 +328,9 @@ describe("the constants the build writes for the update engine", () => {
 
   it("electron-vite writes them into the main process's bundle only", () => {
     const config = readFileSync(join(APP, "electron.vite.config.ts"), "utf8");
-    expect(config).toContain("define: updateDefines(process.env, new Date()),");
+    expect(config).toContain("define: updateDefines(buildEnv, new Date()),");
+    // F-561: the build's environment, with this checkout's commit unless the build names one.
+    expect(config).toContain("const buildEnv = withCommit(process.env, process.cwd());");
     expect(config.indexOf("define:")).toBeLessThan(config.indexOf("preload:"));
   });
 });

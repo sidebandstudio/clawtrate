@@ -21,6 +21,12 @@ export const MAX_SIGNIN_METHODS = 32;
 export const MAX_KEY_PROVIDERS = 64;
 /** Models in the gateway's catalogue. */
 export const MAX_CATALOG_MODELS = 128;
+/**
+ * Models of one provider in its full list (`view: "all"`), as kept. The gateway
+ * sends the whole list in one answer, with no pages; a longer list is kept to
+ * this many and says how many it had (`ModelList.total`).
+ */
+export const MAX_PROVIDER_MODELS = 1024;
 /** Effort levels per model. */
 export const MAX_EFFORT_LEVELS = 12;
 /** Accounts a stored order lists, as kept. */
@@ -160,6 +166,36 @@ export type CatalogModel = {
   levels: string[];
   defaultLevel: string | null;
 };
+
+/**
+ * One provider's full list (`models.list {view: "all", provider}`), the answer to one
+ * "View more" (bots.md section 9). It is given to the screen that asked and kept nowhere.
+ */
+export type ModelList =
+  | {
+      status: "ready";
+      /**
+       * Up to `MAX_PROVIDER_MODELS`, in the gateway's order but with the ones the picker
+       * doesn't have first, so a list cut short keeps the rows the menu adds; only what the
+       * menu uses of each.
+       */
+      models: ListedModel[];
+      /** How many the gateway listed, which can be more than are given. */
+      total: number;
+      /**
+       * The gateway answered while still finding this provider's models
+       * (`pendingProviders`) or after a refresh that failed (`refreshFailed`).
+       */
+      partial: boolean;
+    }
+  /** `unsupported`: the gateway refused `view: "all"`. */
+  | { status: "unsupported" | "error"; error: string };
+
+/** A row of a full list: only what the Model menu uses of it. */
+export type ListedModel = Pick<CatalogModel, "id" | "levels" | "defaultLevel">;
+
+/** A provider whose rows the picker kept fewer of than the gateway listed. */
+export type PickerCut = { provider: string; total: number };
 
 /** The order the gateway keeps for a bot and the provider of its model. */
 export type StoredOrder = {
@@ -365,6 +401,8 @@ export type AccountsState = {
   methods: SignInMethod[];
   keyProviders: KeyProvider[];
   models: CatalogModel[];
+  /** Providers whose picker rows were cut at `MAX_CATALOG_MODELS`, with how many it listed. */
+  modelsCut: PickerCut[];
   bindings: BotBinding[];
   signIn: SignInState | null;
   creation: BotCreationState | null;
@@ -382,6 +420,7 @@ export const initialAccountsState: AccountsState = {
   methods: [],
   keyProviders: [],
   models: [],
+  modelsCut: [],
   bindings: [],
   signIn: null,
   creation: null,
@@ -651,6 +690,45 @@ export function readKeyProviders(view: BotView | undefined): KeyProvider[] {
 }
 
 export function readCatalog(answer: unknown): CatalogModel[] {
+  return modelRows(answer).slice(0, MAX_CATALOG_MODELS);
+}
+
+/** The providers whose picker rows `readCatalog` cut, with how many the gateway listed. */
+export function readPickerCuts(answer: unknown): PickerCut[] {
+  const rows = modelRows(answer);
+  const out: PickerCut[] = [];
+  for (const { provider } of rows.slice(MAX_CATALOG_MODELS)) {
+    if (out.length >= MAX_KEY_PROVIDERS || out.some((cut) => cut.provider === provider)) continue;
+    out.push({ provider, total: rows.filter((row) => row.provider === provider).length });
+  }
+  return out;
+}
+
+/** One provider's full list: its rows in the gateway's order, as kept, and how many it had. */
+export function readProviderCatalog(
+  answer: unknown,
+  provider: string,
+  /** The ids the picker already has: their rows go after the others. */
+  known: ReadonlySet<string> = new Set(),
+): { models: ListedModel[]; total: number; partial: boolean } {
+  const record = asRecord(answer);
+  const all = modelRows(answer).filter((row) => row.provider === provider);
+  const rows = [
+    ...all.filter((row) => !known.has(row.id)),
+    ...all.filter((row) => known.has(row.id)),
+  ].map(({ id, levels, defaultLevel }) => ({ id, levels, defaultLevel }));
+  const pending = Array.isArray(record?.pendingProviders)
+    ? record.pendingProviders.includes(provider)
+    : false;
+  return {
+    models: rows.slice(0, MAX_PROVIDER_MODELS),
+    total: rows.length,
+    partial: pending || record?.refreshFailed === true,
+  };
+}
+
+/** Every model row of a `models.list` answer, in its order. */
+function modelRows(answer: unknown): CatalogModel[] {
   const record = asRecord(answer);
   const models = Array.isArray(record?.models) ? record.models : [];
   const out: CatalogModel[] = [];
@@ -658,7 +736,7 @@ export function readCatalog(answer: unknown): CatalogModel[] {
     const model = asRecord(raw);
     const id = str(model?.id);
     const provider = str(model?.provider);
-    if (!model || !id || !provider || out.length >= MAX_CATALOG_MODELS) continue;
+    if (!model || !id || !provider) continue;
     const levels = (Array.isArray(model.thinkingLevels) ? model.thinkingLevels : [])
       .map((level) => str(asRecord(level)?.id) ?? str(level))
       .filter((level): level is string => level !== null)

@@ -33,6 +33,7 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
+import type { ModelList } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -5976,6 +5977,11 @@ export class ClawtrateClient {
   refreshAccounts(): Promise<void> {
     if (this.state.connection.status !== "connected") return Promise.resolve();
     return this.accounts.load();
+  }
+
+  /** Read one provider's full list for "View more"; the answer is kept nowhere. */
+  loadModelCatalog(provider: string): Promise<ModelList> {
+    return this.accounts.readModelList(provider);
   }
 
   /** Read one bot's stored order and model again: the lock's evidence. */
