@@ -677,11 +677,13 @@ type ConnectionWrites = {
   grants: Map<string, { full: boolean; held: number } | null>;
   /** Bumped by every write or removal of the saved settings record, by any client on the store. */
   settingsRevision: number;
+  /** Numbered choices made on this store (Connect, setup, Reconnect, real Forget), newest last. */
+  choices: number;
   /**
-   * The gateway a client on the store last chose, by a Connect, a setup's save or a Reconnect
-   * that saved it over another, and the settings revision of that write.
+   * The choice number of the latest committed choice (a Connect, a setup's save, a Reconnect, or
+   * a Forget that removed a saved record). An older setup steps aside once a newer choice commits.
    */
-  chosen: { url: string; revision: number } | null;
+  chosen: number;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
 
@@ -1243,8 +1245,8 @@ export class ClawtrateClient {
    * since (`recordSeen`).
    */
   private seenRevision: number | null = null;
-  /** A setup's gateway and the settings revision when the person chose it. */
-  private setupChosen: { url: string; revision: number } | null = null;
+  /** A setup's gateway and the choice number from when the person chose it. */
+  private setupChosen: { url: string; choice: number } | null = null;
   /**
    * While `start` reads the saved settings. A Disconnect, Suspend or Retry sent meanwhile waits
    * for `read`, settled once they are in `settings` or with the error that stopped the read, so
@@ -1582,7 +1584,8 @@ export class ClawtrateClient {
       rotations: new Map(),
       grants: new Map(),
       settingsRevision: 0,
-      chosen: null,
+      choices: 0,
+      chosen: 0,
     };
     connectionWrites.set(host.storage, this.writes);
     this.options = options;
@@ -1619,10 +1622,13 @@ export class ClawtrateClient {
     this.settings = settings;
   }
 
-  /** Saved as the gateway this client chose: a setup chosen before it for another gateway steps aside. */
-  private async saveChoice(settings: ConnectionSettings): Promise<void> {
+  /** Saved as a choice the person made: any setup chosen before `choice` steps aside. */
+  private async saveChoice(
+    settings: ConnectionSettings,
+    choice: number = ++this.writes.choices,
+  ): Promise<void> {
     await this.saveSettings(settings);
-    this.writes.chosen = { url: settings.url, revision: this.writes.settingsRevision };
+    if (choice > this.writes.chosen) this.writes.chosen = choice;
   }
 
   /** The saved record alone; this client's settings stay as they are. */
@@ -1646,18 +1652,14 @@ export class ClawtrateClient {
   }
 
   /**
-   * Whether a setup for `url` may save it: no client on this store chose another gateway since
-   * the person chose this one. Other writes, such as a token clear, a suspension or a Back that
-   * forgot a gateway, are no choice, and the setup still saves. Decided without reading the
-   * store, so nothing runs between a save's check that its socket is live and its write.
+   * The choice number a setup for `url` may save under, or null once a newer choice committed on
+   * this store (including a Connect to the same URL or a real Forget). Non-choices — a token
+   * clear, a suspension, or Back from an empty store — leave `chosen` alone. Decided without
+   * reading the store, so nothing runs between a save's check that its socket is live and its write.
    */
-  private setupMaySave(url: string): boolean {
+  private setupMaySave(url: string): number | null {
     const chosen = this.setupChosen;
-    const latest = this.writes.chosen;
-    return (
-      chosen?.url === url &&
-      (latest === null || latest.revision <= chosen.revision || latest.url === url)
-    );
+    return chosen?.url === url && chosen.choice >= this.writes.chosen ? chosen.choice : null;
   }
 
   /**
@@ -1858,7 +1860,7 @@ export class ClawtrateClient {
       this.typedAttempt = null;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
       this.settings = setupSettings(url, setup);
-      this.setupChosen = { url, revision: this.writes.settingsRevision };
+      this.setupChosen = { url, choice: ++this.writes.choices };
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = { url, reuse: false };
@@ -1889,7 +1891,7 @@ export class ClawtrateClient {
       if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
       this.settings = setupSettings(target, setup);
-      this.setupChosen = { url: target, revision: this.writes.settingsRevision };
+      this.setupChosen = { url: target, choice: ++this.writes.choices };
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(target, setup);
       this.setupIntent = { url: target, reuse: true };
@@ -1959,7 +1961,11 @@ export class ClawtrateClient {
       // since is that client's, and stays, even for this gateway.
       const saved = await this.readSavedSettings(stops);
       if (!this.settings || stops !== this.stops) return;
-      if (saved === null || this.recordSeen()) await this.forgetRecord();
+      if (saved === null || this.recordSeen()) {
+        await this.forgetRecord();
+        // A real deletion (not Back on an empty store) is a choice that blocks older setup saves.
+        if (saved !== null) this.writes.chosen = ++this.writes.choices;
+      }
       this.connectionCommands += 1;
       this.selectionApplied = asked;
       this.abandonAccessRequest("Disconnected from the gateway.");
@@ -2007,7 +2013,7 @@ export class ClawtrateClient {
         const saved = await this.readSavedSettings(stops);
         if (!this.settings || stops !== this.stops) return;
         if (saved?.url === this.settings.url) {
-          await this.saveSettings({ ...saved, suspended: false });
+          await this.saveChoice({ ...saved, suspended: false });
         } else if (this.recordSeen()) {
           await this.saveChoice({ ...this.settings, suspended: false });
         } else {
@@ -7023,8 +7029,9 @@ export class ClawtrateClient {
           await this.changeConnection(async () => {
             const current = this.settings;
             if (!live() || generation !== this.generation || current?.url !== settings.url) return;
-            if (!this.setupMaySave(settings.url)) return;
-            await this.saveChoice(current);
+            const choice = this.setupMaySave(settings.url);
+            if (choice === null) return;
+            await this.saveChoice(current, choice);
           });
           return;
         }
@@ -7040,8 +7047,9 @@ export class ClawtrateClient {
               this.close();
               return;
             }
-            if (!this.setupMaySave(settings.url)) return;
-            await this.saveChoice(current);
+            const choice = this.setupMaySave(settings.url);
+            if (choice === null) return;
+            await this.saveChoice(current, choice);
             return;
           }
           if (!current.token) return;

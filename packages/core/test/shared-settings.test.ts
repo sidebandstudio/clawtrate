@@ -1146,4 +1146,132 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("a setup for C saves C even when an older paused setup for B finishes first", async () => {
+    const storage = memoryStorage();
+    const setupAt = (target: string, issued: string) => {
+      const gateway = new FakeGateway();
+      gateway.connectReply = (params, url) => {
+        const { auth } = params as ConnectParams & { auth?: { bootstrapToken?: string } };
+        if (url === target && auth?.bootstrapToken)
+          return {
+            ok: true,
+            payload: {
+              ...helloOk(),
+              auth: { role: "operator", scopes: ["operator.read"], deviceToken: issued },
+            },
+          };
+        return { ok: true, payload: helloOk() };
+      };
+      return gateway;
+    };
+    const gatewayB = setupAt(URL_B, "token-B");
+    const gatewayC = setupAt(URL_C, "token-C");
+    const client = new ClawtrateClient(testHost(gatewayB, storage), FAST);
+    const other = new ClawtrateClient(testHost(gatewayC, storage), FAST);
+    const holdB = holdRead(storage, tokenKey(URL_B), () => gatewayB.connects.length > 0);
+    const holdC = holdRead(storage, tokenKey(URL_C), () => gatewayC.connects.length > 0);
+    try {
+      await client.start({ resume: false });
+      await other.start({ resume: false });
+      await client.connectWithSetupCode(setupCode);
+      await until(holdB.waiting);
+      await other.connectWithSetupCode({ ...setupCode, url: URL_C });
+      await until(holdC.waiting);
+      // The older setup for B finishes before the newer choice C.
+      holdB.release();
+      await until(() => client.state.connection.status === "connected");
+      await until(() => storage.data.has(tokenKey(URL_B)));
+      holdC.release();
+      await until(() => other.state.connection.status === "connected");
+      await until(() => storage.data.has(tokenKey(URL_C)));
+      await sleep(30);
+      expect(saved(storage)).toEqual({ url: URL_C, token: null });
+      const restarted = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+      try {
+        await restarted.start({ resume: "disconnected" });
+        expect(restarted.state.connection.gatewayUrl).toBe(URL_C);
+      } finally {
+        restarted.stop();
+      }
+    } finally {
+      holdB.release();
+      holdC.release();
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("a setup reuse of A does not save A again after another client forgot A", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: readToken("token-A"),
+    });
+    const gateway = pairingGateway("token-A");
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const other = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
+    try {
+      await client.start();
+      await other.start();
+      await until(() => client.state.connection.status === "connected");
+      await until(() => other.state.connection.status === "connected");
+      const before = gateway.connects.length;
+      const hold = holdRead(storage, tokenKey(URL_A), () => gateway.connects.length > before);
+      await client.connectForSetup(URL_A);
+      await until(hold.waiting);
+      // Another client forgets A, emptying the store, before the older reuse finishes saving.
+      await other.disconnect(URL_A);
+      expect(saved(storage)).toBeNull();
+      hold.release();
+      await until(() => client.state.connection.status === "connected");
+      await sleep(30);
+      expect(saved(storage)).toBeNull();
+      const restarted = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+      try {
+        await restarted.start({ resume: "disconnected" });
+        expect(restarted.state.connection.gatewayUrl).toBeNull();
+      } finally {
+        restarted.stop();
+      }
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("a setup for B does not overwrite a later Connect to B's gateway token with null", async () => {
+    const storage = memoryStorage();
+    const afterToken = deferred<void>();
+    let tokenWritten = false;
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      await set(key, value);
+      if (!tokenWritten && key === tokenKey(URL_B)) {
+        tokenWritten = true;
+        await afterToken.promise;
+      }
+    };
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const client = new ClawtrateClient(testHost(setupGateway(), storage), FAST);
+    const other = new ClawtrateClient(testHost(closed, storage), FAST);
+    try {
+      await client.start({ resume: false });
+      await other.start({ resume: false });
+      await client.connectWithSetupCode(setupCode);
+      await until(() => tokenWritten);
+      // Queued while the older setup holds the write queue after writing its device token.
+      const connecting = other.connect({ url: URL_B, token: "typed-B" });
+      await sleep(10);
+      afterToken.resolve();
+      await connecting;
+      await until(() => client.state.connection.status === "connected");
+      await sleep(30);
+      expect(saved(storage)).toEqual({ url: URL_B, token: "typed-B" });
+    } finally {
+      afterToken.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
 });
