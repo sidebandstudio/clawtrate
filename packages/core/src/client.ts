@@ -5673,6 +5673,8 @@ export class ClawtrateClient {
     for (const bot of this.state.bots) if (!present.has(bot.id)) removed.add(bot.id);
     this.store.update((state) => ({ ...state, bots }));
     if (removed.size === 0) return;
+    // A task read already out can still list the removed bots' tasks: read them once more after it.
+    if (this.refreshing) this.refreshAgain = true;
     let pruned = false;
     for (const [key, row] of [...this.rows]) {
       const botId =
@@ -7584,11 +7586,7 @@ export class ClawtrateClient {
     if (!current()) return;
 
     const failures: string[] = [];
-    if (agents.status !== "fulfilled") {
-      failures.push(`bots: ${errorMessage(agents.reason)}`);
-    } else if (read.botsChanged) {
-      void this.refreshBotsOnChange(generation);
-    }
+    if (agents.status !== "fulfilled") failures.push(`bots: ${errorMessage(agents.reason)}`);
     if (sessions.status === "fulfilled") {
       this.replaceRows(sessions.value.rows);
       if (read.sessionsChanged) await this.refreshSessions(generation);
@@ -7609,6 +7607,9 @@ export class ClawtrateClient {
     // reconnect included, asks for read alone; Back or another gateway ends it.
     if (!current()) return;
     this.discoveryRead = null;
+    // After the last wait above, so a change reported during the task catch-up is read too.
+    if (agents.status === "fulfilled" && read.botsChanged)
+      void this.refreshBotsOnChange(generation);
     const setup = this.isSetup(this.settings?.url);
     if (setup && failures.length === 0) this.setupIntent = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:

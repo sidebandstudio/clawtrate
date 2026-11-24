@@ -92,6 +92,73 @@ describe("the bot list follows gateway config changes", () => {
     }
   });
 
+  it("F-558: a config.changed while the connection catches up on its tasks still reads the bots again", async () => {
+    let agents: Array<Record<string, unknown>> = [{ id: "main", identity: { name: "Juniper" } }];
+    const gateway = new FakeGateway();
+    gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents });
+    let subscribed: (() => void) | null = null;
+    gateway.handlers["sessions.subscribe"] = () =>
+      new Promise((resolve) => {
+        subscribed = () => resolve({ subscribed: true, list: { sessions: [], hasMore: false } });
+      });
+    let listed: (() => void) | null = null;
+    gateway.handlers["sessions.list"] = () =>
+      new Promise((resolve) => {
+        listed = () => resolve({ sessions: [], hasMore: false });
+      });
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    try {
+      await client.connect({ url: URL_A, token: "t" });
+      await until(() => subscribed !== null);
+      // A task change during the first read makes the connection read its tasks again before it is ready.
+      gateway.emit("sessions.changed", {});
+      subscribed!();
+      await until(() => listed !== null);
+      agents = [...agents, { id: "pip", identity: { name: "Pip" } }];
+      gateway.emit("config.changed", { hash: "h1", ts: 1 });
+      listed!();
+      await until(() => client.state.bots.some((bot) => bot.id === "pip"));
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-558: a task read already out when a bot is deleted doesn't bring its tasks back", async () => {
+    let agents: Array<Record<string, unknown>> = [
+      { id: "main", identity: { name: "Juniper" } },
+      { id: "otto", identity: { name: "Otto" } },
+    ];
+    const both = [
+      { key: "agent:main:main", agentId: "main", updatedAt: 10 },
+      { key: "agent:otto:main", agentId: "otto", updatedAt: 20 },
+    ];
+    const gateway = new FakeGateway();
+    gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: both, hasMore: false },
+    });
+    const client = await connect(gateway);
+    const answers: Array<(value: unknown) => void> = [];
+    gateway.handlers["sessions.list"] = () => new Promise((resolve) => answers.push(resolve));
+    try {
+      expect(Object.keys(client.state.tasksByBot).sort()).toEqual(["main", "otto"]);
+      gateway.emit("sessions.changed", {});
+      await until(() => answers.length === 1);
+      // Otto is deleted while that read is out; the gateway removes its tasks with it.
+      agents = [{ id: "main", identity: { name: "Juniper" } }];
+      gateway.emit("config.changed", { hash: "h1", ts: 1 });
+      await until(() => !("otto" in client.state.tasksByBot));
+      answers[0]!({ sessions: both, hasMore: false });
+      await until(() => answers.length === 2);
+      answers[1]!({ sessions: both.slice(0, 1), hasMore: false });
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(Object.keys(client.state.tasksByBot)).toEqual(["main"]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-558: coalesces bursts of config.changed into at most one read in flight plus one queued, and drops stale reads after reconnect", async () => {
     const gateway = new FakeGateway();
     const client = await connect(gateway);

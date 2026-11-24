@@ -99,6 +99,35 @@ test.describe("1440", () => {
     expect(await sent(page)).toContain("readBotRoutines");
   });
 
+  test("F-558: a filtered bot deleted elsewhere keeps the filter while its own read can still list its routines", async ({
+    page,
+  }) => {
+    // Quartermaster's one routine is beyond the capped list: only its own read lists it.
+    await open(page, "scene=main&routines=truncated&routinehold=quartermaster");
+    await view(page)
+      .getByRole("combobox", { name: "Bots" })
+      .selectOption({ label: "Quartermaster of the Family Calendar and Errands" });
+    await expect(view(page).getByLabel("Loading routines")).toBeVisible();
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            setState(f: (s: { bots: Array<{ id: string }> }) => unknown): void;
+          };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        bots: state.bots.filter((bot) => bot.id !== "quartermaster"),
+      })),
+    );
+    await expect(view(page).getByLabel("Loading routines")).toBeVisible();
+    await page.evaluate(() =>
+      (window as unknown as { releaseRoutineReads(): void }).releaseRoutineReads(),
+    );
+    await expect(view(page).getByTestId("routine-row")).toHaveCount(1);
+    await expect(view(page).getByTestId("routine-row")).toContainText("Stores count");
+  });
+
   test("F-191: the bot filter confirms completeness only after a successful complete read", async ({
     page,
   }) => {
