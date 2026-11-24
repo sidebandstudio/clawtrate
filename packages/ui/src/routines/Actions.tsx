@@ -23,6 +23,7 @@ import { ChevronIcon } from "../icons.tsx";
 import { type MenuEntry } from "../Menu.tsx";
 import { screenStamp, type ShownStamp } from "../stamp.ts";
 import { draftOf } from "./draft.ts";
+import { notSentDelete, notSentNote } from "./refusals.ts";
 import { viewerZone, when, zoneCity } from "./schedule.ts";
 
 export function canAdmin(connection: ConnectionState, info: HostInfo): boolean {
@@ -107,9 +108,7 @@ export function useRoutineActions(
                 : result.status === "deleted"
                   ? "it was deleted."
                   : result.status === "not-sent"
-                    ? result.reason === "changed"
-                      ? "the connection changed since this was opened, so nothing was sent."
-                      : "nothing was sent."
+                    ? notSentNote(result.reason)
                     : "it changed meanwhile."
             }`,
           );
@@ -150,9 +149,7 @@ export function useRoutineActions(
               status: "failed",
               error:
                 result.status === "not-sent"
-                  ? result.reason === "changed"
-                    ? "the connection changed since this was opened, so nothing was sent."
-                    : "nothing was sent."
+                  ? notSentNote(result.reason)
                   : result.status === "unknown"
                     ? `the gateway didn't answer (${result.error}).`
                     : result.error,
@@ -321,13 +318,7 @@ export function DeleteRoutine({
       });
       if (result.status === "removed") return onDeleted();
       if (result.status === "unknown") return setStatus("unknown");
-      setError(
-        result.status === "not-sent"
-          ? result.reason === "changed"
-            ? "The connection changed since this was opened, so nothing was sent."
-            : "Nothing was sent: this connection can't change routines."
-          : result.error,
-      );
+      setError(result.status === "not-sent" ? notSentDelete(result.reason) : result.error);
       setStatus("idle");
     } catch {
       setStatus("unknown");

@@ -1131,6 +1131,13 @@ export function accountCommand(
       }));
       return Promise.resolve();
     case "disconnectAccount":
+      // As the host does: a confirmation from before the target moved removes nothing.
+      if (command.stamp.target !== get().connection.target)
+        return Promise.reject(
+          new Error(
+            "The connection changed since this screen was read, so nothing was sent. Look again, then try again.",
+          ),
+        );
       put((a) => ({
         ...a,
         accounts: a.accounts.filter((x) => x.id !== command.profileId),

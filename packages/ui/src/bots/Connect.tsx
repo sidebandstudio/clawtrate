@@ -124,6 +124,8 @@ export function useConnect({
   const keyRef = useRef<HTMLInputElement>(null);
   const pasteRef = useRef<HTMLInputElement>(null);
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
+  // Why the last Disconnect of a sign-in's account was refused, said under it.
+  const [dropError, setDropError] = useState<string | null>(null);
 
   // A sign-in that finished moves on to its label; one that found no new account says so.
   const stage = signIn?.stage ?? null;
@@ -1048,6 +1050,15 @@ export function useConnect({
     );
   }
 
+  if (dropError && !confirmDrop)
+    body = (
+      <>
+        {body}
+        <p className="b-field-error" role="alert" data-testid="drop-error">
+          {dropError}
+        </p>
+      </>
+    );
   if (confirmDrop) {
     body = (
       <>
@@ -1075,9 +1086,12 @@ export function useConnect({
               onClick={() => {
                 const id = confirmDrop;
                 setConfirmDrop(null);
+                setDropError(null);
                 void screenStamp(bridge, openedOn)
                   .then((stamp) => bridge.send({ type: "disconnectAccount", profileId: id, stamp }))
-                  .catch(() => {});
+                  .catch((error: unknown) =>
+                    setDropError(error instanceof Error ? error.message : String(error)),
+                  );
               }}
             >
               Disconnect

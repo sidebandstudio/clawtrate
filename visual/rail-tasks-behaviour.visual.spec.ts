@@ -214,8 +214,11 @@ test("F-278: a confirmed delete of an archived task removes its row and its menu
   const archived = page.getByRole("list", { name: "Otto's archived tasks" });
   await expect(archived.getByTestId("archived-task")).toHaveCount(2);
   await archived.getByTestId("archived-task").filter({ hasText: "Old printer driver" }).click();
+  // The host is pointed at a gateway anew while the menu is open: its Delete keeps the menu's stamp.
+  const before = await moveTarget(page);
   await page.getByRole("menuitem", { name: "Delete…" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => sentStamp(page, "deleteTask")).toEqual(before);
   await expect(
     archived.getByTestId("archived-task").filter({ hasText: "Old printer driver" }),
   ).toHaveCount(0);

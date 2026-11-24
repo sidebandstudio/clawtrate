@@ -615,6 +615,10 @@ test("#450: disconnecting the account a failed sign-in left sends the stamp Conn
   const before = await moveTarget(page);
   await newBot(page).getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect.poll(() => sentStamp(page, "disconnectAccount")).toEqual(before);
+  // Refused, as the host refuses a confirmation from before the target moved: the screen says so.
+  await expect(page.getByTestId("drop-error")).toHaveText(
+    "The connection changed since this screen was read, so nothing was sent. Look again, then try again.",
+  );
 });
 
 test("F-476: Disconnect asks first, with focus on Cancel; Escape closes the confirmation alone", async ({

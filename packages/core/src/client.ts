@@ -387,6 +387,13 @@ const IDENTITY_RETRY_MS = 500;
 /** Why a write stamped on an earlier connection target is not sent (`requireSameGateway`). */
 export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
+/** Why a write that had already sent part of itself stopped: what the gateway did is not known. */
+export const CONNECTION_CHANGED_AFTER_SEND =
+  "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
+
+/** What a task action asks that changes nothing: the rest of its requests are writes. */
+const taskRead = (method: string) =>
+  method === "sessions.describe" || method === "sessions.list" || method === "users.prefs.get";
 
 /** Disconnect refused because another gateway is selected now: the one asked for is no longer there. */
 export class GatewayChangedError extends Error {
@@ -6070,8 +6077,13 @@ export class ClawtrateClient {
     if (stamp === undefined)
       return this.accounts.changeAccount(botId, account, provider, model, effort);
     await this.requireSameGateway(stamp);
-    return this.accounts.changeAccount(botId, account, provider, model, effort, () =>
-      this.requireSameTarget(stamp),
+    return this.accounts.changeAccount(
+      botId,
+      account,
+      provider,
+      model,
+      effort,
+      this.sameConnection(stamp),
     );
   }
 
@@ -6084,14 +6096,14 @@ export class ClawtrateClient {
   ): Promise<void> {
     if (stamp === undefined) return this.accounts.setModel(botId, model, effort);
     await this.requireSameGateway(stamp);
-    return this.accounts.setModel(botId, model, effort, () => this.requireSameTarget(stamp));
+    return this.accounts.setModel(botId, model, effort, this.sameConnection(stamp));
   }
 
   /** With `stamp`, as for `changeBotAccount`. */
   async removeBotFallbacks(botId: string, stamp?: GatewayStamp): Promise<void> {
     if (stamp === undefined) return this.accounts.removeFallbacks(botId);
     await this.requireSameGateway(stamp);
-    return this.accounts.removeFallbacks(botId, () => this.requireSameTarget(stamp));
+    return this.accounts.removeFallbacks(botId, this.sameConnection(stamp));
   }
 
   /**
@@ -6116,6 +6128,19 @@ export class ClawtrateClient {
   ): Promise<{ confirmed: boolean }> {
     if (stamp === undefined) return this.accounts.setBotPicture(botId, avatar);
     return this.accounts.setBotPicture(botId, avatar, await this.requireSameGateway(stamp));
+  }
+
+  /**
+   * A setting's later steps, after `requireSameGateway`: each is sent only on the connection that
+   * guard read, while the host keeps the stamp's target. Once a write has gone, the refusal says
+   * the change is unconfirmed, not unsent.
+   */
+  private sameConnection(stamp: GatewayStamp): (sent: boolean) => void {
+    const epoch = this.epoch;
+    return (sent) => {
+      if (this.target !== stamp.target || this.epoch !== epoch)
+        throw new Error(sent ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED);
+    };
   }
 
   /** Refuse a write whose screen was read before the host was last pointed at a gateway anew. */
@@ -9379,11 +9404,20 @@ export class ClawtrateClient {
    */
   private actionContext(owner: object | null): TaskActionContext & SidebarContext {
     const generation = this.generation;
+    // The connection the action's first request went on, and whether it has sent a write yet.
+    let epoch: number | null = null;
+    let wrote = false;
     return {
       request: async (method, params) => {
         this.checkNotWithdrawn(owner);
-        // Every close moves this on, so a later step of an action never reaches the next connection.
+        // A Disconnect, a Connect or a switch closes the connection, and moves this on.
         if (generation !== this.generation) throw new Error("Switched to another gateway.");
+        // A dropped connection and its reconnect don't, and another gateway can answer that
+        // reconnect at the same address: a later step never goes on another connection.
+        if (epoch !== null && epoch !== this.epoch)
+          throw new Error(wrote ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED);
+        epoch = this.epoch;
+        if (!taskRead(method)) wrote = true;
         try {
           return await this.request(method, params);
         } catch (error) {
@@ -9491,10 +9525,13 @@ export class ClawtrateClient {
     key: string,
     options: { stop?: boolean; owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<ArchiveResult> {
-    if (options.stamp) await this.requireSameGateway(options.stamp);
-    return archiveTask(this.actionContext(options.owner ?? null), key, {
-      stop: options.stop === true,
-    });
+    const ctx = this.actionContext(options.owner ?? null);
+    // Write access first: asking for it can reconnect, and the guard reads the connection it ends on.
+    if (options.stamp) {
+      await ctx.ensureWrite();
+      await this.requireSameGateway(options.stamp);
+    }
+    return archiveTask(ctx, key, { stop: options.stop === true });
   }
 
   async restoreTask(key: string, options: { owner?: object } = {}): Promise<void> {
@@ -9506,8 +9543,12 @@ export class ClawtrateClient {
     key: string,
     options: { owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<void> {
-    if (options.stamp) await this.requireSameGateway(options.stamp);
-    await deleteTask(this.actionContext(options.owner ?? null), key);
+    const ctx = this.actionContext(options.owner ?? null);
+    if (options.stamp) {
+      await ctx.ensureWrite();
+      await this.requireSameGateway(options.stamp);
+    }
+    await deleteTask(ctx, key);
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */

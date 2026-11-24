@@ -6,7 +6,12 @@
 
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
-import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  CONNECTION_CHANGED,
+  CONNECTION_CHANGED_AFTER_SEND,
+} from "../src/client.ts";
+import type { AccountsEngine } from "../src/accounts-engine.ts";
 import { pictureWithChoice } from "../src/avatar.ts";
 import { ADMIN_SCOPES, FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { gatewayStamp, type GatewayStamp } from "../src/types.ts";
@@ -791,6 +796,104 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
+  // A dropped connection and its reconnect keep the target; another gateway can answer that
+  // reconnect at the same address. A later step of a write never goes on the new connection.
+  /** A, on `when`, drops and comes back as gateway-x at the same address. */
+  const replaceOn = (a: AccountsGateway, method: string, when: () => boolean = () => true) => {
+    const answer = a.gateway.handlers[method]!;
+    let replaced = false;
+    a.gateway.handlers[method] = async (params) => {
+      const value = await answer(params);
+      if (!replaced && when()) {
+        replaced = true;
+        a.identity = "gateway-x";
+        setTimeout(() => a.gateway.dropAll(), 0);
+      }
+      return value;
+    };
+    return () => replaced;
+  };
+
+  for (const type of ["archiveTask", "deleteTask"] as const)
+    it(`Tasks: a ${type === "archiveTask" ? "Stop and archive" : "delete of a working task"} whose connection drops mid-way, with another gateway answering at the same address, sends nothing more there`, async () => {
+      const { client, a } = await twoGateways();
+      tasks(a);
+      a.gateway.handlers["sessions.describe"] = () => ({
+        session: { key: KEY, sessionId: "s-logs", status: "running", archived: false },
+      });
+      a.gateway.handlers["chat.abort"] = () => ({ ok: true });
+      const replaced = replaceOn(a, "chat.abort");
+      const target = client.state.connection.target;
+      const pending = createBridgeSession(client)
+        .apply({
+          type,
+          key: KEY,
+          ...(type === "archiveTask" ? { stop: true } : {}),
+          stamp: gatewayStamp(client.state.connection),
+        } as Parameters<ReturnType<typeof createBridgeSession>["apply"]>[0])
+        .then(
+          () => "done",
+          (error: Error) => error.message,
+        );
+      await until(() => replaced() && client.state.connection.gatewayId === "gateway-x", 6_000);
+      expect(client.state.connection.target).toBe(target);
+      // The stop had gone: what became of the task isn't known, and the screen says so.
+      expect(await pending).toBe(CONNECTION_CHANGED_AFTER_SEND);
+      expect(sentOf(a, TASK_WRITES)).toEqual([]);
+      client.stop();
+    });
+
+  it("A bot's account: a change whose connection drops after its patch, with another gateway answering at the same address, records nothing there", async () => {
+    const { client, a } = await twoGateways();
+    // A takes the patch but is slow to apply it, then drops and comes back as another gateway.
+    const get = a.gateway.handlers["config.get"]!;
+    a.gateway.handlers["config.get"] = async (params) => {
+      const config = (await get(params)) as Record<string, unknown>;
+      return a.gateway.calls("config.patch").length === 0
+        ? config
+        : { ...config, appliedConfigHash: "not yet" };
+    };
+    const replaced = replaceOn(a, "config.patch");
+    const target = client.state.connection.target;
+    const pending = createBridgeSession(client)
+      .apply({ ...ACCOUNT, stamp: gatewayStamp(client.state.connection) })
+      .then(
+        () => "saved",
+        (error: Error) => error.message,
+      );
+    await until(() => replaced() && client.state.connection.gatewayId === "gateway-x", 6_000);
+    expect(client.state.connection.target).toBe(target);
+    expect(await pending).toBe(CONNECTION_CHANGED_AFTER_SEND);
+    expect(a.gateway.calls("users.prefs.set")).toEqual([]);
+    client.stop();
+  });
+
+  it("A bot's account: when its gateway goes after the patch is confirmed, the account is not recorded or shown as saved", async () => {
+    const { client, a } = await twoGateways();
+    // The host's check, as `changeBotAccount` passes it, starts refusing once A has applied the
+    // patch: the next step is the account's record, here and on the gateway.
+    let gone = false;
+    const get = a.gateway.handlers["config.get"]!;
+    a.gateway.handlers["config.get"] = async (params) => {
+      const config = await get(params);
+      if (a.gateway.calls("config.patch").length > 0) gone = true;
+      return config;
+    };
+    const accounts = (client as unknown as { accounts: AccountsEngine }).accounts;
+    const failure = await accounts
+      .changeAccount("otto", "acme:home", "acme", "dev-1", null, (sent) => {
+        if (gone) throw new Error(sent ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED);
+      })
+      .then(
+        () => "saved",
+        (error: Error) => error.message,
+      );
+    expect(failure).toBe(CONNECTION_CHANGED_AFTER_SEND);
+    expect(client.state.accounts.write).toMatchObject({ what: "account", status: "failed" });
+    expect(a.gateway.calls("users.prefs.set")).toEqual([]);
+    client.stop();
+  });
+
   for (const [what, command] of [
     ["account", ACCOUNT],
     ["model", MODEL],
@@ -815,7 +918,8 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
         );
       await until(() => switched !== null);
       await switched;
-      expect(await pending).toBe(CONNECTION_CHANGED);
+      // The patch had gone to A: what it did there isn't known, and the screen says so.
+      expect(await pending).toBe(CONNECTION_CHANGED_AFTER_SEND);
       // The next read of the config, and any step after the patch, never reached B.
       expect(sentOf(b, SETTING_WRITES)).toEqual([]);
       expect(b.gateway.calls("config.get")).toEqual([]);
