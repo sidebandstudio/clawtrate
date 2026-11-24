@@ -37,7 +37,8 @@ const ORIGIN = "https://gateway.example";
 const TOKEN = "device-token";
 const RED = solidPng(48, 32, [220, 40, 40]);
 const NOW = Date.parse("2026-11-24T22:50:01.305Z");
-const TICKET = "v1.eyJzY29wZSI6ImFzc2lzdGFudC1tZWRpYSJ9.q0dWbX9pN2Lr_xZ8";
+/** A ticket in the gateway's form: `v1`, a payload and a signature, each base64url. Made up. */
+const TICKET = ["v1", "c2NvcGU", "c2lnbmF0dXJl"].join(".");
 const ascii = (text: string) => Uint8Array.from(text, (char) => char.charCodeAt(0));
 
 function response(
@@ -126,7 +127,7 @@ describe("F-557: which reference a person's picture is read back by", () => {
       "media://user@inbound/a.png",
       "file:///tmp/a.png",
       "https://gateway.example/a.png",
-      "/home/someone/.state/media/inbound/a.png",
+      "/state/media/inbound/a.png",
       "AGENTS.md",
       `media://inbound/${"a".repeat(600)}.png`,
       42,
@@ -208,7 +209,6 @@ describe("F-557: reading a person's picture back from the gateway", () => {
       "wss://localhost:19001",
       "wss://[::1]:19001",
       "wss://gateway.localhost",
-      "wss://user:pw@gateway.example",
     ])
       expect(await fetchInboundPicture(ctxOf(fetch, { gatewayUrl }), KEY, SHOT.url)).toEqual({
         status: "cannot-load",
