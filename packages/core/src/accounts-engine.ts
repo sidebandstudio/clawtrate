@@ -1783,13 +1783,30 @@ export class AccountsEngine {
     await this.removeFallbacks(botId);
   }
 
-  /** Change a bot's account, or to no fixed account, with its model and effort (section 11). */
+  /** The context a bot setting writes through: `beforeSend` runs before each request. */
+  private checked(beforeSend?: () => void): AccountsContext {
+    if (!beforeSend) return this.ctx;
+    const base = this.ctx;
+    return {
+      ...base,
+      request: async (method, params, options) => {
+        beforeSend();
+        return base.request(method, params, options);
+      },
+    };
+  }
+
+  /**
+   * Change a bot's account, or to no fixed account, with its model and effort (section 11).
+   * `beforeSend` runs before each request: the host's check that the screen's gateway is here.
+   */
   async changeAccount(
     botId: string,
     account: string | null,
     provider: string,
     model: string,
     effort: string | null,
+    beforeSend?: () => void,
   ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     if (account && accountProvider(account) !== provider)
@@ -1802,8 +1819,13 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
-      await this.writeModel(botId, { provider, model, account }, effort, false);
-      await this.recordIntent(botId, account ? { mode: "account", account } : { mode: "gateway" });
+      const ctx = this.checked(beforeSend);
+      await this.writeModel(botId, { provider, model, account }, effort, false, ctx);
+      await this.recordIntent(
+        botId,
+        account ? { mode: "account", account } : { mode: "gateway" },
+        ctx,
+      );
       this.setWrite({
         what: "account",
         target: botId,
@@ -1824,8 +1846,13 @@ export class AccountsEngine {
     await this.checkLock(botId);
   }
 
-  /** The bot's model and effort, keeping its account. */
-  async setModel(botId: string, model: string, effort: string | null): Promise<void> {
+  /** The bot's model and effort, keeping its account. `beforeSend` as for `changeAccount`. */
+  async setModel(
+    botId: string,
+    model: string,
+    effort: string | null,
+    beforeSend?: () => void,
+  ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     const binding = this.ctx.get().bindings.find((b) => b.botId === botId);
     if (!binding?.provider) throw new Error("Choose an account first.");
@@ -1842,6 +1869,7 @@ export class AccountsEngine {
         { provider: binding.provider, model, account: binding.account },
         effort,
         false,
+        this.checked(beforeSend),
       );
       this.setWrite({
         what: "model",
@@ -1864,7 +1892,7 @@ export class AccountsEngine {
   }
 
   /** "Remove fallbacks": the bot's model keeps its account; its fallback list becomes empty. */
-  async removeFallbacks(botId: string): Promise<void> {
+  async removeFallbacks(botId: string, beforeSend?: () => void): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     this.setWrite({
       what: "fallbacks",
@@ -1874,9 +1902,11 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
-      await this.patch({ agents: { entries: { [botId]: { model: { fallbacks: [] } } } } }, [
-        `agents.entries.${botId}.model.fallbacks`,
-      ]);
+      await this.patch(
+        { agents: { entries: { [botId]: { model: { fallbacks: [] } } } } },
+        [`agents.entries.${botId}.model.fallbacks`],
+        this.checked(beforeSend),
+      );
       this.unwritten.delete(botId);
       this.setWrite({
         what: "fallbacks",

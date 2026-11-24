@@ -6034,22 +6034,43 @@ export class ClawtrateClient {
     this.accounts.dismissCreation();
   }
 
-  changeBotAccount(
+  /**
+   * With `stamp` (where the bot's settings were read), nothing is sent unless the host still has
+   * that target and that gateway connected, and each request checks the target again.
+   */
+  async changeBotAccount(
     botId: string,
     account: string | null,
     provider: string,
     model: string,
     effort: string | null,
+    stamp?: GatewayStamp,
   ): Promise<void> {
-    return this.accounts.changeAccount(botId, account, provider, model, effort);
+    if (stamp === undefined)
+      return this.accounts.changeAccount(botId, account, provider, model, effort);
+    await this.requireSameGateway(stamp);
+    return this.accounts.changeAccount(botId, account, provider, model, effort, () =>
+      this.requireSameTarget(stamp),
+    );
   }
 
-  setBotModel(botId: string, model: string, effort: string | null): Promise<void> {
-    return this.accounts.setModel(botId, model, effort);
+  /** With `stamp`, as for `changeBotAccount`. */
+  async setBotModel(
+    botId: string,
+    model: string,
+    effort: string | null,
+    stamp?: GatewayStamp,
+  ): Promise<void> {
+    if (stamp === undefined) return this.accounts.setModel(botId, model, effort);
+    await this.requireSameGateway(stamp);
+    return this.accounts.setModel(botId, model, effort, () => this.requireSameTarget(stamp));
   }
 
-  removeBotFallbacks(botId: string): Promise<void> {
-    return this.accounts.removeFallbacks(botId);
+  /** With `stamp`, as for `changeBotAccount`. */
+  async removeBotFallbacks(botId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp === undefined) return this.accounts.removeFallbacks(botId);
+    await this.requireSameGateway(stamp);
+    return this.accounts.removeFallbacks(botId, () => this.requireSameTarget(stamp));
   }
 
   /**

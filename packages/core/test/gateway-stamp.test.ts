@@ -547,13 +547,60 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
-  it("Machines and tasks: a command from a renderer keeps its stamp, and one without a stamp is refused", () => {
+  const SETTING_WRITES = ["config.patch", "users.prefs.set"];
+  const ACCOUNT = {
+    type: "changeBotAccount",
+    botId: "otto",
+    account: "acme:home",
+    provider: "acme",
+    model: "dev-1",
+    effort: null,
+  } as const;
+  const MODEL = { type: "setBotModel", botId: "otto", model: "dev-1", effort: "high" } as const;
+  const FALLBACKS = { type: "removeBotFallbacks", botId: "otto" } as const;
+
+  it("A bot's model and account: a change read on one gateway reaches neither after a switch to another with the same id", async () => {
+    const { client, a, b, switchToB } = await twoGateways();
+    const stamp = gatewayStamp(client.state.connection);
+    await switchToB();
+    await client.refreshAccounts();
+    const viewer = createBridgeSession(client);
+    for (const command of [ACCOUNT, MODEL, FALLBACKS])
+      await expect(viewer.apply({ ...command, stamp })).rejects.toThrow(CONNECTION_CHANGED);
+    expect(sentOf(a, SETTING_WRITES)).toEqual([]);
+    expect(sentOf(b, SETTING_WRITES)).toEqual([]);
+    // Read again on the gateway connected now, the change goes there.
+    await viewer.apply({ ...ACCOUNT, stamp: gatewayStamp(client.state.connection) });
+    expect(b.gateway.calls("config.patch")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("A bot's model and account: a change goes with no switch, and after a dropped connection's reconnect", async () => {
+    const { client, a } = await twoGateways();
+    const viewer = createBridgeSession(client);
+    const stamp = gatewayStamp(client.state.connection);
+    await viewer.apply({ ...ACCOUNT, stamp });
+    expect(a.gateway.calls("config.patch")).toHaveLength(1);
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => ready(client, URL_A) && client.state.connection.connectedAt !== was);
+    await client.refreshAccounts();
+    await viewer.apply({ ...MODEL, stamp });
+    await viewer.apply({ ...FALLBACKS, stamp });
+    expect(a.gateway.calls("config.patch")).toHaveLength(3);
+    client.stop();
+  });
+
+  it("Machines, tasks and a bot's settings: a command from a renderer keeps its stamp, and one without a stamp is refused", () => {
     const stamp = { gatewayId: "gateway-a", target: 4 };
     for (const command of [
       { type: "removeMachine", nodeId: "node-1", stamp },
       { type: "removeDevice", deviceId: "phone-1", stamp },
       { type: "archiveTask", key: KEY, stop: true, stamp },
       { type: "deleteTask", key: KEY, stamp },
+      { ...ACCOUNT, stamp },
+      { ...MODEL, stamp },
+      { ...FALLBACKS, stamp },
     ] as const) {
       expect(parseBridgeCommand(command)).toEqual(command);
       const { stamp: _stamp, ...bare } = command;

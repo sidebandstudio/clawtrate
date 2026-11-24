@@ -328,6 +328,7 @@ export type BridgeCommand =
   | { type: "dismissBotCreation" }
   /** Finish a bot whose creation is partial, by its id, on the gateway New bot was showing. */
   | { type: "finishBot"; botId: string; stamp: GatewayStamp }
+  /** A bot's account, model and fallbacks: `stamp` is where its settings were read. */
   | {
       type: "changeBotAccount";
       botId: string;
@@ -335,9 +336,16 @@ export type BridgeCommand =
       provider: string;
       model: string;
       effort: string | null;
+      stamp: GatewayStamp;
     }
-  | { type: "setBotModel"; botId: string; model: string; effort: string | null }
-  | { type: "removeBotFallbacks"; botId: string }
+  | {
+      type: "setBotModel";
+      botId: string;
+      model: string;
+      effort: string | null;
+      stamp: GatewayStamp;
+    }
+  | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
   /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
   | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
   | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
@@ -1195,8 +1203,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "dismissBotCreation":
       return { type: command.type };
     case "checkLock":
-    case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
+    case "removeBotFallbacks":
+      return {
+        type: "removeBotFallbacks",
+        botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "acceptBotName":
       return {
         type: "acceptBotName",
@@ -1283,6 +1296,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "setBotModel":
       return {
@@ -1293,6 +1307,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "disconnect":
       if (
@@ -2058,11 +2073,12 @@ class ViewerSession implements BridgeSession {
           command.provider,
           command.model,
           command.effort,
+          command.stamp,
         );
       case "setBotModel":
-        return client.setBotModel(command.botId, command.model, command.effort);
+        return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
-        return client.removeBotFallbacks(command.botId);
+        return client.removeBotFallbacks(command.botId, command.stamp);
       case "acceptBotName":
         return client.acceptBotName(command.botId, command.name, command.stamp);
       case "declineBotName":
