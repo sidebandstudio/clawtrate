@@ -1382,7 +1382,17 @@ export class ClawtrateClient {
   /** "Show external channel chats": the person's choice, off until they turn it on. */
   private showChannelChats = false;
   /** How often the person set each preference: a startup read begun before a change doesn't undo it. */
-  private readonly preferenceSets = { turnLimit: 0, channelChats: 0 };
+  private readonly preferenceSets = { turnLimit: 0, channelChats: 0, gatewayNames: 0 };
+  /**
+   * Reads and writes of the gateway names, one at a time and in order: each rename starts from
+   * the list the one before it left, so two quick renames both keep their names.
+   */
+  private gatewayNameWork: Promise<unknown> = Promise.resolve();
+  private queueGatewayNames<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.gatewayNameWork.then(work);
+    this.gatewayNameWork = run.catch(() => {});
+    return run;
+  }
   /**
    * The person this connection acts for, as the gateway names them (`users.self` profile id):
    * which reactions are this person's own. Read once per connection; null until then, or when
@@ -1953,8 +1963,9 @@ export class ClawtrateClient {
             : null;
         const channelChats =
           (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
-        const names = readGatewayNames(
-          await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null),
+        // In the names' queue, so a rename sent meanwhile starts from what was read.
+        const names = await this.queueGatewayNames(async () =>
+          readGatewayNames(await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null)),
         );
         // A startup stopped while it read keeps nothing: the next one reads again. A preference
         // the person set meanwhile is newer than what was read.
@@ -1967,8 +1978,7 @@ export class ClawtrateClient {
           this.turnLimitMs = limit * 60_000;
         if (sets.channelChats === this.preferenceSets.channelChats)
           this.showChannelChats = channelChats;
-        // A name given meanwhile is newer than what was read.
-        if (this.gatewayNames.length === 0) this.gatewayNames = names;
+        if (sets.gatewayNames === this.preferenceSets.gatewayNames) this.gatewayNames = names;
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
@@ -7139,10 +7149,13 @@ export class ClawtrateClient {
    */
   async nameGateway(gatewayUrl: string, name: string): Promise<void> {
     if (this.state.connection.gatewayUrl !== gatewayUrl) throw new GatewayChangedError();
-    const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
-    await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
-    this.gatewayNames = next;
-    this.store.update((state) => ({ ...state }));
+    return this.queueGatewayNames(async () => {
+      const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
+      await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
+      this.preferenceSets.gatewayNames += 1;
+      this.gatewayNames = next;
+      this.store.update((state) => ({ ...state }));
+    });
   }
 
   /**
