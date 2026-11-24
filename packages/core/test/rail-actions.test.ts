@@ -13,6 +13,7 @@ import {
   grantingGateway,
   KEY,
   openTask,
+  SESSION,
   URL_A,
   asShown,
 } from "./client-harness.ts";
@@ -402,7 +403,7 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
     gateway.handlers["chat.history"] = () => ({ messages: [] });
     let active = true;
     gateway.handlers["sessions.describe"] = () => ({
-      session: { key: KEY, sessionId: "s-1", hasActiveRun: active },
+      session: { key: KEY, sessionId: SESSION, hasActiveRun: active },
     });
     // What the engine shows of the run and its follow-up when the archive reaches the gateway.
     let atArchive: unknown = null;
@@ -430,7 +431,7 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
     active = false;
     await expect(archived).resolves.toEqual({ stoppedRun: false });
     expect(gateway.calls("sessions.patch")).toEqual([
-      { key: KEY, archived: true, expectedSessionId: "s-1" },
+      { key: KEY, archived: true, expectedSessionId: SESSION },
     ]);
     // Archived only once the engine's Stop had settled: the run stopped, its follow-up parked.
     expect(atArchive).toEqual({ run: "stopped", followUp: "not-sent" });
