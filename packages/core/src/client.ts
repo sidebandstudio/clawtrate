@@ -335,6 +335,7 @@ import {
   restoreTask,
   TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
+  TASK_GONE,
   TASK_RESET_ELSEWHERE,
   type ArchivedList,
   type ArchiveResult,
@@ -9831,17 +9832,21 @@ export class ClawtrateClient {
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       stopMark: (key) => this.waiting.stopMark(key),
-      stopRuns: async (key) => {
-        const runs = this.state.transcripts[key]?.runs ?? [];
+      stopRuns: async (key, sessionId) => {
+        const sessionRuns = () => {
+          const transcript = this.state.transcripts[key];
+          if (sessionId !== undefined && transcript?.sessionId !== sessionId)
+            throw new Error(TASK_GONE);
+          return transcript?.runs ?? [];
+        };
         await Promise.all(
-          runs
+          sessionRuns()
             .filter((run) => run.state === "running" || run.state === "waiting")
             .map((run) =>
               this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true }),
             ),
         );
-        return (this.state.transcripts[key]?.runs ?? []).filter((run) => isActive(run.state))
-          .length;
+        return sessionRuns().filter((run) => isActive(run.state)).length;
       },
       runsActive: (key) =>
         (this.state.transcripts[key]?.runs ?? []).some((run) => isActive(run.state)),
@@ -10009,9 +10014,9 @@ export class ClawtrateClient {
             await ctx.ensureWrite();
             inTime();
           },
-          stopRuns: async (task) => {
+          stopRuns: async (task, selectedSession) => {
             inTime();
-            return ctx.stopRuns(task);
+            return ctx.stopRuns(task, selectedSession);
           },
         }),
         late,

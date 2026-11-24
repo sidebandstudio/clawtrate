@@ -1684,6 +1684,35 @@ describe("Archive and Delete check the selected session before Stop (F-277, F-27
     },
   );
 
+  it.each(["archive", "delete"] as const)(
+    "F-278: %s never stops the replacement's run when preflight still names the selected session",
+    async (action) => {
+      const { client, gateway, transcript, changes } = await chosen(null);
+      gateway.handlers["chat.history"] = () => ({
+        sessionId: "s-2",
+        messages: [],
+        inFlightRun: { runId: "run-b" },
+      });
+      gateway.emit("sessions.changed", { sessionKey: KEY, phase: "message", updatedAt: 2 });
+      await until(() => transcript().sessionId === "s-2");
+      expect(transcript().runs).toContainEqual(
+        expect.objectContaining({ id: "run-b", state: "running" }),
+      );
+      const rows = [{ sessionId: "s-1", hasActiveRun: true }, { sessionId: "s-2" }];
+      gateway.handlers["sessions.describe"] = () => ({ session: rows.shift() });
+      try {
+        const acted =
+          action === "archive"
+            ? client.archiveTask(KEY, { sessionId: "s-1", stop: true })
+            : client.deleteTask(KEY, { sessionId: "s-1" });
+        await expect(acted).rejects.toThrow(TASK_GONE);
+        expect(changes()).toEqual([]);
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
   it("F-277: a session change after a key-only Stop refuses the archive without claiming nothing happened", async () => {
     const { client, gateway } = await chosen(null);
     const rows = [

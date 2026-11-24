@@ -79,7 +79,7 @@ export type TaskActionContext = {
    * follows that is running or waiting. Answers how many of its runs are now
    * running, waiting or stopping: 0 when it follows none.
    */
-  stopRuns: (key: string) => Promise<number>;
+  stopRuns: (key: string, sessionId?: string) => Promise<number>;
   /** Whether a run of the task the engine follows is still running, waiting or stopping. */
   runsActive: (key: string) => boolean;
 };
@@ -292,7 +292,8 @@ export async function stopAndSettle(
   key: string,
   sessionId?: string,
 ): Promise<RawRecord> {
-  if ((await ctx.stopRuns(key)) === 0) await ctx.request("chat.abort", { sessionKey: key });
+  if ((await ctx.stopRuns(key, sessionId)) === 0)
+    await ctx.request("chat.abort", { sessionKey: key });
   const deadline = ctx.now() + STOP_SETTLE_MS;
   for (;;) {
     const row = sameSession(await describe(ctx, key), sessionId);
