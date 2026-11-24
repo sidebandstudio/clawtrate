@@ -178,11 +178,16 @@ export function isExcludedSessionKey(key: string): boolean {
   return !isTaskSession({ key });
 }
 
+/** The bot a session row belongs to: its own `agentId`, else the one its key names. */
+export function rowBotOf(key: string, row: RawRecord): string | null {
+  return str(row.agentId) ?? botIdFromSessionKey(key);
+}
+
 /** One session row to a task, or null for rows the sidebar should not show. */
 export function mapSessionRow(row: RawRecord): Task | null {
   const key = sessionRowKey(row);
   if (!key || !isTaskSession(row)) return null;
-  const botId = str(row.agentId) ?? botIdFromSessionKey(key);
+  const botId = rowBotOf(key, row);
   if (!botId) return null;
   const channel = externalChannelOf(row);
   return {

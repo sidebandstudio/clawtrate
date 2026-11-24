@@ -210,6 +210,15 @@ const plainId = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.trim() === value;
 
 /** Whether an `agents.list` answer is whole enough to decide on, or to show as the bot list. */
+/** Every bot id a whole `agents.list` answer lists, system agents too; null when it isn't whole. */
+export function rosterIds(result: unknown): Set<string> | null {
+  try {
+    return new Set(roster(result).agents.map((agent) => agent.id as string));
+  } catch {
+    return null;
+  }
+}
+
 export function wholeRoster(result: unknown): boolean {
   try {
     roster(result);
