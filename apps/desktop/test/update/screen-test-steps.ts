@@ -77,7 +77,7 @@ export function stepLog(profile: string, now: () => number = Date.now) {
 }
 
 /** The last check's or download's states and steps, oldest first. Null without a log. */
-export function readSteps(profile: string, now = Date.now()): Step[] | null {
+export function readSteps(profile: string, clock: () => number = Date.now): Step[] | null {
   let lines: StepLine[];
   try {
     // The app may be writing a line as this reads: the text after the last line ending is dropped.
@@ -89,6 +89,8 @@ export function readSteps(profile: string, now = Date.now()): Step[] | null {
   } catch {
     return null;
   }
+  // After the read, so no line it read is later than now.
+  const now = clock();
   type Found = { state?: string; step?: string; at: number; end?: number; outcome?: string };
   const found: Found[] = [];
   let shown: Found | undefined;

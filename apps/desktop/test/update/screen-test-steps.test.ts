@@ -56,7 +56,7 @@ async function stalledDownload(steps: ReturnType<typeof log>) {
 it("names the step a download stopped in after its last byte, and how long it has run", async () => {
   const steps = log();
   await stalledDownload(steps);
-  expect(readSteps(dir.path, 10_000)).toEqual([
+  expect(readSteps(dir.path, () => 10_000)).toEqual([
     { state: "downloading", atMs: 0, ms: 3_000 },
     { step: "folders", atMs: 0, ms: 2_500, outcome: "made" },
     { state: "moving", atMs: 3_000, ms: 2 },
@@ -64,6 +64,19 @@ it("names the step a download stopped in after its last byte, and how long it ha
     { step: "read-back", atMs: 3_002, ms: 2_898, outcome: "read" },
     { step: "read-back", atMs: 5_905, ms: 2_095, running: true },
   ]);
+});
+
+it("reads the clock after the log, so a row the app writes meanwhile never runs backwards", async () => {
+  const steps = log();
+  await stalledDownload(steps);
+  // The app writes its next state 5 ms after the reader's clock reading.
+  const movingOn = (at: number) => () => {
+    clock = at + 5;
+    steps.state({ kind: "verified", offerId: "o", version: "1.1.0", size: 4_000_000 });
+    return at;
+  };
+  const rows = readSteps(dir.path, movingOn(10_000));
+  expect(rows?.map((row) => row.ms)).toEqual([3_000, 2_500, 2, 4_998, 2_898, 2_095]);
 });
 
 it("writes one row per state change rather than one per downloaded chunk", () => {
@@ -90,7 +103,7 @@ it("ends every step of a download that completes, and passes each step's result 
   const inspect = held(steps, "installer-inspect", (reason: string | null) => reason ?? "accepted");
   expect(await inspect(10_600, null)).toBeNull();
   steps.state({ kind: "verified", offerId: "o", version: "1.1.0", size: 4_000_000 });
-  expect(readSteps(dir.path, 11_000)).toEqual([
+  expect(readSteps(dir.path, () => 11_000)).toEqual([
     { state: "downloading", atMs: 0, ms: 3_000 },
     { step: "folders", atMs: 0, ms: 2_500, outcome: "made" },
     { state: "moving", atMs: 3_000, ms: 2 },
@@ -120,7 +133,7 @@ it("keeps only the last check or download, and an error's code, never its messag
   await expect(folders).rejects.toBe(refused);
   clock = 20_300;
   steps.state({ kind: "failed", stage: "download", reason: "write-failed" });
-  expect(readSteps(dir.path, 20_400)).toEqual([
+  expect(readSteps(dir.path, () => 20_400)).toEqual([
     { state: "downloading", atMs: 0, ms: 200 },
     { step: "folders", atMs: 0, ms: 0, outcome: "threw EPERM" },
     { state: "failed write-failed", atMs: 200, ms: 100, current: true },
@@ -168,5 +181,7 @@ it("never fails the step it times, and leaves out a line still being written", a
   const file = join(dir.path, "update-steps.jsonl");
   writeFileSync(file, JSON.stringify({ at: 0, state: "verifying" }) + "\n");
   appendFileSync(file, '{"at":5,"st');
-  expect(readSteps(dir.path, 10)).toEqual([{ state: "verifying", atMs: 0, ms: 10, current: true }]);
+  expect(readSteps(dir.path, () => 10)).toEqual([
+    { state: "verifying", atMs: 0, ms: 10, current: true },
+  ]);
 });
