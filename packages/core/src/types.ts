@@ -158,6 +158,13 @@ export const sameStamp = (a: GatewayStamp | null | undefined, b: GatewayStamp | 
  */
 export type ReadStamp = GatewayStamp & { connectedAt: number | null };
 
+/**
+ * Why a write that had already sent part of itself stopped: the connection changed before its
+ * outcome was read back, so what the gateway did is not known (a bot's Rename, a setting, a task).
+ */
+export const CONNECTION_CHANGED_AFTER_SEND =
+  "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
+
 /** The stamp of what is read on the connection as it is now. */
 export const gatewayStamp = (
   connection: Pick<ConnectionState, "gatewayId" | "target">,

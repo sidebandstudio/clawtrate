@@ -369,6 +369,7 @@ import {
 } from "./computer.ts";
 import { readMachine, type MachineFacts } from "./machine.ts";
 import {
+  CONNECTION_CHANGED_AFTER_SEND,
   gatewayStamp,
   initialConnectionState,
   initialScopeUpgrade,
@@ -405,8 +406,7 @@ const IDENTITY_RETRY_MS = 500;
 export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 /** Why a write that had already sent part of itself stopped: what the gateway did is not known. */
-export const CONNECTION_CHANGED_AFTER_SEND =
-  "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
+export { CONNECTION_CHANGED_AFTER_SEND };
 
 /** What a task action asks that changes nothing: the rest of its requests are writes. */
 const taskRead = (method: string) =>
