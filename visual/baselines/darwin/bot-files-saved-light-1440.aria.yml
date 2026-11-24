@@ -1,0 +1,87 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - list:
+    - listitem:
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
+      - list "Otto's tasks":
+        - listitem:
+          - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
+        - listitem:
+          - button "Disk almost full on the media box"
+        - listitem:
+          - button "Weekly backup check, unread": Weekly backup check
+        - listitem:
+          - button "Certificate renewal warning"
+        - listitem:
+          - button "Router firmware"
+        - listitem:
+          - button "Printer offline again"
+        - listitem:
+          - button "Show all 14"
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research, primary bot":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
+    - listitem:
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
+    - listitem:
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
+  - status
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "Otto, Disk almost full on the media box. Show details.": Otto ·Disk almost full on the media box
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:20 PM
+    - paragraph: Put both trail reviews in one PDF and attach it.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Both reviews are in this two-page draft.
+    - text: reviews-draft.pdf 1 KB · application/pdf
+    - button "Save reviews-draft.pdf": Save
+    - status: Saved.
+    - text: reviews.txt 1 KB · text/plain
+    - button "Save reviews.txt": Save
+    - alert: Couldn't save it. The gateway answered 404 for this file.
+    - text: trail-photos.zip 6.0 MB · application/zip
+    - status: "Too large to save here: Clawtrate saves files up to 5 MB."
+    - text: voice-note.wav 178 KB · audio/wav
+    - button "Save voice-note.wav": Save
+    - text: gps-track.bin application/octet-stream
+    - status: The gateway didn't hand this file over, so it can't be saved.
+    - toolbar "Message actions":
+      - button "More"
+    - group: Worked 1 action
+    - paragraph: And the route as a spreadsheet?
+    - toolbar "Message actions":
+      - button "More"
+    - text: route.csv 1 KB · text/csv
+    - button "Save route.csv": Save
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status
