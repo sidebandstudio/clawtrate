@@ -357,6 +357,104 @@ describe("F-552: a bot that takes a name", () => {
     client.stop();
   });
 
+  it("F-552: a picture taken out of the config while Rename tidies the file keeps its line in the file", async () => {
+    const { gateway, bot, takeName } = namingGateway((name) => identityFile(name, true), {
+      picture: true,
+    });
+    // After the rename, the second config read finds the picture gone: an operator removed it.
+    const config = gateway.handlers["config.get"]!;
+    let readsAfterRename = 0;
+    gateway.handlers["config.get"] = (params) => {
+      if (gateway.calls("agents.update").length === 0) return config(params);
+      readsAfterRename += 1;
+      return readsAfterRename === 1
+        ? config(params)
+        : {
+            config: {
+              agents: { entries: { "new-bot": { name: bot.name, identity: { name: bot.name } } } },
+            },
+          };
+    };
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    await client.acceptBotName("new-bot", "Johnny", here(client));
+    expect(readsAfterRename).toBe(2);
+    expect(gateway.calls("agents.files.set")).toEqual([]);
+    expect(bot.file).toMatch(/^- Avatar: data:image\/png;base64,/m);
+    client.stop();
+  });
+
+  it("F-552: a Not now queued behind another is in memory before its card goes, so a run ending meanwhile doesn't bring it back", async () => {
+    const { gateway, takeName } = namingGateway();
+    const storage = adminStorage();
+    const { client } = await openTask({ gateway, storage, held: ADMIN_SCOPES, key: KEY });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // The first Not now's write is held, so the next one waits behind it.
+    const gate = deferred<void>();
+    const set = storage.set;
+    let held = false;
+    storage.set = async (key, value) => {
+      if (key === NAME_DECLINES_KEY && !held) {
+        held = true;
+        await gate.promise;
+      }
+      return set(key, value);
+    };
+    try {
+      const first = client.declineBotName("new-bot", "Johnny", here(client));
+      takeName("Jonas");
+      endRun(gateway);
+      await until(() => client.state.botNames?.[0]?.name === "Jonas");
+      const second = client.declineBotName("new-bot", "Jonas", here(client));
+      // A run ends while that Not now waits to be written: it reads Jonas again.
+      const before = reads(gateway);
+      endRun(gateway);
+      await until(() => reads(gateway) === before + 1);
+      await sleep(30);
+      expect(client.state.botNames).toEqual([]);
+      gate.resolve();
+      expect(await first).toEqual({ declined: true });
+      expect(await second).toEqual({ declined: true });
+      expect(JSON.parse(storage.data.get(NAME_DECLINES_KEY)!)).toMatchObject({
+        ["gw-a\nnew-bot"]: "Jonas",
+      });
+    } finally {
+      gate.resolve();
+      client.stop();
+    }
+  });
+
+  it("F-552: Not now says whether it answered the card shown now", async () => {
+    const { gateway, takeName } = namingGateway();
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // An answer to a card read on another connection, as one left from before a switch, does nothing.
+    const stale = { ...here(client), target: here(client).target + 1 };
+    expect(await client.declineBotName("new-bot", "Johnny", stale)).toEqual({ declined: false });
+    expect(client.state.botNames).toHaveLength(1);
+    expect(await client.declineBotName("new-bot", "Johnny", here(client))).toEqual({
+      declined: true,
+    });
+    expect(client.state.botNames).toEqual([]);
+    client.stop();
+  });
+
   it("F-558 F-552: a card goes, with no reconnect, when another client renames the bot to its name or deletes the bot", async () => {
     const { gateway, bot, takeName } = namingGateway();
     const { client } = await openTask({

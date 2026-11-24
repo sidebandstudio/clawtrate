@@ -100,6 +100,29 @@ test.describe("bot name behaviour", () => {
     await expect(page.locator(".title-pill-name")).toHaveText("New bot");
   });
 
+  test("F-552: a Not now for a card read on an earlier connection announces nothing", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark");
+    await expect(card(page)).toBeVisible();
+    // The connection moves on while the card is still on screen: the engine ignores its answer.
+    await page.evaluate(() => {
+      const { clawtrateFixture } = window as unknown as {
+        clawtrateFixture: {
+          setState(f: (s: { connection: { target: number } }) => unknown): void;
+        };
+      };
+      clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, target: state.connection.target + 1 },
+      }));
+    });
+    await card(page).getByRole("button", { name: "Not now" }).click();
+    await expect.poll(async () => (await sent(page)).length).toBe(1);
+    await expect(card(page).getByRole("button", { name: "Not now" })).toBeEnabled();
+    await expect(page.getByTestId("announcer")).not.toHaveText(/keeps its name/);
+  });
+
   test("F-552: without admin the card says so and offers no Rename and no access request", async ({
     page,
   }) => {

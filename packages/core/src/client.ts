@@ -6087,8 +6087,13 @@ export class ClawtrateClient {
   }
 
   /** Not now on a name card: kept on this device for that bot and that name. */
-  declineBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
-    return this.botNames.decline(botId, name, stamp);
+  /** Not now, with whether it answered the card shown now. */
+  async declineBotName(
+    botId: string,
+    name: string,
+    stamp: GatewayStamp,
+  ): Promise<{ declined: boolean }> {
+    return { declined: await this.botNames.decline(botId, name, stamp) };
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
