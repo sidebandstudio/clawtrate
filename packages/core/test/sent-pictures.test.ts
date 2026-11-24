@@ -14,7 +14,7 @@ import {
 import { mapHistory } from "../src/mapping.ts";
 import { MAX_PICTURE_BYTES, type SentPictureRead } from "../src/pictures.ts";
 import { KEY, openTask } from "./client-harness.ts";
-import { until } from "./fake-gateway.ts";
+import { sleep, until } from "./fake-gateway.ts";
 import { FIRST, NOTES, SECOND, SHOT, sentRow, solidPng } from "./sent-attachments-rows.ts";
 
 const RED = solidPng(48, 32, [220, 40, 40]);
@@ -172,6 +172,46 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
       new Uint8Array(RED),
     );
     expect(gateway.calls("artifacts.download")).toEqual([]);
+    client.stop();
+  });
+
+  /** A sent picture, confirmed, in `KEY`, and the gateway answering a delete or archive of it. */
+  async function keptInTask() {
+    const opened = await task();
+    const { client, gateway, confirm } = opened;
+    gateway.handlers["sessions.describe"] = () => ({ session: { key: KEY, sessionId: "s-1" } });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    gateway.handlers["sessions.delete"] = () => ({ ok: true, deleted: true });
+    const id = client.sendMessage(KEY, "look", { attachments: [picture(RED, "shot.png")] });
+    await confirm([sentRow(id, "look", [SHOT])]);
+    expect(client.keptPictureBytes).toBe(RED.length);
+    return { ...opened, id };
+  }
+
+  it("F-557: deleting the task from this app lets its pictures go", async () => {
+    const { client, gateway, id } = await keptInTask();
+    await client.deleteTask(KEY);
+    expect(gateway.calls("sessions.delete")).toHaveLength(1);
+    expect(client.keptPictureBytes).toBe(0);
+    expect(await client.readSentPicture(KEY, `${id}:user`, 0)).toEqual({ status: "not-kept" });
+    client.stop();
+  });
+
+  it("F-557: a task deleted elsewhere lets its pictures go, once the gateway says so", async () => {
+    const { client, gateway } = await keptInTask();
+    gateway.emit("sessions.changed", { sessionKey: KEY, reason: "deleted" });
+    await until(() => client.keptPictureBytes === 0);
+    client.stop();
+  });
+
+  it("F-557: archiving the task keeps its pictures, so they show when it is opened or restored", async () => {
+    const { client, gateway, id } = await keptInTask();
+    await client.archiveTask(KEY);
+    gateway.emit("sessions.changed", { sessionKey: KEY, archived: true, updatedAt: 3 });
+    await sleep(50);
+    expect(gateway.calls("sessions.patch")).toHaveLength(1);
+    expect(client.keptPictureBytes).toBe(RED.length);
+    expect((await client.readSentPicture(KEY, `${id}:user`, 0)).status).toBe("content");
     client.stop();
   });
 
