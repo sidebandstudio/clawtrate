@@ -28,6 +28,7 @@
   --bubble-user-text: #04261f;
   --warn: #f0b45a;
   --warn-soft: rgba(240, 180, 90, 0.12);
+  --danger: #ff8a80;
   --warn-line: rgba(240, 180, 90, 0.42);
   --border: rgba(255, 255, 255, 0.08);
   --shadow-raised: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.4);
@@ -82,6 +83,7 @@
   --bubble-user-text: #ffffff;
   --warn: #935600;
   --warn-soft: rgba(147, 86, 0, 0.1);
+  --danger: #b3261e;
   --warn-line: rgba(147, 86, 0, 0.32);
   --border: rgba(17, 18, 19, 0.09);
   --shadow-raised: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 2px 8px rgba(17, 18, 19, 0.08);
@@ -609,7 +611,8 @@ html:not(.js) .cmd-box + .cmd-box {
   font-size: 13px;
   color: var(--text-faint);
 }
-.event svg {
+.event svg,
+.run-card svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -617,6 +620,44 @@ html:not(.js) .cmd-box + .cmd-box {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+/* A run's actions, behind one line that opens to plain-words cards. */
+.run summary {
+  width: fit-content;
+  min-height: 32px;
+  list-style: none;
+  cursor: pointer;
+}
+.run summary::-webkit-details-marker {
+  display: none;
+}
+.run summary:hover {
+  color: var(--text-muted);
+}
+.event .run-chevron {
+  stroke: currentColor;
+  transition: transform 140ms var(--ease);
+}
+.run[open] .run-chevron {
+  transform: rotate(90deg);
+}
+.run-failed {
+  color: var(--danger);
+}
+.run-state {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.run-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 9px 14px;
+  border-radius: 14px;
+  background: var(--bg-bubble);
+  font-size: 14px;
 }
 .demo-live {
   position: absolute;

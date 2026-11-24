@@ -167,6 +167,7 @@ import type {
   TranscriptBlock,
   TranscriptItem,
   ChatPicture,
+  NameProposal,
   SentAttachment,
 } from "./types.ts";
 
@@ -709,6 +710,7 @@ const connection = object<ConnectionState>()({
   canApprove: FLAG,
   canAdmin: FLAG,
   fullPairing: FLAG,
+  fullOffer: ENUM,
   upgrade,
   deviceId: ID,
   pairing,
@@ -737,6 +739,14 @@ const bot = flagged<Bot>()({
   theme: NAME,
   model: NAME,
   isDefault: FLAG,
+});
+const nameProposal = object<NameProposal>()({
+  botId: ID,
+  name: NAME,
+  from: NAME,
+  stamp: object<NameProposal["stamp"]>()({ gatewayId: ID, target: NUMBER }),
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const task = flagged<Task>()({
   key: ID,
@@ -1275,6 +1285,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
   usage: USAGE,
+  botNames: list(MAX_BOTS, nameProposal),
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };
