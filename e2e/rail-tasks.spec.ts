@@ -4,7 +4,7 @@
 // uses a task of its own; each asserts what the gateway holds afterwards, that
 // it survives a reload, and what the second connection sees. What the checks
 // create is removed, and the arrangement they changed put back, afterwards.
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -70,6 +70,7 @@ type Row = {
   archived?: boolean;
   unread?: boolean;
   hasActiveRun?: boolean;
+  activeRunIds?: string[];
   isMain?: boolean;
 };
 const describe = async (key: string) =>
@@ -227,6 +228,31 @@ async function sendInTask(on: Page, title: string, text: string): Promise<void> 
   await taskRow(on, title).click();
   await on.getByTestId("composer-input").fill(text);
   await on.getByTestId("composer-input").press("Enter");
+}
+
+async function startUnnamedRun(task: { key: string; title: string }) {
+  await sendInTask(page, task.title, "#slow 40");
+  await gateway
+    .poll(async () => {
+      const row = await describe(task.key);
+      return row?.hasActiveRun === true && !row.activeRunIds?.length;
+    })
+    .toBe(true);
+}
+
+async function stopInConversationAfterRefusal(dialog: Locator, key: string) {
+  await expect(dialog.getByRole("alert")).toHaveText(
+    "Couldn't stop this task. The gateway didn't name its active runs.",
+  );
+  const row = await describe(key);
+  expect(row?.hasActiveRun).toBe(true);
+  expect(row?.archived).not.toBe(true);
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await page.getByTestId("stop").click();
+  await gateway.poll(async () => (await describe(key))?.hasActiveRun).toBe(false);
+  const stopped = await describe(key);
+  expect(stopped?.sessionId).toBe(row?.sessionId);
+  expect(stopped?.archived).not.toBe(true);
 }
 
 async function shot(on: Page, name: string): Promise<void> {
@@ -493,7 +519,7 @@ test("F-277: Archive moves a task into the bot's Archived group on the gateway, 
   await expect(taskRow(second, task.title)).toBeVisible({ timeout: 20_000 });
 });
 
-test("F-278: Delete, confirmed, stops the task's active run first, then removes the task and its transcript; what the bot saved to memory stays", async () => {
+test("F-278: Delete refuses an unnamed active run; after stopping it in the conversation, Delete removes the transcript and keeps memory", async () => {
   const task = await ownTask("pip", "Pip", "Delete me");
   // The bot saves a memory note during the task.
   const memory = join(
@@ -508,12 +534,15 @@ test("F-278: Delete, confirmed, stops the task's active run first, then removes 
   const saved = readFileSync(memory, "utf8");
   await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
   // A long run is under way when Delete is chosen.
-  await sendInTask(page, task.title, "#slow 40");
-  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun).toBe(true);
+  await startUnnamedRun(task);
   await taskMenu(page, task.title);
   await page.getByRole("menuitem", { name: "Delete…" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete “${task.title}”?` });
   await expect(dialog).toContainText("Its run is stopped first.");
+  await dialog.getByRole("button", { name: "Delete" }).click();
+  await stopInConversationAfterRefusal(dialog, task.key);
+  await taskMenu(page, task.title);
+  await page.getByRole("menuitem", { name: /^Delete/ }).click();
   await dialog.getByRole("button", { name: "Delete" }).click();
   await expect(dialog).toHaveCount(0, { timeout: 30_000 });
   // The run ended as stopped before the task went: its abort and end come before the removal.
@@ -835,7 +864,7 @@ test("F-277: restored elsewhere after its archive refused a message, the task of
   ).toEqual([]);
 });
 
-test("F-277: Stop and archive stops a working task's run and archives it; restored, its history is as it was", async () => {
+test("F-277: Stop and archive refuses an unnamed active run; after stopping it in the conversation, Archive and Restore keep its history", async () => {
   const task = await ownTask("pip", "Pip", "Stop and archive me");
   await sendInTask(page, task.title, "Hello");
   await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
@@ -848,13 +877,14 @@ test("F-277: Stop and archive stops a working task's run and archives it; restor
         )
       ).messages.map((message) => [message.__openclaw?.id, message.role]),
     );
-  await sendInTask(page, task.title, "#slow 40");
-  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun).toBe(true);
+  await startUnnamedRun(task);
   await taskMenu(page, task.title);
   await page.getByRole("menuitem", { name: "Stop and archive…" }).click();
   const dialog = page.getByRole("dialog", { name: /Stop and archive/ });
   await dialog.getByRole("button", { name: "Stop and archive" }).click();
-  await expect(dialog).toHaveCount(0, { timeout: 30_000 });
+  await stopInConversationAfterRefusal(dialog, task.key);
+  await taskMenu(page, task.title);
+  await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
   await gateway.poll(async () => (await describe(task.key))?.archived).toBe(true);
   expect(
     watcher.events.some(

@@ -351,9 +351,9 @@ describe("the rail's task actions", () => {
     expect(calls[1]!.params).toEqual({ sessionKey: KEY, runId: "run-a" });
   });
 
-  it.each([undefined, null, [], ["valid", ""]])(
-    "F-277: a live session without a complete run list cannot be stopped: %j",
-    async (activeRunIds) => {
+  it.each([undefined, null, [], ["valid", ""]].map((activeRunIds) => ({ activeRunIds })))(
+    "F-277: a live session without a complete run list cannot be stopped: $activeRunIds",
+    async ({ activeRunIds }) => {
       const { ctx, calls } = fakeGateway({
         [KEY]: { sessionId: "s-1", hasActiveRun: true, activeRunIds },
       });
