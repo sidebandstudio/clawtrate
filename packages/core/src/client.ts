@@ -1274,6 +1274,8 @@ export class ClawtrateClient {
   /** Reads of the bot list in the order they were asked, and the latest shown. */
   private botsIssued = 0;
   private botsShown = 0;
+  /** Coalesced bot-list reread for `config.changed`: at most one in flight plus one queued. */
+  private botsRefresh: { generation: number; again: boolean } | null = null;
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -1318,7 +1320,7 @@ export class ClawtrateClient {
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
-  private discoveryRead: { sessionsChanged: boolean } | null = null;
+  private discoveryRead: { sessionsChanged: boolean; botsChanged: boolean } | null = null;
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
   private readonly writes: ConnectionWrites;
@@ -5624,13 +5626,64 @@ export class ClawtrateClient {
     return this.machines.removeDevice(deviceId);
   }
 
-  /** Read the bot list again, after a bot was created. */
+  /** Read the bot list again, after a bot was created or changed here. */
   private async refreshBots(): Promise<void> {
     const generation = this.generation;
     const issued = ++this.botsIssued;
     const result = await this.request("agents.list", {});
     if (generation !== this.generation || !this.newestBots(issued)) return;
-    this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+    this.applyBots(mapAgents(result));
+  }
+
+  /**
+   * Read the bot list again after the gateway reports its config changed: at most
+   * one read in flight and one more queued for any burst of signals.
+   */
+  private async refreshBotsOnChange(generation: number): Promise<void> {
+    if (generation !== this.generation) return;
+    const running = this.botsRefresh;
+    if (running && running.generation === generation) {
+      running.again = true;
+      return;
+    }
+    const read = { generation, again: false };
+    this.botsRefresh = read;
+    try {
+      do {
+        read.again = false;
+        const issued = ++this.botsIssued;
+        try {
+          const result = await this.request("agents.list", {});
+          if (generation !== this.generation || !this.newestBots(issued)) continue;
+          this.applyBots(mapAgents(result));
+        } catch (error) {
+          if (generation === this.generation) this.logFailure("warn", "agents.list", error);
+        }
+      } while (read.again && generation === this.generation && this.botsRefresh === read);
+    } finally {
+      if (this.botsRefresh === read) this.botsRefresh = null;
+    }
+  }
+
+  /** Publish the bot list and drop cached task rows belonging to bots the gateway removed. */
+  private applyBots(bots: ReturnType<typeof mapAgents>): void {
+    const present = new Set<string>();
+    for (const bot of bots) present.add(bot.id);
+    const removed = new Set<string>();
+    for (const bot of this.state.bots) if (!present.has(bot.id)) removed.add(bot.id);
+    this.store.update((state) => ({ ...state, bots }));
+    if (removed.size === 0) return;
+    let pruned = false;
+    for (const [key, row] of [...this.rows]) {
+      const botId =
+        botIdFromSessionKey(key) ?? (typeof row.agentId === "string" ? row.agentId : null);
+      if (!botId || !removed.has(botId)) continue;
+      this.rows.delete(key);
+      this.cancelAllQueued(key);
+      this.retireForeign(key);
+      pruned = true;
+    }
+    if (pruned) this.publishTasks();
   }
 
   /**
@@ -7140,6 +7193,7 @@ export class ClawtrateClient {
     if (this.reopenTimer !== null) clearTimeout(this.reopenTimer);
     this.reopenTimer = null;
     this.discoveryRead = null;
+    this.botsRefresh = null;
     this.selectionReady = -1;
     this.endSocketReads();
     this.endSocketReads = () => {};
@@ -7491,7 +7545,7 @@ export class ClawtrateClient {
     const selection = this.selectionApplied;
     // Closing the socket or starting another discovery retires this read.
     const epoch = this.epoch;
-    const read = { sessionsChanged: false };
+    const read = { sessionsChanged: false, botsChanged: false };
     this.discoveryRead = read;
     const sameSocket = () => generation === this.generation && epoch === this.epoch;
     const current = () =>
@@ -7532,6 +7586,8 @@ export class ClawtrateClient {
     const failures: string[] = [];
     if (agents.status !== "fulfilled") {
       failures.push(`bots: ${errorMessage(agents.reason)}`);
+    } else if (read.botsChanged) {
+      void this.refreshBotsOnChange(generation);
     }
     if (sessions.status === "fulfilled") {
       this.replaceRows(sessions.value.rows);
@@ -8122,6 +8178,10 @@ export class ClawtrateClient {
     switch (event.event) {
       case "sessions.changed":
         this.handleSessionsChanged(event.payload, generation);
+        return;
+      case "config.changed":
+        if (this.discoveryRead) this.discoveryRead.botsChanged = true;
+        else void this.refreshBotsOnChange(generation);
         return;
       case "plugins.changed":
         // Tool-server tools come from the gateway's bundle-mcp plugin: read each task's map again.

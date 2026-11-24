@@ -906,6 +906,12 @@ export function RoutinesView({
     nav.bot !== null && !shown && mode === "list"
       ? (bots.find((each) => each.id === nav.bot) ?? null)
       : null;
+  // A filtered bot that leaves the gateway's list and has no remaining routines clears the filter.
+  const filteredBotMissing =
+    nav.bot !== null && !owners(bots, store.routines).some((each) => each.id === nav.bot);
+  useEffect(() => {
+    if (filteredBotMissing) onNav({ ...nav, bot: null });
+  }, [filteredBotMissing, nav, onNav]);
   // Read in the list across bots too: its group heads say each bot's check-ins.
   const checkInsSection = useCheckInsSection({
     active: !shown && mode === "list",
