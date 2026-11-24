@@ -459,7 +459,7 @@ export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /**
  * Messages history confirmed whose pictures this client keeps to show, from
  * the copy it sent, whenever their task is open on this device, until this
- * client disconnects from the gateway or the task is deleted (archiving keeps
+ * client disconnects from the gateway or the task or its bot is deleted (archiving keeps
  * them). Clawtrate doesn't load a person's picture from the gateway (#469).
  * Their bytes share
  * `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes' files and give way,
