@@ -68,9 +68,11 @@ const confirmedScope = (gatewayId: string) => `gateway:${gatewayId}`;
 const placementScope = (connection: ConnectionState) =>
   connection.gatewayId ? confirmedScope(connection.gatewayId) : fallbackScope(connection);
 
-type SaveEntry = { pending: number; seq: number };
+const OTHER_PLACEMENT_PARTS = PLACEMENT_PARTS.filter((part) => part !== "commands");
 
-const EMPTY_SAVE: SaveEntry = { pending: 0, seq: 0 };
+type SaveEntry = { pending: number; commandsSeq: number; botSeqs: Record<string, number> };
+
+const EMPTY_SAVE: SaveEntry = { pending: 0, commandsSeq: 0, botSeqs: {} };
 
 type SavesState = {
   seq: number;
@@ -88,11 +90,16 @@ function promoteScope(state: SavesState, fallback: string, confirmed: string): S
   const redirects = { ...state.redirects, [fallback]: confirmed };
   if (!carried) return { ...state, redirects };
   const existing = state.entries[confirmed] ?? EMPTY_SAVE;
+  const botSeqs: Record<string, number> = { ...existing.botSeqs };
+  for (const [botId, seq] of Object.entries(carried.botSeqs)) {
+    botSeqs[botId] = Math.max(botSeqs[botId] ?? 0, seq);
+  }
   const entries = { ...state.entries };
   delete entries[fallback];
   entries[confirmed] = {
     pending: existing.pending + carried.pending,
-    seq: Math.max(existing.seq, carried.seq),
+    commandsSeq: Math.max(existing.commandsSeq, carried.commandsSeq),
+    botSeqs,
   };
   return { ...state, entries, redirects };
 }
@@ -102,11 +109,11 @@ function beginSave(state: SavesState, rawScope: string): SavesState {
   const was = state.entries[scope] ?? EMPTY_SAVE;
   return {
     ...state,
-    entries: { ...state.entries, [scope]: { pending: was.pending + 1, seq: was.seq } },
+    entries: { ...state.entries, [scope]: { ...was, pending: was.pending + 1 } },
   };
 }
 
-function finishSave(state: SavesState, rawScope: string): SavesState {
+function finishSave(state: SavesState, rawScope: string, botId: string): SavesState {
   const scope = resolveScope(state, rawScope);
   const was = state.entries[scope] ?? EMPTY_SAVE;
   const seq = state.seq + 1;
@@ -115,12 +122,16 @@ function finishSave(state: SavesState, rawScope: string): SavesState {
     seq,
     entries: {
       ...state.entries,
-      [scope]: { pending: Math.max(0, was.pending - 1), seq },
+      [scope]: {
+        pending: Math.max(0, was.pending - 1),
+        commandsSeq: seq,
+        botSeqs: { ...was.botSeqs, [botId]: seq },
+      },
     },
   };
 }
 
-function settleSave(state: SavesState, rawScope: string): SavesState {
+function settleSave(state: SavesState, rawScope: string, botId: string): SavesState {
   const scope = resolveScope(state, rawScope);
   const was = state.entries[scope] ?? EMPTY_SAVE;
   const seq = state.seq + 1;
@@ -129,7 +140,11 @@ function settleSave(state: SavesState, rawScope: string): SavesState {
     seq,
     entries: {
       ...state.entries,
-      [scope]: { pending: was.pending, seq },
+      [scope]: {
+        pending: was.pending,
+        commandsSeq: seq,
+        botSeqs: { ...was.botSeqs, [botId]: seq },
+      },
     },
   };
 }
@@ -137,9 +152,10 @@ function settleSave(state: SavesState, rawScope: string): SavesState {
 type PlacementSaves = {
   seq: number;
   entries: Record<string, SaveEntry>;
-  begin: (scope: string) => () => void;
-  settled: (scope: string) => void;
-  seqOf: (scope: string) => number;
+  begin: (scope: string, botId: string) => () => void;
+  settled: (scope: string, botId: string) => void;
+  commandsSeqOf: (scope: string) => number;
+  botSeqOf: (scope: string, botId: string) => number;
 };
 
 const PlacementSavesContext = createContext<PlacementSaves | null>(null);
@@ -175,28 +191,32 @@ export function PlacementSavesProvider({
   useLayoutEffect(() => {
     mirror.current = state;
   }, [state]);
-  const seqOf = useCallback((scope: string) => {
+  const commandsSeqOf = useCallback((scope: string) => {
     const target = resolveScope(mirror.current, scope);
-    return mirror.current.entries[target]?.seq ?? 0;
+    return mirror.current.entries[target]?.commandsSeq ?? 0;
   }, []);
-  const settled = useCallback((scope: string) => {
-    mirror.current = settleSave(mirror.current, scope);
-    setState((current) => settleSave(current, scope));
+  const botSeqOf = useCallback((scope: string, botId: string) => {
+    const target = resolveScope(mirror.current, scope);
+    return mirror.current.entries[target]?.botSeqs[botId] ?? 0;
   }, []);
-  const begin = useCallback((scope: string) => {
+  const settled = useCallback((scope: string, botId: string) => {
+    mirror.current = settleSave(mirror.current, scope, botId);
+    setState((current) => settleSave(current, scope, botId));
+  }, []);
+  const begin = useCallback((scope: string, botId: string) => {
     mirror.current = beginSave(mirror.current, scope);
     setState((current) => beginSave(current, scope));
     let ended = false;
     return () => {
       if (ended) return;
       ended = true;
-      mirror.current = finishSave(mirror.current, scope);
-      setState((current) => finishSave(current, scope));
+      mirror.current = finishSave(mirror.current, scope, botId);
+      setState((current) => finishSave(current, scope, botId));
     };
   }, []);
   const value = useMemo<PlacementSaves>(
-    () => ({ seq: state.seq, entries: state.entries, begin, settled, seqOf }),
-    [state.seq, state.entries, begin, settled, seqOf],
+    () => ({ seq: state.seq, entries: state.entries, begin, settled, commandsSeqOf, botSeqOf }),
+    [state.seq, state.entries, begin, settled, commandsSeqOf, botSeqOf],
   );
   return <PlacementSavesContext.Provider value={value}>{children}</PlacementSavesContext.Provider>;
 }
@@ -218,10 +238,12 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   // Every bot on a gateway writes against the same config revision.
   const scope = placementScope(connection);
   const entry = saves?.entries[scope] ?? EMPTY_SAVE;
+  const botSeq = entry.botSeqs[botId] ?? 0;
   const currentSeq = saves?.seq ?? 0;
   const savesBegin = saves?.begin ?? null;
   const savesSettled = saves?.settled ?? null;
-  const seqOf = saves?.seqOf ?? null;
+  const commandsSeqOf = saves?.commandsSeqOf ?? null;
+  const botSeqOf = saves?.botSeqOf ?? null;
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
   const key = `${botId}\n${connectionKey(connection)}`;
@@ -253,13 +275,29 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   // Fallback pending count when rendered outside PlacementSavesProvider.
   const [localWriting, setLocalWriting] = useState(0);
   const writing = saves ? entry.pending : localWriting;
-  const [batch, setBatch] = useState<ReadBatch>(() => ({
+  const [commandsBatch, setCommandsBatch] = useState<ReadBatch>(() => ({
     sessionId,
     generation: 0,
     seq: currentSeq,
   }));
-  if (batch.sessionId !== sessionId || batch.generation !== generation || batch.seq < entry.seq) {
-    setBatch({ sessionId, generation, seq: currentSeq });
+  if (
+    commandsBatch.sessionId !== sessionId ||
+    commandsBatch.generation !== generation ||
+    commandsBatch.seq < entry.commandsSeq
+  ) {
+    setCommandsBatch({ sessionId, generation, seq: currentSeq });
+  }
+  const [otherBatch, setOtherBatch] = useState<ReadBatch>(() => ({
+    sessionId,
+    generation: 0,
+    seq: currentSeq,
+  }));
+  if (
+    otherBatch.sessionId !== sessionId ||
+    otherBatch.generation !== generation ||
+    otherBatch.seq < botSeq
+  ) {
+    setOtherBatch({ sessionId, generation, seq: currentSeq });
   }
   const scopeRef = useRef(scope);
   useLayoutEffect(() => {
@@ -267,13 +305,44 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   }, [scope]);
   useEffect(() => {
     if (!active || !connected) return;
-    if (batch.sessionId !== sessionId) return;
+    if (commandsBatch.sessionId !== sessionId) return;
     let live = true;
-    const req = batch;
+    const req = commandsBatch;
+    const keep = (part: Partial<Placement>) =>
+      live &&
+      req.generation === asked.current &&
+      (!commandsSeqOf || req.seq >= commandsSeqOf(scopeRef.current)) &&
+      setHeld((was) => {
+        const same = was?.sessionId === req.sessionId;
+        return {
+          sessionId: req.sessionId,
+          parts: { ...(same ? was.parts : {}), ...part },
+          at: { ...(same ? was.at : {}), commands: req },
+        };
+      });
+    bridge.invoke({ type: "readPlacement", botId, part: "commands" }).then(
+      (value) => keep({ commands: { status: "ready", value } }),
+      (error: unknown) =>
+        keep({
+          commands: {
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [bridge, botId, active, connected, commandsBatch, sessionId, commandsSeqOf]);
+  useEffect(() => {
+    if (!active || !connected) return;
+    if (otherBatch.sessionId !== sessionId) return;
+    let live = true;
+    const req = otherBatch;
     const keep = (name: PlacementPart, part: Partial<Placement>) =>
       live &&
       req.generation === asked.current &&
-      (!seqOf || req.seq >= seqOf(scopeRef.current)) &&
+      (!botSeqOf || req.seq >= botSeqOf(scopeRef.current, botId)) &&
       setHeld((was) => {
         const same = was?.sessionId === req.sessionId;
         return {
@@ -282,7 +351,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
           at: { ...(same ? was.at : {}), [name]: req },
         };
       });
-    for (const part of PLACEMENT_PARTS)
+    for (const part of OTHER_PLACEMENT_PARTS)
       bridge.invoke({ type: "readPlacement", botId, part }).then(
         (value) => keep(part, { [part]: { status: "ready", value } }),
         (error: unknown) =>
@@ -296,13 +365,13 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     return () => {
       live = false;
     };
-  }, [bridge, botId, active, connected, batch, sessionId, seqOf]);
+  }, [bridge, botId, active, connected, otherBatch, sessionId, botSeqOf]);
   const reload = useCallback(() => {
     asked.current += 1;
     setGeneration(asked.current);
   }, []);
   const begin = useCallback(() => {
-    if (savesBegin) return savesBegin(scope);
+    if (savesBegin) return savesBegin(scope, botId);
     setLocalWriting((n) => n + 1);
     let ended = false;
     return () => {
@@ -311,11 +380,11 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
       setLocalWriting((n) => n - 1);
       reload();
     };
-  }, [savesBegin, scope, reload]);
+  }, [savesBegin, scope, botId, reload]);
   const settled = useCallback(() => {
-    if (savesSettled) savesSettled(scope);
+    if (savesSettled) savesSettled(scope, botId);
     else reload();
-  }, [savesSettled, scope, reload]);
+  }, [savesSettled, scope, botId, reload]);
   // On a disconnect or another session, what was read is dropped before anything is derived.
   if (held && (!connected || held.sessionId !== sessionId)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>
@@ -332,10 +401,10 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   const commandsCurrent =
     writing === 0 &&
     held?.sessionId === sessionId &&
-    held.at.commands === batch &&
-    batch.sessionId === sessionId &&
-    batch.generation === generation &&
-    batch.seq >= entry.seq;
+    held.at.commands === commandsBatch &&
+    commandsBatch.sessionId === sessionId &&
+    commandsBatch.generation === generation &&
+    commandsBatch.seq >= entry.commandsSeq;
   return { read, reload, begin, settled, commandsCurrent };
 }
 

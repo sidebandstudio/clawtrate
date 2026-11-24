@@ -1214,6 +1214,76 @@ test("F-046: confirming the gateway id on the same connection reuses the placeme
   await expect(select).toBeEnabled();
 });
 
+test("F-046: Otto's command save refreshes Pip's commands without re-reading Pip's workspace", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    const held = window as unknown as {
+      ottoAnswered?: boolean;
+      answerOtto?: () => Promise<unknown>;
+    };
+    fixture.invoke = (command) => {
+      const cmd = command as { type: string; botId?: string; part?: string };
+      if (cmd.type === "setCommandMachine" && cmd.botId === "otto")
+        return new Promise((resolve, reject) => {
+          held.answerOtto = () =>
+            original(command).then(
+              (answer) => {
+                held.ottoAnswered = true;
+                resolve(answer);
+                return answer;
+              },
+              (error) => {
+                reject(error);
+                throw error;
+              },
+            );
+        });
+      if (
+        held.ottoAnswered &&
+        cmd.type === "readPlacement" &&
+        cmd.botId === "pip" &&
+        cmd.part === "workspace"
+      )
+        return original(command).then(() => {
+          throw new Error("agents.list timed out");
+        });
+      return original(command);
+    };
+  });
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  // Switch to Pip while Otto's save is still out, and let Pip's workspace load.
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Pip\b/ })
+    .click();
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /^Where Pip runs: / }).click();
+  await expect(page.getByTestId("runs-on-workspace")).toContainText("/srv/clawtrate/workspaces/");
+  await expect(page.getByRole("button", { name: "Change…" })).toBeVisible();
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toBeDisabled();
+  const pipWorkspaceReads = async () =>
+    (await sent(page)).filter(
+      (c) => c.type === "readPlacement" && c.botId === "pip" && c.part === "workspace",
+    ).length;
+  const before = await pipWorkspaceReads();
+  expect(before).toBeGreaterThan(0);
+  // Release Otto's save: Pip's commands refresh, but Pip's workspace is not read again.
+  await page.evaluate(() =>
+    (window as unknown as { answerOtto: () => Promise<unknown> }).answerOtto(),
+  );
+  await expect(select).toBeEnabled();
+  expect(await pipWorkspaceReads()).toBe(before);
+  await expect(page.getByTestId("runs-on-workspace")).toContainText("/srv/clawtrate/workspaces/");
+  await expect(page.getByRole("button", { name: "Change…" })).toBeVisible();
+});
+
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
   page,
 }) => {
