@@ -20,6 +20,7 @@ import {
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
+  type PickerCut,
   type GatewayAccount,
   type KeyProvider,
   type LockCheck,
@@ -1056,6 +1057,7 @@ const catalogModel = object<CatalogModel>()({
   levels: list(MAX_EFFORT_LEVELS, ENUM),
   defaultLevel: ENUM,
 });
+const pickerCut = object<PickerCut>()({ provider: ID, total: NUMBER });
 const storedOrder = object<StoredOrder>()({
   ids: list(MAX_ORDER_IDS, ID),
   stored: FLAG,
@@ -1148,6 +1150,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   methods: list(MAX_SIGNIN_METHODS, signInMethod),
   keyProviders: list(MAX_KEY_PROVIDERS, keyProvider),
   models: list(MAX_CATALOG_MODELS, catalogModel),
+  modelsCut: list(MAX_KEY_PROVIDERS, pickerCut),
   bindings: list(MAX_BOTS, binding),
   signIn,
   creation: botCreation,

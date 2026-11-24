@@ -11,6 +11,7 @@ import {
   OUTGOING,
   QUESTION,
   RUN,
+  STATE,
   STEP,
   TRANSCRIPT,
   WORST_STATE_CHARS,
@@ -71,6 +72,10 @@ describe("the documented retention totals", () => {
     for (const [part, value] of Object.entries(hostWorstCase(limits))) {
       expect(lastCell(`\`${part}\``), part).toBe(written(value));
     }
+    // The connection's own cap, written inside the task list's row.
+    assert(STATE.kind === "object");
+    const listRow = docs.split("\n").find((line) => line.includes("| Task list, connection"));
+    expect(listRow).toContain(`connection ${written(worstCase(STATE.fields.connection!))},`);
   });
 
   it("count each viewer's results at its command slots", () => {
