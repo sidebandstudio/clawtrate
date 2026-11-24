@@ -38,3 +38,17 @@ it("accepts a stable version or the calculated nightly and rejects mismatched in
   ] as const)
     expect(() => nightlyVersion(base, date, run)).toThrow();
 });
+it("F-559: from 0.2.0 on, a beta candidate is named by hand with three numbers, never dated", () => {
+  const pick = (value: string, current = "0.2.0") =>
+    candidateVersion("nightly", value, current, date, "3");
+  expect(pick("0.2.0")).toBe("0.2.0");
+  expect(pick("0.2.7")).toBe("0.2.7");
+  expect(pick("0.3.0", "0.3.0")).toBe("0.3.0");
+  for (const value of ["", "0.2.1-beta.20261119.3", "bad"]) expect(() => pick(value)).toThrow();
+  for (const current of ["0.2.0", "0.3.0", "1.0.0"])
+    expect(() => nightlyVersion(current, date, "1")).toThrow(
+      `Betas of ${current} have three numbers; a dated beta is never made again.`,
+    );
+  // Below 0.2.0, dated as before.
+  expect(nightlyVersion("0.1.9", date, "1")).toBe("0.1.10-beta.20261119.1");
+});

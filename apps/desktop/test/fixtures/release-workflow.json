@@ -11,7 +11,7 @@
         },
         "version": {
           "type": "string",
-          "description": "Stable version (leave blank to calculate a beta)",
+          "description": "Stable version, or Beta version from 0.2.0 on (leave blank to calculate a dated beta below 0.2.0)",
           "required": false
         }
       }

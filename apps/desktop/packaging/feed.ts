@@ -14,7 +14,12 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildAddressProblem } from "../src/main/update/address.ts";
 import { FEED_FORMAT, FILE_EXTENSION, FILE_KEYS, type FileKey } from "../src/main/update/feed.ts";
-import { formatVersion, parseVersion, versionTrack } from "../src/main/update/version.ts";
+import {
+  fitsTrack,
+  formatVersion,
+  parseVersion,
+  versionTrack,
+} from "../src/main/update/version.ts";
 import type { UpdateTrack } from "@clawtrate/core";
 // Not from config.ts: the site assembly imports this file and installs no packages.
 import { PRODUCT_NAME } from "../src/main/identity.ts";
@@ -45,9 +50,13 @@ export function makeFeed(options: {
   releaseDate: string;
   folder: string;
   dir: string;
+  /** The track the feed is for. Three numbers can be on either; a dated version only on Beta. */
+  track?: UpdateTrack;
 }): FeedDocument {
   const version = parseVersion(options.version);
   if (!version) throw new Error("Invalid release version");
+  const track = options.track ?? versionTrack(version);
+  if (!fitsTrack(version, track)) throw new Error("Version does not match track");
   const base = new URL(options.folder);
   base.search = "";
   base.hash = "";
@@ -69,7 +78,7 @@ export function makeFeed(options: {
   }
   return {
     format: FEED_FORMAT,
-    track: versionTrack(version),
+    track,
     version: formatVersion(version),
     releaseDate: options.releaseDate,
     files,

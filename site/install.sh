@@ -165,12 +165,14 @@ function run(argv) {
   };
   if (!isObject(feed) || !exactKeys(feed, ["arm64", "teamIdentifier", "x86_64"])) throw new Error("wrong fields");
   if (feed.teamIdentifier !== team) throw new Error("the feed names another signing team");
-  // The release's own beta version: a real calendar date and a run number.
-  const VERSION = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})-beta\.([1-9]\d{7})\.(0|[1-9]\d{0,11})$/;
+  // The release's own beta version: three numbers, or the dated form before
+  // 0.2.0, whose date must be a real calendar date and which ends in a run number.
+  const VERSION = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-beta\.([1-9]\d{7})\.(0|[1-9]\d{0,11}))?$/;
   const isBeta = (v) => {
     if (typeof v !== "string" || v.length > 50) return false;
     const m = VERSION.exec(v);
     if (!m || m[0] !== v) return false;
+    if (m[4] === undefined) return true;
     const iso = m[4].slice(0, 4) + "-" + m[4].slice(4, 6) + "-" + m[4].slice(6);
     const time = Date.parse(iso);
     return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === iso;

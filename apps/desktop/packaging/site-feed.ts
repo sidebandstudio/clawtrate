@@ -43,7 +43,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GITHUB_RELEASE_ASSETS, releaseAssetRedirect } from "../src/main/update/address.ts";
-import { isNewer, parseVersion, versionTrack } from "../src/main/update/version.ts";
+import { fitsTrack, isNewer, parseVersion } from "../src/main/update/version.ts";
 import {
   isTitle,
   MAX_WHATS_NEW_ITEMS,
@@ -92,7 +92,7 @@ export function newestBeta(rows: readonly ReleaseRow[]): ReleaseRow | null {
   for (const row of rows) {
     if (row.draft || !row.prerelease || !row.tag_name.startsWith("v")) continue;
     const version = parseVersion(row.tag_name.slice(1));
-    if (!version || versionTrack(version) !== "nightly") continue;
+    if (!version || !fitsTrack(version, "nightly")) continue;
     const names = row.assets.map((asset) => asset.name);
     const needed = [
       FEED_NAME,
@@ -235,7 +235,7 @@ export function betaNotes(
   const betas = rows.flatMap((row) => {
     if (row.draft || !row.prerelease || !row.tag_name.startsWith("v")) return [];
     const version = parseVersion(row.tag_name.slice(1));
-    if (!version || versionTrack(version) !== "nightly") return [];
+    if (!version || !fitsTrack(version, "nightly")) return [];
     const items = whatsNew(row.body);
     return items.length ? [{ version, text: row.tag_name.slice(1), items }] : [];
   });
@@ -372,6 +372,11 @@ export async function writeSiteFeed(
   const whatsNew = whatsNewFile(all);
   writeFeedFolder(join(site, BETA_FOLDER), files, whatsNew);
   if (pin === null) {
+    // Copies that read the legacy folder refuse three numbers: they reach one only through a pin.
+    if (parseVersion(release.tag_name.slice(1))!.length === 3)
+      throw new Error(
+        `The newest beta, ${release.tag_name.slice(1)}, has three numbers, and the legacy Beta feed is not pinned, so nothing deploys.`,
+      );
     writeFeedFolder(join(site, LEGACY_BETA_FOLDER), files, whatsNew);
     return release.tag_name;
   }

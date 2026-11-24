@@ -39,6 +39,16 @@ describe.skipIf(process.platform !== "darwin")("install.sh's Claw moment", () =>
     await s.close();
   });
 
+  it("F-559: installs a three-numbered beta the same way", async () => {
+    await s.close();
+    s = await standIns("0.2.0");
+    const run = await runPiped("/bin/sh", { ...s.env, ...TERMINAL });
+    expect(run.stderr).toBe("");
+    expect(run.stdout).toContain("Latest beta: Clawtrate 0.2.0 for ");
+    expect(run.stdout).toContain(`Installed Clawtrate 0.2.0 in ${s.applications}/Clawtrate.app.`);
+    expect(run.status).toBe(0);
+  });
+
   it.each(SHELLS)(
     "prints exactly the install's own lines when stdout is not a terminal (%s)",
     async (shell) => {
