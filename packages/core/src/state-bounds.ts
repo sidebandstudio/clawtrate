@@ -616,6 +616,7 @@ const item = flagged<TranscriptItem>()({
   model: NAME,
   pictures: list(MAX_PICTURES_PER_ITEM, picture, { pool: "pictures" }),
   files: list(MAX_FILES_PER_ITEM, chatFile, { pool: "files" }),
+  filesLast: FLAG,
   attachments: list(MAX_ATTACHMENTS_PER_ITEM, sentAttachment, { pool: "attachments" }),
   truncated: FLAG,
   messageId: ID,

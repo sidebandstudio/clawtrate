@@ -352,6 +352,8 @@ export type TranscriptItem = {
   pictures?: ChatPicture[];
   /** The other files the bot's messages of this item hand over, in their order. Absent when none. */
   files?: ChatFile[];
+  /** The item's last row with text or files had only files: present and true only then. */
+  filesLast?: true;
   /** The files a person's message carried, in the order sent. Absent when none. */
   attachments?: SentAttachment[];
   /**

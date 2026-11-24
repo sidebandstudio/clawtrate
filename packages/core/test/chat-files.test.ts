@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import { toBase64 } from "../src/bytes.ts";
+import { utf8Length } from "../src/encoding.ts";
 import { isTooLargeToSave, MAX_CHAT_FILE_BYTES } from "../src/chat-files.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { parseBridgeCommand } from "../src/bridge.ts";
@@ -15,7 +16,7 @@ import type { HttpFetch, HttpResponseLike } from "../src/host.ts";
 import {
   cleanFileName,
   mapHistory,
-  MAX_FILE_NAME_LENGTH,
+  MAX_FILE_NAME_BYTES,
   taskWithFilePreview,
 } from "../src/mapping.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
@@ -131,6 +132,9 @@ describe("F-115: a file a bot attaches, in history", () => {
           sizeBytes: 9_000,
         },
         { type: "file", artifactId: "artifact_other", title: "plan.key", sizeBytes: 12 },
+        // A known kind without an id is still a row, with nothing to read; an unknown one isn't.
+        { type: "audio", fileName: "memo.m4a", mimeType: "audio/mp4" },
+        { type: "file", title: "no-id.key" },
         {
           type: "attachment",
           attachment: { artifactId: "artifact_k", kind: "sheet", label: "costs.xlsx" },
@@ -143,10 +147,12 @@ describe("F-115: a file a bot attaches, in history", () => {
         },
       ]),
     ).at(-1)!.files!;
+    expect(files.find((file) => file.name === "memo.m4a")?.artifactId).toBeNull();
     expect(files.map((file) => [file.name, file.mimeType, file.sizeBytes])).toEqual([
       ["tone.wav", "audio/wav", 44],
       ["clip.mp4", "video/mp4", 9_000],
       ["plan.key", null, 12],
+      ["memo.m4a", "audio/mp4", null],
       ["costs.xlsx", null, null],
     ]);
   });
@@ -303,24 +309,42 @@ describe("F-115: a file a bot attaches, live", () => {
 });
 
 describe("F-115: the name shown and offered for saving", () => {
-  it("F-115: keeps only the last path part, takes out control and direction characters, and is never empty", () => {
+  it("F-115: keeps only the last path part, takes out control, format and separator characters and lone surrogates, and is never empty", () => {
     expect(cleanFileName("../../etc/passwd")).toBe("passwd");
     expect(cleanFileName("C:\\Users\\someone\\report.pdf")).toBe("report.pdf");
     expect(cleanFileName("a\u0007b\u0000c.txt")).toBe("abc.txt");
     expect(cleanFileName("invoice\u202Efdp.exe")).toBe("invoicefdp.exe");
+    expect(cleanFileName("re\u200Bport.pdf")).toBe("report.pdf");
+    expect(cleanFileName("a\u2060.pdf")).toBe("a.pdf");
+    expect(cleanFileName("a\u00ADb.pdf")).toBe("ab.pdf");
+    expect(cleanFileName("a\u{E0041}.pdf")).toBe("a.pdf");
+    expect(cleanFileName("a\u2028b.pdf")).toBe("ab.pdf");
+    expect(cleanFileName("a\u2029b.pdf")).toBe("ab.pdf");
+    expect(cleanFileName("a\uD800b.pdf")).toBe("ab.pdf");
+    expect(cleanFileName("\uFEFFnotes.txt")).toBe("notes.txt");
     expect(cleanFileName("  ..  ")).toBe("File");
     expect(cleanFileName("")).toBe("File");
     expect(cleanFileName(null)).toBe("File");
     expect(cleanFileName("folder/")).toBe("File");
   });
 
-  it(`F-115: a long name is cut to ${MAX_FILE_NAME_LENGTH} characters with its extension kept`, () => {
-    const long = `${"a".repeat(400)}.pdf`;
-    const cut = cleanFileName(long);
-    expect([...cut]).toHaveLength(MAX_FILE_NAME_LENGTH);
+  it(`F-115: a long name is cut to ${MAX_FILE_NAME_BYTES} UTF-8 bytes between characters, with its extension kept`, () => {
+    const bytes = utf8Length;
+    const cut = cleanFileName(`${"a".repeat(400)}.pdf`);
     expect(cut.endsWith("….pdf")).toBe(true);
-    const exact = `${"b".repeat(MAX_FILE_NAME_LENGTH - 4)}.txt`;
+    expect(bytes(cut)).toBeLessThanOrEqual(MAX_FILE_NAME_BYTES);
+    expect(bytes(cut)).toBeGreaterThan(MAX_FILE_NAME_BYTES - 4);
+    const exact = `${"b".repeat(MAX_FILE_NAME_BYTES - 4)}.txt`;
     expect(cleanFileName(exact)).toBe(exact);
+    // Emoji are four bytes each: never cut inside one, never over the limit.
+    const emoji = cleanFileName(`${"\u{1F4C4}".repeat(300)}.pdf`);
+    expect(bytes(emoji)).toBeLessThanOrEqual(MAX_FILE_NAME_BYTES);
+    expect(emoji).toMatch(/^(?:\u{1F4C4})+….pdf$/u);
+    expect(emoji.length).toBeLessThanOrEqual(255);
+    // Fewer than 255 characters, more than 255 bytes: still cut.
+    const short = cleanFileName(`${"\u{1F4C4}".repeat(100)}.pdf`);
+    expect(bytes(short)).toBeLessThanOrEqual(MAX_FILE_NAME_BYTES);
+    expect(short.endsWith("….pdf")).toBe(true);
   });
 });
 
@@ -333,6 +357,23 @@ describe("F-115: the preview of a task whose last message is only a file", () =>
   it("F-115: reads as the file's name in place of the person's message the gateway lists, or of none", () => {
     expect(taskWithFilePreview(task("Send the route"), only).preview).toBe("route.csv");
     expect(taskWithFilePreview(task(null), only).preview).toBe("route.csv");
+  });
+
+  it("F-115: a file-only message after the bot's text in the same run still names its file, in place of that text", () => {
+    const merged = {
+      items: mapHistory([
+        ...run([{ type: "text", text: "I'll prepare it." }], "Send the route"),
+        {
+          role: "assistant",
+          content: [attachment(NOTES, "route.csv", "text/csv", 1_204)],
+          model: "dev-1",
+          __openclaw: { runId: "probe-attach", id: "row-last", seq: 5 },
+        },
+      ]),
+    } as unknown as Transcript;
+    expect(merged.items.filter((item) => item.role === "assistant")).toHaveLength(1);
+    expect(taskWithFilePreview(task("I'll prepare it."), merged).preview).toBe("route.csv");
+    expect(taskWithFilePreview(task("Send the route"), merged).preview).toBe("Send the route");
   });
 
   it("F-115: any other preview, a message with text, or no loaded history keeps the gateway's", () => {
