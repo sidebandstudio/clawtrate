@@ -88,7 +88,7 @@ function SentPicture({
         {shown.status === "loading"
           ? "Loading the picture…"
           : shown.status === "not-kept"
-            ? "Picture sent with this message. It shows only on the device that sent it, while the task is open."
+            ? "Picture sent with this message. It shows on the device that sent it, until Clawtrate disconnects or is closed."
             : `Couldn't show the picture. ${shown.message}`}
       </span>
     </p>

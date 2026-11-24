@@ -312,7 +312,7 @@ test.describe("F-557: a picture you attach", () => {
     });
     await expect(there.getByTestId("sent-picture")).toContainText(
       // Its name and size as the gateway recorded them, then the plain line.
-      `shot.png${Math.round(shot.length / 1024)} KBPicture sent with this message. It shows only on the device that sent it, while the task is open.`,
+      `shot.png${Math.round(shot.length / 1024)} KBPicture sent with this message. It shows on the device that sent it, until Clawtrate disconnects or is closed.`,
     );
     await expect(there.locator(".bubble")).toHaveText(WORDS);
     await otherContext.close();
