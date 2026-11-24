@@ -476,9 +476,8 @@ function TranscriptView({
           draftKey={draftKey}
           messageId={thread?.messageId ?? null}
           onClose={() => {
-            const from = thread?.from;
             setThread(null);
-            requestAnimationFrame(() => from?.focus());
+            thread?.from?.focus();
           }}
         />
       </MessageProvider>

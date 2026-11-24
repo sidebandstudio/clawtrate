@@ -128,6 +128,22 @@ for (const outcome of ["refusal", "acceptance"] as const) {
   });
 }
 
+test("F-067: closing a reply does not take focus back from the next reply button", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=message-actions&${OTTO_DISK}&panel=closed`, "light");
+  await page.getByTestId("reply-quote").click();
+  const other = page.getByTestId("message").filter({ has: page.getByTestId("reactions") });
+  const next = other.getByRole("button", { name: "Reply in a thread" });
+  await next.evaluate(async (button: HTMLButtonElement) => {
+    document.querySelector<HTMLButtonElement>('button[aria-label="Close the thread"]')!.click();
+    button.focus();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  await expect(page.getByTestId("thread")).toHaveCount(0);
+  await expect(next).toBeFocused();
+});
+
 for (const edit of ["retyped", "untouched"] as const) {
   test(`F-278: delayed new-task success clears only the submitted revision when a reopened reply is ${edit}`, async ({
     page,
