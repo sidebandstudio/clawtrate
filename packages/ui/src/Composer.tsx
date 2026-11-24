@@ -195,7 +195,33 @@ function writeDraft(key: string, draft: Draft): void {
   }
 }
 
-const useComposerDraft = createHandoffDraft<Draft>((draft) => Boolean(draft.text), writeDraft);
+type ComposerDraft = { words: Draft; files: Attached[]; tokens: MenuRow[] };
+
+const emptyComposer = (words: Draft = { text: "" }): ComposerDraft => ({
+  words,
+  files: [],
+  tokens: [],
+});
+const useComposerHandoff = createHandoffDraft<ComposerDraft>(({ words, files, tokens }) =>
+  Boolean(words.text || files.length || tokens.length),
+);
+const uploadingFiles = new WeakSet<Attached>();
+
+function useComposerDraft(key: string) {
+  const [draft, change, pending, begin] = useComposerHandoff(key, () =>
+    emptyComposer(readDraft(key)),
+  );
+  const edit = useCallback(
+    (update: (current: ComposerDraft) => ComposerDraft) =>
+      change((current) => {
+        const next = update(current);
+        if (next.words !== current.words) writeDraft(key, next.words);
+        return next;
+      }),
+    [change, key],
+  );
+  return [draft, edit, pending, begin] as const;
+}
 
 /** True on a Mac, where ⌘ is the command key; elsewhere Ctrl stands for it. */
 const isMac = () => /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? "");
@@ -247,27 +273,33 @@ export function Composer({
   const bridge = useBridge();
   // A draft belongs to one task on one gateway.
   const draftKey = `${gateway ?? ""}|${taskKey}`;
-  const [draft, setDraft, handingOff, beginHandoff] = useComposerDraft(draftKey, () =>
-    readDraft(draftKey),
-  );
+  const [composer, edit, handingOff, beginHandoff] = useComposerDraft(draftKey);
+  const { words: draft, files, tokens } = composer;
   const text = draft.text;
   // The task's session as drawn now.
   const shownSession = transcript?.sessionId;
   /** The person's words, bound at their first to the session the view shows, if it shows one. */
   const setText = useCallback(
     (next: string) =>
-      setDraft((current) => ({
-        ...current,
-        text: next,
-        ...(next.trim() && current.sessionId === undefined && !current.unbound && shownSession
-          ? { sessionId: shownSession }
-          : {}),
+      edit(({ words, ...parts }) => ({
+        ...parts,
+        words: {
+          ...words,
+          text: next,
+          ...(next.trim() && words.sessionId === undefined && !words.unbound && shownSession
+            ? { sessionId: shownSession }
+            : {}),
+        },
       })),
-    [setDraft, shownSession],
+    [edit, shownSession],
   );
-  const [files, setFiles] = useState<Attached[]>([]);
-  // The skill or command chosen from the "/" menu: a chip sent before the words.
-  const [tokens, setTokens] = useState<MenuRow[]>([]);
+  const setFiles = useCallback(
+    (update: (current: Attached[]) => Attached[]) =>
+      edit((current) => ({ ...current, files: update(current.files) })),
+    [edit],
+  );
+  const setTokens = (update: (current: MenuRow[]) => MenuRow[]) =>
+    edit((current) => ({ ...current, tokens: update(current.tokens) }));
   /** The menu the words before the caret open: its trigger, what follows it, and where it starts. */
   const [picker, setPicker] = useState<{ trigger: "/" | "@"; query: string; start: number } | null>(
     null,
@@ -352,15 +384,15 @@ export function Composer({
   // showed one, the first it shows; it lets go once it holds nothing.
   useLayoutEffect(() => {
     if (!hasContent && (draft.sessionId !== undefined || draft.unbound))
-      setDraft({ text: draft.text });
+      edit((current) => ({ ...current, words: { text: current.words.text } }));
     else if (
       hasContent &&
       draft.sessionId === undefined &&
       !draft.unbound &&
       shownSession !== undefined
     )
-      setDraft({ ...draft, sessionId: shownSession });
-  }, [draft, hasContent, shownSession, setDraft]);
+      edit((current) => ({ ...current, words: { ...current.words, sessionId: shownSession } }));
+  }, [draft, hasContent, shownSession, edit]);
   // Words that name no session Clawtrate knows they were written for: once the view shows one,
   // the person chooses a new task for them or the task shown.
   const unbound = hasContent && draft.unbound === true;
@@ -449,16 +481,15 @@ export function Composer({
           });
           return;
         }
-        setDraft({ text: "" });
+        edit((current) => ({ ...current, words: { text: "" } }));
         stop(view.stoppable);
         return;
       }
       submitting.current = true;
       const finishHandoff = beginHandoff();
-      const words = text;
-      const chips = tokens;
       // The chips go first, as their own text: the gateway runs a command or skill named so.
-      const body = sentText(chips, words);
+      const body = sentText(tokens, text);
+      setPicker(null);
       if (how === "new-task") {
         // The words stay here until the host holds the new task: a refusal finds them where they
         // were, and meanwhile they keep their task on screen should it have left the list.
@@ -471,9 +502,7 @@ export function Composer({
           });
           // The new task runs on its own; this viewer stays on this one.
           void bridge.send({ type: "closeSession", key });
-          setDraft((current) => (current.text === words ? { text: "" } : current));
-          setTokens((current) => (current === chips ? [] : current));
-          setPicker(null);
+          edit((current) => (current === composer ? emptyComposer() : current));
           onAnnounce("Started as a new task");
         } catch (error) {
           onNotice({
@@ -486,18 +515,14 @@ export function Composer({
         }
         return;
       }
-      const taken = files;
-      const attachmentIds = taken.flatMap((file) => (file.info ? [file.info.id] : []));
+      const attachmentIds = files.flatMap((file) => (file.info ? [file.info.id] : []));
       const session = to;
       // The words as they go back if the host refuses them: as they were bound, or as chosen.
       const kept: Draft = {
-        text: words,
+        text,
         ...(session ? { sessionId: session } : unbound ? { unbound: true } : {}),
       };
-      setDraft({ text: "" });
-      setFiles([]);
-      setTokens([]);
-      setPicker(null);
+      edit(() => emptyComposer());
       try {
         await bridge.invoke({
           type: "sendMessage",
@@ -513,9 +538,20 @@ export function Composer({
       } catch (error) {
         // The words come back with the session they were bound to, ahead of anything typed since;
         // words typed since for another session leave the draft bound to none.
-        setDraft((current) => joinDrafts(kept, current));
-        setFiles((current) => [...taken, ...current]);
-        setTokens((current) => [...chips, ...current]);
+        edit((current) => ({
+          words: joinDrafts(kept, current.words),
+          files: [
+            ...files,
+            ...current.files.filter((file) => !file.info || !attachmentIds.includes(file.info.id)),
+          ],
+          tokens: [
+            ...tokens,
+            ...current.tokens.filter(
+              (token) =>
+                !tokens.some((sent) => sent.kind === token.kind && sent.insert === token.insert),
+            ),
+          ],
+        }));
         onNotice({
           title: "Couldn't send this message.",
           reason: error instanceof Error ? error.message : String(error),
@@ -535,10 +571,11 @@ export function Composer({
       text,
       files,
       tokens,
+      composer,
       bridge,
       bot.id,
       taskKey,
-      setDraft,
+      edit,
       onAnnounce,
       onNotice,
       view,
@@ -556,9 +593,7 @@ export function Composer({
   const discard = () => {
     const held = files.flatMap((file) => (file.info ? [file.info.id] : []));
     if (held.length > 0) void bridge.send({ type: "releaseAttachments", attachmentIds: held });
-    setDraft({ text: "" });
-    setFiles([]);
-    setTokens([]);
+    edit(() => emptyComposer());
     setPicker(null);
     focusRef.current?.focus();
   };
@@ -723,25 +758,27 @@ export function Composer({
     else void sendAs(view.mode);
   };
 
-  const addFiles = useCallback((list: FileList | File[]) => {
-    const added = [...list].map((file): Attached => ({
-      key: `${file.name}:${file.size}:${Math.random().toString(36).slice(2)}`,
-      name: file.name,
-      bytes: file.size,
-      mimeType: file.type || "application/octet-stream",
-      file,
-      info: null,
-      error: null,
-    }));
-    setFiles((current) => [...current, ...added]);
-  }, []);
+  const addFiles = useCallback(
+    (list: FileList | File[]) => {
+      const added = [...list].map((file): Attached => ({
+        key: `${file.name}:${file.size}:${Math.random().toString(36).slice(2)}`,
+        name: file.name,
+        bytes: file.size,
+        mimeType: file.type || "application/octet-stream",
+        file,
+        info: null,
+        error: null,
+      }));
+      setFiles((current) => [...current, ...added]);
+    },
+    [setFiles],
+  );
 
   // The host takes a file once the gateway's limits admit it: at once when it is chosen, or
   // after a reconnect brings a policy that does.
-  const handing = useRef(new Set<string>());
   useEffect(() => {
     for (const chip of files) {
-      if (!chip.file || chip.info || chip.error || handing.current.has(chip.key)) continue;
+      if (!chip.file || chip.info || chip.error || uploadingFiles.has(chip)) continue;
       if (refusalFor({ size: chip.bytes, type: chip.mimeType, name: chip.name }, ceilings))
         continue;
       const { key, file } = chip;
@@ -752,22 +789,20 @@ export function Composer({
             void bridge.send({ type: "releaseAttachments", attachmentIds: [release.id] });
           return current.map((each) => (each.key === key ? { ...each, ...change } : each));
         });
-      handing.current.add(key);
+      uploadingFiles.add(chip);
       void file
         .arrayBuffer()
         .then((data) => bridge.attach({ name: file.name, type: chip.mimeType, data }))
         .then(
           (info) => {
-            handing.current.delete(key);
             settle({ info, file: null }, info);
           },
           (error: unknown) => {
-            handing.current.delete(key);
             settle({ error: error instanceof Error ? error.message : String(error) });
           },
         );
     }
-  }, [files, ceilings, bridge]);
+  }, [files, ceilings, bridge, setFiles]);
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     if (event.clipboardData.files.length > 0) {
@@ -811,19 +846,22 @@ export function Composer({
         onTakenBack={(back) => {
           // Unsent words are never lost: an existing draft keeps its place above them. They come
           // back with the session they were bound to.
-          setDraft((current) => joinDrafts(current, takenBack(back)));
-          setFiles((current) => [
+          edit((current) => ({
             ...current,
-            ...back.attachments.map((info) => ({
-              key: info.id,
-              name: info.fileName,
-              bytes: info.sizeBytes,
-              mimeType: info.mimeType,
-              file: null,
-              info,
-              error: null,
-            })),
-          ]);
+            words: joinDrafts(current.words, takenBack(back)),
+            files: [
+              ...current.files,
+              ...back.attachments.map((info) => ({
+                key: info.id,
+                name: info.fileName,
+                bytes: info.sizeBytes,
+                mimeType: info.mimeType,
+                file: null,
+                info,
+                error: null,
+              })),
+            ],
+          }));
         }}
         onNotice={onNotice}
         onAnnounce={onAnnounce}
