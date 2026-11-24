@@ -66,6 +66,9 @@ export function gatewayEndpoint(raw: string): string | null {
  */
 export function endpointSpellings(raw: string): string[] {
   const own = validateGatewayUrl(raw);
+  // An address normalizing would change again (a query ending in `/`) names no other spelling:
+  // the spellings built from it would drop a character the dialled address keeps.
+  if (own !== raw.trim()) return [];
   const endpoint = gatewayEndpoint(own);
   const url = new URL(own);
   const host = url.hostname.replace(/\.$/, "");
@@ -75,7 +78,9 @@ export function endpointSpellings(raw: string): string[] {
     for (const name of [host, `${host}.`]) {
       try {
         const each = validateGatewayUrl(`${scheme}//${name}:${port}${url.pathname}${url.search}`);
-        if (each !== own && gatewayEndpoint(each) === endpoint) spellings.add(each);
+        // The same query as dialled, character for character, and the same endpoint.
+        if (each !== own && new URL(each).search === url.search && gatewayEndpoint(each) === endpoint)
+          spellings.add(each);
       } catch {
         // A name that can't take a trailing dot (an IP address) has no such spelling.
       }

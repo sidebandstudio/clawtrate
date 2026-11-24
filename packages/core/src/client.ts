@@ -1355,6 +1355,12 @@ export class ClawtrateClient {
   private tokenAlias: { url: string; spelling: string } | null = null;
   /** The answer to the full-control offer for the current gateway and device, read at each open. */
   private offerAnswer: OfferAnswer | "unread" | null = null;
+  /**
+   * The accept of the full-control offer under way, from before its answer is saved until the
+   * gateway settles its request: an accept that comes meanwhile (a double click, another window)
+   * joins it, so one choice sends one request. Released when the save fails, to try again.
+   */
+  private fullAttempt: Promise<void> | null = null;
   /** The scopes a `held` request keeps, as the connection held them when it was made. */
   private heldBase: readonly string[] = [];
   /** The access request under way also asks for device access (`operator.pairing`). */
@@ -2217,19 +2223,30 @@ export class ClawtrateClient {
       this.state.connection.deviceId === binding.deviceId &&
       this.settings?.url === binding.gatewayUrl;
     if (!offered()) throw new Error("Full control isn't offered on this connection.");
+    // Reserved before the save starts: an accept that overlaps this one joins it, even if the
+    // gateway settles it first, so it never sends a request of its own.
+    if (this.fullAttempt) return this.fullAttempt;
     if (this.scopeUpgrade && this.upgradeTier === "full") return;
-    // Saved first: an answer that can't be kept would let the offer ask again.
-    if (!(await this.answerOffer("asked")))
-      throw new Error("Clawtrate couldn't save this choice. Try again.");
-    if (!offered()) throw new Error("The connection changed. Try again from Settings.");
-    // Another accept (a double click, another window) got here first: its request stands.
-    if (this.scopeUpgrade && this.upgradeTier === "full") return;
-    this.scopeUpgrade?.cancelScopeUpgrade();
-    this.scopeUpgrade = null;
-    this.upgradeTier = "full";
-    this.pairingWanted = false;
-    this.upgradeWanted = true;
-    this.startUpgrade();
+    const attempt = (async () => {
+      // Saved first: an answer that can't be kept would let the offer ask again.
+      if (!(await this.answerOffer("asked", binding)))
+        throw new Error("Clawtrate couldn't save this choice. Try again.");
+      if (!offered()) throw new Error("The connection changed. Try again from Settings.");
+      if (this.scopeUpgrade && this.upgradeTier === "full") return;
+      this.scopeUpgrade?.cancelScopeUpgrade();
+      this.scopeUpgrade = null;
+      this.upgradeTier = "full";
+      this.pairingWanted = false;
+      this.upgradeWanted = true;
+      this.startUpgrade();
+    })();
+    this.fullAttempt = attempt;
+    // A failed save sends nothing: the person may try again. Otherwise the gateway's answer to
+    // the request releases it (`startUpgrade`), or leaving the gateway does.
+    attempt.catch(() => {
+      if (this.fullAttempt === attempt) this.fullAttempt = null;
+    });
+    return attempt;
   }
 
   /** "Keep current access": the offer is answered, and shows by itself no more. */
@@ -2242,7 +2259,7 @@ export class ClawtrateClient {
       connection.deviceId !== binding.deviceId
     )
       return;
-    await this.answerOffer("dismissed");
+    await this.answerOffer("dismissed", binding);
   }
 
   private offerKey(url: string, deviceId: string): string {
@@ -2267,17 +2284,24 @@ export class ClawtrateClient {
   }
 
   /**
-   * Saves the answer for the current gateway and device, and moves the offer to Settings.
-   * Resolves false when it couldn't be kept; this session counts it as answered anyway.
+   * Saves the answer for the gateway and device it was given for, and, while that gateway is
+   * the one in use, moves the offer to Settings. Resolves false when it couldn't be kept; this
+   * session counts it as answered anyway.
    */
-  private async answerOffer(answer: OfferAnswer): Promise<boolean> {
-    const url = this.settings?.url;
-    const deviceId = this.state.connection.deviceId;
-    if (!url || !deviceId) return false;
-    this.offerAnswer = answer;
-    if (this.state.connection.fullOffer === "offer") this.setConnection({ fullOffer: "settings" });
+  private async answerOffer(
+    answer: OfferAnswer,
+    at: { gatewayUrl: string; deviceId: string },
+  ): Promise<boolean> {
+    if (this.settings?.url === at.gatewayUrl && this.state.connection.deviceId === at.deviceId) {
+      this.offerAnswer = answer;
+      if (this.state.connection.fullOffer === "offer")
+        this.setConnection({ fullOffer: "settings" });
+    }
     try {
-      await this.host.storage.set(this.offerKey(url, deviceId), JSON.stringify({ answer }));
+      await this.host.storage.set(
+        this.offerKey(at.gatewayUrl, at.deviceId),
+        JSON.stringify({ answer }),
+      );
       return true;
     } catch {
       this.log("warn", "Could not save the answer to the full-control offer.");
@@ -2294,6 +2318,9 @@ export class ClawtrateClient {
     const url = this.settings?.url;
     if (!url || !this.fullAccess || !protectedGatewayUrl(url)) return null;
     if (this.holdsFullPairing() || this.isSetup(url)) return null;
+    // Only a device the gateway paired: a hello that left no saved token offers nothing.
+    const deviceId = this.state.connection.deviceId;
+    if (!deviceId || !this.writes.grants.get(this.tokenKey(url, deviceId, "operator"))) return null;
     if (FULL_SCOPES.every((scope) => scopes.includes(scope))) return null;
     return this.offerAnswer === null ? "offer" : "settings";
   }
@@ -2326,6 +2353,16 @@ export class ClawtrateClient {
   }
 
   private startUpgrade(): void {
+    // A full pairing asks for nothing more, a request queued before its grant was known too.
+    if (this.holdsFullPairing()) {
+      if (!this.upgradeWanted) return;
+      this.upgradeWanted = false;
+      this.pairingWanted = false;
+      const waiters = this.accessWaiters;
+      this.accessWaiters = [];
+      for (const waiter of waiters) waiter.reject(new Error(FULL_PAIRING_LIMIT));
+      return;
+    }
     const protocol = this.protocol;
     const identity = this.identity;
     const url = this.settings?.url;
@@ -2335,6 +2372,11 @@ export class ClawtrateClient {
     const tier = this.upgradeTier;
     const target = this.upgradeTarget();
     const askedPairing = target.includes(PAIRING_SCOPE);
+    const asked = { gatewayUrl: url, deviceId: identity.deviceId };
+    // The gateway's answer ends the person's accept of the offer: a later one is a new choice.
+    const settled = () => {
+      if (tier === "full") this.fullAttempt = null;
+    };
     const upgrade = new GatewayScopeUpgrade({
       request: (method, params, options) => protocol.request(method, params, options),
       tokenStore: {
@@ -2421,6 +2463,7 @@ export class ClawtrateClient {
         (outcome) => {
           if (this.scopeUpgrade !== upgrade) return;
           this.scopeUpgrade = null;
+          settled();
           if (outcome.status === "approved") {
             // Judged on what is kept (the store's rule), so an approval is never one the saved
             // record can't hold: an admin grant for a write request keeps neither.
@@ -2431,6 +2474,7 @@ export class ClawtrateClient {
                 FULL_SCOPES.every((scope) => outcome.scopes.includes(scope))
                   ? "granted"
                   : "narrower",
+                asked,
               );
             else if (
               (tier !== "held" &&
@@ -2451,7 +2495,8 @@ export class ClawtrateClient {
             this.setUpgrade({ status: "approved", error: null });
             return;
           }
-          if (tier === "full" && outcome.status === "rejected") void this.answerOffer("refused");
+          if (tier === "full" && outcome.status === "rejected")
+            void this.answerOffer("refused", asked);
           this.failAccess(new AccessRequestError(outcome.status));
         },
         (error: unknown) => {
@@ -2462,6 +2507,7 @@ export class ClawtrateClient {
             // The connection dropped while waiting. Ask again after the next hello.
             return;
           }
+          settled();
           this.failAccess(new AccessRequestError("error", errorMessage(error)));
         },
       );
@@ -2479,6 +2525,7 @@ export class ClawtrateClient {
   private abandonAccessRequest(reason: string): void {
     this.scopeUpgrade?.cancelScopeUpgrade();
     this.scopeUpgrade = null;
+    this.fullAttempt = null;
     this.upgradeWanted = false;
     this.pairingWanted = false;
     const waiters = this.accessWaiters;
@@ -6351,10 +6398,12 @@ export class ClawtrateClient {
     const spelling = offerable ? await this.pairingSpelling(settings.url, identity.deviceId) : null;
     if (generation !== this.generation) return;
     if (spelling) this.tokenAlias = { url: settings.url, spelling };
-    this.offerAnswer = offerable
+    // Read first, kept only while this open is current: a superseded read never lands.
+    const offerAnswer = offerable
       ? await this.loadOfferAnswer(settings.url, identity.deviceId)
       : null;
     if (generation !== this.generation) return;
+    this.offerAnswer = offerAnswer;
     const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
@@ -8981,8 +9030,9 @@ export class ClawtrateClient {
     deviceId: string,
     role: string,
     includeRejected = false,
+    // A key captured earlier: a removal compares and deletes the same record it named.
+    key = this.tokenKey(url, deviceId, role),
   ): Promise<StoredDeviceToken | null> {
-    const key = this.tokenKey(url, deviceId, role);
     const raw = await this.host.storage.get(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
@@ -9175,7 +9225,7 @@ export class ClawtrateClient {
         this.endEligibility(url);
         this.writes.refusals += 1;
         await this.changeConnection(async () => {
-          const existing = await this.loadToken(url, deviceId, role, true);
+          const existing = await this.loadToken(url, deviceId, role, true, key);
           if (existing?.token.trim() === rejected) {
             await this.host.storage.delete(key);
             this.writes.grants.set(key, null);

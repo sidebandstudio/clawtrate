@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient, FULL_PAIRING_LIMIT, type ProvedRoute } from "../src/client.ts";
-import { endpointSpellings, gatewayEndpoint } from "../src/gateway-url.ts";
+import { endpointSpellings, gatewayEndpoint, validateGatewayUrl } from "../src/gateway-url.ts";
 import type { KeyValueStore } from "../src/host.ts";
 import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { gatewayStamp } from "../src/types.ts";
@@ -426,11 +426,11 @@ describe("the one-time offer of full control (F-500)", () => {
   });
 
   it("F-549: an address with its own pairing keeps it, and a plain ws:// address never borrows one", async () => {
-    // Its own record wins over another spelling's.
+    // Its own record wins over another spelling's, one it could otherwise take up.
     const storage = pairedAt();
     storage.data.set(
-      tokenKey("ws://gateway.example:19980"),
-      JSON.stringify({ token: "token-W", grantedScopes: READ_SCOPES, heldScopes: READ_SCOPES }),
+      tokenKey("wss://gateway.example.:19980"),
+      JSON.stringify({ token: "token-D", grantedScopes: READ_SCOPES, heldScopes: READ_SCOPES }),
     );
     const { gateway } = gatewayFor();
     const client = await connected(clientOn(gateway, storage));
@@ -445,5 +445,117 @@ describe("the one-time offer of full control (F-500)", () => {
     await until(() => plain.connects.length > 0);
     expect((plain.connects.at(-1) as ConnectParams).auth?.deviceToken).toBeUndefined();
     other.stop();
+  });
+  it("F-549: two accepts, with the owner's refusal between their saves, send one request", async () => {
+    const storage = pairedAt();
+    const { gateway, decide } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    // The second accept's save of its answer waits until after the refusal.
+    const set = storage.set.bind(storage);
+    const held = deferred<void>();
+    let writes = 0;
+    storage.set = async (key: string, value: string) => {
+      if (key === offerKey() && ++writes === 2) await held.promise;
+      await set(key, value);
+    };
+    const first = accept(client).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    const second = accept(client).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await until(() => client.state.connection.upgrade.status === "pending");
+    decide({ status: "rejected" });
+    await until(() => client.state.connection.upgrade.status === "rejected");
+    held.resolve();
+    await Promise.all([first, second]);
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-549: an access request queued at startup sends nothing for a full pairing", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord,
+    });
+    const { gateway } = gatewayFor();
+    // The first read of the saved pairing waits, so the request below comes before its grant
+    // is known.
+    const hello = deferred<void>();
+    let reading = false;
+    const get = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (key === tokenKey(URL) && !reading) {
+        reading = true;
+        await hello.promise;
+      }
+      return get(key);
+    };
+    const client = clientOn(gateway, storage);
+    const starting = client.start();
+    await until(() => reading);
+    const queued = client.requestAccess("admin").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    hello.resolve();
+    await starting;
+    await until(() => client.state.connection.fullPairing);
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    expect(await queued).toBeNull();
+    expect(client.state.connection.upgrade.status).toBe("idle");
+    client.stop();
+  });
+
+  it("F-549: a protected hello that left no saved pairing offers nothing", async () => {
+    // A typed token the gateway accepts without issuing a device token.
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({ ok: true, payload: helloOk([...READ_SCOPES], "") });
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    const storage = memoryStorage();
+    const client = clientOn(gateway, storage);
+    await client.start();
+    await client.connect({ url: URL, token: "typed-shared-token" });
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.gatewayId !== null,
+    );
+    expect(storage.data.has(tokenKey(URL))).toBe(false);
+    expect(client.state.connection.fullOffer).toBeNull();
+    client.stop();
+  });
+
+  it("F-549: an address whose query ends in a slash takes up no other spelling's pairing", () => {
+    const dialled = validateGatewayUrl("wss://gateway.example/?tenant=one//");
+    expect(dialled).toBe("wss://gateway.example/?tenant=one/");
+    expect(endpointSpellings(dialled)).toEqual([]);
+    // The same query, character for character, in every spelling of an ordinary one.
+    for (const each of endpointSpellings("wss://gateway.example/?tenant=one"))
+      expect(each).toMatch(/\?tenant=one$/);
+  });
+
+  it("F-549: a refused token at a borrowed spelling is removed from that spelling's record", async () => {
+    const dotted = "wss://gateway.example.:19987";
+    const storage = pairedAt(dotted);
+    storage.data.set(
+      "connection",
+      JSON.stringify({ url: "wss://gateway.example:19987", token: null }),
+    );
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: { code: "UNAUTHORIZED", message: "refused", details: { code: "AUTH_TOKEN_MISMATCH" } },
+    });
+    const client = clientOn(gateway, storage);
+    await client.start();
+    await until(() => gateway.connects.length > 0);
+    expect((gateway.connects[0] as ConnectParams).auth?.deviceToken).toBe("token-A");
+    await until(() => !storage.data.has(tokenKey(dotted)));
+    client.stop();
   });
 });
