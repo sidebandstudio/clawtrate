@@ -1,7 +1,7 @@
 // The files a person sent, on their own message (#451), in the order sent. A
 // picture shows from this app's own copy (`readSentPicture`), as long as this
 // app holds it. Clawtrate doesn't load a person's picture from the gateway
-// (#469), so on another device, or once the task was closed, the message says
+// (#469), so on another device, or once this app let its copy go, the message says
 // plainly that a picture was sent and isn't shown. Any other file, a picture of
 // a type not drawn, one over 5 MB, or one whose bytes aren't the picture it is
 // named as, is its name and size.
@@ -88,7 +88,7 @@ function SentPicture({
         {shown.status === "loading"
           ? "Loading the picture…"
           : shown.status === "not-kept"
-            ? "Picture sent with this message. It shows only on the device that sent it, while the task is open."
+            ? "Picture sent with this message. It shows on the device that sent it, until Clawtrate disconnects or is closed."
             : `Couldn't show the picture. ${shown.message}`}
       </span>
     </p>

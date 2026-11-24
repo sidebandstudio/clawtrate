@@ -293,10 +293,19 @@ export type BridgeCommand =
       expected: RoutineRevision;
       stamp: GatewayStamp;
     }
-  /** `listedOn` is the routines list the row came from (`RoutinesState.listedOn`). */
-  | { type: "setRoutineEnabled"; id: string; enabled: boolean; listedOn: number }
-  | { type: "runRoutineNow"; id: string; listedOn: number }
-  | { type: "removeRoutine"; id: string; listedOn: number }
+  /**
+   * `listedOn` is the routines list the row came from (`RoutinesState.listedOn`), and `stamp`
+   * where it was read: a list number starts again with the host, the stamp's target does not.
+   */
+  | {
+      type: "setRoutineEnabled";
+      id: string;
+      enabled: boolean;
+      listedOn: number;
+      stamp: GatewayStamp;
+    }
+  | { type: "runRoutineNow"; id: string; listedOn: number; stamp: GatewayStamp }
+  | { type: "removeRoutine"; id: string; listedOn: number; stamp: GatewayStamp }
   | { type: "readGatewayHooks" }
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
   /** Read the accounts, sign-ins, bindings and catalogue again. */
@@ -318,9 +327,11 @@ export type BridgeCommand =
   | { type: "recheckSignIn" }
   | { type: "chooseSignInAccount"; profileId: string }
   /** An API key the person typed. Sent once to the gateway and kept nowhere. */
-  | { type: "saveApiKey"; provider: string; key: string; botId: string | null }
+  /** `stamp` is where Connect was opened: a key goes only to that gateway. */
+  | { type: "saveApiKey"; provider: string; key: string; botId: string | null; stamp: GatewayStamp }
   | { type: "setAccountLabel"; profileId: string; label: string }
-  | { type: "disconnectAccount"; profileId: string }
+  /** `stamp` is where the confirmation was opened: another gateway can have the same profile id. */
+  | { type: "disconnectAccount"; profileId: string; stamp: GatewayStamp }
   /** New bot: its name and picture, and the account it runs on (null: the gateway chooses). */
   | {
       type: "createBot";
@@ -336,6 +347,7 @@ export type BridgeCommand =
   | { type: "dismissBotCreation" }
   /** Finish a bot whose creation is partial, by its id, on the gateway New bot was showing. */
   | { type: "finishBot"; botId: string; stamp: GatewayStamp }
+  /** A bot's account, model and fallbacks: `stamp` is where its settings were read. */
   | {
       type: "changeBotAccount";
       botId: string;
@@ -343,9 +355,16 @@ export type BridgeCommand =
       provider: string;
       model: string;
       effort: string | null;
+      stamp: GatewayStamp;
     }
-  | { type: "setBotModel"; botId: string; model: string; effort: string | null }
-  | { type: "removeBotFallbacks"; botId: string }
+  | {
+      type: "setBotModel";
+      botId: string;
+      model: string;
+      effort: string | null;
+      stamp: GatewayStamp;
+    }
+  | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
   /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
   | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
   | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
@@ -374,11 +393,14 @@ export type BridgeCommand =
   | { type: "pinTask"; key: string; pinned: boolean }
   /** Mark unread or read; `opened` is the read of opening a task, made only while the connection writes. */
   | { type: "markTask"; key: string; unread: boolean; opened: boolean }
-  /** Archive; `stop` stops an active run first ("Stop and archive"). */
-  | { type: "archiveTask"; key: string; stop: boolean }
+  /**
+   * Archive; `stop` stops an active run first ("Stop and archive"). `stamp` is where the rail
+   * listed the task: a restored copy has the same keys, so nothing goes anywhere else.
+   */
+  | { type: "archiveTask"; key: string; stop: boolean; stamp: GatewayStamp }
   | { type: "restoreTask"; key: string }
-  /** Delete a task and its transcript, stopping an active run first. */
-  | { type: "deleteTask"; key: string }
+  /** Delete a task and its transcript, stopping an active run first. `stamp` as for archiving. */
+  | { type: "deleteTask"; key: string; stamp: GatewayStamp }
   /** A bot's archived tasks, read now. */
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
@@ -453,9 +475,10 @@ export type BridgeCommand =
       expectedHash: string | null;
     }
   | { type: "renameMachine"; nodeId: string; name: string }
-  | { type: "removeMachine"; nodeId: string }
+  /** `stamp` is where Machines was read: a removal goes only to that gateway. */
+  | { type: "removeMachine"; nodeId: string; stamp: GatewayStamp }
   | { type: "renameDevice"; deviceId: string; name: string }
-  | { type: "removeDevice"; deviceId: string }
+  | { type: "removeDevice"; deviceId: string; stamp: GatewayStamp }
   // Deleting a bot (`bot-delete.ts`). The read is `operator.read`; the delete needs admin.
   /** What the delete dialog lists for a bot, read now. */
   | { type: "readBotDelete"; botId: string }
@@ -1189,6 +1212,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         id: id(command.id, "routine id"),
         enabled: flag(command.enabled),
         listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "runRoutineNow":
     case "removeRoutine":
@@ -1196,6 +1220,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: command.type,
         id: id(command.id, "routine id"),
         listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "readRoutine":
       return {
@@ -1214,8 +1239,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "loadModelCatalog":
       return { type: "loadModelCatalog", provider: providerId(command.provider) };
     case "checkLock":
-    case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
+    case "removeBotFallbacks":
+      return {
+        type: "removeBotFallbacks",
+        botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "acceptBotName":
       return {
         type: "acceptBotName",
@@ -1250,6 +1280,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         provider: providerId(command.provider),
         key: secretText(command.key),
         botId: command.botId === null || command.botId === undefined ? null : botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "chooseSignInAccount":
       return { type: "chooseSignInAccount", profileId: profileId(command.profileId) };
@@ -1260,7 +1291,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         label: shortText(command.label, 128, "label"),
       };
     case "disconnectAccount":
-      return { type: "disconnectAccount", profileId: profileId(command.profileId) };
+      return {
+        type: "disconnectAccount",
+        profileId: profileId(command.profileId),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "createBot":
       return {
         type: "createBot",
@@ -1302,6 +1337,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "setBotModel":
       return {
@@ -1312,6 +1348,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "disconnect":
       if (
@@ -1639,9 +1676,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         opened: command.opened === undefined ? false : flag(command.opened),
       };
     case "archiveTask":
-      return { type: "archiveTask", key: sessionKey(command.key), stop: flag(command.stop) };
-    case "restoreTask":
+      return {
+        type: "archiveTask",
+        key: sessionKey(command.key),
+        stop: flag(command.stop),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "deleteTask":
+      return {
+        type: "deleteTask",
+        key: sessionKey(command.key),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "restoreTask":
       return { type: command.type, key: sessionKey(command.key) };
     case "computerShow":
       return { type: "computerShow", key: sessionKey(command.key) };
@@ -1792,7 +1839,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         name: shortText(command.name, MAX_MACHINE_NAME_CHARS, "name"),
       };
     case "removeMachine":
-      return { type: "removeMachine", nodeId: id(command.nodeId, "machine") };
+      return {
+        type: "removeMachine",
+        nodeId: id(command.nodeId, "machine"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "renameDevice":
       return {
         type: "renameDevice",
@@ -1800,7 +1851,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         name: shortText(command.name, MAX_MACHINE_NAME_CHARS, "name"),
       };
     case "removeDevice":
-      return { type: "removeDevice", deviceId: id(command.deviceId, "device") };
+      return {
+        type: "removeDevice",
+        deviceId: id(command.deviceId, "device"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     default:
       throw new Error("unknown command");
   }
@@ -2028,11 +2083,17 @@ class ViewerSession implements BridgeSession {
           command.stamp,
         );
       case "setRoutineEnabled":
-        return client.setRoutineEnabled(command.id, command.enabled, owner, command.listedOn);
+        return client.setRoutineEnabled(
+          command.id,
+          command.enabled,
+          owner,
+          command.listedOn,
+          command.stamp,
+        );
       case "runRoutineNow":
-        return client.runRoutineNow(command.id, owner, command.listedOn);
+        return client.runRoutineNow(command.id, owner, command.listedOn, command.stamp);
       case "removeRoutine":
-        return client.removeRoutine(command.id, owner, command.listedOn);
+        return client.removeRoutine(command.id, owner, command.listedOn, command.stamp);
       case "readGatewayHooks":
         return client.readGatewayHooks();
       case "refreshAccounts":
@@ -2054,11 +2115,11 @@ class ViewerSession implements BridgeSession {
       case "chooseSignInAccount":
         return client.chooseSignInAccount(command.profileId);
       case "saveApiKey":
-        return client.saveApiKey(command.provider, command.key, command.botId);
+        return client.saveApiKey(command.provider, command.key, command.botId, command.stamp);
       case "setAccountLabel":
         return client.setAccountLabel(command.profileId, command.label);
       case "disconnectAccount":
-        return client.disconnectAccount(command.profileId);
+        return client.disconnectAccount(command.profileId, command.stamp);
       case "createBot":
         return client.createBot(
           {
@@ -2082,11 +2143,12 @@ class ViewerSession implements BridgeSession {
           command.provider,
           command.model,
           command.effort,
+          command.stamp,
         );
       case "setBotModel":
-        return client.setBotModel(command.botId, command.model, command.effort);
+        return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
-        return client.removeBotFallbacks(command.botId);
+        return client.removeBotFallbacks(command.botId, command.stamp);
       case "acceptBotName":
         return client.acceptBotName(command.botId, command.name, command.stamp);
       case "declineBotName":
@@ -2284,11 +2346,11 @@ class ViewerSession implements BridgeSession {
       case "markTask":
         return client.markTask(command.key, command.unread, { owner, opened: command.opened });
       case "archiveTask":
-        return client.archiveTask(command.key, { stop: command.stop, owner });
+        return client.archiveTask(command.key, { stop: command.stop, owner, stamp: command.stamp });
       case "restoreTask":
         return client.restoreTask(command.key, { owner });
       case "deleteTask":
-        return client.deleteTask(command.key, { owner });
+        return client.deleteTask(command.key, { owner, stamp: command.stamp });
       case "listArchived":
         return client.listArchived(command.botId);
       case "changeSidebar":
@@ -2386,11 +2448,11 @@ class ViewerSession implements BridgeSession {
       case "renameMachine":
         return client.renameMachine(command.nodeId, command.name);
       case "removeMachine":
-        return client.removeMachine(command.nodeId);
+        return client.removeMachine(command.nodeId, command.stamp);
       case "renameDevice":
         return client.renameDevice(command.deviceId, command.name, { owner });
       case "removeDevice":
-        return client.removeDevice(command.deviceId);
+        return client.removeDevice(command.deviceId, command.stamp);
     }
   }
 

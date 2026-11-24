@@ -565,6 +565,11 @@ export function createFixtureBridge(
   badge: number | null;
   /** From now on, refuse the rail's commands of this type, as a gateway refuses a change. */
   refuse(type: string): void;
+  /** Answer the rail's commands of this type again. */
+  allow(type: string): void;
+  /** Hold the answers of the rail's commands of this type until `releaseRail`. */
+  holdRail(type: string): void;
+  releaseRail(): void;
   /** The next plain archive meets a run that had just started, and stops it. */
   raceArchive(): void;
   /**
@@ -748,6 +753,9 @@ export function createFixtureBridge(
   const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
   // The rail's task actions, answered as the engine would.
   const railRefused = new Set<string>();
+  // Rail commands whose answers wait for the test to let them go (`holdRail`, `releaseRail`).
+  const railHeld = new Set<string>();
+  const railWaiting: Array<() => void> = [];
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
@@ -826,6 +834,8 @@ export function createFixtureBridge(
     );
     if (rail) {
       sent.push(command);
+      if (railHeld.has(command.type))
+        return new Promise<void>((resolve) => railWaiting.push(resolve)).then(() => rail);
       return rail;
     }
     const named = botNameCommand(
@@ -1286,6 +1296,12 @@ export function createFixtureBridge(
     },
     badge: null,
     refuse: (type: string) => void railRefused.add(type),
+    allow: (type: string) => void railRefused.delete(type),
+    holdRail: (type: string) => void railHeld.add(type),
+    releaseRail: () => {
+      railHeld.clear();
+      for (const resolve of railWaiting.splice(0)) resolve();
+    },
     raceArchive: () => void (railRace.archive = true),
     hold: timers.hold,
     release: timers.release,

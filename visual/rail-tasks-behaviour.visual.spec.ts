@@ -3,7 +3,7 @@
 // offers none of them.
 import type { BridgeCommand } from "../packages/core/src/bridge.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
+import { contextFor, moveTarget, openFixture, sentStamp, settle, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const OTTO = "bot=otto&task=agent:otto:disk-space";
@@ -214,13 +214,79 @@ test("F-278: a confirmed delete of an archived task removes its row and its menu
   const archived = page.getByRole("list", { name: "Otto's archived tasks" });
   await expect(archived.getByTestId("archived-task")).toHaveCount(2);
   await archived.getByTestId("archived-task").filter({ hasText: "Old printer driver" }).click();
+  // The host is pointed at a gateway anew while the menu is open: its Delete keeps the menu's stamp.
+  const before = await moveTarget(page);
   await page.getByRole("menuitem", { name: "Delete…" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => sentStamp(page, "deleteTask")).toEqual(before);
   await expect(
     archived.getByTestId("archived-task").filter({ hasText: "Old printer driver" }),
   ).toHaveCount(0);
   await expect(archived.getByTestId("archived-task")).toHaveCount(1);
   await expect(page.getByRole("menu")).toHaveCount(0);
+});
+
+test("#450: an archived row read before the host's target moved acts with the stamp of its read; a failed read again shows no stale rows", async ({
+  page,
+}) => {
+  type Rail = {
+    clawtrateFixture: {
+      refuse(type: string): void;
+      allow(type: string): void;
+      holdRail(type: string): void;
+      releaseRail(): void;
+      getState(): { connection: { gatewayId: string | null; target: number } };
+    };
+  };
+  /** One of the fixture's rail hooks, with the command type it is for. */
+  const rail = (hook: "refuse" | "allow" | "holdRail" | "releaseRail", type = "listArchived") =>
+    page.evaluate(
+      ([hook, type]) => {
+        const fixture = (window as unknown as Rail).clawtrateFixture;
+        if (hook === "releaseRail") fixture.releaseRail();
+        else fixture[hook](type);
+      },
+      [hook, type] as const,
+    );
+  const stampNow = () =>
+    page.evaluate(() => {
+      const { gatewayId, target } = (window as unknown as Rail).clawtrateFixture.getState()
+        .connection;
+      return { gatewayId, target };
+    });
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  await page.getByRole("button", { name: "Archived" }).click();
+  const archived = page.getByRole("list", { name: "Otto's archived tasks" });
+  const rows = archived.getByTestId("archived-task");
+  await expect(rows).toHaveCount(2);
+
+  // The host is pointed at a gateway anew; until the list is read again, the rows shown are the
+  // ones read before, and a row's Delete carries the stamp of that read.
+  await rail("holdRail");
+  const before = await moveTarget(page);
+  await expect.poll(async () => (await sent(page, "listArchived")).length).toBe(2);
+  await rows.filter({ hasText: "Old printer driver" }).click();
+  await page.getByRole("menuitem", { name: "Delete…" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => sentStamp(page, "deleteTask")).toEqual(before);
+  await rail("releaseRail");
+
+  // When that read again fails, the list says so and shows no rows to act on.
+  await rail("refuse");
+  await moveTarget(page);
+  await expect(archived.getByRole("alert")).toContainText("Couldn't read the archived tasks.");
+  await expect(rows).toHaveCount(0);
+
+  // A later read that works brings the rows back, and they act with the stamp of that read.
+  await rail("allow");
+  await page.getByRole("button", { name: "Archived" }).click();
+  await page.getByRole("button", { name: "Archived" }).click();
+  await expect(rows.filter({ hasText: "Flush the DNS cache" })).toHaveCount(1);
+  const now = await stampNow();
+  await rows.filter({ hasText: "Flush the DNS cache" }).click();
+  await page.getByRole("menuitem", { name: "Delete…" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => sentStamp(page, "deleteTask")).toEqual(now);
 });
 
 type Fixture = {
@@ -506,10 +572,13 @@ test("F-277: a task whose run is active asks Stop and archive or Cancel; Cancel 
   expect(await sent(page, "archiveTask")).toEqual([]);
   await taskMenu(page, "Rotate the logs");
   await page.getByRole("menuitem", { name: "Stop and archive…" }).click();
+  // The host is pointed at a gateway anew while the dialog is open: it keeps the row's stamp.
+  const before = await moveTarget(page);
   await dialog.getByRole("button", { name: "Stop and archive" }).click();
   await expect(taskRow(page, "Rotate the logs")).toHaveCount(0);
+  expect(await sentStamp(page, "archiveTask")).toEqual(before);
   expect(await sent(page, "archiveTask")).toEqual([
-    { type: "archiveTask", key: "agent:otto:rotate-logs", stop: true },
+    { type: "archiveTask", key: "agent:otto:rotate-logs", stop: true, stamp: expect.any(Object) },
   ]);
 });
 
@@ -535,12 +604,15 @@ test("F-278: Delete asks first, with Cancel focused; Delete removes the task and
 
   await taskMenu(page, "Certificate renewal");
   await page.getByRole("menuitem", { name: "Delete…" }).click();
+  // The host is pointed at a gateway anew while the dialog is open: it keeps the row's target.
+  const before = await moveTarget(page);
   await dialog.getByRole("button", { name: "Delete" }).click();
   await expect(dialog).toHaveCount(0);
+  expect(await sentStamp(page, "deleteTask")).toEqual(before);
   await expect(taskRow(page, "Certificate renewal")).toHaveCount(0);
   await expect(taskRow(page, "Router firmware")).toBeFocused();
   expect(await sent(page, "deleteTask")).toEqual([
-    { type: "deleteTask", key: "agent:otto:cert-renewal" },
+    { type: "deleteTask", key: "agent:otto:cert-renewal", stamp: expect.any(Object) },
   ]);
   // A running task says its run is stopped first.
   await taskMenu(page, "Rotate the logs");

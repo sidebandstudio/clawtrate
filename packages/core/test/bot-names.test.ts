@@ -16,6 +16,7 @@ import {
   MAX_NAME_CARDS,
   NAME_DECLINES_KEY,
   plainName,
+  UNCONFIRMED_AFTER_SWITCH,
 } from "../src/bot-names.ts";
 import { MAX_BOTS } from "../src/state-bounds.ts";
 import {
@@ -26,6 +27,7 @@ import {
   type NameProposal,
 } from "../src/types.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import { createBridgeSession } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { agentEvent, FAST, openTask, URL_A, URL_B, grantingGateway } from "./client-harness.ts";
 import {
@@ -452,6 +454,38 @@ describe("F-552: a bot that takes a name", () => {
       declined: true,
     });
     expect(client.state.botNames).toEqual([]);
+    client.stop();
+  });
+
+  it("F-558 F-552: a card goes, with no reconnect, when another client renames the bot to its name or deletes the bot", async () => {
+    const { gateway, bot, takeName } = namingGateway();
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // Renamed to that name in another client: the gateway's config.changed is all this one gets.
+    bot.name = "Johnny";
+    gateway.emit("config.changed", { hash: "h1", ts: 1 });
+    await until(() => client.state.bots.find((each) => each.id === "new-bot")?.name === "Johnny");
+    expect(client.state.botNames).toEqual([]);
+
+    // A new name brings a new card; then another client deletes the bot.
+    takeName("Jonas");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "main",
+      agents: [{ id: "main", identity: { name: "Juniper" } }],
+    });
+    gateway.emit("config.changed", { hash: "h2", ts: 2 });
+    await until(() => !client.state.bots.some((each) => each.id === "new-bot"));
+    expect(client.state.botNames).toEqual([]);
+    expect(gateway.calls("agents.update")).toEqual([]);
     client.stop();
   });
 
@@ -1186,6 +1220,121 @@ describe("F-552: a bot that takes a name", () => {
     expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("Johnny");
     expect(client.state.botNames).toEqual([]);
     client.stop();
+  });
+
+  it("F-552: Not now followed at once by a Rename of the same card (#512): Not now wins, and nothing is renamed", async () => {
+    // Another window, a double press, or both commands in one socket read: the Rename reaches the
+    // engine in the same turn, right after the Not now.
+    const storage = memoryStorage();
+    const requests: string[] = [];
+    const names = engine({
+      storage,
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+    });
+    await names.ctxRun();
+    const [declined, renamed] = await Promise.allSettled([
+      names.engine.decline("new-bot", "Johnny", STAMP),
+      names.engine.accept("new-bot", "Johnny", STAMP),
+    ]);
+    expect(declined).toEqual({ status: "fulfilled", value: true });
+    expect(renamed).toMatchObject({
+      status: "rejected",
+      reason: { message: "That name is no longer waiting for you." },
+    });
+    expect(requests).not.toContain("agents.update");
+    expect(JSON.parse(storage.data.get(NAME_DECLINES_KEY)!)).toEqual({ "gw-a\nnew-bot": "Johnny" });
+  });
+
+  it("F-552: Not now and Rename from two windows in one turn, through the bridge (#512): one Not now, no rename", async () => {
+    const { gateway, takeName } = namingGateway();
+    const storage = adminStorage();
+    const { client } = await openTask({ gateway, storage, held: ADMIN_SCOPES, key: KEY });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    const stamp = here(client);
+    const [declined, renamed] = await Promise.allSettled([
+      createBridgeSession(client).apply({
+        type: "declineBotName",
+        botId: "new-bot",
+        name: "Johnny",
+        stamp,
+      }),
+      createBridgeSession(client).apply({
+        type: "acceptBotName",
+        botId: "new-bot",
+        name: "Johnny",
+        stamp,
+      }),
+    ]);
+    expect(declined).toEqual({ status: "fulfilled", value: { declined: true } });
+    expect(renamed.status).toBe("rejected");
+    expect(gateway.calls("agents.update")).toEqual([]);
+    expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("New bot");
+    expect(JSON.parse(storage.data.get(NAME_DECLINES_KEY)!)).toEqual({ "gw-a\nnew-bot": "Johnny" });
+    client.stop();
+  });
+
+  it("F-552: a Rename already under way when Not now arrives ends as the rename alone (#512)", async () => {
+    const storage = memoryStorage();
+    const listed = deferred<void>();
+    const requests: string[] = [];
+    const names = engine({
+      storage,
+      refreshBots: () => listed.promise,
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+    });
+    await names.ctxRun();
+    names.onUpdate = () => (names.bots[0] = { ...names.bots[0]!, name: "Johnny" });
+    const renaming = names.engine.accept("new-bot", "Johnny", STAMP);
+    // The Rename waits on its read of the bot list; Not now comes then, and in the same turn.
+    expect(await names.engine.decline("new-bot", "Johnny", STAMP)).toBe(false);
+    listed.resolve();
+    await renaming;
+    expect(requests.filter((each) => each === "agents.update")).toHaveLength(1);
+    expect(storage.data.get(NAME_DECLINES_KEY)).toBeUndefined();
+  });
+
+  it("F-552: Not now is kept for the gateway that drew the card, though the connection now answers as another (#512)", async () => {
+    const storage = memoryStorage();
+    let gateway = "gw-a";
+    const names = engine({
+      storage,
+      gateway: () => gateway,
+      request: async () => ({
+        file: { content: identityFile("Johnny", false), hash: "a".repeat(64) },
+      }),
+    });
+    await names.ctxRun();
+    // A reconnect at the same address reaches a gateway with another id; the card is still open.
+    gateway = "gw-b";
+    expect(await names.engine.decline("new-bot", "Johnny", STAMP)).toBe(true);
+    expect(JSON.parse(storage.data.get(NAME_DECLINES_KEY)!)).toEqual({ "gw-a\nnew-bot": "Johnny" });
+  });
+
+  it("F-552: a Rename sent just before the connection moves to another gateway isn't reported as done (#471)", async () => {
+    const requests: string[] = [];
+    const names = engine({
+      request: async (method) => {
+        requests.push(method);
+        return { file: { content: identityFile("Johnny", false), hash: "a".repeat(64) } };
+      },
+    });
+    await names.ctxRun();
+    // The update goes out, then the host moves to another gateway before the list is read back.
+    names.onUpdate = () => names.engine.reset();
+    await expect(names.engine.accept("new-bot", "Johnny", STAMP)).rejects.toThrow(
+      UNCONFIRMED_AFTER_SWITCH,
+    );
+    expect(requests.filter((each) => each === "agents.update")).toHaveLength(1);
+    // The next gateway's cards are left as they are: none here.
+    expect(names.published.at(-1)).toEqual([]);
   });
 
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {

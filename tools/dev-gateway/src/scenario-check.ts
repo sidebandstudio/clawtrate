@@ -2587,6 +2587,22 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a turn of ten model calls",
+    covers: ["#learn"],
+    run: async (h) => {
+      const key = await h.session("main", "learn");
+      const view = await h.run("plain", key, "#learn");
+      const reads: CallExpectation[] = [];
+      for (const call of scriptedCalls("#learn")) {
+        const args = call.arguments as { path: string; offset?: number };
+        reads.push(await fileCall(h, "main", args.path, args.offset));
+      }
+      same(reads.length, 9, "the turn's reads");
+      view.expectCalls(reads);
+      view.expectEnd("final", scriptedFinalText("#learn"));
+    },
+  },
+  {
     name: "a folder listing",
     covers: ["#list"],
     run: async (h) => {

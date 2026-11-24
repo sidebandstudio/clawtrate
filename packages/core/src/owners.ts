@@ -40,6 +40,7 @@ import {
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
+  MAX_DEFERRED_STOPS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
   MAX_SENT_PICTURE_MESSAGES,
@@ -135,6 +136,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "listings.*": { max: MAX_LISTED_TASKS, each: ROW, row: null, opaque: "`SESSION_ROW`" },
   // Per followed task: keys and small values.
   openSessions: { max: T, each: ID + N, row: "bookkeeping" },
+  // Bots removed while one task read is out, at most the bot list's own cap; cleared as the next read starts.
+  removedDuringRead: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  // The last whole roster's ids, kept while there are at most `MAX_BOTS`; dropped as the connection closes.
+  lastRosterIds: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   retained: { max: T, each: ID, row: "bookkeeping" },
   incarnations: { max: T, each: ID + N, row: "bookkeeping" },
   loads: { max: T, each: ID + SHORT, row: "bookkeeping" },
@@ -150,6 +155,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Computer Stops whose first abort waits for the gateway to name the run: task and run ids, and
   // the task's opening that asked (an empty object); gone once sent, settled or withdrawn.
   unsentStops: { max: T * MAX_RUN_LIST, each: 2 * ID + 1, row: "bookkeeping" },
+  // An archive's or a delete's Stop of a run not named yet: task and run ids, and the action's
+  // connection check; kept while its run is stopping, and never past the bound.
+  deferredStops: { max: MAX_DEFERRED_STOPS, each: 2 * ID + 1, row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },

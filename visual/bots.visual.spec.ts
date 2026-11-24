@@ -716,3 +716,123 @@ test("F-023: the shell gives the host the number of unread tasks for the dock ba
   await page.getByRole("menuitem", { name: "Disconnect" }).click();
   await expect.poll(badge).toBe(0);
 });
+
+test("F-558: the sidebar, open conversation and open dialogs follow renamed, new and deleted bots", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO_DISK}`, "light");
+  await expect(page.locator(".title-pill-name")).toHaveText("Otto");
+
+  // A renamed bot updates in the sidebar and in its open conversation header.
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(
+            f: (s: {
+              bots: Array<{
+                id: string;
+                name: string;
+                emoji: string | null;
+                avatarUrl: string | null;
+                theme: string | null;
+                model: string | null;
+                isDefault: boolean;
+              }>;
+            }) => unknown,
+          ): void;
+        };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      bots: state.bots.map((entry) =>
+        entry.id === "otto" ? { ...entry, name: "Otto Prime" } : entry,
+      ),
+    }));
+  });
+  await expect(bot(page, "Otto Prime")).toBeVisible();
+  await expect(page.locator(".title-pill-name")).toHaveText("Otto Prime");
+
+  // A new bot appears in the sidebar.
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(
+            f: (s: {
+              bots: Array<{
+                id: string;
+                name: string;
+                emoji: string | null;
+                avatarUrl: string | null;
+                theme: string | null;
+                model: string | null;
+                isDefault: boolean;
+              }>;
+            }) => unknown,
+          ): void;
+        };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      bots: [
+        ...state.bots,
+        {
+          id: "nora",
+          name: "Nora",
+          emoji: null,
+          avatarUrl: null,
+          theme: null,
+          model: null,
+          isDefault: false,
+        },
+      ],
+    }));
+  });
+  await expect(bot(page, "Nora")).toBeVisible();
+
+  // Open a dialog for Otto Prime, then delete Otto from the gateway's bot list.
+  await menuItem(page, "Otto Prime", "Move to");
+  await page.getByRole("menuitem", { name: "New section…" }).click();
+  await expect(page.getByTestId("rail-dialog")).toBeVisible();
+
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(
+            f: (s: { bots: Array<{ id: string }>; tasksByBot: Record<string, unknown> }) => unknown,
+          ): void;
+        };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const { otto: _gone, ...restTasks } = state.tasksByBot;
+      return {
+        ...state,
+        bots: state.bots.filter((entry) => entry.id !== "otto"),
+        tasksByBot: restTasks,
+      };
+    });
+  });
+
+  // The deleted bot leaves the sidebar, its open dialog closes and the conversation moves on.
+  await expect(bot(page, "Otto Prime")).toHaveCount(0);
+  await expect(page.getByTestId("rail-dialog")).toHaveCount(0);
+  await expect(page.locator(".title-pill-name")).toHaveText("Juniper");
+
+  // When every bot is gone, the conversation shows the empty state.
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(f: (s: Record<string, unknown>) => unknown): void;
+        };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => ({ ...state, bots: [], tasksByBot: {} }));
+  });
+  await expect(page.getByText("No bots to show")).toBeVisible();
+});

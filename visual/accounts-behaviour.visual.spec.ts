@@ -4,7 +4,16 @@
 // thing, the access bar for admin, and what a read-only connection shows.
 import type { ClawtrateBridge, ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import {
+  contextFor,
+  moveTarget,
+  NOW,
+  openFixture,
+  OTTO_DISK,
+  sentStamp,
+  settle,
+  SIZES,
+} from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
@@ -552,6 +561,101 @@ test("F-490: a read-only connection shows a bot's settings with every value, and
   );
 });
 
+test("#450: Change account, a Disconnect confirmation and a typed key send the target they opened with", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  // Change account: the choice is made on the page as it opened.
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  let before = await moveTarget(page);
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => sentStamp(page, "changeBotAccount")).toEqual(before);
+
+  // Disconnect…: the confirmation keeps the target it was asked under.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
+  await settings.getByRole("button", { name: "Disconnect…" }).click();
+  before = await moveTarget(page);
+  await page
+    .getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" })
+    .getByRole("button", { name: "Disconnect" })
+    .click();
+  await expect.poll(() => sentStamp(page, "disconnectAccount")).toEqual(before);
+});
+
+test("#450: a key typed in Connect goes with the target Connect opened with", async ({ page }) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  await newBot(page).getByRole("combobox", { name: "Provider" }).selectOption("xai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  const before = await moveTarget(page);
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect.poll(() => sentStamp(page, "saveApiKey")).toEqual(before);
+});
+
+test("#450: disconnecting the account a failed sign-in left sends the stamp Connect opened with", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=failed&saved=1`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI · / })
+    .click();
+  await expect(page.getByTestId("reread")).toContainText("It may not be ready to use.");
+  await page.getByTestId("reread").getByRole("button", { name: "Disconnect it…" }).click();
+  const before = await moveTarget(page);
+  await newBot(page).getByRole("button", { name: "Disconnect", exact: true }).click();
+  await expect.poll(() => sentStamp(page, "disconnectAccount")).toEqual(before);
+  // Refused, as the host refuses a confirmation from before the target moved: the screen says so.
+  await expect(page.getByTestId("drop-error")).toHaveText(
+    "The connection changed since this screen was read, so nothing was sent. Look again, then try again.",
+  );
+});
+
+test("#450: a Disconnect confirmation is refused when another gateway names itself on the same target", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
+  await settings.getByRole("button", { name: "Disconnect…" }).click();
+  // A reconnect answered by another gateway at the same address: same target, another identity.
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: "another-gateway" },
+    })),
+  );
+  await page
+    .getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" })
+    .getByRole("button", { name: "Disconnect" })
+    .click();
+  await expect(settings.getByTestId("b-announcer")).toHaveText(
+    "This change was made for another gateway, so nothing was sent.",
+  );
+  const accounts = await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { getState: () => ClawtrateState } }).clawtrateFixture
+      .getState()
+      .accounts.accounts.map((each) => each.id),
+  );
+  expect(accounts).toContain("openai:work");
+});
+
 test("F-476: Disconnect asks first, with focus on Cancel; Escape closes the confirmation alone", async ({
   page,
 }) => {
@@ -900,6 +1004,78 @@ test("F-478: View more opened for one provider starts closed for the next, and r
       .filter((each) => each.type === "loadModelCatalog")
       .map((each) => each.provider),
   ).toEqual(["openai", "xai", "openai"]);
+});
+
+for (const [where, open] of [
+  ["New bot", (page: Page) => newBotOnWork(page, `${ADMIN}&catalog=slow`)],
+  [
+    "Settings",
+    (page: Page) => openFixture(page, `${ADMIN}&panel=open&tab=settings&catalog=slow`, "light"),
+  ],
+] as const)
+  test(`F-478: focus never leaves the Model menu while View more's answer replaces its row, in ${where}`, async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByTestId("model-select").click();
+    const menu = page.getByRole("menu", { name: "Model" });
+    await menu.getByRole("menuitem", { name: "View more" }).click();
+    // Where focus is at the moment the answer's rows are in the page, before anything later runs:
+    // a key pressed then (Escape) must reach the menu.
+    await page.evaluate(() => {
+      const probe = window as unknown as { focusWhenShown?: string };
+      const seen = new MutationObserver(() => {
+        const menu = document.querySelector('[role="menu"]');
+        if (!menu?.querySelector('[role="menuitemradio"][aria-label="gpt-5.4"]')) return;
+        seen.disconnect();
+        probe.focusWhenShown = menu.contains(document.activeElement) ? "menu" : "outside";
+      });
+      seen.observe(document.body, { childList: true, subtree: true });
+    });
+    await releaseCatalog(page);
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { focusWhenShown?: string }).focusWhenShown),
+      )
+      .toBe("menu");
+    // And Escape closes the menu alone.
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("model-select")).toBeFocused();
+  });
+
+test("F-478: a menu that lost focus to the page never takes it back from the control Tab moved to", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings`, "light");
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await page.keyboard.press("End");
+  await expect(menu.locator(".menu-item").last()).toBeFocused();
+  // Focus goes from the row to the page with no blur reaching the menu, as when its focused row
+  // is removed.
+  await page.evaluate(() => {
+    window.addEventListener("focusout", (event) => event.stopImmediatePropagation(), {
+      capture: true,
+      once: true,
+    });
+    (document.activeElement as HTMLElement).blur();
+  });
+  await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  // Tab moves focus to another control; then the menu's rows change.
+  await page.keyboard.press("Tab");
+  const moved = await page.evaluate(() => {
+    const active = document.activeElement as HTMLElement;
+    active.dataset.movedHere = "1";
+    return active !== document.body && !active.closest('[role="menu"]');
+  });
+  expect(moved).toBe(true);
+  await change(
+    page,
+    `return { ...state, accounts: { ...state.accounts, models: state.accounts.models.filter((m) => m.id !== "gpt-5.5-mini") } };`,
+  );
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.5-mini" })).toHaveCount(0);
+  await expect(page.locator('[data-moved-here="1"]')).toBeFocused();
 });
 
 test("F-478: View more's answer belongs to its dialog: closing the dialog drops it, and opening View more again reads again", async ({

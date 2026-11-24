@@ -3,6 +3,7 @@ export * from "./store.ts";
 export * from "./gateway-names.ts";
 export * from "./host.ts";
 export * from "./mapping.ts";
+export * from "./skill-notes.ts";
 export * from "./avatar.ts";
 export * from "./gateway-update.ts";
 export * from "./runs.ts";

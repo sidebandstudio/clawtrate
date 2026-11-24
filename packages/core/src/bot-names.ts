@@ -28,6 +28,9 @@ export const MAX_NAME_CARDS = 32;
 export const MAX_CHECKED_RUNS = 64;
 /** A run id longer than this isn't kept: its end is checked each time it comes. */
 export const MAX_CHECKED_RUN_CHARS = 256;
+/** A Rename sent, and the connection gone to another gateway before its read-back. */
+export const UNCONFIRMED_AFTER_SWITCH =
+  "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
 /** What a card says of a Rename that didn't land, at most. */
 export const MAX_NAME_ERROR_CHARS = 512;
 
@@ -271,8 +274,9 @@ export class BotNames {
     } catch {
       // Shown below: the list did not confirm it.
     }
-    // Sent before a reset: it reached the gateway it was for, and leaves the cards of the next alone.
-    if (epoch !== this.epoch) return;
+    // Sent before a reset: it reached the gateway it was for, and leaves the cards of the next
+    // alone, but nothing confirmed it, so it isn't reported as done.
+    if (epoch !== this.epoch) throw new Error(UNCONFIRMED_AFTER_SWITCH);
     // Claimed only once the gateway's own list shows it.
     if (this.ctx.bots().find((each) => each.id === botId)?.name === name) return this.drop(botId);
     const unconfirmed = `Rename was sent, but the gateway's bot list doesn't show ${name} yet.`;
@@ -347,15 +351,17 @@ export class BotNames {
       return open?.name === name && open.status !== "renaming" && sameStamp(open.stamp, stamp);
     };
     if (!answers()) return false;
-    const gateway = this.ctx.gateway();
-    if (!gateway) {
-      this.drop(botId);
-      return true;
-    }
+    // Kept for the gateway that drew the card, as Rename is bound to it: its stamp names one, or
+    // it wouldn't answer. A connection that now answers as another gateway doesn't take it over.
+    const gateway = stamp.gatewayId!;
     // The card stays up while what is kept is read; then the Not now is in memory before the
-    // card goes, so a run that ends meanwhile doesn't bring the card back.
-    await this.loadDeclines();
-    if (!answers()) return false;
+    // card goes, so a run that ends meanwhile doesn't bring the card back. Awaited only when not
+    // read yet: a card is drawn only once they are, and a wait here would let a Rename sent just
+    // after this Not now take the card first (#512). After a wait, the card is looked at again.
+    if (this.declines === null) {
+      await this.loadDeclines();
+      if (!answers()) return false;
+    }
     // Changed as they are now, after the read, so two at once both keep their names.
     const declines = { ...this.declines };
     const key = declineKey(gateway, botId);

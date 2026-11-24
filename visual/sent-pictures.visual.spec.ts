@@ -100,7 +100,7 @@ test.describe("sent pictures behaviour", () => {
     const elsewhere = page.getByTestId("transcript-turn").filter({ hasText: "from my phone" });
     await expect(elsewhere.getByTestId("sent-picture")).toHaveAttribute("data-state", "not-kept");
     await expect(elsewhere.getByTestId("sent-picture")).toContainText(
-      "receipt.jpg47 KBPicture sent with this message. It shows only on the device that sent it, while the task is open.",
+      "receipt.jpg47 KBPicture sent with this message. It shows on the device that sent it, until Clawtrate disconnects or is closed.",
     );
     expect(await sent(page)).toEqual([
       {

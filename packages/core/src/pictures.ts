@@ -57,7 +57,7 @@ export type ChatPictureContext = {
  * A picture a person sent, read from this app's own copy (`readSentPicture`):
  * the same answer as a bot's; `not-a-picture` when its bytes aren't one of the
  * types drawn, whatever it was named; or `not-kept` when this app holds no copy
- * of it, which is the case on every other device and after the task was closed:
+ * of it, which is the case on every other device and once this app let it go:
  * Clawtrate doesn't load a person's picture from the gateway (#469).
  */
 export type SentPictureRead =
