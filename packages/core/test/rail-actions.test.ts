@@ -822,6 +822,101 @@ describe("an archive or a delete bound to the connection it began on", () => {
     client.stop();
   });
 
+  it("a deferred Stop's run, once history holds its message, is not aborted on another gateway that a later history read finds it in flight on", async () => {
+    const id = { value: "gateway-a" };
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    const named = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => named.promise;
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [] });
+    let inFlight: unknown = undefined;
+    gateway.handlers["chat.history"] = () => ({
+      messages: [],
+      hasMore: false,
+      ...(inFlight ? { inFlightRun: inFlight } : {}),
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    const message = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    void client
+      .archiveTask(KEY, { stop: true, stamp: gatewayStamp(client.state.connection) })
+      .catch(() => {});
+    await until(() => transcript().runs.find((each) => each.id === message)?.state === "stopping");
+    // The send's answer names the run with the gateway's own id, and its abort goes on this
+    // connection, with the archive's check.
+    named.resolve({ runId: "gateway-run-1", status: "started" });
+    await until(() => gateway.calls("chat.abort").length === 1);
+    // A read that holds the message drops its id from the run; the run settles with no known
+    // outcome, as a read that no longer finds it in flight leaves it.
+    client.store.update((state) => ({
+      ...state,
+      transcripts: {
+        ...state.transcripts,
+        [KEY]: {
+          ...state.transcripts[KEY]!,
+          runs: state.transcripts[KEY]!.runs.map((run) =>
+            run.id === "gateway-run-1"
+              ? { ...run, messageId: null, state: "stopped" as const, outcomeKnown: false }
+              : run,
+          ),
+        },
+      },
+    }));
+    // Another gateway answers the reconnect at the same address, and its history read finds the
+    // run in flight: that read would abort it, but the archive's connection is gone.
+    inFlight = { runId: "gateway-run-1" };
+    id.value = "gateway-x";
+    gateway.dropAll();
+    await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    await until(() => gateway.calls("chat.history").length >= 2);
+    await sleep(600);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("a deferred Stop given up during its wait for write access leaves no check for a later Stop", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    gateway.handlers["chat.send"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    // The Stop's wait for write access lasts until its viewer has gone.
+    const host = client as unknown as {
+      ensureScope: (scope: string, owner: object | null) => Promise<void>;
+    };
+    const ensure = host.ensureScope.bind(client);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    host.ensureScope = async (scope, owner) => {
+      if (client.state.transcripts[KEY]?.runs.some((each) => each.state === "stopping")) await gate;
+      return ensure(scope, owner);
+    };
+    const viewer = {};
+    void client
+      .archiveTask(KEY, {
+        stop: true,
+        owner: viewer,
+        stamp: gatewayStamp(client.state.connection),
+      })
+      .catch(() => {});
+    await until(() => transcript().runs.find((each) => each.id === run)?.state === "stopping");
+    expect((client as unknown as Deferred).deferredStop(KEY, run)).toBeTypeOf("function");
+    client.withdraw(viewer);
+    release();
+    await until(() => transcript().runs.find((each) => each.id === run)?.state !== "stopping");
+    expect((client as unknown as Deferred).deferredStop(KEY, run)).toBeUndefined();
+    client.stop();
+  });
+
   /** A read-tier host whose archive waits for an access grant the gateway approves. */
   async function granted(after: string) {
     const { client, gateway } = await connected(READ_SCOPES);

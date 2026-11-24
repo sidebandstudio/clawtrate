@@ -1321,6 +1321,47 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
+  it("A bot's settings: accounts whose read was out when the identity answered take it, on the same connection", async () => {
+    const { client, a } = await twoGateways();
+    // A reconnect whose identity read is held, and an accounts read asked meanwhile, held too.
+    const named = deferred<unknown>();
+    a.identityReply = named.promise;
+    const get = a.gateway.handlers["config.get"]!;
+    const configured = deferred<void>();
+    a.gateway.handlers["config.get"] = async (params) => {
+      await configured.promise;
+      return get(params);
+    };
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.connectedAt !== was,
+    );
+    expect(client.state.connection.gatewayId).toBeNull();
+    // Every stamp the accounts are published with on this connection.
+    const here = client.state.connection.connectedAt;
+    const published: Array<string | null> = [];
+    const unsubscribe = client.store.subscribe((state) => {
+      const read = state.accounts.readOn;
+      if (read && read.connectedAt === here && published.at(-1) !== read.gatewayId)
+        published.push(read.gatewayId);
+    });
+    const reading = client.refreshAccounts();
+    // The identity answers while that read is out; then the read answers.
+    named.resolve({ deviceId: "gateway-a" });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    a.gateway.handlers["config.get"] = get;
+    configured.resolve();
+    await reading;
+    await until(() => client.state.accounts.readOn?.connectedAt === here);
+    unsubscribe();
+    // The read that was out when the identity answered is published with it, never without.
+    expect(published).toEqual(["gateway-a"]);
+    client.stop();
+  });
+
   it("the gateway's identity, when its first read fails, is read again on the same connection, and a stamp taken then goes", async () => {
     const { client, a } = await twoGateways();
     tasks(a);
