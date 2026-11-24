@@ -1372,4 +1372,58 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       client.stop();
     }
   });
+
+  it("Reconnect leaves out a shared gateway token another client's pairing retired, though its device token was refused since", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "old-shared" }),
+    });
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params, url) => {
+      const { scopes, auth } = params as ConnectParams;
+      if (url === URL_A && auth?.deviceToken)
+        return {
+          ok: false,
+          error: {
+            code: "UNAUTHORIZED",
+            message: "device token mismatch",
+            details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+          },
+        };
+      return { ok: true, payload: helloOk(scopes, url === URL_A ? "issued-A" : "token-B") };
+    };
+    const closed = new FakeGateway();
+    closed.refuseConnections = true;
+    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    const other = new ClawtrateClient(testHost(gateway, storage), FAST);
+    try {
+      await client.start({ resume: "disconnected" });
+      // The other client pairs with A, which retires the shared token.
+      await other.start();
+      await until(() => other.state.connection.status === "connected");
+      await until(() => saved(storage)?.token === null);
+      // The gateway then refuses the device token, and the other client chooses B.
+      gateway.dropAll();
+      await until(() => !storage.data.has(tokenKey(URL_A)));
+      await other.connect({ url: URL_B });
+      await until(() => other.state.connection.status === "connected");
+      await client.suspend();
+      await client.retryNow();
+      other.stop();
+      client.stop();
+      const fresh = memoryStorage(Object.fromEntries(storage.data));
+      const restarted = new ClawtrateClient(testHost(new FakeGateway(), fresh), FAST);
+      try {
+        expect(await restarted.savedSettings()).toEqual({
+          url: URL_A,
+          token: null,
+          suspended: false,
+        });
+      } finally {
+        restarted.stop();
+      }
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
 });

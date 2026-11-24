@@ -306,7 +306,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
  */
 export const CLIENT_NOT_WALKED: Record<string, string> = {
   writes:
-    "shared by clients of the host store; one writer per live pairing, one token per unresolved refusal, one rotation count per token key an access request rotated and one grant (a flag and a number) per token key written, removed or read",
+    "shared by clients of the host store; one writer per live pairing, one token per unresolved refusal, one rotation count per token key an access request rotated, one grant (a flag and a number) per token key written, removed or read and one retired shared gateway token per gateway URL whose device token was saved",
   host: "the host's own objects: its socket factory, storage and signer",
   protocol: "the official client package's protocol client; its requests time out",
   auth: "the official client package's device-auth lifecycle and this connection's token store",

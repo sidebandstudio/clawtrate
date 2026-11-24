@@ -689,6 +689,11 @@ type ConnectionWrites = {
    * a Forget that removed a saved record). An older setup steps aside once a newer choice commits.
    */
   chosen: number;
+  /**
+   * For each gateway URL, the shared gateway token a pairing on this store replaced with a device
+   * token. It stays retired if that device token is refused later, until a Connect to that URL.
+   */
+  retiredShared: Map<string, string>;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
 
@@ -1602,6 +1607,7 @@ export class ClawtrateClient {
       inFlightSettings: null,
       choices: 0,
       chosen: 0,
+      retiredShared: new Map(),
     };
     connectionWrites.set(host.storage, this.writes);
     this.options = options;
@@ -1873,6 +1879,7 @@ export class ClawtrateClient {
         token,
         ...(setup.createSocket && setup.route !== undefined ? { route: setup.route } : {}),
       });
+      this.writes.retiredShared.delete(url);
       // The selection changes only once this choice was valid and saved: a refused one leaves
       // the connection that stays open its own, and its attempt as it was.
       this.selectionApplied = selection;
@@ -2082,13 +2089,15 @@ export class ClawtrateClient {
           await this.saveChoice({ ...this.settings, suspended: false });
         } else {
           // Another client saved another gateway or forgot this one since. Drop this client's
-          // token when a device token has already replaced it (or on a secure store, where
-          // switching retired any migrated token and typed tokens stay in memory only). Keep it
-          // when it is still this gateway's only credential on a plain-file store.
+          // token when a pairing on this store retired it, even if that device token was refused
+          // since, or a device token has replaced it (or on a secure store, where switching
+          // retired any migrated token and typed tokens stay in memory only). Keep it when it is
+          // still this gateway's only credential on a plain-file store.
           const { token, url } = this.settings;
           const dropToken =
             token !== null &&
             (this.host.credentialStatus !== undefined ||
+              this.writes.retiredShared.get(url) === token ||
               (await this.raceStop(stops, () => this.hasDeviceToken(url), true)));
           if (!this.settings || stops !== this.stops) return;
           await this.saveChoice({
@@ -7144,6 +7153,7 @@ export class ClawtrateClient {
               await this.writeRecord({ ...saved, token: null });
               this.settings = { ...saved, token: null };
             } else this.settings = { ...current, token: null };
+            this.writes.retiredShared.set(settings.url, current.token);
           } catch {
             // The settings keep the secret, so the next hello tries again; this one goes on.
             this.log("warn", "Could not remove the shared gateway token from this device.");
