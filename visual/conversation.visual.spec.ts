@@ -22,7 +22,11 @@ for (const size of SHOWN) {
       test.use(contextFor(size, theme));
       for (const view of LIVE_VIEWS.filter((each) => each.scene !== "main")) {
         test(`${view.rows ? `${view.rows}: ` : ""}${view.scene}`, async ({ page }) => {
-          await openFixture(page, `scene=${view.scene}&${OTTO_DISK}&panel=closed`, theme);
+          await openFixture(
+            page,
+            `scene=${view.scene}&${OTTO_DISK}&panel=closed${view.query ?? ""}`,
+            theme,
+          );
           await view.ready(page);
           // The final frame: fonts and images ready, no animation running, and the transcript
           // at its end, unmoved for several frames. Two frames are not enough on a busy machine.

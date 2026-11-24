@@ -322,7 +322,14 @@ export default async function globalSetup() {
     await startInstance(sentinel, "--no-seed");
     process.env.CLAWTRATE_E2E_OTHERS = JSON.stringify(runningOthers([name], [sentinel]));
     // Every start is a fresh, seeded gateway.
-    await startInstance(name, "--with-plugin", "clawtrate-memory");
+    // With the stand-in image provider, for the pictures a bot makes (e2e/ui-pictures.spec.ts).
+    await startInstance(
+      name,
+      "--with-plugin",
+      "clawtrate-memory",
+      "--with-images",
+      "--with-message-tool",
+    );
     // It also has a paired machine (`--with-node`), for Settings, Machines and "Where a bot runs".
     await startInstance(
       accounts,

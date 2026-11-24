@@ -36,6 +36,24 @@
 .updates-section .b-note p {
   margin: 0;
 }
+.update-failure {
+  margin-block-start: 8px;
+}
+.update-failure .b-actions {
+  margin-block-start: 8px;
+}
+.update-failure-record {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .update-result progress {
   display: block;
   margin-top: 6px;
@@ -53,4 +71,20 @@
   .rail-top:has(.update-entry) .rail-status {
     margin-right: 0;
   }
+}
+
+/* What a build adds (F-554): plain lines under a disclosure. */
+.whats-new {
+  margin-block: 8px;
+}
+.whats-new > .whats-new-lines {
+  margin: 0;
+  padding: 4px 0 0 34px;
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.whats-new > .whats-new-lines li + li {
+  margin-block-start: 4px;
 }

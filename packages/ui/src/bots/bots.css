@@ -701,6 +701,24 @@ button.b-choice:hover {
   height: 44px;
 }
 
+/* Settings → Advanced: a switch kept on this device and its name on one line. */
+.device-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.b-field > .device-switch-row {
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+.device-switch .b-hint {
+  margin: 0;
+}
+
 .b-field-error {
   margin: 0;
   padding: 0 4px;

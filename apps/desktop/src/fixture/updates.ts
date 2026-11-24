@@ -7,6 +7,37 @@ import {
   type UpdateTrack,
 } from "@clawtrate/core";
 
+/**
+ * The betas' lists the fixture's Beta source serves beside its feed (F-554), in
+ * the shape of whats-new.json, newest first: the offered beta, one skipped, and
+ * the running beta. Read only after a check, as the app does. The renderer may
+ * not import the update module, so the fixture places them by these versions.
+ */
+export const FIXTURE_BETA_NOTES: Array<{ version: string; items: string[] }> = [
+  {
+    version: "0.2.0-beta.20261116.1",
+    items: [
+      "Settings shows what an update adds (#457)",
+      "The download page lists what each beta added (#456)",
+      "Conversations hide a bot's thinking unless you turn it on (#447)",
+    ],
+  },
+  {
+    version: "0.1.1-beta.20261115.4",
+    items: [
+      "iPhone Settings can show chats from Discord, Telegram and others (#441)",
+      "Holding a message on a touch screen opens its actions (#380)",
+    ],
+  },
+  {
+    version: "0.1.0-beta.20261115.1",
+    items: [
+      "Pictures a bot makes appear in the conversation (#364)",
+      "Provider limits show the share used and reset in larger type (#373)",
+    ],
+  },
+];
+
 /** A fixed host reading for the screenshot fixture. No transfer or clock runs here. */
 export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
   const runningTrack = params.get("buildTrack") === "nightly" ? "nightly" : "stable";
@@ -32,6 +63,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
     "handed-to-system": { kind: "handed-to-system", ...offer },
     "handoff-unconfirmed": { kind: "handoff-unconfirmed", version, offerId: offer.offerId },
     "installer-failed": { kind: "handoff-failed", version, reason: "installer-failed" },
+    "inspection-failed": { kind: "verified", version, size: 120000, offerId: offer.offerId },
     "not-checked": { kind: "not-checked" },
     checking: { kind: "checking" },
     "nothing-newer": { kind: "nothing-newer" },
@@ -72,6 +104,21 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           : runningVersion;
   const supportsRestart = kind === "ready" || kind === "offered" || kind === "inspecting";
   function installFor(state: DesktopUpdateState): DesktopUpdateSnapshot["install"] {
+    if (kind === "inspection-failed" && state.kind === "verified")
+      return {
+        kind: "unavailable-in-this-build",
+        reason: "inspection-failed",
+        failure: {
+          stage: "running-signature",
+          exitCode: 0,
+          signal: null,
+          output: "reported",
+          helperStep: "parent-code -67065",
+          errorCode: null,
+          durationMs: 84,
+          system: "macOS 27.2.1",
+        },
+      };
     if (supportsRestart && state.kind === "verified")
       return { kind: "restart-available", offerId: state.offerId, completesOnQuit: true };
     return {
@@ -126,15 +173,41 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
         : null,
     install: installFor(initialState),
   };
+  /**
+   * What the lists show for `next` (F-554): only once a check has run, only from
+   * the Beta source, and none with `whatsNew=none`.
+   */
+  function withNotes(next: DesktopUpdateSnapshot): DesktopUpdateSnapshot {
+    const rest = { ...next };
+    delete rest.whatsNew;
+    const state = next.state;
+    if (
+      params.get("whatsNew") === "none" ||
+      next.selectedTrack !== "nightly" ||
+      state.kind === "not-checked" ||
+      state.kind === "checking" ||
+      // As the app: a check that failed read no lists.
+      (state.kind === "failed" && state.stage === "check")
+    )
+      return rest;
+    const [offered, skipped] = FIXTURE_BETA_NOTES;
+    const coming =
+      "version" in state && state.version === offered!.version ? [offered!, skipped!] : [];
+    // The running build's own list, whichever build that is: after an update, the one installed.
+    const own =
+      FIXTURE_BETA_NOTES.find((build) => build.version === next.runningVersion)?.items ?? null;
+    return coming.length || own ? { ...rest, whatsNew: { coming, running: own } } : rest;
+  }
+  snapshot = withNotes(snapshot);
   const listeners = new Set<(s: DesktopUpdateSnapshot) => void>();
   function publish(patch: Partial<Omit<DesktopUpdateSnapshot, "install">>) {
     const state = patch.state ?? snapshot.state;
-    snapshot = {
+    snapshot = withNotes({
       ...snapshot,
       ...patch,
       install: installFor(state),
       revision: snapshot.revision + 1,
-    };
+    });
     for (const listener of listeners) listener(snapshot);
   }
   const reply = (outcome: DesktopUpdateOutcome) => ({ outcome, snapshot });

@@ -27,7 +27,14 @@ import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from 
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
 import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
-import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
+import {
+  ActionScope,
+  ItemFeed,
+  RunFeed,
+  RunLine,
+  showAction,
+  TurnPictures,
+} from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
@@ -36,19 +43,31 @@ import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
+import { useShowCommands, useShowThinking } from "./preferences.ts";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
  * bubbles, action cards and "Thought" lines in their order (section 7).
  */
-function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?: boolean }) {
+function Turn({
+  taskKey,
+  item,
+  incomplete = false,
+}: {
+  taskKey: string;
+  item: TranscriptItem;
+  incomplete?: boolean;
+}) {
   const role = item.role === "user" ? "user" : "assistant";
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
   return (
     <div className="turn" data-role={role} data-testid="transcript-turn">
       <ReplyQuote item={item} />
       {role === "assistant" ? (
-        <ItemFeed itemId={item.id} />
+        <>
+          <ItemFeed itemId={item.id} />
+          <TurnPictures taskKey={taskKey} item={item} />
+        </>
       ) : (
         <MessageUnit
           message={
@@ -86,11 +105,13 @@ export function echoesError(item: TranscriptItem, run: Run): boolean {
   return error !== "" && plain(itemText(item)) === error;
 }
 
-/** Under the task's name: how much of the model's context the task uses. */
+/** Under the task's name: how much of the model's context the task uses, once the gateway reports it. */
 function TaskContext({ task }: { task: Task }) {
+  const words = contextWords(task.context);
+  if (!words) return null;
   return (
     <p className="task-context" data-testid="task-context">
-      {contextWords(task.context)}
+      {words}
     </p>
   );
 }
@@ -245,7 +266,16 @@ function TranscriptView({
     }),
     [task.key, transcript, bot.name, liveOptions.interactive, liveOptions.connected, onAnnounce],
   );
-  const live = buildLive(bot, task, transcript, { ...liveOptions, reading });
+  // Without commands shown, the status line says the kind of work; with thinking shown, what the
+  // bot thinks shows under it (7.11).
+  const [commandsShown] = useShowCommands();
+  const [thinkingShown] = useShowThinking();
+  const live = buildLive(bot, task, transcript, {
+    ...liveOptions,
+    reading,
+    quiet: !commandsShown,
+    thinking: thinkingShown,
+  });
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
   const contentSize = `${itemCount}:${live.signature}`;
@@ -386,7 +416,7 @@ function TranscriptView({
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
         ) : live.echoes.has(item.id) ? null : (
-          <Turn item={item} incomplete={live.incomplete.has(item.id)} />
+          <Turn taskKey={task.key} item={item} incomplete={live.incomplete.has(item.id)} />
         )}
       </CardSlot>,
     );
@@ -548,6 +578,10 @@ function heldByEngine(run: Run, transcript: Transcript): boolean {
 type LiveOptions = {
   /** What the reading needs beyond each call, as the cards read it. */
   reading?: ReadingContext;
+  /** "Show commands" is off (7.11). */
+  quiet?: boolean;
+  /** "Show thinking" is on (7.11). */
+  thinking?: boolean;
   connected: boolean;
   interactive: boolean;
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */
@@ -694,7 +728,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         </div>,
       );
     }
-    signature.push(status.phrase);
+    signature.push(status.phrase, status.thought ?? "");
     foot.push(
       <StatusLine
         key={`status-${active.id}`}

@@ -62,6 +62,8 @@ afterEach(async () => {
   await server.close();
   dir.remove();
 });
+/** The feed's and the files' requests; a check also asks for the lists beside the feed (F-554). */
+const feedRequests = () => server.requests.filter((path) => path !== "/whats-new.json");
 const store = () => createUpdatePreferenceStore(join(dir.path, "preferences.json"));
 const start = (overrides: Partial<Parameters<typeof DesktopUpdateService.start>[0]> = {}) =>
   DesktopUpdateService.start({
@@ -102,7 +104,7 @@ it("removes old files and makes zero requests at launch, on get, and on choosing
     state: { kind: "verified", offerId: id, version: nightly, size: fixture.body.length },
   });
   expect(readdirSync(updates)).toHaveLength(1);
-  expect(server.requests).toEqual(["/nightly", "/files/app.zip"]);
+  expect(feedRequests()).toEqual(["/nightly", "/files/app.zip"]);
   const checked = service.get().lastCheck;
   expect(checked).toMatchObject({ track: "nightly", readAt: expect.stringMatching(/Z$/) });
   expect(JSON.stringify(snapshots)).not.toMatch(/https?:|app\.zip|\.partial|sha512|"path"/);
@@ -127,7 +129,7 @@ it("drops the old identity and verified bytes when switching tracks", async () =
   await service.download(current);
   await service.chooseTrack("stable");
   expect(existsSync(updates)).toBe(false);
-  expect(server.requests).toEqual(["/stable", "/nightly", "/files/app.zip"]);
+  expect(feedRequests()).toEqual(["/stable", "/nightly", "/files/app.zip"]);
 });
 it.each(["check", "download"] as const)(
   "discards an outstanding %s and refuses overlapping requests",
@@ -160,9 +162,7 @@ it.each(["check", "download"] as const)(
       state: { kind: "not-checked" },
     });
     expect(existsSync(updates)).toBe(false);
-    expect(server.requests).toEqual(
-      stage === "check" ? ["/stable"] : ["/stable", "/files/app.zip"],
-    );
+    expect(feedRequests()).toEqual(stage === "check" ? ["/stable"] : ["/stable", "/files/app.zip"]);
   },
 );
 it("refuses a feed for another track and records only completed reads", async () => {
@@ -195,7 +195,7 @@ it("keeps the previous track when saving fails and checks it next", async () => 
   });
   expect(server.requests).toEqual([]);
   await offer(service);
-  expect(server.requests).toEqual(["/stable"]);
+  expect(feedRequests()).toEqual(["/stable"]);
 });
 it("reports the running version when the selected track offers an older build", async () => {
   const service = await start({ version: "2.0.0-beta.20261102.1" });
@@ -330,7 +330,7 @@ it("checks ancestry before cleanup and refuses a linked destination before openi
   const nested = await start({ downloadDir: join(updates, "keep") });
   expect(nested.get().preferenceIssue).toBe("update-folder-unavailable");
   expect(readFileSync(join(outside, "keep"), "utf8")).toBe("keep");
-  expect(server.requests).toEqual(["/stable"]);
+  expect(feedRequests()).toEqual(["/stable"]);
 });
 
 it("gives same-version offers separate private destinations and removes the older bytes", async () => {
@@ -352,7 +352,7 @@ it("gives same-version offers separate private destinations and removes the olde
     kind: "offered",
     offerId: second,
   });
-  expect(server.requests).toEqual(["/stable", "/files/app.zip", "/stable"]);
+  expect(feedRequests()).toEqual(["/stable", "/files/app.zip", "/stable"]);
   expect(existsSync(old)).toBe(false);
   await service.download(second);
   const fresh = join(updates, second);
@@ -400,7 +400,7 @@ it("marks the command busy before notifying a throwing observer", async () => {
   expect((await service.download(id)).snapshot).toMatchObject({ state: { kind: "verified" } });
   expect(replies.length).toBeGreaterThan(1);
   for (const reply of await Promise.all(replies)) expect(reply.outcome).toBe("busy");
-  expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
+  expect(feedRequests()).toEqual(["/stable", "/files/app.zip"]);
 });
 
 it("neither startup nor track selection schedules a later check", async () => {
@@ -423,7 +423,7 @@ it("refuses a check for a selection another caller has changed", async () => {
   expect((await service.check({}, service.get().revision)).outcome).toBe("invalid");
   expect(server.requests).toEqual([]);
   expect((await service.check("nightly", service.get().revision)).outcome).toBe("accepted");
-  expect(server.requests).toEqual(["/nightly"]);
+  expect(feedRequests()).toEqual(["/nightly"]);
 });
 
 it("reports check eligibility at launch and stops unsupported checks before transport", async () => {
@@ -531,7 +531,7 @@ it.each(["check", "download"] as const)(
       ["nightly", "stable", "not-checked"],
       [null, "nightly", "not-checked"],
     ]);
-    expect(server.requests).toEqual(
+    expect(feedRequests()).toEqual(
       operation === "check" ? ["/stable", "/stable"] : ["/stable", "/files/app.zip"],
     );
     const revisions = snapshots.map((s) => s.revision);
@@ -797,7 +797,7 @@ it("a nightly-only build stays idle and checks only its one configured source", 
   });
   const again = await start({ feeds: { stable: null, nightly: server.origin + "/nightly" } });
   expect(again.get().lastCheck).toEqual(checked.snapshot.lastCheck);
-  expect(server.requests).toEqual(["/nightly"]);
+  expect(feedRequests()).toEqual(["/nightly"]);
 });
 
 it("keeps a history save error visible when a track choice is draining it", async () => {
@@ -1054,7 +1054,7 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
     expect((await pending).snapshot.lastAttempt).toBeNull();
     expect(quitAfterLaunch).toHaveBeenCalledTimes(1);
     expect(installer.launch).toHaveBeenCalledTimes(1);
-    expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
+    expect(feedRequests()).toEqual(["/stable", "/files/app.zip"]);
   } finally {
     resume.resolve();
     try {
@@ -1064,13 +1064,16 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
     }
   }
   for (const [version, kind] of [
-    ["1.1.0", "target-running"],
     ["1.0.0", "old-version-running"],
     ["1.0.1", "unconfirmed"],
     ["invalid", "unconfirmed"],
+    // Last: once the attempted version runs, the attempt is done with.
+    ["1.1.0", "target-running"],
   ] as const) {
     const prefs = store();
     if (version === "1.1.0") {
+      // Each start clears the update folder; this one checks it reads before clearing.
+      mkdirSync(updates);
       const read = prefs.readPreferences;
       vi.spyOn(prefs, "readPreferences").mockImplementation(async () => {
         expect(existsSync(updates)).toBe(true);
@@ -1084,10 +1087,12 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
       from: "1.0.0",
       track: "stable",
       running: version === "invalid" ? null : version,
+      // This run never reached will-quit after the handoff.
+      ...(kind !== "target-running" && { quit: "not-finished" }),
     });
     expect(existsSync(updates)).toBe(false);
   }
-  expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
+  expect(feedRequests()).toEqual(["/stable", "/files/app.zip"]);
 });
 
 it.each([
@@ -1247,8 +1252,8 @@ it("retains the selected track and last check when an authorized write replaces 
     attempt,
   });
   for (const [version, kind] of [
-    ["1.2.0", "target-running"],
     ["1.0.0", "old-version-running"],
+    ["1.2.0", "target-running"],
   ] as const) {
     const next = await start({ version, store: prefs });
     expect(next.get().lastAttempt).toMatchObject({ kind, running: version });
@@ -1374,7 +1379,7 @@ it("records a storage-blocked check separately from a startup storage notice", a
     preferenceIssue: "update-folder-unavailable",
     lastCheck: before.lastCheck,
   });
-  expect(server.requests).toEqual(["/stable"]);
+  expect(feedRequests()).toEqual(["/stable"]);
 });
 it.skipIf(process.platform === "win32")(
   "a native refusal cannot publish handed-to-system before update-downloaded",
@@ -1553,11 +1558,24 @@ it.skipIf(process.platform === "win32")(
     });
     try {
       const inspect = vi.fn(async () => null);
-      const service = await start({ installer: macInstaller("arm64", inspect) });
+      const service = await start({
+        installer: macInstaller("arm64", inspect, undefined, undefined, "macOS 99.1"),
+      });
       const id = await offer(service);
       expect((await service.download(id)).snapshot).toMatchObject({
         state: { kind: "verified", offerId: id },
-        install: { kind: "unavailable-in-this-build", reason: "inspection-failed" },
+        install: {
+          kind: "unavailable-in-this-build",
+          reason: "inspection-failed",
+          failure: {
+            stage: "hold-archive",
+            errorCode: "ENOSPC",
+            exitCode: null,
+            signal: null,
+            output: null,
+            system: "macOS 99.1",
+          },
+        },
       });
       expect(full).toHaveBeenCalled();
       expect(inspect).not.toHaveBeenCalled();
@@ -1575,3 +1593,396 @@ it.skipIf(process.platform === "win32")(
     }
   },
 );
+
+it("a Restart whose inspection fails carries the installer's record of why", async () => {
+  const failure = {
+    stage: "running-signature",
+    exitCode: 0,
+    signal: null,
+    output: "reported",
+    helperStep: "parent-code -67065",
+    errorCode: null,
+    durationMs: 12,
+    system: "macOS 99.1",
+  } as const;
+  const inspect = vi
+    .fn<UpdateInstaller["inspect"]>()
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce("inspection-failed");
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspectionFailure: failure,
+    inspect,
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "restart-available",
+    offerId: id,
+    completesOnQuit: true,
+  });
+  expect((await service.restart(id)).snapshot).toMatchObject({
+    state: { kind: "handoff-failed", reason: "inspection-failed", failure },
+    install: { kind: "unavailable-in-this-build", reason: "inspection-failed", failure },
+  });
+  service.shutdown();
+});
+
+it("records no failure with a refusal other than inspection-failed", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    inspectionFailure: {
+      stage: "archive",
+      exitCode: 1,
+      signal: null,
+      output: "empty",
+      helperStep: null,
+      errorCode: null,
+      durationMs: 1,
+      system: "macOS 99.1",
+    },
+    inspect: async () => "mac-archive",
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "unavailable-in-this-build",
+    reason: "mac-archive",
+  });
+  service.shutdown();
+});
+
+it("carries a copy the installer couldn't remove with the install it offers", async () => {
+  const cleanup = { copy: "checked-copy", errorCode: "ENOTEMPTY" } as const;
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    cleanupFailure: cleanup,
+    inspect: async () => null,
+    launch: async () => null,
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.install).toEqual({
+    kind: "restart-available",
+    offerId: id,
+    cleanup,
+  });
+  service.shutdown();
+});
+
+it("records a quit that finished after a handoff, and the next start tells it from one that didn't", async () => {
+  const handOff = async (quit: boolean) => {
+    rmSync(join(dir.path, "preferences.json.quit"), { force: true });
+    const installer: UpdateInstaller = {
+      unavailable: null,
+      completesOnQuit: true,
+      inspect: async () => null,
+      launch: async (_file, _signal, handed) => {
+        handed();
+        return null;
+      },
+    };
+    const service = await start({ installer });
+    const id = await offer(service);
+    await service.download(id);
+    expect((await service.restart(id)).snapshot.state.kind).toBe("handed-to-system");
+    // The app is asked to quit at the handoff; will-quit comes 23 s later.
+    if (quit) service.quitting(Date.now() + 23_000);
+    service.shutdown();
+  };
+  await handOff(true);
+  expect((await start()).get().lastAttempt).toMatchObject({
+    kind: "old-version-running",
+    quit: "finished",
+    quitMs: expect.any(Number),
+  });
+  expect((await start()).get().lastAttempt?.quitMs).toBeGreaterThanOrEqual(23_000);
+  await handOff(false);
+  expect((await start()).get().lastAttempt).toMatchObject({
+    kind: "old-version-running",
+    quit: "not-finished",
+  });
+  expect((await start()).get().lastAttempt).not.toHaveProperty("quitMs");
+  // An update that took says nothing about the quit.
+  expect((await start({ version: "1.1.0" })).get().lastAttempt).toEqual({
+    kind: "target-running",
+    target: "1.1.0",
+    from: "1.0.0",
+    track: "stable",
+    running: "1.1.0",
+  });
+});
+
+it("an update the system refused before any handoff reports no quit, finished or not", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async () => "mac-updater-refused",
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect((await service.restart(id)).snapshot.state.kind).toBe("handoff-failed");
+  service.shutdown();
+  const attempt = (await start()).get().lastAttempt;
+  expect(attempt).toMatchObject({ kind: "old-version-running", target: "1.1.0" });
+  expect(attempt).not.toHaveProperty("quit");
+});
+
+it("a quit recorded while the clock moved back is still a finished quit, of no time", async () => {
+  rmSync(join(dir.path, "preferences.json.quit"), { force: true });
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async (_file, _signal, handed) => {
+      handed();
+      return null;
+    },
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  await service.restart(id);
+  service.quitting(Date.now() - 60_000);
+  service.shutdown();
+  expect((await start()).get().lastAttempt).toMatchObject({ quit: "finished", quitMs: 0 });
+});
+
+it("says nothing about a quit for an attempt written by a build that didn't record quits", async () => {
+  await store().set(
+    "attempt",
+    JSON.stringify({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      time: "2026-11-23T00:00:00.000Z",
+      phase: "handoff",
+    }),
+  );
+  expect((await start()).get().lastAttempt).toEqual({
+    kind: "old-version-running",
+    target: "1.1.0",
+    from: "1.0.0",
+    track: "stable",
+    running: "1.0.0",
+  });
+});
+
+it("a quit with no handoff in this run records nothing", async () => {
+  const markQuit = vi.fn();
+  const service = await start({ store: { ...store(), markQuit } });
+  service.quitting();
+  service.shutdown();
+  expect(markQuit).not.toHaveBeenCalled();
+});
+
+it("a later quit after an unconfirmed handoff records no quit time", async () => {
+  const installer: UpdateInstaller = {
+    unavailable: null,
+    completesOnQuit: true,
+    inspect: async () => null,
+    launch: async (_file, _signal, _handed, submitted) => {
+      submitted?.();
+      return null;
+    },
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect((await service.restart(id)).snapshot.state.kind).toBe("handoff-unconfirmed");
+  // The person quits an hour later; nothing asked the app to quit for the update.
+  service.quitting(Date.now() + 3_600_000);
+  service.shutdown();
+  const attempt = (await start()).get().lastAttempt;
+  expect(attempt).toMatchObject({ kind: "old-version-running", quit: "finished" });
+  expect(attempt).not.toHaveProperty("quitMs");
+});
+
+it("forgets the attempt once the attempted version runs, so a later downgrade by hand reports none", async () => {
+  const prefs = store();
+  await prefs.set(
+    "attempt",
+    JSON.stringify({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      time: "2026-11-23T00:00:00.000Z",
+      phase: "handoff",
+      marksQuit: true,
+    }),
+  );
+  prefs.markQuit({ attempt: "2026-11-23T00:00:00.000Z", ms: 9000 });
+  expect((await start({ version: "1.1.0", store: prefs })).get().lastAttempt).toMatchObject({
+    kind: "target-running",
+  });
+  expect(await prefs.get("attempt")).toBeNull();
+  expect(existsSync(join(dir.path, "preferences.json.quit"))).toBe(false);
+  // The person reinstalls 1.0.0 by hand: nothing claims an update didn't take.
+  expect((await start({ version: "1.0.0", store: prefs })).get().lastAttempt).toBeNull();
+});
+
+it("F-554: the lists beside the feed are read only inside a check the person starts, and show what the offer adds", async () => {
+  server.route(
+    "/whats-new.json",
+    json({
+      format: 1,
+      builds: [
+        { version: nightly, items: ["The offer (#3)"] },
+        { version: "1.0.1-beta.20261020.1", items: ["Skipped (#2)"] },
+        { version: "1.0.0", items: ["This build (#1)"] },
+      ],
+    }),
+  );
+  const service = await start();
+  await service.chooseTrack("nightly");
+  expect(server.requests).toEqual([]);
+  expect("whatsNew" in service.get()).toBe(false);
+  await offer(service);
+  expect(server.requests).toContain("/whats-new.json");
+  await vi.waitFor(() =>
+    expect(service.get().whatsNew).toEqual({
+      coming: [
+        { version: nightly, items: ["The offer (#3)"] },
+        { version: "1.0.1-beta.20261020.1", items: ["Skipped (#2)"] },
+      ],
+      running: ["This build (#1)"],
+    }),
+  );
+  expect(service.get().state).toMatchObject({ kind: "offered", version: nightly });
+  // A new track forgets the lists until its own check reads them.
+  await service.chooseTrack("stable");
+  expect("whatsNew" in service.get()).toBe(false);
+});
+
+it.each<[string, Parameters<FeedServer["route"]>[1] | null]>([
+  ["missing", null],
+  ["malformed", json("{")],
+  [
+    "oversized",
+    (_request, response) => {
+      response.writeHead(200, { "content-length": String(200 * 1024) });
+      response.end("x".repeat(200 * 1024));
+    },
+  ],
+  [
+    "redirected to another origin",
+    (_request, response) => {
+      response.writeHead(302, { location: "https://elsewhere.example/whats-new.json" });
+      response.end();
+    },
+  ],
+  ["slow", () => {}],
+])(
+  "F-554: a %s list gives no list and the check's result as it is without one",
+  async (_name, answer) => {
+    if (answer) server.route("/whats-new.json", answer);
+    const service = await start();
+    const started = Date.now();
+    const reply = await service.check("stable", service.get().revision);
+    expect(reply.outcome).toBe("accepted");
+    expect(reply.snapshot.state).toMatchObject({ kind: "offered", version: "1.1.0" });
+    // The check does not wait for the lists.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect("whatsNew" in service.get()).toBe(false);
+  },
+);
+
+it("F-554: the list is read once per check, only after the feed has answered with an offer or nothing newer, and changes no state the updater reads", async () => {
+  // The list is answered only once the check has returned, so the comparison never races it.
+  const held = Promise.withResolvers<void>();
+  server.route("/whats-new.json", async (request, response) => {
+    await held.promise;
+    json({ format: 1, builds: [{ version: "1.1.0", items: ["The offer (#3)"] }] })(
+      request,
+      response,
+    );
+  });
+  const service = await start();
+  const reply = await service.check("stable", service.get().revision);
+  const offered = reply.snapshot;
+  expect(offered.state).toMatchObject({ kind: "offered", version: "1.1.0" });
+  held.resolve();
+  await vi.waitFor(() => expect(service.get().whatsNew?.coming).toHaveLength(1));
+  // The feed answered first, and the list was asked for once.
+  expect(server.requests).toEqual(["/stable", "/whats-new.json"]);
+  // Only the list changed: the updater's state, its revision included, is as the check left it,
+  // and the lists' own counter rose by one.
+  const { whatsNew: _list, listsRevision, ...after } = service.get();
+  const { whatsNew: _none, listsRevision: before, ...checked } = offered;
+  expect(after).toEqual(checked);
+  expect(listsRevision).toBe((before ?? 0) + 1);
+  const { offerId } = offered.state as { offerId: string };
+  expect((await service.download(offerId)).snapshot.state).toMatchObject({ kind: "verified" });
+  // Another check asks once more; a check that fails asks for no list.
+  await service.check("stable", service.get().revision);
+  expect(server.requests.filter((path) => path === "/whats-new.json")).toHaveLength(2);
+  server.route("/stable", (_request, response) => response.writeHead(500).end());
+  await service.check("stable", service.get().revision);
+  expect(server.requests.filter((path) => path === "/whats-new.json")).toHaveLength(2);
+});
+
+it("F-554: lists that arrive while the check still says Checking show only once it has its answer", async () => {
+  server.route("/stable", json(document("1.0.0", "stable")));
+  server.route(
+    "/whats-new.json",
+    json({ format: 1, builds: [{ version: "1.0.0", items: ["This build (#1)"] }] }),
+  );
+  const base = store();
+  const saving = Promise.withResolvers<void>();
+  const service = await start({
+    store: {
+      ...base,
+      set: async (key: string, value: string) => {
+        if (key === "lastCheck") await saving.promise;
+        return base.set(key, value);
+      },
+    },
+  });
+  const checking = service.check("stable", service.get().revision);
+  // The lists arrive while the check is still saving when it read the feed.
+  await vi.waitFor(() => expect(snapshots.some((each) => each.listsRevision)).toBe(true));
+  expect(service.get().state.kind).toBe("checking");
+  expect("whatsNew" in service.get()).toBe(false);
+  saving.resolve();
+  await checking;
+  expect(service.get().state.kind).toBe("nothing-newer");
+  expect(service.get().whatsNew).toEqual({ coming: [], running: ["This build (#1)"] });
+});
+
+it("F-554: Download is offered and works while the list has not arrived", async () => {
+  server.route("/whats-new.json", () => {});
+  const service = await start();
+  const reply = await service.check("stable", service.get().revision);
+  expect(reply.snapshot.state).toMatchObject({ kind: "offered", version: "1.1.0" });
+  const { offerId } = reply.snapshot.state as { offerId: string };
+  expect((await service.download(offerId)).snapshot.state).toMatchObject({ kind: "verified" });
+  expect("whatsNew" in service.get()).toBe(false);
+});
+
+it("F-554: the lists arriving after a check never make the next Check stale", async () => {
+  server.route("/stable", json(document("1.0.0", "stable")));
+  const held = Promise.withResolvers<void>();
+  server.route("/whats-new.json", async (_request, response) => {
+    await held.promise;
+    json({ format: 1, builds: [{ version: "1.0.0", items: ["This build (#1)"] }] })(
+      _request,
+      response,
+    );
+  });
+  const service = await start();
+  const first = await service.check("stable", service.get().revision);
+  expect(first.snapshot.state).toMatchObject({ kind: "nothing-newer" });
+  // What the renderer holds when the person clicks Check again.
+  const shown = service.get().revision;
+  held.resolve();
+  await vi.waitFor(() => expect(service.get().whatsNew?.running).toEqual(["This build (#1)"]));
+  expect(service.get().revision).toBe(shown);
+  const again = await service.check("stable", shown);
+  expect(again.outcome).toBe("accepted");
+  expect(server.requests.filter((path) => path === "/stable")).toHaveLength(2);
+});

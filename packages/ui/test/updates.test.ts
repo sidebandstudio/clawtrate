@@ -8,6 +8,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { Updates, showUpdateFooter } from "../src/Updates.tsx";
+import {
+  attemptLine,
+  cleanupLine,
+  inspectionFailureDetails,
+  inspectionFailureLine,
+} from "../src/update-restart.ts";
 
 const snapshot: DesktopUpdateSnapshot = {
   runningVersion: "1.0.0",
@@ -383,4 +389,179 @@ it("F-231: a previous attempt gives retry advice only on its idle startup track"
     ),
   ])
     expect(render(state, startup).html).not.toContain(advice);
+});
+
+const failure = {
+  stage: "running-signature",
+  exitCode: 0,
+  signal: null,
+  output: "reported",
+  helperStep: "parent-code -67065",
+  errorCode: null,
+  durationMs: 84,
+  system: "macOS 27.2.1",
+} as const;
+it("F-231: a failed inspection says where it stopped, under the message it explains", () => {
+  const install = {
+    kind: "unavailable-in-this-build",
+    reason: "inspection-failed",
+    failure,
+  } as const;
+  const shown = render(verified, { install });
+  const message = shown.html.indexOf("Couldn't finish checking the downloaded update.");
+  const reason = shown.html.indexOf(
+    "The update checker stopped while checking this app's signature: it couldn't read a signature.",
+  );
+  expect(message).toBeGreaterThan(-1);
+  expect(reason).toBeGreaterThan(message);
+  expect(shown.actions).toEqual(["Copy details"]);
+  const failed = render(
+    { kind: "handoff-failed", version: "1.1.0", reason: "inspection-failed", failure },
+    { install },
+  );
+  expect(failed.html.indexOf("checking this app's signature")).toBeGreaterThan(
+    failed.html.indexOf("Couldn't finish checking the downloaded update."),
+  );
+  expect(failed.actions).toEqual(["Copy details", "Check for Updates"]);
+  // Without a record, nothing more is said.
+  const bare = render(verified, {
+    install: { kind: "unavailable-in-this-build", reason: "inspection-failed" },
+  });
+  expect(bare.actions).toEqual([]);
+  expect(bare.html).not.toContain("update checker");
+});
+it.each([
+  [
+    { stage: "hold-archive", errorCode: "ENOSPC" },
+    "It stopped while keeping a private copy of the download (ENOSPC).",
+  ],
+  [
+    { stage: "start-helper", output: null, errorCode: "ENOENT" },
+    "The update checker didn't start (ENOENT).",
+  ],
+  [
+    { stage: "archive", signal: "SIGKILL", output: "empty" },
+    "The update checker stopped while checking the downloaded app: macOS stopped it with SIGKILL.",
+  ],
+  [
+    { stage: "archive", exitCode: 1, output: "empty" },
+    "The update checker stopped while checking the downloaded app: it exited with code 1.",
+  ],
+  [{ output: "empty" }, "it gave no answer."],
+  [{ output: "no-line-ending" }, "its answer was cut off."],
+  [{ output: "too-long" }, "its answer was too long."],
+  [{ output: "unrecognized" }, "it gave an answer Clawtrate doesn't know."],
+] as const)("F-231: words a failed inspection %#", (change, line) => {
+  expect(inspectionFailureLine({ ...failure, ...change })).toContain(line);
+});
+it("F-231: the details to copy are codes, counts and versions only", () => {
+  expect(inspectionFailureDetails(failure, "0.1.1-beta.20261122.4")).toBe(
+    [
+      "Clawtrate update inspection failed",
+      "Version: 0.1.1-beta.20261122.4",
+      "System: macOS 27.2.1",
+      "Stage: running-signature",
+      "Exit code: 0",
+      "Signal: none",
+      "Output: reported",
+      "Helper step: parent-code -67065",
+      "Error code: none",
+      "Duration: 84 ms",
+    ].join("\n"),
+  );
+});
+
+it("F-231: says when the check left a copy it couldn't remove, and that it tries again", () => {
+  const install = {
+    kind: "restart-available",
+    offerId: "shown",
+    cleanup: { copy: "checked-copy", errorCode: "ENOTEMPTY" },
+  } as const;
+  const line =
+    "Clawtrate couldn't remove the copy of the app it checked (ENOTEMPTY). It tries again at the next start or check.";
+  expect(cleanupLine({ ...snapshot, install })).toBe(line);
+  expect(render(verified, { install }).html).toContain(line);
+  expect(
+    cleanupLine({
+      ...snapshot,
+      install: { ...install, cleanup: { copy: "held-copy", errorCode: "EPERM" } },
+    }),
+  ).toContain("its private copy of the download (EPERM)");
+  expect(
+    render(verified, { install: { kind: "restart-available", offerId: "shown" } }).html,
+  ).not.toContain("couldn't remove");
+});
+
+it.each([
+  [
+    { quit: "not-finished" },
+    "Clawtrate 1.0.0 is running, not 1.1.0. No finished quit was recorded for this update, and macOS installs it only after the app quits. Check for updates to try again.",
+  ],
+  [
+    { quit: "finished", quitMs: 23_400 },
+    "Clawtrate 1.0.0 is running, not 1.1.0. The app quit for the update after 23 s, but macOS didn't install it. Check for updates to try again.",
+  ],
+  [
+    { quit: "finished" },
+    "Clawtrate 1.0.0 is running, not 1.1.0. The app quit, but macOS didn't install the update. Check for updates to try again.",
+  ],
+  [{}, "Clawtrate 1.0.0 is running, not 1.1.0. Check for updates to try again."],
+] as const)(
+  "F-231: after an update that didn't take, says whether the app finished quitting %#",
+  (quit, line) => {
+    expect(
+      attemptLine({
+        kind: "old-version-running",
+        target: "1.1.0",
+        from: "1.0.0",
+        track: "stable",
+        running: "1.0.0",
+        ...quit,
+      }),
+    ).toBe(line);
+  },
+);
+
+it("F-554: an offer's list is open, a skipped build's and the running build's closed, as plain text; nothing without lists", () => {
+  const offered: DesktopUpdateState = {
+    kind: "offered",
+    version: "1.2.0",
+    releaseDate: "2026-11-20T00:00:00Z",
+    offerId: "stable-1",
+  };
+  const { html } = render(offered, {
+    whatsNew: {
+      coming: [
+        { version: "1.2.0", items: ["The offer (#3)", "A <b>tag</b> stays text (#4)"] },
+        { version: "1.1.0", items: ["Skipped (#2)"] },
+      ],
+      running: ["This build (#1)"],
+    },
+  });
+  const sections = [
+    ...html.matchAll(/<details class="b-disclosure whats-new"[^>]*>[\s\S]*?<\/details>/g),
+  ].map((m) => m[0]);
+  const read = (section: string) => ({
+    open: /^<details[^>]* open=""/.test(section),
+    title: /<\/svg>([^<]*)<\/summary>/.exec(section)?.[1],
+    lines: [...section.matchAll(/<li>([^<]*)<\/li>/g)].map((m) => m[1]),
+  });
+  expect(sections.map(read)).toEqual([
+    { open: false, title: "What's new in this build", lines: ["This build (#1)"] },
+    {
+      open: true,
+      title: "What's new in 1.2.0",
+      lines: ["The offer (#3)", "A &lt;b&gt;tag&lt;/b&gt; stays text (#4)"],
+    },
+    { open: false, title: "What's new in 1.1.0", lines: ["Skipped (#2)"] },
+  ]);
+  expect(sections.join("")).not.toMatch(/<a|<img|<b>/);
+  // The notes are not part of the app's own status: they follow its group, Download included.
+  expect(html.indexOf(">Download</button>")).toBeGreaterThan(
+    html.indexOf('aria-label="Update status"'),
+  );
+  expect(html.indexOf("What's new in 1.2.0")).toBeGreaterThan(html.indexOf(">Download</button>"));
+  // Before a check, and when the lists name nothing, there is no section.
+  expect(render({ kind: "not-checked" }).html).not.toContain("whats-new");
+  expect(render(offered).html).not.toContain("whats-new");
 });

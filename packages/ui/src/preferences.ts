@@ -2,7 +2,7 @@
 // can be missing or throw (private windows, blocked site data), and the app must
 // work without it.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 export function readPreference(key: string): string | null {
   try {
@@ -72,6 +72,47 @@ export function useBubbles(): [BubbleChoice, (choice: BubbleChoice) => void] {
   }, []);
   return [choice, choose];
 }
+
+/**
+ * A switch kept on this device (conversation.md, 7.11), off by default, stored as
+ * `clawtrate.<key>` = "show"; `?<key>=show` overrides the stored choice. One value
+ * for the whole window, so Settings, the conversation and the Computer tab change together.
+ */
+function deviceSwitch(key: string): () => [boolean, (shown: boolean) => void] {
+  const listeners = new Set<() => void>();
+  let value: boolean | null = null;
+  const read = (): boolean => {
+    if (value === null) {
+      const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get(key);
+      value = (fromUrl ?? readPreference(key)) === "show";
+    }
+    return value;
+  };
+  return function useDeviceSwitch() {
+    const shown = useSyncExternalStore((listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }, read);
+    const choose = useCallback((next: boolean) => {
+      writePreference(key, next ? "show" : null);
+      value = next;
+      for (const listener of listeners) listener();
+    }, []);
+    return [shown, choose];
+  };
+}
+
+/**
+ * "Show commands": the action cards in the conversation, command lines and the
+ * Raw view. `?commands=show` overrides the stored choice.
+ */
+export const useShowCommands = deviceSwitch("commands");
+
+/**
+ * "Show thinking": the "Thought" lines in the conversation and the thinking under
+ * the status line. `?thinking=show` overrides the stored choice.
+ */
+export const useShowThinking = deviceSwitch("thinking");
 
 /** A set of ids kept as a JSON array in a preference. */
 export function readIdSet(key: string): Set<string> {

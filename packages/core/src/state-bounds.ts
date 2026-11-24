@@ -152,6 +152,7 @@ import type {
   ClawtrateState,
   ConnectionError,
   ConnectionState,
+  GatewayStamp,
   DiscoveryState,
   MessageReaction,
   PairingRequest,
@@ -165,6 +166,7 @@ import type {
   Transcript,
   TranscriptBlock,
   TranscriptItem,
+  ChatPicture,
 } from "./types.ts";
 
 // Field caps, in JSON characters --------------------------------------------------
@@ -240,6 +242,9 @@ export const MAX_HISTORY_ITEMS = 200;
 export const MAX_TOOL_FACTS_CHARS = 160;
 export const MAX_BLOCKS_PER_ITEM = 300;
 export const MAX_HISTORY_BLOCKS = 300;
+/** Pictures a bot's turn hands over, and across a task's history page (`ChatPicture`). */
+export const MAX_PICTURES_PER_ITEM = 8;
+export const MAX_HISTORY_PICTURES = 16;
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */
@@ -571,12 +576,23 @@ const block = union<TranscriptBlock, "kind">("kind")({
     result: toolResult,
   }),
 });
+const picture = object<ChatPicture>()({
+  artifactId: ID,
+  alt: NAME,
+  prompt: NAME,
+  mimeType: NAME,
+  width: NUMBER,
+  height: NUMBER,
+  sizeBytes: NUMBER,
+  messageId: ID,
+});
 const item = flagged<TranscriptItem>()({
   id: ID,
   role: ENUM,
   timestamp: NUMBER,
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
+  pictures: list(MAX_PICTURES_PER_ITEM, picture, { pool: "pictures" }),
   truncated: FLAG,
   messageId: ID,
   replyTo: object<ReplyReference>()({
@@ -624,7 +640,9 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   runsOmitted: NUMBER,
   sessionKey: ID,
   status: ENUM,
-  items: list(MAX_HISTORY_ITEMS, item, { pools: { blocks: MAX_HISTORY_BLOCKS } }),
+  items: list(MAX_HISTORY_ITEMS, item, {
+    pools: { blocks: MAX_HISTORY_BLOCKS, pictures: MAX_HISTORY_PICTURES },
+  }),
   error: text(MAX_MESSAGE_LINE_CHARS),
   hasMore: FLAG,
   live: object<NonNullable<Transcript["live"]>>()({ runId: ID, text: text(MAX_RUN_TEXT_CHARS) }),
@@ -684,6 +702,7 @@ const connection = object<ConnectionState>()({
   error: connectionError,
   retryAt: NUMBER,
   connectedAt: NUMBER,
+  target: NUMBER,
   paired: FLAG,
   sendLimits: object<SendLimits>()({
     imageBytes: NUMBER,
@@ -1164,7 +1183,7 @@ const checkInSave = object<CheckInSave>()({
 export const CHECK_INS: Bound = object<CheckInsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
-  gatewayId: ID,
+  stamp: object<GatewayStamp>()({ gatewayId: ID, target: NUMBER }),
   scheduler: FLAG,
   readBotIds: list(MAX_BOTS, ID),
   jobs: list(MAX_BOTS, checkInJob),

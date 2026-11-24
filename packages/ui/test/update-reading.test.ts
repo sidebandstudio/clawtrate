@@ -281,3 +281,31 @@ it("F-231: a stale restart reply cannot replace or contradict a newer handoff", 
   await pending;
   expect(h.reader.get()).toMatchObject({ snapshot: { revision: 5 }, message: null });
 });
+
+it("F-554: the lists arriving at the same revision are shown, and older ones never replace them", async () => {
+  const h = harness();
+  h.first.resolve(base);
+  await vi.waitFor(() => expect(h.reader.get().snapshot?.revision).toBe(3));
+  const lists = { coming: [], running: ["This build (#1)"] };
+  h.event({ ...base, listsRevision: 1, whatsNew: lists });
+  expect(h.reader.get().snapshot?.whatsNew).toEqual(lists);
+  h.event({ ...base, listsRevision: 1 });
+  h.event(base);
+  expect(h.reader.get().snapshot?.whatsNew).toEqual(lists);
+  // A newer revision still replaces it, whatever its lists.
+  h.event({ ...base, revision: 4 });
+  expect(h.reader.get().snapshot?.whatsNew).toBeUndefined();
+});
+
+it("F-554: lists arriving keep a command's feedback on the screen", async () => {
+  const h = harness();
+  h.first.resolve(base);
+  await vi.waitFor(() => expect(h.reader.get().snapshot?.revision).toBe(3));
+  const check = h.reader.check("stable", 3);
+  h.reply.reject(new Error("no reply"));
+  await check;
+  expect(h.reader.get().message).toBe("Couldn't get a reply to the update check.");
+  h.event({ ...base, listsRevision: 1, whatsNew: { coming: [], running: ["This build (#1)"] } });
+  expect(h.reader.get().snapshot?.whatsNew?.running).toEqual(["This build (#1)"]);
+  expect(h.reader.get().message).toBe("Couldn't get a reply to the update check.");
+});

@@ -245,9 +245,9 @@ test("F-201: a failed Check stays retryable and does not rebase onto an older re
         failed = true;
         throw new Error("The read could not be sent.");
       }
-      const { gatewayId, jobs, defaults } = bridge.getState().checkIns!;
+      const { stamp, jobs, defaults } = bridge.getState().checkIns!;
       return {
-        gatewayId,
+        stamp,
         jobs,
         defaults,
         settings: [
@@ -530,7 +530,7 @@ test("F-201: a draft survives admin going and coming back, and is not shown for 
   // Another gateway now answers at the same address: its identity is not the draft's.
   await change(
     page,
-    "return { ...state, connection: { ...state.connection, gatewayId: 'another' }, checkIns: { ...state.checkIns, gatewayId: 'another' } };",
+    "return { ...state, connection: { ...state.connection, gatewayId: 'another' }, checkIns: { ...state.checkIns, stamp: { ...state.checkIns.stamp, gatewayId: 'another' } } };",
   );
   await expect(page.getByTestId("check-ins-dialog")).toHaveCount(0);
   await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();

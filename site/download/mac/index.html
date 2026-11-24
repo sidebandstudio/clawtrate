@@ -6,6 +6,8 @@
     __CLAWTRATE_ARM64_ZIP__      latest-mac.json's arm64 url
     __CLAWTRATE_X64_ZIP__        latest-mac.json's x86_64 url
     __CLAWTRATE_RELEASE_PAGE__   https://github.com/sidebandstudio/clawtrate/releases/tag/<tag>
+  One more token sits below the tracks, where the newest betas' "What's new"
+  lists go; it is replaced by nothing when no beta's release page has a list.
   It deploys nothing while a token is left. docs/decisions.md, "The website".
 -->
 <html lang="en">
@@ -15,6 +17,21 @@
     <title>Download Clawtrate for Mac</title>
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#101112" />
+    <!-- The link preview, the home page's card. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Clawtrate" />
+    <meta property="og:url" content="https://clawtrate.dev/download/mac/" />
+    <meta property="og:title" content="Download Clawtrate for Mac" />
+    <meta property="og:description" content="Beta is out now for Mac. Stable isn't released yet." />
+    <meta property="og:image" content="https://clawtrate.dev/social.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="The Clawtrate logo and name, the words Your OpenClaw agents, orchestrated, and a row of Claws along the bottom."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" href="../../favicon.png" sizes="32x32" />
     <link
       rel="preload"
@@ -850,6 +867,8 @@
           </div>
         </article>
       </div>
+
+      __CLAWTRATE_WHATS_NEW__
 
       <section class="pedigree" aria-labelledby="pedigree-title" data-reveal>
         <p class="pedigree-title" id="pedigree-title">Built by engineers from</p>
