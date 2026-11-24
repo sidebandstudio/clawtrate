@@ -8,8 +8,11 @@
 //   node e2e-packaged/real-update/check.ts --app /Applications/Clawtrate.app --out <dir>
 //     [--expect <version>] [--probe <running-signature-probe binary>]
 //
-// It writes <out>/result.json and the app's output, and exits 0 only when the app at
-// --app was replaced by the offered version and that copy's signature is valid.
+// It writes <out>/result.json and the app's output. Its `verdict` is `passed` when the app at
+// --app was replaced in place by the offered version, `inconclusive` when the feed offered a
+// newer release than --expect (a release published mid-run, say), and `failed` otherwise, any
+// other offer included.
+// It exits 1 only for `failed`.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,6 +20,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
+import { offerVerdict, remaining, withinLimit, type Verdict } from "./verdict.ts";
 
 const { values } = parseArgs({
   options: {
@@ -71,8 +75,10 @@ async function until<T>(what: string, ms: number, probe: () => Promise<T | null>
   for (;;) {
     const value = await probe();
     if (value !== null) return value;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await sleep(500);
+    // Never asleep past the deadline: the last probe starts by then, within its own limit.
+    const left = deadline - Date.now();
+    if (left <= 0) throw new Error(`timed out waiting for ${what}`);
+    await sleep(Math.min(500, left));
   }
 }
 
@@ -99,10 +105,15 @@ class Page {
   }
   static async open(url: string): Promise<Page> {
     const socket = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      socket.addEventListener("open", resolve, { once: true });
-      socket.addEventListener("error", reject, { once: true });
-    });
+    await withinLimit(
+      "opening the page",
+      30_000,
+      new Promise((resolve, reject) => {
+        socket.addEventListener("open", resolve, { once: true });
+        socket.addEventListener("error", reject, { once: true });
+      }),
+      () => socket.close(),
+    );
     return new Page(socket);
   }
   /**
@@ -111,21 +122,21 @@ class Page {
    */
   async evaluate<T>(expression: string, ms = 60_000): Promise<T> {
     const id = this.next++;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const reply = await new Promise<{ result?: unknown; error?: unknown }>((resolve) => {
-      timer = setTimeout(() => {
-        this.waiting.delete(id);
-        resolve({ error: `no answer within ${ms} ms to ${expression}` });
-      }, ms);
-      this.waiting.set(id, resolve);
-      this.socket.send(
-        JSON.stringify({
-          id,
-          method: "Runtime.evaluate",
-          params: { expression, awaitPromise: true, returnByValue: true },
-        }),
-      );
-    }).finally(() => clearTimeout(timer));
+    const reply = await withinLimit(
+      expression,
+      ms,
+      new Promise<{ result?: unknown; error?: unknown }>((resolve) => {
+        this.waiting.set(id, resolve);
+        this.socket.send(
+          JSON.stringify({
+            id,
+            method: "Runtime.evaluate",
+            params: { expression, awaitPromise: true, returnByValue: true },
+          }),
+        );
+      }),
+      () => this.waiting.delete(id),
+    );
     const evaluated = reply.result as
       { result?: { value?: T }; exceptionDetails?: unknown } | undefined;
     if (reply.error || evaluated?.exceptionDetails)
@@ -148,7 +159,7 @@ type Snapshot = {
 
 const updates = "window.clawtrateHost.desktopUpdates";
 
-async function main() {
+async function main(): Promise<Verdict> {
   result.system = run("/usr/bin/sw_vers", []);
   result.previousVersion = bundleVersion();
   log(`previous version ${result.previousVersion as string}`);
@@ -186,7 +197,10 @@ async function main() {
   result.mainPid = pid;
   log(`app pid ${pid}, debugging port ${port}`);
   const target = await until("the app's window", 60_000, async () => {
-    const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as {
+    const listed = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    const targets = (await listed.json()) as {
       type: string;
       webSocketDebuggerUrl: string;
     }[];
@@ -201,7 +215,7 @@ async function main() {
 }
 
 /** The check, download, inspection and Restart, through the open page. */
-async function drive(page: Page, pid: number): Promise<boolean> {
+async function drive(page: Page, pid: number): Promise<Verdict> {
   const snapshot = () => page.evaluate<Snapshot>(`${updates}.get()`);
   await until("the update bridge", 60_000, () =>
     page
@@ -221,14 +235,25 @@ async function drive(page: Page, pid: number): Promise<boolean> {
   result.checked = offered;
   log(`checked ${JSON.stringify(offered.state)}`);
   if (offered.state.kind !== "offered") throw new Error(`no offer: ${offered.state.kind}`);
-  if (values.expect && offered.state.version !== values.expect)
-    throw new Error(`offered ${offered.state.version}, expected ${values.expect}`);
   result.offeredVersion = offered.state.version;
+  const offer = offerVerdict(offered.state.version, values.expect);
+  if (offer.verdict !== "proceed") {
+    result.outcome = `${offer.verdict === "inconclusive" ? "not this candidate" : "wrong offer"}: ${offer.reason}`;
+    return offer.verdict;
+  }
+  // One 600 s limit for the whole stage, from before the call that starts the download.
   const started = Date.now();
-  // The call answers when the download and inspection end; the poll below bounds the stage too.
-  await page.evaluate(`${updates}.download(${JSON.stringify(offered.state.offerId)})`, 600_000);
-  const downloaded = await until("the download and inspection", 60_000, async () => {
-    const s = await snapshot();
+  const deadline = started + 600_000;
+  await page.evaluate(
+    `${updates}.download(${JSON.stringify(offered.state.offerId)})`,
+    remaining(deadline),
+  );
+  const downloaded = await until("the download and inspection", remaining(deadline), async () => {
+    // Each poll within the time left, so the stage never outlasts its one deadline.
+    const s = await page.evaluate<Snapshot>(
+      `${updates}.get()`,
+      Math.max(1, Math.min(60_000, remaining(deadline))),
+    );
     return s.state.kind === "downloading" ? null : s;
   });
   result.downloaded = downloaded;
@@ -252,7 +277,7 @@ async function drive(page: Page, pid: number): Promise<boolean> {
 
   if (downloaded.install.kind !== "restart-available") {
     result.outcome = `not offered a restart: ${downloaded.install.reason ?? downloaded.install.kind}`;
-    return false;
+    return "failed";
   }
   // The previous release's own requirement, which the replacement must meet.
   const requirement = /designated => (.+)/.exec(run("/usr/bin/codesign", ["-d", "-r-", app]))?.[1];
@@ -307,20 +332,23 @@ async function drive(page: Page, pid: number): Promise<boolean> {
     result.reopenedRunsReplacement === true &&
     result.reopenedStayedOpen === true;
   result.outcome = ok ? "updated in place" : "not updated in place";
-  return ok;
+  return ok ? "passed" : "failed";
 }
 
 main()
-  .then((ok) => {
-    if (!ok) for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
+  .then((verdict) => {
+    if (verdict !== "passed")
+      for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
+    result.verdict = verdict;
     result.finishedAt = new Date().toISOString();
     save();
-    log(String(result.outcome));
-    process.exitCode = ok ? 0 : 1;
+    log(`${verdict}: ${String(result.outcome)}`);
+    process.exitCode = verdict === "failed" ? 1 : 0;
   })
   .catch((error: unknown) => {
     // Whatever this check opened is stopped by PID.
     for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
+    result.verdict = "failed";
     result.error = String(error);
     result.finishedAt = new Date().toISOString();
     save();
