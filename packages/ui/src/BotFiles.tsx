@@ -5,7 +5,12 @@
 // save, the desktop app's save dialog or the browser's download. Nothing is
 // opened or run. "Saved" is said only once the host says the bytes are there.
 
-import { isTooLargeToSave, MAX_CHAT_FILE_BYTES, type ChatFile } from "@clawtrate/core";
+import {
+  isTooLargeToSave,
+  MAX_CHAT_FILE_BYTES,
+  type ChatFile,
+  type ClawtrateBridge,
+} from "@clawtrate/core";
 import { useState } from "react";
 import { useBridge } from "./bridge.tsx";
 import { size } from "./Composer.tsx";
@@ -13,7 +18,7 @@ import { FileIcon } from "./icons.tsx";
 import { collectBytes } from "./work/content.ts";
 import { downloadBytes } from "./work/download.ts";
 
-type Phase =
+export type Phase =
   | { status: "ready" }
   | { status: "saving" }
   | { status: "saved" }
@@ -43,6 +48,36 @@ export function fileNote(file: ChatFile, phase: Phase): string | null {
   }
 }
 
+/**
+ * Save one file, saying each state as it comes: read it through the host, hand
+ * its bytes to the host's save, and say "Saved" only once the host has. A
+ * closed save dialog goes back to ready, saying nothing.
+ */
+export async function saveChatFile(
+  bridge: ClawtrateBridge,
+  taskKey: string,
+  file: ChatFile,
+  set: (phase: Phase) => void,
+): Promise<void> {
+  const artifactId = file.artifactId;
+  if (artifactId === null) return;
+  set({ status: "saving" });
+  const fail = (message: string) => set({ status: "failed", message });
+  try {
+    const read = await bridge.invoke({ type: "readChatFile", key: taskKey, artifactId });
+    if (read.status === "too-large") return set({ status: "too-large" });
+    if (read.status !== "content") return fail(read.message);
+    const data = await collectBytes(bridge, read.transfer, read.bytes);
+    if (!(data instanceof Uint8Array)) return fail(data.message);
+    const outcome = await downloadBytes(bridge, file.name, data);
+    if (outcome === null) return set({ status: "ready" });
+    if (!outcome.ok) return fail(outcome.detail ?? outcome.announcement);
+    set({ status: bridge.save ? "saved" : "downloaded" });
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function BotFile({ taskKey, file }: { taskKey: string; file: ChatFile }) {
   const bridge = useBridge();
   const [phase, setPhase] = useState<Phase>({ status: "ready" });
@@ -55,25 +90,7 @@ function BotFile({ taskKey, file }: { taskKey: string; file: ChatFile }) {
         : phase.status;
   const savable = state !== "unreadable" && state !== "too-large";
 
-  const save = async () => {
-    if (artifactId === null) return;
-    setPhase({ status: "saving" });
-    const fail = (message: string) => setPhase({ status: "failed", message });
-    try {
-      const read = await bridge.invoke({ type: "readChatFile", key: taskKey, artifactId });
-      if (read.status === "too-large") return setPhase({ status: "too-large" });
-      if (read.status !== "content") return fail(read.message);
-      const data = await collectBytes(bridge, read.transfer, read.bytes);
-      if (!(data instanceof Uint8Array)) return fail(data.message);
-      const outcome = await downloadBytes(bridge, file.name, data);
-      // The person closed the save dialog: nothing was saved, and nothing is said.
-      if (outcome === null) return setPhase({ status: "ready" });
-      if (!outcome.ok) return fail(outcome.detail ?? outcome.announcement);
-      setPhase({ status: bridge.save ? "saved" : "downloaded" });
-    } catch (error) {
-      fail(error instanceof Error ? error.message : String(error));
-    }
-  };
+  const save = () => void saveChatFile(bridge, taskKey, file, setPhase);
 
   const note = fileNote(file, phase);
   const details = [file.sizeBytes === null ? null : size(file.sizeBytes), file.mimeType]
@@ -92,7 +109,7 @@ function BotFile({ taskKey, file }: { taskKey: string; file: ChatFile }) {
           className="button"
           aria-label={`Save ${file.name}`}
           disabled={phase.status === "saving"}
-          onClick={() => void save()}
+          onClick={save}
         >
           Save
         </button>

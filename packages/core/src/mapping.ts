@@ -741,6 +741,44 @@ export function taskWithoutSkillNotes(task: Task, transcript: Transcript | undef
   return preview === task.preview ? task : { ...task, preview };
 }
 
+/**
+ * A task's preview when its loaded history ends with a bot's message that is only files (F-115):
+ * the files' names. The gateway lists the last row with text, which is then the person's message
+ * before it, so only that preview, or none, is replaced; any other is the gateway's.
+ */
+export function taskWithFilePreview(task: Task, transcript: Transcript | undefined): Task {
+  const items = transcript?.items ?? [];
+  const last = items.at(-1);
+  if (last?.role !== "assistant" || !last.files?.length) return task;
+  if (last.blocks.some((block) => block.kind === "text" && block.text.trim())) return task;
+  const asked = items.findLast((item) => item.role === "user");
+  const askedText = asked?.blocks.findLast((block) => block.kind === "text");
+  const before =
+    askedText?.kind === "text"
+      ? plainPreview(askedText.text.slice(0, MAX_PREVIEW_SOURCE_CHARS))
+      : null;
+  if (task.preview !== null && task.preview !== before) return task;
+  const preview = last.files.map((file) => file.name).join(", ");
+  return preview === task.preview ? task : { ...task, preview };
+}
+
+/** Every listed task as `taskWithFilePreview` shows it, by bot. */
+export function tasksWithFilePreviews(
+  tasksByBot: Record<string, Task[]>,
+  transcripts: Record<string, Transcript>,
+): Record<string, Task[]> {
+  let changed = false;
+  const shown: Record<string, Task[]> = {};
+  for (const [botId, tasks] of Object.entries(tasksByBot)) {
+    shown[botId] = tasks.map((task) => {
+      const named = taskWithFilePreview(task, transcripts[task.key]);
+      if (named !== task) changed = true;
+      return named;
+    });
+  }
+  return changed ? shown : tasksByBot;
+}
+
 /** Every listed task as `taskWithoutSkillNotes` shows it, by bot. */
 export function tasksWithoutSkillNotes(
   tasksByBot: Record<string, Task[]>,

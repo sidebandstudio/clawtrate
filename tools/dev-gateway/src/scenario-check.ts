@@ -43,6 +43,13 @@ import {
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
 import { IMAGE_PROMPT, SEND_PICTURE_AFTER, SEND_PICTURE_TEXT } from "./scenarios.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
+import {
+  ATTACH_NOTE,
+  ATTACH_PDF_PATH,
+  ATTACH_TEXT,
+  ATTACH_TEXT_PATH,
+  reviewsDraftPdf,
+} from "./scripted-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
 import { COMPUTER_CHECKS } from "./computer-checks.ts";
@@ -3558,6 +3565,71 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         `the download's path: ${String(download.url)}`,
       );
       same(rec(download.artifact).sizeBytes, trailMap().length, "the picture's size");
+    },
+  },
+  {
+    name: "files a bot attaches with MEDIA: lines",
+    covers: ["#attach"],
+    run: async (h) => {
+      const key = await h.session(FILES_BOT, "attach");
+      const view = await h.run("plain", key, "#attach");
+      const write = (path: string, content: string) => ({
+        name: "write",
+        args: { path, content },
+        isError: false,
+        content: (texts: string[], where: string) =>
+          expect(
+            texts.length === 1 &&
+              texts[0]!.startsWith(`Successfully wrote ${content.length} bytes`),
+            `${where} text: ${texts.join(" ")}`,
+          ),
+        details: (details: JsonRecord | undefined, where: string) =>
+          same(details?.created, true, `${where} created`),
+        title: `Write to ${path} (${content.length} chars)`,
+      });
+      view.expectCalls([
+        write(ATTACH_PDF_PATH, reviewsDraftPdf()),
+        write(ATTACH_TEXT_PATH, ATTACH_NOTE),
+      ]);
+      // The MEDIA: lines are gone from the text the run ends with.
+      view.expectEnd("final", ATTACH_TEXT);
+      same(
+        await workspaceFile(h, FILES_BOT, ATTACH_PDF_PATH),
+        reviewsDraftPdf(),
+        "the PDF on disk",
+      );
+      // The gateway takes the MEDIA: lines out of the text and gives the row a block for each file.
+      const history = await h
+        .op("plain")
+        .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key });
+      const last = history.messages.at(-1)!;
+      const content = last.content as JsonRecord[];
+      same(content[0], { type: "text", text: ATTACH_TEXT }, "the answer's text");
+      const files = content.slice(1).map((block) => rec(block.attachment));
+      same(
+        [
+          content.slice(1).map((block) => block.type),
+          files.map((file) => [file.kind, file.label, file.mimeType, file.sizeBytes]),
+        ],
+        [
+          ["attachment", "attachment"],
+          [
+            ["document", "reviews-draft.pdf", "application/pdf", reviewsDraftPdf().length],
+            ["document", "reviews.txt", "text/plain", ATTACH_NOTE.length],
+          ],
+        ],
+        "the answer's files",
+      );
+      const download = await h.op("plain").request<JsonRecord>("artifacts.download", {
+        sessionKey: key,
+        artifactId: files[0]!.artifactId,
+      });
+      expect(
+        new RegExp(
+          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/${String(files[0]!.artifactId).slice(-36)}/full\\?mediaTicket=v1\\.[A-Za-z0-9._~-]+$`,
+        ).test(String(download.url)),
+        `the download's path: ${String(download.url)}`,
+      );
     },
   },
   {
