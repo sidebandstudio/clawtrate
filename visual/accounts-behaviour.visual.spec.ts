@@ -615,6 +615,38 @@ test("#505: Change account sends the stamp of the accounts it shows, not the ide
   await expect.poll(() => sentStamp(page, "disconnectAccount")).toEqual(read);
 });
 
+test("#505: Remove fallbacks sends the stamp of the accounts it shows, not the identity now connected", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=differs`,
+    "light",
+  );
+  const read = await page.evaluate(() => {
+    let read = { gatewayId: null as string | null, target: 0 };
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      read = { gatewayId: state.connection.gatewayId, target: state.connection.target };
+      return {
+        ...state,
+        accounts: {
+          ...state.accounts,
+          readOn: { ...read, connectedAt: state.connection.connectedAt },
+        },
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+      };
+    });
+    return read;
+  });
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Remove fallbacks" }).click();
+  await expect.poll(() => sentStamp(page, "removeBotFallbacks")).toEqual(read);
+});
+
 test("#505: a key typed in Connect sends the stamp of the accounts it shows, not the identity now connected", async ({
   page,
 }) => {

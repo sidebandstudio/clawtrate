@@ -712,7 +712,11 @@ describe("an archive or a delete bound to the connection it began on", () => {
   it("a deferred Stop's check is kept before its wait for write access, so the send's answer meanwhile aborts on the action's connection", async () => {
     let release: () => void = () => {};
     await deferredStop(
-      () => {},
+      (client, run) => {
+        // The Stop is still waiting for write access when the send's answer comes: its check is
+        // already kept, so that answer's abort, and any retry of it, stays on this connection.
+        expect((client as unknown as Deferred).deferredStop(KEY, run)).toBeTypeOf("function");
+      },
       (client) => {
         // The Stop's own wait for write access lasts past the send's answer.
         const host = client as unknown as {
