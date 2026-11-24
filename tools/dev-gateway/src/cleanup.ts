@@ -16,6 +16,7 @@ export type RemoveOptions = {
   deadlineMs?: number;
   /** The pause between passes, so a late create has time to show. */
   pauseMs?: number;
+  /** Milliseconds from any start; by default a clock that never steps back. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
@@ -32,7 +33,7 @@ export async function removeUntilGone(
   options: RemoveOptions,
 ): Promise<{ gone: boolean; left: string[] }> {
   const all = [...keys];
-  const now = options.now ?? Date.now;
+  const now = options.now ?? (() => performance.now());
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const until = now() + (options.deadlineMs ?? 90_000);

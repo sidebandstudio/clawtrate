@@ -589,6 +589,8 @@ function BotVoicePane({
             aria-labelledby="bot-voice-label"
             aria-describedby="bot-voice-note"
             aria-busy={saving || undefined}
+            // Unavailable while its own save is on its way, and still focused.
+            aria-disabled={saving || undefined}
             disabled={!canWrite || !confirmed}
             data-testid="bot-voice-switch"
             onClick={() => {

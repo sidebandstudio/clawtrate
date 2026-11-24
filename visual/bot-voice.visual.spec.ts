@@ -493,6 +493,25 @@ test.describe("bot voice", () => {
     await expect(settings.getByTestId("bot-voice")).toHaveAttribute("data-confirmed", "true");
   });
 
+  test("F-527: while its change is on its way, the switch is unavailable and keeps focus", async ({
+    page,
+  }) => {
+    const settings = await openPane(page, "&voicesave=slow");
+    const voice = settings.getByRole("switch", { name: "Bot voice" });
+    await voice.focus();
+    await page.keyboard.press("Space");
+    await expect(voice).toHaveAttribute("aria-busy", "true");
+    await expect(voice).toHaveAttribute("aria-disabled", "true");
+    await expect(voice).toBeFocused();
+    // Pressing it again sends nothing more.
+    await page.keyboard.press("Space");
+    await page.waitForTimeout(100);
+    expect(await saves(page)).toHaveLength(1);
+    await releaseSaves(page, 1);
+    await expect(voice).not.toHaveAttribute("aria-disabled", "true");
+    await expect(voice).toBeFocused();
+  });
+
   test("F-527: a save still on its way to one gateway doesn't hold back another's switch", async ({
     page,
   }) => {
