@@ -546,7 +546,17 @@ describe("an archive or a delete bound to the connection it began on", () => {
     client.stop();
   });
 
-  it("a Stop asked before the gateway named the run, whose abort the drop lost, is not sent again to another gateway at the same address", async () => {
+  /** Host internals the deferred Stop's tests reach: what a history read and later Stops do. */
+  type Deferred = {
+    deferredStop(key: string, ...ids: string[]): (() => boolean) | undefined;
+    keepDeferredStop(key: string, runId: string, bound: () => boolean): boolean;
+  };
+
+  /**
+   * An archive that stops a run the gateway hasn't named; `meanwhile` runs before the send's
+   * answer names it. That abort's answer is lost, and gateway-x answers the reconnect.
+   */
+  async function deferredStop(meanwhile: (client: ClawtrateClient, run: string) => void) {
     const id = { value: "gateway-a" };
     const gateway = grantingGateway();
     gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
@@ -554,7 +564,6 @@ describe("an archive or a delete bound to the connection it began on", () => {
       session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
     });
     gateway.handlers["sessions.patch"] = () => ({ ok: true });
-    // The send's answer, which names the run, comes only after the archive has asked to stop it.
     const named = deferred<unknown>();
     gateway.handlers["chat.send"] = () => named.promise;
     gateway.handlers["chat.abort"] = () => {
@@ -570,6 +579,7 @@ describe("an archive or a delete bound to the connection it began on", () => {
     const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
     await until(() => transcript().runs.find((each) => each.id === run)?.state === "stopping");
     expect(gateway.calls("chat.abort")).toEqual([]);
+    meanwhile(client, run);
     named.resolve({ runId: run, status: "started" });
     await until(() => gateway.calls("chat.abort").length === 1);
     await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
@@ -578,6 +588,26 @@ describe("an archive or a delete bound to the connection it began on", () => {
     expect(await archived).not.toBe("done");
     expect(gateway.calls("sessions.patch")).toEqual([]);
     client.stop();
+  }
+
+  it("a Stop asked before the gateway named the run, whose abort the drop lost, is not sent again to another gateway at the same address", async () => {
+    await deferredStop(() => {});
+  });
+
+  it("a deferred Stop's check stays for the send's answer after a history read used it first", async () => {
+    await deferredStop((client, run) => {
+      // A history read names the run first and aborts it with the check, as `readTranscript` does.
+      expect((client as unknown as Deferred).deferredStop(KEY, run)).toBeTypeOf("function");
+    });
+  });
+
+  it("a deferred Stop still waiting is not let go for later ones", async () => {
+    await deferredStop((client) => {
+      // More Stops than the bound are kept after it, each for a run already over.
+      const host = client as unknown as Deferred;
+      for (let n = 0; n < 40; n += 1)
+        expect(host.keepDeferredStop(KEY, `ended-${n}`, () => true)).toBe(true);
+    });
   });
 
   /** A read-tier host whose archive waits for an access grant the gateway approves. */

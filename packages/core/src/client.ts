@@ -393,6 +393,8 @@ export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose aga
 
 /** Deferred Stops of an archive or a delete kept for their runs' aborts (`deferredStops`). */
 export const MAX_DEFERRED_STOPS = 32;
+/** Why a deferred Stop was given up: every place for its check is held by a Stop still waiting. */
+const TOO_MANY_STOPS = "Too many Stops are waiting for their runs to start. Try again in a moment.";
 /** A failed read of the gateway's identity is asked again this many times, each 4 times later. */
 const IDENTITY_RETRIES = 4;
 const IDENTITY_RETRY_MS = 500;
@@ -1546,8 +1548,8 @@ export class ClawtrateClient {
   private readonly unsentStops = new Map<string, object>();
   /**
    * An archive's or a delete's Stop of a run the gateway had not named yet, by `key\u0000runId`:
-   * the action's connection (`stopRun` `bound`), kept for the abort sent once the run is named.
-   * At most `MAX_DEFERRED_STOPS`, the oldest let go first.
+   * the action's connection (`stopRun` `bound`), kept for the aborts sent once the run is named,
+   * until the run is no longer stopping. At most `MAX_DEFERRED_STOPS`, none let go while waiting.
    */
   private readonly deferredStops = new Map<string, () => boolean>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
@@ -4150,7 +4152,7 @@ export class ClawtrateClient {
       const run = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
       if (run?.state === "stopping") {
         this.unsentStops.delete(`${key}\u0000${runId}`);
-        void this.abortRun(key, runId, this.takeDeferredStop(key, messageId, runId));
+        void this.abortRun(key, runId, this.deferredStop(key, messageId, runId));
       }
     }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
@@ -4241,13 +4243,9 @@ export class ClawtrateClient {
         if (options.taskOnly && options.owner)
           this.unsentStops.set(`${key}\u0000${runId}`, options.owner);
         // The abort sent once the run is named stays on the action's connection, as this one would.
-        if (options.bound) {
-          this.deferredStops.set(`${key}\u0000${runId}`, options.bound);
-          for (const old of this.deferredStops.keys()) {
-            if (this.deferredStops.size <= MAX_DEFERRED_STOPS) break;
-            this.deferredStops.delete(old);
-          }
-        }
+        // With no room left for its check, the Stop is given up rather than sent unbound later.
+        if (options.bound && !this.keepDeferredStop(key, runId, options.bound))
+          this.updateActivity(key, (activity) => revertStop(activity, runId, TOO_MANY_STOPS));
         return;
       }
       await this.abortRun(key, current.id, options.bound);
@@ -4258,21 +4256,40 @@ export class ClawtrateClient {
   }
 
   /**
+   * Keep a deferred Stop's check (the action's connection) until its run settles. Checks whose
+   * runs are no longer stopping are let go first; a check still waiting is never let go for a
+   * newer one. False when `MAX_DEFERRED_STOPS` are all still waiting.
+   */
+  private keepDeferredStop(key: string, runId: string, bound: () => boolean): boolean {
+    for (const held of [...this.deferredStops.keys()]) {
+      const [task, id] = held.split("\u0000") as [string, string];
+      const activity = this.state.transcripts[task];
+      const run = activity?.runs.find((each) => each.id === id || each.messageId === id);
+      if (run?.state !== "stopping") this.deferredStops.delete(held);
+    }
+    if (this.deferredStops.size >= MAX_DEFERRED_STOPS) return false;
+    this.deferredStops.set(`${key}\u0000${runId}`, bound);
+    return true;
+  }
+
+  /**
+   * The action's connection a deferred Stop of this run was asked on, if any. It stays while the
+   * run is stopping: the send's answer and a history read can each abort the run, and retry.
+   */
+  private deferredStop(key: string, ...ids: string[]): (() => boolean) | undefined {
+    for (const id of ids) {
+      const bound = this.deferredStops.get(`${key}\u0000${id}`);
+      if (bound) return bound;
+    }
+    return undefined;
+  }
+
+  /**
    * `chat.abort` for one run the gateway has named, its exact id. Only the gateway's refusal
    * gives the Stop up. An abort that was not sent, or whose answer the connection lost, leaves
    * the run stopping: once the connection is back, the run is aborted again if it still is, as
    * many times as the connection drops, until the gateway answers or the run's end arrives.
    */
-  /** The action's connection a deferred Stop of this run was asked on, if any; it is let go. */
-  private takeDeferredStop(key: string, ...ids: string[]): (() => boolean) | undefined {
-    let bound: (() => boolean) | undefined;
-    for (const id of ids) {
-      bound ??= this.deferredStops.get(`${key}\u0000${id}`);
-      this.deferredStops.delete(`${key}\u0000${id}`);
-    }
-    return bound;
-  }
-
   private async abortRun(
     key: string,
     runId: string,
@@ -9236,7 +9253,7 @@ export class ClawtrateClient {
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
       for (const run of toStop) {
         this.unsentStops.delete(`${key}\u0000${run.id}`);
-        void this.abortRun(key, run.id, this.takeDeferredStop(key, run.id));
+        void this.abortRun(key, run.id, this.deferredStop(key, run.id));
       }
       void this.readRecipients(key, generation);
       void this.backfillQuestions(key, generation);
