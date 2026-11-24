@@ -1,0 +1,14 @@
+- status
+- main:
+  - heading "Clawtrate" [level=1]
+  - paragraph: Your OpenClaw agents, orchestrated.
+  - region "Connect to your gateway":
+    - heading "Connect to your gateway" [level=2]
+    - text: Gateway address
+    - textbox "Gateway address": ws://127.0.0.1:19001
+    - text: Gateway token, for pairing
+    - textbox "Gateway token, for pairing"
+    - button "Connect a gateway"
+    - button "Use the development gateway"
+    - paragraph: Clawtrate works with an OpenClaw gateway you already run. It asks for read access only.
+  - paragraph: This device a41c9e02 · Web preview 0.1.0

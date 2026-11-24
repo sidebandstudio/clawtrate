@@ -24,7 +24,7 @@ OPENCLAW_BIN=<a copy of openclaw 2026.10.6>/bin/openclaw CLAWTRATE_LOCAL_GATEWAY
 
 `OPENCLAW_BIN` must be a copy of the tests' own, never a system-wide Homebrew one. `OPENCLAW_NODE` names the Node that runs it when the one running the tests is outside OpenClaw's supported range. The case with another account's listener runs only on CI's discarded macOS runner.
 
-CI runs lint, typecheck and the unit tests on Linux, local connect's gateway-backed checks on macOS, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm and Electron under `xvfb-run`, split by file across three runners, `pnpm visual` on every core and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made. A pull request that changes only documentation (`docs/`, the Markdown files at the top level, the issue and pull request templates) runs the Linux `check` job alone.
+CI runs lint, typecheck and the unit tests on Linux, local connect's gateway-backed checks on macOS, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm and Electron under `xvfb-run`, split by file across three runners, `pnpm visual` on every core and an unsigned `pnpm package:mac` on macOS 15, the screenshot tests in the Linux image split across three runners ([below](#the-screenshot-tests-on-linux)), and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made. A pull request that changes only documentation (`docs/`, the Markdown files at the top level, the issue and pull request templates) runs the Linux `check` job alone.
 
 `pnpm test:desktop-updates` runs the desktop update flow on macOS and Windows. It builds a temporary Electron app with a loopback feed, launches it with a fresh profile, and checks the renderer through the real preload and main process. It runs independently of packaging and development gateways.
 
@@ -46,6 +46,23 @@ A bot's Delete bot… dialog has states of its own: `&delshared=1` gives Pip Mar
 For Settings → Updates, choose a [fixture update state](../../apps/desktop/src/fixture/updates.ts) with `?updates=offered`, for example. The fixture has two tracks unless `tracks=one`. Choose the running track with `buildTrack=nightly` (Beta), the selected track with `track=nightly`, or a failed selection with `save=failed`. Once a check has run, its Beta source lists what its builds add (F-554); `whatsNew=none` serves no lists. Without an update state, the fixture has no updater.
 
 `pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. A screenshot may differ from its baseline in 0.2% of its pixels, which a changed sentence can stay under, so each screenshot also compares the accessibility snapshot of what it shows, its words, names and states, exactly with the `.aria.yml` file beside the image. Specs get this from the `expect` that [`visual/fixture.ts`](../../visual/fixture.ts) exports. After an intended change, `pnpm visual:update` rewrites both; look at every changed image and text snapshot before committing it.
+
+### The screenshot tests on Linux
+
+```bash
+pnpm visual:linux $(grep -v '^#' visual/linux/specs.txt)  # what CI's visual-linux job runs
+pnpm visual:linux visual/memory.visual.spec.ts -g phone   # one spec, its phone tests only
+```
+
+`pnpm visual:linux` runs the visual tests in a pinned Linux image ([`visual/linux/Dockerfile`](../../visual/linux/Dockerfile)), against `visual/baselines/linux/`, the way CI's `visual-linux` job does. It needs Docker. Its arguments go to `playwright test`. It sends the checkout's files to the container, installs Linux dependencies there, and writes results to `test-results/visual/` and new baselines to `visual/baselines/linux/`. With Colima, the checkout must be under your home folder, which is the only folder Colima shares by default. The first run pulls about 1 GB and builds the image in about a minute. After that, a single test takes about 15 seconds more than its own run time.
+
+The image is Playwright's image for Ubuntu 24.04, by digest, which fixes Chromium, FreeType, HarfBuzz, fontconfig and Noto Color Emoji. The interface's own fonts, Figtree and JetBrains Mono, come from `@fontsource-variable` packages pinned in the lockfile and are served with the fixture, so every platform draws them from the same files. The image adds DejaVu Sans 2.37, checked by SHA-256, for the arrows and key symbols those two fonts lack (→ ↵ ⇧ ⌥ ⌘ ⌃), and [`fonts.conf`](../../visual/linux/fonts.conf) makes it the first fallback. On macOS the same characters come from system fonts (SF and Lucida Grande) and the emoji from Apple Color Emoji, which cannot be shipped in an image.
+
+The image runs on the computer's own architecture: arm64 on Apple silicon, amd64 on CI. The two draw the same picture within the tests' tolerance, so a baseline recorded on either passes on both. To draw exactly what CI draws, set `CLAWTRATE_VISUAL_PLATFORM=linux/amd64`. On Apple silicon, that needs Docker's Rosetta emulation, because Node fails under QEMU's. When CI's job fails, its `visual-linux-results-<shard>` artifact holds the actual and difference pictures.
+
+To change a baseline, delete the picture and its `.aria.yml` and record them again with `--update-snapshots=missing`. `--update-snapshots=changed` keeps a stale picture that still passes inside the pixel tolerance. Look at every new picture before you commit it.
+
+Until the Linux baselines replace the macOS ones, `visual/baselines/linux/` holds a sample, and CI's `visual-linux` job runs the specs listed in [`visual/linux/specs.txt`](../../visual/linux/specs.txt): the ones with Linux baselines and the ones that take no screenshot. The macOS job's `pnpm visual` stays the check that counts.
 
 ## The end-to-end tests
 
