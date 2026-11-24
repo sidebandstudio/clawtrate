@@ -29,6 +29,9 @@ import {
   prefProfileId,
   readBotView,
   readCatalog,
+  readPickerCuts,
+  readProviderCatalog,
+  type ModelList,
   readIntent,
   readKeyProviders,
   readMethods,
@@ -181,6 +184,8 @@ export class AccountsEngine {
    * it; a reset since it began retires it.
    */
   private resets = 0;
+  /** The default bot's picker read under way, which Create waits for. */
+  private pickerRead: Promise<unknown> | null = null;
   /** The bound write whose Create the state's creation and the slow timer belong to. */
   private creating: WriteMark | null = null;
   /** The gateway the state's creation was asked of: it is kept, and finished, only there. */
@@ -230,6 +235,8 @@ export class AccountsEngine {
   private async readAll(): Promise<void> {
     const { ctx } = this;
     if (!ctx.connected()) return;
+    // A reset since the read began (another gateway) retires it: nothing it read is published.
+    const resets = this.resets;
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
     try {
       const bots = ctx.bots();
@@ -238,18 +245,68 @@ export class AccountsEngine {
         this.readViews(bots.map((bot) => bot.id)),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
       ]);
+      // Checked before the preferences are read: another gateway's must never refill the maps
+      // the reset cleared.
+      if (resets !== this.resets) return;
       this.readPrefs(prefs);
-      const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
-      const catalog = await ctx
-        .request("models.list", { agentId: defaultBot })
-        .then(readCatalog, () => ctx.get().models);
       const at = ctx.now();
-      ctx.update((a) => this.compose(a, config, views, catalog, at));
+      ctx.update((a) => this.compose(a, config, views, a.models, at));
+      // The default bot's picker, the Model menu's rows (section 9), asked once the accounts are
+      // published and in the same read, so it never overlaps another account read or what a
+      // read is awaited for (a new bot's first task): the gateway refuses it alongside the reads
+      // above ("Chat metadata access changed while preparing its metadata"). Not published after
+      // a reset; a failed read keeps the rows there are.
+      const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
+      // Kept while it is out: Create waits for it rather than overlap it (section 4).
+      const picker = ctx.request("models.list", { agentId: defaultBot }).catch(() => null);
+      this.pickerRead = picker;
+      const answer = await picker;
+      if (this.pickerRead === picker) this.pickerRead = null;
+      if (answer === null || resets !== this.resets) return;
+      const models = readCatalog(answer);
+      const modelsCut = readPickerCuts(answer);
+      ctx.update((a) => ({ ...a, models, modelsCut }));
     } catch (error) {
+      if (resets !== this.resets) return;
       // While a sign-in lasts, its typed values are taken out of whatever comes back.
       const message = this.scrub(errorText(error));
       ctx.update((a) => ({ ...a, status: "error", error: message }));
     }
+  }
+
+  /**
+   * One provider's full list for "View more" (section 9): `models.list {view: "all",
+   * provider}` for the default bot, the same scope as the picker, read each time it is asked
+   * for and given to the screen that asked. Nothing of it is kept. Its answer is refused, not
+   * given, when the gateway was reset (another gateway) while it was read.
+   */
+  async readModelList(provider: string): Promise<ModelList> {
+    const { ctx } = this;
+    if (!ctx.connected()) throw new Error("Not connected to a gateway.");
+    const resets = this.resets;
+    const bots = ctx.bots();
+    const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
+    let list: ModelList;
+    try {
+      const answer = await ctx.request("models.list", {
+        agentId: defaultBot,
+        view: "all",
+        provider,
+      });
+      const known = new Set(
+        ctx
+          .get()
+          .models.filter((m) => m.provider === provider)
+          .map((m) => m.id),
+      );
+      list = { status: "ready", ...readProviderCatalog(answer, provider, known) };
+    } catch (error) {
+      const refused =
+        error instanceof GatewayProtocolRequestError && error.code === "INVALID_REQUEST";
+      list = { status: refused ? "unsupported" : "error", error: this.scrub(errorText(error)) };
+    }
+    if (resets !== this.resets) throw new Error("The gateway changed while its models were read.");
+    return list;
   }
 
   private async readViews(botIds: string[]): Promise<Map<string, BotView>> {
@@ -1296,6 +1353,9 @@ export class AccountsEngine {
   }
 
   async createBot(input: CreateBotInput, binding?: WriteBinding): Promise<CreatedBot> {
+    // The picker read already under way is answered before anything is written: a new bot's
+    // writes and first task never overlap it (the gateway refuses them alongside each other).
+    await this.pickerRead;
     return this.boundTo(binding, (ctx, mark) => this.create(ctx, input, mark));
   }
 
@@ -1967,6 +2027,7 @@ export class AccountsEngine {
     this.onClose();
     this.kinds.clear();
     this.intents.clear();
+    this.pickerRead = null;
     this.unwritten.clear();
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;

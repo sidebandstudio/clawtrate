@@ -130,6 +130,36 @@ export class AccountsGateway {
   identityReply: Promise<unknown> | null = null;
   /** Fail `agents.list` once an `agents.update` has been taken. */
   failListAfterUpdate = false;
+  /** The default bot's picker (`models.list {agentId}`) is answered once this settles. */
+  holdPicker: Promise<void> | null = null;
+  /** A provider's full list (`view: "all"`) is answered once this settles. */
+  holdFull: Promise<void> | null = null;
+  /** Refuse the full list with this error. */
+  failFull: { code: string; message: string } | null = null;
+  /** More of the full list's answer: `pendingProviders`, `refreshFailed`. */
+  fullMarkers: Json = {};
+  /** Each provider's full list, in the gateway's order. */
+  fullCatalog: Record<string, Json[]> = {
+    acme: [
+      { id: "dev-1", provider: "acme", thinkingLevels: [{ id: "low" }], available: true },
+      { id: "dev-3", provider: "acme", thinkingLevels: [], available: false },
+      { id: "dev-2", provider: "acme", thinkingLevels: [], available: true },
+    ],
+  };
+  /** The gateway's picker for the default bot. */
+  pickerCatalog: () => Json = () => ({
+    models: [
+      {
+        id: "dev-1",
+        provider: "acme",
+        thinkingLevels: [{ id: "off" }, { id: "low" }, { id: "high" }],
+        thinkingDefault: "low",
+        available: true,
+      },
+      { id: "dev-2", provider: "acme", thinkingLevels: [], available: true },
+      { id: "dev-1", provider: "globex", thinkingLevels: [{ id: "low" }], available: false },
+    ],
+  });
   private updated = false;
   /** Leave the next `agents.create` unanswered, then make the bot anyway. */
   silentCreate = false;
@@ -245,19 +275,19 @@ export class AccountsGateway {
       Object.assign(this.prefs, (params as { entries: Json }).entries);
       return { status: "ok" };
     };
-    g.handlers["models.list"] = () => ({
-      models: [
-        {
-          id: "dev-1",
-          provider: "acme",
-          thinkingLevels: [{ id: "off" }, { id: "low" }, { id: "high" }],
-          thinkingDefault: "low",
-          available: true,
-        },
-        { id: "dev-2", provider: "acme", thinkingLevels: [], available: true },
-        { id: "dev-1", provider: "globex", thinkingLevels: [{ id: "low" }], available: false },
-      ],
-    });
+    g.handlers["models.list"] = (params) => {
+      const { view, provider } = params as { view?: string; provider?: string };
+      if (view !== "all")
+        return this.holdPicker
+          ? this.holdPicker.then(() => this.pickerCatalog())
+          : this.pickerCatalog();
+      if (this.failFull) throw new GatewayError(this.failFull);
+      const answer = () => ({
+        models: this.fullCatalog[provider ?? ""] ?? [],
+        ...this.fullMarkers,
+      });
+      return this.holdFull ? this.holdFull.then(answer) : answer();
+    };
     g.handlers["models.authStatus"] = (params) => {
       const { agentId } = params as { agentId: string };
       if (agentId === this.failStatusFor)
@@ -576,7 +606,13 @@ export class AccountsGateway {
 
 /** A client on the accounts gateway, holding `scopes`, with the accounts read once. */
 export async function accountsClient(
-  options: { scopes?: readonly string[]; gateway?: AccountsGateway; adminHeld?: boolean } = {},
+  options: {
+    scopes?: readonly string[];
+    gateway?: AccountsGateway;
+    adminHeld?: boolean;
+    /** Read the accounts before returning (the default). */
+    read?: boolean;
+  } = {},
 ) {
   const fake = options.gateway ?? new AccountsGateway();
   const scopes = options.scopes ?? ADMIN_SCOPES;
@@ -592,6 +628,6 @@ export async function accountsClient(
   const client = new ClawtrateClient(testHost(fake.gateway, storage), FAST);
   await client.start();
   await until(() => client.state.discovery.status === "ready");
-  await client.refreshAccounts();
+  if (options.read !== false) await client.refreshAccounts();
   return { client, fake, storage, accounts: () => client.state.accounts };
 }

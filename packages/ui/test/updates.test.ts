@@ -8,6 +8,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { Updates, showUpdateFooter } from "../src/Updates.tsx";
+import { versionLabel } from "../src/version-label.ts";
 import {
   attemptLine,
   cleanupLine,
@@ -184,7 +185,8 @@ it("F-231: names the host it checks, but not as where a download comes from", ()
     { kind: "offered", version: "1.1.0", releaseDate: "2026-10-01", offerId: "opaque" },
     { selectedTrack: "nightly" },
   );
-  expect(offered.html).toContain("Downloads Clawtrate 1.1.0, only when you choose to.");
+  // A three-number Beta build names Beta beside its number (F-561).
+  expect(offered.html).toContain("Downloads Clawtrate Beta · 1.1.0, only when you choose to.");
   expect(offered.html).not.toContain("beta.example");
 });
 
@@ -510,14 +512,17 @@ it.each([
   "F-231: after an update that didn't take, says whether the app finished quitting %#",
   (quit, line) => {
     expect(
-      attemptLine({
-        kind: "old-version-running",
-        target: "1.1.0",
-        from: "1.0.0",
-        track: "stable",
-        running: "1.0.0",
-        ...quit,
-      }),
+      attemptLine(
+        {
+          kind: "old-version-running",
+          target: "1.1.0",
+          from: "1.0.0",
+          track: "stable",
+          running: "1.0.0",
+          ...quit,
+        },
+        "stable",
+      ),
     ).toBe(line);
   },
 );
@@ -564,4 +569,149 @@ it("F-554: an offer's list is open, a skipped build's and the running build's cl
   // Before a check, and when the lists name nothing, there is no section.
   expect(render({ kind: "not-checked" }).html).not.toContain("whats-new");
   expect(render(offered).html).not.toContain("whats-new");
+});
+
+// F-561: Beta is the channel, shown beside a three-number version; every other
+// version reads as it did, so a dated beta shows exactly what it showed before.
+const beta: Partial<DesktopUpdateSnapshot> = {
+  runningVersion: "0.2.3",
+  runningTrack: "nightly",
+  selectedTrack: "nightly",
+  tracks: [{ track: "nightly", source: "beta.example" }],
+};
+it("F-561: a three-number Beta build shows Beta beside its number, and a dated one as before", () => {
+  expect(versionLabel("0.2.3", "nightly")).toBe("Beta · 0.2.3");
+  expect(versionLabel("0.2.3", "stable")).toBe("0.2.3");
+  expect(versionLabel("0.2.3", null)).toBe("0.2.3");
+  expect(versionLabel("0.1.1-beta.20261124.2", "nightly")).toBe("0.1.1-beta.20261124.2");
+  const short = render({ kind: "not-checked" }, beta).html;
+  expect(short).toContain("Clawtrate Beta · 0.2.3");
+  expect(short).not.toContain("This copy is a Beta build.");
+  const dated = render(
+    { kind: "not-checked" },
+    { ...beta, runningVersion: "0.1.1-beta.20261124.2" },
+  ).html;
+  expect(dated).toContain("Clawtrate 0.1.1-beta.20261124.2<p");
+  expect(dated).toContain("This copy is a Beta build.");
+});
+it("F-561: every line that names a Beta build's three-number version names Beta beside it", () => {
+  const offer = { version: "0.2.4", releaseDate: "2026-12-01", offerId: "opaque" };
+  for (const [state, line] of [
+    [{ kind: "offered", ...offer }, "Clawtrate Beta · 0.2.4 is offered by the update source."],
+    [
+      { kind: "downloading", version: "0.2.4", received: 1, expected: 4 },
+      "Downloading Clawtrate Beta · 0.2.4… 1 of 4 bytes",
+    ],
+    [
+      { kind: "downloading", version: "0.2.4", received: 4, expected: 4 },
+      "Checking the downloaded update for Clawtrate Beta · 0.2.4…",
+    ],
+    [{ kind: "preparing", ...offer }, "Preparing Clawtrate Beta · 0.2.4 for restart…"],
+    [{ kind: "handing-off", ...offer }, "Handing Clawtrate Beta · 0.2.4 to the system updater…"],
+    [
+      { kind: "verified", version: "0.2.4", size: 4, offerId: "opaque" },
+      "Clawtrate Beta · 0.2.4 is downloaded",
+    ],
+  ] as Array<[DesktopUpdateState, string]>)
+    expect(render(state, beta).html, state.kind).toContain(line);
+  expect(render({ kind: "offered", ...offer }, beta).html).toContain(
+    "Downloads Clawtrate Beta · 0.2.4, only when you choose to.",
+  );
+  const lists = render(
+    { kind: "offered", ...offer },
+    {
+      ...beta,
+      whatsNew: { coming: [{ version: "0.2.4", items: ["A change (#1)"] }], running: null },
+    },
+  ).html;
+  expect(lists).toContain("What's new in Beta · 0.2.4");
+  // On Stable, and for a dated beta, the lines read as before.
+  expect(render({ kind: "offered", ...offer }).html).toContain(
+    "Clawtrate 0.2.4 is offered by the update source.",
+  );
+  expect(
+    render({ kind: "offered", ...offer, version: "0.2.0-beta.20261201.1" }, beta).html,
+  ).toContain("Clawtrate 0.2.0-beta.20261201.1 is offered by the update source.");
+  const attempt = {
+    kind: "target-running",
+    from: "0.2.3",
+    target: "0.2.4",
+    track: "nightly",
+  } as const;
+  expect(attemptLine({ ...attempt, running: "0.2.4" }, "nightly")).toBe(
+    "Clawtrate Beta · 0.2.4 is running.",
+  );
+  expect(
+    attemptLine({ ...attempt, kind: "old-version-running", running: "0.2.3" }, "nightly"),
+  ).toBe("Clawtrate Beta · 0.2.3 is running, not Beta · 0.2.4. Check for updates to try again.");
+  expect(
+    attemptLine(
+      {
+        ...attempt,
+        from: "0.1.1-beta.20261124.2",
+        target: "0.2.0",
+        running: "0.1.1-beta.20261124.2",
+        kind: "old-version-running",
+      },
+      "nightly",
+    ),
+  ).toBe(
+    "Clawtrate 0.1.1-beta.20261124.2 is running, not Beta · 0.2.0. Check for updates to try again.",
+  );
+});
+it("F-561: the running version takes the running build's track, and the target the attempt's", () => {
+  // A Stable build with both feeds chose Beta and didn't reach 0.2.0: it is still a Stable build.
+  const tried = {
+    from: "0.1.0",
+    target: "0.2.0",
+    track: "nightly",
+    running: "0.1.0",
+  } as const;
+  expect(attemptLine({ ...tried, kind: "old-version-running" }, "stable")).toBe(
+    "Clawtrate 0.1.0 is running, not Beta · 0.2.0. Check for updates to try again.",
+  );
+  expect(attemptLine({ ...tried, kind: "unconfirmed" }, "stable")).toBe(
+    "Clawtrate 0.1.0 is running. Clawtrate couldn't confirm that it restarted into Beta · 0.2.0.",
+  );
+  // And a Beta build that tried a Stable one.
+  const stable = { from: "0.2.3", target: "0.3.0", track: "stable", running: "0.2.3" } as const;
+  expect(attemptLine({ ...stable, kind: "old-version-running" }, "nightly")).toBe(
+    "Clawtrate Beta · 0.2.3 is running, not 0.3.0. Check for updates to try again.",
+  );
+  expect(attemptLine({ ...stable, kind: "unconfirmed" }, "nightly")).toBe(
+    "Clawtrate Beta · 0.2.3 is running. Clawtrate couldn't confirm that it restarted into 0.3.0.",
+  );
+  // On the screen, the Version line and the attempt agree.
+  const html = render(
+    { kind: "not-checked" },
+    {
+      revision: 0,
+      runningVersion: "0.1.0",
+      runningTrack: "stable",
+      selectedTrack: "nightly",
+      lastAttempt: { ...tried, kind: "old-version-running" },
+    },
+  ).html;
+  expect(html).toContain("This copy is a Stable build.");
+  expect(html).toContain("Clawtrate 0.1.0 is running, not Beta · 0.2.0.");
+  expect(html).not.toContain("Beta · 0.1.0");
+});
+it("F-561: the build's date and commit sit in Build details, for both forms, and only when the build has them", () => {
+  const build = {
+    releaseDate: "2026-12-01T10:00:00.000Z",
+    commit: "0123456789abcdef0123456789abcdef01234567",
+  };
+  for (const runningVersion of ["0.2.3", "0.1.1-beta.20261124.2"]) {
+    const html = render({ kind: "not-checked" }, { ...beta, runningVersion, build }).html;
+    expect(html).toContain("Build details");
+    expect(html).toContain("2026-12-01 10:00 UTC");
+    expect(html).toContain(`<code>${build.commit}</code>`);
+  }
+  expect(render({ kind: "not-checked" }, beta).html).not.toContain("Build details");
+  const dateOnly = render(
+    { kind: "not-checked" },
+    { ...beta, build: { ...build, commit: null } },
+  ).html;
+  expect(dateOnly).toContain("2026-12-01 10:00 UTC");
+  expect(dateOnly).not.toContain("Commit");
 });

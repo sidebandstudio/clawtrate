@@ -15,6 +15,8 @@ import {
   labelProblem,
   lockCommand,
   MAX_ACCOUNTS,
+  MAX_CATALOG_MODELS,
+  MAX_PROVIDER_MODELS,
   MAX_SECRET_CHARS,
   parseModelRef,
   readBotView,
@@ -30,7 +32,8 @@ import { gatewayStamp } from "../src/types.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { identityFile } from "../src/accounts-engine.ts";
+import { AccountsEngine, identityFile } from "../src/accounts-engine.ts";
+import { initialAccountsState, type AccountsState } from "../src/accounts.ts";
 import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
 import { FAST, stampOn, URL_A } from "./client-harness.ts";
 import {
@@ -44,6 +47,270 @@ import {
 
 const binding = (state: ClawtrateState["accounts"], botId: string) =>
   state.bindings.find((each) => each.botId === botId)!;
+
+describe("the Model menu's lists", () => {
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  it("F-478: account choices and bindings are published while the default bot's model list is held", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdPicker = held.promise;
+    const { client, accounts } = await accountsClient({ gateway: fake, read: false });
+    const loading = client.refreshAccounts();
+    await until(() => accounts().status === "ready");
+    expect(accounts().accounts.map((a) => a.id)).toContain("acme:work");
+    expect(accounts().bindings.length).toBeGreaterThan(0);
+    expect(accounts().models).toEqual([]);
+    held.resolve();
+    await loading;
+    expect(accounts().models.map((m) => m.id)).toEqual(["dev-1", "dev-2", "dev-1"]);
+    client.stop();
+  });
+
+  it("F-478: the next account read waits for the model list, so the two never overlap", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdPicker = held.promise;
+    const { client, accounts } = await accountsClient({ gateway: fake, read: false });
+    const first = client.refreshAccounts();
+    await until(() => accounts().status === "ready");
+    const configReads = () => fake.gateway.calls("config.get").length;
+    const before = configReads();
+    const second = client.refreshAccounts();
+    await settle();
+    // The accounts are shown, and the next read hasn't begun while the list is out.
+    expect(configReads()).toBe(before);
+    held.resolve();
+    await Promise.all([first, second]);
+    expect(configReads()).toBe(before + 1);
+    expect(accounts().models.length).toBeGreaterThan(0);
+  });
+
+  it("F-478: the model list is asked only after the account reads have answered", async () => {
+    const fake = new AccountsGateway();
+    const log: string[] = [];
+    for (const method of ["config.get", "models.authStatus", "users.prefs.get", "models.list"]) {
+      const handler = fake.gateway.handlers[method]!;
+      fake.gateway.handlers[method] = (params) => {
+        log.push(method);
+        const answer = handler(params);
+        log.push(`${method} answered`);
+        return answer;
+      };
+    }
+    const { client } = await accountsClient({ gateway: fake });
+    const asked = log.indexOf("models.list");
+    expect(asked).toBeGreaterThan(log.lastIndexOf("models.authStatus answered"));
+    expect(asked).toBeGreaterThan(log.indexOf("config.get answered"));
+    expect(asked).toBeGreaterThan(log.indexOf("users.prefs.get answered"));
+    client.stop();
+  });
+
+  it("F-478: a picker longer than kept says, for each provider it cut, how many the gateway listed", async () => {
+    const fake = new AccountsGateway();
+    const rows = (provider: string, n: number) =>
+      Array.from({ length: n }, (_, i) => ({ id: `m-${i}`, provider, available: true }));
+    fake.pickerCatalog = () => ({ models: [...rows("acme", 100), ...rows("globex", 40)] });
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await until(() => accounts().models.length > 0);
+    expect(accounts().models).toHaveLength(MAX_CATALOG_MODELS);
+    expect(accounts().modelsCut).toEqual([{ provider: "globex", total: 40 }]);
+    client.stop();
+  });
+
+  it("F-478: View more reads the provider's full list for the default bot each time, and keeps nothing", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    // The account read asks for the picker alone.
+    expect(fake.gateway.calls("models.list")).toEqual([{ agentId: "main" }]);
+    const before = JSON.stringify(accounts());
+    const list = await client.loadModelCatalog("acme");
+    expect(list).toEqual({
+      status: "ready",
+      // Only what the menu uses of each row, and the rows the picker lacks first.
+      models: [
+        { id: "dev-3", levels: [], defaultLevel: null },
+        { id: "dev-1", levels: ["low"], defaultLevel: null },
+        { id: "dev-2", levels: [], defaultLevel: null },
+      ],
+      total: 3,
+      partial: false,
+    });
+    // Nothing of it is in the state, and asking again reads again.
+    expect(JSON.stringify(accounts())).toBe(before);
+    await client.loadModelCatalog("acme");
+    expect(fake.gateway.calls("models.list").slice(1)).toEqual([
+      { agentId: "main", view: "all", provider: "acme" },
+      { agentId: "main", view: "all", provider: "acme" },
+    ]);
+    client.stop();
+  });
+
+  it("F-478: a refused full list is unsupported, a failed one says why, and a partial one says so", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    fake.failFull = { code: "INVALID_REQUEST", message: "invalid models.list params" };
+    expect(await client.loadModelCatalog("acme")).toEqual({
+      status: "unsupported",
+      error: "invalid models.list params",
+    });
+    fake.failFull = { code: "UNAVAILABLE", message: "catalogue busy" };
+    expect(await client.loadModelCatalog("acme")).toEqual({
+      status: "error",
+      error: "catalogue busy",
+    });
+    fake.failFull = null;
+    fake.fullMarkers = { pendingProviders: ["acme"] };
+    expect(await client.loadModelCatalog("acme")).toMatchObject({ status: "ready", partial: true });
+    fake.fullMarkers = { refreshFailed: true };
+    expect(await client.loadModelCatalog("acme")).toMatchObject({ status: "ready", partial: true });
+    fake.fullMarkers = { pendingProviders: ["globex"] };
+    expect(await client.loadModelCatalog("acme")).toMatchObject({
+      status: "ready",
+      partial: false,
+    });
+    client.stop();
+  });
+
+  /** The engine alone on the fake gateway, so a test can reset it while a read is answered. */
+  function engineOn(fake: AccountsGateway) {
+    let state: AccountsState = initialAccountsState;
+    const engine = new AccountsEngine({
+      request: (method, params) =>
+        Promise.resolve().then(() => fake.gateway.handlers[method]!(params)),
+      get: () => state,
+      update: (change) => {
+        state = change(state);
+      },
+      bots: () => [
+        { id: "main", name: "main", isDefault: true, avatarUrl: null },
+        { id: "otto", name: "otto", isDefault: false, avatarUrl: null },
+      ],
+      connected: () => true,
+      admin: () => true,
+      refreshBots: () => Promise.resolve(),
+      gateway: () => Promise.resolve("gateway-a"),
+      gatewayNow: () => "gateway-a",
+      target: () => 0,
+      createMainTask: () => Promise.resolve(),
+      now: () => 0,
+      randomId: () => "id",
+      log: () => {},
+    });
+    // Another gateway: the engine is reset and the state starts empty, as the client does.
+    const switchGateway = () => {
+      engine.reset();
+      state = initialAccountsState;
+    };
+    return { engine, state: () => state, switchGateway };
+  }
+  const nothingPublished = (state: AccountsState) =>
+    expect([state.accounts, state.models, state.modelsCut]).toEqual([[], [], []]);
+
+  it("F-478: an account read answered after a gateway switch publishes nothing, and its preferences never reach the next gateway", async () => {
+    const fake = new AccountsGateway();
+    // The old gateway's record says Clawtrate set an account for otto.
+    fake.prefs["clawtrate.bot-account.otto"] = { mode: "account", account: "acme:work" };
+    const held = deferred<void>();
+    const prefs = fake.gateway.handlers["users.prefs.get"]!;
+    fake.gateway.handlers["users.prefs.get"] = (params) => held.promise.then(() => prefs(params));
+    const { engine, state, switchGateway } = engineOn(fake);
+    const loading = engine.load();
+    await settle();
+    switchGateway();
+    const answered = prefs({});
+    held.resolve();
+    await loading;
+    await settle();
+    nothingPublished(state());
+    // The next gateway has its own otto, on a model with no account, and no record of one.
+    fake.gateway.handlers["users.prefs.get"] = () => ({ status: "ok", entries: {} });
+    expect(answered).toBeTruthy();
+    const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
+      .entries;
+    entries.otto!.model = { primary: "acme/dev-1", fallbacks: [] };
+    await engine.load();
+    expect(state().bindings.find((b) => b.botId === "otto")).toMatchObject({ suffixLost: false });
+  });
+
+  it("F-478: the default bot's model list answered after a gateway switch publishes nothing", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdPicker = held.promise;
+    const { engine, state, switchGateway } = engineOn(fake);
+    const loading = engine.load();
+    await until(() => state().accounts.length > 0);
+    switchGateway();
+    held.resolve();
+    await loading;
+    nothingPublished(state());
+  });
+
+  it("F-478: a provider's full list answered after a gateway switch is refused, not given", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdFull = held.promise;
+    const { engine, state, switchGateway } = engineOn(fake);
+    const reading = engine.readModelList("acme");
+    await settle();
+    switchGateway();
+    held.resolve();
+    await expect(reading).rejects.toThrow(/gateway changed/);
+    nothingPublished(state());
+  });
+
+  it("F-034 F-478: Create waits for the picker read under way before it writes anything", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdPicker = held.promise;
+    const { client, accounts } = await accountsClient({ gateway: fake, read: false });
+    const loading = client.refreshAccounts();
+    await until(() => accounts().status === "ready");
+    const creating = client.createBot({
+      name: "Early",
+      account: null,
+      provider: "acme",
+      model: "dev-1",
+      effort: null,
+      avatar: null,
+    });
+    await settle();
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    held.resolve();
+    await loading;
+    await creating.catch(() => {});
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-478: a full list longer than kept keeps its bound and says how many it had", async () => {
+    const fake = new AccountsGateway();
+    fake.fullCatalog = {
+      acme: Array.from({ length: 1500 }, (_, i) => ({ id: `m-${i}`, provider: "acme" })),
+    };
+    const { client } = await accountsClient({ gateway: fake });
+    const list = await client.loadModelCatalog("acme");
+    expect(list.status === "ready" && [list.models.length, list.total]).toEqual([
+      MAX_PROVIDER_MODELS,
+      1500,
+    ]);
+    client.stop();
+  });
+
+  it("F-478: a viewer that can receive less gets fewer of the models and the same total", async () => {
+    const fake = new AccountsGateway();
+    fake.fullCatalog = {
+      acme: Array.from({ length: 1000 }, (_, i) => ({ id: `model-${i}`, provider: "acme" })),
+    };
+    const { client } = await accountsClient({ gateway: fake });
+    const viewer = createBridgeSession(client, { maxResultChars: 20_000 });
+    const list = await viewer.apply({ type: "loadModelCatalog", provider: "acme" });
+    expect(JSON.stringify(list).length).toBeLessThanOrEqual(20_000);
+    expect(list.status === "ready" && list.models.length).toBeGreaterThan(0);
+    expect(list.status === "ready" && list.models.length).toBeLessThan(1000);
+    expect(list.status === "ready" && list.total).toBe(1000);
+    client.stop();
+  });
+});
 
 describe("the accounts as each bot sees them", () => {
   it("reads every bot's refreshed view, and tells shared accounts from those one bot keeps", async () => {

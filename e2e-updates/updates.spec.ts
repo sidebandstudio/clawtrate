@@ -604,7 +604,7 @@ test("F-231: a stale check or download reconciles the screen without contacting 
   expect(feedRequests(server)).toEqual(["/stable", "/stable"]);
 });
 
-test("F-231 F-559: a dated beta updates to a three-numbered Beta build, which takes the next and no older one", async ({
+test("F-231 F-559 F-561: a dated beta updates to a three-numbered Beta build, which takes the next and no older one", async ({
   desktopApp,
 }) => {
   const { relaunch, server, manifest, profile, filePath, resume } = desktopApp;
@@ -615,8 +615,11 @@ test("F-231 F-559: a dated beta updates to a three-numbered Beta build, which ta
     await page.keyboard.press("ControlOrMeta+,");
     await page.getByRole("button", { name: "Updates", exact: true }).click();
     const facts = page.locator(".updates-section .facts").first();
-    await expect(facts).toContainText(`Clawtrate ${version}`);
-    await expect(facts).toContainText("This copy is a Beta build.");
+    // F-561: a three-number Beta build says Beta beside its number; a dated one as before.
+    if (version.includes("-beta.")) {
+      await expect(facts).toContainText(`Clawtrate ${version}`);
+      await expect(facts).toContainText("This copy is a Beta build.");
+    } else await expect(facts).toHaveText(`VersionClawtrate Beta · ${version}`);
     return page;
   };
   const check = async (page: Page, offered: string) => {
@@ -628,10 +631,10 @@ test("F-231 F-559: a dated beta updates to a three-numbered Beta build, which ta
   // Old to new: the installed dated beta takes 0.2.0 and downloads it.
   let page = await open("0.1.1-beta.20261124.2");
   await check(page, "0.2.0");
-  await expect(line(page)).toHaveText("Clawtrate 0.2.0 is offered by the update source.");
+  await expect(line(page)).toHaveText("Clawtrate Beta · 0.2.0 is offered by the update source.");
   await page.getByRole("button", { name: "Download", exact: true }).click();
   await expect(line(page)).toHaveText(
-    "Clawtrate 0.2.0 is downloaded, and its size and checksum match the update source. Ready to install.",
+    "Clawtrate Beta · 0.2.0 is downloaded, and its size and checksum match the update source. Ready to install.",
     { timeout: 30_000 },
   );
   expect(feedRequests(server)).toEqual(["/nightly", filePath]);
@@ -648,7 +651,7 @@ test("F-231 F-559: a dated beta updates to a three-numbered Beta build, which ta
   await expect(line(page)).toContainText("No newer version was offered for this build");
   // New to new.
   await check(page, "0.2.1");
-  await expect(line(page)).toHaveText("Clawtrate 0.2.1 is offered by the update source.");
+  await expect(line(page)).toHaveText("Clawtrate Beta · 0.2.1 is offered by the update source.");
   expect(feedRequests(server)).toEqual([
     "/nightly",
     filePath,

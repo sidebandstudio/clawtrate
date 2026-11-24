@@ -2030,3 +2030,20 @@ it("F-554: the lists arriving after a check never make the next Check stale", as
   expect(again.outcome).toBe("accepted");
   expect(server.requests.filter((path) => path === "/stable")).toHaveLength(2);
 });
+it("F-561: reports the build's own date and commit, for support, and nothing it doesn't carry", async () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  expect((await start({ releaseDate: "2026-12-01T10:00:00.000Z", commit })).get().build).toEqual({
+    releaseDate: "2026-12-01T10:00:00.000Z",
+    commit,
+  });
+  expect((await start({ releaseDate: "2026-12-01T10:00:00.000Z" })).get().build).toEqual({
+    releaseDate: "2026-12-01T10:00:00.000Z",
+    commit: null,
+  });
+  expect((await start({ commit: "not a commit" })).get()).not.toHaveProperty("build");
+  expect((await start()).get()).not.toHaveProperty("build");
+  // It stays through a check.
+  const service = await start({ commit });
+  await service.check(service.get().selectedTrack, service.get().revision);
+  expect(service.get().build).toEqual({ releaseDate: null, commit });
+});
