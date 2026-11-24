@@ -3,7 +3,8 @@
 // state says which step it stopped in and for how long (#207). Step names,
 // outcomes and times only: never a path, an address or a file's contents.
 import type { DesktopUpdateState } from "@clawtrate/core";
-import { appendFileSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { constants } from "node:os";
 import { join } from "node:path";
 
@@ -43,22 +44,28 @@ function threw(error: unknown): string {
   return "threw an error";
 }
 
+let pendingWrites = Promise.resolve();
+
 /** Appends to the log in the app's profile folder. */
-export function stepLog(profile: string, now: () => number = Date.now) {
+export function stepLog(
+  profile: string,
+  now: () => number = Date.now,
+  append: (file: string, line: string) => Promise<void> = appendFile,
+) {
+  const file = join(profile, STEP_LOG);
   let lastState: string | undefined;
   const write = (line: StepLine) => {
-    try {
-      appendFileSync(join(profile, STEP_LOG), JSON.stringify(line) + "\n");
-      return true;
-    } catch {
-      // The check under way outranks its diagnostics.
-      return false;
-    }
+    pendingWrites = pendingWrites
+      .then(() => append(file, JSON.stringify(line) + "\n"))
+      .catch(() => {});
   };
   return {
+    flush: () => pendingWrites,
     state(state: DesktopUpdateState) {
       const name = stateName(state);
-      if (name !== lastState && write({ at: now(), state: name })) lastState = name;
+      if (name === lastState) return;
+      lastState = name;
+      write({ at: now(), state: name });
     },
     async time<T>(step: string, work: () => Promise<T>, outcome: (value: T) => string) {
       write({ at: now(), step });

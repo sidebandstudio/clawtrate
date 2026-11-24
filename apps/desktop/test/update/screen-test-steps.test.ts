@@ -56,6 +56,7 @@ async function stalledDownload(steps: ReturnType<typeof log>) {
 it("names the step a download stopped in after its last byte, and how long it has run", async () => {
   const steps = log();
   await stalledDownload(steps);
+  await steps.flush();
   expect(readSteps(dir.path, () => 10_000)).toEqual([
     { state: "downloading", atMs: 0, ms: 3_000 },
     { step: "folders", atMs: 0, ms: 2_500, outcome: "made" },
@@ -69,17 +70,20 @@ it("names the step a download stopped in after its last byte, and how long it ha
 it("reads the clock after the log, so a row the app writes meanwhile never runs backwards", async () => {
   const steps = log();
   await stalledDownload(steps);
+  await steps.flush();
   // The app writes its next state 5 ms after the reader's clock reading.
   const movingOn = (at: number) => () => {
-    clock = at + 5;
-    steps.state({ kind: "verified", offerId: "o", version: "1.1.0", size: 4_000_000 });
+    appendFileSync(
+      join(dir.path, "update-steps.jsonl"),
+      JSON.stringify({ at: at + 5, state: "verified" }) + "\n",
+    );
     return at;
   };
   const rows = readSteps(dir.path, movingOn(10_000));
   expect(rows?.map((row) => row.ms)).toEqual([3_000, 2_500, 2, 4_998, 2_898, 2_095]);
 });
 
-it("writes one row per state change rather than one per downloaded chunk", () => {
+it("writes one row per state change rather than one per downloaded chunk", async () => {
   const steps = log();
   steps.state(downloading(0));
   steps.state(downloading(1_000));
@@ -87,12 +91,67 @@ it("writes one row per state change rather than one per downloaded chunk", () =>
   steps.state(downloading(4_000_000, "moving"));
   steps.state({ kind: "checking" });
   steps.state(downloading(0));
+  await steps.flush();
   const rows = readFileSync(join(dir.path, "update-steps.jsonl"), "utf8").trim().split("\n");
   expect(rows.map((row) => JSON.parse(row).state)).toEqual([
     "downloading",
     "moving",
     "checking",
     "downloading",
+  ]);
+});
+
+it("F-231: a locked log gets only one append attempt per state", async () => {
+  const attempts: string[] = [];
+  const steps = stepLog(
+    dir.path,
+    () => clock,
+    async (_file, line) => {
+      attempts.push(JSON.parse(line).state);
+      throw new Error("log locked");
+    },
+  );
+  steps.state(downloading(0));
+  await steps.flush();
+  for (let received = 1; received <= 32; received++) steps.state(downloading(received));
+  steps.state(downloading(32, "moving"));
+  await steps.flush();
+  expect(attempts).toEqual(["downloading", "moving"]);
+});
+
+it("F-231: a pending append neither holds up update work nor lets another writer pass it", async () => {
+  const lock = Promise.withResolvers<void>();
+  const attempts: unknown[] = [];
+  const append = async (_file: string, line: string) => {
+    attempts.push(JSON.parse(line));
+    if (attempts.length === 1) await lock.promise;
+  };
+  const host = stepLog(dir.path, () => clock, append);
+  const inspector = stepLog(dir.path, () => clock, append);
+  host.state(downloading(0));
+  expect(attempts).toEqual([]);
+  await Promise.resolve();
+  clock = 1;
+  try {
+    await expect(
+      inspector.time(
+        "read-back",
+        async () => "proof",
+        () => "read",
+      ),
+    ).resolves.toBe("proof");
+    clock = 2;
+    host.state(downloading(32, "moving"));
+    expect(attempts).toEqual([{ at: 0, state: "downloading" }]);
+  } finally {
+    lock.resolve();
+  }
+  await host.flush();
+  expect(attempts).toEqual([
+    { at: 0, state: "downloading" },
+    { at: 1, step: "read-back" },
+    { at: 1, step: "read-back", outcome: "read" },
+    { at: 2, state: "moving" },
   ]);
 });
 
@@ -103,6 +162,7 @@ it("ends every step of a download that completes, and passes each step's result 
   const inspect = held(steps, "installer-inspect", (reason: string | null) => reason ?? "accepted");
   expect(await inspect(10_600, null)).toBeNull();
   steps.state({ kind: "verified", offerId: "o", version: "1.1.0", size: 4_000_000 });
+  await steps.flush();
   expect(readSteps(dir.path, () => 11_000)).toEqual([
     { state: "downloading", atMs: 0, ms: 3_000 },
     { step: "folders", atMs: 0, ms: 2_500, outcome: "made" },
@@ -133,6 +193,7 @@ it("keeps only the last check or download, and an error's code, never its messag
   await expect(folders).rejects.toBe(refused);
   clock = 20_300;
   steps.state({ kind: "failed", stage: "download", reason: "write-failed" });
+  await steps.flush();
   expect(readSteps(dir.path, () => 20_400)).toEqual([
     { state: "downloading", atMs: 0, ms: 200 },
     { step: "folders", atMs: 0, ms: 0, outcome: "threw EPERM" },
@@ -159,6 +220,7 @@ it("keeps unknown error codes, signals and outcomes out of the timing log", asyn
     (result) => result,
   );
   expect(value).toBe(detail);
+  await steps.flush();
   expect(readFileSync(join(dir.path, "update-steps.jsonl"), "utf8")).not.toContain(detail);
   expect(readSteps(dir.path)?.map((row) => row.outcome)).toEqual([
     "threw an error",
@@ -176,6 +238,7 @@ it("never fails the step it times, and leaves out a line still being written", a
       () => "read",
     ),
   ).toBe("proof");
+  await missing.flush();
   expect(readSteps(join(dir.path, "missing"))).toBeNull();
 
   const file = join(dir.path, "update-steps.jsonl");

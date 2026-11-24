@@ -58,6 +58,7 @@ it("reads the step log before asking the host, and prints and attaches that one 
     () => "read",
   );
   const requests = ["/stable", "/file.exe"];
+  await steps.flush();
   const host = Promise.withResolvers<DesktopUpdateSnapshot>();
   let asked = 0;
   const test = failedTest();
@@ -72,6 +73,7 @@ it("reads the step log before asking the host, and prints and attaches that one 
   work.resolve();
   await readBack;
   steps.state(snapshot.state);
+  await steps.flush();
   requests.push("/stable");
   host.resolve(snapshot);
   const state = await taken;
