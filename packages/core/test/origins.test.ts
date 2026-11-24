@@ -310,6 +310,35 @@ describe("F-563: Show sessions from other tools", () => {
     client.stop();
   });
 
+  it("F-563: another tool's session that arrives while the switch is off is never listed, and is once it is on", async () => {
+    const { client, gateway, keys } = await connected();
+    const api = { key: "agent:pip:openai-user:new-client", agentId: "pip", updatedAt: 5_000 };
+    const scheduled = {
+      key: "agent:pip:weekly-report",
+      agentId: "pip",
+      createdVia: "cron",
+      updatedAt: 5_001,
+    };
+    const own = {
+      key: "agent:pip:dashboard:new-own",
+      agentId: "pip",
+      createdVia: "operator",
+      updatedAt: 5_002,
+    };
+    const listed = [...rows(), api, scheduled, own];
+    gateway.handlers["sessions.list"] = () => ({ sessions: listed, hasMore: false });
+    for (const row of [api, scheduled, own])
+      gateway.emit("sessions.changed", { sessionKey: row.key, ...row });
+    // The person's own new task is listed: the events were taken in.
+    await until(() => keys().includes(own.key));
+    await sleep(200);
+    expect(keys()).not.toContain(api.key);
+    expect(keys()).not.toContain(scheduled.key);
+    await client.setShowOtherToolSessions(true);
+    await until(() => keys().includes(api.key) && keys().includes(scheduled.key));
+    client.stop();
+  });
+
   it("F-563: a change in another tool's session the cap could not keep does not read the whole list again", async () => {
     const own = Array.from({ length: MAX_LISTED_TASKS }, (_, index) => ({
       key: `agent:pip:dashboard:${String(index).padStart(8, "0")}-0000`,
