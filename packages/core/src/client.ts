@@ -677,6 +677,11 @@ type ConnectionWrites = {
   grants: Map<string, { full: boolean; held: number } | null>;
   /** Bumped by every write or removal of the saved settings record, by any client on the store. */
   settingsRevision: number;
+  /**
+   * The settings write or removal currently in flight on this store, if any: records the revision
+   * it settled at once storage returns, so a startup read that overlapped publication can reconcile.
+   */
+  inFlightSettings: { settledRevision: number | null } | null;
   /** Numbered choices made on this store (Connect, setup, Reconnect, real Forget), newest last. */
   choices: number;
   /**
@@ -1245,6 +1250,16 @@ export class ClawtrateClient {
    * since (`recordSeen`).
    */
   private seenRevision: number | null = null;
+  /**
+   * When startup read the saved record while a settings write was in flight (for instance, the
+   * secure store publishing a new record before retiring an earlier token), the snapshot and the
+   * write it overlapped, reconciled once that write has settled.
+   */
+  private pendingSeen: {
+    before: number;
+    write: { settledRevision: number | null };
+    raw: string | null;
+  } | null = null;
   /** A setup's gateway and the choice number from when the person chose it. */
   private setupChosen: { url: string; choice: number } | null = null;
   /**
@@ -1584,6 +1599,7 @@ export class ClawtrateClient {
       rotations: new Map(),
       grants: new Map(),
       settingsRevision: 0,
+      inFlightSettings: null,
       choices: 0,
       chosen: 0,
     };
@@ -1633,13 +1649,31 @@ export class ClawtrateClient {
 
   /** The saved record alone; this client's settings stay as they are. */
   private async writeRecord(record: ConnectionSettings): Promise<void> {
-    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(record));
-    this.seenRevision = ++this.writes.settingsRevision;
+    const write: { settledRevision: number | null } = { settledRevision: null };
+    this.writes.inFlightSettings = write;
+    try {
+      await this.host.storage.set(SETTINGS_KEY, JSON.stringify(record));
+      const rev = ++this.writes.settingsRevision;
+      write.settledRevision = rev;
+      this.seenRevision = rev;
+      this.pendingSeen = null;
+    } finally {
+      if (this.writes.inFlightSettings === write) this.writes.inFlightSettings = null;
+    }
   }
 
   private async forgetRecord(): Promise<void> {
-    await this.host.storage.delete(SETTINGS_KEY);
-    this.seenRevision = ++this.writes.settingsRevision;
+    const write: { settledRevision: number | null } = { settledRevision: null };
+    this.writes.inFlightSettings = write;
+    try {
+      await this.host.storage.delete(SETTINGS_KEY);
+      const rev = ++this.writes.settingsRevision;
+      write.settledRevision = rev;
+      this.seenRevision = rev;
+      this.pendingSeen = null;
+    } finally {
+      if (this.writes.inFlightSettings === write) this.writes.inFlightSettings = null;
+    }
   }
 
   /**
@@ -1647,8 +1681,17 @@ export class ClawtrateClient {
    * client's on this store, saved or forgotten since, and this client changes in it only what it
    * means to change.
    */
-  private recordSeen(): boolean {
-    return this.seenRevision === this.writes.settingsRevision;
+  private recordSeen(saved?: ConnectionSettings | null): boolean {
+    if (this.seenRevision === this.writes.settingsRevision) return true;
+    const pending = this.pendingSeen;
+    if (!pending || saved === undefined) return false;
+    const expected = pending.write.settledRevision ?? pending.before;
+    if (expected !== this.writes.settingsRevision) return false;
+    const savedRaw = saved === null ? null : JSON.stringify(saved);
+    if (savedRaw !== pending.raw) return false;
+    this.seenRevision = expected;
+    this.pendingSeen = null;
+    return true;
   }
 
   /**
@@ -1737,6 +1780,7 @@ export class ClawtrateClient {
         // uncontended read claims its revision, so the record and revision this client keeps go
         // together.
         let before = this.writes.settingsRevision;
+        let writingBefore = this.writes.inFlightSettings;
         settings = await this.savedSettings();
         for (
           let again = 0;
@@ -1747,13 +1791,24 @@ export class ClawtrateClient {
           again += 1
         ) {
           before = this.writes.settingsRevision;
+          writingBefore = this.writes.inFlightSettings;
           settings = await this.savedSettings();
         }
-        const uncontended = before === this.writes.settingsRevision;
+        const after = this.writes.settingsRevision;
+        const inFlight = this.writes.inFlightSettings ?? writingBefore;
+        const uncontended = before === after && inFlight === null;
         if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
           return;
         this.settings = settings;
         this.seenRevision = uncontended ? before : null;
+        this.pendingSeen =
+          !uncontended && before === after && inFlight !== null
+            ? {
+                before,
+                write: inFlight,
+                raw: settings === null ? null : JSON.stringify(settings),
+              }
+            : null;
       } catch (error) {
         outcome = { failed: true, error };
         throw error;
@@ -1961,7 +2016,7 @@ export class ClawtrateClient {
       // since is that client's, and stays, even for this gateway.
       const saved = await this.readSavedSettings(stops);
       if (!this.settings || stops !== this.stops) return;
-      if (saved === null || this.recordSeen()) {
+      if (saved === null || this.recordSeen(saved)) {
         await this.forgetRecord();
         // A real deletion (not Back on an empty store) is a choice that blocks older setup saves.
         if (saved !== null) this.writes.chosen = ++this.writes.choices;
@@ -2014,7 +2069,7 @@ export class ClawtrateClient {
         if (!this.settings || stops !== this.stops) return;
         if (saved?.url === this.settings.url) {
           await this.saveChoice({ ...saved, suspended: false });
-        } else if (this.recordSeen()) {
+        } else if (this.recordSeen(saved)) {
           await this.saveChoice({ ...this.settings, suspended: false });
         } else {
           // Another client saved another gateway or forgot this one since. This client's token
@@ -2058,7 +2113,7 @@ export class ClawtrateClient {
           suspended: true,
           ...(typed && saved.token === typed ? { token: null } : {}),
         });
-      } else if (this.recordSeen()) {
+      } else if (this.recordSeen(saved)) {
         await this.saveSettings({
           ...this.settings,
           suspended: true,
