@@ -1,6 +1,6 @@
 // A picture a person sends shows in their own message (#451). Clawtrate doesn't
 // load a person's picture from the gateway (#469), so the preview
-// comes from the copy this app sent, while the task stays open; history names
+// comes from the copy this app sent, kept across reopening the task; history names
 // each file so another device can say what was sent.
 
 import { describe, expect, it } from "vitest";
@@ -150,6 +150,31 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
+  it("F-557: still shows when its task is opened again on this device, after its last viewer closed it (#509)", async () => {
+    const { client, gateway, confirm, history } = await task();
+    const id = client.sendMessage(KEY, "can u add this to my calendar?", {
+      attachments: [picture(RED, "shot.png")],
+    });
+    await confirm([sentRow(id, "can u add this to my calendar?", [SHOT])]);
+    // The person moves to another task, or the page reloads: the last viewer lets this one go.
+    client.closeSession(KEY);
+    await until(() => !client.state.transcripts[KEY]);
+    const reads = gateway.calls("chat.history").length;
+    client.openSession(KEY);
+    await until(
+      () =>
+        gateway.calls("chat.history").length > reads &&
+        client.state.transcripts[KEY]?.status === "ready",
+    );
+    expect(history()).toHaveLength(1);
+    const item = client.state.transcripts[KEY]!.items[0]!;
+    expect(bytesOf(client, await client.readSentPicture(KEY, item.idempotencyKey!, 0))).toEqual(
+      new Uint8Array(RED),
+    );
+    expect(gateway.calls("artifacts.download")).toEqual([]);
+    client.stop();
+  });
+
   it("F-557: two pictures keep their order, and a file that isn't a picture isn't kept", async () => {
     const { client, confirm } = await task();
     const id = client.sendMessage(KEY, "two pictures", {
@@ -202,7 +227,7 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("F-557: kept pictures go when the task closes, and give way to files still to be sent", async () => {
+  it("F-557: kept pictures give way to files still to be sent", async () => {
     const { client, gateway, confirm } = await task();
     const id = client.sendMessage(KEY, "look", { attachments: [picture(RED, "shot.png")] });
     await confirm([sentRow(id, "look", [SHOT])]);
@@ -218,7 +243,7 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it(`F-557: at most ${MAX_SENT_PICTURE_MESSAGES} messages' pictures are kept, the oldest giving way, and none once the task is closed`, async () => {
+  it(`F-557: at most ${MAX_SENT_PICTURE_MESSAGES} messages' pictures are kept, the oldest giving way, and closing the task keeps them`, async () => {
     const { client, confirm } = await task();
     const rows: unknown[] = [];
     const ids: string[] = [];
@@ -232,7 +257,7 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     expect(await client.readSentPicture(KEY, `${ids[0]}:user`, 0)).toEqual({ status: "not-kept" });
     expect((await client.readSentPicture(KEY, `${ids.at(-1)}:user`, 0)).status).toBe("content");
     client.closeSession(KEY);
-    expect(client.keptPictureBytes).toBe(0);
+    expect(client.keptPictureBytes).toBe(MAX_SENT_PICTURE_MESSAGES * RED.length);
     client.stop();
   }, 30_000);
 });

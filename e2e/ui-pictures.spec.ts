@@ -186,12 +186,14 @@ test("F-535: a picture the bot sends with its message tool shows under that mess
 
 // A picture a person attaches (#451), sent through the composer of a host of this test's own,
 // with interactive access. History names the file by a `media://inbound` reference, and Clawtrate
-// doesn't load a person's picture from the gateway (#469), so the preview is the app's own copy
-// while its host follows the task (a reload of the page keeps it); another device's host has
-// none, and its message says what was sent.
+// doesn't load a person's picture from the gateway (#469), so the preview is the app's own copy,
+// kept by its host whenever the task is opened again there (another task and back, or a reload
+// of the page, #509); another device's host has none, and its message says what was sent.
 test.describe("F-557: a picture you attach", () => {
-  const OWN_TASK = "Your picture from the end-to-end run";
-  const OWN_KEY = "agent:pip:e2e-own-picture";
+  // A task of each run's own, so a repeated or retried run never meets an earlier one's messages.
+  const RUN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const OWN_TASK = `Your picture from the end-to-end run ${RUN}`;
+  const OWN_KEY = `agent:pip:e2e-own-picture-${RUN}`;
   const WORDS = "can u add this to my calendar?";
   const MINE = "Your picture: shot.png";
   // Your own turn: the scripted reply quotes your words, so a text filter alone finds its turn too.
@@ -278,7 +280,17 @@ test.describe("F-557: a picture you attach", () => {
     await expect(viewer).toHaveCount(0);
     await expect(turn.getByRole("button", { name: MINE })).toBeFocused();
 
-    // A reload of the page: the host still follows the task, so its copy still shows.
+    // The bot has answered, so nothing keeps the task followed once you leave it. Another task and
+    // back: the host let the task go, and still shows its copy (#509).
+    await expect(
+      page.getByTestId("transcript-turn").filter({ hasText: "scripted development model" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await openTask(page, "Pip", "Saturday errands route");
+    await openTask(page, "Pip", OWN_TASK);
+    const back = page.locator(YOURS).filter({ hasText: WORDS });
+    await expect(back.getByRole("img", { name: MINE })).toBeVisible({ timeout: 20_000 });
+
+    // A reload of the page lets this viewer's tasks go too: the copy still shows.
     await page.reload();
     await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
     await openTask(page, "Pip", OWN_TASK);

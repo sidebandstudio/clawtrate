@@ -450,9 +450,11 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /**
  * Messages history confirmed whose pictures this client keeps to show, from
- * the copy it sent, while their task stays open (Clawtrate doesn't load a
- * person's picture from the gateway, #469). Their bytes share `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes'
- * files and give way, oldest first, to a new message's.
+ * the copy it sent, whenever their task is open on this device, until this
+ * client disconnects from the gateway (Clawtrate doesn't load a person's
+ * picture from the gateway, #469). Their bytes share
+ * `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes' files and give way,
+ * oldest first, to a new message's.
  */
 export const MAX_SENT_PICTURE_MESSAGES = 32;
 /** Operations waiting for access at once; past it a new one is refused. */
@@ -2531,7 +2533,8 @@ export class ClawtrateClient {
     for (const message of this.state.transcripts[key]?.outbox ?? []) {
       this.dropAttachments(message.id);
     }
-    for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
+    // Pictures you sent stay (`sentPictures`): the task can be opened again on this device, and
+    // they show there once more. Their own bound lets them go.
     this.recipients.delete(key);
     for (const readKey of [...this.approvalReads.keys()])
       if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
