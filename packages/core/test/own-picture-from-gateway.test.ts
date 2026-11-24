@@ -5,12 +5,10 @@
 //
 // The qualifying-address rule is the product's: these clients connect at
 // `wss://gateway.example`, and the fake fetch stands in for its HTTPS origin.
-// The last suite points that origin at a stand-in server on loopback, so Node's
-// own fetch refuses the redirect and carries the header as the host's does.
+// apps/desktop/test/own-picture-host-fetch.test.ts points that origin at a
+// stand-in server on loopback, through the desktop host's own fetch.
 
-import { createServer, type IncomingMessage, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { fromBase64, toBase64 } from "../src/bytes.ts";
 import {
   ClawtrateClient,
@@ -88,12 +86,26 @@ const png = (bytes: Uint8Array = RED) =>
 
 type Fetched = { url: string; init: Parameters<HttpFetch>[1] };
 
+/** An address before its query, and its query's names and decoded values, in order. */
+function parts(url: string) {
+  const [base, search = ""] = url.split("?") as [string, string?];
+  const pairs = search
+    .split("&")
+    .filter(Boolean)
+    .map((pair) => pair.split("=") as [string, string?]);
+  const get = (name: string) => {
+    const value = pairs.find(([key]) => key === name)?.[1];
+    return value === undefined ? null : decodeURIComponent(value);
+  };
+  return { base, keys: pairs.map(([key]) => key), get };
+}
+
 /** A fake HTTPS origin: the ticket answer for `meta=1`, the bytes otherwise. */
 function route(meta: () => HttpResponseLike, bytes: () => HttpResponseLike = png) {
   const fetched: Fetched[] = [];
   const fetch: HttpFetch = async (url, init) => {
     fetched.push({ url, init });
-    return new URL(url).searchParams.get("meta") === "1" ? meta() : bytes();
+    return parts(url).get("meta") === "1" ? meta() : bytes();
   };
   return { fetch, fetched };
 }
@@ -180,17 +192,16 @@ describe("F-557: reading a person's picture back from the gateway", () => {
     const read = await fetchInboundPicture(ctxOf(fetch), KEY, SHOT.url);
     expect(read).toEqual({ status: "bytes", mimeType: "image/png", bytes: RED });
     expect(fetched).toHaveLength(2);
-    const [meta, bytes] = fetched.map(({ url }) => new URL(url));
+    const [meta, bytes] = fetched.map(({ url }) => parts(url));
     for (const url of [meta!, bytes!]) {
-      expect(url.origin).toBe(ORIGIN);
-      expect(url.pathname).toBe(INBOUND_MEDIA_ROUTE);
-      expect(url.searchParams.get("source")).toBe(SHOT.url);
-      expect(url.searchParams.get("sessionKey")).toBe(KEY);
-      expect(url.href).not.toContain(TOKEN);
+      expect(url.base).toBe(`${ORIGIN}${INBOUND_MEDIA_ROUTE}`);
+      expect(url.get("source")).toBe(SHOT.url);
+      expect(url.get("sessionKey")).toBe(KEY);
     }
-    expect([...meta!.searchParams.keys()]).toEqual(["meta", "source", "sessionKey"]);
-    expect([...bytes!.searchParams.keys()]).toEqual(["source", "sessionKey", "mediaTicket"]);
-    expect(bytes!.searchParams.get("mediaTicket")).toBe(TICKET);
+    for (const { url } of fetched) expect(url).not.toContain(TOKEN);
+    expect(meta!.keys).toEqual(["meta", "source", "sessionKey"]);
+    expect(bytes!.keys).toEqual(["source", "sessionKey", "mediaTicket"]);
+    expect(bytes!.get("mediaTicket")).toBe(TICKET);
     expect(fetched[0]!.init.headers).toEqual({ authorization: `Bearer ${TOKEN}` });
     expect(fetched[1]!.init.headers).toBeUndefined();
     for (const { init } of fetched) {
@@ -389,10 +400,7 @@ describe("F-557: your picture on another device, and after a restart", () => {
     // The reference stays in the host: the state a viewer is sent never has it.
     expect(JSON.stringify(client.state)).not.toContain("media://");
     expect(bytesOf(client, await client.readSentPicture(KEY, "m1:user", 0))).toEqual(RED);
-    expect(fetched.map(({ url }) => new URL(url).searchParams.get("sessionKey"))).toEqual([
-      KEY,
-      KEY,
-    ]);
+    expect(fetched.map(({ url }) => parts(url).get("sessionKey"))).toEqual([KEY, KEY]);
     expect(client.readBackPictureBytes).toBe(RED.length);
     expect(bytesOf(client, await client.readSentPicture(KEY, "m1:user", 0))).toEqual(RED);
     expect(fetched).toHaveLength(2);
@@ -526,63 +534,4 @@ describe("F-557: your picture on another device, and after a restart", () => {
     await until(() => client.readBackPictureBytes === 0);
     client.stop();
   }, 30_000);
-});
-
-describe("F-557: through Node's own fetch, against a stand-in of the gateway's route", () => {
-  let server: Server;
-  let port = 0;
-  const seen: Array<{ url: string; authorization: string | undefined }> = [];
-  let mode: "picture" | "redirect" = "picture";
-  beforeAll(async () => {
-    server = createServer((request: IncomingMessage, res) => {
-      seen.push({ url: request.url!, authorization: request.headers.authorization });
-      const url = new URL(request.url!, "http://stand-in");
-      if (mode === "redirect") {
-        res.writeHead(302, { location: "/elsewhere" }).end();
-      } else if (url.searchParams.get("meta") === "1") {
-        res.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(
-          JSON.stringify({
-            available: true,
-            mimeType: "image/png",
-            sizeBytes: RED.length,
-            mediaTicket: TICKET,
-            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          }),
-        );
-      } else {
-        res.writeHead(200, { "content-type": "image/png" }).end(Buffer.from(RED));
-      }
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    port = (server.address() as AddressInfo).port;
-  });
-  afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
-
-  // The address the product sees is protected; the test delivers its requests to loopback.
-  const viaStandIn: HttpFetch = (url, init) =>
-    globalThis.fetch(url.replace(ORIGIN, `http://127.0.0.1:${port}`), init) as never;
-
-  it("F-557: the token arrives as a header on the ticket request only, and the bytes are the gateway's", async () => {
-    mode = "picture";
-    seen.length = 0;
-    const read = await fetchInboundPicture(
-      ctxOf(viaStandIn, { now: () => Date.now() }),
-      KEY,
-      SHOT.url,
-    );
-    expect(read).toEqual({ status: "bytes", mimeType: "image/png", bytes: RED });
-    expect(seen.map((each) => each.authorization)).toEqual([`Bearer ${TOKEN}`, undefined]);
-    expect(seen.every((each) => !each.url.includes(TOKEN))).toBe(true);
-  });
-
-  it("F-557: a redirect is not followed", async () => {
-    mode = "redirect";
-    seen.length = 0;
-    expect(await fetchInboundPicture(ctxOf(viaStandIn), KEY, SHOT.url)).toEqual({
-      status: "cannot-load",
-    });
-    expect(seen.map((each) => new URL(each.url, "http://x").pathname)).toEqual([
-      INBOUND_MEDIA_ROUTE,
-    ]);
-  });
 });
