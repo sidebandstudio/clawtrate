@@ -123,6 +123,31 @@ describe("the bot list follows gateway config changes", () => {
     }
   });
 
+  it("F-558: a config.changed while the connection's first bot read fails still reads the bots again", async () => {
+    const agents = [
+      { id: "main", identity: { name: "Juniper" } },
+      { id: "pip", identity: { name: "Pip" } },
+    ];
+    const gateway = new FakeGateway();
+    let fail: ((error: Error) => void) | null = null;
+    gateway.handlers["agents.list"] = () =>
+      fail === null
+        ? new Promise((_, reject) => {
+            fail = reject;
+          })
+        : { defaultId: "main", agents };
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    try {
+      await client.connect({ url: URL_A, token: "t" });
+      await until(() => fail !== null);
+      gateway.emit("config.changed", { hash: "h1", ts: 1 });
+      fail!(new GatewayError({ code: "UNAVAILABLE", message: "busy" }));
+      await until(() => client.state.bots.some((bot) => bot.id === "pip"));
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-558: a task read already out when a bot is deleted doesn't bring its tasks back, even if the next read fails", async () => {
     let agents: Array<Record<string, unknown>> = [
       { id: "main", identity: { name: "Juniper" } },

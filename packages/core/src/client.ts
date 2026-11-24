@@ -7818,9 +7818,9 @@ export class ClawtrateClient {
     // reconnect included, asks for read alone; Back or another gateway ends it.
     if (!current()) return;
     this.discoveryRead = null;
-    // After the last wait above, so a change reported during the task catch-up is read too.
-    if (agents.status === "fulfilled" && read.botsChanged)
-      void this.refreshBotsOnChange(generation);
+    // After the last wait above, so a change reported during the task catch-up is read too, and
+    // also when the first bot read failed: the change it missed is read now.
+    if (read.botsChanged) void this.refreshBotsOnChange(generation);
     const setup = this.isSetup(this.settings?.url);
     if (setup && failures.length === 0) this.setupIntent = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
