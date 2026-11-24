@@ -1,6 +1,6 @@
 // The same main entry, sandboxed preload and renderer as the launch check.
 // Only this temporary build links the service to the test's own feed.
-import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
+import { expect, test as base, type Page } from "@playwright/test";
 import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
@@ -14,16 +14,18 @@ import {
   symlinkSync,
   rmSync,
   writeFileSync,
-  mkdirSync,
   cpSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
-import { setTimeout as pause } from "node:timers/promises";
 import { join } from "node:path";
 import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
-import { readSteps } from "../apps/desktop/test/update/screen-test-steps.ts";
+import {
+  hostStateAtFailure,
+  statusLine,
+  type HostState,
+} from "../apps/desktop/test/update/host-state.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
 import { PRIVATE_DIRECTORIES_TIMEOUT_MS } from "../apps/desktop/src/main/private-update-directory.ts";
@@ -40,6 +42,8 @@ type TestApp = {
   resume: () => void;
   manifest: Record<string, unknown>;
   rendererRequests: string[];
+  /** Reads the host's state at a failure and attaches it; later calls get that same reading. */
+  captureHostState: () => Promise<HostState>;
 };
 
 /** The app's own limit for making an offer's folders, and a moment to send the request. */
@@ -193,6 +197,16 @@ const test = base.extend<{
         return page;
       }
       const page = await launch("0.1.0");
+      const captureHostState = hostStateAtFailure(
+        testInfo,
+        profile,
+        server.requests,
+        rendererRequests,
+        () =>
+          page.evaluate(() =>
+            (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get(),
+          ),
+      );
       await use({
         page,
         relaunch: launch,
@@ -203,19 +217,11 @@ const test = base.extend<{
         resume: resume.resolve,
         manifest,
         rendererRequests,
+        captureHostState,
       });
-      if (testInfo.status !== testInfo.expectedStatus && !page.isClosed()) {
-        const reading = await page.evaluate(async () => {
-          const { state, preferenceIssue } = await (
-            window as unknown as ProbeWindow
-          ).clawtrateHost.desktopUpdates.get();
-          return { state, preferenceIssue };
-        });
-        console.log(
-          "Update status at failure",
-          JSON.stringify({ requests: server.requests, ...reading, steps: readSteps(profile) }),
-        );
-      }
+      // The reading the failure attached, not a new one after its cleanup.
+      if (testInfo.status !== testInfo.expectedStatus)
+        console.log("Update status at failure", statusLine(await captureHostState()));
     } finally {
       // A locked or unreadable diagnostic must not skip the cleanup.
       try {
@@ -235,14 +241,7 @@ const test = base.extend<{
 test.afterEach(async ({ desktopApp }, testInfo) => {
   if (testInfo.status === "passed" || testInfo.status === "skipped") return;
   // A test that captured before its own cleanup keeps that snapshot.
-  if (testInfo.attachments.some((each) => each.name === "host-state")) return;
-  await captureHostState(
-    desktopApp.page,
-    testInfo,
-    desktopApp.server,
-    desktopApp.rendererRequests,
-    desktopApp.profile,
-  );
+  await desktopApp.captureHostState();
 });
 
 /** The feed's and the files' requests; a check also asks once for the lists beside the feed (F-554). */
@@ -403,37 +402,6 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   expect(rendererRequests).toEqual([]);
 });
 
-/** A failure may be visible only in the host's state, which teardown closes away. */
-async function captureHostState(
-  page: Page,
-  info: TestInfo,
-  server: TestApp["server"],
-  rendererRequests: string[],
-  profile: string,
-) {
-  try {
-    const reading = await Promise.race([
-      page.evaluate(() => (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get()),
-      pause(10_000).then(() => null),
-    ]).catch((cause) => ({ error: String(cause) }));
-    // Which step the host stopped in, and for how long.
-    const steps = readSteps(profile);
-    const file = join(info.outputDir, "host-state.json");
-    mkdirSync(info.outputDir, { recursive: true });
-    writeFileSync(
-      file,
-      JSON.stringify(
-        { reading, steps, requests: server.requests, rendererRequests, notes: info.annotations },
-        null,
-        2,
-      ),
-    );
-    await info.attach("host-state", { path: file, contentType: "application/json" });
-  } catch {
-    // The failure under diagnosis still outranks the diagnostics.
-  }
-}
-
 /** Which element has focus, in words, for a failure's notes. */
 const focusedElement = (page: Page) =>
   page.evaluate(() => {
@@ -567,7 +535,7 @@ for (const stage of ["check", "download"] as const) {
       );
     } catch (error) {
       // Cleanup releases the held choice, so the failure's state is read first.
-      await captureHostState(page, test.info(), server, desktopApp.rendererRequests, profile);
+      await desktopApp.captureHostState();
       throw error;
     } finally {
       delayed.resolve();
