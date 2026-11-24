@@ -166,6 +166,33 @@ test("F-472: the Account step: subscriptions first, the gateway's choice last; C
   await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
 });
 
+test("F-472: focus a person moves into the Account step at once stays there when the step's own focus move comes late", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await holdFrames(page);
+  await page.getByRole("button", { name: "Next" }).click();
+  const radios = page.getByRole("radiogroup", { name: "Accounts" }).getByRole("radio");
+  await radios.first().focus();
+  await releaseFrames(page);
+  await expect(radios.first()).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(radios.nth(1)).toBeFocused();
+  await expect(radios.nth(1)).toHaveAttribute("aria-checked", "true");
+});
+
+test("F-472: with focus left alone, the Account step's heading takes it as the step changes", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await holdFrames(page);
+  await page.getByRole("button", { name: "Next" }).click();
+  await releaseFrames(page);
+  await expect(page.getByRole("heading", { name: "Account", level: 2 })).toBeFocused();
+});
+
 test("F-472: when the gateway's default model names an account, that account is chosen at first, and the step says why", async ({
   page,
 }) => {
