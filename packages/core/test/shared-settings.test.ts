@@ -1126,6 +1126,56 @@ describe("clients sharing a store keep each other's saved gateway", () => {
         client.stop();
       }
     });
+
+    it("F-457: a Suspend sent while startup reads again leaves gateway B, saved by another client after the first read", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL_A, token: null }) });
+      const firstRead = deferred<void>();
+      const firstGate = deferred<void>();
+      const rereadGate = deferred<void>();
+      let reads = 0;
+      let rereading = false;
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (key !== "connection") return get(key);
+        reads += 1;
+        if (reads === 1) {
+          const value = await get(key);
+          firstRead.resolve();
+          await firstGate.promise;
+          return value;
+        }
+        if (reads === 2) {
+          rereading = true;
+          await rereadGate.promise;
+        }
+        return get(key);
+      };
+      const gatewayA = pairingGateway("token-A");
+      const client = new ClawtrateClient(testHost(gatewayA, storage), FAST);
+      const other = new ClawtrateClient(testHost(pairingGateway("token-B"), storage), FAST);
+      try {
+        const starting = client.start();
+        await firstRead.promise;
+        await other.start({ resume: false });
+        await other.connect({ url: URL_B });
+        expect(saved(storage)?.url).toBe(URL_B);
+        firstGate.resolve();
+        await until(() => rereading);
+        const suspending = client.suspend();
+        rereadGate.resolve();
+        await Promise.all([starting, suspending]);
+        await sleep(50);
+        expect(saved(storage)).toEqual({ url: URL_B, token: null });
+        expect(client.state.connection.gatewayUrl).toBe(URL_A);
+        expect(client.state.connection.status).toBe("disconnected");
+        expect(gatewayA.sockets, "the Suspend still keeps A offline").toHaveLength(0);
+      } finally {
+        firstGate.resolve();
+        rereadGate.resolve();
+        other.stop();
+        client.stop();
+      }
+    });
   });
 
   it("F-387: Retry after another client chose B saves this client's gateway, the person's latest choice", async () => {

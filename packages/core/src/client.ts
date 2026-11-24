@@ -1781,9 +1781,9 @@ export class ClawtrateClient {
         // Startup needs to open the socket without waiting for another client's credential write.
         // A write that lands during the read may or may not be in what it returned, so the record
         // is read again, twice at most, until no write lands across a read — unless a command
-        // already queued during the read, which acts on the gateway this read captured. Only an
-        // uncontended read claims its revision, so the record and revision this client keeps go
-        // together.
+        // queued meanwhile, which acts on the gateway already captured. A command queued while a
+        // reread was pending discards that reread and its revision. Only an uncontended read
+        // claims its revision, so the record and revision this client keeps go together.
         let before = this.writes.settingsRevision;
         let writingBefore = this.writes.inFlightSettings;
         settings = await this.savedSettings();
@@ -1795,9 +1795,13 @@ export class ClawtrateClient {
           before !== this.writes.settingsRevision;
           again += 1
         ) {
-          before = this.writes.settingsRevision;
-          writingBefore = this.writes.inFlightSettings;
-          settings = await this.savedSettings();
+          const rereadBefore = this.writes.settingsRevision;
+          const rereadWriting = this.writes.inFlightSettings;
+          const reread = await this.savedSettings();
+          if (restoring.commands.length > 0) break;
+          before = rereadBefore;
+          writingBefore = rereadWriting;
+          settings = reread;
         }
         const after = this.writes.settingsRevision;
         const inFlight = this.writes.inFlightSettings ?? writingBefore;
