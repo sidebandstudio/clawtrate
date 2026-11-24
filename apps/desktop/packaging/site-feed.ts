@@ -15,7 +15,9 @@
 // <output>/updates/beta/. From the same beta it fills the Mac download page
 // (download/mac/index.html, a template) and requires install.sh to pin that
 // beta's team. The page's "What's new" section is the newest betas' own lists:
-// the "- " lines under "What's new:" on each release's page, as plain text. With no published beta, a template token left or another
+// the "- " lines under "What's new:" on each release's page, as plain text, and
+// the same lists go beside the feed as updates/beta/whats-new.json, which the app
+// reads inside a check (F-554). With no published beta, a template token left or another
 // team pinned, it fails, so the workflow deploys nothing and the last
 // deployment stays; it assembles in a temporary folder and copies the result
 // to <output> only once every check has passed. The Site workflow runs it on every deploy, from main
@@ -37,6 +39,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GITHUB_RELEASE_ASSETS, releaseAssetRedirect } from "../src/main/update/address.ts";
 import { isNewer, parseVersion, versionTrack } from "../src/main/update/version.ts";
+import {
+  isTitle,
+  MAX_WHATS_NEW_ITEMS,
+  WHATS_NEW_FILE,
+  WHATS_NEW_FORMAT,
+} from "../src/main/update/whats-new.ts";
 import {
   checkBetaFiles,
   releaseFolder,
@@ -171,14 +179,6 @@ async function releaseRows(get: Get, token: string | undefined): Promise<Release
 
 /** The line a release page puts above its list of what the beta adds. */
 export const WHATS_NEW_HEADING = "What's new:";
-const MAX_NEW_ITEMS = 30;
-const MAX_NEW_ITEM_CHARS = 200;
-/**
- * What a change's title is made of: letters, numbers, marks, punctuation,
- * symbols and the plain space. Controls, zero-width characters, the marks
- * that reorder text and every other separator are outside it.
- */
-const TITLE = /^[\p{L}\p{N}\p{M}\p{P}\p{S} ]+$/u;
 
 /**
  * What a release page says the beta adds, as plain text. The contract is
@@ -201,11 +201,21 @@ export function whatsNew(body: string | null | undefined): string[] {
       if (line.trim() === "" && !items.length) continue;
       break;
     }
+    // The app's own rule (isTitle), so the page and the app show the same lines.
     const item = line.slice(2).trim();
-    if (item.length <= MAX_NEW_ITEM_CHARS && TITLE.test(item)) items.push(item);
-    if (items.length === MAX_NEW_ITEMS) break;
+    if (isTitle(item)) items.push(item);
+    if (items.length === MAX_WHATS_NEW_ITEMS) break;
   }
   return items;
+}
+
+/** whats-new.json: the newest betas' lists, as the app reads them (update/whats-new.ts). */
+export function whatsNewFile(rows: readonly ReleaseRow[]): string {
+  const text = JSON.stringify({ format: WHATS_NEW_FORMAT, builds: betaNotes(rows) }, null, 2);
+  // A title may name a template token. With the second "_" of each "__" written "\u005f"
+  // it reads back the same and is not mistaken for a token left in the site. Only those:
+  // each costs five bytes more, and the largest list must stay under the app's cap.
+  return `${text.replaceAll("__", "_\\u005f")}\n`;
 }
 
 /** The newest published betas whose pages list what they add, newest first. */
@@ -286,7 +296,8 @@ export async function writeSiteFeed(
     throw new Error(
       "updates/beta/ is the generated Beta feed's folder; the site may not have one.",
     );
-  const release = newestBeta(rows ?? (await releaseRows(get, token)));
+  const all = rows ?? (await releaseRows(get, token));
+  const release = newestBeta(all);
   if (!release) return null;
   const tag = release.tag_name;
   const version = tag.slice(1);
@@ -323,6 +334,9 @@ export async function writeSiteFeed(
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, FEED_NAME), files.feed);
   writeFileSync(join(folder, LATEST_MAC_NAME), files.latest);
+  // What the newest betas add, for the app to read inside a check (F-554); the
+  // two files above are written exactly as before.
+  writeFileSync(join(folder, WHATS_NEW_FILE), whatsNewFile(all));
   return tag;
 }
 

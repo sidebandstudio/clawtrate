@@ -182,6 +182,8 @@ Withdrawing the only published beta leaves the site as it was: with no beta to f
 
 ### What's new on the download page
 
+The same lists reach the app: the site also writes them to `updates/beta/whats-new.json`, which Settings → Updates reads when someone checks for an update, to show what the offered build and any skipped ones add.
+
 The download page lists what each of the newest betas added, in a section a visitor opens. It reads that from each release's page on GitHub: the last line reading `What's new:` and the `- ` lines after it, so the list goes at the end of the notes. `pnpm release:beta` does not write that list, so whoever publishes a beta adds it to the release's notes afterwards (one line per change a person would notice, ending with the pull request's number as `(#123)`; at most 30 lines of at most 200 characters are read), then runs `gh workflow run site.yml --ref main` so the page is assembled again. A release with no such list is left off the page.
 
 ### Rolling back after the credentials move

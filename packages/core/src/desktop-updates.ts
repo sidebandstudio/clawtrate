@@ -170,6 +170,23 @@ export interface DesktopUpdateSnapshot {
   state: DesktopUpdateState;
   install: UpdateInstallCapability;
   lastAttempt: UpdateAttemptOutcome | null;
+  /**
+   * What the builds add (F-554), from the lists the site serves beside the feed,
+   * read only inside a check the person started. Absent before a check, when the
+   * check read no lists, and when they name nothing to show.
+   */
+  /**
+   * Raised, with `revision` unchanged, when only `whatsNew` changed (F-554): it
+   * orders those snapshots. Commands are checked against `revision` alone, so the
+   * lists arriving never makes a command stale. Absent until the lists first arrive.
+   */
+  listsRevision?: number;
+  whatsNew?: {
+    /** Builds newer than the running one, up to the one offered, newest first. */
+    readonly coming: ReadonlyArray<{ readonly version: string; readonly items: readonly string[] }>;
+    /** What the running build added, when the lists name it. */
+    readonly running: readonly string[] | null;
+  };
 }
 
 export type DesktopUpdateOutcome = "accepted" | "busy" | "stale" | "invalid" | "superseded";
