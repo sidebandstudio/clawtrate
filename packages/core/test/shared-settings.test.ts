@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
-import { FAST, URL_A, URL_B } from "./client-harness.ts";
+import { FAST, ONCE, URL_A, URL_B } from "./client-harness.ts";
 import type { KeyValueStore } from "../src/host.ts";
 import {
   deferred,
@@ -479,14 +479,19 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     });
     const closed = new FakeGateway();
     closed.refuseConnections = true;
-    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    // Both clients are this device at A on one store: a socket this one opened while the other
+    // pairs would leave the other's hello unsaved, and the shared token kept. It tries once.
+    const client = new ClawtrateClient(testHost(closed, storage), ONCE);
     const other = new ClawtrateClient(testHost(pairingGateway("issued-A"), storage), FAST);
     try {
       await client.start();
+      await until(() => client.state.connection.retryAt !== null);
       // The other client pairs, which drops the shared token.
       await other.start();
       await until(() => other.state.connection.status === "connected");
-      await until(() => saved(storage)?.token === null);
+      // Its hello is reported once its token is saved and the shared token dropped.
+      expect(closed.sockets).toHaveLength(1);
+      expect(saved(storage)?.token).toBeNull();
       await client.suspend();
       expect(saved(storage)).toEqual({ url: URL_A, token: null, suspended: true });
     } finally {
@@ -745,14 +750,19 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     });
     const closed = new FakeGateway();
     closed.refuseConnections = true;
-    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    // Both clients are this device at A on one store: a socket this one opened while the other
+    // pairs would leave the other's hello unsaved, and the shared token kept. It tries once.
+    const client = new ClawtrateClient(testHost(closed, storage), ONCE);
     const other = new ClawtrateClient(testHost(pairingGateway("issued-A"), storage), FAST);
     try {
       await client.start();
+      await until(() => client.state.connection.retryAt !== null);
       // The other client pairs, which drops the shared token, and then chooses B.
       await other.start();
       await until(() => other.state.connection.status === "connected");
-      await until(() => saved(storage)?.token === null);
+      // Its hello is reported once its token is saved and the shared token dropped.
+      expect(closed.sockets).toHaveLength(1);
+      expect(saved(storage)?.token).toBeNull();
       await client.suspend();
       await other.connect({ url: URL_B });
       await client.retryNow();
@@ -832,14 +842,19 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     });
     const closed = new FakeGateway();
     closed.refuseConnections = true;
-    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    // Both clients are this device at A on one store: a socket this one opened while the other
+    // pairs would leave the other's hello unsaved, and the shared token kept. It tries once.
+    const client = new ClawtrateClient(testHost(closed, storage), ONCE);
     const other = new ClawtrateClient(testHost(pairingGateway("issued-A"), storage), FAST);
     try {
       await client.start();
+      await until(() => client.state.connection.retryAt !== null);
       // The other client pairs, which drops the shared token, and then chooses B.
       await other.start();
       await until(() => other.state.connection.status === "connected");
-      await until(() => saved(storage)?.token === null);
+      // Its hello is reported once its token is saved and the shared token dropped.
+      expect(closed.sockets).toHaveLength(1);
+      expect(saved(storage)?.token).toBeNull();
       await other.connect({ url: URL_B });
       await client.suspend();
       await client.retryNow();
