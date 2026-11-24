@@ -61,6 +61,7 @@ import {
 } from "./machines.ts";
 import {
   deleteBot,
+  rosterIds,
   wholeRoster,
   readBotDelete,
   type BotDeleteContext,
@@ -5829,7 +5830,7 @@ export class ClawtrateClient {
         const issued = ++this.botsIssued;
         const result = await link.request("agents.list", {});
         const shown = wholeRoster(result) && link.alive() && this.newestBots(issued);
-        if (shown) this.applyBots(mapAgents(result));
+        if (shown) this.applyBots(result);
         // Asked again whenever it matters: a newer list shown since, or another connection, ends it.
         return { result, current: () => shown && link.alive() && this.botsShown === issued };
       },
@@ -5880,7 +5881,7 @@ export class ClawtrateClient {
     const issued = ++this.botsIssued;
     const result = await this.request("agents.list", {});
     if (generation !== this.generation || !this.newestBots(issued)) return;
-    this.applyBots(mapAgents(result));
+    this.applyBots(result);
   }
 
   /**
@@ -5903,7 +5904,7 @@ export class ClawtrateClient {
         try {
           const result = await this.request("agents.list", {});
           if (generation !== this.generation || !this.newestBots(issued)) continue;
-          this.applyBots(mapAgents(result));
+          this.applyBots(result);
         } catch (error) {
           if (generation === this.generation) this.logFailure("warn", "agents.list", error);
         }
@@ -5913,15 +5914,25 @@ export class ClawtrateClient {
     }
   }
 
-  /** Publish the bot list and drop cached task rows belonging to bots the gateway removed. */
-  private applyBots(bots: ReturnType<typeof mapAgents>): void {
-    const present = new Set<string>();
-    for (const bot of bots) present.add(bot.id);
-    const removed = new Set<string>();
-    for (const bot of this.state.bots) if (!present.has(bot.id)) removed.add(bot.id);
-    this.store.update((state) => ({ ...state, bots }));
+  /**
+   * Publish the bot list. A whole roster also says which bots this connection no longer sees,
+   * shown or not: their cached task rows go. Their unsent messages stay, since the gateway can
+   * hide a bot it still has; only its answer to a delete cancels them (`dropQueuedFor`).
+   */
+  private applyBots(result: unknown): void {
+    const shownBefore = this.state.bots;
+    this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
     this.botNames.onBots(this.state.bots);
-    for (const id of present) this.removedDuringRead.delete(id);
+    // Every id the gateway lists, system agents and bots past the display cap included.
+    const listed = rosterIds(result);
+    if (listed === null) return;
+    for (const id of listed) this.removedDuringRead.delete(id);
+    const removed = new Set<string>();
+    for (const bot of shownBefore) if (!listed.has(bot.id)) removed.add(bot.id);
+    for (const [key, row] of this.rows) {
+      const botId = rowBotId(key, row);
+      if (botId && !listed.has(botId)) removed.add(botId);
+    }
     if (removed.size === 0) return;
     // A task read already out can still list the removed bots' tasks: its rows for them are
     // dropped when it lands, and the tasks are read once more after it.
@@ -5937,7 +5948,6 @@ export class ClawtrateClient {
       const botId = rowBotId(key, row);
       if (!botId || !removed.has(botId)) continue;
       this.rows.delete(key);
-      this.cancelAllQueued(key);
       this.retireForeign(key);
       pruned = true;
     }
@@ -7841,12 +7851,12 @@ export class ClawtrateClient {
           const newest = this.newestBots(botsIssued);
           // Only a read that found the identity writes it: an older refresh whose
           // read failed must not clear what a newer one on this connection confirmed.
-          this.store.update((state) => ({
-            ...state,
-            ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
-            ...(newest ? { bots: mapAgents(result) } : {}),
-          }));
-          if (newest) this.botNames.onBots(this.state.bots);
+          if (id !== null)
+            this.store.update((state) => ({
+              ...state,
+              connection: { ...state.connection, gatewayId: id },
+            }));
+          if (newest) this.applyBots(result);
         }
         return result;
       }),

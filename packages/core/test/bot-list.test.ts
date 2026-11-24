@@ -24,7 +24,7 @@ describe("the bot list follows gateway config changes", () => {
     const gateway = new FakeGateway();
     gateway.handlers["agents.list"] = () => {
       if (fail) throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
-      return { defaultId: "main", agents };
+      return { defaultId: "main", mainKey: "main", scope: "per-sender", agents };
     };
     gateway.handlers["sessions.subscribe"] = () => ({
       subscribed: true,
@@ -95,7 +95,12 @@ describe("the bot list follows gateway config changes", () => {
   it("F-558: a config.changed while the connection catches up on its tasks still reads the bots again", async () => {
     let agents: Array<Record<string, unknown>> = [{ id: "main", identity: { name: "Juniper" } }];
     const gateway = new FakeGateway();
-    gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents });
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents,
+    });
     let subscribed: (() => void) | null = null;
     gateway.handlers["sessions.subscribe"] = () =>
       new Promise((resolve) => {
@@ -135,7 +140,7 @@ describe("the bot list follows gateway config changes", () => {
         ? new Promise((_, reject) => {
             fail = reject;
           })
-        : { defaultId: "main", agents };
+        : { defaultId: "main", mainKey: "main", scope: "per-sender", agents };
     const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
     try {
       await client.connect({ url: URL_A, token: "t" });
@@ -158,7 +163,12 @@ describe("the bot list follows gateway config changes", () => {
       { key: "agent:otto:main", agentId: "otto", updatedAt: 20 },
     ];
     const gateway = new FakeGateway();
-    gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents });
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents,
+    });
     gateway.handlers["sessions.subscribe"] = () => ({
       subscribed: true,
       list: { sessions: both, hasMore: false },
@@ -194,7 +204,12 @@ describe("the bot list follows gateway config changes", () => {
     // As many bots as the client keeps: main and b1 to b31.
     let agents = [bot("main"), ...Array.from({ length: 31 }, (_, i) => bot(`b${i + 1}`))];
     const gateway = new FakeGateway();
-    gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents });
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents,
+    });
     gateway.handlers["sessions.subscribe"] = () => ({
       subscribed: true,
       list: {
@@ -235,6 +250,57 @@ describe("the bot list follows gateway config changes", () => {
     }
   });
 
+  it("F-558: a whole bot list drops cached tasks of bots it doesn't list, shown or not", async () => {
+    const whole = (ids: string[]) => ({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: ids.map((id) => ({ id, identity: { name: id } })),
+    });
+    const both = [
+      { key: "agent:main:main", agentId: "main", updatedAt: 10 },
+      { key: "agent:otto:main", agentId: "otto", updatedAt: 20 },
+    ];
+    const gateway = new FakeGateway();
+    let listFails = true;
+    gateway.handlers["agents.list"] = () => {
+      if (listFails) throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      return whole(["main"]);
+    };
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: both, hasMore: false },
+    });
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    try {
+      // The first bot read fails, so Otto's task is kept with no bot shown for it.
+      await client.connect({ url: URL_A, token: "t" });
+      await until(() => "otto" in client.state.tasksByBot);
+      listFails = false;
+      gateway.emit("config.changed", { hash: "h1", ts: 1 });
+      await until(() => !("otto" in client.state.tasksByBot));
+      expect(Object.keys(client.state.tasksByBot)).toEqual(["main"]);
+
+      // A reconnect whose task read fails: the bot list it reads still drops Otto's cached task.
+      listFails = false;
+      gateway.handlers["agents.list"] = () => whole(["main", "otto"]);
+      gateway.emit("config.changed", { hash: "h2", ts: 2 });
+      await until(() => client.state.bots.some((bot) => bot.id === "otto"));
+      gateway.handlers["sessions.list"] = () => ({ sessions: both, hasMore: false });
+      gateway.emit("sessions.changed", {});
+      await until(() => "otto" in client.state.tasksByBot);
+      gateway.handlers["agents.list"] = () => whole(["main"]);
+      gateway.handlers["sessions.subscribe"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      };
+      gateway.dropAll();
+      await until(() => client.state.bots.length === 1);
+      await until(() => !("otto" in client.state.tasksByBot));
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-558: coalesces bursts of config.changed into at most one read in flight plus one queued, and drops stale reads after reconnect", async () => {
     const gateway = new FakeGateway();
     const client = await connect(gateway);
@@ -252,6 +318,8 @@ describe("the bot list follows gateway config changes", () => {
 
       answers[0]!({
         defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
         agents: [
           { id: "main", identity: { name: "Juniper" } },
           { id: "intermediate", identity: { name: "Intermediate" } },
@@ -260,6 +328,8 @@ describe("the bot list follows gateway config changes", () => {
       await until(() => answers.length === 2);
       answers[1]!({
         defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
         agents: [
           { id: "main", identity: { name: "Juniper" } },
           { id: "final", identity: { name: "Final" } },
@@ -278,11 +348,18 @@ describe("the bot list follows gateway config changes", () => {
         { id: "main", identity: { name: "Juniper" } },
         { id: "after-reconnect", identity: { name: "After Reconnect" } },
       ];
-      gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents: latestAgents });
+      gateway.handlers["agents.list"] = () => ({
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: latestAgents,
+      });
       gateway.dropAll();
       await until(() => client.state.bots.some((bot) => bot.id === "after-reconnect"));
       staleAnswer({
         defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
         agents: [{ id: "main", identity: { name: "Stale" } }],
       });
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
