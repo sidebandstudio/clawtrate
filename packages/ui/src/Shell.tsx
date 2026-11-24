@@ -2,6 +2,7 @@ import {
   isActive,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
+  tasksWithoutSkillNotes,
   type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
@@ -314,6 +315,15 @@ export function Shell({
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePanel, drawerKeys, setPanel, deletingOpen]);
 
+  // With commands hidden, the rail's preview of a task whose loaded, current history ends with the
+  // gateway's skill notes is the last thing before them; its time, order and unread are unchanged (F-560).
+  const [commandsShown] = useShowCommands();
+  const { tasksByBot, transcripts } = state;
+  const listedTasks = useMemo(
+    () => (commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts)),
+    [commandsShown, tasksByBot, transcripts],
+  );
+
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
   const unread = unreadCount(
     state.tasksByBot,
@@ -620,7 +630,6 @@ export function Shell({
   // The way between a step and its file (work-pane.md, section 10).
   const runs = transcript?.runs;
   // Without commands shown, a running turn's steps join the chat when it ends (conversation.md, 7.11).
-  const [commandsShown] = useShowCommands();
   const notInChat = useCallback(
     (callId: string) =>
       !commandsShown &&
@@ -829,7 +838,7 @@ export function Shell({
       >
         <Rail
           bots={state.bots}
-          tasksByBot={state.tasksByBot}
+          tasksByBot={listedTasks}
           discovery={state.discovery}
           connection={state.connection}
           catchingUp={catchingUp}

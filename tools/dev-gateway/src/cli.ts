@@ -413,6 +413,12 @@ export type StartOptions = {
    * a send that names no channel or target is the gateway's reply in the bot's own task.
    */
   messageTool?: boolean;
+  /**
+   * The `skill_workshop` tool offered to every bot, so the gateway's background skill review
+   * runs after a task's work; named instances only. The scripted model saves a skill in a
+   * review only after `#learn` (scenarios.ts, `skillReviewReply`).
+   */
+  skillReview?: boolean;
 };
 
 /** The config the development gateway runs with. Written fresh by every start. */
@@ -534,18 +540,20 @@ export function devConfig(
         ...(browsers ? ["browser"] : []),
         ...(options.images ? ["image_generate"] : []),
         ...(options.messageTool ? ["message"] : []),
+        ...(options.skillReview ? ["skill_workshop"] : []),
       ],
       // Denied as well, so a change to the allowlist cannot bring them back:
       // tools that reach the network, manage the gateway or its installation,
       // drive a browser or another device, or send through a channel. With
       // bot browsers the browser tool is denied per bot instead (botEntries).
       // With the stand-in image provider, image_generate is offered instead, and
-      // with the message tool, message.
+      // with the message tool, message, and with skill reviews, skill_workshop.
       deny: DENIED_TOOLS.filter(
         (tool) =>
           !(browsers && tool === "browser") &&
           !(options.images && tool === "image_generate") &&
-          !(options.messageTool && tool === "message"),
+          !(options.messageTool && tool === "message") &&
+          !(options.skillReview && tool === "skill_workshop"),
       ),
     },
     // The stand-in coding agent: a local command server, no network, run in
@@ -795,12 +803,14 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
         key !== "defaultLocalPairing" &&
         key !== "renewTimeoutMs" &&
         key !== "images" &&
-        key !== "messageTool",
+        key !== "messageTool" &&
+        key !== "skillReview",
     ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).images) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).messageTool) ||
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).skillReview) ||
     !renewChoice((recorded as StartOptions).renewTimeoutMs)
   ) {
     throw new Error(`${path} is not a record of start options`);
@@ -1097,6 +1107,8 @@ export async function start(
     images?: boolean;
     /** The message tool for every bot (`StartOptions.messageTool`). */
     messageTool?: boolean;
+    /** The background skill review (`StartOptions.skillReview`). */
+    skillReview?: boolean;
   } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
@@ -1116,6 +1128,9 @@ export async function start(
   if (options.messageTool && inst.name === null) {
     throw new Error("the default instance never offers the message tool; use --instance <name>");
   }
+  if (options.skillReview && inst.name === null) {
+    throw new Error("the default instance never reviews tasks for skills; use --instance <name>");
+  }
   if (!renewChoice(options.renewTimeoutMs)) {
     throw new Error(
       `--renew-timeout-ms must be one of ${BOT_BROWSER_CHOICES.renewTimeoutMs.join(", ")}`,
@@ -1127,6 +1142,7 @@ export async function start(
     ...(options.renewTimeoutMs !== undefined ? { renewTimeoutMs: options.renewTimeoutMs } : {}),
     ...(options.images ? { images: true } : {}),
     ...(options.messageTool ? { messageTool: true } : {}),
+    ...(options.skillReview ? { skillReview: true } : {}),
   };
   // Refused before anything changes: a name that is not this checkout's own
   // plugin, or whose addition breaks the rule for plugins.
@@ -1228,6 +1244,8 @@ export async function start(
               ...(inst.name?.startsWith("ios-")
                 ? { SCRIPTED_STREAM_HOLD_FILE: join(inst.runDir, IOS_STREAM_HOLD_FILE) }
                 : {}),
+              // The background skill review's answers, on an instance that reviews.
+              ...(startOptions.skillReview ? { SCRIPTED_SKILL_REVIEW: "1" } : {}),
               // The pages the development browser may open, when there is one.
               ...(browserBots.length > 0
                 ? { SCRIPTED_PAGES_PORT: String(browserPorts(ports, browserBots).pagesPort) }
@@ -2186,7 +2204,7 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
+  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2206,6 +2224,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "renew-timeout-ms": { type: "string" },
       "with-images": { type: "boolean", default: false },
       "with-message-tool": { type: "boolean", default: false },
+      "with-skill-review": { type: "boolean", default: false },
       agent: { type: "string" },
       provider: { type: "string" },
     },
@@ -2242,7 +2261,12 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     process.exitCode = command ? 1 : 0;
     return;
   }
-  for (const option of ["default-local-pairing", "with-images", "with-message-tool"] as const) {
+  for (const option of [
+    "default-local-pairing",
+    "with-images",
+    "with-message-tool",
+    "with-skill-review",
+  ] as const) {
     if (values[option] && command !== "start" && command !== "up") {
       throw new Error(`--${option} is a start option; ${command} does not take it`);
     }
@@ -2265,6 +2289,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         node: values["with-node"],
         images: values["with-images"],
         messageTool: values["with-message-tool"],
+        skillReview: values["with-skill-review"],
         ...(renew !== undefined ? { renewTimeoutMs: Number(renew) } : {}),
       });
     case "stop":

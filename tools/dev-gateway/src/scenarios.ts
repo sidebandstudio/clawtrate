@@ -156,6 +156,54 @@ const SIX_READS = [
   { path: "AGENTS.md", offset: 3 },
 ];
 
+/** Nine reads: with the text after them, the ten model calls that make a task due for a review. */
+const LEARN_READS = [
+  ...SIX_READS,
+  { path: "SOUL.md", offset: 3 },
+  { path: "USER.md", offset: 2 },
+  { path: "IDENTITY.md", offset: 2 },
+];
+
+/** The skill the background review saves after `#learn`, and the reason it gives. */
+export const LEARNED_SKILL = "trail-check";
+export const LEARNED_REASON = "check the trail before a hike";
+
+/** How the gateway's background skill review prompt begins (buildSkillExperienceReviewPrompt). */
+export const SKILL_REVIEW_PROMPT = "Background skill review.";
+
+/**
+ * The scripted model's answer to the gateway's background skill review. It
+ * saves a skill only when the turn it reviews was a `#learn`: it lists the
+ * learned skills, as the review prompt asks, then creates `trail-check` (or
+ * `trail-check-2` and so on, when that name is taken), then says the gateway's
+ * "nothing to say". Every other review says only that.
+ */
+export function skillReviewReply(
+  conversation: { role: string; text: string }[],
+  results: { name: string; text: string }[],
+  tools: Set<string>,
+): ReplyStep[] {
+  const silent: ReplyStep[] = [{ kind: "text", text: "NO_REPLY" }];
+  const reviewed = conversation.findLast((message) => message.role === "user");
+  const learn =
+    reviewed && selectScenarios(reviewed.text).some(({ scenario }) => scenario.name === "learn");
+  if (!learn || !tools.has("skill_workshop")) return silent;
+  const done = results.filter((result) => result.name === "skill_workshop");
+  if (done.length === 0) return [tool("skill_workshop", { action: "list" })];
+  if (done.length > 1) return silent;
+  const taken = new Set(done[0]!.text.match(new RegExp(`\\b${LEARNED_SKILL}(?:-\\d+)?\\b`, "g")));
+  let name = LEARNED_SKILL;
+  for (let n = 2; taken.has(name); n += 1) name = `${LEARNED_SKILL}-${n}`;
+  return [
+    tool("skill_workshop", {
+      action: "create",
+      name,
+      reason: LEARNED_REASON,
+      content: `---\nname: ${name}\ndescription: Use before a hike to check the trail's conditions.\n---\n\n# Trail check\n\n1. Read the trail notes in the workspace.\n2. Say which parts are closed.\n`,
+    }),
+  ];
+}
+
 /** The only shell commands any scenario emits. All are harmless and stay in the bot's workspace. */
 export const SHELL_COMMANDS = {
   list: "ls",
@@ -432,6 +480,15 @@ export const SCENARIOS: Scenario[] = [
       think("I will read through my workspace files one after another."),
       ...SIX_READS.map((args) => tool("read", args)),
       say("I read six files in my workspace."),
+    ],
+  },
+  {
+    name: "learn",
+    phrase: "learn from this",
+    summary: `Ten model calls in one turn (nine file reads, then text), the work after which the gateway reviews a task in the background. On an instance started with \`--with-skill-review\`, that review saves a skill (\`${LEARNED_SKILL}\`) and the gateway adds its note to the task about 30 seconds after the turn.`,
+    steps: () => [
+      ...LEARN_READS.map((args) => tool("read", args)),
+      say("I read through my workspace files one by one."),
     ],
   },
   {

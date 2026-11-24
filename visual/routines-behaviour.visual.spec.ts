@@ -4,7 +4,7 @@
 // same rows are checked against a real gateway in e2e/routines.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
-import { contextFor, openFixture, SIZES } from "./fixture.ts";
+import { contextFor, moveTarget, openFixture, SIZES } from "./fixture.ts";
 
 const ROUTINES = "scene=main&routines=on";
 const size = (name: string) => SIZES.find((each) => each.name === name)!;
@@ -97,6 +97,12 @@ test.describe("1440", () => {
     await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
     await expect(view(page).getByTestId("routine-row")).toHaveCount(3);
     expect(await sent(page)).toContain("readBotRoutines");
+    // A new host target (as after a host restart, whose list counter starts again): read again.
+    const reads = async () =>
+      (await sent(page)).filter((type) => type === "readBotRoutines").length;
+    const before = await reads();
+    await moveTarget(page);
+    await expect.poll(reads).toBe(before + 1);
   });
 
   test("F-558: a filtered bot deleted elsewhere keeps the filter while its own read can still list its routines", async ({

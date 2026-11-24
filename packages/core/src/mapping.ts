@@ -3,6 +3,7 @@
 // trusted, so a newer gateway adding or changing fields cannot crash the UI.
 
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
+import { gatewayPreviewOfNote, isSkillChangeNote } from "./skill-notes.ts";
 import type {
   Bot,
   Task,
@@ -11,6 +12,7 @@ import type {
   ToolResult,
   TranscriptBlock,
   TranscriptItem,
+  Transcript,
   ChatPicture,
   SentAttachment,
 } from "./types.ts";
@@ -518,6 +520,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           if (blocks.length === 0 && pictures.length === 0) return;
           currentRun = runId;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
+          // It names no run, so it is a turn of its own.
+          if (isSkillChangeNote(message)) item.skillNote = true;
           items.push(item);
         }
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
@@ -623,4 +627,52 @@ function historyFacts(details: unknown): Record<string, unknown> | null {
     };
   }
   return Object.keys(out).length ? out : null;
+}
+
+/** The start of a message read for a preview in place of the gateway's: more than two lines show. */
+const MAX_PREVIEW_SOURCE_CHARS = 400;
+
+/**
+ * A task's preview as the sidebar shows it while commands are hidden. Only the preview text
+ * changes, and only when the gateway's listed preview is the skill-change note this client's
+ * loaded history ends with: the preview the gateway makes of that note's text
+ * (`gatewayPreviewOfNote`) is the listed one. It is then the text of the last item before the
+ * notes (null when none has text, so the title shows). Any other preview, a newer reply's
+ * included, or any doubt about how the gateway formats the note, leaves the gateway's. No clock
+ * is compared, and the time is never changed, so the sidebar's order and unread mark stay the
+ * gateway's (docs/decisions.md, "The gateway's skill notes").
+ */
+export function taskWithoutSkillNotes(task: Task, transcript: Transcript | undefined): Task {
+  const items = transcript?.items ?? [];
+  const note = items.at(-1);
+  if (note?.skillNote !== true || note.truncated === true || task.preview === null) return task;
+  const [only, ...more] = note.blocks;
+  if (more.length > 0 || only?.kind !== "text") return task;
+  const listed = gatewayPreviewOfNote(only.text);
+  if (listed === null || plainPreview(listed) !== task.preview) return task;
+  let preview: string | null = null;
+  for (let index = items.length - 1; index >= 0 && preview === null; index -= 1) {
+    const item = items[index]!;
+    if (item.role === "system" || item.skillNote === true) continue;
+    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
+    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
+  }
+  return preview === task.preview ? task : { ...task, preview };
+}
+
+/** Every listed task as `taskWithoutSkillNotes` shows it, by bot. */
+export function tasksWithoutSkillNotes(
+  tasksByBot: Record<string, Task[]>,
+  transcripts: Record<string, Transcript>,
+): Record<string, Task[]> {
+  let changed = false;
+  const shown: Record<string, Task[]> = {};
+  for (const [botId, tasks] of Object.entries(tasksByBot)) {
+    shown[botId] = tasks.map((task) => {
+      const quiet = taskWithoutSkillNotes(task, transcripts[task.key]);
+      if (quiet !== task) changed = true;
+      return quiet;
+    });
+  }
+  return changed ? shown : tasksByBot;
 }

@@ -78,7 +78,9 @@ export function readRecord(path: string): RunRecord | null {
             // The bot voice check's own instance (e2e/bot-voice.spec.ts).
             entry?.name === `e2e-${record.run}-voice` ||
             // The setup checks' own instance, recorded by e2e/setup.spec.ts.
-            entry?.name === `e2e-${record.run}-setup`) &&
+            entry?.name === `e2e-${record.run}-setup` ||
+            // The skill-review instance, recorded by e2e/skill-notes.spec.ts.
+            entry?.name === `e2e-${record.run}-skills`) &&
           typeof entry.runId === "string" &&
           /^[0-9a-f]{48}$/.test(entry.runId),
       ) &&

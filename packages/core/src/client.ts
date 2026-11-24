@@ -391,9 +391,25 @@ export const REQUESTED_SCOPES = ["operator.read"] as const;
 /** Why forgetting a gateway was refused: another viewer chose a different one meanwhile. */
 export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose again.";
 
+/** Deferred Stops of an archive or a delete kept for their runs' aborts (`deferredStops`). */
+export const MAX_DEFERRED_STOPS = 32;
+/** Why a deferred Stop was given up: every place for its check is held by a Stop still waiting. */
+const TOO_MANY_STOPS =
+  "Too many Stops are waiting for their runs to start, so nothing was sent for this one. Try again in a moment.";
+/** A failed read of the gateway's identity is asked again this many times, each 4 times later. */
+const IDENTITY_RETRIES = 4;
+const IDENTITY_RETRY_MS = 500;
+
 /** Why a write stamped on an earlier connection target is not sent (`requireSameGateway`). */
 export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
+/** Why a write that had already sent part of itself stopped: what the gateway did is not known. */
+export const CONNECTION_CHANGED_AFTER_SEND =
+  "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
+
+/** What a task action asks that changes nothing: the rest of its requests are writes. */
+const taskRead = (method: string) =>
+  method === "sessions.describe" || method === "sessions.list" || method === "users.prefs.get";
 
 /** Disconnect refused because another gateway is selected now: the one asked for is no longer there. */
 export class GatewayChangedError extends Error {
@@ -461,9 +477,12 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /**
  * Messages history confirmed whose pictures this client keeps to show, from
- * the copy it sent, while their task stays open (Clawtrate doesn't load a
- * person's picture from the gateway, #469). Their bytes share `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes'
- * files and give way, oldest first, to a new message's.
+ * the copy it sent, whenever their task is open on this device, until this
+ * client disconnects from the gateway or the task or its bot is deleted (archiving keeps
+ * them). Clawtrate doesn't load a person's picture from the gateway (#469).
+ * Their bytes share
+ * `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes' files and give way,
+ * oldest first, to a new message's.
  */
 export const MAX_SENT_PICTURE_MESSAGES = 32;
 /** Operations waiting for access at once; past it a new one is refused. */
@@ -1541,6 +1560,12 @@ export class ClawtrateClient {
    * goes, when the run settles, or with its owner.
    */
   private readonly unsentStops = new Map<string, object>();
+  /**
+   * An archive's or a delete's Stop of a run the gateway had not named yet, by `key\u0000runId`:
+   * the action's connection (`stopRun` `bound`), kept for the aborts sent once the run is named,
+   * until the run is no longer stopping. At most `MAX_DEFERRED_STOPS`, none let go while waiting.
+   */
+  private readonly deferredStops = new Map<string, () => boolean>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
   private readonly creations = new Map<string, TaskCreation>();
   private readonly creationTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1593,9 +1618,10 @@ export class ClawtrateClient {
   /**
    * The host's target (`ConnectionState.target`): raised when the host is pointed at a gateway
    * anew, kept across reconnects to the same one. Never lowered, so no earlier screen matches.
-   * From the clock, so a restarted host never hands out a number a page kept from the last one.
+   * It starts at a random number, not the clock, so a restarted host is vanishingly unlikely to
+   * hand out a number a page kept from the last one, even when the clock repeats or steps back.
    */
-  private target = Date.now();
+  private target = 1 + Math.floor(Math.random() * 2 ** 52);
   /** The gateway's identity as read on the connection of `epoch`, once asked. */
   private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
   /** Check-in reads begun; only the latest one's answer is shown. */
@@ -2587,7 +2613,8 @@ export class ClawtrateClient {
     for (const message of this.state.transcripts[key]?.outbox ?? []) {
       this.dropAttachments(message.id);
     }
-    for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
+    // Pictures you sent stay (`sentPictures`): the task can be opened again on this device, and
+    // they show there once more. Their own bound lets them go.
     this.recipients.delete(key);
     for (const readKey of [...this.approvalReads.keys()])
       if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
@@ -3325,6 +3352,11 @@ export class ClawtrateClient {
       bytes,
     });
     this.sentPictureBytes += bytes;
+  }
+
+  /** Let go of every picture kept for one task, when the task itself is gone. */
+  private dropTaskPictures(key: string): void {
+    for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
   }
 
   private dropSentPictures(messageId: string): void {
@@ -4140,7 +4172,7 @@ export class ClawtrateClient {
       const run = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
       if (run?.state === "stopping") {
         this.unsentStops.delete(`${key}\u0000${runId}`);
-        void this.abortRun(key, runId);
+        void this.abortRun(key, runId, this.deferredStop(key, messageId, runId));
       }
     }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
@@ -4186,7 +4218,13 @@ export class ClawtrateClient {
   async stopRun(
     key: string,
     asked: string,
-    options: { owner?: object; everyRun?: boolean; taskOnly?: boolean } = {},
+    options: {
+      owner?: object;
+      everyRun?: boolean;
+      taskOnly?: boolean;
+      /** A Stop that belongs to an action's connection (archive, delete): false once it has gone. */
+      bound?: () => boolean;
+    } = {},
   ): Promise<void> {
     const transcript = this.state.transcripts[key];
     const runId = transcript
@@ -4224,13 +4262,46 @@ export class ClawtrateClient {
       if (!current.bound) {
         if (options.taskOnly && options.owner)
           this.unsentStops.set(`${key}\u0000${runId}`, options.owner);
+        // The abort sent once the run is named stays on the action's connection, as this one would.
+        // With no room left for its check, the Stop is given up rather than sent unbound later.
+        if (options.bound && !this.keepDeferredStop(key, runId, options.bound))
+          this.updateActivity(key, (activity) => revertStop(activity, runId, TOO_MANY_STOPS));
         return;
       }
-      await this.abortRun(key, current.id);
+      await this.abortRun(key, current.id, options.bound);
     } catch (error) {
       this.noteMissingScope(error);
       this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
     }
+  }
+
+  /**
+   * Keep a deferred Stop's check (the action's connection) until its run settles. Checks whose
+   * runs are no longer stopping are let go first; a check still waiting is never let go for a
+   * newer one. False when `MAX_DEFERRED_STOPS` are all still waiting.
+   */
+  private keepDeferredStop(key: string, runId: string, bound: () => boolean): boolean {
+    for (const held of [...this.deferredStops.keys()]) {
+      const [task, id] = held.split("\u0000") as [string, string];
+      const activity = this.state.transcripts[task];
+      const run = activity?.runs.find((each) => each.id === id || each.messageId === id);
+      if (run?.state !== "stopping") this.deferredStops.delete(held);
+    }
+    if (this.deferredStops.size >= MAX_DEFERRED_STOPS) return false;
+    this.deferredStops.set(`${key}\u0000${runId}`, bound);
+    return true;
+  }
+
+  /**
+   * The action's connection a deferred Stop of this run was asked on, if any. It stays while the
+   * run is stopping: the send's answer and a history read can each abort the run, and retry.
+   */
+  private deferredStop(key: string, ...ids: string[]): (() => boolean) | undefined {
+    for (const id of ids) {
+      const bound = this.deferredStops.get(`${key}\u0000${id}`);
+      if (bound) return bound;
+    }
+    return undefined;
   }
 
   /**
@@ -4239,10 +4310,24 @@ export class ClawtrateClient {
    * the run stopping: once the connection is back, the run is aborted again if it still is, as
    * many times as the connection drops, until the gateway answers or the run's end arrives.
    */
-  private async abortRun(key: string, runId: string): Promise<void> {
+  private async abortRun(
+    key: string,
+    runId: string,
+    bound?: () => boolean,
+    sent = false,
+  ): Promise<void> {
     // The Stop belongs to the gateway it began on: after the wait below, the person may have
-    // switched to another, which must never get this abort. A reconnect to the same one still does.
+    // switched to another, which must never get this abort. A reconnect to the same one still does,
+    // except for a Stop that belongs to an action's connection (`bound`): another gateway can
+    // answer that reconnect at the same address, so the abort goes no further.
     const gateway = this.settings?.url;
+    const gone = () => {
+      if (!bound || bound()) return false;
+      const why = sent ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED;
+      this.updateActivity(key, (activity) => revertStop(activity, runId, why));
+      return true;
+    };
+    if (gone()) return;
     try {
       // A withdrawal the gateway does not answer must not hold the Stop: after a short wait the
       // run is aborted anyway, and that steer stays as it was.
@@ -4252,7 +4337,8 @@ export class ClawtrateClient {
         new Promise<void>((resolve) => (waited = setTimeout(resolve, STEER_WITHDRAWAL_WAIT_MS))),
       ]);
       clearTimeout(waited);
-      if (this.settings?.url !== gateway) return;
+      if (this.settings?.url !== gateway || gone()) return;
+      sent = true;
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
       // Nothing was aborted: the run ended already. Its terminal event or history settles it.
       if (result?.aborted === false) this.scheduleHistory(key);
@@ -4274,7 +4360,7 @@ export class ClawtrateClient {
         return;
       }
       const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
-      if (run?.state === "stopping" && run.bound) await this.abortRun(key, runId);
+      if (run?.state === "stopping" && run.bound) await this.abortRun(key, runId, bound, sent);
     }
   }
 
@@ -5983,24 +6069,27 @@ export class ClawtrateClient {
     enabled: boolean,
     owner: object | null = null,
     listedOn?: number,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
-    return this.routines.setEnabled(id, enabled, owner, listedOn);
+    return this.routines.setEnabled(id, enabled, owner, listedOn, stamp);
   }
 
   runRoutineNow(
     id: string,
     owner: object | null = null,
     listedOn?: number,
+    stamp?: GatewayStamp,
   ): Promise<RoutineRunNow> {
-    return this.routines.runNow(id, owner, listedOn);
+    return this.routines.runNow(id, owner, listedOn, stamp);
   }
 
   removeRoutine(
     id: string,
     owner: object | null = null,
     listedOn?: number,
+    stamp?: GatewayStamp,
   ): Promise<RoutineRemove> {
-    return this.routines.remove(id, owner, listedOn);
+    return this.routines.remove(id, owner, listedOn, stamp);
   }
 
   /** The gateway's inbound hooks, read with admin; null below it. */
@@ -6057,11 +6146,17 @@ export class ClawtrateClient {
   }
 
   /** An API key the person typed: sent once to the gateway, kept nowhere. */
-  saveApiKey(
+  /**
+   * With `stamp` (where Connect was opened), the key is sent only while the host still has that
+   * target and that gateway connected: a key is a credential, and goes nowhere else.
+   */
+  async saveApiKey(
     provider: string,
     key: string,
     botId: string | null,
+    stamp?: GatewayStamp,
   ): Promise<{ profileId: string | null }> {
+    if (stamp !== undefined) await this.requireSameGateway(stamp);
     return this.accounts.saveKey(provider, key, botId);
   }
 
@@ -6069,7 +6164,9 @@ export class ClawtrateClient {
     return this.accounts.setLabel(profileId, label);
   }
 
-  disconnectAccount(profileId: string): Promise<void> {
+  /** With `stamp` (where the confirmation was opened), as for `saveApiKey`. */
+  async disconnectAccount(profileId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp !== undefined) await this.requireSameGateway(stamp);
     return this.accounts.disconnect(profileId);
   }
 
@@ -6096,22 +6193,48 @@ export class ClawtrateClient {
     this.accounts.dismissCreation();
   }
 
-  changeBotAccount(
+  /**
+   * With `stamp` (where the bot's settings were read), nothing is sent unless the host still has
+   * that target and that gateway connected, and each request checks the target again.
+   */
+  async changeBotAccount(
     botId: string,
     account: string | null,
     provider: string,
     model: string,
     effort: string | null,
+    stamp?: GatewayStamp,
   ): Promise<void> {
-    return this.accounts.changeAccount(botId, account, provider, model, effort);
+    if (stamp === undefined)
+      return this.accounts.changeAccount(botId, account, provider, model, effort);
+    await this.requireSameGateway(stamp);
+    return this.accounts.changeAccount(
+      botId,
+      account,
+      provider,
+      model,
+      effort,
+      this.sameConnection(stamp),
+    );
   }
 
-  setBotModel(botId: string, model: string, effort: string | null): Promise<void> {
-    return this.accounts.setModel(botId, model, effort);
+  /** With `stamp`, as for `changeBotAccount`. */
+  async setBotModel(
+    botId: string,
+    model: string,
+    effort: string | null,
+    stamp?: GatewayStamp,
+  ): Promise<void> {
+    if (stamp === undefined) return this.accounts.setModel(botId, model, effort);
+    await this.requireSameGateway(stamp);
+    return this.accounts.setModel(botId, model, effort, this.sameConnection(stamp));
   }
 
-  removeBotFallbacks(botId: string): Promise<void> {
-    return this.accounts.removeFallbacks(botId);
+  /** With `stamp`, as for `changeBotAccount`. */
+  async removeBotFallbacks(botId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp === undefined) return this.accounts.removeFallbacks(botId);
+    await this.requireSameGateway(stamp);
+    return this.accounts.removeFallbacks(botId, this.sameConnection(stamp));
   }
 
   /**
@@ -6141,6 +6264,19 @@ export class ClawtrateClient {
   ): Promise<{ confirmed: boolean }> {
     if (stamp === undefined) return this.accounts.setBotPicture(botId, avatar);
     return this.accounts.setBotPicture(botId, avatar, await this.requireSameGateway(stamp));
+  }
+
+  /**
+   * A setting's later steps, after `requireSameGateway`: each is sent only on the connection that
+   * guard read, while the host keeps the stamp's target. Once a write has gone, the refusal says
+   * the change is unconfirmed, not unsent.
+   */
+  private sameConnection(stamp: GatewayStamp): (sent: boolean) => void {
+    const epoch = this.epoch;
+    return (sent) => {
+      if (this.target !== stamp.target || this.epoch !== epoch)
+        throw new Error(sent ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED);
+    };
   }
 
   /** Refuse a write whose screen was read before the host was last pointed at a gateway anew. */
@@ -6284,7 +6420,14 @@ export class ClawtrateClient {
     return this.machines.renameMachine(nodeId, name);
   }
 
-  removeMachine(nodeId: string): Promise<void> {
+  /**
+   * Unpair a node. With `stamp` (where Machines was read), nothing is sent unless the host still
+   * has that target and that gateway connected: a restored copy has the same node ids.
+   */
+  async removeMachine(nodeId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp === undefined) return this.machines.removeMachine(nodeId);
+    // One request, sent in the same turn as the guard's last check.
+    await this.requireSameGateway(stamp);
     return this.machines.removeMachine(nodeId);
   }
 
@@ -6292,7 +6435,10 @@ export class ClawtrateClient {
     return this.machines.renameDevice(deviceId, name, () => this.checkNotWithdrawn(options.owner));
   }
 
-  removeDevice(deviceId: string): Promise<void> {
+  /** Unpair a device. With `stamp`, as for `removeMachine`. */
+  async removeDevice(deviceId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp === undefined) return this.machines.removeDevice(deviceId);
+    await this.requireSameGateway(stamp);
     return this.machines.removeDevice(deviceId);
   }
 
@@ -6351,7 +6497,13 @@ export class ClawtrateClient {
         return notSent(errorMessage(error));
       }
       if (!link.alive()) return notSent("The connection changed before the delete was sent.");
-      return await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
+      const outcome = await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
+      // The gateway deleted the bot with its tasks and reports no removal for each task: the
+      // pictures you sent in them go now. Only its `ok` proves the delete.
+      if (outcome.kind === "answered")
+        for (const [id, kept] of this.sentPictures)
+          if (botIdFromSessionKey(kept.task) === request.botId) this.dropSentPictures(id);
+      return outcome;
     } finally {
       this.botDeletes.delete(key);
     }
@@ -8537,6 +8689,21 @@ export class ClawtrateClient {
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
   }
 
+  /** Read the identity again, a few times further apart, while this connection lasts without it. */
+  private askIdentityAgain(current: () => boolean, attempt: number): void {
+    if (attempt >= IDENTITY_RETRIES) return;
+    setTimeout(
+      () => {
+        if (!current() || this.state.connection.gatewayId !== null) return;
+        void this.readGatewayIdentity().then((id) => {
+          if (id === null) this.askIdentityAgain(current, attempt + 1);
+          else this.confirmGatewayIdentity(id, current);
+        });
+      },
+      IDENTITY_RETRY_MS * 4 ** attempt,
+    );
+  }
+
   private readGatewayIdentity(): Promise<string | null> {
     const known = this.gatewayIdentity;
     if (known?.epoch === this.epoch) return known.id;
@@ -8578,6 +8745,11 @@ export class ClawtrateClient {
     // Applied here too, so a bot list that fails or is slow to read does not
     // keep the identity back.
     void gatewayId.then((id) => this.confirmGatewayIdentity(id, sameSocket));
+    // Every connection that can read can read it, so a read that failed is asked again:
+    // a screen's write waits for the identity rather than going without it.
+    void gatewayId.then((id) => {
+      if (id === null) this.askIdentityAgain(sameSocket, 0);
+    });
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;
@@ -8814,6 +8986,8 @@ export class ClawtrateClient {
     if (isSessionRemoval(payload)) {
       this.cancelAllQueued(key);
       this.retireForeign(key);
+      // Deleted elsewhere: the pictures you sent in it go too. An archived task keeps them.
+      this.dropTaskPictures(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
@@ -9110,7 +9284,7 @@ export class ClawtrateClient {
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
       for (const run of toStop) {
         this.unsentStops.delete(`${key}\u0000${run.id}`);
-        void this.abortRun(key, run.id);
+        void this.abortRun(key, run.id, this.deferredStop(key, run.id));
       }
       void this.readRecipients(key, generation);
       void this.backfillQuestions(key, generation);
@@ -9497,10 +9671,20 @@ export class ClawtrateClient {
    */
   private actionContext(owner: object | null): TaskActionContext & SidebarContext {
     const generation = this.generation;
+    // The connection the action's first request went on, and whether it has sent a write yet.
+    let epoch: number | null = null;
+    let wrote = false;
     return {
       request: async (method, params) => {
         this.checkNotWithdrawn(owner);
+        // A Disconnect, a Connect or a switch closes the connection, and moves this on.
         if (generation !== this.generation) throw new Error("Switched to another gateway.");
+        // A dropped connection and its reconnect don't, and another gateway can answer that
+        // reconnect at the same address: a later step never goes on another connection.
+        if (epoch !== null && epoch !== this.epoch)
+          throw new Error(wrote ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED);
+        epoch = this.epoch;
+        if (!taskRead(method)) wrote = true;
         try {
           return await this.request(method, params);
         } catch (error) {
@@ -9518,13 +9702,17 @@ export class ClawtrateClient {
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       stopMark: (key) => this.waiting.stopMark(key),
       stopRuns: async (key) => {
-        const runs = this.state.transcripts[key]?.runs ?? [];
+        const runs = (this.state.transcripts[key]?.runs ?? []).filter(
+          (run) => run.state === "running" || run.state === "waiting",
+        );
+        // The engine's Stop is a write of this action too, sent only on the action's connection.
+        if (runs.length > 0) wrote = true;
+        const here = epoch;
+        const bound = () => here !== null && this.epoch === here && this.generation === generation;
         await Promise.all(
-          runs
-            .filter((run) => run.state === "running" || run.state === "waiting")
-            .map((run) =>
-              this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true }),
-            ),
+          runs.map((run) =>
+            this.stopRun(key, run.id, { ...(owner ? { owner } : {}), everyRun: true, bound }),
+          ),
         );
         return (this.state.transcripts[key]?.runs ?? []).filter((run) => isActive(run.state))
           .length;
@@ -9600,10 +9788,21 @@ export class ClawtrateClient {
     await markTask(this.actionContext(options.owner ?? null), key, unread);
   }
 
+  /**
+   * With `stamp` (where the rail listed the task), nothing is sent unless the host still has that
+   * target and that gateway connected: a restored copy has the same task keys.
+   */
   async archiveTask(
     key: string,
-    options: { stop?: boolean; owner?: object } = {},
+    options: { stop?: boolean; owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<ArchiveResult> {
+    // Write access first: asking for it can reconnect, and the guard reads the connection it ends
+    // on. The action is bound to that connection only after both, so the grant's reconnect doesn't
+    // end it.
+    if (options.stamp) {
+      await this.actionContext(options.owner ?? null).ensureWrite();
+      await this.requireSameGateway(options.stamp);
+    }
     return archiveTask(this.actionContext(options.owner ?? null), key, {
       stop: options.stop === true,
     });
@@ -9613,8 +9812,18 @@ export class ClawtrateClient {
     await restoreTask(this.actionContext(options.owner ?? null), key);
   }
 
-  async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
+  /** With `stamp`, as for `archiveTask`. */
+  async deleteTask(
+    key: string,
+    options: { owner?: object; stamp?: GatewayStamp } = {},
+  ): Promise<void> {
+    if (options.stamp) {
+      await this.actionContext(options.owner ?? null).ensureWrite();
+      await this.requireSameGateway(options.stamp);
+    }
     await deleteTask(this.actionContext(options.owner ?? null), key);
+    // Its conversation is gone from the gateway: so are the pictures you sent in it.
+    this.dropTaskPictures(key);
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */

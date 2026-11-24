@@ -219,6 +219,8 @@ export function startScriptedPages(options: { port: number; log?: (line: string)
     socket.destroy();
   });
   server.on("connect", (req, socket) => {
+    // A reset tunnel ends this socket alone, never the pages server (fake-provider.ts says why).
+    socket.on("error", () => socket.destroy());
     refuse(String(req.headers.host ?? ""), "CONNECT", req.url ?? "");
     socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
   });

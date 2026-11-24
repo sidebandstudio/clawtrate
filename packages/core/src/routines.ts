@@ -1185,14 +1185,18 @@ export class RoutinesEngine {
     }
   }
 
-  /** Pause or resume (`cron.update {enabled}`). */
+  /**
+   * Pause or resume (`cron.update {enabled}`). `listedOn` and `stamp` are the row's list and
+   * where it was read: one from before the host was pointed at a gateway anew is `changed`.
+   */
   async setEnabled(
     id: string,
     enabled: boolean,
     owner: object | null = null,
     listedOn?: number,
+    stamp?: GatewayStamp,
   ): Promise<RoutineWrite> {
-    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
+    const blocked = this.blocked(owner, stamp) ?? this.unlisted(listedOn);
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     if (this.updates.size >= MAX_ROUTINE_UPDATES)
@@ -1217,8 +1221,13 @@ export class RoutinesEngine {
   }
 
   /** Run it once now (`cron.run {mode: "force"}`), paused or not; it stays as it was. */
-  async runNow(id: string, owner: object | null = null, listedOn?: number): Promise<RoutineRunNow> {
-    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
+  async runNow(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+    stamp?: GatewayStamp,
+  ): Promise<RoutineRunNow> {
+    const blocked = this.blocked(owner, stamp) ?? this.unlisted(listedOn);
     if (blocked) return { status: "not-sent", reason: blocked };
     try {
       const result = asRecord(await this.ctx.request("cron.run", { id, mode: "force" }));
@@ -1242,8 +1251,13 @@ export class RoutinesEngine {
    * established not-found refusal, is what takes it off the list: any other
    * answer leaves the row while its outcome is checked.
    */
-  async remove(id: string, owner: object | null = null, listedOn?: number): Promise<RoutineRemove> {
-    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
+  async remove(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+    stamp?: GatewayStamp,
+  ): Promise<RoutineRemove> {
+    const blocked = this.blocked(owner, stamp) ?? this.unlisted(listedOn);
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     const drop = () => {

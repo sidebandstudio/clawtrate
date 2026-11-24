@@ -3,7 +3,12 @@
 
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
-import { ClawtrateClient } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  CONNECTION_CHANGED_AFTER_SEND,
+  MAX_DEFERRED_STOPS,
+} from "../src/client.ts";
+import { gatewayStamp } from "../src/types.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
@@ -481,4 +486,273 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
     ]);
     client.stop();
   }, 20_000);
+});
+
+// #450: an archive's own Stop of a run this host follows, and the access grant an archive waits
+// for, as the action's connection sees them.
+describe("an archive or a delete bound to the connection it began on", () => {
+  /** A host following a run in KEY on a gateway that names itself `id()`; the task stays active. */
+  async function following(id: { value: string }) {
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    gateway.handlers["sessions.delete"] = () => ({ ok: true });
+    // The gateway names the run by the send's own id, so the host follows it as that run.
+    gateway.handlers["chat.send"] = (params) => ({
+      runId: (params as { idempotencyKey: string }).idempotencyKey,
+      status: "started",
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === id.value);
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => transcript().runs.find((each) => each.id === run)?.bound === true);
+    return { client, gateway, stamp: gatewayStamp(client.state.connection) };
+  }
+  const outcome = (pending: Promise<unknown>) =>
+    pending.then(
+      () => "done",
+      (error: Error) => error.message,
+    );
+
+  it("a Stop and archive whose connection drops after this host stopped the run says the change is unconfirmed", async () => {
+    const id = { value: "gateway-a" };
+    const { client, gateway, stamp } = await following(id);
+    gateway.handlers["chat.abort"] = () => {
+      // The same gateway drops just after taking the Stop, and comes back.
+      setTimeout(() => gateway.dropAll(), 0);
+      return { ok: true, aborted: true, runIds: [] };
+    };
+    const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    expect(await archived).toBe(CONNECTION_CHANGED_AFTER_SEND);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
+  it("a Stop whose answer the drop lost is not sent again to another gateway answering at the same address", async () => {
+    const id = { value: "gateway-a" };
+    const { client, gateway, stamp } = await following(id);
+    gateway.handlers["chat.abort"] = () => {
+      // The abort's answer never comes: the connection drops, and gateway-x answers the reconnect.
+      id.value = "gateway-x";
+      setTimeout(() => gateway.dropAll(), 0);
+      return new Promise(() => {});
+    };
+    const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    await sleep(600);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    expect(await archived).not.toBe("done");
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
+  /** Host internals the deferred Stop's tests reach: what a history read and later Stops do. */
+  type Deferred = {
+    deferredStop(key: string, ...ids: string[]): (() => boolean) | undefined;
+    keepDeferredStop(key: string, runId: string, bound: () => boolean): boolean;
+  };
+
+  /**
+   * An archive that stops a run the gateway hasn't named; `meanwhile` runs before the send's
+   * answer names it. That abort's answer is lost, and gateway-x answers the reconnect.
+   */
+  async function deferredStop(
+    meanwhile: (client: ClawtrateClient, run: string) => void,
+    before: (client: ClawtrateClient) => void = () => {},
+  ) {
+    const id = { value: "gateway-a" };
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    const named = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => named.promise;
+    gateway.handlers["chat.abort"] = () => {
+      id.value = "gateway-x";
+      setTimeout(() => gateway.dropAll(), 0);
+      return new Promise(() => {});
+    };
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    await openOthers(client);
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    before(client);
+    const stamp = gatewayStamp(client.state.connection);
+    const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    await until(() => transcript().runs.find((each) => each.id === run)?.state === "stopping");
+    expect(gateway.calls("chat.abort")).toEqual([]);
+    meanwhile(client, run);
+    named.resolve({ runId: run, status: "started" });
+    await until(() => gateway.calls("chat.abort").length === 1);
+    await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    await sleep(600);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    expect(await archived).not.toBe("done");
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  }
+
+  it("a Stop asked before the gateway named the run, whose abort the drop lost, is not sent again to another gateway at the same address", async () => {
+    await deferredStop(() => {});
+  });
+
+  it("a deferred Stop's check stays for the send's answer after a history read used it first", async () => {
+    await deferredStop((client, run) => {
+      // A history read names the run first and aborts it with the check, as `readTranscript` does.
+      expect((client as unknown as Deferred).deferredStop(KEY, run)).toBeTypeOf("function");
+    });
+  });
+
+  /** Tasks besides KEY that hold waiting Stops: a task keeps at most 16 runs. */
+  const OTHERS = ["agent:main:waiting-a", "agent:main:waiting-b"];
+  const openOthers = async (client: ClawtrateClient) => {
+    for (const key of OTHERS) {
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+    }
+  };
+
+  /**
+   * `count` more deferred Stops, each for a run still waiting to be named, 14 to a task: copies
+   * of `run`, stopping, as the host would hold them. Answers how many the host kept.
+   */
+  const waitingStops = (client: ClawtrateClient, run: string, count: number) => {
+    const live = client.state.transcripts[KEY]!.runs.find((each) => each.id === run)!;
+    let kept = 0;
+    for (let n = 0; n < count; n += 1) {
+      const key = [KEY, ...OTHERS][Math.floor(n / 14)]!;
+      const id = `waiting-${n}`;
+      client.store.update((state) => {
+        const transcript = state.transcripts[key]!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              runs: [...transcript.runs, { ...live, id, messageId: id, state: "stopping" }],
+            },
+          },
+        };
+      });
+      expect(client.state.transcripts[key]!.runs.some((each) => each.id === id)).toBe(true);
+      if ((client as unknown as Deferred).keepDeferredStop(key, id, () => true)) kept += 1;
+    }
+    return kept;
+  };
+
+  it("a deferred Stop still waiting is not let go when the registry fills behind it", async () => {
+    await deferredStop((client, run) => {
+      // The archive's Stop is kept; every later one finds the registry full of Stops still
+      // waiting, and is refused rather than letting the archive's go.
+      expect(waitingStops(client, run, 40)).toBe(MAX_DEFERRED_STOPS - 1);
+      // The registry is full of Stops still waiting: none was let go for the later ones.
+    });
+  });
+
+  it("Stops whose runs are over make room: an archive's Stop is kept after the registry filled with them", async () => {
+    await deferredStop(
+      () => {},
+      (client) => {
+        // The registry fills with Stops for runs already over, as sends that failed leave them.
+        const host = client as unknown as Deferred;
+        for (let n = 0; n < MAX_DEFERRED_STOPS; n += 1)
+          expect(host.keepDeferredStop(KEY, `ended-${n}`, () => true)).toBe(true);
+      },
+    );
+  });
+
+  it("an archive whose Stop finds the registry full sends no abort, here or to a gateway that replaces this one", async () => {
+    const id = { value: "gateway-a" };
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    const named = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => named.promise;
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [] });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    await openOthers(client);
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    expect(waitingStops(client, run, MAX_DEFERRED_STOPS)).toBe(MAX_DEFERRED_STOPS);
+    const stamp = gatewayStamp(client.state.connection);
+    const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    // The archive's Stop is given up at once, and says nothing was sent for it.
+    await until(
+      () =>
+        transcript()
+          .runs.find((each) => each.id === run)
+          ?.stopError?.includes("nothing was sent for this one") === true,
+    );
+    named.resolve({ runId: run, status: "started" });
+    // Another gateway answers the reconnect at the same address.
+    id.value = "gateway-x";
+    gateway.dropAll();
+    await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    await sleep(600);
+    expect(gateway.calls("chat.abort")).toEqual([]);
+    expect(await archived).not.toBe("done");
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
+  /** A read-tier host whose archive waits for an access grant the gateway approves. */
+  async function granted(after: string) {
+    const { client, gateway } = await connected(READ_SCOPES);
+    let id = "gateway-a";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: "agent:pip:main", sessionId: "s-main" },
+    });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => {
+      // The grant's reconnect is answered by `after`.
+      id = after;
+      return {
+        requestId: "req-1",
+        status: "approved",
+        deviceToken: "token-W",
+        scopes: [...INTERACTIVE_SCOPES],
+      };
+    };
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    return { client, gateway, stamp: gatewayStamp(client.state.connection) };
+  }
+
+  for (const type of ["archive", "delete"] as const)
+    it(`${type === "archive" ? "an archive" : "a delete"} that waits for an access grant goes through once the same gateway grants it`, async () => {
+      const { client, gateway, stamp } = await granted("gateway-a");
+      gateway.handlers["sessions.delete"] = () => ({ ok: true });
+      const target = stamp.target;
+      const acting =
+        type === "archive"
+          ? client.archiveTask("agent:pip:main", { stamp })
+          : client.deleteTask("agent:pip:main", { stamp });
+      expect(await outcome(acting)).toBe("done");
+      expect(client.state.connection.target).toBe(target);
+      expect(gateway.calls("sessions.patch")).toEqual([
+        { key: "agent:pip:main", archived: true, expectedSessionId: "s-main" },
+      ]);
+      expect(gateway.calls("sessions.delete")).toHaveLength(type === "delete" ? 1 : 0);
+      client.stop();
+    });
+
+  it("an archive that waits for an access grant is refused when another gateway answers the grant's reconnect", async () => {
+    const { client, gateway, stamp } = await granted("gateway-x");
+    expect(await outcome(client.archiveTask("agent:pip:main", { stamp }))).toBe(
+      "This change was made for another gateway, so nothing was sent.",
+    );
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
 });
