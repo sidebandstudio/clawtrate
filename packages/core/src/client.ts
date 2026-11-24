@@ -2554,9 +2554,9 @@ export class ClawtrateClient {
    * After what waits changed: the list again, and, for a task that waits but whose row the
    * client does not hold, the list read again so it is listed until answered.
    */
-  private waitingChanged(): void {
+  private waitingChanged(before?: ReadonlySet<string>): void {
     this.waitingEpoch += 1;
-    this.publishTasks();
+    this.publishTasks(before);
     if (this.waiting.keys().some(this.unheldWait)) this.scheduleRefresh(this.generation);
   }
 
@@ -8616,7 +8616,8 @@ export class ClawtrateClient {
       this.scheduleRefresh(this.generation);
   }
 
-  private publishTasks(): void {
+  /** `before`: the rows the cap kept before a change that can swap them (`releaseKeptRows`). */
+  private publishTasks(before?: ReadonlySet<string>): void {
     // Channel chats and other tools' sessions are grouped too: one that waits for the person stays
     // listed while it waits, so an approval or question it asks is never out of sight (F-519).
     const tasksByBot = groupTasks(this.rows.values(), {
@@ -8659,19 +8660,25 @@ export class ClawtrateClient {
       else delete tasksByBot[botId];
     }
     this.store.update((state) => ({ ...state, tasksByBot }));
-    this.releaseKeptRows();
+    this.releaseKeptRows(before);
   }
 
   /** Read the list again when a row the cap kept stops being kept with the list full. */
-  private releaseKeptRows(): void {
-    let kept = 0;
-    for (const key of this.rows.keys()) if (this.keeps(key)) kept += 1;
-    // A count, not the keys: two kept rows swapping within one update aren't seen. That is fine,
-    // as each gateway event changes what is kept for one task, and a miss only delays a task's
-    // return until the next list read.
-    const released = kept < this.keptRows;
-    this.keptRows = kept;
+  private releaseKeptRows(before?: ReadonlySet<string>): void {
+    const kept = this.keptKeys();
+    // A change that can stop one task waiting and start another at once (`replaceQuestions`)
+    // passes the keys kept before it, and any that left counts. Every other change is one gateway
+    // event, which changes what is kept for one task, so a smaller count says one left.
+    const released = before ? [...before].some((key) => !kept.has(key)) : kept.size < this.keptRows;
+    this.keptRows = kept.size;
     if (released && this.rows.size >= MAX_LISTED_TASKS) this.scheduleRefresh(this.generation);
+  }
+
+  /** The keys of the held rows the cap keeps for now (`keeps`); built for one call, not kept. */
+  private keptKeys(): Set<string> {
+    const kept = new Set<string>();
+    for (const key of this.rows.keys()) if (this.keeps(key)) kept.add(key);
+    return kept;
   }
 
   /**
@@ -9741,8 +9748,9 @@ export class ClawtrateClient {
       const listed = asRecord(await this.request("question.list", {}));
       if (generation !== this.generation) return;
       const questions = Array.isArray(listed?.questions) ? listed.questions : [];
+      const before = this.keptKeys();
       this.waiting.replaceQuestions(questions, this.now());
-      this.waitingChanged();
+      this.waitingChanged(before);
     } catch (error) {
       this.logFailure("warn", "question.list", error);
     }

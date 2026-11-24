@@ -549,6 +549,39 @@ describe("F-563: Show sessions from other tools", () => {
     client.stop();
   });
 
+  it("F-563: when a connect's question list swaps one waiting task for another at a full list, the task that gave way comes back", async () => {
+    const own = Array.from({ length: MAX_LISTED_TASKS }, (_, index) => ({
+      key: `agent:pip:dashboard:${String(index).padStart(8, "0")}-0000`,
+      agentId: "pip",
+      createdVia: "operator",
+      updatedAt: 1_000 + index,
+    }));
+    const api = { ...rows()[0]!, updatedAt: 99_999 };
+    const question = (id: string, sessionKey: string) => ({
+      id,
+      sessionKey,
+      runId: `run-${id}`,
+      status: "pending",
+      createdAtMs: 100_000,
+    });
+    let pending = [question("qa", API)];
+    const { client, gateway, keys } = await connected({}, [...own, api], true);
+    gateway.handlers["question.list"] = () => ({ questions: pending });
+    // The API client's session waits, so it holds the place of the oldest of the person's tasks.
+    gateway.dropAll();
+    await until(() => keys().includes(API) && !keys().includes(own[0]!.key));
+    // At the next connect, it no longer waits and one of the person's listed tasks does: one
+    // kept task for another, in one list.
+    pending = [question("qb", own[250]!.key)];
+    gateway.dropAll();
+    await until(() => keys().includes(own[0]!.key));
+    expect(keys()).not.toContain(API);
+    expect(client.state.tasksByBot.pip!.find((task) => task.key === own[250]!.key)?.status).toBe(
+      "waiting",
+    );
+    client.stop();
+  });
+
   it("F-563: search results are filtered by the switches as they are when the results arrive", async () => {
     const { client, gateway } = await connected();
     await client.setShowChannelChats(true);
