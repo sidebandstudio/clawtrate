@@ -246,7 +246,7 @@ The run is failed if any image failed, otherwise inconclusive if any image was, 
 
 It can pass only when the previous release has the fix for [#383](https://github.com/sidebandstudio/clawtrate/issues/383): every earlier build fails at inspection, which is what the check showed on macOS 26 with `0.1.1-beta.20261122.4`. So it is meaningful from the second release after that fix.
 
-The app reads only the update source compiled into it, over HTTPS checked against the roots bundled with it, so a released build can be offered only what the live Beta feed offers. The check therefore runs right after `--publish`, not before it. A failure there means the release must not stay on the feed: withdraw it (above). A preview image is not the newest macOS a person may run, and a hosted Mac is not a person's Mac: if the check passes and a person's Mac still fails, Settings → Updates shows why the inspection failed, and "Copy details" gives the record for the issue.
+The app reads only the update source compiled into it, over HTTPS checked against the roots bundled with it, so a released build can be offered only what the live Beta feed offers. The check therefore runs right after `--publish`, not before it. A failure there on a release image (`macos-15`, `macos-26`) means the release must not stay on the feed: withdraw it (above). A failure on the preview image alone is the warning described above. A preview image is not the newest macOS a person may run, and a hosted Mac is not a person's Mac: if the check passes and a person's Mac still fails, Settings → Updates shows why the inspection failed, and "Copy details" gives the record for the issue.
 
 ### The owner's signed trial
 
