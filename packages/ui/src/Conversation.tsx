@@ -27,7 +27,14 @@ import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from 
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
 import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
-import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
+import {
+  ActionScope,
+  ItemFeed,
+  RunFeed,
+  RunLine,
+  showAction,
+  TurnPictures,
+} from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
@@ -35,7 +42,6 @@ import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
-import { Pictures } from "./Pictures.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 
@@ -60,7 +66,7 @@ function Turn({
       {role === "assistant" ? (
         <>
           <ItemFeed itemId={item.id} />
-          <Pictures taskKey={taskKey} item={item} />
+          <TurnPictures taskKey={taskKey} item={item} />
         </>
       ) : (
         <MessageUnit

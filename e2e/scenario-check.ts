@@ -45,6 +45,7 @@ import {
   openCheckClients,
   FAMILY_ROWS,
   IMAGE_CHECK,
+  SEND_PICTURE_CHECK,
   ownerAgent,
   runScenarioChecks,
   SEQ_GAP_NOTES,
@@ -131,7 +132,7 @@ async function main(): Promise<number> {
       const { passed, failed, notes } = await runScenarioChecks(clients, {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
         providerUrl,
-        only: (check) => check.name !== IMAGE_CHECK,
+        only: (check) => check.name !== IMAGE_CHECK && check.name !== SEND_PICTURE_CHECK,
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
@@ -248,8 +249,8 @@ async function imageChecks(
   runId: string,
   startInstance: (instance: string, id: string, extra: string[]) => Promise<void>,
 ): Promise<number> {
-  console.log(`Starting instance ${name} for the image check`);
-  await startInstance(name, runId, ["--with-images"]);
+  console.log(`Starting instance ${name} for the image checks`);
+  await startInstance(name, runId, ["--with-images", "--with-message-tool"]);
   const inst = openInstance(name);
   const ports = instancePorts(inst);
   for (const port of [ports.gatewayPort, ports.providerPort]) {
@@ -262,8 +263,9 @@ async function imageChecks(
   );
   try {
     const { passed, failed } = await runScenarioChecks(clients, {
-      only: (check) => check.name === IMAGE_CHECK,
+      only: (check) => check.name === IMAGE_CHECK || check.name === SEND_PICTURE_CHECK,
       images: true,
+      messageTool: true,
     });
     console.log(`${passed} of ${passed + failed} image checks passed`);
     return failed;

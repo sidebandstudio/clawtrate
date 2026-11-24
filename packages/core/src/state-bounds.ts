@@ -584,6 +584,7 @@ const picture = object<ChatPicture>()({
   width: NUMBER,
   height: NUMBER,
   sizeBytes: NUMBER,
+  messageId: ID,
 });
 const item = flagged<TranscriptItem>()({
   id: ID,
