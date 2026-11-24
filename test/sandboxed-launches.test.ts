@@ -2,17 +2,18 @@
 // with none of the markers, it is a person's app and looks at the real
 // computer (docs/development/setup.md). Every launch of the packaged app the
 // launch check makes carries `--clawtrate-setup-sandbox`.
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   exitedWithin,
   launchArgs,
   launchPlace,
   recordExit,
   reportExit,
+  windowsQuitProblem,
   withCheckBundle,
 } from "../e2e-packaged/global-setup.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
@@ -202,5 +203,48 @@ describe("the packaged app's launches", () => {
     } finally {
       process.kill(child.pid!, "SIGKILL");
     }
+  });
+});
+
+describe("the Windows packaged quit", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function childWithGonePid() {
+    vi.useFakeTimers();
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    });
+    return recordExit(Object.assign(new ChildProcess(), { pid: 42 }));
+  }
+
+  it("accepts a clean exit reported after the PID disappears", async () => {
+    const child = childWithGonePid();
+    const problem = windowsQuitProblem(child);
+    await vi.advanceTimersByTimeAsync(250);
+    Object.assign(child, { exitCode: 0 });
+    child.emit("exit", 0, null);
+    expect(await problem).toBeNull();
+  });
+
+  it("rejects a nonzero exit", async () => {
+    const child = recordExit(
+      spawn(process.execPath, ["-e", "process.exit(7)"], { stdio: "ignore", windowsHide: true }),
+    );
+    expect(await windowsQuitProblem(child)).toBe("the app exited with 7");
+  });
+
+  it("reports a timeout if the PID is gone but Node never reports an exit", async () => {
+    const child = childWithGonePid();
+    const settled = vi.fn();
+    void windowsQuitProblem(child).then(settled);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledWith(
+      `the app (pid ${child.pid}) did not quit within 15 seconds`,
+    );
   });
 });
