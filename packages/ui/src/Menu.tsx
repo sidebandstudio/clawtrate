@@ -5,6 +5,8 @@ export type MenuEntry =
       kind: "item";
       label: string;
       onSelect: () => void;
+      /** Shown, reachable, and announced as unavailable; choosing it does nothing. */
+      disabled?: boolean;
       tone?: "danger";
       icon?: ReactNode;
       hint?: string;
@@ -36,6 +38,7 @@ export function Menu({
   className,
   style,
   trigger,
+  focusAt,
 }: {
   label: string;
   entries: MenuEntry[];
@@ -45,8 +48,26 @@ export function Menu({
   style?: CSSProperties;
   /** Clicks on the trigger are the trigger's own; they do not count as outside. */
   trigger?: HTMLElement | null;
+  /** When set or changed, focus moves to the item at this index: after items are added in place. */
+  focusAt?: number;
 }) {
   const ref = useRef<HTMLUListElement>(null);
+
+  useEffect(() => {
+    if (focusAt === undefined) return;
+    ref.current?.querySelectorAll<HTMLElement>(".menu-item")[focusAt]?.focus();
+  }, [focusAt]);
+
+  // An item that had focus and went away (its entries changed in place) leaves it in the menu.
+  useEffect(() => {
+    const menu = ref.current;
+    if (!menu || menu.contains(document.activeElement)) return;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    (
+      menu.querySelector<HTMLElement>('[aria-checked="true"]') ??
+      menu.querySelector<HTMLElement>(".menu-item")
+    )?.focus();
+  }, [entries]);
 
   useEffect(() => {
     const menu = ref.current;
@@ -149,10 +170,11 @@ export function Menu({
                   className="menu-item"
                   role="menuitem"
                   data-tone={entry.tone}
+                  aria-disabled={entry.disabled || undefined}
                   aria-label={entry.note ? entry.label : undefined}
                   aria-description={entry.note}
                   tabIndex={-1}
-                  onClick={entry.onSelect}
+                  onClick={entry.disabled ? undefined : entry.onSelect}
                 >
                   {entry.icon}
                   {entry.note ? (
