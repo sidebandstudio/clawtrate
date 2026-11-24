@@ -1975,7 +1975,8 @@ export class ClawtrateClient {
     const count = this.openSessions.get(key) ?? 0;
     this.openSessions.set(key, count + 1);
     if (count > 0) {
-      // A view coming to a task whose history failed asks for it, as a first open would.
+      // A view coming to a task whose history failed asks for it, as a first open would,
+      // unless a read already under way will settle it.
       if (this.state.transcripts[key]?.status === "error") this.reloadSession(key);
       return;
     }
@@ -1994,9 +1995,32 @@ export class ClawtrateClient {
    * failed read. Closing and opening again would not read while another viewer
    * holds the task, since only the first open reads.
    */
-  reloadSession(key: string): void {
+  reloadSession(key: string, failed?: string): void {
     if (!this.openSessions.has(key)) throw new Error("That task isn't open.");
     const current = this.state.transcripts[key];
+    if (failed !== undefined && (current?.status !== "error" || current.error !== failed)) return;
+    const load = this.loads.get(key);
+    if (load) {
+      // A read already under way settles this task; coalescing avoids queuing a second read
+      // behind it (for instance from a second Try again before the loading snapshot arrives).
+      if (current?.status !== "error") return;
+      // Capture the incarnation before publishing loading: a synchronous store listener can close
+      // every hold and reopen the same key, replacing it before this call returns.
+      const incarnation = this.incarnations.get(key);
+      this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
+      // A read that published its failure while this retry arrived (its listeners run before it
+      // ends) settles nothing more: still loading once it ends, the task is read again. A close
+      // and reopen between here and then is a different task, so its incarnation must still match.
+      void load.done.then(() => {
+        if (
+          this.openSessions.has(key) &&
+          this.incarnations.get(key) === incarnation &&
+          this.state.transcripts[key]?.status === "loading"
+        )
+          this.reloadSession(key);
+      });
+      return;
+    }
     if (current?.status === "error")
       this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
     if (this.state.connection.status === "connected") void this.loadTranscript(key, false, null);
@@ -2416,6 +2440,14 @@ export class ClawtrateClient {
   /** Operations waiting for access, for tests and diagnostics. */
   get pendingAccessWaiters(): number {
     return this.accessWaiters.length;
+  }
+
+  /**
+   * Resolves once the task's current read queue is idle, or at once if none runs,
+   * for tests that need a late duplicate read to have been queued already.
+   */
+  historyReadsSettled(key: string): Promise<void> {
+    return this.loads.get(key)?.done ?? Promise.resolve();
   }
 
   /** Reject every operation waiting for access, without changing what is being asked for. */
@@ -7742,6 +7774,9 @@ export class ClawtrateClient {
       };
       while (next) {
         await this.readTranscript(key, next.subscribe, next.resync);
+        // If `releaseTask` dropped this entry while the read was in flight, stop instead of
+        // running queued work under a reopened task's new incarnation.
+        if (this.loads.get(key) !== entry) break;
         next = entry.again;
         entry.again = null;
       }

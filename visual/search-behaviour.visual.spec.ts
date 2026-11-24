@@ -44,6 +44,7 @@ type Fixture = {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   sent: Array<{ type: string; key?: string }>;
   send(command: { type: string; key?: string }): Promise<void>;
+  sendFrom(view: string, command: { type: string; key?: string }): Promise<void>;
   getState(): ClawtrateState;
   holds(key: string): number;
   answerReread?: () => void;
@@ -570,7 +571,8 @@ test("the fixture reads a history again after pairing, and drops a read that a d
       delete transcripts[key];
       return { ...state, transcripts };
     });
-    await fixture.send({ type: "openSession", key });
+    // A second view opens the task, so the dropped history is read again.
+    await fixture.sendFrom("other", { type: "openSession", key });
     const reading = fixture.getState().transcripts[key]?.status;
     fixture.release();
     return [reading, fixture.getState().transcripts[key]?.status];
@@ -587,7 +589,7 @@ test("the fixture reads a history again after pairing, and drops a read that a d
       delete transcripts[key];
       return { ...state, transcripts };
     });
-    await fixture.send({ type: "openSession", key });
+    await fixture.sendFrom("other", { type: "openSession", key });
     await fixture.send({ type: "disconnect" });
     fixture.release();
     return fixture.getState().transcripts[key];
