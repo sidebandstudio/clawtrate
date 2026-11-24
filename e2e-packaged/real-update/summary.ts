@@ -4,7 +4,8 @@
 //
 // Reads <results>/real-update-<image>/result.json for each image, writes
 // real-update-summary.json and the step summary, and exits 1 only when the run failed: a pass
-// and an inconclusive run both exit 0, and the JSON's `verdict` says which.
+// and an inconclusive run both exit 0, and the JSON's `verdict` says which; an inconclusive run
+// also prints a warning annotation.
 
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,4 +31,9 @@ writeFileSync("real-update-summary.json", JSON.stringify(summary, null, 2) + "\n
 if (process.env.GITHUB_STEP_SUMMARY)
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryMarkdown(summary));
 console.log(JSON.stringify(summary, null, 2));
+// A green run that isn't a pass says so on the run's page.
+if (summary.verdict === "inconclusive")
+  console.log(
+    `::warning title=Real update inconclusive::The feed offered a newer release than ${summary.candidate}, so it was not tested. Read verdict in real-update-summary.json.`,
+  );
 process.exitCode = summary.verdict === "failed" ? 1 : 0;

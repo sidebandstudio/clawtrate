@@ -47,10 +47,56 @@ it.each([
     { verdict: "inconclusive", reason: "offered 1.3.0, expected 1.2.0" },
   ],
   [
-    "another version than an explicit candidate the feed no longer offers",
+    "a newer version than an explicit candidate the feed has moved past",
     "1.3.0",
     "1.1.0",
     { verdict: "inconclusive", reason: "offered 1.3.0, expected 1.1.0" },
+  ],
+  [
+    "a later run of the same day (numeric, not text, order)",
+    "0.1.1-beta.20261123.11",
+    "0.1.1-beta.20261123.7",
+    {
+      verdict: "inconclusive",
+      reason: "offered 0.1.1-beta.20261123.11, expected 0.1.1-beta.20261123.7",
+    },
+  ],
+  [
+    "the stable release after its betas",
+    "0.1.1",
+    "0.1.1-beta.20261123.7",
+    { verdict: "inconclusive", reason: "offered 0.1.1, expected 0.1.1-beta.20261123.7" },
+  ],
+  [
+    "an older version than expected (an explicit candidate the feed never reached)",
+    "1.1.0",
+    "1.2.0",
+    { verdict: "failed", reason: "offered 1.1.0, expected 1.2.0" },
+  ],
+  [
+    "the version already installed",
+    "0.1.1-beta.20261123.6",
+    "0.1.1-beta.20261123.7",
+    { verdict: "failed", reason: "offered 0.1.1-beta.20261123.6, expected 0.1.1-beta.20261123.7" },
+  ],
+  ["an empty version", "", "1.2.0", { verdict: "failed", reason: "offered , expected 1.2.0" }],
+  [
+    "no version",
+    undefined,
+    "1.2.0",
+    { verdict: "failed", reason: "offered undefined, expected 1.2.0" },
+  ],
+  [
+    "no version when none is expected",
+    undefined,
+    undefined,
+    { verdict: "failed", reason: "offered undefined, expected a version" },
+  ],
+  [
+    "a malformed version",
+    "1.3.0 ",
+    "1.2.0",
+    { verdict: "failed", reason: "offered 1.3.0 , expected 1.2.0" },
   ],
 ] as const)("an offer of %s", (_, offered, expected, verdict) => {
   expect(offerVerdict(offered, expected)).toEqual(verdict);
@@ -144,10 +190,10 @@ afterEach(() => {
 });
 
 it.each([
-  ["passed", passed, 0],
-  ["inconclusive", inconclusive, 0],
-  ["failed", failed, 1],
-] as const)("the summary job exits %s with %i", (verdict, result, status) => {
+  ["passed", 0, passed],
+  ["inconclusive", 0, inconclusive],
+  ["failed", 1, failed],
+] as const)("the summary job exits %s with %i", (verdict, status, result) => {
   const dir = mkdtempSync(join(tmpdir(), "clawtrate-real-update-summary-"));
   dirs.push(dir);
   for (const [image, each] of [
@@ -182,6 +228,10 @@ it.each([
   expect(ran.status, ran.stderr).toBe(status);
   const summary = JSON.parse(readFileSync(join(dir, "real-update-summary.json"), "utf8"));
   expect(summary).toMatchObject({ previous: "1.0.0", candidate: "1.1.0", verdict });
+  // A green run that isn't a pass says so on the run's page.
+  expect(ran.stdout.includes("::warning title=Real update inconclusive::")).toBe(
+    verdict === "inconclusive",
+  );
   expect(readFileSync(join(dir, "step-summary.md"), "utf8")).toContain(
     `Real update 1.0.0 to 1.1.0: ${verdict === "failed" ? "FAILED" : verdict}`,
   );

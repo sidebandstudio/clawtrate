@@ -207,8 +207,8 @@ Both inputs are optional: empty ones take the two newest published releases. The
 Each image ends with one of three verdicts, and so does the run ([verdict.ts](../../e2e-packaged/real-update/verdict.ts)):
 
 - **passed**: the image updated in place.
-- **failed**: it didn't: no offer, a refused inspection, no restart offered, or a replacement that doesn't meet the checks above; also an image that left no result.
-- **inconclusive**: the feed offered another version than the candidate, so the run couldn't test it. That happens when a release is published while the run goes, or when an explicit `candidate` is no longer the feed's offer. It is never a pass. Run the check again with the versions the feed now offers.
+- **failed**: it didn't: no offer, an offer without a version or of an older version than the candidate, a refused inspection, no restart offered, or a replacement that doesn't meet the checks above; also an image that left no result, such as one cancelled or timed out before the check finished.
+- **inconclusive**: the feed offered a newer release than the candidate, so the run couldn't test it. That happens when a release is published while the run goes, or when the feed has moved past an explicit `candidate`. The run page shows a warning for it. It is never a pass. Run the check again with the versions the feed now offers.
 
 The run is failed if any image failed, otherwise inconclusive if any image was, otherwise passed. Its conclusion is red only when it failed, so read the verdict from the `real-update-summary` artifact, `real-update-summary.json`:
 
@@ -232,7 +232,9 @@ The run is failed if any image failed, otherwise inconclusive if any image was, 
 }
 ```
 
-`images` has one entry per image (`macos-15`, `macos-26`, `xcode-27`), so a caller can weigh the preview image apart. The run's step summary gives the same answer in one line per image. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
+`images` has one entry per image (`macos-15`, `macos-26`, `xcode-27`), so a caller can weigh the preview image apart. The run's step summary gives the same answer in one line per image.
+
+**For the release job.** Read `verdict` from `real-update-summary.json`, never the run's conclusion, because an inconclusive run is green. Pause releases on `failed`, on any other value, and when the run has no `real-update-summary` artifact (the `versions` job failed, or the run was cancelled before its summary). `inconclusive` means the feed already offers a newer release than the candidate, so the candidate was not tested. Don't pause for it, and don't record the candidate as checked: the newer release's own run checks what the feed now offers. Pass `previous` and `candidate` explicitly, so that a release published before the `versions` job starts can't change the pair. Each image's own artifact holds `result.json` with every snapshot, the running app's signature as the update helper reads it ([running-signature-probe.m](../../e2e-packaged/real-update/running-signature-probe.m)), how each helper process ended, the unified log and any crash report.
 
 It can pass only when the previous release has the fix for [#383](https://github.com/sidebandstudio/clawtrate/issues/383): every earlier build fails at inspection, which is what the check showed on macOS 26 with `0.1.1-beta.20261122.4`. So it is meaningful from the second release after that fix.
 

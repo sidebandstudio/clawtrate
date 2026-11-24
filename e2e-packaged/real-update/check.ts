@@ -9,8 +9,9 @@
 //     [--expect <version>] [--probe <running-signature-probe binary>]
 //
 // It writes <out>/result.json and the app's output. Its `verdict` is `passed` when the app at
-// --app was replaced in place by the offered version, `inconclusive` when the feed offered
-// another version than --expect (a release published mid-run, say), and `failed` otherwise.
+// --app was replaced in place by the offered version, `inconclusive` when the feed offered a
+// newer release than --expect (a release published mid-run, say), and `failed` otherwise, any
+// other offer included.
 // It exits 1 only for `failed`.
 
 import { execFileSync, spawnSync } from "node:child_process";
@@ -233,10 +234,10 @@ async function drive(page: Page, pid: number): Promise<Verdict> {
   log(`checked ${JSON.stringify(offered.state)}`);
   if (offered.state.kind !== "offered") throw new Error(`no offer: ${offered.state.kind}`);
   result.offeredVersion = offered.state.version;
-  const offer = offerVerdict(offered.state.version!, values.expect);
-  if (offer.verdict === "inconclusive") {
-    result.outcome = `not this candidate: ${offer.reason}`;
-    return "inconclusive";
+  const offer = offerVerdict(offered.state.version, values.expect);
+  if (offer.verdict !== "proceed") {
+    result.outcome = `${offer.verdict === "inconclusive" ? "not this candidate" : "wrong offer"}: ${offer.reason}`;
+    return offer.verdict;
   }
   // One 600 s limit for the whole stage, from before the call that starts the download.
   const started = Date.now();
@@ -246,7 +247,11 @@ async function drive(page: Page, pid: number): Promise<Verdict> {
     remaining(deadline),
   );
   const downloaded = await until("the download and inspection", remaining(deadline), async () => {
-    const s = await snapshot();
+    // Each poll within the time left, so the stage never outlasts its one deadline.
+    const s = await page.evaluate<Snapshot>(
+      `${updates}.get()`,
+      Math.max(1, Math.min(60_000, remaining(deadline))),
+    );
     return s.state.kind === "downloading" ? null : s;
   });
   result.downloaded = downloaded;

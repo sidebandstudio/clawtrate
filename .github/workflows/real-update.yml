@@ -9,7 +9,7 @@ name: Real update
 #   gh workflow run real-update.yml [-f previous=<version>] [-f candidate=<version>]
 #
 # Empty inputs take the two newest published releases. The `real-update-summary` artifact holds
-# the answer as JSON: `verdict` is passed, failed or inconclusive (the feed offered another version
+# the answer as JSON: `verdict` is passed, failed or inconclusive (the feed offered a newer release
 # than the candidate, such as a release published while the run went). The run fails only when an
 # image failed.
 
@@ -143,7 +143,7 @@ jobs:
           retention-days: 7
 
   # One machine-readable answer for the release job: each image's verdict, and the run's. The
-  # job fails only when an image failed; an inconclusive run (the feed offered another version
+  # job fails only when an image failed; an inconclusive run (the feed offered a newer release
   # than the candidate) passes it, and the summary's `verdict` says so.
   summary:
     needs: [versions, update]

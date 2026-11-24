@@ -4,18 +4,37 @@
 /** An image's answer. `inconclusive`: the run couldn't test the candidate it was given. */
 export type Verdict = "passed" | "failed" | "inconclusive";
 
+/** A release version (`0.1.1-beta.20261123.7`, `0.1.1`) as numbers to compare; null otherwise. */
+function releaseParts(version: unknown): number[] | null {
+  const match =
+    typeof version === "string"
+      ? /^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+)\.(\d+))?$/.exec(version)
+      : null;
+  // A stable release follows every beta of its version.
+  return match
+    ? match.slice(1).map((part) => (part === undefined ? Infinity : Number(part)))
+    : null;
+}
+
 /**
  * Whether the feed's offer is the candidate this run checks. The app reads the live feed itself,
- * so a release published while the run goes, or a candidate the feed no longer offers, makes the
- * offer differ: the check then can't say whether the candidate updates in place, which is
- * inconclusive, never a pass and never a failure.
+ * so a release published while the run goes, or an explicit candidate the feed has moved past,
+ * makes it offer a newer release: the check then can't say whether the candidate updates in
+ * place, which is inconclusive, never a pass. Any other offer (no version, a malformed one, an
+ * older one, the installed one) is the updater or the feed going wrong, which fails.
  */
 export function offerVerdict(
-  offered: string,
+  offered: unknown,
   expected: string | undefined,
-): { verdict: "proceed" } | { verdict: "inconclusive"; reason: string } {
-  if (!expected || offered === expected) return { verdict: "proceed" };
-  return { verdict: "inconclusive", reason: `offered ${offered}, expected ${expected}` };
+): { verdict: "proceed" } | { verdict: "inconclusive" | "failed"; reason: string } {
+  if (releaseParts(offered) && (!expected || offered === expected)) return { verdict: "proceed" };
+  const reason = `offered ${String(offered)}, expected ${expected ?? "a version"}`;
+  const got = releaseParts(offered);
+  const want = releaseParts(expected);
+  const at = got && want ? got.findIndex((part, i) => part !== want[i]) : -1;
+  return at !== -1 && got![at]! > want![at]!
+    ? { verdict: "inconclusive", reason }
+    : { verdict: "failed", reason };
 }
 
 /** The time left until `deadline` (from `Date.now()`), never below zero. */
