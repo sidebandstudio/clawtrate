@@ -1222,6 +1222,105 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     client.stop();
   });
 
+  it("Tasks: an event for a key both gateways share isn't merged into rows read on the other one", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    const list = listing(a);
+    await reconnectAs(client, a, "gateway-a");
+    await until(() => client.state.discovery.tasksRead?.gatewayId === "gateway-a");
+    const title = () => client.state.tasksByBot.otto?.find((task) => task.key === KEY)?.title;
+    const before = title();
+    list.hold(new Promise(() => {}));
+    await reconnectAs(client, a, "gateway-x");
+    // The other gateway's own row for the same key, while its list hasn't come.
+    a.gateway.emit("sessions.changed", {
+      sessionKey: KEY,
+      session: {
+        key: KEY,
+        agentId: "otto",
+        sessionId: "s-x",
+        label: "Gateway X's task",
+        updatedAt: 99,
+      },
+    });
+    await sleep(100);
+    expect(title()).toBe(before);
+    expect(client.state.discovery.tasksRead?.gatewayId).toBe("gateway-a");
+    client.stop();
+  });
+
+  it("A bot's settings: the model menu read on one gateway isn't shown beside another's read", async () => {
+    const { client, a } = await twoGateways();
+    await until(() => client.state.accounts.models.length > 0);
+    // Another gateway answers at the same address; its model picker is slow.
+    a.holdPicker = new Promise(() => {});
+    await reconnectAs(client, a, "gateway-x");
+    await until(() => client.state.accounts.readOn?.gatewayId === "gateway-x");
+    expect(client.state.accounts.models).toEqual([]);
+    client.stop();
+  });
+
+  it("Tasks: a list read on a connection that ended before its identity answered isn't published on the next one", async () => {
+    const { client, a } = await twoGateways();
+    tasks(a);
+    listing(a);
+    await reconnectAs(client, a, "gateway-a");
+    await until(() => client.state.discovery.tasksRead?.gatewayId === "gateway-a");
+    const listed = client.state.discovery.tasksRead!;
+    // A reconnect whose bot list fails and whose identity read is held: the task list waits on it.
+    const named = deferred<unknown>();
+    a.identityReply = named.promise;
+    const agents = a.gateway.handlers["agents.list"]!;
+    a.gateway.handlers["agents.list"] = () => {
+      throw new Error("the bot list is busy");
+    };
+    let was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => client.state.connection.connectedAt !== was);
+    // That connection ends; the next one's task list is held.
+    a.gateway.handlers["agents.list"] = agents;
+    const list = listing(a);
+    list.hold(new Promise(() => {}));
+    a.identityReply = null;
+    was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.connectedAt !== was &&
+        client.state.connection.gatewayId === "gateway-a",
+    );
+    // The first one's identity answers now: its list is not published as this connection's.
+    named.resolve({ deviceId: "gateway-a" });
+    await sleep(100);
+    expect(client.state.discovery.tasksRead).toEqual(listed);
+    client.stop();
+  });
+
+  it("A bot's settings: accounts read before the identity answered act once it does, on the same connection", async () => {
+    const { client, a } = await twoGateways();
+    // A reconnect whose first identity read fails; it is asked again (`askIdentityAgain`).
+    let fails = 1;
+    const answer = a.gateway.handlers["gateway.identity.get"]!;
+    a.gateway.handlers["gateway.identity.get"] = (params) => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("the gateway was busy");
+      }
+      return answer(params);
+    };
+    const was = client.state.connection.connectedAt;
+    a.gateway.dropAll();
+    await until(() => client.state.connection.connectedAt !== was && fails === 0);
+    await client.refreshAccounts();
+    expect(client.state.accounts.readOn?.gatewayId).toBeNull();
+    await until(() => client.state.connection.gatewayId === "gateway-a", 3_000);
+    expect(client.state.accounts.readOn?.gatewayId).toBe("gateway-a");
+    const stamp = await screenStamp(viewOf(client), client.state.accounts.readOn!);
+    await createBridgeSession(client).apply({ ...MODEL, stamp });
+    expect(a.gateway.calls("config.patch").length).toBeGreaterThan(0);
+    client.stop();
+  });
+
   it("the gateway's identity, when its first read fails, is read again on the same connection, and a stamp taken then goes", async () => {
     const { client, a } = await twoGateways();
     tasks(a);

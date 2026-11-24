@@ -615,6 +615,48 @@ test("#505: Change account sends the stamp of the accounts it shows, not the ide
   await expect.poll(() => sentStamp(page, "disconnectAccount")).toEqual(read);
 });
 
+test("#505: a choice on Change account made before the accounts were read on another connection doesn't go with the new read", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  const home = page.getByRole("radio", { name: /^OpenAI · Home/ });
+  await home.click();
+  await expect(home).toBeChecked();
+  // The accounts are read again on another connection, answered by another gateway.
+  const read = await page.evaluate(() => {
+    let read = { gatewayId: "another-gateway", target: 0 };
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      read = { gatewayId: "another-gateway", target: state.connection.target };
+      return {
+        ...state,
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+        accounts: {
+          ...state.accounts,
+          readOn: { ...read, connectedAt: (state.connection.connectedAt ?? 0) + 1 },
+        },
+      };
+    });
+    return read;
+  });
+  // The choice made from the earlier read is let go: nothing is ready to save.
+  await expect(home).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  // Made again from the new read, it goes with that read's stamp.
+  await home.click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => sentStamp(page, "changeBotAccount")).toEqual(read);
+});
+
 test("#505: Remove fallbacks sends the stamp of the accounts it shows, not the identity now connected", async ({
   page,
 }) => {

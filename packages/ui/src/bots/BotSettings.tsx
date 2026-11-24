@@ -170,15 +170,27 @@ export function BotSettings({
   const focusIn = useCallback((selector: string) => {
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
   }, []);
-  // The host's target when Change account opened: the choice made there goes only to that gateway.
-  // Where the accounts shown were read when Change account opened (`AccountsState.readOn`): after a
-  // reconnect they stay until read again, and the identity that answered can be known first.
-  const changeOpenedOn = useRef(accounts.readOn ?? shownStamp(connection));
+  // Where the accounts Change account offers were read (`AccountsState.readOn`): its choices come
+  // from that read and go with its stamp. After a reconnect the accounts stay until read again, and
+  // the identity that answered can be known first. When they are read on another connection, a
+  // choice made from the earlier read is let go, and the new read's stamp goes with the next one.
+  const [choicesRead, setChoicesRead] = useState(() => accounts.readOn ?? shownStamp(connection));
+  const readKey = accounts.readOn
+    ? `${accounts.readOn.gatewayId}\n${accounts.readOn.target}\n${accounts.readOn.connectedAt}`
+    : null;
+  const [choicesFrom, setChoicesFrom] = useState(readKey);
+  if (choicesFrom !== readKey) {
+    setChoicesFrom(readKey);
+    setPick(null);
+    setPickModel(null);
+    setPickEffort(null);
+    setChoicesRead(accounts.readOn ?? shownStamp(connection));
+  }
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
     if (next === "change" && view !== "change")
-      changeOpenedOn.current = accounts.readOn ?? shownStamp(connection);
+      setChoicesRead(accounts.readOn ?? shownStamp(connection));
     if (next !== "change") setPick(null);
     focusIn(focus);
   };
@@ -557,7 +569,7 @@ export function BotSettings({
           provider: targetProvider,
           model,
           effort,
-          stamp: await screenStamp(bridge, changeOpenedOn.current),
+          stamp: await screenStamp(bridge, choicesRead),
         });
         announce(
           toGateway
