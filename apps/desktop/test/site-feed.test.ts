@@ -10,8 +10,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkBetaFiles, makeLatestMac, releaseFolder } from "../packaging/beta-files.ts";
 import {
   assembleSite,
+  betaNotes,
   main,
   newestBeta,
+  whatsNew,
+  whatsNewHtml,
   writeSiteFeed,
   type Get,
   type ReleaseRow,
@@ -96,6 +99,134 @@ describe("which release the site takes", () => {
     ];
     expect(newestBeta(rows)?.tag_name).toBe("v0.1.1-beta.20261120.10");
     expect(newestBeta([row("0.1.1-beta.20261121.1", { draft: true })])).toBeNull();
+  });
+});
+
+describe("what a beta's release page says it adds", () => {
+  const body = (list: string) =>
+    `Clawtrate 0.1.1-beta.20261120.2, a beta for macOS.\n\nSHA-256:\n\n- \`a.zip\`: \`00\`\n\n${list}`;
+
+  it('reads the lines under "What\'s new:" and nothing else on the page', () => {
+    expect(
+      whatsNew(body("What's new:\n\n- A new task shows no context line (#368)\n- Second\n")),
+    ).toEqual(["A new task shows no context line (#368)", "Second"]);
+    // The checksum list above it is not the list, and neither is what follows a blank line.
+    expect(whatsNew(body("What's new:\r\n- One\r\n\r\n- Not this\r\n"))).toEqual(["One"]);
+    expect(whatsNew(body("What's new:\n- One\nA paragraph.\n- Not this\n"))).toEqual(["One"]);
+  });
+
+  it("has no list without the heading, on an empty page, or for a line that is no change", () => {
+    expect(whatsNew(body("- A stray list item"))).toEqual([]);
+    expect(whatsNew(null)).toEqual([]);
+    expect(whatsNew(undefined)).toEqual([]);
+    expect(whatsNew("What's new:\n\nNothing listed.")).toEqual([]);
+    expect(whatsNew(`What's new:\n- ${"x".repeat(201)}\n- Short\n- With\u0007a bell`)).toEqual([
+      "Short",
+    ]);
+    expect(whatsNew(`What's new:\n${"- One\n".repeat(40)}`)).toHaveLength(30);
+  });
+
+  it("takes the last heading's list, and no indented, invisible or oddly separated line", () => {
+    // The tooling writes the list last, so an earlier heading, in an example or not, is passed over.
+    const example =
+      "Format:\n\n```\nWhat's new:\n\n- An example\n```\n\nWhat's new:\n\n- The real one";
+    expect(whatsNew(example)).toEqual(["The real one"]);
+    expect(whatsNew("<!--\nWhat's new:\n- Hidden\n-->\n\nWhat's new:\n- Shown")).toEqual(["Shown"]);
+    expect(whatsNew("What's new:\n\nSoon.\n\nWhat's new:\n- Later")).toEqual(["Later"]);
+    expect(whatsNew("What's new:\n- Earlier\n\nWhat's new:\n\nNothing this time.")).toEqual([]);
+    // An indented line belongs to the one above; it ends the list.
+    expect(whatsNew("What's new:\n- Top\n  - Child\n- After")).toEqual(["Top"]);
+    expect(whatsNew("What's new:\n  - Indented from the start")).toEqual([]);
+    // A title with a character that isn't text is left out, and the list goes on past it.
+    const odd = [
+      "Zero\u200bwidth",
+      "Right\u202eto left",
+      "Arabic\u061cmark",
+      "Soft\u00adhyphen",
+      "Line\u2028separator",
+      "No\u00a0break space",
+      "Byte\ufeffmark",
+      "A\ttab",
+    ];
+    expect(whatsNew(`What's new:\n${odd.map((item) => `- ${item}`).join("\n")}\n- Plain`)).toEqual([
+      "Plain",
+    ]);
+    // Ordinary titles keep their punctuation, symbols, accents and other scripts.
+    const fine = [
+      "Costs $5 & up (#12)",
+      "`code` → done, 100% ✓",
+      "Café déjà vu",
+      "日本語のタイトル",
+    ];
+    expect(whatsNew(`What's new:\n${fine.map((item) => `- ${item}`).join("\n")}`)).toEqual(fine);
+    expect(whatsNew("What's new:\n* A star")).toEqual([]);
+    expect(whatsNew("what's new:\n- Other casing")).toEqual([]);
+  });
+
+  it("lists the newest published betas that have a list, newest first", () => {
+    const listed = (version: string, item: string, extra: Partial<ReleaseRow> = {}) =>
+      row(version, { body: `What's new:\n\n- ${item}`, ...extra });
+    const rows = [
+      listed("0.1.1-beta.20261120.2", "Second"),
+      listed("0.1.1-beta.20261120.10", "Tenth"),
+      row("0.1.1-beta.20261120.9", { body: "No list here." }),
+      listed("0.1.1-beta.20261120.11", "A draft", { draft: true }),
+      listed("0.1.1-beta.20261120.12", "Not a beta", { prerelease: false }),
+      listed("0.1.1", "A Stable build"),
+      listed("0.1.1-beta.20261120.1", "First"),
+    ];
+    expect(betaNotes(rows)).toEqual([
+      { version: "0.1.1-beta.20261120.10", items: ["Tenth"] },
+      { version: "0.1.1-beta.20261120.2", items: ["Second"] },
+      { version: "0.1.1-beta.20261120.1", items: ["First"] },
+    ]);
+    expect(betaNotes(rows, 1)).toEqual([{ version: "0.1.1-beta.20261120.10", items: ["Tenth"] }]);
+    // Five at most unless asked otherwise, and a tag that is no beta's is left out.
+    const many = Array.from({ length: 7 }, (_, index) =>
+      listed(`0.1.1-beta.20261121.${index + 1}`, `Change ${index + 1}`),
+    );
+    expect(betaNotes(many).map((note) => note.version)).toEqual(
+      [7, 6, 5, 4, 3].map((run) => `0.1.1-beta.20261121.${run}`),
+    );
+    expect(
+      betaNotes([
+        { ...listed("0.1.1-beta.20261121.1", "No v"), tag_name: "0.1.1-beta.20261121.1" },
+        { ...listed("0.1.1-beta.20261121.2", "Not a version"), tag_name: "vnext" },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("writes the section as text, with a change's number linked to its pull request", () => {
+    const html = whatsNewHtml(
+      [
+        { version: "0.1.1-beta.20261120.2", items: ['<b>Bold</b> & "quoted" (#12)', "No number"] },
+        { version: "0.1.1-beta.20261120.1", items: ["Earlier (#7) in the middle"] },
+      ],
+      "0.1.1-beta.20261120.2",
+    );
+    expect(html).toContain(
+      '<li>&lt;b&gt;Bold&lt;/b&gt; &amp; &quot;quoted&quot; (<a href="https://github.com/sidebandstudio/clawtrate/pull/12">#12</a>)</li>',
+    );
+    expect(html).toContain("<li>No number</li>");
+    // Only a closing number is a link.
+    expect(html).toContain("<li>Earlier (#7) in the middle</li>");
+    expect(html).toContain(
+      '<h3>0.1.1-beta.20261120.2 <span class="whats-new-current">This beta</span></h3>',
+    );
+    expect(html).toContain("<h3>0.1.1-beta.20261120.1</h3>");
+    expect(html).not.toContain("<b>");
+    // Closed until it is opened: a details element with no `open`.
+    expect(
+      html.startsWith('<details class="whats-new"><summary><h2>What\'s new</h2></summary>'),
+    ).toBe(true);
+    expect(whatsNewHtml([], "0.1.1-beta.20261120.2")).toBe("");
+    // A title that names a template token shows it, without holding one.
+    const token = whatsNewHtml(
+      [{ version: "0.1.1-beta.20261120.2", items: ["Document __CLAWTRATE_BETA_VERSION__"] }],
+      "",
+    );
+    expect(token).toContain("<li>Document &#95;&#95;CLAWTRATE_BETA_VERSION&#95;&#95;</li>");
+    expect(token).not.toMatch(/__CLAWTRATE_/);
   });
 });
 
@@ -396,6 +527,7 @@ describe("assembling the site", () => {
         '<a href="__CLAWTRATE_ARM64_ZIP__">Apple silicon</a>',
         '<a href="__CLAWTRATE_X64_ZIP__">Intel</a>',
         '<a href="__CLAWTRATE_RELEASE_PAGE__">This beta on GitHub</a>',
+        "<main>__CLAWTRATE_WHATS_NEW__</main>",
       ].join("\n"),
     );
     writeFileSync(
@@ -468,6 +600,8 @@ describe("assembling the site", () => {
       `<a href="https://github.com/sidebandstudio/clawtrate/releases/tag/${tag}">This beta on GitHub</a>`,
     );
     expect(page).not.toMatch(/__CLAWTRATE_/);
+    // This beta's release page lists nothing, so the page has no "What's new" section.
+    expect(page).toContain("<main></main>");
     expect(readFileSync(join(output, "install.sh"), "utf8")).toContain(
       'CLAWTRATE_TEAM_ID="TEAMID1234"',
     );
@@ -477,6 +611,73 @@ describe("assembling the site", () => {
     // The source is left a template.
     expect(readFileSync(join(source, "download/mac/index.html"), "utf8")).toContain(
       "__CLAWTRATE_ARM64_ZIP__",
+    );
+  });
+
+  it("fills the download page's What's new section from the newest betas' release pages", async () => {
+    fixture();
+    const earlier = "0.1.1-beta.20261120.1";
+    const listed: Get = async (url, headers) => {
+      if (url.startsWith("https://api.github.com/"))
+        return new Response(
+          JSON.stringify([
+            row(earlier, { body: "What's new:\n\n- An earlier change (#7)" }),
+            row(version, { body: "Notes.\n\nWhat's new:\n\n- A <new> change (#12)\n- Another" }),
+          ]),
+        );
+      return oneBeta(url, headers);
+    };
+    expect(await assembleSite(source, output, listed, undefined)).toBe(tag);
+    const page = readFileSync(join(output, "download/mac/index.html"), "utf8");
+    expect(page).toContain(
+      `<h3>${version} <span class="whats-new-current">This beta</span></h3>` +
+        '<ul><li>A &lt;new&gt; change (<a href="https://github.com/sidebandstudio/clawtrate/pull/12">#12</a>)</li>' +
+        "<li>Another</li></ul>",
+    );
+    // The earlier beta's list follows the newest one's.
+    expect(page.indexOf(`<h3>${earlier}</h3>`)).toBeGreaterThan(page.indexOf(`<h3>${version} `));
+    expect(page).not.toMatch(/__CLAWTRATE_/);
+  });
+
+  it("puts a title in as written, whatever it holds, and still asks GitHub once", async () => {
+    fixture();
+    const asked: string[] = [];
+    const awkward: Get = async (url, headers) => {
+      asked.push(url);
+      if (url.startsWith("https://api.github.com/"))
+        return new Response(
+          JSON.stringify([
+            row(version, {
+              body: [
+                "What's new:",
+                "",
+                "- Costs $& and $` and $' and $$ and $1",
+                "- Document __CLAWTRATE_BETA_VERSION__ (#3)",
+              ].join("\n"),
+            }),
+          ]),
+        );
+      return oneBeta(url, headers);
+    };
+    expect(await assembleSite(source, output, awkward, undefined)).toBe(tag);
+    const page = readFileSync(join(output, "download/mac/index.html"), "utf8");
+    // In a replacement string these would be read as patterns, and the token as one left unfilled.
+    expect(page).toContain("<li>Costs $&amp; and $` and $&#39; and $$ and $1</li>");
+    expect(page).toContain(
+      '<li>Document &#95;&#95;CLAWTRATE_BETA_VERSION&#95;&#95; (<a href="https://github.com/sidebandstudio/clawtrate/pull/3">#3</a>)</li>',
+    );
+    expect(page.match(/<main>/g)).toHaveLength(1);
+    expect(asked.filter((url) => url.startsWith("https://api.github.com/"))).toHaveLength(1);
+  });
+
+  it("still refuses a token the page itself leaves unfilled", async () => {
+    fixture();
+    writeFileSync(
+      join(source, "download/mac/index.html"),
+      "<p>__CLAWTRATE_BETA_VERSION__ __CLAWTRATE_NOT_A_TOKEN__</p>__CLAWTRATE_WHATS_NEW__",
+    );
+    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+      "still holds __CLAWTRATE_NOT_A_TOKEN__",
     );
   });
 
