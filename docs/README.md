@@ -41,6 +41,7 @@ Every document in the repository, by what you want to do.
 - [Effortless setup and connection](design/setup-effortless.md): full access at the first connect, connecting on this Mac from OpenClaw's settings file, approving devices inside Clawtrate, and the first run timed.
 - [Search](design/search.md): the Cmd/Ctrl+K palette, what each source covers, opening a result in its place, and the iPhone's scopes.
 - [The Main Bot](design/main-bot-onboarding.md): the first run's chat with the Main Bot, how bots run commands, bots asking to change themselves and other bots through Clawtrate's plugin, proposals, and external agents over MCP.
+- [Bringing your OpenClaw in](design/bring-your-openclaw.md): starting the Main Bot from what an existing bot knows, moving scheduled jobs to it and back, and bringing in what another assistant knows about you by a prompt.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 
 ## Research
@@ -56,6 +57,8 @@ Every document in the repository, by what you want to do.
 - `research/steer-stop/`: the probe behind the steering and Stop note.
 - [Bots that manage themselves](research/bot-self-management.md): what an OpenClaw plugin can do to change bots, with whose authority, with no tools, and over MCP, from OpenClaw's source and a development instance.
 - `research/bot-self-management/`: a gateway-free stand-in for the contract that note leads to.
+- [Bringing an existing OpenClaw in](research/bring-your-openclaw.md): where a bot's memory, the person's profile, notes and skills live, which methods read and write them, and how a scheduled job moves between bots and back, from OpenClaw's source and a development instance.
+- `research/bring-your-openclaw/`: the probe behind that note.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
