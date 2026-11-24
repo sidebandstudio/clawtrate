@@ -1165,6 +1165,78 @@ test("F-478: View more opened for one provider starts closed for the next, and r
   ).toEqual(["openai", "xai", "openai"]);
 });
 
+for (const [where, open] of [
+  ["New bot", (page: Page) => newBotOnWork(page, `${ADMIN}&catalog=slow`)],
+  [
+    "Settings",
+    (page: Page) => openFixture(page, `${ADMIN}&panel=open&tab=settings&catalog=slow`, "light"),
+  ],
+] as const)
+  test(`F-478: focus never leaves the Model menu while View more's answer replaces its row, in ${where}`, async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByTestId("model-select").click();
+    const menu = page.getByRole("menu", { name: "Model" });
+    await menu.getByRole("menuitem", { name: "View more" }).click();
+    // Where focus is at the moment the answer's rows are in the page, before anything later runs:
+    // a key pressed then (Escape) must reach the menu.
+    await page.evaluate(() => {
+      const probe = window as unknown as { focusWhenShown?: string };
+      const seen = new MutationObserver(() => {
+        const menu = document.querySelector('[role="menu"]');
+        if (!menu?.querySelector('[role="menuitemradio"][aria-label="gpt-5.4"]')) return;
+        seen.disconnect();
+        probe.focusWhenShown = menu.contains(document.activeElement) ? "menu" : "outside";
+      });
+      seen.observe(document.body, { childList: true, subtree: true });
+    });
+    await releaseCatalog(page);
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { focusWhenShown?: string }).focusWhenShown),
+      )
+      .toBe("menu");
+    // And Escape closes the menu alone.
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("model-select")).toBeFocused();
+  });
+
+test("F-478: a menu that lost focus to the page never takes it back from the control Tab moved to", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open&tab=settings`, "light");
+  await page.getByTestId("model-select").click();
+  const menu = page.getByRole("menu", { name: "Model" });
+  await page.keyboard.press("End");
+  await expect(menu.locator(".menu-item").last()).toBeFocused();
+  // Focus goes from the row to the page with no blur reaching the menu, as when its focused row
+  // is removed.
+  await page.evaluate(() => {
+    window.addEventListener("focusout", (event) => event.stopImmediatePropagation(), {
+      capture: true,
+      once: true,
+    });
+    (document.activeElement as HTMLElement).blur();
+  });
+  await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  // Tab moves focus to another control; then the menu's rows change.
+  await page.keyboard.press("Tab");
+  const moved = await page.evaluate(() => {
+    const active = document.activeElement as HTMLElement;
+    active.dataset.movedHere = "1";
+    return active !== document.body && !active.closest('[role="menu"]');
+  });
+  expect(moved).toBe(true);
+  await change(
+    page,
+    `return { ...state, accounts: { ...state.accounts, models: state.accounts.models.filter((m) => m.id !== "gpt-5.5-mini") } };`,
+  );
+  await expect(menu.getByRole("menuitemradio", { name: "gpt-5.5-mini" })).toHaveCount(0);
+  await expect(page.locator('[data-moved-here="1"]')).toBeFocused();
+});
+
 test("F-478: View more's answer belongs to its dialog: closing the dialog drops it, and opening View more again reads again", async ({
   page,
 }) => {
