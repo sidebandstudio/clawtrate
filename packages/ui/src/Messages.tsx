@@ -19,6 +19,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -26,6 +27,7 @@ import {
   type RefObject,
 } from "react";
 import { useBridge } from "./bridge.tsx";
+import { createHandoffDraft } from "./draft-handoff.ts";
 import { copyText } from "./clipboard.ts";
 import { useHoldsWords } from "./held-words.ts";
 import { ArrowUpIcon, CloseIcon, MoreIcon, ReplyIcon, SmileIcon } from "./icons.tsx";
@@ -634,14 +636,25 @@ export function reconcileReplyReceipts(
  */
 /** A reply's words, where they go, and why the last send of them was refused. */
 type ThreadDraft = Draft & { error: string | null };
+const useThreadDrafts = createHandoffDraft<Record<string, ThreadDraft>>((drafts) =>
+  Object.values(drafts).some((draft) => Boolean(draft.text)),
+);
 
-export function ThreadView({ messageId, onClose }: { messageId: string; onClose: () => void }) {
+export function ThreadView({
+  messageId,
+  draftKey,
+  onClose,
+}: {
+  messageId: string;
+  draftKey: string;
+  onClose: () => void;
+}) {
   const env = useMessages();
   const bridge = useBridge();
   // Each thread keeps its own words and error, so a send refused after another thread was opened
   // comes back to the thread it was typed in, not the one on screen. Each keeps the session it was
   // started in too, with the message it replies to: it goes there only (F-278).
-  const [drafts, setDrafts] = useState<Record<string, ThreadDraft>>({});
+  const [drafts, setDrafts, handingOff, beginHandoff] = useThreadDrafts(draftKey, () => ({}));
   const {
     text,
     error,
@@ -659,7 +672,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   // Its words keep the task on screen should it leave the list (`keptOnScreen`).
   useHoldsWords(
     env?.taskKey ?? "",
-    env !== null && Object.values(drafts).some((draft) => draft.text.trim()),
+    env !== null && (handingOff || Object.values(drafts).some((draft) => draft.text.trim())),
   );
   /** One change to a thread's draft: its words, their session and its error together. */
   const change = (id: string, next: (now: ThreadDraft) => ThreadDraft) =>
@@ -676,16 +689,19 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
           },
     );
   // Words typed before the view showed a session keep the session of the message they reply to.
-  const adopt = Object.entries(drafts).filter(
-    ([, draft]) => draft.text.trim() && draft.sessionId === undefined && !draft.unbound,
-  );
-  if (shownSession && adopt.length > 0)
+  useLayoutEffect(() => {
+    if (!shownSession) return;
+    const adopt = Object.entries(drafts).filter(
+      ([, draft]) => draft.text.trim() && draft.sessionId === undefined && !draft.unbound,
+    );
+    if (!adopt.length) return;
     setDrafts((all) => ({
       ...all,
       ...Object.fromEntries(
         adopt.map(([id, draft]) => [id, { ...draft, sessionId: parents[id] ?? shownSession }]),
       ),
     }));
+  }, [shownSession, drafts, parents, setDrafts]);
   const field = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const writable = env?.canWrite;
@@ -752,6 +768,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     // A reply goes only to the session of the message it replies to.
     if (env.gone || (parent !== undefined && to !== parent)) return;
     const back = chosen ? { text: body, sessionId: chosen } : asBound(body);
+    const finishHandoff = beginHandoff();
     change(messageId, () => ({ text: "", error: null }));
     try {
       const answer = await bridge.invoke({
@@ -767,6 +784,8 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
       setAdded((count) => count + 1);
     } catch (failure) {
       restore(back, failure);
+    } finally {
+      finishHandoff();
     }
   };
   /**
@@ -779,6 +798,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     const botId = botIdFromSessionKey(env.taskKey);
     if (!body || !botId) return;
     const id = messageId;
+    const finishHandoff = beginHandoff();
     try {
       const { key } = await bridge.invoke({ type: "createTask", botId, text: body, label: null });
       void bridge.send({ type: "closeSession", key });
@@ -789,6 +809,8 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         ...now,
         error: failure instanceof Error ? failure.message : String(failure),
       }));
+    } finally {
+      finishHandoff();
     }
   };
   const line = (item: { role: string; text: string; author?: string }, key: string) => (

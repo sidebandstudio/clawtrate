@@ -24,6 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { useBridge } from "./bridge.tsx";
+import { createHandoffDraft } from "./draft-handoff.ts";
 import { useHoldsWords } from "./held-words.ts";
 import { ArrowUpIcon, ChevronIcon, CloseIcon, FileIcon, PlusIcon } from "./icons.tsx";
 import {
@@ -194,6 +195,8 @@ function writeDraft(key: string, draft: Draft): void {
   }
 }
 
+const useComposerDraft = createHandoffDraft<Draft>((draft) => Boolean(draft.text), writeDraft);
+
 /** True on a Mac, where ⌘ is the command key; elsewhere Ctrl stands for it. */
 const isMac = () => /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? "");
 export const command = (event: { metaKey: boolean; ctrlKey: boolean }) =>
@@ -244,10 +247,10 @@ export function Composer({
   const bridge = useBridge();
   // A draft belongs to one task on one gateway.
   const draftKey = `${gateway ?? ""}|${taskKey}`;
-  const [draft, setDraft] = useState(() => readDraft(draftKey));
+  const [draft, setDraft, handingOff, beginHandoff] = useComposerDraft(draftKey, () =>
+    readDraft(draftKey),
+  );
   const text = draft.text;
-  // Its words and session are one record, written whole whenever either changes.
-  useEffect(() => writeDraft(draftKey, draft), [draftKey, draft]);
   // The task's session as drawn now.
   const shownSession = transcript?.sessionId;
   /** The person's words, bound at their first to the session the view shows, if it shows one. */
@@ -341,20 +344,23 @@ export function Composer({
   const hasContent = text.trim().length > 0 || files.length > 0 || tokens.length > 0;
   const canSend = hasContent && !refused && !uploading;
   // Its words keep the task on screen should it leave the list (`keptOnScreen`).
-  useHoldsWords(taskKey, hasContent);
+  useHoldsWords(taskKey, hasContent || handingOff);
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
   // Until the view shows the task's session the draft stays here: only a new task takes it.
   const waits = sendWaits(transcript);
   // The draft keeps the session the view showed at its first word, or, started before the view
   // showed one, the first it shows; it lets go once it holds nothing.
-  const settled = !hasContent
-    ? draft.sessionId !== undefined || draft.unbound
-      ? { text: draft.text }
-      : draft
-    : draft.sessionId === undefined && !draft.unbound && shownSession !== undefined
-      ? { ...draft, sessionId: shownSession }
-      : draft;
-  if (settled !== draft) setDraft(settled);
+  useLayoutEffect(() => {
+    if (!hasContent && (draft.sessionId !== undefined || draft.unbound))
+      setDraft({ text: draft.text });
+    else if (
+      hasContent &&
+      draft.sessionId === undefined &&
+      !draft.unbound &&
+      shownSession !== undefined
+    )
+      setDraft({ ...draft, sessionId: shownSession });
+  }, [draft, hasContent, shownSession, setDraft]);
   // Words that name no session Clawtrate knows they were written for: once the view shows one,
   // the person chooses a new task for them or the task shown.
   const unbound = hasContent && draft.unbound === true;
@@ -417,7 +423,7 @@ export function Composer({
         onNotice({ title: "This message is still in the composer.", reason: DRAFT_MOVED });
         return;
       }
-      if (submitting.current) {
+      if (submitting.current || handingOff) {
         onNotice({
           title: "This message is still in the composer.",
           reason:
@@ -448,6 +454,7 @@ export function Composer({
         return;
       }
       submitting.current = true;
+      const finishHandoff = beginHandoff();
       const words = text;
       const chips = tokens;
       // The chips go first, as their own text: the gateway runs a command or skill named so.
@@ -465,7 +472,6 @@ export function Composer({
           // The new task runs on its own; this viewer stays on this one.
           void bridge.send({ type: "closeSession", key });
           setDraft((current) => (current.text === words ? { text: "" } : current));
-          if (readDraft(draftKey).text === words) writeDraft(draftKey, { text: "" });
           setTokens((current) => (current === chips ? [] : current));
           setPicker(null);
           onAnnounce("Started as a new task");
@@ -475,6 +481,7 @@ export function Composer({
             reason: error instanceof Error ? error.message : String(error),
           });
         } finally {
+          finishHandoff();
           submitting.current = false;
         }
         return;
@@ -514,10 +521,13 @@ export function Composer({
           reason: error instanceof Error ? error.message : String(error),
         });
       } finally {
+        finishHandoff();
         submitting.current = false;
       }
     },
     [
+      beginHandoff,
+      handingOff,
       canSend,
       hasContent,
       uploading,
@@ -528,7 +538,6 @@ export function Composer({
       bridge,
       bot.id,
       taskKey,
-      draftKey,
       setDraft,
       onAnnounce,
       onNotice,

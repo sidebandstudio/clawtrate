@@ -230,6 +230,7 @@ function useHoldPlace(
  */
 function TranscriptView({
   task,
+  draftKey,
   gone,
   bot,
   transcript,
@@ -238,6 +239,7 @@ function TranscriptView({
   onAnnounce,
 }: {
   task: Task;
+  draftKey: string;
   /** The task left the list and stays on screen for what it holds (F-278, F-277). */
   gone: boolean;
   bot: Bot;
@@ -472,6 +474,7 @@ function TranscriptView({
       {thread && (
         <MessageProvider env={messageEnv}>
           <ThreadView
+            draftKey={draftKey}
             messageId={thread.messageId}
             onClose={() => {
               const from = thread.from;
@@ -1118,9 +1121,11 @@ export function Conversation({
       />
     );
   } else {
+    const draftKey = JSON.stringify([connection.gatewayUrl, task.key]);
     body = (
       <TranscriptView
-        key={task.key}
+        key={draftKey}
+        draftKey={draftKey}
         task={task}
         gone={gone}
         bot={bot}
