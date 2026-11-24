@@ -162,6 +162,7 @@ import type {
   SendLimits,
   Task,
   TaskContext,
+  TaskStarter,
   TaskCreation,
   ToolResult,
   Transcript,
@@ -614,6 +615,7 @@ const item = flagged<TranscriptItem>()({
   }),
   idempotencyKey: ID,
   skillNote: FLAG,
+  brief: FLAG,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
@@ -768,6 +770,7 @@ const task = flagged<Task>()({
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
   channel: NAME,
+  startedBy: object<TaskStarter>()({ botId: ID, fromKey: ID }),
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
 const sidebarId = id(MAX_SIDEBAR_ID_CHARS);

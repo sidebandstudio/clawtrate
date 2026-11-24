@@ -1,0 +1,30 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph:
+      - text: Otto started this task from Weekly backup check
+      - button "Open Weekly backup check"
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:35 PM
+    - figure "Otto's brief":
+      - text: Otto's brief
+      - paragraph: The media box disk is almost full. Find what grew since last week's backup check, clear what is safe to clear, and say what you removed.
+    - paragraph: Old transcode logs grew by 40 GB. I removed them; the disk is now at 61%.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Thanks. Keep last month's logs next time.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: "Noted: I will keep a month of logs."
+    - toolbar "Message actions":
+      - button "More"
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

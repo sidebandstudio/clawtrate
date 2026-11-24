@@ -12,6 +12,7 @@ import type {
 import { browserUse } from "@clawtrate/core";
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -24,7 +25,14 @@ import { AccessBar } from "./AccessBar.tsx";
 import { NameCard } from "./bots/NameCard.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
-import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
+import {
+  CardScope,
+  CardSlot,
+  focusPending,
+  oldestPending,
+  OpenTaskContext,
+  TrailingCards,
+} from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
 import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
@@ -46,6 +54,7 @@ import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "
 import { SentFiles } from "./SentFiles.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
+import { BriefTurn, StartedLine, starterOf, type Starter } from "./StartedBy.tsx";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -55,11 +64,15 @@ function Turn({
   taskKey,
   item,
   incomplete = false,
+  starter = null,
 }: {
   taskKey: string;
   item: TranscriptItem;
   incomplete?: boolean;
+  /** Who started the task, for the brief it wrote (F-565). */
+  starter?: Starter | null;
 }) {
+  if (item.brief && starter) return <BriefTurn text={itemText(item)} starter={starter} />;
   const role = item.role === "user" ? "user" : "assistant";
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
   return (
@@ -257,6 +270,9 @@ function TranscriptView({
   onAnnounce: (text: string) => void;
 }) {
   const reading = useReading();
+  const { bots, tasksByBot } = useClawtrateState();
+  const starter = useMemo(() => starterOf(task, bots, tasksByBot), [task, bots, tasksByBot]);
+  const openTask = useContext(OpenTaskContext);
   // The thread open over the transcript, and what opened it, for focus to go back to.
   const [thread, setThread] = useState<{ messageId: string; from: HTMLElement | null } | null>(
     null,
@@ -431,7 +447,12 @@ function TranscriptView({
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
         ) : live.echoes.has(item.id) ? null : (
-          <Turn taskKey={task.key} item={item} incomplete={live.incomplete.has(item.id)} />
+          <Turn
+            taskKey={task.key}
+            item={item}
+            incomplete={live.incomplete.has(item.id)}
+            starter={starter}
+          />
         )}
       </CardSlot>,
     );
@@ -466,6 +487,7 @@ function TranscriptView({
                 <h1 className="task-line" tabIndex={-1}>
                   {task.title}
                 </h1>
+                {starter && <StartedLine starter={starter} onOpen={openTask} />}
                 <TaskContext task={task} />
                 {note}
                 {rows}
