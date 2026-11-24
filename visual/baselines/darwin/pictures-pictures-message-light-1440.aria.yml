@@ -57,7 +57,8 @@
       - button "More"
     - paragraph: Here is the picture.
     - figure:
-      - img "A picture the bot handed over"
+      - button "A picture the bot handed over":
+        - img "A picture the bot handed over"
     - toolbar "Message actions":
       - button "More"
     - paragraph: It fits the top of the newsletter.

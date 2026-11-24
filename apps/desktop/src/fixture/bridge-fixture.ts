@@ -66,7 +66,13 @@ import { botDeleteCommands, NO_BOT_DELETE_PARAMS, type BotDeleteParams } from ".
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
-import { isPictureScene, PICTURE_SCENES, pictureAnswers, pictureScene } from "./pictures.ts";
+import {
+  isPictureScene,
+  PICTURE_SCENES,
+  pictureAnswers,
+  pictureScene,
+  sentPictureAnswer,
+} from "./pictures.ts";
 import { BOT_NAME_SCENES, botNameCommand, botNameScene, isBotNameScene } from "./bot-name.ts";
 import {
   computerFixture,
@@ -807,6 +813,7 @@ export function createFixtureBridge(
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
     if (command.type === "readChatPicture") return pictureAnswer();
+    if (command.type === "readSentPicture") return sentPictureAnswer(command);
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;

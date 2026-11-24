@@ -37,6 +37,7 @@ import {
   MAX_APPROVAL_READERS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
+  MAX_SENT_PICTURE_MESSAGES,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
@@ -256,6 +257,18 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 3 * MAX_FILE_NAME_CHARS,
     row: null,
     opaque: "file content, counted in `outboxFiles`",
+  },
+  // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
+  sentPictures: {
+    max: MAX_SENT_PICTURE_MESSAGES,
+    each: 3 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
+    row: "outboxFiles",
+  },
+  "sentPictures.*.files": {
+    max: MAX_ATTACHMENTS_PER_MESSAGE,
+    each: N + MAX_FILE_NAME_CHARS,
+    row: null,
+    opaque: "picture content, counted in `outboxFiles`",
   },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
