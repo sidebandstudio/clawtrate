@@ -133,15 +133,15 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Outbox                                  | 16 × 64,696                                                                                                                            |       1,035,154 |
   | Questions                               | (4 pending + 4 settled) × 81,509                                                                                                       |         652,082 |
   | Approvals                               | (16 pending + 8 settled) × 88,109                                                                                                      |       2,114,642 |
-  | History page                            | 200 items × 6,144, plus 300 blocks × 4,172, 16 pictures × 2,979 and 40 sent files × 920 shared by the page                             |       2,565,366 |
+  | History page                            | 200 items × 6,144, plus 300 blocks × 4,172, 16 pictures × 2,978 and 40 sent files × 919 shared by the page                             |       2,565,366 |
   | Inter-session messages                  | 64 × 5,772                                                                                                                             |         369,474 |
   | Linked runs                             | 32 × (key 1,024 + 2,204)                                                                                                               |         103,362 |
   | Steer aliases                           | 16 × (key 1,024 + 1,024)                                                                                                               |          32,802 |
   | Queue aliases                           | 16 × (key 1,024 + 1,024)                                                                                                               |          32,802 |
-  | Tool map                                | `MAX_MCP_TOOLS` (128) tool-server tools by effective name, from `tools.effective`                                                      |          84,750 |
-  | Tool inventory and workspace root       | `MAX_BUILTIN_TOOLS` (256) built-in and plugin tool names from `tools.effective`, and the bot's workspace root from `agents.files.list` |          33,571 |
-  | Reactions                               | 200 messages shown × (key 1,024 + 12 emoji × 123), from `session.reactions.list` and `session.reaction`                                |         503,214 |
-  | Streaming text, ids, error and the rest | streaming text 16,384, plus field names                                                                                                |          21,917 |
+  | Tool map                                | `MAX_MCP_TOOLS` (128) tool-server tools by effective name, from `tools.effective`                                                      |          84,738 |
+  | Tool inventory and workspace root       | `MAX_BUILTIN_TOOLS` (256) built-in and plugin tool names from `tools.effective`, and the bot's workspace root from `agents.files.list` |          33,538 |
+  | Reactions                               | 200 messages shown × (key 1,024 + 12 emoji × 123), from `session.reactions.list` and `session.reaction`                                |         503,202 |
+  | Streaming text, ids, error and the rest | streaming text 16,384, plus field names                                                                                                |          21,974 |
   | Per task                                |                                                                                                                                        |      14,722,898 |
 
 - **The state**, and what one viewer is sent:
@@ -155,10 +155,10 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Accounts                           | 64 accounts, 32 sign-in methods, 64 key providers, 128 models and 64 providers' cut counts, 32 bots' bindings, one sign-in, one creation, one write |       2,395,453 |
   | Routines                           | 200 routines from `cron.list`, each instruction at most 4,096, and the last one removed; runs and conversations are not kept                        |       2,299,134 |
   | Usage                              | 16 warning budgets and their counts, 16 providers' limits × 8 windows                                                                               |         186,584 |
-  | Check-ins                          | 32 bots' IDs, jobs and settings, the default (33 bots, a prompt), scheduler and save; prompts of at most 4,000                                      |         944,979 |
-  | Task list, connection and the rest | 500 listed tasks × 6,676 across 32 bots, connection 105,209, setup on this computer, field names                                                    |       3,580,946 |
-  | Computer tab                       | 8 viewers' panes (16 tabs, a view and a control each), 32 control events                                                                            |         776,173 |
-  | Bot names                          | 32 cards: a bot's id, its name and the one it wrote, its read's gateway stamp, a reason                                                             |         151,854 |
+  | Check-ins                          | 32 bots' IDs, jobs and settings, the default (33 bots, a prompt), scheduler and save; prompts of at most 4,000                                      |         945,024 |
+  | Task list, connection and the rest | 500 listed tasks × 6,832 across 32 bots, connection 105,209, setup on this computer, field names                                                    |       3,644,618 |
+  | Computer tab                       | 8 viewers' panes (16 tabs, a view and a control each), 32 control events                                                                            |         776,161 |
+  | Bot names                          | 32 cards: a bot's id, its name and the one it wrote, its read's gateway stamp, a reason                                                             |         151,842 |
   | State                              |                                                                                                                                                     |     131,065,984 |
   | One viewer's snapshot              | the state with only its 4 open tasks                                                                                                                |      72,170,288 |
 
