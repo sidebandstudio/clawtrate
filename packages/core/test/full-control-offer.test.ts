@@ -479,7 +479,13 @@ describe("the one-time offer of full control (F-500)", () => {
   it("F-549: an access request queued at startup sends nothing for a full pairing", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL, token: null }),
-      [tokenKey(URL)]: fullRecord,
+      // A full pairing the gateway granted read alone: an admin request would be sent.
+      [tokenKey(URL)]: JSON.stringify({
+        token: "token-A",
+        grantedScopes: READ_SCOPES,
+        heldScopes: READ_SCOPES,
+        fullGrant: true,
+      }),
     });
     const { gateway } = gatewayFor();
     // The first read of the saved pairing waits, so the request below comes before its grant
