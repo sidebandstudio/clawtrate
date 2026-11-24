@@ -475,7 +475,9 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "readBo
   ? BotDeleteRead
   : C extends { type: "deleteBot" }
     ? BotDeleteOutcome
-    : BridgeResultRest<C>;
+    : C extends { type: "declineBotName" }
+      ? { declined: boolean }
+      : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
