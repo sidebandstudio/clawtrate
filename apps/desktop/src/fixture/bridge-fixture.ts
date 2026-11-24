@@ -903,6 +903,8 @@ export function createFixtureBridge(
         return;
       // The offer's one request waits for the owner; `clawtrateFixture.setState` decides it.
       case "requestFullControl":
+        // It replaces any access request under way: that one's held answer no longer lands.
+        latestAccessRequest += 1;
         set(
           withConnection(state, {
             fullOffer: "settings",

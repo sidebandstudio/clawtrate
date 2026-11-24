@@ -190,6 +190,7 @@ export function FullControlOffer({
               {note}
             </p>
             {!connection.fullPairing &&
+              isFullRequest(connection) &&
               connection.upgrade.status === "pending" &&
               connection.upgrade.approveCommand && (
                 <CommandLine

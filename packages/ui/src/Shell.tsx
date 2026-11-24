@@ -147,6 +147,8 @@ export function Shell({
   const overlay = mainWidth !== null && mainWidth < DOCK_FROM;
   // The Routines view takes the main pane, Work included: no drawer, scrim or inert rail behind it.
   const drawerOpen = panelOpen && overlay && !routines;
+  // While the offer of full control is open, its dialog keeps the keyboard, not the drawer behind.
+  const drawerKeys = drawerOpen && !offerOpen;
 
   const setPanel = useCallback((open: boolean) => {
     if (open) {
@@ -261,9 +263,9 @@ export function Shell({
         // ⌘[ in the conversation goes back to the file while "Back to <file>" is offered.
         event.preventDefault();
         backLinkRef.current();
-      } else if (event.key === "Escape" && drawerOpen) {
+      } else if (event.key === "Escape" && drawerKeys) {
         setPanel(false);
-      } else if (event.key === "Tab" && drawerOpen && panelRef.current) {
+      } else if (event.key === "Tab" && drawerKeys && panelRef.current) {
         // The drawer keeps focus inside itself.
         const items = [
           ...panelRef.current.querySelectorAll<HTMLElement>("button, [tabindex]"),
@@ -285,7 +287,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel, drawerOpen, setPanel]);
+  }, [togglePanel, drawerKeys, setPanel]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
   const unread = unreadCount(
@@ -870,7 +872,12 @@ export function Shell({
         )}
       </div>
       {offerOpen && (
-        <FullControlOffer connection={state.connection} onClose={() => setOfferOpen(false)} />
+        <FullControlOffer
+          // Each gateway's offer is its own: a switch shows that gateway's choices afresh.
+          key={offerFor ?? ""}
+          connection={state.connection}
+          onClose={() => setOfferOpen(false)}
+        />
       )}
       {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
       {searchOpen && (

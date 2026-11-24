@@ -28,7 +28,7 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
-import { FullControlAsk, notGranted } from "./FullControl.tsx";
+import { FullControlAsk, isFullRequest, notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
@@ -559,7 +559,8 @@ export function Settings({
           {problem.message}
         </div>
       )}
-      {!info.readOnly && rePairProblem && !holdsAll && (
+      {/* The owner's decision on the full-control request shows whatever this device holds. */}
+      {!info.readOnly && rePairProblem && (!holdsAll || isFullRequest(connection)) && (
         <div className="form-error" role="alert" data-testid="repair-problem">
           {rePairProblem}
         </div>

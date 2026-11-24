@@ -79,7 +79,11 @@ export function endpointSpellings(raw: string): string[] {
       try {
         const each = validateGatewayUrl(`${scheme}//${name}:${port}${url.pathname}${url.search}`);
         // The same query as dialled, character for character, and the same endpoint.
-        if (each !== own && new URL(each).search === url.search && gatewayEndpoint(each) === endpoint)
+        if (
+          each !== own &&
+          new URL(each).search === url.search &&
+          gatewayEndpoint(each) === endpoint
+        )
           spellings.add(each);
       } catch {
         // A name that can't take a trailing dot (an IP address) has no such spelling.
