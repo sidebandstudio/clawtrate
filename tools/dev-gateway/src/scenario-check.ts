@@ -3468,7 +3468,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
               where,
             ),
           title: spawnTitle(args),
-          status: "failed",
+          status: "blocked",
         },
       ]);
       outside.expectEnd("final", `The task did not start (forbidden): ${error}`);
