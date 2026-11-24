@@ -236,9 +236,9 @@ The run is failed if any image failed, otherwise inconclusive if any image was, 
 
 **For the release job.** Read `real-update-summary.json`, never the run's conclusion, because an inconclusive run is green.
 
-- **Pause releases** when any image `failed`, when a verdict is anything other than the three values above, and when the run has no `real-update-summary` artifact (the `versions` job failed, or the run was cancelled before its summary). A failure on the preview image alone (`xcode-27`) is a warning, not a pause.
-- **A release counts as checked** when at least one image `passed` and none `failed`, whatever the run's own `verdict`. An image that started after a newer release was published ends `inconclusive`, which says nothing against an image that passed.
-- **A release with no passing image** isn't recorded as checked, and isn't a reason to pause by itself. After three such releases in a row, hold the next release until the newest one's check has a passing or failing image. Nothing newer is published in that time, so the images still waiting are offered the candidate.
+- **Pause releases** when a release image (`macos-15`, `macos-26`) `failed`, when a verdict is anything other than the three values above, and when the run has no `real-update-summary` artifact (the `versions` job failed, or the run was cancelled before its summary). A failure on the preview image alone (`xcode-27`) is a warning, not a pause.
+- **A release counts as checked** when at least one release image `passed` and no release image `failed`, whatever the run's own `verdict` and whatever the preview image did. An image that started after a newer release was published ends `inconclusive`, which says nothing against an image that passed.
+- **A release with no passing release image** isn't recorded as checked, and isn't a reason to pause by itself. After three such releases in a row, hold the next release until the newest one's check has a passing or failing release image. Nothing newer is published in that time, so the images still waiting are offered the candidate.
 - **A run that hasn't finished** when the release job stops waiting is read when it does finish: a late pass still counts, and a late failure still pauses.
 - **Pass `previous` and `candidate` explicitly**, so that a release published before the `versions` job starts can't change the pair.
 
