@@ -509,7 +509,12 @@ test("F-277: a task whose run is active asks Stop and archive or Cancel; Cancel 
   await dialog.getByRole("button", { name: "Stop and archive" }).click();
   await expect(taskRow(page, "Rotate the logs")).toHaveCount(0);
   expect(await sent(page, "archiveTask")).toEqual([
-    { type: "archiveTask", key: "agent:otto:rotate-logs", stop: true },
+    {
+      type: "archiveTask",
+      key: "agent:otto:rotate-logs",
+      stop: true,
+      sessionId: "otto-rotate-logs",
+    },
   ]);
 });
 
@@ -540,7 +545,7 @@ test("F-278: Delete asks first, with Cancel focused; Delete removes the task and
   await expect(taskRow(page, "Certificate renewal")).toHaveCount(0);
   await expect(taskRow(page, "Router firmware")).toBeFocused();
   expect(await sent(page, "deleteTask")).toEqual([
-    { type: "deleteTask", key: "agent:otto:cert-renewal" },
+    { type: "deleteTask", key: "agent:otto:cert-renewal", sessionId: "otto-cert-renewal" },
   ]);
   // A running task says its run is stopped first.
   await taskMenu(page, "Rotate the logs");
