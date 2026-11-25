@@ -43,6 +43,7 @@ import {
   MAX_DEFERRED_STOPS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
+  MAX_PICTURE_READS,
   MAX_READ_BACK_PICTURES,
   MAX_SENT_PICTURE_MESSAGES,
   MAX_SPAWN_LINKS,
@@ -298,6 +299,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "outboxFiles",
     opaque: "picture content, counted in `outboxFiles`",
   },
+  // Pictures being read back, under way or waiting their turn: each its task's key and a flag.
+  pictureReadsInFlight: { max: MAX_PICTURE_READS, each: ID + SHORT, row: "bookkeeping" },
   // Each followed task's references to its person's newest files, by row key and place.
   sentSources: {
     max: T,

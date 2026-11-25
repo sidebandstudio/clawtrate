@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { fromBase64, toBase64 } from "../src/bytes.ts";
 import {
   ClawtrateClient,
+  MAX_PICTURE_READS,
   MAX_READ_BACK_PICTURES,
   MAX_RETAINED_ATTACHMENT_BYTES,
   type OutgoingAttachment,
@@ -556,6 +557,38 @@ describe("F-557: your picture on another device, and after a restart", () => {
     expect((await Promise.all(reads)).map((read) => read.status)).toEqual(Array(6).fill("content"));
     client.stop();
   });
+
+  it("F-557: past the pictures read at once, a new read is refused and kept nowhere, and can be tried again", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { fetch: answer } = live();
+    const fetch: HttpFetch = async (url, init) => {
+      await held;
+      return answer(url, init);
+    };
+    const rows = Array.from({ length: MAX_PICTURE_READS + 1 }, (_, i) =>
+      sentRow(`m${i}`, `p${i}`, [SHOT], i + 1),
+    );
+    const { client } = await elsewhere(fetch, rows);
+    const inFlight = () =>
+      (client as unknown as { pictureReadsInFlight: Set<unknown> }).pictureReadsInFlight.size;
+    const reads = rows
+      .slice(0, MAX_PICTURE_READS)
+      .map((_, i) => client.readSentPicture(KEY, `m${i}:user`, 0));
+    await until(() => inFlight() === MAX_PICTURE_READS);
+    const last = `m${MAX_PICTURE_READS}:user`;
+    expect(await client.readSentPicture(KEY, last, 0)).toEqual({
+      status: "failed",
+      message: "Too many pictures are being read; try again in a moment.",
+    });
+    expect(inFlight()).toBe(MAX_PICTURE_READS);
+    release();
+    expect((await Promise.all(reads)).every((read) => read.status === "content")).toBe(true);
+    expect(inFlight()).toBe(0);
+    // Tried again once the others are done, it loads.
+    expect((await client.readSentPicture(KEY, last, 0)).status).toBe("content");
+    client.stop();
+  }, 30_000);
 
   it("F-557: at an address with a path or a query, nothing is asked: the origin's root isn't the gateway shown", async () => {
     for (const url of ["wss://gateway.example/base", "wss://gateway.example/?x=1"]) {

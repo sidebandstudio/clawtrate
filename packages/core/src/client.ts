@@ -497,6 +497,11 @@ export const MAX_SENT_PICTURE_MESSAGES = 32;
  * let them go. Their bytes share the same budget and give way first, oldest first.
  */
 export const MAX_READ_BACK_PICTURES = 16;
+/**
+ * Pictures being read back at once, under way or waiting for a file read's place: more than a
+ * screen shows together. Past it a new read is refused at once, and the picture offers Try again.
+ */
+export const MAX_PICTURE_READS = 32;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
 
@@ -7099,6 +7104,11 @@ export class ClawtrateClient {
   ): Promise<SentPictureRead> {
     const generation = this.generation;
     const epoch = this.epoch;
+    if (this.pictureReadsInFlight.size >= MAX_PICTURE_READS)
+      return {
+        status: "failed",
+        message: "Too many pictures are being read; try again in a moment.",
+      };
     // Dropped when its task, or its bot, is deleted while it is read: a read for another task
     // goes on.
     const flight = { task: key, dropped: false };
