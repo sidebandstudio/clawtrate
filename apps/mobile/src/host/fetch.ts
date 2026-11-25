@@ -1,0 +1,91 @@
+// Core's fetch on iOS (`HttpFetch`, packages/core/src/host.ts), for the pictures it reads from
+// the gateway. React Native's fetch follows every redirect and gives no body to read in parts,
+// and Expo's uses the app's shared cache, cookies and stored credentials, so the app's own
+// native module makes the request (modules/clawtrate-fetch; docs/decisions.md, The iOS app).
+// Here only what core asks for reaches it: a GET to an http or https address with, at most,
+// core's one `Authorization` header. Core's abort, or a body it cancels past its limit, stops
+// the transfer. A refused redirect fails as a WHATWG fetch's does, which core reads as one.
+
+import type { HttpFetch, HttpResponseLike } from "@clawtrate/core";
+
+/** What modules/clawtrate-fetch gives JavaScript, each request named by an id. */
+export type NativeFetch = {
+  start(
+    id: string,
+    url: string,
+    authorization: string | null,
+  ): Promise<{ status: number; headers: Record<string, string> }>;
+  /** The next part of the body, or null at its end. */
+  read(id: string): Promise<Uint8Array | ArrayBuffer | null>;
+  cancel(id: string): Promise<void>;
+};
+
+const codeOf = (error: unknown) =>
+  typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+
+/** A failed request as a WHATWG fetch reports it: a redirect as undici names one. */
+const fetchFailed = (error: unknown) =>
+  new TypeError("fetch failed", {
+    cause: codeOf(error) === "ERR_REDIRECT" ? new Error("unexpected redirect") : error,
+  });
+
+export function createHostFetch(native: NativeFetch): HttpFetch {
+  let last = 0;
+  return async (url, init) => {
+    if (init.method !== "GET" || init.redirect !== "error" || init.credentials !== "omit")
+      throw new TypeError(
+        "This host fetches only a GET that follows no redirect and sends no cookies.",
+      );
+    if (!/^https?:\/\//i.test(url))
+      throw new TypeError("This host fetches only http and https addresses.");
+    const { signal } = init;
+    if (signal.aborted)
+      throw Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+    last += 1;
+    const id = String(last);
+    let open = true;
+    const close = () => {
+      open = false;
+      signal.removeEventListener("abort", stop);
+    };
+    // Stops the transfer: core's time limit ran out, or it wants no more of the body.
+    function stop() {
+      if (!open) return;
+      close();
+      void native.cancel(id).catch(() => {});
+    }
+    signal.addEventListener("abort", stop);
+    let head: Awaited<ReturnType<NativeFetch["start"]>>;
+    try {
+      head = await native.start(id, url, init.headers?.authorization ?? null);
+    } catch (error) {
+      stop();
+      throw fetchFailed(error);
+    }
+    const headers = new Map(Object.entries(head.headers));
+    const reader = {
+      async read(): Promise<{ done: boolean; value?: Uint8Array }> {
+        if (!open) return { done: true };
+        let part: Uint8Array | ArrayBuffer | null;
+        try {
+          part = await native.read(id);
+        } catch (error) {
+          stop();
+          throw fetchFailed(error);
+        }
+        if (part === null) {
+          close();
+          return { done: true };
+        }
+        return { done: false, value: part instanceof Uint8Array ? part : new Uint8Array(part) };
+      },
+      cancel: async () => stop(),
+    };
+    const response: HttpResponseLike = {
+      status: head.status,
+      headers: { get: (name) => headers.get(name.toLowerCase()) ?? null },
+      body: { getReader: () => reader, cancel: async () => stop() },
+    };
+    return response;
+  };
+}
