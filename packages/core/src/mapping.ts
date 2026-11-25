@@ -5,8 +5,8 @@
 import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
-import { gatewayPreviewOfNote, isSkillChangeNote } from "./skill-notes.ts";
 import {
+  gatewayPreviewOf,
   rowIdempotencyKey,
   UPDATE_NOTICE_KEY_PREFIX,
   updateNoticeLine,
@@ -760,9 +760,11 @@ export function mapHistory(
           if (blocks.length === 0 && pictures.length === 0 && files.length === 0) return;
           currentRun = runId;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
-          // It names no run, so it is a turn of its own.
-          if (isSkillChangeNote(message)) item.skillNote = true;
           if (runId?.startsWith(REPORT_RUN_PREFIX)) item.reportRunId = runId;
+          // A row that names no run, not even as a reply kept after an abort, is no run's reply.
+          if (runId === null && str(asRecord(message.openclawAbort)?.runId) === null) {
+            item.runless = true;
+          }
           // Perhaps the gateway's update notice: the first row with its key, never a later one.
           const updateRunId = firstOfKey ? updateNoticeRunId(message) : null;
           if (updateRunId) {
@@ -897,34 +899,6 @@ function historyFacts(details: unknown): Record<string, unknown> | null {
 const MAX_PREVIEW_SOURCE_CHARS = 400;
 
 /**
- * A task's preview as the sidebar shows it while commands are hidden. Only the preview text
- * changes, and only when the gateway's listed preview is the skill-change note this client's
- * loaded history ends with: the preview the gateway makes of that note's text
- * (`gatewayPreviewOfNote`) is the listed one. It is then the text of the last item before the
- * notes (null when none has text, so the title shows). Any other preview, a newer reply's
- * included, or any doubt about how the gateway formats the note, leaves the gateway's. No clock
- * is compared, and the time is never changed, so the sidebar's order and unread mark stay the
- * gateway's (docs/decisions.md, "The gateway's skill notes").
- */
-export function taskWithoutSkillNotes(task: Task, transcript: Transcript | undefined): Task {
-  const items = transcript?.items ?? [];
-  const note = items.at(-1);
-  if (note?.skillNote !== true || note.truncated === true || task.preview === null) return task;
-  const [only, ...more] = note.blocks;
-  if (more.length > 0 || only?.kind !== "text") return task;
-  const listed = gatewayPreviewOfNote(only.text);
-  if (listed === null || plainPreview(listed) !== task.preview) return task;
-  let preview: string | null = null;
-  for (let index = items.length - 1; index >= 0 && preview === null; index -= 1) {
-    const item = items[index]!;
-    if (item.role === "system" || item.skillNote === true) continue;
-    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
-    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
-  }
-  return preview === task.preview ? task : { ...task, preview };
-}
-
-/**
  * A task's preview when its loaded history ends with a bot's message that is only files (F-115):
  * that message's files' names. The gateway lists the last row with text, the one before it, so
  * only that preview, or none, is replaced; any other is the gateway's.
@@ -962,27 +936,9 @@ export function tasksWithFilePreviews(
   return changed ? shown : tasksByBot;
 }
 
-/** Every listed task as `taskWithoutSkillNotes` shows it, by bot. */
-export function tasksWithoutSkillNotes(
-  tasksByBot: Record<string, Task[]>,
-  transcripts: Record<string, Transcript>,
-): Record<string, Task[]> {
-  let changed = false;
-  const shown: Record<string, Task[]> = {};
-  for (const [botId, tasks] of Object.entries(tasksByBot)) {
-    shown[botId] = tasks.map((task) => {
-      const quiet = taskWithoutSkillNotes(task, transcripts[task.key]);
-      if (quiet !== task) changed = true;
-      return quiet;
-    });
-  }
-  return changed ? shown : tasksByBot;
-}
-
 /**
  * When a task's loaded history ends with an update line (`updateNoticeLine`) and its listed
- * preview is the one the gateway makes of that notice (`gatewayPreviewOfNote`, the proof the
- * skill notes use): the item before the line, or null when there is none. Undefined otherwise:
+ * preview is the one the gateway makes of that notice (`gatewayPreviewOf`): the item before the line, or null when there is none. Undefined otherwise:
  * the listed row then has something newer, or the line is not this device's to draw.
  */
 function beforeUpdateNotice(
@@ -994,15 +950,15 @@ function beforeUpdateNotice(
   const last = items.at(-1);
   if (!last || last.truncated === true || task.preview === null) return undefined;
   if (!updateNoticeLine(last, task.key, scope)) return undefined;
-  const listed = gatewayPreviewOfNote(updateNoticeText(last));
+  const listed = gatewayPreviewOf(updateNoticeText(last));
   if (listed === null || plainPreview(listed) !== task.preview) return undefined;
   return items.at(-2) ?? null;
 }
 
 /**
  * A task's preview in the sidebar when its listed preview is the update notice its loaded history
- * ends with (F-590): the text of the last item before it, as `taskWithoutSkillNotes` does for a
- * note (null when none has text, so the title shows). The notice is not what the bot last said.
+ * ends with (F-590): the text of the last item before it (null when none has text, so the title
+ * shows). The notice is not what the bot last said.
  * No time is changed, so the order is the gateway's.
  */
 export function taskWithoutUpdateNotice(
@@ -1015,7 +971,7 @@ export function taskWithoutUpdateNotice(
   let preview: string | null = null;
   for (let index = items.length - 2; index >= 0 && preview === null; index -= 1) {
     const item = items[index]!;
-    if (item.role === "system" || item.skillNote === true) continue;
+    if (item.role === "system") continue;
     const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
     if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
   }

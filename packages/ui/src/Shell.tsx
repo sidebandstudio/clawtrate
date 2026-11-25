@@ -4,7 +4,6 @@ import {
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
   tasksWithFilePreviews,
-  tasksWithoutSkillNotes,
   tasksWithoutUpdateNotices,
   updateNoticeScope,
   type BridgeCommand,
@@ -320,25 +319,20 @@ export function Shell({
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePanel, drawerKeys, setPanel, deletingOpen]);
 
-  // With commands hidden, the rail's preview of a task whose loaded, current history ends with the
-  // gateway's skill notes is the last thing before them; its time, order and unread are unchanged (F-560).
-  // One whose history ends with a bot's message that is only files reads as their names (F-115).
-  // One whose history ends with the gateway's update line shows what came before it (F-590).
   const [commandsShown] = useShowCommands();
   const { tasksByBot, transcripts } = state;
   const { updated, mainKey } = updateNoticeScope(state);
   const gatewayId = state.connection.gatewayId;
+  // The rail's preview of a task whose history ends with a bot's message that is only files reads
+  // as their names (F-115); one whose history ends with the gateway's update line shows what came
+  // before it (F-590).
   const listedTasks = useMemo(
     () =>
       tasksWithFilePreviews(
-        tasksWithoutUpdateNotices(
-          commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts),
-          transcripts,
-          { updated, gatewayId, mainKey },
-        ),
+        tasksWithoutUpdateNotices(tasksByBot, transcripts, { updated, gatewayId, mainKey }),
         transcripts,
       ),
-    [commandsShown, tasksByBot, transcripts, updated, gatewayId, mainKey],
+    [tasksByBot, transcripts, updated, gatewayId, mainKey],
   );
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.

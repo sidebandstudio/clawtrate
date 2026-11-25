@@ -163,3 +163,33 @@ export function holdsUpdateNotice(
 ): boolean {
   return transcript?.items.some((item) => item.updateRunId === runId) === true;
 }
+
+/** The longest list preview the gateway makes (`SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS`). */
+const LIST_PREVIEW_MAX_CHARS = 240;
+/**
+ * Text whose flattening this does not repeat: links and images (`[`), autolinks (`<`), emphasis
+ * and strikethrough (`*`, `_`, `~`), escapes, fenced code, and a heading, quote or list marker at
+ * the start of a line.
+ */
+const UNMIRRORED_MARKDOWN = /[[\]<>*_~\\]|```|^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s/m;
+const isHighSurrogate = (unit: number) => unit >= 0xd800 && unit <= 0xdbff;
+const isLowSurrogate = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff;
+
+/**
+ * The `lastMessagePreview` the gateway lists for a row with this text, when it is the task's last
+ * message with text (the proof that the listed preview is the notice): OpenClaw 2026.10.6's `projectSessionDisplayMessage(message, {flattenMarkdown:
+ * true})`, which trims the text, flattens its Markdown to one line and cuts it to 240 characters
+ * with "...". Only plain text and inline code are repeated here; for any other Markdown the answer
+ * is null, so the gateway's own preview is shown.
+ */
+export function gatewayPreviewOf(text: string): string | null {
+  if (UNMIRRORED_MARKDOWN.test(text)) return null;
+  const code = text.trim().replace(/`([^`]*)`/g, "$1");
+  if (UNMIRRORED_MARKDOWN.test(code)) return null;
+  const flat = code.replace(/\s+/g, " ").trim();
+  if (!flat) return null;
+  if (flat.length <= LIST_PREVIEW_MAX_CHARS) return flat;
+  let end = LIST_PREVIEW_MAX_CHARS - 3;
+  if (isHighSurrogate(flat.charCodeAt(end - 1)) && isLowSurrogate(flat.charCodeAt(end))) end -= 1;
+  return `${flat.slice(0, end)}...`;
+}
