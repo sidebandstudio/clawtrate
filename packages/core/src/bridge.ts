@@ -6,6 +6,7 @@ import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import { utf8Length } from "./encoding.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
 import type { BotVoiceAnswer } from "./voice.ts";
+import type { BotGuidesAnswer, GuidesChange } from "./guides.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -150,6 +151,10 @@ export type BridgeCommand =
   | { type: "readBotVoice" }
   /** Turn the voice guide on or off for the gateway's bots; needs operator.write. */
   | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
+  /** Clawtrate's guides in the bots' `AGENTS.md`, read now (guides.ts). */
+  | { type: "readBotGuides" }
+  /** Add, replace or remove them, or answer "Not now", on the gateway `stamp` names (admin). */
+  | { type: "changeBotGuides"; change: GuidesChange; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
   /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
@@ -662,24 +667,30 @@ type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage"
                                                                                                       }
                                                                                                     ? BotVoiceAnswer
                                                                                                     : C extends {
-                                                                                                          type: "readMemory";
+                                                                                                          type:
+                                                                                                            | "readBotGuides"
+                                                                                                            | "changeBotGuides";
                                                                                                         }
-                                                                                                      ? MemoryDocument
+                                                                                                      ? BotGuidesAnswer
                                                                                                       : C extends {
-                                                                                                            type:
-                                                                                                              | "checkRoutineCreate"
-                                                                                                              | "checkRoutineUpdate";
+                                                                                                            type: "readMemory";
                                                                                                           }
-                                                                                                        ? RoutineSaveCheck
+                                                                                                        ? MemoryDocument
                                                                                                         : C extends {
-                                                                                                              type: "readChatPicture";
+                                                                                                              type:
+                                                                                                                | "checkRoutineCreate"
+                                                                                                                | "checkRoutineUpdate";
                                                                                                             }
-                                                                                                          ? ChatPictureRead
+                                                                                                          ? RoutineSaveCheck
                                                                                                           : C extends {
-                                                                                                                type: "readSentPicture";
+                                                                                                                type: "readChatPicture";
                                                                                                               }
-                                                                                                            ? SentPictureRead
-                                                                                                            : void;
+                                                                                                            ? ChatPictureRead
+                                                                                                            : C extends {
+                                                                                                                  type: "readSentPicture";
+                                                                                                                }
+                                                                                                              ? SentPictureRead
+                                                                                                              : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -827,6 +838,30 @@ function count(value: unknown, max: number, what: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max)
     throw new Error(`invalid ${what}`);
   return value;
+}
+
+/** A guides change as a viewer may ask for it (guides.ts), or an error. */
+function guidesChange(value: unknown): GuidesChange {
+  const change =
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  switch (change.action) {
+    case "add":
+      if (
+        !Array.isArray(change.bots) ||
+        change.bots.length > 512 ||
+        typeof change.newBots !== "boolean"
+      )
+        throw new Error("invalid guides change");
+      return { action: "add", bots: change.bots.map(botId), newBots: change.newBots };
+    case "replace":
+      return { action: "replace", bot: botId(change.bot) };
+    case "remove":
+    case "decline":
+      return { action: change.action };
+    default:
+      // "update" is the client's own, after a connect: never a viewer's.
+      throw new Error("invalid guides change");
+  }
 }
 
 function botId(value: unknown): string {
@@ -1422,6 +1457,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "setTurnLimit", minutes: command.minutes };
     case "readBotVoice":
       return { type: "readBotVoice" };
+    case "readBotGuides":
+      return { type: "readBotGuides" };
+    case "changeBotGuides":
+      return {
+        type: "changeBotGuides",
+        change: guidesChange(command.change),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "setBotVoice":
       if (typeof command.on !== "boolean") throw new Error("invalid voice setting");
       return {
@@ -2238,6 +2281,10 @@ class ViewerSession implements BridgeSession {
         return client.setTurnLimit(command.minutes);
       case "readBotVoice":
         return client.readBotVoice();
+      case "readBotGuides":
+        return client.readBotGuides();
+      case "changeBotGuides":
+        return client.changeBotGuides(command.change, command.stamp, owner);
       case "setBotVoice":
         return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":

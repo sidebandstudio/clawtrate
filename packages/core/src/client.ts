@@ -4,6 +4,15 @@
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
+  applyGuidesChange,
+  guidesKey,
+  parseGuidesRecord,
+  readGuideFolders,
+  type BotGuidesAnswer,
+  type GuidesChange,
+  type GuidesRecord,
+} from "./guides.ts";
+import {
   readVoice,
   setVoice,
   VOICE_CHANGED_EVENT,
@@ -6274,9 +6283,12 @@ export class ClawtrateClient {
    * host still has that target and that gateway connected.
    */
   async createBot(input: CreateBotInput, stamp?: GatewayStamp): Promise<CreatedBot> {
-    if (stamp === undefined) return this.accounts.createBot(input);
+    const bound = stamp === undefined ? undefined : await this.requireSameGateway(stamp);
     // Checked there: both known and current. The whole write stays bound to them.
-    return this.accounts.createBot(input, await this.requireSameGateway(stamp));
+    const created = await this.accounts.createBot(input, bound);
+    const gatewayId = bound?.gatewayId ?? this.state.connection.gatewayId;
+    if (gatewayId) await this.guidesForNewBot(created.botId, gatewayId);
+    return created;
   }
 
   /**
@@ -6889,6 +6901,118 @@ export class ClawtrateClient {
       this.voiceAdvertised,
     );
     return { ...voice, stamp: { gatewayId: alive() ? gatewayId : null, target } };
+  }
+
+  /**
+   * Clawtrate's guides in the bots' `AGENTS.md` (guides.ts), read now, with this device's record
+   * of the person's answer and whether the voice plugin adds its guide too, stamped with where
+   * it was read. Reads need `operator.read`.
+   */
+  async readBotGuides(): Promise<BotGuidesAnswer> {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === target &&
+      this.state.connection.status === "connected";
+    const gatewayId = await this.readGatewayIdentity();
+    this.confirmGatewayIdentity(gatewayId, alive);
+    const record = gatewayId === null ? null : await this.guidesRecord(gatewayId);
+    const request = (method: string, params: unknown) => this.request(method, params);
+    const [folders, voice] = await Promise.all([
+      readGuideFolders(request, record),
+      readVoice(request, this.voiceAdvertised).catch(() => null),
+    ]);
+    return {
+      folders,
+      record,
+      voicePlugin: voice?.status === "read" && voice.on && voice.hook === "allowed",
+      errors: [],
+      stamp: { gatewayId: alive() ? gatewayId : null, target },
+    };
+  }
+
+  /**
+   * Change the guides as the person asked (`GuidesChange`), on the gateway and bots the screen
+   * was read from (`stamp`), then read them back: the answer is what the files hold, never what
+   * was sent. Writing needs `operator.admin`; "Not now" writes nothing to the gateway. Adding
+   * the section while the voice plugin adds its guide turns the plugin's guide off first, so no
+   * bot gets the voice guide twice. Nothing is sent once `owner`, the viewer that asked, is gone.
+   */
+  async changeBotGuides(
+    change: GuidesChange,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<BotGuidesAnswer> {
+    if (change.action !== "decline" && (this.options.readOnly || !this.state.connection.canAdmin))
+      throw new AdminNeededError("Changing the bots' instructions");
+    const { gatewayId } = await this.requireSameGateway(stamp);
+    this.checkNotWithdrawn(owner);
+    const protocol = this.protocol;
+    const request = (method: string, params: unknown) =>
+      protocol && this.protocol === protocol && this.target === stamp.target
+        ? this.request(method, params)
+        : Promise.reject(new Error(CONNECTION_CHANGED));
+    const before = await this.guidesRecord(gatewayId);
+    if (change.action === "add" && change.bots.length > 0) {
+      const voice = await readVoice(request, this.voiceAdvertised).catch(() => null);
+      if (voice?.status === "read" && voice.on && voice.hook === "allowed")
+        await setVoice(request, false);
+    }
+    const { record, errors } = await applyGuidesChange(request, before, change);
+    if (record) await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(record));
+    const read = await this.readBotGuides();
+    return { ...read, errors };
+  }
+
+  private async guidesRecord(gatewayId: string): Promise<GuidesRecord | null> {
+    return parseGuidesRecord(await this.host.storage.get(guidesKey(gatewayId)).catch(() => null));
+  }
+
+  /**
+   * After a connect with admin access: each section of an older version that Clawtrate wrote is
+   * brought up to date, held to the hash read. A section changed or removed outside Clawtrate is
+   * left. Nothing is done from a read-only viewer or below admin.
+   */
+  private async keepGuidesCurrent(generation: number, epoch: number): Promise<void> {
+    const current = () =>
+      generation === this.generation &&
+      epoch === this.epoch &&
+      this.state.connection.status === "connected" &&
+      this.state.connection.canAdmin &&
+      !this.options.readOnly;
+    if (!current()) return;
+    const request = (method: string, params: unknown) =>
+      current() ? this.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED));
+    const { errors } = await applyGuidesChange(request, null, { action: "update" }).catch(
+      (error: unknown) => ({ errors: [error instanceof Error ? error.message : String(error)] }),
+    );
+    for (const error of errors) this.logFailure("warn", "guides update", error);
+  }
+
+  /**
+   * A bot made in Clawtrate gets the section when the person said yes to "New bots too" on this
+   * device for this gateway, with admin access.
+   */
+  private async guidesForNewBot(botId: string, gatewayId: string): Promise<void> {
+    if (this.options.readOnly || !this.state.connection.canAdmin) return;
+    const record = await this.guidesRecord(gatewayId);
+    if (!record?.newBots) return;
+    const request = (method: string, params: unknown) => this.request(method, params);
+    const result = await applyGuidesChange(request, record, {
+      action: "add",
+      bots: [botId],
+      newBots: true,
+    }).catch((error: unknown) => ({
+      record,
+      errors: [error instanceof Error ? error.message : String(error)],
+    }));
+    for (const error of result.errors) this.logFailure("warn", "guides for a new bot", error);
+    if (result.record)
+      await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(result.record));
   }
 
   /** Settings reads the voice setting again (`state.voiceChanges`). */
@@ -8770,6 +8894,7 @@ export class ClawtrateClient {
       // Every connect reads the list again: runs that started or ended while away are in it.
       if (this.state.connection.status === "connected") void this.routines.load();
       this.usage.onHello();
+      void this.keepGuidesCurrent(generation, epoch);
     });
   }
 
