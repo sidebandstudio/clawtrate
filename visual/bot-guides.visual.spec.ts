@@ -218,6 +218,22 @@ test.describe("how bots work in Clawtrate", () => {
     await expect(pane.getByTestId("bot-guides-voice")).toHaveCount(0);
   });
 
+  test("F-566: a section that isn't at the top, where Clawtrate put it, is shown and nothing writes to it", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=moved");
+    const otto = pane.getByTestId("bot-guide-otto");
+    await expect(otto).toContainText(
+      "Its section isn't at the top, where Clawtrate put it, so Clawtrate leaves it as it is. Move it back to the top, or remove it yourself.",
+    );
+    await expect(otto.getByRole("button", { name: "Show" })).toBeVisible();
+    await expect(otto.getByRole("button", { name: "Replace" })).toHaveCount(0);
+    await expect(pane.getByRole("checkbox", { name: /^Otto/ })).toHaveCount(0);
+    // Its section is in the file the gateway gives Otto, so Otto isn't among the bots not told.
+    await expect(pane.getByTestId("bot-guides-summary")).not.toContainText("Otto");
+    expect(await changes(page)).toEqual([]);
+  });
+
   test("F-566: without admin access the states are shown and nothing can be sent", async ({
     page,
   }) => {
