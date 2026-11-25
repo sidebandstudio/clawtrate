@@ -69,6 +69,7 @@ import {
   type Bound,
 } from "./bounds.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
+import { MAX_START_TASKS_REASON_CHARS, type StartTasks } from "./start-tasks.ts";
 import {
   MAX_BUDGET_ID_CHARS,
   MAX_BUDGETS,
@@ -164,11 +165,13 @@ import type {
   SendLimits,
   Task,
   TaskContext,
+  TaskStarter,
   TaskCreation,
   ToolResult,
   Transcript,
   TranscriptBlock,
   TranscriptItem,
+  ChatFile,
   ChatPicture,
   NameProposal,
   SentAttachment,
@@ -250,6 +253,9 @@ export const MAX_HISTORY_BLOCKS = 300;
 /** Pictures a bot's turn hands over, and across a task's history page (`ChatPicture`). */
 export const MAX_PICTURES_PER_ITEM = 8;
 export const MAX_HISTORY_PICTURES = 16;
+/** Other files a bot's turn hands over (`ChatFile`), and across a task's history page. */
+export const MAX_FILES_PER_ITEM = 20;
+export const MAX_HISTORY_FILES = 40;
 /** Files a person's message names (`SentAttachment`), and across a task's history page. */
 export const MAX_ATTACHMENTS_PER_ITEM = 20;
 export const MAX_HISTORY_ATTACHMENTS = 40;
@@ -594,6 +600,13 @@ const picture = object<ChatPicture>()({
   sizeBytes: NUMBER,
   messageId: ID,
 });
+const chatFile = object<ChatFile>()({
+  artifactId: ID,
+  name: text(MAX_FILE_NAME_CHARS),
+  mimeType: NAME,
+  sizeBytes: NUMBER,
+  messageId: ID,
+});
 const sentAttachment = object<SentAttachment>()({
   fileName: text(MAX_FILE_NAME_CHARS),
   mimeType: NAME,
@@ -606,6 +619,8 @@ const item = flagged<TranscriptItem>()({
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
   pictures: list(MAX_PICTURES_PER_ITEM, picture, { pool: "pictures" }),
+  files: list(MAX_FILES_PER_ITEM, chatFile, { pool: "files" }),
+  filesPreview: NAME,
   attachments: list(MAX_ATTACHMENTS_PER_ITEM, sentAttachment, { pool: "attachments" }),
   truncated: FLAG,
   messageId: ID,
@@ -616,6 +631,8 @@ const item = flagged<TranscriptItem>()({
   }),
   idempotencyKey: ID,
   skillNote: FLAG,
+  brief: FLAG,
+  reportRunId: ID,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
@@ -659,6 +676,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
     pools: {
       blocks: MAX_HISTORY_BLOCKS,
       pictures: MAX_HISTORY_PICTURES,
+      files: MAX_HISTORY_FILES,
       attachments: MAX_HISTORY_ATTACHMENTS,
     },
   }),
@@ -675,6 +693,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   // Names and a root are ids: a cut one would name another tool or folder.
   builtinTools: list(MAX_BUILTIN_TOOLS, id(MAX_TOOL_NAME_CHARS)),
   workspaceRoot: id(MAX_STEP_PATH_CHARS),
+  startTasks: object<StartTasks>()({ can: FLAG, reason: text(MAX_START_TASKS_REASON_CHARS) }),
   reactions: map(MAX_REACTED_MESSAGES, MAX_ID_CHARS, list(MAX_REACTIONS_PER_MESSAGE, reaction)),
   loadedAt: NUMBER,
 });
@@ -746,6 +765,7 @@ const bot = flagged<Bot>()({
   theme: NAME,
   model: NAME,
   isDefault: FLAG,
+  ownerless: FLAG,
 });
 const nameProposal = object<NameProposal>()({
   botId: ID,
@@ -773,6 +793,7 @@ const task = flagged<Task>()({
   effort: NAME,
   otherTool: FLAG,
   channel: NAME,
+  startedBy: object<TaskStarter>()({ botId: ID, fromKey: ID }),
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
 const sidebarId = id(MAX_SIDEBAR_ID_CHARS);
@@ -1298,6 +1319,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   showChannelChats: FLAG,
   voiceChanges: NUMBER,
   showOtherToolSessions: FLAG,
+  showGatewayBot: FLAG,
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
 });

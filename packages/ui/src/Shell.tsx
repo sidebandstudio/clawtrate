@@ -1,7 +1,9 @@
 import {
   isActive,
+  listedTasks as listedTasksOf,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
+  tasksWithFilePreviews,
   tasksWithoutSkillNotes,
   type BridgeCommand,
   type ClawtrateState,
@@ -31,6 +33,7 @@ import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import { FullControlOffer } from "./FullControl.tsx";
+import { BotGuidesOffer } from "./BotGuides.tsx";
 import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
@@ -317,16 +320,22 @@ export function Shell({
 
   // With commands hidden, the rail's preview of a task whose loaded, current history ends with the
   // gateway's skill notes is the last thing before them; its time, order and unread are unchanged (F-560).
+  // One whose history ends with a bot's message that is only files reads as their names (F-115).
   const [commandsShown] = useShowCommands();
   const { tasksByBot, transcripts } = state;
   const listedTasks = useMemo(
-    () => (commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts)),
+    () =>
+      tasksWithFilePreviews(
+        commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts),
+        transcripts,
+      ),
     [commandsShown, tasksByBot, transcripts],
   );
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
+  // Only tasks of the bots the sidebar lists (F-562): a count always has something to open.
   const unread = unreadCount(
-    state.tasksByBot,
+    listedTasksOf(state, selection.kept),
     selection.unreadSeen,
     conversationVisible ? (task?.key ?? null) : null,
   );
@@ -837,7 +846,7 @@ export function Shell({
         inert={inert}
       >
         <Rail
-          bots={state.bots}
+          bots={selection.listed}
           tasksByBot={listedTasks}
           discovery={state.discovery}
           connection={state.connection}
@@ -851,6 +860,11 @@ export function Shell({
           bubbles={bubbles}
           onBubbles={onBubbles}
           top={railTop}
+          notice={
+            interactive && !info.readOnly ? (
+              <BotGuidesOffer onReview={() => onOpenSettings("conversation")} />
+            ) : null
+          }
           onOpenSettings={onOpenSettings}
           settingsKeys={mac ? "⌘," : "Ctrl+,"}
           onNewBot={interactive ? openNewBot : null}
@@ -979,6 +993,7 @@ export function Shell({
         {searchOpen && (
           <SearchPalette
             state={state}
+            kept={selection.kept}
             mac={mac}
             onOpen={openFromSearch}
             onClose={() => closePalette(true)}
@@ -1009,8 +1024,13 @@ export function Shell({
             onClose={(deleted) => {
               setDeleting(null);
               // The rail already follows the gateway's list; the app lands on the Main Bot's latest
-              // task, or the Main Bot alone when it has none.
-              const main = state.bots.find((each) => each.isDefault) ?? state.bots[0];
+              // task, or the Main Bot alone when it has none. While the gateway's own bot is out of
+              // view (F-562), on the first other bot the rail lists, or on it once it is the only one.
+              const kept = selection.listed.filter((each) => each.id !== deleting.id);
+              const main =
+                kept.find((each) => each.isDefault) ??
+                kept[0] ??
+                state.bots.find((each) => each.isDefault);
               if (deleted && main) {
                 // The Work drawer closes first, so the conversation behind it can take focus.
                 if (drawerOpen) setPanel(false);

@@ -268,7 +268,10 @@ export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts"
  * the messaging pair may message each other.
  */
 function botEntries(stateDir: string, browserBots: readonly string[] | null) {
-  const entries: Record<string, { workspace: string; tools: Record<string, unknown> }> = {};
+  const entries: Record<
+    string,
+    { workspace: string; tools: Record<string, unknown>; subagents?: { allowAgents: string[] } }
+  > = {};
   for (const bot of SEED_BOTS) {
     const partner = messagingPartner(bot.id);
     entries[bot.id] = {
@@ -281,6 +284,8 @@ function botEntries(stateDir: string, browserBots: readonly string[] | null) {
         // With browsers of their own, only those bots get the browser tool.
         ...(browserBots && !browserBots.includes(bot.id) ? { deny: ["browser"] } : {}),
       },
+      // A task it starts may go under its partner too (`#hand-off-to-partner`).
+      ...(partner ? { subagents: { allowAgents: [partner] } } : {}),
     };
   }
   return entries;
@@ -651,6 +656,12 @@ export const ALLOWED_TOOLS = [
   "ask_user",
   "sessions_send",
   "sessions_list",
+  // A bot starts a task of its own, reads it and waits on it; it never gets
+  // more tools than the bot that started it.
+  "sessions_spawn",
+  "sessions_history",
+  "subagents",
+  "sessions_yield",
   "progress_card",
   "automations",
   `${CODING_AGENT_SERVER}__*`,
@@ -907,11 +918,121 @@ function writeFreshConfig(
 
 /** Healthy means the guard allows OpenClaw and the gateway answers; a refusal spawns nothing. */
 async function gatewayHealthy(inst: DevInstance): Promise<boolean> {
+  return (await gatewayHealth(inst)).healthy;
+}
+
+/** The health check, with what it saw when the gateway is not healthy. */
+async function gatewayHealth(inst: DevInstance): Promise<{ healthy: boolean; seen: string }> {
   const runner = inst.runner;
-  if (runner.refusal()) return false;
-  if (!(await inst.listening(runner.gatewayPort()))) return false;
+  const refusal = runner.refusal();
+  if (refusal) return { healthy: false, seen: refusal };
+  if (!(await inst.listening(runner.gatewayPort())))
+    return { healthy: false, seen: "its port is not open" };
   const result = await runner.run(["gateway", "call", "health", "--json", "--timeout", "3000"]);
-  return result.status === 0;
+  const said = `${result.stdout}${result.stderr}`.trim().split("\n").at(-1) ?? "";
+  return { healthy: result.status === 0, seen: `health exited ${result.status}: ${said}` };
+}
+
+/**
+ * Ceilings on a condition, not waits. Locally the gateway starts in seconds; on GitHub's Xcode 27
+ * runner, starts in the iOS workflow's logs took 59 to 254 s, and one ran out at 240 s (#537).
+ * The scripted provider is a small Node server that listens in under a second locally; at the
+ * runner's slowest seen ratio to local, 8 to 36 times, it needs up to about 25 s there, and it
+ * once missed a limit of 10 s (#574).
+ */
+const GATEWAY_START_MS = 480_000;
+const SCRIPTED_START_MS = 120_000;
+
+/** A line of a process's output, cut to a readable length. */
+const cut = (line: string, width = 300) =>
+  line.length > width ? `${line.slice(0, width)}…` : line;
+
+/** The last lines of a log, each cut to a readable length; "" when there is none. */
+export function logTail(path: string, lines = 40, width = 300): string {
+  if (!existsSync(path)) return "";
+  return readFileSync(path, "utf8")
+    .trimEnd()
+    .split("\n")
+    .slice(-lines)
+    .map((line) => cut(line, width))
+    .join("\n");
+}
+
+/** Why a process a start waits for never answered: how long, whether it exited, what it last said. */
+export function startProblem(problem: {
+  what: string;
+  waitedMs: number;
+  exited: boolean;
+  lastSeen: string | null;
+  log: string;
+  tail: string;
+}): string {
+  const seconds = Math.round(problem.waitedMs / 1000);
+  return [
+    problem.exited
+      ? `${problem.what} exited after ${seconds} s, before it answered`
+      : `timed out after ${seconds} s waiting for ${problem.what}, which is still running`,
+    `  last health check: ${problem.lastSeen ?? "none"}`,
+    problem.tail
+      ? `  the end of its log, ${problem.log}:\n${problem.tail.replace(/^/gm, "    ")}`
+      : `  its log, ${problem.log}, is empty`,
+  ].join("\n");
+}
+
+/** What a start watches while one of its processes comes up. */
+export type StartWatch = {
+  what: string;
+  exited: () => boolean;
+  health: () => Promise<{ healthy: boolean; seen: string }>;
+  log: string;
+};
+
+/** Wait for a process a start began to answer. Stop as soon as it exits, and say why. */
+export async function waitForStart(watch: StartWatch, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  let lastSeen: string | null = null;
+  for (;;) {
+    if (!watch.exited()) {
+      // A probe can fail outright, for one when the process exits while it runs.
+      const health = await watch.health().catch((error: unknown) => ({
+        healthy: false,
+        seen: `the health check failed: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+      // A process that exited while its probe answered has not started.
+      if (health.healthy && !watch.exited()) return;
+      lastSeen = health.healthy ? "it answered as it exited" : cut(health.seen);
+    }
+    // Read again after the probe, which can end after the process exited.
+    const exited = watch.exited();
+    const waitedMs = Date.now() - started;
+    if (exited || waitedMs >= timeoutMs) {
+      const { what, log } = watch;
+      const tail = logTail(log);
+      throw new Error(startProblem({ what, waitedMs, exited, lastSeen, log, tail }));
+    }
+    await sleep(250);
+  }
+}
+
+/** Whether the process a start recorded in a role has exited. */
+function recordedExited(inst: DevInstance, role: "gateway" | "provider"): boolean {
+  const marker = readMarker(inst.stateDir);
+  return (
+    processState(marker?.[`${role}Pid`], marker?.[`${role}Identity`], inst.identify) === "dead"
+  );
+}
+
+/** The scripted provider's process, answering on one of its ports. */
+function scriptedWatch(inst: DevInstance, what: string, port: number): StartWatch {
+  return {
+    what,
+    exited: () => recordedExited(inst, "provider"),
+    health: async () =>
+      (await inst.listening(port))
+        ? { healthy: true, seen: "" }
+        : { healthy: false, seen: "its port is not open" },
+    log: join(inst.runDir, "provider.log"),
+  };
 }
 
 type ExecScope = {
@@ -1269,10 +1390,13 @@ export async function start(
         ),
       );
       closeSync(providerLog);
-      await waitFor("the scripted provider", () => inst.listening(ports.providerPort), 10_000);
+      await waitForStart(
+        scriptedWatch(inst, "the scripted provider", ports.providerPort),
+        SCRIPTED_START_MS,
+      );
       if (browserBots.length > 0) {
         const { pagesPort } = browserPorts(ports, browserBots);
-        await waitFor("the scripted pages", () => inst.listening(pagesPort), 10_000);
+        await waitForStart(scriptedWatch(inst, "the scripted pages", pagesPort), SCRIPTED_START_MS);
       }
 
       const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "w");
@@ -1289,9 +1413,15 @@ export async function start(
     }
     // The lock is held until the gateway is healthy, sandboxed and seeded, so
     // no other command acts on an instance that is still starting.
-    // A ceiling on a condition, not a wait: on a heavily loaded machine a cold start of the
-    // gateway has taken more than 90 seconds.
-    await waitFor("the development gateway", () => gatewayHealthy(inst), 240_000);
+    await waitForStart(
+      {
+        what: "the development gateway",
+        exited: () => recordedExited(inst, "gateway"),
+        health: () => gatewayHealth(inst),
+        log: join(inst.runDir, "gateway.log"),
+      },
+      GATEWAY_START_MS,
+    );
     await assertExecDenied(inst);
     if (options.node) await startScriptedNode(inst, runId, ports);
     const marker = readMarker(inst.stateDir);
@@ -1749,7 +1879,10 @@ async function existingSessionKeys(inst: DevInstance, botId: string): Promise<Se
   return new Set((parsed.sessions ?? []).flatMap((row) => (row.key ? [row.key] : [])));
 }
 
-/** Create or restyle a bot. These commands write the gateway config, so they run one at a time. */
+/**
+ * Create a bot that is missing and write its instructions. `agents add` writes the gateway
+ * config, so these run one at a time; the bots' identities follow in one write (`setIdentities`).
+ */
 async function configureBot(
   inst: DevInstance,
   bot: SeedBot,
@@ -1772,19 +1905,28 @@ async function configureBot(
   }
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
-  await must(inst, [
-    "agents",
-    "set-identity",
-    "--agent",
-    bot.id,
-    "--name",
-    bot.name,
-    "--emoji",
-    bot.emoji,
-    "--theme",
-    bot.theme,
-    "--json",
-  ]);
+}
+
+/**
+ * Every seeded bot's name, emoji and theme, in one config write through the gateway. It leaves
+ * the config exactly as `agents set-identity` for each bot did, in one round trip instead of four.
+ */
+async function setIdentities(inst: DevInstance): Promise<void> {
+  const entries = Object.fromEntries(
+    SEED_BOTS.map((bot) => [
+      bot.id,
+      { identity: { name: bot.name, emoji: bot.emoji, theme: bot.theme } },
+    ]),
+  );
+  const { hash } = await callGateway<{ hash: string }>(inst, "config.get", {});
+  const patched = await callGateway<{ ok?: boolean }>(inst, "config.patch", {
+    raw: JSON.stringify({ agents: { entries } }),
+    baseHash: hash,
+  });
+  if (patched.ok !== true)
+    throw new Error(
+      `the bots' identities were not saved: ${JSON.stringify(patched).slice(0, 300)}`,
+    );
 }
 
 type AgentRunOutput = {
@@ -1875,9 +2017,15 @@ export function checkHistory(messages: HistoryMessage[], task: SeedTask): string
   return problems;
 }
 
-/** Run a bot's scripted conversations. Sessions are independent, so bots run in parallel. */
-async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void> {
-  const existing = await existingSessionKeys(inst, bot.id);
+/**
+ * Run a bot's scripted conversations. Sessions are independent, so bots run in parallel.
+ * `existing` is the bot's task keys as the seed found them.
+ */
+async function seedConversations(
+  inst: DevInstance,
+  bot: SeedBot,
+  existing: Set<string>,
+): Promise<void> {
   for (const task of bot.tasks) {
     const key = sessionKeyFor(bot.id, task.slug);
     const alreadySeeded = existing.has(key);
@@ -1936,11 +2084,19 @@ export async function seed(inst: DevInstance): Promise<void> {
   const agents = new Map(rows.map((row) => [row.id, row]));
   console.log("Seeding sample bots and conversations");
   for (const bot of SEED_BOTS) await configureBot(inst, bot, agents);
+  await setIdentities(inst);
   // Configuring the bots rewrote the config; it must still keep every guarantee.
   assertSandboxed(inst, instancePorts(inst));
   await assertExecDenied(inst);
-  await Promise.all(SEED_BOTS.map((bot) => seedConversations(inst, bot)));
-  await seedScenarioExamples(inst);
+  // Each bot's tasks, read once: the examples are seeded only where their own task isn't there
+  // yet, and nothing the conversations make has an example's key.
+  const existing = new Map(
+    await Promise.all(
+      SEED_BOTS.map(async (bot) => [bot.id, await existingSessionKeys(inst, bot.id)] as const),
+    ),
+  );
+  await Promise.all(SEED_BOTS.map((bot) => seedConversations(inst, bot, existing.get(bot.id)!)));
+  await seedScenarioExamples(inst, existing);
   console.log("Seed complete");
 }
 
@@ -1983,11 +2139,10 @@ export async function openOperator(
  * it sends each prompt, answers the question and resolves the approval. Runs
  * one example at a time, after the scripted tasks, then unpairs itself.
  */
-async function seedScenarioExamples(inst: DevInstance): Promise<void> {
-  const keys = new Map<string, Set<string>>();
-  for (const botId of new Set(SCENARIO_EXAMPLES.map((example) => example.botId))) {
-    keys.set(botId, await existingSessionKeys(inst, botId));
-  }
+async function seedScenarioExamples(
+  inst: DevInstance,
+  keys: ReadonlyMap<string, Set<string>>,
+): Promise<void> {
   console.log(
     `Seeding live examples as the user, through a paired client "${SEED_CLIENT}" (scopes ${SEED_SCOPES.join(", ")})`,
   );

@@ -7,6 +7,7 @@ import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { StartTasks } from "./start-tasks.ts";
 import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
@@ -197,6 +198,11 @@ export type Bot = {
   theme: string | null;
   model: string | null;
   isDefault: boolean;
+  /**
+   * The gateway names no owner (`agents.list` `selectionRequired`): `isDefault` marks only its
+   * first bot, which is the person's like any other, not the gateway's own (F-562).
+   */
+  ownerless?: boolean;
   /** Paths of fields cut to their bound (an avatar too large to keep is dropped). */
   cut?: string[];
 };
@@ -264,8 +270,20 @@ export type Task = {
    * gateway names it; absent for Clawtrate's own tasks and a bot's main task (`channels.ts`).
    */
   channel?: string;
+  /**
+   * A bot started this task with the gateway's `sessions_spawn` (`createdVia: "spawn"`): the task
+   * it was started from (`spawnedBy`) and that task's bot. Absent for every other task.
+   */
+  startedBy?: TaskStarter;
   /** Paths of fields cut to their bound. */
   cut?: string[];
+};
+
+/** Who started a task, as the gateway recorded it (`Task.startedBy`). */
+export type TaskStarter = {
+  botId: string;
+  /** The session key of the task it was started from. */
+  fromKey: string;
 };
 
 export type TaskContext = {
@@ -339,10 +357,28 @@ export type ChatPicture = {
 };
 
 /**
+ * A file that isn't a picture the gateway put on a bot's message (F-115): an
+ * `attachment` block (a document), an `audio` or `video` block, or an
+ * `attachment_error` block for one it couldn't hand over. `name` is the
+ * gateway's, cleaned (`cleanFileName`); `mimeType` and `sizeBytes` are its
+ * words, shown as text. `artifactId` is null when there is nothing to read:
+ * an `attachment_error`, or a block that named no id. Read with `readChatFile`.
+ */
+export type ChatFile = {
+  artifactId: string | null;
+  name: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  /** The row that carried it (`__openclaw.id`), as for a picture. */
+  messageId?: string;
+};
+
+/**
  * A file a person sent with their message, as the gateway's history names it
  * (`__openclaw.media`, OpenClaw 2026.10.6): its name, type and size, never the
- * reference the gateway keeps it under. Clawtrate loads none from the gateway
- * (#469); a picture is shown only from the sending app's own copy (`readSentPicture`).
+ * reference the gateway keeps it under, which stays in the host (`sentSources`).
+ * A picture shows from the sending app's own copy, or read back from the gateway
+ * at a protected address (`readSentPicture`).
  */
 export type SentAttachment = {
   fileName: string;
@@ -359,6 +395,13 @@ export type TranscriptItem = {
   model: string | null;
   /** The pictures the bot's messages of this item hand over, in their order. Absent when none. */
   pictures?: ChatPicture[];
+  /** The other files the bot's messages of this item hand over, in their order. Absent when none. */
+  files?: ChatFile[];
+  /**
+   * When the item's last row with text or files had only files: those files' names, the
+   * once-shown ones included, as the sidebar names them. Absent otherwise.
+   */
+  filesPreview?: string;
   /** The files a person's message carried, in the order sent. Absent when none. */
   attachments?: SentAttachment[];
   /**
@@ -388,6 +431,18 @@ export type TranscriptItem = {
    * With commands hidden it is not drawn and is not the task's preview.
    */
   skillNote?: true;
+  /**
+   * In a task a bot started, the brief it wrote: the first user row stored in that task, which the
+   * gateway attributes to the person but the bot wrote (`mapHistory`'s `startedAt`). Present and
+   * true only then; a message the person sends there later is theirs as always.
+   */
+  brief?: true;
+  /**
+   * The gateway's run id of a bot's turn that reports on a task it started, or on a follow-up it
+   * sent there (`announce:v1:<task key>:<that task's run id>`, `REPORT_RUN_PREFIX`). Present only
+   * on such a turn: the "Started a task" card ties its report to it by the exact id.
+   */
+  reportRunId?: string;
   /**
    * History places this user row inside a run that began before it: the gateway took it into
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
@@ -448,6 +503,11 @@ export type Transcript = TaskActivity & {
    * Absent until the inventory is read.
    */
   builtinTools?: string[];
+  /**
+   * Whether this task's bot has the gateway's tool for starting a task (`sessions_spawn`), from
+   * the same `tools.effective` read, with the gateway's reason when it hasn't. Absent until read.
+   */
+  startTasks?: StartTasks;
   /**
    * The bot's workspace root, as the gateway names it (`agents.files.list`
    * `workspace`): an absolute path is a memory note only inside it (8.2).
@@ -532,6 +592,11 @@ export type ClawtrateState = {
    * the host.
    */
   showOtherToolSessions?: boolean;
+  /**
+   * "Show the gateway's own bot": whether the gateway's default bot is listed beside the
+   * others (`gateway-bot.ts`). Off by default, kept by the host.
+   */
+  showGatewayBot?: boolean;
   /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host

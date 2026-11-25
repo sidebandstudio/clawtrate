@@ -6,6 +6,7 @@ import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import { utf8Length } from "./encoding.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
 import type { BotVoiceAnswer } from "./voice.ts";
+import { MAX_CHANGED_SECTION_CHARS, type BotGuidesAnswer, type GuidesChange } from "./guides.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -15,6 +16,7 @@ import {
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
+import type { ChatFileRead } from "./chat-files.ts";
 import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { modelIdProblem, type ModelList } from "./accounts.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
@@ -150,10 +152,16 @@ export type BridgeCommand =
   | { type: "readBotVoice" }
   /** Turn the voice guide on or off for the gateway's bots; needs operator.write. */
   | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
+  /** Clawtrate's guides in the bots' `AGENTS.md`, read now (guides.ts). */
+  | { type: "readBotGuides" }
+  /** Add, replace or remove them, or answer "Not now", on the gateway `stamp` names (admin). */
+  | { type: "changeBotGuides"; change: GuidesChange; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
   /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
   | { type: "setShowOtherToolSessions"; on: boolean }
+  /** "Show the gateway's own bot": list the gateway's default bot beside the others, or not. */
+  | { type: "setShowGatewayBot"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
@@ -239,11 +247,27 @@ export type BridgeCommand =
   | { type: "readCheckoutDiff"; key: string; path: string }
   /** A picture the bot handed over in the task, by the id its message gave (`ChatPictureRead`). */
   | { type: "readChatPicture"; key: string; artifactId: string }
+  /** A file that isn't a picture the bot handed over, by the id its message gave (`ChatFileRead`). */
+  | {
+      type: "readChatFile";
+      key: string;
+      artifactId: string;
+      /** The gateway whose history drew the row: the file is read only while it is still that one. */
+      stamp: GatewayStamp;
+    }
   /**
-   * A picture you sent, from this app's own copy (`SentPictureRead`): by the outgoing message's
-   * id, or the key history stored its row under, and its place among the message's files.
+   * A picture you sent (`SentPictureRead`): by the outgoing message's id, or the key history
+   * stored its row under, and its place among the message's files. From this app's own copy,
+   * or read back from the gateway; `stamp` is where the conversation was drawn, and a read
+   * back goes only to that gateway.
    */
-  | { type: "readSentPicture"; key: string; messageKey: string; index: number }
+  | {
+      type: "readSentPicture";
+      key: string;
+      messageKey: string;
+      index: number;
+      stamp?: GatewayStamp;
+    }
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
@@ -391,10 +415,16 @@ export type BridgeCommand =
   | { type: "newTask"; botId: string; label: string | null }
   /** A bot's replacement first task, "Main" (F-424). */
   | { type: "newMainTask"; botId: string }
-  | { type: "renameTask"; key: string; label: string }
-  | { type: "pinTask"; key: string; pinned: boolean }
-  /** Mark unread or read; `opened` is the read of opening a task, made only while the connection writes. */
-  | { type: "markTask"; key: string; unread: boolean; opened: boolean }
+  /** `stamp` as for archiving. */
+  | { type: "renameTask"; key: string; label: string; stamp: GatewayStamp }
+  | { type: "pinTask"; key: string; pinned: boolean; stamp: GatewayStamp }
+  /**
+   * Mark unread or read; `opened` is the read of opening a task, made only while the connection
+   * writes, so it asks for no access and carries no stamp. The person's mark has `stamp` as for
+   * archiving.
+   */
+  | { type: "markTask"; key: string; unread: boolean; opened: true }
+  | { type: "markTask"; key: string; unread: boolean; opened: false; stamp: GatewayStamp }
   /**
    * Archive; `stop` stops an active run first ("Stop and archive"). `stamp` is where the rail
    * listed the task: a restored copy has the same keys, so nothing goes anywhere else.
@@ -662,24 +692,34 @@ type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage"
                                                                                                       }
                                                                                                     ? BotVoiceAnswer
                                                                                                     : C extends {
-                                                                                                          type: "readMemory";
+                                                                                                          type:
+                                                                                                            | "readBotGuides"
+                                                                                                            | "changeBotGuides";
                                                                                                         }
-                                                                                                      ? MemoryDocument
+                                                                                                      ? BotGuidesAnswer
                                                                                                       : C extends {
-                                                                                                            type:
-                                                                                                              | "checkRoutineCreate"
-                                                                                                              | "checkRoutineUpdate";
+                                                                                                            type: "readMemory";
                                                                                                           }
-                                                                                                        ? RoutineSaveCheck
+                                                                                                        ? MemoryDocument
                                                                                                         : C extends {
-                                                                                                              type: "readChatPicture";
+                                                                                                              type:
+                                                                                                                | "checkRoutineCreate"
+                                                                                                                | "checkRoutineUpdate";
                                                                                                             }
-                                                                                                          ? ChatPictureRead
+                                                                                                          ? RoutineSaveCheck
                                                                                                           : C extends {
-                                                                                                                type: "readSentPicture";
+                                                                                                                type: "readChatPicture";
                                                                                                               }
-                                                                                                            ? SentPictureRead
-                                                                                                            : void;
+                                                                                                            ? ChatPictureRead
+                                                                                                            : C extends {
+                                                                                                                  type: "readSentPicture";
+                                                                                                                }
+                                                                                                              ? SentPictureRead
+                                                                                                              : C extends {
+                                                                                                                    type: "readChatFile";
+                                                                                                                  }
+                                                                                                                ? ChatFileRead
+                                                                                                                : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -827,6 +867,35 @@ function count(value: unknown, max: number, what: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max)
     throw new Error(`invalid ${what}`);
   return value;
+}
+
+/** A guides change as a viewer may ask for it (guides.ts), or an error. */
+function guidesChange(value: unknown): GuidesChange {
+  const change =
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  switch (change.action) {
+    case "add":
+      if (
+        !Array.isArray(change.bots) ||
+        change.bots.length > 512 ||
+        typeof change.newBots !== "boolean"
+      )
+        throw new Error("invalid guides change");
+      return { action: "add", bots: change.bots.map(botId), newBots: change.newBots };
+    case "replace":
+      if (typeof change.shown !== "string" || change.shown.length > MAX_CHANGED_SECTION_CHARS)
+        throw new Error("invalid guides change");
+      return { action: "replace", bot: botId(change.bot), shown: change.shown };
+    case "remove":
+    case "decline":
+      return { action: change.action };
+    case "newBots":
+      if (typeof change.on !== "boolean") throw new Error("invalid guides change");
+      return { action: "newBots", on: change.on };
+    default:
+      // "update" is the client's own, after a connect: never a viewer's.
+      throw new Error("invalid guides change");
+  }
 }
 
 function botId(value: unknown): string {
@@ -1422,6 +1491,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "setTurnLimit", minutes: command.minutes };
     case "readBotVoice":
       return { type: "readBotVoice" };
+    case "readBotGuides":
+      return { type: "readBotGuides" };
+    case "changeBotGuides":
+      return {
+        type: "changeBotGuides",
+        change: guidesChange(command.change),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "setBotVoice":
       if (typeof command.on !== "boolean") throw new Error("invalid voice setting");
       return {
@@ -1435,6 +1512,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setShowOtherToolSessions":
       if (typeof command.on !== "boolean") throw new Error("invalid other tools setting");
       return { type: "setShowOtherToolSessions", on: command.on };
+    case "setShowGatewayBot":
+      if (typeof command.on !== "boolean") throw new Error("invalid gateway bot setting");
+      return { type: "setShowGatewayBot", on: command.on };
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
@@ -1589,12 +1669,20 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         artifactId: id(command.artifactId, "picture id"),
       };
+    case "readChatFile":
+      return {
+        type: "readChatFile",
+        key: sessionKey(command.key),
+        artifactId: id(command.artifactId, "file id"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "readSentPicture":
       return {
         type: "readSentPicture",
         key: sessionKey(command.key),
         messageKey: id(command.messageKey, "message key"),
         index: count(command.index, MAX_ATTACHMENTS_PER_MESSAGE - 1, "file index"),
+        ...(command.stamp === undefined ? {} : { stamp: gatewayStampOf(command.stamp) }),
       };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
@@ -1670,16 +1758,26 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "renameTask":
       if (typeof command.label !== "string" || command.label.length > MAX_TASK_LABEL_CHARS)
         throw new Error("invalid label");
-      return { type: "renameTask", key: sessionKey(command.key), label: command.label };
-    case "pinTask":
-      return { type: "pinTask", key: sessionKey(command.key), pinned: flag(command.pinned) };
-    case "markTask":
       return {
-        type: "markTask",
+        type: "renameTask",
         key: sessionKey(command.key),
-        unread: flag(command.unread),
-        opened: command.opened === undefined ? false : flag(command.opened),
+        label: command.label,
+        stamp: gatewayStampOf(command.stamp),
       };
+    case "pinTask":
+      return {
+        type: "pinTask",
+        key: sessionKey(command.key),
+        pinned: flag(command.pinned),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "markTask": {
+      const key = sessionKey(command.key);
+      const unread = flag(command.unread);
+      return command.opened !== undefined && flag(command.opened)
+        ? { type: "markTask", key, unread, opened: true }
+        : { type: "markTask", key, unread, opened: false, stamp: gatewayStampOf(command.stamp) };
+    }
     case "archiveTask":
       return {
         type: "archiveTask",
@@ -2238,12 +2336,18 @@ class ViewerSession implements BridgeSession {
         return client.setTurnLimit(command.minutes);
       case "readBotVoice":
         return client.readBotVoice();
+      case "readBotGuides":
+        return client.readBotGuides();
+      case "changeBotGuides":
+        return client.changeBotGuides(command.change, command.stamp, owner);
       case "setBotVoice":
         return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":
         return client.setShowChannelChats(command.on);
       case "setShowOtherToolSessions":
         return client.setShowOtherToolSessions(command.on);
+      case "setShowGatewayBot":
+        return client.setShowGatewayBot(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":
@@ -2304,12 +2408,20 @@ class ViewerSession implements BridgeSession {
           command.artifactId,
           this.fileOptions(),
         );
+      case "readChatFile":
+        return client.readChatFile(
+          this.mine(command.key),
+          command.artifactId,
+          this.fileOptions(),
+          command.stamp,
+        );
       case "readSentPicture":
         return client.readSentPicture(
           this.mine(command.key),
           command.messageKey,
           command.index,
           this.fileOptions(),
+          command.stamp,
         );
       case "listMemory":
         return client.listMemory(command.botId);
@@ -2347,11 +2459,15 @@ class ViewerSession implements BridgeSession {
       case "newMainTask":
         return { key: await client.newMainTask(command.botId, { owner }) };
       case "renameTask":
-        return client.renameTask(command.key, command.label, { owner });
+        return client.renameTask(command.key, command.label, { owner, stamp: command.stamp });
       case "pinTask":
-        return client.pinTask(command.key, command.pinned, { owner });
+        return client.pinTask(command.key, command.pinned, { owner, stamp: command.stamp });
       case "markTask":
-        return client.markTask(command.key, command.unread, { owner, opened: command.opened });
+        return client.markTask(
+          command.key,
+          command.unread,
+          command.opened ? { owner, opened: true } : { owner, stamp: command.stamp },
+        );
       case "archiveTask":
         return client.archiveTask(command.key, { stop: command.stop, owner, stamp: command.stamp });
       case "restoreTask":

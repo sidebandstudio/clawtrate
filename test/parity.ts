@@ -98,9 +98,11 @@ export function checkIds(checks: CheckPath[]): string[] {
 
 /** Run a runner's listing from `root`'s packages in `cwd`, outside the Vitest worker this is called from. */
 async function list(root: string, cwd: string, bin: string, args: string[]): Promise<string> {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("VITEST")),
-  );
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("VITEST"))),
+    // A Mac runs only the macOS set of screenshot tests; the listing needs every check.
+    CLAWTRATE_VISUAL_ALL_SPECS: "1",
+  };
   const { stdout } = await execFileAsync(join(root, "node_modules/.bin", bin), args, {
     cwd,
     env,

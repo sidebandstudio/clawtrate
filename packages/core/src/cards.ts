@@ -290,7 +290,7 @@ function str(value: unknown): string | null {
 }
 
 /** The call's arguments, live (`args`) or from history (`arguments`, possibly a JSON string). */
-function callArgs(raw: StepRaw | null): RawRecord | null {
+export function callArgs(raw: StepRaw | null): RawRecord | null {
   const call = asRecord(raw?.call);
   const value = call?.args ?? call?.arguments ?? call?.input;
   if (typeof value === "string") {
@@ -304,7 +304,7 @@ function callArgs(raw: StepRaw | null): RawRecord | null {
 }
 
 /** The result's `{content, details}`, live (`result.result`) or from history (the row). */
-function resultBody(raw: StepRaw | null): RawRecord | null {
+export function resultBody(raw: StepRaw | null): RawRecord | null {
   const result = asRecord(raw?.result);
   if (!result) return null;
   return asRecord(result.result) ?? result;
@@ -317,7 +317,7 @@ function resultBody(raw: StepRaw | null): RawRecord | null {
  * are then in the result's own text, the JSON object the tool returned. That
  * object is read only when the text is exactly one, and `details` wins.
  */
-function sendDetails(body: RawRecord | null): RawRecord | null {
+export function sendDetails(body: RawRecord | null): RawRecord | null {
   const details = asRecord(body?.details);
   if (str(details?.status)) return details;
   const blocks = Array.isArray(body?.content) ? body.content : [];

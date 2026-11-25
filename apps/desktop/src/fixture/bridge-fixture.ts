@@ -73,9 +73,17 @@ import {
   PICTURE_SCENES,
   pictureAnswers,
   pictureScene,
-  sentPictureAnswer,
+  sentPictureAnswers,
 } from "./pictures.ts";
 import { BOT_NAME_SCENES, botNameCommand, botNameScene, isBotNameScene } from "./bot-name.ts";
+import {
+  BOT_FILE_SCENES,
+  botFileAnswer,
+  botFileSave,
+  botFileScene,
+  isBotFileScene,
+  type SavedFile,
+} from "./bot-files.ts";
 import {
   computerFixture,
   FIXTURE_VIEWER,
@@ -86,6 +94,7 @@ import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts"
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { voiceCommands, type VoiceParams } from "./voice.ts";
+import { guidesCommands } from "./guides.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 import {
   NO_SEARCH_PARAMS,
@@ -145,6 +154,7 @@ export const SCENES = [
   ...ACTION_SCENES,
   ...PICTURE_SCENES,
   ...BOT_NAME_SCENES,
+  ...BOT_FILE_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -494,6 +504,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
       if (isPictureScene(name)) return { initial: pictureScene(base, now, name), steps: [] };
+      if (isBotFileScene(name)) return { initial: botFileScene(base, now), steps: [] };
       if (isBotNameScene(name)) return { initial: botNameScene(name, base, now), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
@@ -567,10 +578,17 @@ export function createFixtureBridge(
     checkIns?: CheckInParams;
     search?: SearchParams;
     voice?: VoiceParams;
+    /** The bots' guides (guides.ts): `guides=` in the address. */
+    guides?: string | null;
     /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
     fullPairing?: boolean;
     /** A name given to the fixture gateway on this device (`?gatewayName=`). */
     gatewayName?: string | null;
+    /**
+     * "Show the gateway's own bot" (F-562). On unless `gatewaybot=off`, so the scenes keep
+     * Juniper, the gateway's own bot, in the rail; `gatewaybot=off` shows the default.
+     */
+    showGatewayBot?: boolean;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -613,6 +631,8 @@ export function createFixtureBridge(
   releaseSnapshots(): void;
   /** Takes the Computer pane has shown refused as busy so far (`computerFixture`'s `refusals`). */
   computerRefusals(): number;
+  /** What the host's own save wrote, in the scenes that have one (`bot-files`). */
+  savedFiles: SavedFile[];
 } {
   const now = Date.now();
   const setupName = isSetupState(options.setup ?? null) ? options.setup! : null;
@@ -622,6 +642,7 @@ export function createFixtureBridge(
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
   const pictureAnswer = pictureAnswers(name);
+  const sentPictureAnswer = sentPictureAnswers(name);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
   const routineParams = options.routines ?? { state: "none" };
   let state =
@@ -692,6 +713,9 @@ export function createFixtureBridge(
   }
   if (options.fullPairing)
     state = { ...state, connection: { ...state.connection, fullPairing: true } };
+  // The host keeps the choice across every state it sets, as it keeps the target below.
+  let showGatewayBot = options.showGatewayBot ?? true;
+  state = { ...state, showGatewayBot };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
@@ -729,6 +753,8 @@ export function createFixtureBridge(
   const set = (next: ClawtrateState) => {
     // A state that already carries a higher target (a test's own) raises the counter with it.
     target = Math.max(target, next.connection.target);
+    if (next.showGatewayBot === undefined) next = { ...next, showGatewayBot };
+    else showGatewayBot = next.showGatewayBot;
     state = next.connection.target === target ? next : withConnection(next, { target });
     publish();
   };
@@ -768,6 +794,7 @@ export function createFixtureBridge(
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   const timers = holdableTimers();
+  const savedFiles: SavedFile[] = [];
   const { deferred } = timers;
   const searchCommand = searchCommands(search, deferred);
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
@@ -793,6 +820,11 @@ export function createFixtureBridge(
     () => gatewayStamp(state.connection),
     now,
   );
+  const guides = guidesCommands(
+    options.guides ?? null,
+    () => state.connection.canAdmin,
+    () => gatewayStamp(state.connection),
+  );
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
@@ -809,6 +841,10 @@ export function createFixtureBridge(
     if (command.type === "readBotVoice" || command.type === "setBotVoice") {
       sent.push(command);
       return voice(command);
+    }
+    if (command.type === "readBotGuides" || command.type === "changeBotGuides") {
+      sent.push(command);
+      return guides(command);
     }
     if (
       command.type === "listMemory" ||
@@ -879,6 +915,7 @@ export function createFixtureBridge(
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
     if (command.type === "readChatPicture") return pictureAnswer();
     if (command.type === "readSentPicture") return sentPictureAnswer(command);
+    if (command.type === "readChatFile") return botFileAnswer(command);
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;
@@ -1292,6 +1329,10 @@ export function createFixtureBridge(
       await apply(command);
     },
     invoke: answer,
+    ...(isBotFileScene(name)
+      ? { save: botFileSave(savedFiles, (run) => timers.deferred(run, 0)) }
+      : {}),
+    savedFiles,
     attach: async (file) => {
       const info = {
         id: `file-${files.size + 1}`,

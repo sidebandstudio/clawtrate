@@ -21,6 +21,7 @@ export const PICTURE_SCENES = [
   "pictures-failed",
   "pictures-message",
   "pictures-sent",
+  "pictures-sent-back",
 ] as const;
 export type PictureScene = (typeof PICTURE_SCENES)[number];
 
@@ -196,7 +197,7 @@ const SENT_PICTURE_BYTES = 623;
 /**
  * Your messages with files (#451), as the gateway keeps them (`__openclaw.media`): one with a
  * picture this app sent and still holds, one with a text file, and one sent from another device,
- * whose picture this app has no copy of.
+ * whose picture this app has no copy of and can't load back over the fixture's loopback address.
  */
 function sentRows(start: number) {
   const user = (id: string, text: string, media: unknown[], seq: number) => ({
@@ -214,7 +215,7 @@ function sentRows(start: number) {
     __openclaw: { id: `row-${seq}`, seq, runId },
   });
   const media = (name: string, contentType: string, sizeBytes: number) => ({
-    // Never loaded or kept: Clawtrate doesn't load a person's picture from the gateway (#469).
+    // The host's alone: what it reads a picture back by (#469). The page never has it.
     url: `media://inbound/${name.replace(/\.[^.]+$/, "")}---7d0e1a3c-5b2f-4c9e-8a61-0f3b2d4c6e81${name.slice(name.lastIndexOf("."))}`,
     contentType,
     kind: contentType.startsWith("image/") ? "image" : "document",
@@ -247,6 +248,38 @@ function sentRows(start: number) {
   ];
 }
 
+/**
+ * Your messages on another device of yours (#469), whose pictures the host reads back from the
+ * gateway: one it shows, one the gateway no longer keeps, one whose first read fails and whose
+ * Try again shows it, and one still on its way.
+ */
+function sentBackRows(start: number): unknown[] {
+  const user = (id: string, text: string, name: string, seq: number) => {
+    const media = [
+      {
+        url: `media://inbound/${name.replace(/\.png$/, "")}---2c9e8a61-0f3b-4d4c-9e81-7d0e1a3c5b2f.png`,
+        contentType: "image/png",
+        kind: "image",
+        fileName: name,
+        sizeBytes: SENT_PICTURE_BYTES,
+      },
+    ];
+    return {
+      role: "user",
+      content: text,
+      timestamp: start + seq * SECOND,
+      idempotencyKey: `${id}:user`,
+      __openclaw: { id: `row-${seq}`, seq, idempotencyKey: `${id}:user`, media },
+    };
+  };
+  return [
+    user("back-1", "the calendar from this morning", "calendar.png", 1),
+    user("gone-1", "the flyer from last month", "flyer.png", 2),
+    user("failed-1", "my boarding pass", "pass.png", 3),
+    user("late-1", "and the map", "map.png", 4),
+  ];
+}
+
 export function pictureScene(base: ClawtrateState, now: number, name: string): ClawtrateState {
   const start = now - 20 * 60 * SECOND;
   const history =
@@ -254,7 +287,9 @@ export function pictureScene(base: ClawtrateState, now: number, name: string): C
       ? messageRows(start)
       : name === "pictures-sent"
         ? sentRows(start)
-        : rows(start);
+        : name === "pictures-sent-back"
+          ? sentBackRows(start)
+          : rows(start);
   const ctx: EngineContext = { sessionKey: OPEN_TASK, now, raw: new RawTable() };
   const transcript = base.transcripts[OPEN_TASK]!;
   return {
@@ -273,17 +308,37 @@ export function pictureScene(base: ClawtrateState, now: number, name: string): C
   };
 }
 
-/** The host's answer for a picture you sent: the one this app sent and holds, and no other. */
-export function sentPictureAnswer(command: { messageKey: string; index: number }): SentPictureRead {
-  if (command.messageKey === "sent-2:user" && command.index === 1)
-    return { status: "not-a-picture" };
-  if (command.messageKey !== "sent-1:user" || command.index !== 0) return { status: "not-kept" };
-  return {
-    status: "content",
-    kind: "image",
-    mimeType: "image/png",
-    bytes: SENT_PICTURE_BYTES,
-    transfer: { id: null, chunks: 1, data: SENT_PICTURE },
+const SENT_CONTENT: SentPictureRead = {
+  status: "content",
+  kind: "image",
+  mimeType: "image/png",
+  bytes: SENT_PICTURE_BYTES,
+  transfer: { id: null, chunks: 1, data: SENT_PICTURE },
+};
+
+/**
+ * The host's answers for a picture you sent. In `pictures-sent`: the one this app sent and holds,
+ * and no other, since the fixture's address is loopback. In `pictures-sent-back`: read back from
+ * the gateway, gone from it, failed once and then shown, and one that never arrives.
+ */
+export function sentPictureAnswers(name: string) {
+  let failedReads = 0;
+  return (command: {
+    messageKey: string;
+    index: number;
+  }): SentPictureRead | Promise<SentPictureRead> => {
+    if (name === "pictures-sent-back") {
+      if (command.messageKey === "gone-1:user") return { status: "gone" };
+      if (command.messageKey === "late-1:user") return new Promise(() => {});
+      if (command.messageKey === "failed-1:user" && (failedReads += 1) === 1)
+        return { status: "failed", message: "The gateway couldn't be reached for this picture." };
+      return SENT_CONTENT;
+    }
+    if (command.messageKey === "sent-2:user" && command.index === 1)
+      return { status: "not-a-picture" };
+    if (command.messageKey !== "sent-1:user" || command.index !== 0)
+      return { status: "cannot-load" };
+    return SENT_CONTENT;
   };
 }
 

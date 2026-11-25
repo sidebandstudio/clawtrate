@@ -1,25 +1,48 @@
 // The Work pane's Computer tab against real development gateways
-// (work-pane.md, Part 3): the run's seeded instance with the computer plugin
-// (`e2e-<run>-computer`, whose Marlow and Pip have browsers of their own,
+// (work-pane.md, Part 3): a seeded instance of this file's own with the computer
+// plugin (`e2e-<run>-computer`, whose Marlow and Pip have browsers of their own,
 // confined to the instance's scripted pages on loopback), and the run's main
 // instance, which has no plugin. Bots act as the gateway's owner makes them,
 // through the scripted model's browser directives. Each check works in a task
 // of its own, on preview hosts of its own, so none relies on another's state.
 //
+// The computer instance is started in this file's beforeAll and reset in its
+// afterAll, so only the shard that runs this file starts it. It is recorded in a
+// run record of this file's own before it starts, so a run killed outright is
+// cleaned up by the next `pnpm e2e`.
+//
 // With CLAWTRATE_COMPUTER_SHOTS=<folder outside the repository>, it also saves
 // screenshots of what it checked there.
 import { expect, test, type Browser, type Page } from "@playwright/test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browserPorts, instancePorts, openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { PAGES_RECORD_PATH } from "../tools/dev-gateway/src/scripted-pages.ts";
-import { readMarker } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, processIdentity, readMarker } from "../tools/dev-gateway/src/state-guard.ts";
 import { execFileSync } from "node:child_process";
-import { devGateway, FORBIDDEN_PORTS, startHost, stopChild } from "./global-setup.ts";
+import {
+  devGateway,
+  FORBIDDEN_PORTS,
+  listInstances,
+  resetInstance,
+  startHost,
+  stopChild,
+} from "./global-setup.ts";
+import { cleanUp, recordPath, saveRecord, type RunRecord } from "./run-record.ts";
 
-const COMPUTER = process.env.CLAWTRATE_E2E_COMPUTER!;
+/** This file's own run record, beside global setup's: its instance is written here before it starts. */
+const RECORDS = join(import.meta.dirname, "../tools/dev-gateway/.run/e2e");
+const record: RunRecord = {
+  run: randomBytes(4).toString("hex"),
+  runner: { pid: process.pid, identity: "" },
+  instances: [],
+  host: null,
+  dirs: [],
+};
+const COMPUTER = `e2e-${record.run}-computer`;
 const MAIN = process.env.CLAWTRATE_DEV_INSTANCE!;
 const SHOTS = process.env.CLAWTRATE_COMPUTER_SHOTS ?? null;
 
@@ -87,8 +110,50 @@ async function hostOn(instance: string): Promise<string> {
   expect(FORBIDDEN_PORTS).not.toContain(Number(new URL(url).port));
   return url;
 }
+
+test.beforeAll(async () => {
+  test.setTimeout(240_000);
+  const self = processIdentity(process.pid);
+  if (self.state !== "alive") throw new Error("could not determine this worker's start time");
+  record.runner.identity = self.identity;
+  const runId = newRunId();
+  record.instances.push({ name: COMPUTER, runId });
+  saveRecord(RECORDS, record);
+  // With the computer plugin, whose Marlow and Pip have browsers of their own. Seeded: the seed
+  // gives the bots their names. Views and leases get the plugin's normal 20 s window, so a loaded
+  // machine's stall is not taken for an ended view; strict 6 s expiry is covered by the
+  // dev-gateway's own computer checks and the unit tests.
+  process.stdout.write(
+    devGateway(
+      COMPUTER,
+      "start",
+      "--run-id",
+      runId,
+      "--with-plugin",
+      "clawtrate-computer",
+      "--renew-timeout-ms",
+      "20000",
+    ),
+  );
+  const mine = listInstances().find((row) => row.name === COMPUTER);
+  if (!mine?.gatewayRunning) throw new Error(`instance ${COMPUTER} is not running`);
+  for (const port of [mine.gatewayPort, mine.providerPort]) {
+    if (port === null || FORBIDDEN_PORTS.includes(port)) {
+      throw new Error(`instance ${COMPUTER} is on port ${port}, which e2e never uses`);
+    }
+  }
+});
+
 test.afterAll(async () => {
+  test.setTimeout(120_000);
   for (const stop of hosts.splice(0)) await stop();
+  // The hosts are stopped, the instance is reset: the record goes too.
+  expect(cleanUp(RECORDS, record, resetInstance), "the computer checks' run record").toEqual([]);
+  expect(existsSync(recordPath(RECORDS, record.run))).toBe(false);
+  expect(
+    listInstances().some((row) => row.name === COMPUTER),
+    "the computer checks' instance",
+  ).toBe(false);
 });
 
 /** Pair a page's host with an instance, as its owner approves the request. */

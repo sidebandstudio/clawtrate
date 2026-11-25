@@ -11,13 +11,16 @@ export * from "./runs.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";
 export * from "./cards.ts";
+export * from "./started-task-card.ts";
 export * from "./actions.ts";
 export * from "./action-feed.ts";
 export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
 export * from "./pictures.ts";
+export * from "./chat-files.ts";
 export * from "./bot-names.ts";
+export * from "./gateway-bot.ts";
 export * from "./computer.ts";
 export * from "./machine.ts";
 export * as computerWords from "./computer-words.ts";
@@ -115,3 +118,6 @@ export {
   type MemoryList,
 } from "./memory.ts";
 export { type BotVoice, type BotVoiceAnswer, type VoiceHook } from "./voice.ts";
+export * from "./start-tasks.ts";
+export * from "./guides.ts";
+export * from "./guide-text.ts";

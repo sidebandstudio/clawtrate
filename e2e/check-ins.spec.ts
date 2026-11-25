@@ -7,7 +7,7 @@
 // gateway's own log. The instance's scheduler is off, so no check-in runs on
 // its schedule here: Off is shown by the job the scheduler would run, and by
 // the gateway's own refusal to run it when asked to run it if enabled.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,9 +18,10 @@ import { createNodeHost } from "../packages/core/src/node/index.ts";
 import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { ACCOUNTS, test } from "./accounts-instance.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
-const INSTANCE = process.env.CLAWTRATE_E2E_ACCOUNTS!;
+const INSTANCE = ACCOUNTS;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 
 test.describe.configure({ mode: "serial" });
@@ -103,7 +104,9 @@ async function save(bot: string, choice: RegExp): Promise<void> {
   await expect(page.getByTestId("b-announcer")).toHaveText("Check-ins saved");
 }
 
-test.beforeAll(async ({ browser }) => {
+test.beforeAll(async ({ accountsInstance, browser }) => {
+  // Started by the first of the accounts instance's specs this worker runs (accounts-instance.ts).
+  expect(accountsInstance).toBe(INSTANCE);
   test.setTimeout(180_000);
   expect(INSTANCE, "this run's accounts instance").toMatch(/^e2e-[0-9a-f]{8}-acct$/);
   expect(listInstances().find((each) => each.name === INSTANCE)?.gatewayRunning).toBe(true);

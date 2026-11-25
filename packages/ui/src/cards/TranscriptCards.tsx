@@ -4,7 +4,16 @@
 // this folder: what goes where (placement.ts), what each says (model.ts) and
 // how each looks (cards.css).
 
-import { MAX_INTER_SESSION, type Run, type Transcript, type TranscriptItem } from "@clawtrate/core";
+import {
+  MAX_INTER_SESSION,
+  selectStartedTasks,
+  tasksShownHere,
+  type Run,
+  type StartedTaskCard,
+  type Task,
+  type Transcript,
+  type TranscriptItem,
+} from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -35,16 +44,21 @@ import {
   takeArrival,
   takeReturnPoint,
 } from "./MessagedCard.tsx";
-import { botMessageKey, mayDispatch, nameOf, sentVerb } from "./model.ts";
+import { botMessageKey, mayDispatch, nameOf, sentToTask, sentVerb } from "./model.ts";
 import { Announcer } from "./parts.tsx";
 import { cardDomId, codingCalls, placeCards, type CardRef } from "./placement.ts";
 import { QuestionCardView } from "./QuestionCard.tsx";
+import { StartedTaskCardView } from "./StartedTaskCard.tsx";
 import { useCards } from "./useCards.ts";
 import "./cards.css";
 
 type Scope = {
   placement: ReturnType<typeof placeCards>;
   cards: ReturnType<typeof useCards>;
+  /** The tasks the bot started from this conversation (F-587), against this connection's list. */
+  startedTasks: StartedTaskCard[];
+  /** The task list of the connection this conversation is shown from (`tasksShownHere`). */
+  listed: Record<string, Task[]>;
 };
 
 const ScopeContext = createContext<Scope | null>(null);
@@ -71,6 +85,16 @@ export function CardScope({
   const bot = state.bots.find((each) => each.id === task?.botId);
   const invoke = bridge.invoke;
   const cards = useCards(taskKey, transcript, invoke);
+  // Only the task list read on the gateway this conversation is shown from.
+  const listed = tasksShownHere(state);
+  const startedTasks = useMemo(
+    () =>
+      selectStartedTasks(
+        { runs: transcript.runs, items: transcript.items, taskKey, tasks: listed },
+        cards.rawOf,
+      ),
+    [transcript.runs, transcript.items, taskKey, listed, cards.rawOf],
+  );
   const placement = useMemo(
     () =>
       placeCards(
@@ -82,8 +106,9 @@ export function CardScope({
           interSession: transcript.interSession,
         },
         cards.selected,
+        startedTasks,
       ),
-    [transcript, cards.selected],
+    [transcript, cards.selected, startedTasks],
   );
   // Ordinary steps' states, for the card a step becomes; the newest `MAX_STEP_STATES` kept.
   const stepStates = useRef(new Map<string, StepState>());
@@ -196,7 +221,7 @@ export function CardScope({
         scroller.dispatchEvent(new Event("scroll"));
       } else element.scrollIntoView({ block: "center" });
       const button = [...element.querySelectorAll<HTMLButtonElement>(".card-actions button")].find(
-        (each) => each.textContent?.startsWith("Open in"),
+        (each) => each.textContent?.startsWith("Open"),
       );
       (button ?? element.querySelector<HTMLElement>("summary"))?.focus({ preventScroll: true });
     };
@@ -216,7 +241,7 @@ export function CardScope({
   }, [taskKey, openTask]);
 
   return (
-    <ScopeContext.Provider value={{ placement, cards }}>
+    <ScopeContext.Provider value={{ placement, cards, startedTasks, listed }}>
       <CardEnvContext.Provider value={env}>
         <StepHandoverContext.Provider value={handover}>
           <Announcer>{children}</Announcer>
@@ -257,7 +282,7 @@ export const PlacedCardsContext = createContext<ReadonlySet<string>>(new Set());
 export const refKey = (ref: CardRef) => `${ref.kind}:${ref.id}`;
 
 export function CardFor({ cardRef }: { cardRef: CardRef }) {
-  const { cards } = useScope();
+  const { cards, startedTasks, listed } = useScope();
   const env = useCardEnv();
   const domId = cardDomId(cardRef);
   switch (cardRef.kind) {
@@ -275,6 +300,7 @@ export function CardFor({ cardRef }: { cardRef: CardRef }) {
       return (
         <BotMessageCardView
           card={card}
+          task={sentToTask(card, listed, env.taskKey)}
           read={cards.rawState(card.stepId)}
           related={related(env, cards.selected, card.recipient.sessionKey, card.recipient.agentId)}
           partial={partialHistory(env.transcript)}
@@ -285,6 +311,13 @@ export function CardFor({ cardRef }: { cardRef: CardRef }) {
       const card = codingCalls(cards.selected).find((each) => each.id === cardRef.id);
       if (!card || !cards.settledRaw(card.stepId)) return null;
       return <T3CodeCardView card={card} read={cards.rawState(card.stepId)} />;
+    }
+    case "started-task": {
+      // Drawn from what the step keeps of the call and its result, so it never waits on a read of
+      // the whole payload, which only its Raw view needs.
+      const card = startedTasks.find((each) => each.id === cardRef.id);
+      if (!card) return null;
+      return <StartedTaskCardView card={card} read={cards.rawState(card.stepId)} />;
     }
   }
 }

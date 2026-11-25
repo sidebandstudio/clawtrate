@@ -616,6 +616,42 @@
   margin-top: 10px;
 }
 
+/* A task a bot started (F-587): the Messaged frame, always open, so its title, brief and Open
+   are in view. */
+.started-task > .messaged-line {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px 0 14px;
+  font-size: var(--text-md);
+}
+
+.started-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-medium);
+}
+
+.started-task > .messaged-body {
+  padding-top: 0;
+}
+
+.card .started-brief {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.started-task .exchange-text {
+  margin-bottom: 8px;
+}
+
 /* Request cards: approvals and questions ---------------------------------- */
 
 .card.request {
@@ -1233,6 +1269,27 @@
     display: none;
   }
 
+  /* A started task: "Started a task", the bot and the state on the first line; its title on the
+     second. */
+  .started-task > .messaged-line {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0 8px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .started-task .messaged-verb,
+  .started-task .messaged-who,
+  .started-task > .messaged-line > .state {
+    grid-row: 1;
+  }
+
+  .started-title {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-top: 2px;
+  }
+
   .card .standing-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
@@ -1252,6 +1309,7 @@
 }
 
 [data-input="touch"] .messaged > summary,
+[data-input="touch"] .started-task > .messaged-line,
 [data-input="touch"] .card.request[data-resolved] > summary {
   font-size: var(--text-base);
 }
