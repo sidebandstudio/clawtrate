@@ -393,6 +393,37 @@ describe("F-588: Refresh in the Model menu", () => {
     client.stop();
   });
 
+  it("F-588: what is new is against the menu at the press, also when an account read it waits for brings the model first", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const config = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let first = true;
+    fake.gateway.handlers["config.get"] = (params) => {
+      if (!first) return config(params);
+      first = false;
+      return held.promise.then(() => config(params));
+    };
+    const reading = client.refreshAccounts();
+    // Pressed while the account read runs: the menu shows no dev-7 yet.
+    const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
+    expect(accounts().models.some((m) => m.id === "dev-7")).toBe(false);
+    // The gateway gained dev-7 meanwhile: the account read's picker brings it first.
+    const grown = { acme: [row("dev-1"), row("dev-2"), row("dev-7")] };
+    const before = fake.pickerCatalog;
+    fake.pickerCatalog = () => ({
+      models: [
+        ...grown.acme,
+        ...((before() as { models: Json[] }).models ?? []).filter((m) => m.provider !== "acme"),
+      ],
+    });
+    fake.refreshed = grown;
+    held.resolve();
+    await reading;
+    expect(await refreshing).toMatchObject({ added: ["dev-7"], addedCount: 1 });
+    client.stop();
+  });
+
   it("F-588: a provider cut at the bound: nothing is called gone or new on the strength of the cut, and the counts are said", async () => {
     const fake = new AccountsGateway();
     const acme = Array.from({ length: 200 }, (_, i) => row(`m-${i}`));

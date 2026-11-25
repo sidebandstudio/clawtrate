@@ -390,6 +390,11 @@ export class AccountsEngine {
 
   private async lookAgain(provider: string, stamp: GatewayStamp): Promise<ModelRefresh> {
     const { ctx } = this;
+    // What is new or gone is against the menu the person pressed in: taken now, before any wait,
+    // so an account read the refresh waits for can't bring a model in first and hide it.
+    const pressed = ctx.get();
+    const before = pressed.models.filter((m) => m.provider === provider).map((m) => m.id);
+    const cutBefore = pressed.modelsCut.find((c) => c.provider === provider)?.total ?? null;
     // An account read under way finishes first: the gateway refuses the picker beside it.
     const loading = this.loading;
     if (loading) await loading.catch(() => {});
@@ -408,10 +413,6 @@ export class AccountsEngine {
     const shown = ctx.get().readOn;
     if (!ctx.connected() || !sameStamp(stamp, readOn) || !sameStamp(shown, readOn))
       throw new Error(MODELS_GATEWAY_CHANGED);
-    const before = ctx
-      .get()
-      .models.filter((m) => m.provider === provider)
-      .map((m) => m.id);
     const bots = ctx.bots();
     const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
     let answer: unknown;
@@ -459,7 +460,6 @@ export class AccountsEngine {
               ...kept,
               ...a.models.slice(at).filter((m) => m.provider !== provider),
             ];
-      const cutBefore = a.modelsCut.find((c) => c.provider === provider)?.total ?? null;
       const cut = a.modelsCut.filter((c) => c.provider !== provider);
       if (kept.length < found.rows.length) cut.push({ provider, total: found.rows.length });
       result = found.compare(
