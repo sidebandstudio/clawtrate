@@ -65,6 +65,7 @@ const updating = (patch: Partial<OpenClawUpdateState>): OpenClawUpdateState => (
   blocked: null,
   error: null,
   looking: false,
+  lookFailed: false,
   ...patch,
 });
 const text = (html: string) =>

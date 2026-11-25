@@ -24,7 +24,7 @@
     - definition: operator.read, operator.write, operator.approvals, operator.questions, operator.admin
     - term: Gateway
     - definition: OpenClaw 2026.10.6 · protocol 4
-    - paragraph: "The update failed. The gateway says: “The updater could not start: spawn EAGAIN. · managed-service-handoff-failed”."
+    - paragraph: "The update failed. The gateway says: “The updater could not start: spawn EAGAIN. (managed-service-handoff-failed)”."
     - paragraph: You can try again, or update OpenClaw on the gateway's machine with its update instructions.
     - paragraph:
       - link "OpenClaw's update instructions":
