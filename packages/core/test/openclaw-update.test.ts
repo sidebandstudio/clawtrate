@@ -1093,82 +1093,6 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
   });
 });
 
-describe("F-589: the client follows an update across the gateway's restart", () => {
-  it("F-589: Update sends one update.run to the gateway shown, the event and the reconnect are followed, and the provider accounts and models are read again", async () => {
-    const gateway = grantingGateway();
-    let version = OLD;
-    gateway.connectReply = (params) => {
-      const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
-      const hello = helloOk(scopes, auth?.deviceToken ?? "device-token");
-      return {
-        ok: true,
-        payload: {
-          ...hello,
-          server: { ...hello.server, version },
-          snapshot: {
-            ...hello.snapshot,
-            updateAvailable:
-              version === OLD
-                ? { currentVersion: OLD, latestVersion: NEW, channel: "latest" }
-                : null,
-          },
-        },
-      };
-    };
-    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
-    let run = record();
-    gateway.handlers["update.status"] = () => ({
-      sentinel: null,
-      updateAvailable: null,
-      ...(run.status === "running" && gateway.calls("update.run").length ? { activeRun: run } : {}),
-    });
-    gateway.handlers["update.run"] = () => started();
-    gateway.handlers["update.runs.get"] = () => ({ run });
-    const { client } = await openTask({
-      gateway,
-      held: ADMIN_SCOPES,
-      storage: memoryStorage({
-        connection: JSON.stringify({ url: URL_A, token: null }),
-        [`deviceToken:${encodeURIComponent(URL_A)}:device-1:operator`]: JSON.stringify({
-          token: "device-token",
-          grantedScopes: ADMIN_SCOPES,
-          heldScopes: ADMIN_SCOPES,
-          adminHeld: true,
-        }),
-      }),
-    });
-    await until(() => client.state.connection.gatewayId === "gw-a");
-    expect(client.state.connection.openclawUpdate).toMatchObject({ latest: NEW });
-    const session = createBridgeSession(client);
-    await session.apply({
-      type: "startOpenClawUpdate",
-      stamp: gatewayStamp(client.state.connection),
-    });
-    // One press, carrying only its tag on the gateway's internal channel.
-    expect(gateway.calls("update.run")).toEqual([
-      { requester: { channel: "webchat", senderId: expect.stringMatching(/^clawtrate-update:/) } },
-    ]);
-    gateway.emit("update.run.changed", {
-      runId: RUN,
-      phase: "staging",
-      status: "running",
-      updatedAtMs: 2,
-    });
-    await until(() => client.state.openclawUpdating?.run?.phase === "staging");
-    // The gateway restarts on the new version, and its record says succeeded.
-    // The model list is read the way the app reads it (`accounts.load`): the config, then auth.
-    const accountReads = gateway.calls("models.authStatus").length;
-    run = record({ phase: "finished", status: "succeeded", after: { version: NEW } });
-    version = NEW;
-    gateway.dropAll();
-    await until(() => client.state.openclawUpdating?.run?.outcome === "updated");
-    expect(client.state.openclawUpdating?.run).toMatchObject({ from: OLD, to: NEW });
-    await until(() => gateway.calls("models.authStatus").length > accountReads);
-    expect(gateway.calls("update.run")).toHaveLength(1);
-    client.stop();
-  });
-});
-
 describe("F-590: the updates this device saw succeed, for the gateway's notice", () => {
   /** A run this device's press started, followed to "Updated" on the rig's gateway. */
   async function updated(stored?: string) {
@@ -1437,5 +1361,81 @@ describe("F-589: Update is held until what this device keeps is read", () => {
     viewer.engine.onConnected();
     await viewer.engine.onHello();
     expect(holdsUpdate(viewer.state())).toBe(false);
+  });
+});
+
+describe("F-589: the client follows an update across the gateway's restart", () => {
+  it("F-589: Update sends one update.run to the gateway shown, the event and the reconnect are followed, and the provider accounts and models are read again", async () => {
+    const gateway = grantingGateway();
+    let version = OLD;
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
+      const hello = helloOk(scopes, auth?.deviceToken ?? "device-token");
+      return {
+        ok: true,
+        payload: {
+          ...hello,
+          server: { ...hello.server, version },
+          snapshot: {
+            ...hello.snapshot,
+            updateAvailable:
+              version === OLD
+                ? { currentVersion: OLD, latestVersion: NEW, channel: "latest" }
+                : null,
+          },
+        },
+      };
+    };
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
+    let run = record();
+    gateway.handlers["update.status"] = () => ({
+      sentinel: null,
+      updateAvailable: null,
+      ...(run.status === "running" && gateway.calls("update.run").length ? { activeRun: run } : {}),
+    });
+    gateway.handlers["update.run"] = () => started();
+    gateway.handlers["update.runs.get"] = () => ({ run });
+    const { client } = await openTask({
+      gateway,
+      held: ADMIN_SCOPES,
+      storage: memoryStorage({
+        connection: JSON.stringify({ url: URL_A, token: null }),
+        [`deviceToken:${encodeURIComponent(URL_A)}:device-1:operator`]: JSON.stringify({
+          token: "device-token",
+          grantedScopes: ADMIN_SCOPES,
+          heldScopes: ADMIN_SCOPES,
+          adminHeld: true,
+        }),
+      }),
+    });
+    await until(() => client.state.connection.gatewayId === "gw-a");
+    expect(client.state.connection.openclawUpdate).toMatchObject({ latest: NEW });
+    const session = createBridgeSession(client);
+    await session.apply({
+      type: "startOpenClawUpdate",
+      stamp: gatewayStamp(client.state.connection),
+    });
+    // One press, carrying only its tag on the gateway's internal channel.
+    expect(gateway.calls("update.run")).toEqual([
+      { requester: { channel: "webchat", senderId: expect.stringMatching(/^clawtrate-update:/) } },
+    ]);
+    gateway.emit("update.run.changed", {
+      runId: RUN,
+      phase: "staging",
+      status: "running",
+      updatedAtMs: 2,
+    });
+    await until(() => client.state.openclawUpdating?.run?.phase === "staging");
+    // The gateway restarts on the new version, and its record says succeeded.
+    // The model list is read the way the app reads it (`accounts.load`): the config, then auth.
+    const accountReads = gateway.calls("models.authStatus").length;
+    run = record({ phase: "finished", status: "succeeded", after: { version: NEW } });
+    version = NEW;
+    gateway.dropAll();
+    await until(() => client.state.openclawUpdating?.run?.outcome === "updated");
+    expect(client.state.openclawUpdating?.run).toMatchObject({ from: OLD, to: NEW });
+    await until(() => gateway.calls("models.authStatus").length > accountReads);
+    expect(gateway.calls("update.run")).toHaveLength(1);
+    client.stop();
   });
 });
