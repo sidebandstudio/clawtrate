@@ -9,6 +9,7 @@ import { MODEL_ID } from "./env.ts";
 import { ScriptedAccounts, type FailureStatus, type ScriptedFailure } from "./scripted-accounts.ts";
 import { IMAGES_PATH, imagesAnswer } from "./scripted-images.ts";
 import {
+  effectivePrompt,
   messageText,
   gatewayTurnPrompt,
   planReply,
@@ -373,8 +374,8 @@ export function startFakeProvider(options: FakeProviderOptions) {
         }
         if (session) offered.set(session, [...toolNames].sort());
         if (session) {
-          const system = messages.filter((m) => m.role === "system" || m.role === "developer");
-          systems.set(session, system.map(messageText).join("\n\n"));
+          // As the model has it now: 2026.11.10 sends changes to it as messages of their own.
+          systems.set(session, effectivePrompt(messages));
         }
         const steps = planReply(messages, new Set(toolNames), {
           pagesOrigin: options.pagesOrigin ?? null,
