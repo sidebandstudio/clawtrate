@@ -970,23 +970,36 @@ export function gatewayStartProblem(problem: {
   ].join("\n");
 }
 
+/** What a start watches while its gateway comes up. */
+export type GatewayWatch = {
+  exited: () => boolean;
+  health: () => Promise<{ healthy: boolean; seen: string }>;
+  log: string;
+};
+
 /** Wait for a start's gateway to answer. Stop as soon as its process exits, and say why. */
-async function waitForGateway(inst: DevInstance): Promise<void> {
+export async function waitForGateway(
+  watch: GatewayWatch,
+  timeoutMs = GATEWAY_START_MS,
+): Promise<void> {
   const started = Date.now();
   let lastSeen: string | null = null;
   for (;;) {
-    const marker = readMarker(inst.stateDir);
-    const exited =
-      processState(marker?.gatewayPid, marker?.gatewayIdentity, inst.identify) === "dead";
-    if (!exited) {
-      const health = await gatewayHealth(inst);
+    if (!watch.exited()) {
+      // A probe can fail outright, for one when the gateway exits while it runs.
+      const health = await watch.health().catch((error: unknown) => ({
+        healthy: false,
+        seen: `the health check failed: ${error instanceof Error ? error.message : String(error)}`,
+      }));
       if (health.healthy) return;
       lastSeen = health.seen;
     }
+    // Read again after the probe, which can end after the gateway exited.
+    const exited = watch.exited();
     const waitedMs = Date.now() - started;
-    if (exited || waitedMs >= GATEWAY_START_MS) {
-      const log = join(inst.runDir, "gateway.log");
-      throw new Error(gatewayStartProblem({ waitedMs, exited, lastSeen, log, tail: logTail(log) }));
+    if (exited || waitedMs >= timeoutMs) {
+      const tail = logTail(watch.log);
+      throw new Error(gatewayStartProblem({ waitedMs, exited, lastSeen, log: watch.log, tail }));
     }
     await sleep(250);
   }
@@ -1367,7 +1380,14 @@ export async function start(
     }
     // The lock is held until the gateway is healthy, sandboxed and seeded, so
     // no other command acts on an instance that is still starting.
-    await waitForGateway(inst);
+    await waitForGateway({
+      exited: () => {
+        const marker = readMarker(inst.stateDir);
+        return processState(marker?.gatewayPid, marker?.gatewayIdentity, inst.identify) === "dead";
+      },
+      health: () => gatewayHealth(inst),
+      log: join(inst.runDir, "gateway.log"),
+    });
     await assertExecDenied(inst);
     if (options.node) await startScriptedNode(inst, runId, ports);
     const marker = readMarker(inst.stateDir);

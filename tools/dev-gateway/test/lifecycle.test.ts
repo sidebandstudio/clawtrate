@@ -15,6 +15,7 @@ import {
   reset,
   start,
   stop,
+  waitForGateway,
 } from "../src/cli.ts";
 import { GATE_SCRIPT, gatedSpawn, OpenclawRunner } from "../src/env.ts";
 import { stateDirFor } from "../src/instance.ts";
@@ -725,6 +726,55 @@ describe("a start whose gateway never answers says what the gateway was doing (#
         "  its log, /g.log, is empty",
       ].join("\n"),
     );
+  });
+
+  it("treats a probe that fails as the gateway exits as unhealthy, and says it exited", async () => {
+    const log = join(tempDir("clawtrate-log-"), "gateway.log");
+    writeFileSync(log, "[gateway] startup phase: config.auth starting\n");
+    let alive = true;
+    const failure = await waitForGateway({
+      exited: () => !alive,
+      health: async () => {
+        alive = false;
+        throw new Error("the gateway is not running");
+      },
+      log,
+    }).then(
+      () => new Error("the wait succeeded"),
+      (error: unknown) => error as Error,
+    );
+    expect(failure.message).toMatch(
+      /^the development gateway exited after \d+ s, before it answered/,
+    );
+    expect(failure.message).toContain(
+      "last health check: the health check failed: the gateway is not running",
+    );
+    expect(failure.message).toContain("    [gateway] startup phase: config.auth starting");
+  });
+
+  it("says the gateway exited when it exits during the probe that ends past the deadline", async () => {
+    const log = join(tempDir("clawtrate-log-"), "gateway.log");
+    let alive = true;
+    const failure = await waitForGateway(
+      {
+        exited: () => !alive,
+        health: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          alive = false;
+          return { healthy: false, seen: "health exited 1: no answer" };
+        },
+        log,
+      },
+      10,
+    ).then(
+      () => new Error("the wait succeeded"),
+      (error: unknown) => error as Error,
+    );
+    expect(failure.message).toMatch(
+      /^the development gateway exited after \d+ s, before it answered/,
+    );
+    expect(failure.message).toContain("last health check: health exited 1: no answer");
+    expect(failure.message).not.toContain("still running");
   });
 
   it("reads the last lines of a log, each cut to a readable length", () => {
