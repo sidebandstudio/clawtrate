@@ -361,6 +361,7 @@ import {
 } from "./task-actions.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
+import { listedBots } from "./gateway-bot.ts";
 import {
   CONTROL_EVENT,
   ComputerViews,
@@ -465,6 +466,8 @@ const TURN_LIMIT_KEY = "turn-limit-minutes";
 const CHANNEL_CHATS_KEY = "show-channel-chats";
 /** Where the host keeps "Show sessions from other tools"; absent is off. */
 const OTHER_TOOLS_KEY = "show-other-tool-sessions";
+/** Where the host keeps "Show the gateway's own bot"; absent is off. */
+const GATEWAY_BOT_KEY = "show-gateway-bot";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
 /**
@@ -1420,12 +1423,15 @@ export class ClawtrateClient {
   private showChannelChats = false;
   /** "Show sessions from other tools": the person's choice, off until they turn it on. */
   private showOtherToolSessions = false;
+  /** "Show the gateway's own bot": the person's choice, off until they turn it on. */
+  private showGatewayBot = false;
   /** How often the person set each preference: a startup read begun before a change doesn't undo it. */
   private readonly preferenceSets = {
     turnLimit: 0,
     channelChats: 0,
     gatewayNames: 0,
     otherTools: 0,
+    gatewayBot: 0,
   };
   /**
    * Reads and writes of the gateway names, one at a time and in order: each rename starts from
@@ -2037,6 +2043,8 @@ export class ClawtrateClient {
             null,
           ),
         );
+        const gatewayBot =
+          (await this.host.storage.get(GATEWAY_BOT_KEY).catch(() => null)) === "true";
         // A startup stopped while it read keeps nothing: the next one reads again. A preference
         // the person set meanwhile is newer than what was read.
         if (stops !== this.stops) return;
@@ -2052,11 +2060,13 @@ export class ClawtrateClient {
           this.gatewayNames = names;
         if (sets.otherTools === this.preferenceSets.otherTools)
           this.showOtherToolSessions = otherTools;
+        if (sets.gatewayBot === this.preferenceSets.gatewayBot) this.showGatewayBot = gatewayBot;
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
           showChannelChats: this.showChannelChats,
           showOtherToolSessions: this.showOtherToolSessions,
+          showGatewayBot: this.showGatewayBot,
         }));
         if (options.resume === false) return;
         // Startup needs to open the socket without waiting for another client's credential write.
@@ -2333,6 +2343,7 @@ export class ClawtrateClient {
         turnLimitMinutes: this.turnLimitMs / 60_000,
         showChannelChats: this.showChannelChats,
         showOtherToolSessions: this.showOtherToolSessions,
+        showGatewayBot: this.showGatewayBot,
         connection: {
           ...initialConnectionState,
           deviceId: this.identity?.deviceId ?? null,
@@ -5461,7 +5472,8 @@ export class ClawtrateClient {
       // The bots are read now: from the gateway the routines came from, or not at all.
       if (generation !== this.generation)
         throw new Error("The gateway changed while the list was read.");
-      return mentionRows(this.state.bots, routines);
+      // The bots the sidebar lists (F-562).
+      return mentionRows(listedBots(this.state), routines);
     }
     const agentId = botIdFromSessionKey(key);
     const [skills, metadata] = await Promise.all([
@@ -7488,6 +7500,19 @@ export class ClawtrateClient {
     this.publishTasks();
   }
 
+  /**
+   * "Show the gateway's own bot": list the gateway's default bot beside the others, or leave it
+   * out while another bot exists (the default). Kept for the next start. Only what the app shows
+   * changes; nothing is sent to the gateway.
+   */
+  async setShowGatewayBot(on: boolean): Promise<void> {
+    // Kept first: a choice the host could not keep is not taken.
+    await this.host.storage.set(GATEWAY_BOT_KEY, String(on));
+    this.preferenceSets.gatewayBot += 1;
+    this.showGatewayBot = on;
+    this.store.update((state) => ({ ...state, showGatewayBot: on }));
+  }
+
   private turnLimitReached(key: string, runId: string): void {
     this.turnTimers.delete(`${key}\u0000${runId}`);
     const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
@@ -7608,6 +7633,7 @@ export class ClawtrateClient {
         turnLimitMinutes: this.turnLimitMs / 60_000,
         showChannelChats: this.showChannelChats,
         showOtherToolSessions: this.showOtherToolSessions,
+        showGatewayBot: this.showGatewayBot,
         connection: {
           ...initialConnectionState,
           target: this.target,
@@ -7687,6 +7713,7 @@ export class ClawtrateClient {
             turnLimitMinutes: this.turnLimitMs / 60_000,
             showChannelChats: this.showChannelChats,
             showOtherToolSessions: this.showOtherToolSessions,
+            showGatewayBot: this.showGatewayBot,
           }),
       connection: {
         ...initialConnectionState,

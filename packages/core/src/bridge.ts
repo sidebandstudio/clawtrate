@@ -154,6 +154,8 @@ export type BridgeCommand =
   | { type: "setShowChannelChats"; on: boolean }
   /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
   | { type: "setShowOtherToolSessions"; on: boolean }
+  /** "Show the gateway's own bot": list the gateway's default bot beside the others, or not. */
+  | { type: "setShowGatewayBot"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
@@ -1435,6 +1437,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setShowOtherToolSessions":
       if (typeof command.on !== "boolean") throw new Error("invalid other tools setting");
       return { type: "setShowOtherToolSessions", on: command.on };
+    case "setShowGatewayBot":
+      if (typeof command.on !== "boolean") throw new Error("invalid gateway bot setting");
+      return { type: "setShowGatewayBot", on: command.on };
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
@@ -2244,6 +2249,8 @@ class ViewerSession implements BridgeSession {
         return client.setShowChannelChats(command.on);
       case "setShowOtherToolSessions":
         return client.setShowOtherToolSessions(command.on);
+      case "setShowGatewayBot":
+        return client.setShowGatewayBot(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":

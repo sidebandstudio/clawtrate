@@ -4,6 +4,8 @@
 // while the palette is open and nowhere else.
 
 import {
+  listedBots,
+  listedTasks,
   MAX_SEARCH_QUERY_CHARS,
   NOT_OPEN_IN_VIEW,
   type Bot,
@@ -223,11 +225,14 @@ function dayAndTime(timestamp: number | null): string {
 
 export function SearchPalette({
   state,
+  kept = null,
   mac,
   onOpen,
   onClose,
 }: {
   state: ClawtrateState;
+  /** The gateway's own bot the person keeps open: listed, as in the sidebar (F-562). */
+  kept?: string | null;
   /** ⌘ on a Mac, Ctrl elsewhere. */
   mac: boolean;
   onOpen: (target: SearchTarget) => void;
@@ -252,16 +257,29 @@ export function SearchPalette({
   const connected = state.connection.status === "connected";
   const gatewayName = gatewayLabel(state.connection.gatewayUrl);
   const botsById = useMemo(() => new Map(state.bots.map((bot) => [bot.id, bot])), [state.bots]);
-  const tasks = useMemo(() => Object.values(state.tasksByBot).flat(), [state.tasksByBot]);
-  const taskByKey = useMemo(() => new Map(tasks.map((task) => [task.key, task])), [tasks]);
+  const taskByKey = useMemo(
+    () => new Map(Object.values(state.tasksByBot).flatMap((list) => list.map((t) => [t.key, t]))),
+    [state.tasksByBot],
+  );
+  // Bots and task titles only of the bots the sidebar lists (F-562); a message found in a task of
+  // a bot out of view still opens it.
+  const { bots: allBots, tasksByBot, showGatewayBot } = state;
+  const listedBotsNow = useMemo(
+    () => listedBots({ bots: allBots, tasksByBot, showGatewayBot }, kept),
+    [allBots, tasksByBot, showGatewayBot, kept],
+  );
+  const tasks = useMemo(
+    () => Object.values(listedTasks({ bots: allBots, tasksByBot, showGatewayBot }, kept)).flat(),
+    [allBots, tasksByBot, showGatewayBot, kept],
+  );
   const botName = useCallback((id: string) => botsById.get(id)?.name ?? id, [botsById]);
 
   // Every change to the text, and every change of connection, starts a new generation: a reply,
   // retry or open from an earlier one is dropped before it changes anything (search.md §6).
   const generation = useRef(0);
-  const latest = useRef({ query, state, connected });
+  const latest = useRef({ query, state, connected, kept });
   useEffect(() => {
-    latest.current = { query, state, connected };
+    latest.current = { query, state, connected, kept };
   });
   const lanes = useRef({ messages: Promise.resolve(), routines: Promise.resolve() });
   const pool = useRef<{ busy: number; queue: Array<() => void> }>({ busy: 0, queue: [] });
@@ -364,7 +382,9 @@ export function SearchPalette({
           else bots.push(pending);
         }
         const roster =
-          now.status === "run" ? now.roster : latest.current.state.bots.map((bot) => bot.id);
+          now.status === "run"
+            ? now.roster
+            : listedBots(latest.current.state, latest.current.kept).map((bot) => bot.id);
         return { status: "run", bots, roster };
       });
       for (const botId of botIds) {
@@ -408,13 +428,15 @@ export function SearchPalette({
       }
       void searchMessages(gen, q);
       void routinePage(gen, q, 0);
+      // Files only of the bots the sidebar lists (F-562).
+      const fileBots = listedBots(now, latest.current.kept);
       if (q.length < 2) setFiles({ status: "short" });
-      else if (now.bots.length === 0) setFiles({ status: "unloaded" });
+      else if (fileBots.length === 0) setFiles({ status: "unloaded" });
       else
         searchFileBots(
           gen,
           q,
-          now.bots.slice(0, FILE_BATCH).map((bot) => bot.id),
+          fileBots.slice(0, FILE_BATCH).map((bot) => bot.id),
         );
     },
     [searchMessages, routinePage, searchFileBots],
@@ -445,13 +467,13 @@ export function SearchPalette({
 
   // Asked before any bot was known, Files starts when the roster comes; the other groups stay.
   useEffect(() => {
-    if (files.status === "unloaded" && state.bots.length > 0)
+    if (files.status === "unloaded" && listedBotsNow.length > 0)
       searchFileBots(
         generation.current,
         latest.current.query,
-        state.bots.slice(0, FILE_BATCH).map((bot) => bot.id),
+        listedBotsNow.slice(0, FILE_BATCH).map((bot) => bot.id),
       );
-  }, [files.status, state.bots, searchFileBots]);
+  }, [files.status, listedBotsNow, searchFileBots]);
 
   const connectionKey = `${state.connection.status}\n${state.connection.gatewayUrl}\n${state.connection.scopes.join(",")}`;
   const lastConnection = useRef(connectionKey);
@@ -729,7 +751,7 @@ export function SearchPalette({
       return bot ? <Avatar bot={bot} /> : null;
     };
 
-    const botRows: Row[] = state.bots
+    const botRows: Row[] = listedBotsNow
       .filter((bot) => findIn(bot.name, query))
       .map((bot: Bot) => ({
         key: `bot:${bot.id}`,
@@ -983,13 +1005,13 @@ export function SearchPalette({
                 searchEach(
                   gen,
                   query,
-                  state.bots.slice(0, EACH_BOTS).map((bot) => bot.id),
+                  listedBotsNow.slice(0, EACH_BOTS).map((bot) => bot.id),
                 ),
               ),
             ]
           : [];
       if (each) {
-        const notAsked = state.bots
+        const notAsked = listedBotsNow
           .map((bot) => bot.id)
           .filter((id) => !each.bots.some((bot) => bot.botId === id));
         const answered = each.bots.filter((bot) => bot.state === "done");
@@ -1039,6 +1061,15 @@ export function SearchPalette({
             rows: messageRows(r.hits, r, messages.listed),
           };
         });
+        // A message already found never vanishes for asking more: the first search's hits in
+        // bots this pass did not ask (one out of view, F-562, or not asked yet) stay.
+        const asked = new Set(each.bots.map((bot) => bot.botId));
+        const earlier = reply.hits.filter((hit) => !asked.has(hit.botId));
+        if (earlier.length)
+          sections.push({
+            line: `Found earlier · ${plural(earlier.length, "message")} in bots not searched one by one`,
+            rows: messageRows(earlier, reply, messages.listed),
+          });
         const actions = [
           ...failed.map((bot) =>
             action(`messages:retry:${bot.botId}`, `Try again for ${botName(bot.botId)}`, () =>
@@ -1114,14 +1145,22 @@ export function SearchPalette({
           complete: false,
         };
       if (files.status === "idle") return searching(base);
-      const settled = files.bots.every((bot) => bot.state !== "pending");
+      // What is held follows the bots the sidebar lists now (F-562): a bot that left takes its
+      // results, its coverage and its retries with it, and one that came is not asked yet.
+      const listedIds = listedBotsNow.map((bot) => bot.id);
+      const fileBots = files.bots.filter((bot) => listedIds.includes(bot.botId));
+      const roster = [
+        ...files.roster.filter((id) => listedIds.includes(id)),
+        ...listedIds.filter((id) => !files.roster.includes(id)),
+      ];
+      const settled = fileBots.every((bot) => bot.state !== "pending");
       const rows: Row[] = [];
       const lines: string[] = [];
       const returned: string[] = [];
       const empty: string[] = [];
       let searched = 0;
       const retries: Row[] = [];
-      for (const bot of files.bots) {
+      for (const bot of fileBots) {
         const name = botName(bot.botId);
         if (bot.state === "pending") continue;
         if (bot.state === "failed") {
@@ -1195,12 +1234,12 @@ export function SearchPalette({
       if (empty.length) head.push(`No file names returned from ${listed(empty)}.`);
       // Some folders may be skipped, so Files always keeps its coverage line.
       if (!returned.length && settled) head.push("Some folders may be skipped.");
-      const notAsked = files.roster.filter((id) => !files.bots.some((bot) => bot.botId === id));
+      const notAsked = roster.filter((id) => !fileBots.some((bot) => bot.botId === id));
       const tail: string[] = [];
       if (notAsked.length) tail.push(`Not asked yet: ${listed(notAsked.map(botName))}.`);
-      if (settled && searched < files.roster.length)
+      if (settled && searched < roster.length)
         tail.push(
-          `${searched} of ${plural(files.roster.length, "bot's workspace", "bots' workspaces")} searched.`,
+          `${searched} of ${plural(roster.length, "bot's workspace", "bots' workspaces")} searched.`,
         );
       const actions = settled
         ? [
@@ -1323,6 +1362,7 @@ export function SearchPalette({
   }, [
     query,
     state.bots,
+    listedBotsNow,
     state.discovery,
     tasks,
     taskByKey,
