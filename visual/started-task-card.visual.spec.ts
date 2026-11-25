@@ -258,11 +258,22 @@ test.describe("a started task's card", () => {
     const backup = card(page, "Check the backup drive");
     await expect(backup.locator(".state")).toHaveText("Started");
     await expect(backup.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+    // Every announcement from here on, as the live region receives it.
+    await page.getByTestId("card-announcer").evaluate((region) => {
+      const said: string[] = [];
+      (window as unknown as { said: string[] }).said = said;
+      new MutationObserver(() => {
+        if (region.textContent) said.push(region.textContent);
+      }).observe(region, { childList: true, characterData: true, subtree: true });
+    });
     await scene(page, [""]);
     await expect(backup.getByRole("button", { name: "Open Check the backup drive" })).toBeVisible();
     await expect(backup.locator(".state")).toHaveText("Started");
-    await settle(page);
-    await expect(page.getByTestId("card-announcer")).toHaveText("");
+    await scene(page, ["done"]);
+    await expect(backup.locator(".state")).toHaveText("Done");
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { said: string[] }).said))
+      .toEqual(["Check the backup drive: Done"]);
   });
 
   test("F-587: after a switch to another gateway, a card shows no task's state and opens nothing", async ({
