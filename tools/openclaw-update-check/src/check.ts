@@ -306,13 +306,28 @@ async function pressAndDrop(params: JsonRecord): Promise<string | null> {
   const current = client as GatewayClient | null;
   if (!current) return null;
   log({ at: Date.now(), kind: "sent", method: "update.run", params });
+  /** Set once the check starts closing: a rejection after that is the close's, not the gateway's. */
+  let closing = false;
   current.request("update.run", params, { timeoutMs: 120_000 }).then(
     (result) => log({ at: Date.now(), kind: "answer", method: "update.run", result }),
-    (error: unknown) =>
-      log({ at: Date.now(), kind: "note", text: `update.run answer lost: ${String(error)}` }),
+    (error: unknown) => {
+      if (closing) {
+        note(`update.run answer lost when the check closed the connection: ${String(error)}`);
+        return;
+      }
+      const failure = error as { code?: unknown; message?: unknown };
+      log({
+        at: Date.now(),
+        kind: "refused",
+        method: "update.run",
+        code: typeof failure.code === "string" ? failure.code : "ERROR",
+        message: String(failure.message ?? error),
+      });
+    },
   );
   await sleep(50);
   note("closing the connection before the answer");
+  closing = true;
   closingOwn = true;
   await stopStarted();
   closingOwn = false;
@@ -406,7 +421,9 @@ try {
     runId = typeof answer?.runId === "string" ? answer.runId : null;
   }
   note(`following run ${runId}`);
-  if (plan.secondPress) await call("update.run", press(), 120_000);
+  if (plan.secondPress && plan.notExercised === undefined) {
+    await call("update.run", press(), 120_000);
+  }
 
   // Follow the run: events arrive by themselves; read the record every 2 s while connected, and
   // read identity and update.status on each new connection.

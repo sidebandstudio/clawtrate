@@ -298,7 +298,10 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
   if (plan.notExercised !== undefined) {
     failures.push(`not exercised: ${plan.notExercised}`);
   } else if (plan.dropAnswer) {
-    // The answer must be lost; the run is then found by its tag.
+    // The answer must be lost; the run is then found by its tag. A refusal is still a refusal.
+    if (runRefused?.kind === "refused") {
+      failures.push(`update.run was refused: ${runRefused.code} ${runRefused.message}`);
+    }
     if (runAnswers.length > 0) {
       failures.push(
         "the update.run answer arrived before the connection closed: no answer was lost",
@@ -376,7 +379,9 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
       mark(unavailable, rel(e.at));
     } else if (e.kind === "close") {
       if (e.own) {
+        // Not the gateway's restart, but a gap across it is not a connected one either.
         reopenedIndex = entries.indexOf(e);
+        lastRunEventAt = null;
         continue;
       }
       if (reopenedIndex !== null) closeAfterReopen ??= entries.indexOf(e);
@@ -487,8 +492,15 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
   if (updateMessages.length > 0) {
     failures.push(`a transcript mentions the update: ${updateMessages.join(" | ")}`);
   }
+  const listsSessions = (e: Extract<Entry, { kind: "answer" }> | undefined) =>
+    e !== undefined && Array.isArray(asRecord(e.result).sessions);
   if (listedSessions && (snapshotBefore === undefined || snapshotAfter === undefined)) {
     failures.push("sessions.list did not answer both before and after the press");
+  } else if (
+    (snapshotBefore !== undefined || snapshotAfter !== undefined) &&
+    (!listsSessions(snapshotBefore) || !listsSessions(snapshotAfter))
+  ) {
+    failures.push("a sessions.list answer had no sessions array");
   } else if (snapshotBefore !== undefined && snapshotAfter !== undefined) {
     if (newSessions.length > 0) failures.push(`a session appeared: ${newSessions.join(", ")}`);
     if (changedSessions.length > 0) {
@@ -594,6 +606,10 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
       }
     }
   }
+
+  // A case whose setup failed sent no update: only that is its verdict, with the facts kept.
+  if (plan.notExercised !== undefined)
+    failures.splice(0, failures.length, `not exercised: ${plan.notExercised}`);
 
   return {
     passed: failures.length === 0,

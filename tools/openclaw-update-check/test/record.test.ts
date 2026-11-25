@@ -422,13 +422,22 @@ describe("the update check's verdict", () => {
     ]);
   });
 
-  it("says a case whose setup failed was not exercised", () => {
-    const verdict = judge(record(), RUN, {
+  it("says a case whose setup failed was not exercised, and nothing else", () => {
+    // A setup-only trace: no update.run was sent.
+    const setup: Entry[] = [
+      { at: 0, kind: "hello", serverVersion: "2026.10.6", updateAvailable: null, uptimeMs: 1 },
+      { at: 10, kind: "answer", method: "gateway.identity.get", result: { deviceId: "gw" } },
+      { at: 20, kind: "sent", method: "sessions.list", params: {} },
+      { at: 30, kind: "answer", method: "sessions.list", result: { sessions: [] } },
+      { at: 40, kind: "note", text: "not pressing: the turn ended before the press" },
+    ];
+    const verdict = judge(setup, null, {
       expect: "updated",
       notExercised: "the turn ended before the press",
     });
     expect(verdict.passed).toBe(false);
-    expect(verdict.failures[0]).toBe("not exercised: the turn ended before the press");
+    expect(verdict.failures).toEqual(["not exercised: the turn ended before the press"]);
+    expect(verdict.facts.presses.count).toBe(0);
   });
 
   it("records how the turn in flight ended", () => {
@@ -775,6 +784,48 @@ describe("the requester and what the run delivers", () => {
   it("fails a dropped-answer case whose answer arrived after all", () => {
     expect(judge(tagged(), RUN, { ...plan, dropAnswer: true }).failures).toEqual([
       "the update.run answer arrived before the connection closed: no answer was lost",
+    ]);
+  });
+
+  it("fails a refused press in the dropped-answer case", () => {
+    const refused = tagged()
+      .filter((e) => !(e.kind === "answer" && e.method === "update.run"))
+      .concat({
+        at: T0 + 10,
+        kind: "refused",
+        method: "update.run",
+        code: "INVALID_REQUEST",
+        message: "bad requester",
+      });
+    expect(judge(refused, RUN, { ...plan, dropAnswer: true }).failures).toContain(
+      "update.run was refused: INVALID_REQUEST bad requester",
+    );
+  });
+
+  it("does not count a gap across the check's own close as quiet", () => {
+    const changed = (at: number): Entry => ({
+      at,
+      kind: "event",
+      event: "update.run.changed",
+      payload: { runId: RUN, phase: "validating", status: "running" },
+    });
+    const entries: Entry[] = [
+      { at: 0, kind: "sent", method: "update.run", params: {} },
+      changed(1_000),
+      changed(2_000),
+      { at: 3_000, kind: "close", code: 1005, reason: "", own: true },
+      { at: 3_500, kind: "hello", serverVersion: "2026.10.6", updateAvailable: null, uptimeMs: 1 },
+      changed(24_000),
+    ];
+    expect(judge(entries, RUN, plan).facts.longestQuietMs).toBe(1_000);
+  });
+
+  it("needs a sessions array in each session list", () => {
+    const missing = tagged().map((e) =>
+      e.kind === "answer" && e.method === "sessions.list" && e.at > T0 ? { ...e, result: {} } : e,
+    );
+    expect(judge(missing, RUN, plan).failures).toEqual([
+      "a sessions.list answer had no sessions array",
     ]);
   });
 
