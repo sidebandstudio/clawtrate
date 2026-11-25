@@ -9,6 +9,7 @@
 // one request each; no field of the state, no collection and no error message
 // holds them (`withoutSecret`).
 
+import { cleanGatewayName } from "./gateway-names.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import type { ReadStamp } from "./types.ts";
 
@@ -191,6 +192,60 @@ export type ModelList =
     }
   /** `unsupported`: the gateway refused `view: "all"`. */
   | { status: "unsupported" | "error"; error: string };
+
+/** The most new, or gone, models a refresh names; the rest are counted. */
+export const MAX_REFRESH_NAMES = 5;
+/** The longest model id a refresh names, cleaned to one line. */
+export const MAX_REFRESH_NAME_CHARS = 64;
+/** The longest reason a refresh gives when the gateway refused it or failed. */
+export const MAX_REFRESH_ERROR_CHARS = 200;
+/** How long Clawtrate waits for the gateway to look again before it says it didn't answer. */
+export const REFRESH_MODELS_MS = 45_000;
+/** The most `agents.defaults.models` entries read for `modelAllowlist`. */
+export const MAX_ALLOWLIST_ENTRIES = 1024;
+
+export type RefreshOutcome = "ready" | "auth-rejected" | "unavailable" | null;
+
+/**
+ * What one Refresh of a provider's models found (`models.list {agentId, provider, refresh:
+ * true}`): the picker's rows for the provider before and after, compared, and what the gateway
+ * said of the provider. Given to the screen that asked and kept nowhere; the rows themselves go
+ * into the state's `models`.
+ */
+export type ModelRefresh =
+  | {
+      status: "done";
+      provider: string;
+      /** The first `MAX_REFRESH_NAMES` models the menu lists now and didn't before, cleaned. */
+      added: string[];
+      addedCount: number;
+      /** The first `MAX_REFRESH_NAMES` it listed before and doesn't now, cleaned. */
+      removed: string[];
+      removedCount: number;
+      /**
+       * What the gateway reported for the provider (`providerOutcomes`): asked again and answered
+       * (`ready`), asked and refused the account (`auth-rejected`), asked and failed or timed out
+       * (`unavailable`), or not asked again (null): its list is the one the gateway already had.
+       */
+      outcome: RefreshOutcome;
+      /** The gateway's config declares the provider's models (`models.providers`). */
+      configured: boolean;
+      /**
+       * The gateway answered while still finding the provider's models (`pendingProviders`) or
+       * after a refresh that failed (`refreshFailed`).
+       */
+      partial: boolean;
+    }
+  | { status: "error"; error: string };
+
+/**
+ * The gateway config's model list for every bot (`agents.defaults.models`), as the Model menu
+ * needs it: null when there is none. While there is one, the gateway lists, and runs, only the
+ * models it names and the ones its config declares (docs/research/model-catalog.md, section 2).
+ * `whole` is the providers it leaves whole: a `<provider>/*` entry, or, when the config replaces
+ * every other provider (`models.mode: "replace"`), one whose models the config declares.
+ */
+export type ModelAllowlist = { whole: string[] };
 
 /** The longest model id Clawtrate sends. */
 export const MAX_MODEL_ID_CHARS = 512;
@@ -423,6 +478,8 @@ export type AccountsState = {
   models: CatalogModel[];
   /** Providers whose picker rows were cut at `MAX_CATALOG_MODELS`, with how many it listed. */
   modelsCut: PickerCut[];
+  /** The config's `agents.defaults.models`, or null when it has none. */
+  modelAllowlist: ModelAllowlist | null;
   bindings: BotBinding[];
   signIn: SignInState | null;
   creation: BotCreationState | null;
@@ -442,6 +499,7 @@ export const initialAccountsState: AccountsState = {
   keyProviders: [],
   models: [],
   modelsCut: [],
+  modelAllowlist: null,
   bindings: [],
   signIn: null,
   creation: null,
@@ -745,6 +803,92 @@ export function readProviderCatalog(
     models: rows.slice(0, MAX_PROVIDER_MODELS),
     total: rows.length,
     partial: pending || record?.refreshFailed === true,
+  };
+}
+
+/** What a `models.list` answer's `providerOutcomes` says of one provider (`ModelRefresh`). */
+function outcomeOf(answer: unknown, provider: string): RefreshOutcome {
+  const outcomes = asRecord(answer)?.providerOutcomes;
+  const statuses = (Array.isArray(outcomes) ? outcomes : [])
+    .map(asRecord)
+    .filter((each) => each?.provider === provider)
+    .map((each) => each?.status);
+  // The list was asked again if any account's discovery answered.
+  if (statuses.includes("ready")) return "ready";
+  if (statuses.includes("auth-rejected")) return "auth-rejected";
+  return statuses.length > 0 ? "unavailable" : null;
+}
+
+/** Up to `MAX_REFRESH_NAMES` ids, each cleaned to one short line. */
+const named = (ids: string[]) =>
+  ids.slice(0, MAX_REFRESH_NAMES).map((id) => cleanGatewayName(id, MAX_REFRESH_NAME_CHARS));
+
+/**
+ * One refresh's answer for a provider, against the ids the menu listed before: the rows it lists
+ * now (in the gateway's order) and what changed. `configured` is from the gateway's config.
+ */
+export function readModelRefresh(
+  answer: unknown,
+  provider: string,
+  before: readonly string[],
+  configured: boolean,
+): { rows: CatalogModel[]; compare: (after: readonly string[]) => ModelRefresh } {
+  const record = asRecord(answer);
+  const rows = modelRows(answer).filter((row) => row.provider === provider);
+  const pending = Array.isArray(record?.pendingProviders)
+    ? record.pendingProviders.includes(provider)
+    : false;
+  const outcome = outcomeOf(answer, provider);
+  return {
+    rows,
+    compare: (after) => {
+      const was = new Set(before);
+      const now = new Set(after);
+      const added = [...now].filter((id) => !was.has(id));
+      const removed = [...was].filter((id) => !now.has(id));
+      return {
+        status: "done",
+        provider,
+        added: named(added),
+        addedCount: added.length,
+        removed: named(removed),
+        removedCount: removed.length,
+        outcome,
+        configured,
+        partial: pending || record?.refreshFailed === true,
+      };
+    },
+  };
+}
+
+/** Whether the gateway's config declares models for a provider (`models.providers.<id>.models`). */
+export function declaresModels(config: RawRecord | null, provider: string): boolean {
+  const root = asRecord(config?.config);
+  const entry = asRecord(asRecord(asRecord(root?.models)?.providers)?.[provider]);
+  return Array.isArray(entry?.models) && entry.models.length > 0;
+}
+
+/** The config's `agents.defaults.models` as the Model menu needs it (`ModelAllowlist`). */
+export function readModelAllowlist(config: RawRecord | null): ModelAllowlist | null {
+  const root = asRecord(config?.config);
+  const list = asRecord(asRecord(asRecord(root?.agents)?.defaults)?.models);
+  const keys = list ? Object.keys(list).slice(0, MAX_ALLOWLIST_ENTRIES) : [];
+  // An empty list, or one that names every model, limits nothing.
+  if (keys.length === 0 || keys.some((key) => key === "*" || key === "*/*")) return null;
+  const whole = new Set<string>();
+  for (const key of keys) {
+    const slash = key.indexOf("/");
+    if (slash > 0 && key.slice(slash + 1) === "*") whole.add(key.slice(0, slash));
+  }
+  const models = asRecord(root?.models);
+  if (models?.mode === "replace") {
+    for (const provider of Object.keys(asRecord(models.providers) ?? {}))
+      if (declaresModels(config, provider)) whole.add(provider);
+  }
+  return {
+    whole: [...whole]
+      .filter((provider) => provider.length <= MAX_PREF_ID_CHARS)
+      .slice(0, MAX_KEY_PROVIDERS),
   };
 }
 
