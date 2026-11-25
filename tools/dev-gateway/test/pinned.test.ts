@@ -143,14 +143,16 @@ describe("the development gateway's OpenClaw (#597)", () => {
   });
 
   it("gives npm and the install scripts no token or key from the caller's shell", () => {
+    // A home folder of the test's own; the repository names no real one.
+    const home = temp();
     const env = setupEnv(
       {
         PATH: "/usr/bin:/bin",
-        HOME: "/home/dev",
+        HOME: home,
         LANG: "en_US.UTF-8",
         HTTPS_PROXY: "http://proxy.test:3128",
         npm_config_registry: "https://registry.test/",
-        npm_config_cache: "/home/dev/.npm",
+        npm_config_cache: join(home, ".npm"),
         GH_TOKEN: "ghp_secret",
         GITHUB_TOKEN: "ghs_secret",
         ANTHROPIC_API_KEY: "sk-ant-secret",
@@ -164,11 +166,11 @@ describe("the development gateway's OpenClaw (#597)", () => {
     );
     expect(env).toEqual({
       PATH: "/tool/node/bin:/usr/bin:/bin",
-      HOME: "/home/dev",
+      HOME: home,
       LANG: "en_US.UTF-8",
       HTTPS_PROXY: "http://proxy.test:3128",
       npm_config_registry: "https://registry.test/",
-      npm_config_cache: "/home/dev/.npm",
+      npm_config_cache: join(home, ".npm"),
     });
     expect(JSON.stringify(env)).not.toMatch(/secret/);
   });
