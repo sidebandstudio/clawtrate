@@ -17,7 +17,7 @@
 // broadcasts its changes to admin connections. Nothing here starts a run but
 // `start`, which only a person's press reaches.
 //
-// `update.status` is asked only for a reason: when Settings › Gateway or the
+// `update.status` is asked only for a reason: when Settings › Updates or the
 // confirmation opens, when a run is followed or kept, and when a press whose
 // answer was lost must be settled. It is not a pure read (it reads the
 // restart sentinel and run history through the gateway's state database, and
@@ -703,7 +703,7 @@ export class OpenClawUpdates {
   /**
    * Ask the gateway (`update.status`) on the connection that is there: whether it can update
    * itself, the run under way, and how what holds Update has ended. Asked when Settings ›
-   * Gateway or the confirmation opens, on Check again, and when something waits to be settled.
+   * Updates or the confirmation opens, on Check again, and when something waits to be settled.
    * Asks under way on this connection are joined.
    */
   look(): Promise<void> {

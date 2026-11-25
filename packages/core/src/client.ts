@@ -6635,7 +6635,7 @@ export class ClawtrateClient {
   }
 
   /**
-   * Ask the gateway where updating stands (`update.status`): when Settings › Gateway or the
+   * Ask the gateway where updating stands (`update.status`): when Settings › Updates or the
    * confirmation opens, and on Check again. Only reads.
    */
   checkOpenClawUpdate(): Promise<void> {
