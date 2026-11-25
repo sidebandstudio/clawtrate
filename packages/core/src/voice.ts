@@ -26,6 +26,10 @@ const hookSettings = (value: unknown): VoiceHookSettings | null => {
 const GUIDE_MAX = 8192;
 
 export const VOICE_GET = "clawtrate-voice.get";
+/** The plugin's id on the gateway, as `plugins.reload` names it. */
+export const VOICE_PLUGIN = "clawtrate-voice";
+/** The first version with the where-you-live guide; an older one reports no `where`. */
+export const WHERE_SINCE = "0.2.0";
 /** The plugin's event after a change, empty: readers read again (plugins/clawtrate-voice). */
 export const VOICE_CHANGED_EVENT = "plugin.clawtrate-voice.changed";
 
@@ -53,6 +57,13 @@ export type BotVoice =
       lastRanAt: number | null;
       /** The guide the plugin adds to the bots' system prompts while it is on. */
       guide: string;
+      /** The plugin's version, as it reports it, or null when it doesn't. */
+      version: string | null;
+      /**
+       * The where-you-live guide, with its own setting, or null from a plugin older than
+       * `WHERE_SINCE`, whose bots aren't told what a task is.
+       */
+      where: { on: boolean; changedAt: number | null; guide: string } | null;
     };
 
 /**
@@ -69,12 +80,17 @@ const time = (value: unknown) => (Number.isSafeInteger(value) ? (value as number
 export function parseVoice(value: unknown): BotVoice & { status: "read" } {
   const voice = asRecord(value);
   const hook = asRecord(voice?.hook);
+  const where = asRecord(voice?.where);
   if (
     voice?.plugin !== "clawtrate-voice" ||
     typeof voice.on !== "boolean" ||
     typeof voice.guide !== "string" ||
     voice.guide.length > GUIDE_MAX ||
-    !isHook(hook?.state)
+    !isHook(hook?.state) ||
+    (voice.where !== undefined &&
+      (typeof where?.on !== "boolean" ||
+        typeof where.guide !== "string" ||
+        where.guide.length > GUIDE_MAX))
   )
     throw new Error("The gateway's voice plugin gave an answer Clawtrate can't read.");
   return {
@@ -85,6 +101,14 @@ export function parseVoice(value: unknown): BotVoice & { status: "read" } {
     hookSettings: hookSettings(hook!.settings),
     lastRanAt: time(hook!.lastRanAt),
     guide: voice.guide,
+    version: typeof voice.version === "string" && voice.version.length <= 64 ? voice.version : null,
+    where: where
+      ? {
+          on: where.on as boolean,
+          changedAt: time(asRecord(where.changed)?.at),
+          guide: where.guide as string,
+        }
+      : null,
   };
 }
 
@@ -115,7 +139,37 @@ export async function readVoice(request: Request, advertised: boolean | null): P
   }
 }
 
-/** Turn it on or off; answers with the setting as the gateway stored it. */
-export async function setVoice(request: Request, on: boolean): Promise<BotVoice> {
-  return parseVoice(await request("clawtrate-voice.set", { on }));
+/** Which guide a change is for: the voice guide, or the where-you-live guide. */
+export type VoiceSection = "voice" | "where";
+
+/** Turn a guide on or off; answers with the setting as the gateway stored it. */
+export async function setVoice(
+  request: Request,
+  on: boolean,
+  section: VoiceSection = "voice",
+): Promise<BotVoice> {
+  return parseVoice(
+    await request("clawtrate-voice.set", section === "voice" ? { on } : { section, on }),
+  );
+}
+
+/**
+ * Bring an older voice plugin's where-you-live guide to the bots without a Terminal step
+ * (admin): when the plugin the gateway has loaded reports no `where`, ask the gateway to load
+ * it again from its files (`plugins.reload`, which writes no config and keeps the hook's
+ * grant). A plugin linked to a checkout that has the newer files then has the guide at once;
+ * one whose files are still older stays as it was, and Settings says so. Answers whether a
+ * reload was asked for and what the gateway said.
+ */
+export async function updateVoicePlugin(
+  request: Request,
+  voice: BotVoice,
+): Promise<"current" | "reloaded" | { failed: string }> {
+  if (voice.status !== "read" || voice.where !== null) return "current";
+  try {
+    await request("plugins.reload", { plugins: [{ pluginId: VOICE_PLUGIN }] });
+    return "reloaded";
+  } catch (error) {
+    return { failed: error instanceof Error ? error.message : String(error) };
+  }
 }

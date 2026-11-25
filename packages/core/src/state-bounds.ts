@@ -68,6 +68,7 @@ import {
   type Bound,
 } from "./bounds.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
+import type { StartTasks } from "./start-tasks.ts";
 import {
   MAX_BUDGET_ID_CHARS,
   MAX_BUDGETS,
@@ -277,6 +278,8 @@ export const MAX_LINKED_RUNS = 32;
 export const MAX_MCP_TOOLS = 128;
 /** Built-in and plugin tools a task keeps from `tools.effective`, by effective name. */
 export const MAX_BUILTIN_TOOLS = 256;
+/** The gateway's reason a task's bot can't start tasks (`toolAccess` labels, joined). */
+export const MAX_START_TASKS_REASON_CHARS = 256;
 /** A tool's effective name: the gateway cuts it to 64 characters (`buildSafeToolName`). */
 export const MAX_TOOL_NAME_CHARS = 128;
 /** Steer aliases per task (also `MAX_STEER_ALIASES`). */
@@ -673,6 +676,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   // Names and a root are ids: a cut one would name another tool or folder.
   builtinTools: list(MAX_BUILTIN_TOOLS, id(MAX_TOOL_NAME_CHARS)),
   workspaceRoot: id(MAX_STEP_PATH_CHARS),
+  startTasks: object<StartTasks>()({ can: FLAG, reason: text(MAX_START_TASKS_REASON_CHARS) }),
   reactions: map(MAX_REACTED_MESSAGES, MAX_ID_CHARS, list(MAX_REACTIONS_PER_MESSAGE, reaction)),
   loadedAt: NUMBER,
 });

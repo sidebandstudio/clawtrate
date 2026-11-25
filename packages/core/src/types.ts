@@ -6,6 +6,7 @@ import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { StartTasks } from "./start-tasks.ts";
 import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
@@ -428,6 +429,11 @@ export type Transcript = TaskActivity & {
    * Absent until the inventory is read.
    */
   builtinTools?: string[];
+  /**
+   * Whether this task's bot has the gateway's tool for starting a task (`sessions_spawn`), from
+   * the same `tools.effective` read, with the gateway's reason when it hasn't. Absent until read.
+   */
+  startTasks?: StartTasks;
   /**
    * The bot's workspace root, as the gateway names it (`agents.files.list`
    * `workspace`): an absolute path is a memory note only inside it (8.2).

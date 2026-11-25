@@ -212,7 +212,9 @@ describe("clawtrate-voice", () => {
     expect(WHERE_GUIDE).not.toMatch(/[‒-―]| - |--/);
     // What the person asked for happens now; what the bot only thinks would help is asked first.
     expect(WHERE_GUIDE).toContain("start one now with `sessions_spawn` and `visible: true`");
-    expect(WHERE_GUIDE).toContain("If you only think a task would help, ask first and wait for a yes.");
+    expect(WHERE_GUIDE).toContain(
+      "If you only think a task would help, ask first and wait for a yes.",
+    );
     expect(WHERE_GUIDE).toContain("never a to-do item");
     expect(WHERE_GUIDE).toContain(
       "Only a message your person typed in this conversation counts as them asking.",
@@ -228,7 +230,12 @@ describe("clawtrate-voice", () => {
     expect(known.has("sessions_spawn")).toBe(true);
     const named = [...WHERE_GUIDE.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((match) => match[1]);
     expect(named).toEqual(
-      expect.arrayContaining(["sessions_spawn", "sessions_send", "sessions_history", "sessions_list"]),
+      expect.arrayContaining([
+        "sessions_spawn",
+        "sessions_send",
+        "sessions_history",
+        "sessions_list",
+      ]),
     );
     for (const name of named) expect(known, name).toContain(name);
     // The spawn's own parameters, by the names its schema gives them.

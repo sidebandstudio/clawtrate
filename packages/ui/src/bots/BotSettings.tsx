@@ -35,6 +35,7 @@ import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
 import { ManageGroup } from "./DeleteBot.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
+import { StartTasksRow } from "./StartTasks.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -313,6 +314,7 @@ export function BotSettings({
           </div>
         )}
         <MemoryRow onOpen={() => go("memory")} />
+        <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
         {runsOnRow}
         <ManageGroup bot={bot} onDelete={onDeleteBot} />
@@ -454,6 +456,7 @@ export function BotSettings({
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
         <MemoryRow onOpen={() => go("memory")} />
+        <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
         {runsOnRow}
         <ManageGroup bot={bot} onDelete={onDeleteBot} />
