@@ -155,8 +155,10 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # A unit test reads the gateway's own tool-naming function from the installed package.
+      # A unit test reads the gateway's own tool-naming function from the installed package. The
+      # tests read only the copy OPENCLAW_PACKAGE_DIR names; on this throwaway runner, that one.
       - run: npm install --global openclaw@2026.10.6
+      - run: echo "OPENCLAW_PACKAGE_DIR=$(npm root --global)/openclaw" >> "$GITHUB_ENV"
       # The settings reader's test checks its pinned native-module hashes against this package.
       - run: echo "CLAWTRATE_PINNED_OPENCLAW=$(npm root --global)/openclaw" >> "$GITHUB_ENV"
       # The development gateway's browser tests start the Chromium that Playwright installs.

@@ -45,7 +45,7 @@ node plugins/clawtrate-memory/test/gateway-check.ts
 pnpm dev-gateway reset --instance memplugin
 ```
 
-The unit tests use the pinned gateway's filesystem SDK. Set `OPENCLAW_PACKAGE_DIR` to its installed package directory when the global package is a different version.
+The unit tests use the pinned gateway's filesystem SDK, from the copy `OPENCLAW_PACKAGE_DIR` names, never a global one ([the testing guide](../../docs/development/testing.md)).
 
 ```bash
 pnpm exec vitest run plugins/clawtrate-memory/test/memory.test.ts
