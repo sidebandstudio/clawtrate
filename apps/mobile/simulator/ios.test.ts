@@ -606,7 +606,8 @@ describe("the iOS app", () => {
       see({ id: "gateway-address", text: lit(addressWords(gateway)) }),
     ]);
 
-    const js = await until("the Simulator JS probe", async () => [...switcherProbe.clients][0]);
+    // The newest socket: the app opens another when one closes while it is away.
+    const js = await until("the Simulator JS probe", async () => [...switcherProbe.clients].at(-1));
     let blocked: { startedAt: number; unblockAt: number } | undefined;
     let resumed = false;
     js.on("message", (message) => {
