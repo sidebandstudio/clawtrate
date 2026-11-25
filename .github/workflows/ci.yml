@@ -155,8 +155,10 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # A unit test reads the gateway's own tool-naming function from the installed package.
+      # A unit test reads the gateway's own tool-naming function from the installed package. The
+      # tests read only the copy OPENCLAW_PACKAGE_DIR names; on this throwaway runner, that one.
       - run: npm install --global openclaw@2026.10.6
+      - run: echo "OPENCLAW_PACKAGE_DIR=$(npm root --global)/openclaw" >> "$GITHUB_ENV"
       # The settings reader's test checks its pinned native-module hashes against this package.
       - run: echo "CLAWTRATE_PINNED_OPENCLAW=$(npm root --global)/openclaw" >> "$GITHUB_ENV"
       # The development gateway's browser tests start the Chromium that Playwright installs.
@@ -187,6 +189,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The gateway version the project tests against (docs/decisions.md), from the public registry.
       - run: npm install --global openclaw@2026.10.6
+      # The development gateway runs this runner's copy, which is the pinned version.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
       - run: openclaw --version
       - run: pnpm exec playwright install --with-deps chromium
       # e2e/setup.spec.ts drives the desktop app's development build, which needs a display.
@@ -485,6 +489,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The gateway version the project tests against (docs/decisions.md), from the public registry.
       - run: npm install --global openclaw@2026.10.6
+      # The development gateway runs this runner's copy, which is the pinned version.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
       - name: Make a disposable keychain the default
         id: keychain
         run: |

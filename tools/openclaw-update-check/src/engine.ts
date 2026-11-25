@@ -22,6 +22,8 @@ import {
   ClawtrateClient,
   createBridgeSession,
   gatewayStamp,
+  updateNoticeLine,
+  updateNoticeScope,
   type BridgeSession,
   type ClawtrateState,
 } from "@clawtrate/core";
@@ -277,6 +279,18 @@ const state = () => client.state;
 const connected = () => state().connection.status === "connected";
 const admin = () => connected() && state().connection.canAdmin;
 const notice: unknown[] = [];
+/**
+ * Each row of the main task that names itself an update's notice, with its own time, the run's
+ * finish as the engine kept it (both the gateway's clock) and whether it is drawn as the line.
+ * Recorded, not judged: what a real update shows of the line's rule.
+ */
+const noticeLines: {
+  runId: string;
+  timestamp: number | null;
+  succeededAt: number | null;
+  atOrAfterFinish: boolean | null;
+  line: boolean;
+}[] = [];
 
 try {
   await client.start();
@@ -393,6 +407,21 @@ try {
     note(
       `history read ${noticeRead}; the main task shows ${notice.length} item(s) with the gateway's notice`,
     );
+    const kept = state().openclawUpdating?.updated ?? [];
+    const scope = updateNoticeScope(state());
+    for (const item of state().transcripts[MAIN]?.items ?? []) {
+      if (!item.updateRunId) continue;
+      const succeededAt = kept.find((each) => each.runId === item.updateRunId)?.succeededAt ?? null;
+      noticeLines.push({
+        runId: item.updateRunId,
+        timestamp: item.timestamp,
+        succeededAt,
+        atOrAfterFinish:
+          item.timestamp === null || succeededAt === null ? null : item.timestamp >= succeededAt,
+        line: updateNoticeLine(item, MAIN, scope) !== null,
+      });
+    }
+    note(`the notice's own time against the run's finish: ${JSON.stringify(noticeLines)}`);
   }
 } catch (error) {
   note(`stopped: ${error instanceof Error ? error.message : String(error)}`);
@@ -403,7 +432,7 @@ client.stop();
 const verdict = judgeEngine(entries, plan);
 writeFileSync(
   join(out, "engine-result.json"),
-  `${JSON.stringify({ mode, plan, verdict, noticeRead, notice, entries }, null, 2)}\n`,
+  `${JSON.stringify({ mode, plan, verdict, noticeRead, notice, noticeLines, entries }, null, 2)}\n`,
 );
 const report = engineSummary(verdict, values.measure ? `${mode}, measured, not a gate` : mode);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
