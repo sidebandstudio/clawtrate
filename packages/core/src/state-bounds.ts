@@ -1279,6 +1279,7 @@ export const CHECK_INS: Bound = object<CheckInsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   stamp: object<GatewayStamp>()({ gatewayId: ID, target: NUMBER }),
+  model: ENUM,
   scheduler: FLAG,
   readBotIds: list(MAX_BOTS, ID),
   jobs: list(MAX_BOTS, checkInJob),

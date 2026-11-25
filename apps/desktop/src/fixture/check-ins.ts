@@ -5,12 +5,14 @@
 //   &checkins=off      Juniper has a setting of its own, Off (`every: "0m"`): its job is disabled
 //   &checkins=daily    Marlow checks in daily with its own setting; Juniper with one at 30m
 //   &checkins=every    Otto every 2 hours with its own setting, and a custom prompt
+//   &checkins=routines a gateway that keeps check-ins as routines (OpenClaw 2026.11.10): nothing to read or set
 //   &cidefault=prompt  the gateway's default carries a custom prompt without NO_REPLY
 //   &scheduler=off     the gateway's scheduler is off, as on the development gateway
 //   &cisave=fail       a save the gateway refuses; &cisave=unknown, one it may have applied;
 //   &cisave=conflict   another client changes Juniper's cadence and prompt while a dialog is open
 
 import {
+  CHECKINS_AS_ROUTINES,
   durationMs,
   planCheckIn,
   gatewayStamp,
@@ -25,7 +27,7 @@ import {
 } from "@clawtrate/core";
 
 export type CheckInParams = {
-  checkins: "off" | "daily" | "every" | null;
+  checkins: "off" | "daily" | "every" | "routines" | null;
   defaultPrompt: boolean;
   scheduler: boolean;
   save: "fail" | "unknown" | "conflict" | null;
@@ -35,7 +37,10 @@ export function checkInParams(params: URLSearchParams): CheckInParams {
   const checkins = params.get("checkins");
   const save = params.get("cisave");
   return {
-    checkins: checkins === "off" || checkins === "daily" || checkins === "every" ? checkins : null,
+    checkins:
+      checkins === "off" || checkins === "daily" || checkins === "every" || checkins === "routines"
+        ? checkins
+        : null,
     defaultPrompt: params.get("cidefault") === "prompt",
     scheduler: params.get("scheduler") !== "off",
     save: save === "fail" || save === "unknown" || save === "conflict" ? save : null,
@@ -93,10 +98,18 @@ function jobsFor(config: Config, now: number): CheckInJob[] {
   });
 }
 
-function shown(config: Config, now: number, readBotIds: string[] = BOTS) {
+function shown(
+  params: CheckInParams,
+  config: Config,
+  now: number,
+  readBotIds: string[] = BOTS,
+): Pick<CheckInsState, "model" | "readBotIds" | "jobs" | "settings" | "defaults"> {
+  if (params.checkins === "routines")
+    return { model: "routines", readBotIds, jobs: [], settings: null, defaults: null };
   const answer = { config };
   const jobs = jobsFor(config, now).filter((job) => readBotIds.includes(job.botId));
   return {
+    model: "heartbeat",
     readBotIds,
     jobs,
     settings: readSettings(answer, readBotIds),
@@ -113,8 +126,8 @@ export function fixtureCheckIns(
     status: "ready",
     error: null,
     stamp,
-    scheduler: params.scheduler,
-    ...shown(configFor(params), now),
+    scheduler: params.checkins === "routines" ? null : params.scheduler,
+    ...shown(params, configFor(params), now),
     save: null,
   };
 }
@@ -134,6 +147,7 @@ export function checkInCommands(params: CheckInParams) {
     switch (command.type) {
       case "refreshCheckIns": {
         const snapshot = shown(
+          params,
           config,
           Date.now(),
           get().bots.map((bot) => bot.id),
@@ -148,7 +162,7 @@ export function checkInCommands(params: CheckInParams) {
           },
         });
         return Promise.resolve(
-          command.botId
+          command.botId && snapshot.settings
             ? {
                 stamp,
                 jobs: snapshot.jobs.filter((job) => job.botId === command.botId),
@@ -178,6 +192,7 @@ export function checkInCommands(params: CheckInParams) {
           put((c) => ({
             ...c,
             ...shown(
+              params,
               config,
               Date.now(),
               get().bots.map((bot) => bot.id),
@@ -194,6 +209,7 @@ export function checkInCommands(params: CheckInParams) {
             },
           };
         setTimeout(() => {
+          if (params.checkins === "routines") return settle("failed", CHECKINS_AS_ROUTINES);
           if (params.save === "fail")
             return settle("failed", "invalid config: the gateway refused the change.");
           if (params.save === "unknown")

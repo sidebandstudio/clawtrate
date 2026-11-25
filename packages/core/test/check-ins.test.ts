@@ -13,10 +13,11 @@ import { enforce } from "../src/bounds.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, stampOn, URL_A } from "./client-harness.ts";
-import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import {
   cannotKeep,
   CHECK_INS,
+  CHECKINS_AS_ROUTINES,
   durationMs,
   everyText,
   keptByDefault,
@@ -78,6 +79,8 @@ function fakeGateway(
     hold: false,
     held: null as { config: Config; jobs: unknown[] } | null,
     linkAlive: true,
+    /** "routines": the gateway retired heartbeats (OpenClaw 2026.11.10), and its schema has none. */
+    model: "heartbeat" as "heartbeat" | "routines",
     /** Called before each request is answered, to change the world under the engine. */
     before: (_method: string) => {},
   };
@@ -100,8 +103,10 @@ function fakeGateway(
       throw new Error("request timeout");
     }
     await gateway.gate(method);
-    const p = params as { raw?: string; baseHash?: string; offset?: number };
+    const p = params as { raw?: string; baseHash?: string; offset?: number; path?: string };
     switch (method) {
+      case "config.schema.lookup":
+        return schemaLookup(gateway.model, p.path);
       case "cron.list": {
         const all = gateway.arrange([
           { agentId: "otto", payload: { kind: "agentTurn" }, enabled: true },
@@ -126,6 +131,7 @@ function fakeGateway(
       case "config.patch": {
         gateway.attempts.push({ baseHash: p.baseHash });
         if (options.patch) options.patch();
+        if (gateway.model === "routines") throw unrecognizedHeartbeat();
         if (p.baseHash !== `h${gateway.hash}`)
           throw new GatewayProtocolRequestError({
             code: "INVALID_REQUEST",
@@ -198,6 +204,45 @@ function fakeGateway(
     release: () => (gateway.held = null),
     now: () => now,
   };
+}
+
+/**
+ * `config.schema.lookup` as each OpenClaw answers it, read on both: 2026.10.6
+ * describes `agents.defaults.heartbeat` (its children cut here); 2026.11.10's
+ * schema has no such path.
+ */
+function schemaLookup(model: "heartbeat" | "routines", path: string | undefined) {
+  if (model === "heartbeat" && path === "agents.defaults.heartbeat")
+    return {
+      path,
+      schema: { type: "object", additionalProperties: false },
+      reloadKind: "hot",
+      hint: { advanced: true },
+      hintPath: path,
+      children: [],
+    };
+  throw new GatewayProtocolRequestError({
+    code: "INVALID_REQUEST",
+    message: "config schema path not found",
+  });
+}
+
+/** 2026.11.10's refusal of a patch that writes a bot's heartbeat: nothing is written. */
+const unrecognizedHeartbeat = () =>
+  new GatewayProtocolRequestError({
+    code: "INVALID_REQUEST",
+    message: 'invalid config: agents.entries.marlow: Unrecognized key: "heartbeat"',
+  });
+
+/** A refusal as the fake connection sends it: its code and message, as the gateway's frame has them. */
+function onWire<T>(answer: () => T): T {
+  try {
+    return answer();
+  } catch (error) {
+    if (error instanceof GatewayProtocolRequestError)
+      throw new GatewayError({ code: error.code, message: error.message });
+    throw error;
+  }
 }
 
 /** The draft a dialog sends, from what it was shown. */
@@ -302,6 +347,72 @@ describe("reading check-ins", () => {
       inherited: ["main", "marlow", "otto", "quill"],
       every: "90s",
     });
+  });
+});
+
+describe("F-201 F-366 a gateway that keeps check-ins as routines (OpenClaw 2026.11.10)", () => {
+  it("F-201: reads no setting, job or default, so nothing is shown as Off", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    gateway.model = "routines";
+    const asked: string[] = [];
+    gateway.before = (method) => void asked.push(method);
+    expect(await loadCheckIns(ctx, "marlow")).toBeNull();
+    expect(state()).toMatchObject({
+      status: "ready",
+      model: "routines",
+      readBotIds: BOTS,
+      jobs: [],
+      settings: null,
+      defaults: null,
+      scheduler: null,
+    });
+    // Its jobs are routines a person can't tell apart from the rest: none is read as a check-in.
+    expect(asked).toEqual(["config.schema.lookup"]);
+  });
+
+  it("F-201: a gateway on the heartbeat model is read as before, and says so", async () => {
+    const { ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    expect(state()).toMatchObject({ status: "ready", model: "heartbeat", settings: [] });
+    expect(jobsOf(state())).toEqual([["main", true, 1_800_000]]);
+  });
+
+  it("F-201: a save is refused before any patch is sent, with the reason", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    const asked = draft(state(), "marlow", { every: "24h" });
+    gateway.model = "routines";
+    await saveCheckIn(ctx, "s1", "marlow", asked);
+    expect(gateway.attempts).toEqual([]);
+    expect(state().save).toMatchObject({ status: "failed", error: CHECKINS_AS_ROUTINES });
+    expect(state()).toMatchObject({ model: "routines", jobs: [], settings: null });
+  });
+
+  it("F-201: a lookup that fails otherwise fails the read rather than guessing", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    gateway.before = (method) => {
+      if (method === "config.schema.lookup")
+        throw new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "busy" });
+    };
+    await loadCheckIns(ctx);
+    expect(state()).toMatchObject({ status: "error", error: "busy", model: null });
+  });
+
+  it("F-201: a gateway updated while connected is read on its new model after the reconnect", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    expect(state().model).toBe("heartbeat");
+    // Updated: the gateway restarted on the new version and the connection is a new one.
+    gateway.model = "routines";
+    gateway.linkAlive = false;
+    await loadCheckIns(ctx);
+    expect(state()).toMatchObject({ model: "routines", jobs: [], settings: null });
+    // And back, as a person who restores the older version would have it.
+    gateway.model = "heartbeat";
+    gateway.linkAlive = false;
+    await loadCheckIns(ctx);
+    expect(state().model).toBe("heartbeat");
+    expect(jobsOf(state())).toEqual([["main", true, 1_800_000]]);
   });
 });
 
@@ -972,6 +1083,7 @@ const emptyLoading: CheckInsState = {
   status: "loading",
   error: null,
   stamp: null,
+  model: null,
   scheduler: null,
   readBotIds: [],
   jobs: [],
@@ -1011,7 +1123,9 @@ describe("F-201 a save across a real connection change", () => {
   /** A client with admin on a gateway whose check-ins are Juniper's default, and whose identity can change. */
   async function adminClient(failIdentity = false) {
     const gateway = grantingGateway();
-    const world = { identity: "gw-1", patches: 0 };
+    const world = { identity: "gw-1", patches: 0, model: "heartbeat" as "heartbeat" | "routines" };
+    gateway.handlers["config.schema.lookup"] = (params) =>
+      onWire(() => schemaLookup(world.model, (params as { path?: string }).path));
     gateway.handlers["agents.list"] = () => ({
       defaultId: "main",
       agents: [
@@ -1046,6 +1160,10 @@ describe("F-201 a save across a real connection change", () => {
     });
     gateway.handlers["cron.status"] = () => ({ enabled: false });
     gateway.handlers["config.patch"] = () => {
+      if (world.model === "routines")
+        onWire(() => {
+          throw unrecognizedHeartbeat();
+        });
       world.patches += 1;
       return { ok: true };
     };
@@ -1118,6 +1236,32 @@ describe("F-201 a save across a real connection change", () => {
     await until(() => client.state.connection.status === "connected");
     expect(world.patches).toBe(0);
     client.stop();
+  });
+
+  it("F-201: a gateway that retired heartbeats while connected gets no patch after the reconnect", async () => {
+    const { client, gateway, world } = await adminClient();
+    try {
+      expect(client.state.checkIns?.model).toBe("heartbeat");
+      const drafted = daily(client);
+      // Updated to an OpenClaw without heartbeats: it restarts, and the connection comes back.
+      world.model = "routines";
+      gateway.dropAll();
+      await until(() => client.state.checkIns?.stamp === null);
+      await until(
+        () => client.state.connection.status === "connected" && client.state.connection.canAdmin,
+      );
+      await client.refreshCheckIns();
+      expect(client.state.checkIns).toMatchObject({ model: "routines", jobs: [], settings: null });
+      await client.saveCheckIn("s1", "marlow", { ...drafted, stamp: stampOn("gw-1", client) });
+      expect(client.state.checkIns?.save).toMatchObject({
+        status: "failed",
+        error: CHECKINS_AS_ROUTINES,
+      });
+      expect(gateway.requests.filter((each) => each.method === "config.patch")).toEqual([]);
+      expect(world.patches).toBe(0);
+    } finally {
+      client.stop();
+    }
   });
 
   it("F-201: a draft made on one gateway is never saved to the gateway that answers at the same address after a reconnect", async () => {

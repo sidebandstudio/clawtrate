@@ -740,6 +740,40 @@ test("F-201: below admin, one bot's check-ins in Routines are read-only, with no
   await expect(section.getByRole("button", { name: "Change Marlow's check-ins" })).toHaveCount(0);
 });
 
+test("F-201: on an OpenClaw that keeps check-ins as routines, Check-ins say so, change nothing, and lead to the bot's routines", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&routines=on&checkins=routines`, "light");
+  await checkIns(page);
+  const marlow = block(page, "marlow");
+  await expect(marlow.getByTestId("check-in-text")).toHaveText(
+    "This OpenClaw keeps check-ins as routines. Marlow's routines",
+  );
+  // No setting is read, so none is shown as Off, and nothing offers a change.
+  await expect(page.getByText("No check-ins")).toHaveCount(0);
+  await expect(page.getByText(/doesn't check in/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Change .*'s check-ins$/ })).toHaveCount(0);
+  await marlow.getByRole("button", { name: "Marlow's routines" }).click();
+  await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+  await expect(routinesView(page).getByRole("combobox", { name: "Bots" })).toHaveValue("marlow");
+  // There, the block above Marlow's routines says the same, with no link to where it is.
+  const section = routinesView(page).getByTestId("routines-check-ins");
+  await expect(section.getByTestId("check-in-text")).toHaveText(
+    "This OpenClaw keeps check-ins as routines.",
+  );
+  await expect(section.getByRole("button")).toHaveCount(1);
+  await expect(section.getByRole("button", { name: "Refresh" })).toBeVisible();
+  expect((await sent(page)).filter((each) => each.type === "saveCheckIn")).toEqual([]);
+});
+
+test("F-201: on an OpenClaw that keeps check-ins as routines, no group head claims a bot's check-ins", async ({
+  page,
+}) => {
+  await openRoutines(page, `${ROUTINES}&checkins=routines`);
+  await expect(routinesView(page).getByRole("heading", { name: "Marlow" })).toBeVisible();
+  await expect(routinesView(page).locator('[data-testid="check-in-summary"]')).toHaveCount(0);
+});
+
 test("F-201: in the list across bots, a group head claims no check-ins before they are read", async ({
   page,
 }) => {
