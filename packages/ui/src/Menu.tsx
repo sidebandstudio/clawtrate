@@ -99,13 +99,19 @@ export function Menu({
     )?.focus();
   }, [entries]);
 
+  // Once, on opening: a parent's re-render can pass a new `onClose` or `trigger`, and never moves
+  // focus inside an open menu.
+  useEffect(() => {
+    const menu = ref.current;
+    (
+      menu?.querySelector<HTMLElement>('[aria-checked="true"]') ??
+      menu?.querySelector<HTMLElement>(".menu-item")
+    )?.focus();
+  }, []);
+
   useEffect(() => {
     const menu = ref.current;
     if (!menu) return;
-    const first =
-      menu.querySelector<HTMLElement>('[aria-checked="true"]') ??
-      menu.querySelector<HTMLElement>(".menu-item");
-    first?.focus();
     const onPointer = (event: PointerEvent) => {
       const target = event.target as Node;
       if (menu.contains(target) || trigger?.contains(target)) return;
