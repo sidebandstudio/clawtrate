@@ -33,7 +33,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
-import { fromBase64 } from "./bytes.ts";
+import { fromBase64, toBase64 } from "./bytes.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -152,11 +152,14 @@ import {
   type CheckoutDiff,
   type FileRead,
   type FileReaderContext,
+  type FileTransferStart,
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
 import {
+  fetchInboundPicture,
   isDrawnPicture,
+  readBackAddress,
   isShownPictureType,
   MAX_PICTURE_BYTES,
   ownPictureRead,
@@ -182,6 +185,7 @@ import {
   isTaskSession,
   mapAgents,
   mapHistory,
+  sentSources,
   startedTaskSince,
   mergeSessionRow,
   sessionChangeRow,
@@ -498,12 +502,22 @@ export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
  * Messages history confirmed whose pictures this client keeps to show, from
  * the copy it sent, whenever their task is open on this device, until this
  * client disconnects from the gateway or the task or its bot is deleted (archiving keeps
- * them). Clawtrate doesn't load a person's picture from the gateway (#469).
- * Their bytes share
+ * them). Their bytes share
  * `MAX_RETAINED_ATTACHMENT_BYTES` with the outboxes' files and give way,
  * oldest first, to a new message's.
  */
 export const MAX_SENT_PICTURE_MESSAGES = 32;
+/**
+ * Pictures a person sent that this client read back from the gateway (#469), kept so a
+ * message scrolled to again isn't read again, until the same events as the copies above
+ * let them go. Their bytes share the same budget and give way first, oldest first.
+ */
+export const MAX_READ_BACK_PICTURES = 16;
+/**
+ * Pictures being read back at once, under way or waiting for a file read's place: more than a
+ * screen shows together. Past it a new read is refused at once, and the picture offers Try again.
+ */
+export const MAX_PICTURE_READS = 32;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
 
@@ -1444,13 +1458,25 @@ export class ClawtrateClient {
     gatewayBot: 0,
   };
   /**
-   * Reads and writes of the gateway names, one at a time and in order: each rename starts from
-   * the list the one before it left, so two quick renames both keep their names.
+   * Each preference's reads and writes, one at a time and in the order they were asked: a
+   * storage write doesn't promise to finish before a later one, so two quick changes could keep
+   * and show the older. Each rename starts from the names the one before it left.
    */
-  private gatewayNameWork: Promise<unknown> = Promise.resolve();
-  private queueGatewayNames<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.gatewayNameWork.then(work);
-    this.gatewayNameWork = run.catch(() => {});
+  private readonly preferenceWork: Record<
+    "channelChats" | "gatewayBot" | "gatewayNames" | "otherTools",
+    Promise<unknown>
+  > = {
+    channelChats: Promise.resolve(),
+    gatewayBot: Promise.resolve(),
+    gatewayNames: Promise.resolve(),
+    otherTools: Promise.resolve(),
+  };
+  private inOrder<T>(
+    preference: keyof ClawtrateClient["preferenceWork"],
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const run = this.preferenceWork[preference].then(work);
+    this.preferenceWork[preference] = run.catch(() => {});
     return run;
   }
   /**
@@ -1576,7 +1602,18 @@ export class ClawtrateClient {
   /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size and the characters it holds. */
   private readonly attachmentContent = new Map<
     string,
-    { task: string; files: OutgoingAttachment[]; bytes: number }
+    {
+      task: string;
+      /**
+       * The bot its task was listed under when sent (`rowBotOf`): the read of the bots that drops
+       * a deleted bot's rows can land before the gateway's answer to the delete.
+       */
+      bot: string | null;
+      files: OutgoingAttachment[];
+      bytes: number;
+      /** Its task was deleted on this connection: history that holds it keeps none of its pictures. */
+      taskDeleted?: true;
+    }
   >();
   private attachmentBytes = 0;
   /** Pictures of messages history confirmed, by message id, oldest first (`MAX_SENT_PICTURE_MESSAGES`). */
@@ -1584,6 +1621,8 @@ export class ClawtrateClient {
     string,
     {
       task: string;
+      /** As for `attachmentContent`. */
+      bot: string | null;
       mode: OutgoingMessage["mode"];
       runId: string | null;
       files: { index: number; mimeType: string; content: string }[];
@@ -1593,6 +1632,23 @@ export class ClawtrateClient {
     }
   >();
   private sentPictureBytes = 0;
+  /**
+   * Each followed task's references to the files its person's rows carried (`sentSources`),
+   * from its last history read: what a picture with no copy here is read back by.
+   */
+  private readonly sentSources = new Map<string, Map<string, string>>();
+  /** Pictures read back from the gateway, by `task\0messageKey\0index`, oldest first (`MAX_READ_BACK_PICTURES`). */
+  private readonly readBackPictures = new Map<
+    string,
+    { task: string; bot: string | null; mimeType: string; content: string; bytes: number }
+  >();
+  private readBackBytes = 0;
+  /** Reads back in flight, by task: one whose task's or bot's pictures are let go keeps nothing. */
+  private readonly pictureReadsInFlight = new Set<{
+    task: string;
+    bot: string | null;
+    dropped: boolean;
+  }>();
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /**
@@ -2040,7 +2096,7 @@ export class ClawtrateClient {
         // In the names' queue, so a rename sent meanwhile starts from what was read. A stop ends
         // the wait, so a read that never answers can't hold the queue for later starts and
         // renames. A failed or abandoned read is null: the names already held stay.
-        const names = await this.queueGatewayNames(() =>
+        const names = await this.inOrder("gatewayNames", () =>
           this.raceStop<GatewayNames | null>(
             stops,
             async () => {
@@ -2722,8 +2778,10 @@ export class ClawtrateClient {
     for (const message of this.state.transcripts[key]?.outbox ?? []) {
       this.dropAttachments(message.id);
     }
-    // Pictures you sent stay (`sentPictures`): the task can be opened again on this device, and
-    // they show there once more. Their own bound lets them go.
+    // Pictures you sent stay (`sentPictures`, `readBackPictures`): the task can be opened again on
+    // this device, and they show there once more. Their own bound lets them go. Its references
+    // come back with its next history read.
+    this.sentSources.delete(key);
     this.recipients.delete(key);
     for (const readKey of [...this.approvalReads.keys()])
       if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
@@ -3384,9 +3442,15 @@ export class ClawtrateClient {
       ...(replyToId ? { replyToId } : {}),
     };
     if (attachments.length > 0) {
-      this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
+      this.attachmentContent.set(message.id, {
+        task: key,
+        bot: this.taskBot(key),
+        files: attachments,
+        bytes,
+      });
       this.attachmentBytes += bytes;
-      // Pictures kept only to be shown give way to files still to go out.
+      // Pictures kept only to be shown give way to files still to go out, read-back ones first.
+      this.makeRoomForPictures(0);
       for (const id of this.sentPictures.keys()) {
         if (this.attachmentBytes + this.sentPictureBytes <= MAX_RETAINED_ATTACHMENT_BYTES) break;
         this.dropSentPictures(id);
@@ -3434,7 +3498,8 @@ export class ClawtrateClient {
   private keepSentPictures(message: OutgoingMessage): void {
     const kept = this.attachmentContent.get(message.id);
     this.dropAttachments(message.id);
-    if (!kept) return;
+    // A history read asked before its task was deleted can still be answered after.
+    if (!kept || kept.taskDeleted) return;
     const named = kept.files.flatMap((file, index) =>
       isShownPictureType(file.mimeType) && decodedBytes(file.content) <= MAX_PICTURE_BYTES
         ? [{ index, mimeType: file.mimeType, content: file.content }]
@@ -3445,6 +3510,7 @@ export class ClawtrateClient {
     const notPictures = named.filter((file) => !files.includes(file)).map((file) => file.index);
     const bytes = files.reduce((sum, file) => sum + decodedBytes(file.content), 0);
     if (named.length === 0 || this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) return;
+    this.makeRoomForPictures(bytes);
     for (const id of this.sentPictures.keys()) {
       if (
         this.sentPictures.size < MAX_SENT_PICTURE_MESSAGES &&
@@ -3455,6 +3521,7 @@ export class ClawtrateClient {
     }
     this.sentPictures.set(message.id, {
       task: kept.task,
+      bot: kept.bot,
       mode: message.mode,
       runId: message.runId,
       files,
@@ -3464,9 +3531,71 @@ export class ClawtrateClient {
     this.sentPictureBytes += bytes;
   }
 
-  /** Let go of every picture kept for one task, when the task itself is gone. */
-  private dropTaskPictures(key: string): void {
-    for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
+  /** Let go of every picture kept for the tasks `deleted` names, and of those still to be kept. */
+  private dropDeletedPictures(
+    deleted: (record: { task: string; bot: string | null }) => boolean,
+  ): void {
+    for (const flight of this.pictureReadsInFlight) if (deleted(flight)) flight.dropped = true;
+    for (const [id, kept] of this.sentPictures) if (deleted(kept)) this.dropSentPictures(id);
+    for (const [id, kept] of this.readBackPictures) if (deleted(kept)) this.dropReadBackPicture(id);
+    for (const sending of this.attachmentContent.values())
+      if (deleted(sending)) sending.taskDeleted = true;
+  }
+
+  /**
+   * The bot a task is listed under now (\`rowBotOf\`), noted on a picture's record when it is made:
+   * the read of the bots that drops a deleted bot's rows can land before the gateway's answer to
+   * the delete.
+   */
+  private taskBot(key: string): string | null {
+    const bot = rowBotOf(key, this.rows.get(capId(key, MAX_ID_CHARS)) ?? {});
+    return bot === null ? null : capId(bot, MAX_ID_CHARS);
+  }
+
+  /** Read-back pictures give way, oldest first, until `bytes` more fit in the shared budget. */
+  private makeRoomForPictures(bytes: number): void {
+    for (const id of this.readBackPictures.keys()) {
+      if (
+        this.attachmentBytes + this.sentPictureBytes + this.readBackBytes + bytes <=
+        MAX_RETAINED_ATTACHMENT_BYTES
+      )
+        break;
+      this.dropReadBackPicture(id);
+    }
+  }
+
+  private dropReadBackPicture(id: string): void {
+    const kept = this.readBackPictures.get(id);
+    if (!kept) return;
+    this.readBackPictures.delete(id);
+    this.readBackBytes -= kept.bytes;
+  }
+
+  /** Keep a picture read back, as the newest, when it fits beside everything else kept. */
+  private keepReadBack(
+    id: string,
+    task: string,
+    bot: string | null,
+    mimeType: string,
+    bytes: Uint8Array,
+  ): void {
+    this.dropReadBackPicture(id);
+    if (this.readBackPictures.size >= MAX_READ_BACK_PICTURES)
+      this.dropReadBackPicture(this.readBackPictures.keys().next().value!);
+    this.makeRoomForPictures(bytes.length);
+    if (
+      this.attachmentBytes + this.sentPictureBytes + this.readBackBytes + bytes.length >
+      MAX_RETAINED_ATTACHMENT_BYTES
+    )
+      return;
+    this.readBackPictures.set(id, {
+      task,
+      bot,
+      mimeType,
+      content: toBase64(bytes),
+      bytes: bytes.length,
+    });
+    this.readBackBytes += bytes.length;
   }
 
   private dropSentPictures(messageId: string): void {
@@ -3479,6 +3608,11 @@ export class ClawtrateClient {
   /** Decoded bytes of pictures kept to show for messages history holds, for tests and diagnostics. */
   get keptPictureBytes(): number {
     return this.sentPictureBytes;
+  }
+
+  /** Decoded bytes of pictures read back from the gateway and kept, for tests and diagnostics. */
+  get readBackPictureBytes(): number {
+    return this.readBackBytes;
   }
 
   /** Decoded bytes of files held for outgoing messages, for tests and diagnostics. */
@@ -6669,13 +6803,7 @@ export class ClawtrateClient {
         return notSent(errorMessage(error));
       }
       if (!link.alive()) return notSent("The connection changed before the delete was sent.");
-      const outcome = await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
-      // The gateway deleted the bot with its tasks and reports no removal for each task: the
-      // pictures you sent in them go now. Only its `ok` proves the delete.
-      if (outcome.kind === "answered")
-        for (const [id, kept] of this.sentPictures)
-          if (botIdFromSessionKey(kept.task) === request.botId) this.dropSentPictures(id);
-      return outcome;
+      return await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
     } finally {
       this.botDeletes.delete(key);
     }
@@ -6727,7 +6855,13 @@ export class ClawtrateClient {
         return { result, current: () => shown && link.alive() && this.botsShown === issued };
       },
       // The one evidence that the bot is gone, acted on as it arrives, whatever follows.
-      deleted: (botId) => this.dropQueuedFor(botId),
+      deleted: (botId) => {
+        this.dropQueuedFor(botId);
+        // The gateway deleted the bot with its tasks and reports no removal for each task: the
+        // pictures you sent in them go now, by the bot each task was listed under when sent.
+        const deleted = capId(botId, MAX_ID_CHARS);
+        this.dropDeletedPictures(({ bot }) => bot === deleted);
+      },
       admin: () =>
         this.options.readOnly !== true &&
         this.holds(ADMIN_SCOPE) &&
@@ -7201,23 +7335,28 @@ export class ClawtrateClient {
   }
 
   /**
-   * A picture a person sent with a message in this task, from this client's
-   * own copy: by the outgoing message's id while the outbox holds it, or by
-   * the key history stored its row under (`namesOutgoing`) once it is there.
-   * `index` is the file's place among the message's attachments. Nothing is
-   * asked of the gateway: without a copy here the answer is `not-kept`, and
-   * for a file whose bytes aren't the picture it is named as, `not-a-picture`.
+   * A picture a person sent with a message in this task. First from this client's own copy: by
+   * the outgoing message's id while the outbox holds it, or by the key history stored its row
+   * under (`namesOutgoing`) once it is there. Then from a picture this client read back before
+   * (`readBackPictures`). Then, only at a protected address, read back from the gateway by the
+   * reference the task's own row gave (`sentSources`, `fetchInboundPicture`), bound to the
+   * connection it was asked on and, with `stamp`, to that screen's gateway. `index` is the
+   * file's place among the message's attachments. A file whose bytes aren't the picture it is
+   * named as is `not-a-picture`; with no copy and no read back, `cannot-load`.
    */
   async readSentPicture(
     key: string,
     messageKey: string,
     index: number,
     options: FileReadOptions = {},
+    stamp?: GatewayStamp,
   ): Promise<SentPictureRead> {
     for (let waited = 0; this.fileTransfers.full() && waited < 300; waited += 1)
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
     // A viewer that left while the picture waited is given nothing.
     this.checkNotWithdrawn(options.owner);
+    const start = (bytes: Uint8Array) =>
+      this.fileTransfers.start(options.owner ?? DIRECT_CALLER, bytes, options.maxChars);
     const outgoing = this.state.transcripts[key]?.outbox.find((each) => each.id === messageKey);
     const sending = outgoing ? this.attachmentContent.get(outgoing.id) : undefined;
     const kept = sending
@@ -7229,10 +7368,101 @@ export class ClawtrateClient {
         )?.[1];
     if (kept?.notPictures.includes(index)) return { status: "not-a-picture" };
     const file = sending ? sending.files[index] : kept?.files.find((each) => each.index === index);
-    if (!file) return { status: "not-kept" };
-    return ownPictureRead(file, (bytes) =>
-      this.fileTransfers.start(options.owner ?? DIRECT_CALLER, bytes, options.maxChars),
-    );
+    if (file) return ownPictureRead(file, start);
+    const id = `${key}\u0000${messageKey}\u0000${index}`;
+    const readBack = this.readBackPictures.get(id);
+    if (readBack) {
+      // The newest again: the picture last shown gives way last.
+      this.readBackPictures.delete(id);
+      this.readBackPictures.set(id, readBack);
+      return ownPictureRead(readBack, start);
+    }
+    const ref = this.sentSources.get(key)?.get(`${messageKey}\u0000${index}`);
+    // Nothing is asked for at a loopback or `ws://` address, or without the row's own reference.
+    if (!ref || !this.host.fetch || !readBackAddress(this.state.connection.gatewayUrl ?? ""))
+      return { status: "cannot-load" };
+    return this.readBackPicture(key, id, ref, options, start, stamp);
+  }
+
+  /** `readSentPicture`'s read from the gateway, sharing the file reads' limit. */
+  private async readBackPicture(
+    key: string,
+    id: string,
+    ref: string,
+    options: FileReadOptions,
+    start: (bytes: Uint8Array) => FileTransferStart,
+    stamp: GatewayStamp | undefined,
+  ): Promise<SentPictureRead> {
+    const generation = this.generation;
+    const epoch = this.epoch;
+    if (this.pictureReadsInFlight.size >= MAX_PICTURE_READS)
+      return {
+        status: "failed",
+        message: "Too many pictures are being read; try again in a moment.",
+      };
+    // Dropped when its task, or its bot, is deleted while it is read: a read for another task
+    // goes on.
+    const flight = { task: key, bot: this.taskBot(key), dropped: false };
+    this.pictureReadsInFlight.add(flight);
+    try {
+      // The socket it was asked on, and the gateway the screen was drawn for: never another.
+      const elsewhere = () =>
+        generation !== this.generation ||
+        epoch !== this.epoch ||
+        (stamp !== undefined &&
+          (stamp.gatewayId === null ||
+            stamp.target !== this.target ||
+            this.state.connection.gatewayId !== stamp.gatewayId));
+      const changed = {
+        status: "failed",
+        message: "The connection changed while this picture was read.",
+      } as const;
+      if (elsewhere()) return changed;
+      // Pictures on screen together queue for a place: nothing is awaited between the last look
+      // at the gate and the read taking its place, so none is refused for another's.
+      for (let waited = 0; this.fileReads >= MAX_FILE_READS && waited < 300; waited += 1)
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+      if (elsewhere()) return changed;
+      this.checkNotWithdrawn(options.owner);
+      const gatewayUrl = this.state.connection.gatewayUrl ?? "";
+      const deviceId = this.state.connection.deviceId;
+      const read = await this.fileRead(async (ctx) => {
+        // This device's token for the gateway connected now, and no other gateway's.
+        const held =
+          deviceId && this.settings?.url === gatewayUrl
+            ? await this.loadToken(gatewayUrl, deviceId, "operator")
+            : null;
+        if (elsewhere()) return changed;
+        // A token bound to a proved route goes only on that route's sockets, never on this request.
+        if (held?.route !== undefined) return { status: "cannot-load" } as const;
+        const token = held?.token ?? null;
+        return fetchInboundPicture(
+          { fetch: this.host.fetch ?? null, gatewayUrl, token, now: ctx.now },
+          key,
+          ref,
+        );
+      }, options);
+      // Bytes that arrive after a switch are the old gateway's, and a task deleted meanwhile keeps
+      // none: neither is kept or shown.
+      if (elsewhere() || flight.dropped) return changed;
+      if (read.status !== "bytes") return read;
+      this.keepReadBack(id, key, flight.bot, read.mimeType, read.bytes);
+      try {
+        // A viewer that left during the read is handed nothing.
+        this.checkNotWithdrawn(options.owner);
+        return {
+          status: "content",
+          kind: "image",
+          mimeType: read.mimeType,
+          bytes: read.bytes.length,
+          transfer: start(read.bytes),
+        };
+      } catch (error) {
+        return { status: "failed", message: errorMessage(error) };
+      }
+    } finally {
+      this.pictureReadsInFlight.delete(flight);
+    }
   }
 
   /** The next part of a file on its way to this viewer. */
@@ -7591,7 +7821,7 @@ export class ClawtrateClient {
    */
   async nameGateway(gatewayUrl: string, name: string): Promise<void> {
     if (this.state.connection.gatewayUrl !== gatewayUrl) throw new GatewayChangedError();
-    return this.queueGatewayNames(async () => {
+    return this.inOrder("gatewayNames", async () => {
       const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
       await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
       this.preferenceSets.gatewayNames += 1;
@@ -7627,12 +7857,14 @@ export class ClawtrateClient {
    * held, so the list changes at once, with nothing read again; a bot's main task always shows.
    */
   async setShowChannelChats(on: boolean): Promise<void> {
-    // Kept first: a choice the host could not keep is not taken.
-    await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
-    this.preferenceSets.channelChats += 1;
-    this.showChannelChats = on;
-    this.store.update((state) => ({ ...state, showChannelChats: on }));
-    this.publishTasks();
+    return this.inOrder("channelChats", async () => {
+      // Kept first: a choice the host could not keep is not taken.
+      await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
+      this.preferenceSets.channelChats += 1;
+      this.showChannelChats = on;
+      this.store.update((state) => ({ ...state, showChannelChats: on }));
+      this.publishTasks();
+    });
   }
 
   /**
@@ -7641,11 +7873,13 @@ export class ClawtrateClient {
    * start, and applied to the rows already held, as `setShowChannelChats` is.
    */
   async setShowOtherToolSessions(on: boolean): Promise<void> {
-    await this.host.storage.set(OTHER_TOOLS_KEY, String(on));
-    this.preferenceSets.otherTools += 1;
-    this.showOtherToolSessions = on;
-    this.store.update((state) => ({ ...state, showOtherToolSessions: on }));
-    this.publishTasks();
+    return this.inOrder("otherTools", async () => {
+      await this.host.storage.set(OTHER_TOOLS_KEY, String(on));
+      this.preferenceSets.otherTools += 1;
+      this.showOtherToolSessions = on;
+      this.store.update((state) => ({ ...state, showOtherToolSessions: on }));
+      this.publishTasks();
+    });
   }
 
   /**
@@ -7654,11 +7888,13 @@ export class ClawtrateClient {
    * changes; nothing is sent to the gateway.
    */
   async setShowGatewayBot(on: boolean): Promise<void> {
-    // Kept first: a choice the host could not keep is not taken.
-    await this.host.storage.set(GATEWAY_BOT_KEY, String(on));
-    this.preferenceSets.gatewayBot += 1;
-    this.showGatewayBot = on;
-    this.store.update((state) => ({ ...state, showGatewayBot: on }));
+    return this.inOrder("gatewayBot", async () => {
+      // Kept first: a choice the host could not keep is not taken.
+      await this.host.storage.set(GATEWAY_BOT_KEY, String(on));
+      this.preferenceSets.gatewayBot += 1;
+      this.showGatewayBot = on;
+      this.store.update((state) => ({ ...state, showGatewayBot: on }));
+    });
   }
 
   private turnLimitReached(key: string, runId: string): void {
@@ -8671,6 +8907,9 @@ export class ClawtrateClient {
     this.attachmentContent.clear();
     this.sentPictures.clear();
     this.sentPictureBytes = 0;
+    this.readBackPictures.clear();
+    this.readBackBytes = 0;
+    this.sentSources.clear();
   }
 
   private invalidateCheckIns(): void {
@@ -9432,7 +9671,7 @@ export class ClawtrateClient {
       this.cancelAllQueued(key);
       this.retireForeign(key);
       // Deleted elsewhere: the pictures you sent in it go too. An archived task keeps them.
-      this.dropTaskPictures(key);
+      this.dropDeletedPictures(({ task }) => task === key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
@@ -9712,6 +9951,7 @@ export class ClawtrateClient {
       }
       const activity = markUnconfirmed(reconciled);
       const items = mapHistory(messages, { startedAt: startedTaskSince(history) });
+      this.sentSources.set(key, sentSources(messages));
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
@@ -10242,23 +10482,51 @@ export class ClawtrateClient {
     return this.listCreated(await newMainTask(this.actionContext(options.owner ?? null), botId));
   }
 
-  async renameTask(key: string, label: string, options: { owner?: object } = {}): Promise<void> {
+  /**
+   * A stamped task action's write access, then its guard. Access first: asking for it can
+   * reconnect, and the guard reads the connection it ends on. The action's own context is made
+   * only after both, so the grant's reconnect doesn't end it.
+   */
+  private async settleTaskWrite(
+    owner: object | null,
+    stamp: GatewayStamp | undefined,
+  ): Promise<void> {
+    // Unstamped, nothing names the gateway the action was for, so the grant's reconnect still ends
+    // it rather than send it to whichever gateway answered.
+    if (!stamp) return;
+    await this.actionContext(owner).ensureWrite();
+    await this.requireSameGateway(stamp);
+  }
+
+  /** With `stamp`, as for `archiveTask`. */
+  async renameTask(
+    key: string,
+    label: string,
+    options: { owner?: object; stamp?: GatewayStamp } = {},
+  ): Promise<void> {
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     await renameTask(this.actionContext(options.owner ?? null), key, label);
   }
 
-  async pinTask(key: string, pinned: boolean, options: { owner?: object } = {}): Promise<void> {
+  /** With `stamp`, as for `archiveTask`. */
+  async pinTask(
+    key: string,
+    pinned: boolean,
+    options: { owner?: object; stamp?: GatewayStamp } = {},
+  ): Promise<void> {
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     await pinTask(this.actionContext(options.owner ?? null), key, pinned);
   }
 
   /**
-   * Mark a task unread or read. `opened` is a read the person did not ask for
-   * (opening the task): it names the unread marker it saw, and is made only
+   * Mark a task unread or read, with `stamp` as for `archiveTask`. `opened` is a read the person
+   * did not ask for (opening the task): it names the unread marker it saw, and is made only
    * while the connection already writes, never asking for access.
    */
   async markTask(
     key: string,
     unread: boolean,
-    options: { owner?: object; opened?: boolean } = {},
+    options: { owner?: object; opened?: boolean; stamp?: GatewayStamp } = {},
   ): Promise<void> {
     if (options.opened) {
       if (!this.holds(WRITE_SCOPE) || this.options.readOnly) return;
@@ -10275,6 +10543,7 @@ export class ClawtrateClient {
       }
       return;
     }
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     await markTask(this.actionContext(options.owner ?? null), key, unread);
   }
 
@@ -10286,13 +10555,7 @@ export class ClawtrateClient {
     key: string,
     options: { stop?: boolean; owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<ArchiveResult> {
-    // Write access first: asking for it can reconnect, and the guard reads the connection it ends
-    // on. The action is bound to that connection only after both, so the grant's reconnect doesn't
-    // end it.
-    if (options.stamp) {
-      await this.actionContext(options.owner ?? null).ensureWrite();
-      await this.requireSameGateway(options.stamp);
-    }
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     return archiveTask(this.actionContext(options.owner ?? null), key, {
       stop: options.stop === true,
     });
@@ -10307,13 +10570,10 @@ export class ClawtrateClient {
     key: string,
     options: { owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<void> {
-    if (options.stamp) {
-      await this.actionContext(options.owner ?? null).ensureWrite();
-      await this.requireSameGateway(options.stamp);
-    }
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     await deleteTask(this.actionContext(options.owner ?? null), key);
     // Its conversation is gone from the gateway: so are the pictures you sent in it.
-    this.dropTaskPictures(key);
+    this.dropDeletedPictures(({ task }) => task === key);
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */

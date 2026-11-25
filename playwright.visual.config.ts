@@ -3,13 +3,31 @@
 // loopback port, and compare screenshots with baselines committed under
 // visual/baselines/<platform>/. Font rendering differs between operating
 // systems, so the baselines are only valid on the platform in their path.
+// The Linux ones, drawn in the pinned image (visual/linux/), are the gate.
 import { defineConfig, devices } from "@playwright/test";
 
 // 5341 unless CLAWTRATE_FIXTURE_PORT names another; the fixture's own config reads the same variable.
 const PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);
 
+/**
+ * The macOS set: the specs where macOS draws what the Linux image cannot (#392), the
+ * shortcuts sheet's ⌘ ⇧ ⌥ ⌃, search's ↵, the reactions' emoji, and the whole window as macOS
+ * rasterises its text. Only these keep baselines under visual/baselines/darwin/, so a Mac runs
+ * only these. Every spec runs in the Linux image (`pnpm visual:linux`), against
+ * visual/baselines/linux/. CLAWTRATE_VISUAL_ALL_SPECS lists every spec on a Mac too, for the
+ * parity check's listing.
+ */
+export const MACOS_SPECS = [
+  "visual/shortcuts.visual.spec.ts",
+  "visual/search.visual.spec.ts",
+  "visual/messages.visual.spec.ts",
+  "visual/shell.visual.spec.ts",
+];
+const macosSetOnly = process.platform === "darwin" && !process.env.CLAWTRATE_VISUAL_ALL_SPECS;
+
 export default defineConfig({
   testDir: "visual",
+  ...(macosSetOnly ? { testMatch: MACOS_SPECS } : {}),
   // A folder of its own: Playwright empties its output folder when a run starts, and the
   // end-to-end runs keep theirs under test-results/ while they run.
   outputDir: "test-results/visual",

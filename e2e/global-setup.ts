@@ -23,14 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
 import { newRunId, processIdentity, processState } from "../tools/dev-gateway/src/state-guard.ts";
-import {
-  cleanUp,
-  recoverDeadRuns,
-  runIncludes,
-  saveRecord,
-  TEMP_PREFIX,
-  type RunRecord,
-} from "./run-record.ts";
+import { cleanUp, recoverDeadRuns, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
@@ -164,7 +157,11 @@ export function startHost(
   instance: string,
   staticDir: string,
   dataDir: string,
-  options: { readOnly?: boolean; gatewayBot?: "shown" | "default" } = {},
+  options: {
+    readOnly?: boolean;
+    env?: Record<string, string>;
+    gatewayBot?: "shown" | "default";
+  } = {},
 ) {
   if (options.gatewayBot !== "default") showGatewayBot(dataDir);
   const gated: Gated = gatedSpawn(
@@ -187,7 +184,7 @@ export function startHost(
       ...(options.readOnly ? ["--read-only"] : []),
     ],
     // The instance is named by the flag alone, never inherited from the environment.
-    { cwd: ROOT, env: cliEnv(), stdio: ["ignore", "pipe", "inherit"] },
+    { cwd: ROOT, env: { ...cliEnv(), ...options.env }, stdio: ["ignore", "pipe", "inherit"] },
   );
   const host = gated.child;
   const url = new Promise<string>((resolve, reject) => {
@@ -229,20 +226,13 @@ export default async function globalSetup() {
   if (!/^[0-9a-f]{8}$/.test(run)) throw new Error(`CLAWTRATE_E2E_RUN must be 8 hex digits`);
   const name = `e2e-${run}`;
   const sentinel = `e2e-${run}-other`;
-  // Provider accounts (docs/design/bots.md) run on an instance of their own, with scripted
-  // accounts and sign-ins, so nothing they create reaches the seeded instance's checks.
-  const accounts = `e2e-${run}-acct`;
-  // The Computer tab's checks need the computer plugin: an instance of its own, started only
-  // when this run can include them.
-  const computer = `e2e-${run}-computer`;
-  const withComputer = runIncludes(process.argv, join(ROOT, "e2e/work-computer.spec.ts"));
-  // Bot voice's check starts its own instance, in e2e/bot-voice.spec.ts: only where it runs.
-  const own = [name, sentinel, accounts, computer];
+  // An instance only some specs use is started by those specs, only where they run: the accounts
+  // instance by e2e/accounts-instance.ts, and the Computer tab's, bot voice's and others' by their
+  // own spec files.
+  const own = [name, sentinel];
   // The spec's own dev-gateway calls address this run's instance.
   process.env.CLAWTRATE_DEV_INSTANCE = name;
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
-  process.env.CLAWTRATE_E2E_ACCOUNTS = accounts;
-  if (withComputer) process.env.CLAWTRATE_E2E_COMPUTER = computer;
 
   recoverDeadRuns(RECORDS, resetInstance);
 
@@ -364,35 +354,11 @@ export default async function globalSetup() {
       "--with-images",
       "--with-message-tool",
     );
-    // It also has a paired machine (`--with-node`), for Settings, Machines and "Where a bot runs".
-    await startInstance(
-      accounts,
-      "--with-accounts",
-      "--with-plugin",
-      "clawtrate-dev-signin",
-      "--with-node",
-      "--no-seed",
-    );
-    // With the computer plugin, whose Marlow and Pip have browsers of their own. Seeded: the
-    // seed gives the bots their names. Views and leases get the plugin's normal 20 s window, so a
-    // loaded machine's stall is not taken for an ended view; strict 6 s expiry is covered by the
-    // dev-gateway's own computer checks and the unit tests.
-    if (withComputer)
-      await startInstance(
-        computer,
-        "--with-plugin",
-        "clawtrate-computer",
-        "--renew-timeout-ms",
-        "20000",
-      );
-    const instances = [name, accounts, ...(withComputer ? [computer] : [])];
-    for (const instance of instances) {
-      const mine = listInstances().find((row) => row.name === instance);
-      if (!mine?.gatewayRunning) throw new Error(`instance ${instance} is not running`);
-      for (const port of [mine.gatewayPort, mine.providerPort]) {
-        if (port === null || FORBIDDEN_PORTS.includes(port)) {
-          throw new Error(`instance ${instance} is on port ${port}, which e2e never uses`);
-        }
+    const mine = listInstances().find((row) => row.name === name);
+    if (!mine?.gatewayRunning) throw new Error(`instance ${name} is not running`);
+    for (const port of [mine.gatewayPort, mine.providerPort]) {
+      if (port === null || FORBIDDEN_PORTS.includes(port)) {
+        throw new Error(`instance ${name} is on port ${port}, which e2e never uses`);
       }
     }
 

@@ -43,11 +43,14 @@ import {
   MAX_DEFERRED_STOPS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
+  MAX_PICTURE_READS,
+  MAX_READ_BACK_PICTURES,
   MAX_SENT_PICTURE_MESSAGES,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
+import { MAX_INBOUND_REF_CHARS, MAX_SENT_SOURCES } from "./mapping.ts";
 import { ADMIN_SCOPES } from "./scopes.ts";
 import {
   MAX_FILE_TRANSFERS,
@@ -268,7 +271,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
-    each: 2 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
+    each: 3 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },
   "attachmentContent.*.files": {
@@ -280,7 +283,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
   sentPictures: {
     max: MAX_SENT_PICTURE_MESSAGES,
-    each: 3 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
+    each: 4 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
     row: "outboxFiles",
   },
   "sentPictures.*.files": {
@@ -289,6 +292,22 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: null,
     opaque: "picture content, counted in `outboxFiles`",
   },
+  // Pictures read back from the gateway, kept to show: their content is in `outboxFiles`'s budget.
+  readBackPictures: {
+    max: MAX_READ_BACK_PICTURES,
+    each: 4 * ID + 2 * N + SHORT,
+    row: "outboxFiles",
+    opaque: "picture content, counted in `outboxFiles`",
+  },
+  // Pictures being read back, under way or waiting their turn: each its task's key, its bot and a flag.
+  pictureReadsInFlight: { max: MAX_PICTURE_READS, each: 2 * ID + SHORT, row: "bookkeeping" },
+  // Each followed task's references to its person's newest files, by row key and place.
+  sentSources: {
+    max: T,
+    each: ID + MAX_SENT_SOURCES * (2 * MAX_INBOUND_REF_CHARS + N),
+    row: "bookkeeping",
+  },
+  "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Settings reads a stop ends: connection commands run one at a time, each with one read.

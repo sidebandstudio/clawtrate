@@ -1924,9 +1924,10 @@ Live and source agree on these ceilings:
   blocks on the row, whose data the history projection removes (`omitted`,
   a byte count); still no artifact id (`chat-send-user-turn`,
   `user-turn-transcript.message`, `chat-display-projection.core`).
-  Clawtrate doesn't use that route yet, since it would send the device's
-  credential over HTTP: a person's picture shows only from the sending app's
-  own copy (#469).
+  Clawtrate uses that route only at a `wss://` address that isn't loopback,
+  with the device's token in a header of the ticket request alone, since it
+  sends the credential on a request other than the proved socket (#469,
+  `docs/decisions.md`, "Pictures a person sent").
 
 ### 20. Side panel and per-bot controls
 
