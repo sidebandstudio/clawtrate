@@ -161,7 +161,7 @@ describe("F-557: your picture read back through the iPhone host's fetch", () => 
     }
   });
 
-  it("F-557: only a GET that follows no redirect and sends no cookies, to an http or https address, with core's one header, reaches the native request", async () => {
+  it("F-557: only a GET that follows no redirect and sends no cookies, to an https address, with core's one header, reaches the native request", async () => {
     const fake = fakeNative();
     const fetch = createHostFetch(fake.native);
     const signal = new AbortController().signal;
@@ -170,6 +170,7 @@ describe("F-557: your picture read back through the iPhone host's fetch", () => 
       ["https://gateway.example/a", { method: "POST" }],
       ["https://gateway.example/a", { redirect: "follow" }],
       ["https://gateway.example/a", { credentials: "include" }],
+      ["http://gateway.example/a", {}],
       ["file:///etc/hosts", {}],
       ["data:image/png;base64,AAAA", {}],
     ] as const)
@@ -182,10 +183,10 @@ describe("F-557: your picture read back through the iPhone host's fetch", () => 
       ...init,
       headers: { authorization: "Bearer x", cookie: "session=1" } as { authorization: string },
     });
-    await fetch("http://gateway.example/b", init);
+    await fetch("https://gateway.example/b", init);
     expect(fake.started.map(({ url, authorization }) => [url, authorization])).toEqual([
       ["https://gateway.example/a", "Bearer x"],
-      ["http://gateway.example/b", null],
+      ["https://gateway.example/b", null],
     ]);
   });
 
@@ -205,6 +206,53 @@ describe("F-557: your picture read back through the iPhone host's fetch", () => 
       });
       expect(fake.cancelled).toEqual([fake.started.at(-1)!.id]);
     }
+  });
+
+  it("F-557: a read after the abort rejects, even for a part already on its way, and never gives it", async () => {
+    // The native side resolved the part before its cancel came, so the cancel rejects nothing.
+    const controller = new AbortController();
+    const cancelled: string[] = [];
+    const native: NativeFetch = {
+      start: async () => ({ status: 200, headers: { "content-type": "image/png" } }),
+      read: () =>
+        new Promise((resolve) =>
+          controller.signal.addEventListener("abort", () => resolve(RED.slice(0, 10))),
+        ),
+      cancel: async (id) => void cancelled.push(id),
+    };
+    const response = await createHostFetch(native)("https://gateway.example/a", {
+      method: "GET",
+      redirect: "error",
+      credentials: "omit",
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    const first = reader.read();
+    controller.abort();
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    await expect(reader.read()).rejects.toMatchObject({ name: "AbortError" });
+    expect(cancelled).toEqual(["1"]);
+  });
+
+  it("F-557: a picture cut off by the time limit is a read to try again, never drawn", async () => {
+    vi.useFakeTimers();
+    // The bytes' first part, a picture's start, is still on its way when the 30 s run out.
+    let late: (() => void) | null = null;
+    const fake = fakeNative();
+    const native: NativeFetch = {
+      ...fake.native,
+      read: (id) =>
+        id === "2"
+          ? new Promise((resolve) => (late = () => resolve(RED.slice(0, 10))))
+          : fake.native.read(id),
+    };
+    const read = fetchInboundPicture(ctx(createHostFetch(native)), KEY, SHOT.url);
+    await vi.advanceTimersByTimeAsync(30_000);
+    late!();
+    expect(await read).toEqual({
+      status: "failed",
+      message: "The picture took too long to arrive.",
+    });
   });
 
   it("F-557: a body that passes 5 MB is stopped as it passes, and nothing more is read", async () => {

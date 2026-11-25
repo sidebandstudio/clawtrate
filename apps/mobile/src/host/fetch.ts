@@ -2,9 +2,10 @@
 // the gateway. React Native's fetch follows every redirect and gives no body to read in parts,
 // and Expo's uses the app's shared cache, cookies and stored credentials, so the app's own
 // native module makes the request (modules/clawtrate-fetch; docs/decisions.md, The iOS app).
-// Here only what core asks for reaches it: a GET to an http or https address with, at most,
-// core's one `Authorization` header. Core's abort, or a body it cancels past its limit, stops
-// the transfer. A refused redirect fails as a WHATWG fetch's does, which core reads as one.
+// Here only what core asks for reaches it: a GET to an https address with, at most, core's one
+// `Authorization` header. Core's abort, or a body it cancels past its limit, stops the transfer.
+// As in a WHATWG fetch, a read after an abort rejects, even for a part already on its way, and a
+// refused redirect fails as undici's does: core reads both as such.
 
 import type { HttpFetch, HttpResponseLike } from "@clawtrate/core";
 
@@ -23,6 +24,10 @@ export type NativeFetch = {
 const codeOf = (error: unknown) =>
   typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 
+/** What a WHATWG fetch rejects with once its signal has aborted. */
+const aborted = () =>
+  Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+
 /** A failed request as a WHATWG fetch reports it: a redirect as undici names one. */
 const fetchFailed = (error: unknown) =>
   new TypeError("fetch failed", {
@@ -36,11 +41,9 @@ export function createHostFetch(native: NativeFetch): HttpFetch {
       throw new TypeError(
         "This host fetches only a GET that follows no redirect and sends no cookies.",
       );
-    if (!/^https?:\/\//i.test(url))
-      throw new TypeError("This host fetches only http and https addresses.");
+    if (!/^https:\/\//i.test(url)) throw new TypeError("This host fetches only https addresses.");
     const { signal } = init;
-    if (signal.aborted)
-      throw Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+    if (signal.aborted) throw aborted();
     last += 1;
     const id = String(last);
     let open = true;
@@ -60,19 +63,25 @@ export function createHostFetch(native: NativeFetch): HttpFetch {
       head = await native.start(id, url, init.headers?.authorization ?? null);
     } catch (error) {
       stop();
-      throw fetchFailed(error);
+      throw signal.aborted ? aborted() : fetchFailed(error);
     }
+    // An answer that arrives after the abort is not given: the abort stopped the request.
+    if (signal.aborted) throw aborted();
     const headers = new Map(Object.entries(head.headers));
     const reader = {
       async read(): Promise<{ done: boolean; value?: Uint8Array }> {
+        if (signal.aborted) throw aborted();
+        // Ended, or cancelled by core once it had what it needed.
         if (!open) return { done: true };
         let part: Uint8Array | ArrayBuffer | null;
         try {
           part = await native.read(id);
         } catch (error) {
           stop();
-          throw fetchFailed(error);
+          throw signal.aborted ? aborted() : fetchFailed(error);
         }
+        // A part already on its way when the abort came is not the body: a cut picture would pass.
+        if (signal.aborted) throw aborted();
         if (part === null) {
           close();
           return { done: true };
