@@ -642,7 +642,7 @@ export function ActionScope({
   const scope = useScopeCards();
   const handover = useStepHandover();
   const { selected, rawState } = scope.cards;
-  const { placement } = scope;
+  const { placement, startedTasks } = scope;
 
   const feeds = useMemo(() => {
     const index = stepIndex(transcript.runs);
@@ -659,6 +659,8 @@ export function ActionScope({
       card: (callId) => {
         const message = selected.botMessages.find((card) => card.toolCallId === callId);
         if (message) return { kind: "bot-message", id: message.id };
+        const started = startedTasks.find((card) => card.toolCallId === callId);
+        if (started) return { kind: "started-task", id: started.id };
         // A T3 Code call is its card once the card is drawn, and nothing else.
         const coding = t3.find((card) => card.toolCallId === callId);
         if (coding && handover?.isCard(callId)) return { kind: "t3-code", id: coding.id };
@@ -800,7 +802,17 @@ export function ActionScope({
         revision: each.revision,
       });
     return { items, runs, accounts, hidden } satisfies Feeds;
-  }, [transcript, engineRuns, selected, handover, placement, ctx, quiet, thinkingShown]);
+  }, [
+    transcript,
+    engineRuns,
+    selected,
+    startedTasks,
+    handover,
+    placement,
+    ctx,
+    quiet,
+    thinkingShown,
+  ]);
 
   const placed = useMemo(() => {
     const keys = new Set<string>();

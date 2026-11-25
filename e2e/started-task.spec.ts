@@ -2,8 +2,10 @@
 // starts a visible task with the gateway's own sessions_spawn (`#hand-off`) from a task of its
 // own; the interface lists it under Juniper by its label, opens it, says who started it and
 // from where, shows the first message as Juniper's brief, and the person writes there and gets
-// an answer. The scenario check starts its `#hand-off` tasks under Pip and Marlow, and a label is
-// unique among a bot's tasks, so this spec uses Juniper.
+// an answer. Then Otto, asked in the conversation, starts one, and the conversation shows it as a
+// card (F-587) that reaches Done, opens that task, and says Otto reported back. The scenario check
+// starts its `#hand-off` tasks under Pip and Marlow, and a label is unique among a bot's tasks, so
+// this spec uses Juniper and Otto.
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -22,6 +24,8 @@ const SINCE = Date.now();
 const STAMP = SINCE.toString(36);
 const PARENT = `agent:main:e2e-started-${STAMP}`;
 const PARENT_TITLE = "Plan the Saturday walk";
+const ASKED = `agent:otto:e2e-card-${STAMP}`;
+const ASKED_TITLE = "Saturday walk maps";
 const PLAIN_REPLY = "Here is a plain reply, streamed in small pieces with no reasoning first.";
 
 type Host = { child: ChildProcess; url: string; data: string };
@@ -29,7 +33,7 @@ let host: Host | null = null;
 let page: Page;
 let sender: OperatorSession;
 /** Tasks this spec made, removed afterwards. */
-const made = new Set<string>([PARENT]);
+const made = new Set<string>([PARENT, ASKED]);
 
 async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
   const result = await openInstance(INSTANCE).runner.run([
@@ -164,4 +168,55 @@ test("F-565: a task a bot started opens under the bot with its label, says who s
   // Open goes to the task it was started from.
   await page.getByRole("button", { name: `Open ${PARENT_TITLE}` }).click();
   await expect(page.locator(".task-line")).toHaveText(PARENT_TITLE);
+});
+
+test("F-587: a task a bot starts shows as a card where it was asked, reaches Done, opens that task, and says the bot reported back", async () => {
+  test.setTimeout(180_000);
+  // A conversation of Otto's, opened in the app, where the person asks for a task.
+  const first = (await sender.send(ASKED, "#text")) as { runId: string };
+  await sender.terminal(first.runId, 60_000);
+  await gatewayCall("sessions.patch", { key: ASKED, label: ASKED_TITLE });
+  await botRow(page, "Otto").first().click();
+  await expect(taskRow(page, ASKED_TITLE)).toBeVisible({ timeout: 30_000 });
+  await taskRow(page, ASKED_TITLE).click();
+  await expect(page.locator(".task-line")).toHaveText(ASKED_TITLE);
+  await page.getByTestId("composer-input").fill("#hand-off");
+  await page.getByTestId("composer-input").press("Enter");
+
+  // The start is a card where it was asked, not a step line, and reaches Done.
+  const card = page.getByRole("group", { name: `Started a task: ${HAND_OFF.label}` });
+  await expect(card).toBeVisible({ timeout: 60_000 });
+  await expect(card.locator(".messaged-verb")).toHaveText("Started a task");
+  await expect(card.locator(".messaged-who")).toHaveText("Otto");
+  await expect(card.locator(".started-title")).toHaveText(HAND_OFF.label);
+  await expect(card.getByTestId("started-task-brief")).toHaveText(HAND_OFF.task);
+  await expect(card.locator(".state")).toHaveText("Done", { timeout: 60_000 });
+  await expect(page.getByTestId("transcript").getByText("Started a helper")).toHaveCount(0);
+  const listed = await gatewayCall<{ sessions: Array<Record<string, unknown>> }>("sessions.list", {
+    agentId: "otto",
+    excludeCron: true,
+    excludeSubagents: true,
+    limit: 200,
+  });
+  const child = listed.sessions.find((row) => row.spawnedBy === ASKED);
+  expect(child, "the gateway lists the started task").toBeTruthy();
+  made.add(String(child!.key));
+
+  // Open task opens that task.
+  await card.getByRole("button", { name: `Open ${HAND_OFF.label}` }).click();
+  await expect(page.locator(".task-line")).toHaveText(HAND_OFF.label);
+  await expect(page.getByTestId("started-by")).toHaveText(
+    `Otto started this task from ${ASKED_TITLE} · Open ${ASKED_TITLE}`,
+    { timeout: 30_000 },
+  );
+
+  // Back where it was asked, the card says Otto reported back, and goes to that reply.
+  await page.getByRole("button", { name: `Open ${ASKED_TITLE}` }).click();
+  await expect(page.locator(".task-line")).toHaveText(ASKED_TITLE);
+  await expect(card.getByTestId("started-task-reported")).toHaveText("Otto reported back.", {
+    timeout: 60_000,
+  });
+  await expect(card.locator(".state")).toHaveText("Done");
+  await card.getByRole("button", { name: `Show Otto's report on ${HAND_OFF.label}` }).click();
+  await expect(page.locator(":focus")).toContainText(`${HAND_OFF.label} finished.`);
 });

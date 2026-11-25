@@ -310,6 +310,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/avatar.ts:LANTERN_HEADPHONES.box.left": "static, one headphone cup's centre",
   "packages/core/src/avatar.ts:LANTERN_HEADPHONES.box.right": "static, one headphone cup's centre",
   "packages/core/src/avatar.ts:wornAt>placed": "per call, at most three shapes for one pose",
+  "packages/core/src/guides.ts:applyGuidesChange>errors":
+    "one call; one sentence per instructions file it changed, returned to the caller",
 };
 
 describe("the source keeps no collection outside the registry", () => {

@@ -76,7 +76,7 @@ function Turn({
   const role = item.role === "user" ? "user" : "assistant";
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
   return (
-    <div className="turn" data-role={role} data-testid="transcript-turn">
+    <div className="turn" data-role={role} data-item={item.id} data-testid="transcript-turn">
       <ReplyQuote item={item} />
       {role === "assistant" ? (
         <>
