@@ -25,7 +25,7 @@
     - toolbar "Message actions":
       - button "More"
     - paragraph: and this one, from my phone
-    - paragraph: receipt.jpg 47 KB Picture sent with this message. It shows on the device that sent it, until Clawtrate disconnects or is closed.
+    - paragraph: receipt.jpg 47 KB This connection can't load the picture back from the gateway.
     - toolbar "Message actions":
       - button "More"
     - paragraph: I can see you sent a picture.

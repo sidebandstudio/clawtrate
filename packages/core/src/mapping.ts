@@ -346,31 +346,80 @@ function assistantPictures(content: unknown): ChatPicture[] {
 const MAX_SENT_ATTACHMENTS = 20;
 const MAX_SENT_NAME_CHARS = 255;
 
-/**
- * The files a person's row carried: the gateway's `__openclaw.media` entries, in
- * their order, by name, type and size. The `media://inbound` reference an entry
- * names is the gateway's own and is never kept, so never used.
- */
-function sentAttachments(info: RawRecord): SentAttachment[] {
-  return arr(info.media)
+/** A person's row's `__openclaw.media` entries, in order: the same list for its files and their references. */
+const sentFacts = (info: RawRecord): RawRecord[] =>
+  arr(info.media)
     .slice(0, MAX_SENT_ATTACHMENTS)
     .flatMap((entry) => {
       const fact = asRecord(entry);
-      if (!fact) return [];
-      // An entry with no name is still a file the message carried.
-      const name = str(fact.fileName) ?? (fact.kind === "image" ? "Picture" : "File");
-      const size = num(fact.sizeBytes);
-      const type = str(fact.contentType);
-      return [
-        {
-          fileName:
-            name.length > MAX_SENT_NAME_CHARS ? `${name.slice(0, MAX_SENT_NAME_CHARS - 1)}…` : name,
-          mimeType:
-            type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null,
-          sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
-        },
-      ];
+      return fact ? [fact] : [];
     });
+
+/**
+ * The files a person's row carried: the gateway's `__openclaw.media` entries, in
+ * their order, by name, type and size. The `media://inbound` reference an entry
+ * names stays in the host (`sentSources`), never in the view.
+ */
+function sentAttachments(info: RawRecord): SentAttachment[] {
+  return sentFacts(info).flatMap((fact) => {
+    // An entry with no name is still a file the message carried.
+    const name = str(fact.fileName) ?? (fact.kind === "image" ? "Picture" : "File");
+    const size = num(fact.sizeBytes);
+    const type = str(fact.contentType);
+    return [
+      {
+        fileName:
+          name.length > MAX_SENT_NAME_CHARS ? `${name.slice(0, MAX_SENT_NAME_CHARS - 1)}…` : name,
+        mimeType: type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null,
+        sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
+      },
+    ];
+  });
+}
+
+/** The longest reference kept, and the most kept for one task: as many as its history shows files. */
+export const MAX_INBOUND_REF_CHARS = 512;
+export const MAX_SENT_SOURCES = 40;
+
+/**
+ * A person's attachment as their row names it (`__openclaw.media[].url`), exactly
+ * `media://inbound/<id>`: one segment that isn't `.` or `..`, with no `/`, `\`, `?`, `#`, `%`,
+ * space or control character, so nothing is decoded and nothing else is named. Null otherwise;
+ * an entry's `path`, or any other address, is never one.
+ */
+export function inboundRef(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > MAX_INBOUND_REF_CHARS) return null;
+  // eslint-disable-next-line no-control-regex
+  const match = /^media:\/\/inbound\/([^/\\?#%\s\u0000-\u001f\u007f]+)$/.exec(value);
+  return match && match[1] !== "." && match[1] !== ".." ? value : null;
+}
+
+/**
+ * Each file's reference on a person's own rows (`inboundRef`), by the key a row is asked for
+ * under (its idempotency key, or else its id) and the file's place among the row's files:
+ * `${rowKey}\u0000${index}`. Never a bot's or the gateway's row, and never an entry without a
+ * reference in that exact form. The newest `MAX_SENT_SOURCES` are kept, as the state keeps the
+ * newest files. The host keeps these (`readSentPicture`); the view never has them.
+ */
+export function sentSources(messages: unknown): Map<string, string> {
+  const sources = new Map<string, string>();
+  const rows = new Set<string>();
+  for (const entry of [...arr(messages)].reverse()) {
+    const message = asRecord(entry);
+    if (message?.role !== "user" || gatewayTurnText(message)) continue;
+    const info = meta(message);
+    const rowKey = str(info.idempotencyKey) ?? str(message.idempotencyKey) ?? str(info.id);
+    // The first row of a key, newest first, is the one its message shows.
+    if (!rowKey || rowKey.length > MAX_INBOUND_REF_CHARS || rows.has(rowKey)) continue;
+    rows.add(rowKey);
+    const facts = sentFacts(info);
+    for (let index = facts.length - 1; index >= 0; index -= 1) {
+      if (sources.size >= MAX_SENT_SOURCES) return sources;
+      const ref = inboundRef(facts[index]!.url);
+      if (ref) sources.set(`${rowKey}\u0000${index}`, ref);
+    }
+  }
+  return sources;
 }
 
 function assistantBlocks(content: unknown): TranscriptBlock[] {

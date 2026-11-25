@@ -975,7 +975,7 @@ describe("deleting a bot: one gateway, one connection", () => {
       expect(outcome.kind).toBe("answered");
       expect(client.keptPictureBytes).toBe(png.length);
       expect(await client.readSentPicture(UNPREFIXED, `${ids.get(UNPREFIXED)}:user`, 0)).toEqual({
-        status: "not-kept",
+        status: "cannot-load",
       });
       expect((await client.readSentPicture(MISNAMED, `${ids.get(MISNAMED)}:user`, 0)).status).toBe(
         "content",
