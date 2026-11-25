@@ -766,6 +766,43 @@ test("F-201: on an OpenClaw that keeps check-ins as routines, Check-ins say so, 
   expect((await sent(page)).filter((each) => each.type === "saveCheckIn")).toEqual([]);
 });
 
+test("F-201: an open dialog closes when the gateway, updated while it was open, keeps check-ins as routines, and nothing is saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&checkins=updated`, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const marlow = dialog(page, "Marlow");
+  await marlow.getByRole("radio", { name: /^Daily/ }).click();
+  // The gateway restarts on its new version: the connection drops and comes back, and is read again.
+  await change(
+    page,
+    "return { ...state, connection: { ...state.connection, status: 'reconnecting' } };",
+  );
+  await change(
+    page,
+    "return { ...state, connection: { ...state.connection, status: 'connected' } };",
+  );
+  await expect(block(page, "marlow").getByTestId("check-in-text")).toHaveText(
+    "This OpenClaw keeps check-ins as routines. Marlow's routines",
+  );
+  await expect(page.getByTestId("check-ins-dialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Change .*'s check-ins$/ })).toHaveCount(0);
+  expect(await saves(page)).toEqual([]);
+});
+
+test("F-201: below admin, on an OpenClaw that keeps check-ins as routines, nothing asks for admin to change them", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=read&checkins=routines`, "light");
+  await checkIns(page);
+  await expect(block(page, "marlow").getByTestId("check-in-text")).toContainText(
+    "This OpenClaw keeps check-ins as routines.",
+  );
+  await expect(page.getByTestId("admin-bar")).toHaveCount(0);
+  await expect(page.getByText("Changing check-ins needs admin access.")).toHaveCount(0);
+});
+
 test("F-201: on an OpenClaw that keeps check-ins as routines, no group head claims a bot's check-ins", async ({
   page,
 }) => {

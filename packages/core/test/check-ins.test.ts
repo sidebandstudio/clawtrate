@@ -398,6 +398,32 @@ describe("F-201 F-366 a gateway that keeps check-ins as routines (OpenClaw 2026.
     expect(state()).toMatchObject({ status: "error", error: "busy", model: null });
   });
 
+  it('F-201: only a lookup the schema answers "path not found" is a gateway without heartbeats: any other refusal fails the read, says nothing and writes nothing', async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    const asked = draft(state(), "marlow", { every: "24h" });
+    // How 2026.10.6 answers a method it doesn't have, with the same code as a missing path.
+    gateway.before = (method) => {
+      if (method === "config.schema.lookup")
+        throw new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: config.schema.lookup",
+        });
+    };
+    await loadCheckIns(ctx);
+    expect(state()).toMatchObject({
+      status: "error",
+      error: "unknown method: config.schema.lookup",
+    });
+    expect(state().model).not.toBe("routines");
+    await saveCheckIn(ctx, "s1", "marlow", asked);
+    expect(gateway.attempts).toEqual([]);
+    expect(state().save).toMatchObject({
+      status: "failed",
+      error: "unknown method: config.schema.lookup",
+    });
+  });
+
   it("F-201: a gateway updated while connected is read on its new model after the reconnect", async () => {
     const { gateway, ctx, state } = fakeGateway();
     await loadCheckIns(ctx);
