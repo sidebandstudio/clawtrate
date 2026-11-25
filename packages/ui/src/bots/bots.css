@@ -1600,6 +1600,44 @@ button.b-open > .icon {
   color: var(--danger);
 }
 
+/* Update OpenClaw (#565): the button, why there is none, the run's line. */
+.b-update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.b-update p {
+  margin: 0;
+}
+
+.b-update-words {
+  overflow-wrap: anywhere;
+}
+
+.b-update-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: var(--space-5);
+}
+
+.b-confirm .b-update-facts p {
+  margin: 0;
+}
+
+.b-update-place:focus {
+  outline: none;
+}
+
+.b-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* "How bots work in Clawtrate" (BotGuides.tsx): one row per instructions file. */
 .bot-guides-list {
   display: grid;

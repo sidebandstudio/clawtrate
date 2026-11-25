@@ -27,7 +27,10 @@ const VERSION = /^v?\d+(\.\d+){1,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 /** The longest version kept: a longer one is not a version this client shows. */
 const MAX_VERSION_CHARS = 64;
 
-const isVersion = (value: string) => value.length <= MAX_VERSION_CHARS && VERSION.test(value);
+/** Whether a string is a version as OpenClaw writes one, within `MAX_VERSION_CHARS`. */
+export const isOpenClawVersion = (value: string) =>
+  value.length <= MAX_VERSION_CHARS && VERSION.test(value);
+const isVersion = isOpenClawVersion;
 
 /** The gateway's `updateAvailable`, or null when it reports none or something else. */
 export function readOpenClawUpdate(value: unknown): OpenClawUpdate | null {

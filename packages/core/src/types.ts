@@ -2,6 +2,7 @@
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
 import type { OpenClawUpdate } from "./gateway-update.ts";
+import type { OpenClawUpdateState } from "./openclaw-update.ts";
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
@@ -633,6 +634,11 @@ export type ClawtrateState = {
    * that bot's conversation. Absent until the first.
    */
   botNames?: NameProposal[];
+  /**
+   * Updating OpenClaw from Clawtrate (`openclaw-update.ts`): the run followed, the press being
+   * sent, and why the gateway can't update itself. Absent until the first.
+   */
+  openclawUpdating?: OpenClawUpdateState;
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
 };
