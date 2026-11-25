@@ -2,6 +2,7 @@
 // untrusted `unknown` values: a field with the wrong type is ignored rather than
 // trusted, so a newer gateway adding or changing fields cannot crash the UI.
 
+import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
 import { gatewayPreviewOfNote, isSkillChangeNote } from "./skill-notes.ts";
@@ -15,6 +16,7 @@ import type {
   TranscriptBlock,
   TranscriptItem,
   Transcript,
+  ChatFile,
   ChatPicture,
   SentAttachment,
 } from "./types.ts";
@@ -342,6 +344,94 @@ function assistantPictures(content: unknown): ChatPicture[] {
   });
 }
 
+/** The longest preview of a file-only message kept (`TranscriptItem.filesPreview`): two sidebar lines. */
+const MAX_FILES_PREVIEW_CHARS = 200;
+
+/** The longest file name shown or offered for saving, in UTF-8 bytes: what macOS, Linux and Windows file systems all take. */
+export const MAX_FILE_NAME_BYTES = 255;
+
+/** As much of `text` as fits in `bytes` UTF-8 bytes, cut between characters. */
+function fitBytes(text: string, bytes: number): string {
+  let out = "";
+  let used = 0;
+  for (const char of text) {
+    const size = utf8Length(char);
+    if (used + size > bytes) break;
+    out += char;
+    used += size;
+  }
+  return out;
+}
+
+/**
+ * A file name a gateway gave, safe to show and to offer for saving: its last
+ * path part only, with control, format (zero-width, direction, soft hyphen,
+ * tag) and separator characters and lone surrogates taken out, at most
+ * `MAX_FILE_NAME_BYTES` UTF-8 bytes, cut between characters with its extension
+ * kept, so the name shown is the name saved. "File" when nothing is left.
+ */
+export function cleanFileName(raw: unknown): string {
+  const last = (typeof raw === "string" ? raw : "").split(/[/\\]/).at(-1) ?? "";
+  const name = last
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, "")
+    .trim()
+    .replace(/^\.+$/, "");
+  if (!name) return "File";
+  if (utf8Length(name) <= MAX_FILE_NAME_BYTES) return name;
+  const dot = name.lastIndexOf(".");
+  const extension = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : "";
+  const room = MAX_FILE_NAME_BYTES - utf8Length("…") - utf8Length(extension);
+  return `${fitBytes(name.slice(0, name.length - extension.length), room)}…${extension}`;
+}
+
+/** A media type as the gateway names it, lower-cased, or null for anything else. */
+const mediaType = (value: unknown): string | null => {
+  const type = str(value);
+  return type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null;
+};
+
+/** Blocks the gateway hands a file over in (OpenClaw 2026.10.6, `buildManagedMediaBlock`). */
+const KNOWN_FILES = new Set(["attachment", "audio", "video"]);
+
+/** Blocks of a bot's message that are never a file it hands over. */
+const NOT_FILES = new Set([
+  "text",
+  "thinking",
+  "redacted_thinking",
+  "toolCall",
+  "tool_use",
+  "image",
+]);
+
+/**
+ * The files that aren't pictures a bot's message hands over (F-115), in its
+ * order: `attachment` blocks (documents), `audio` and `video` blocks, any other
+ * block that names an artifact, and `attachment_error` blocks, which name a
+ * file the gateway couldn't hand over. A block missing a field still gives a
+ * file, from what it has. The address a block names is never kept, so never used.
+ */
+function assistantFiles(content: unknown): ChatFile[] {
+  return arr(content).flatMap((part) => {
+    const block = asRecord(part);
+    const type = str(block?.type);
+    if (!block || !type || NOT_FILES.has(type)) return [];
+    const failed = type === "attachment_error";
+    const fact = type === "attachment" || failed ? (asRecord(block.attachment) ?? {}) : block;
+    const artifactId = failed ? null : str(fact.artifactId);
+    // A block of a kind the gateway names files with is a row even without an id; another needs one.
+    if (!failed && !KNOWN_FILES.has(type) && !artifactId) return [];
+    const size = num(fact.sizeBytes);
+    return [
+      {
+        artifactId,
+        name: cleanFileName(str(fact.label) ?? str(fact.fileName) ?? str(fact.title)),
+        mimeType: mediaType(fact.mimeType),
+        sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
+      },
+    ];
+  });
+}
+
 /** Most files one message may carry (`chat.send`'s own limit, as `attachments.ts` keeps it). */
 const MAX_SENT_ATTACHMENTS = 20;
 const MAX_SENT_NAME_CHARS = 255;
@@ -628,6 +718,7 @@ export function mapHistory(
         }
         const runId = str(info.runId);
         const pictures = assistantPictures(message.content);
+        const files = assistantFiles(message.content);
         const prompt = pictures.length > 0 ? imagePrompt(runId, items) : null;
         for (const picture of pictures) picture.prompt = prompt;
         if (runId !== null && runId === precedingRun) {
@@ -642,7 +733,7 @@ export function mapHistory(
           item = previous;
         } else {
           // An empty row starts no turn: a later row of its run gets one of its own, never the last.
-          if (blocks.length === 0 && pictures.length === 0) return;
+          if (blocks.length === 0 && pictures.length === 0 && files.length === 0) return;
           currentRun = runId;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           // It names no run, so it is a turn of its own.
@@ -660,6 +751,23 @@ export function mapHistory(
           return true;
         });
         if (added.length > 0) item.pictures = [...(item.pictures ?? []), ...added];
+        // Files likewise: once each, where it first came; one the gateway couldn't hand over has no id.
+        const handed = new Set((item.files ?? []).map((file) => file.artifactId));
+        const more = files.filter((file) => {
+          if (file.artifactId !== null && handed.has(file.artifactId)) return false;
+          handed.add(file.artifactId);
+          if (rowId) file.messageId = rowId;
+          return true;
+        });
+        if (more.length > 0) item.files = [...(item.files ?? []), ...more];
+        // When the item's last row with text or files had files only: their names, for the sidebar.
+        if (blocks.some((block) => block.kind === "text" && block.text.trim()))
+          delete item.filesPreview;
+        else if (files.length > 0)
+          item.filesPreview = files
+            .map((file) => file.name)
+            .join(", ")
+            .slice(0, MAX_FILES_PREVIEW_CHARS);
         if (cutByGateway) item.truncated = true;
         if (rowId) {
           for (const block of blocks)
@@ -783,6 +891,44 @@ export function taskWithoutSkillNotes(task: Task, transcript: Transcript | undef
     if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
   }
   return preview === task.preview ? task : { ...task, preview };
+}
+
+/**
+ * A task's preview when its loaded history ends with a bot's message that is only files (F-115):
+ * that message's files' names. The gateway lists the last row with text, the one before it, so
+ * only that preview, or none, is replaced; any other is the gateway's.
+ */
+export function taskWithFilePreview(task: Task, transcript: Transcript | undefined): Task {
+  const items = transcript?.items ?? [];
+  const last = items.at(-1);
+  const preview = last?.role === "assistant" ? last.filesPreview : undefined;
+  if (!preview) return task;
+  let before: string | null = null;
+  for (let index = items.length - 1; index >= 0 && before === null; index -= 1) {
+    const text = items[index]!.blocks.findLast(
+      (block) => block.kind === "text" && block.text.trim(),
+    );
+    if (text?.kind === "text") before = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
+  }
+  if (task.preview !== null && task.preview !== before) return task;
+  return preview === task.preview ? task : { ...task, preview };
+}
+
+/** Every listed task as `taskWithFilePreview` shows it, by bot. */
+export function tasksWithFilePreviews(
+  tasksByBot: Record<string, Task[]>,
+  transcripts: Record<string, Transcript>,
+): Record<string, Task[]> {
+  let changed = false;
+  const shown: Record<string, Task[]> = {};
+  for (const [botId, tasks] of Object.entries(tasksByBot)) {
+    shown[botId] = tasks.map((task) => {
+      const named = taskWithFilePreview(task, transcripts[task.key]);
+      if (named !== task) changed = true;
+      return named;
+    });
+  }
+  return changed ? shown : tasksByBot;
 }
 
 /** Every listed task as `taskWithoutSkillNotes` shows it, by bot. */

@@ -72,6 +72,7 @@ export type SentPictureRead =
 const failed = (message: string): ChatPictureRead => ({ status: "failed", message });
 
 const TOO_LARGE = "This picture is larger than Clawtrate shows: pictures up to 5 MB.";
+const NOT_SHOWN = "The gateway sent something that isn't a picture this app shows.";
 
 /** Whether a conversation draws pictures of this type (PNG, JPEG, GIF or WebP). */
 export function isShownPictureType(mimeType: string | null | undefined): boolean {
@@ -212,27 +213,55 @@ async function readAtMost(
   return bytes;
 }
 
-/** One picture of the task, by the id its message gave, read whole or not at all. */
-export async function readChatPicture(
+/** What a download the gateway issued gave: its bytes and their type, or why not. */
+export type IssuedBytes =
+  | { ok: true; mimeType: string; bytes: Uint8Array }
+  | { ok: false; tooLarge: boolean; message: string };
+
+/** What a read calls the thing it reads, and what it takes. */
+export type IssuedRead = {
+  /** "picture" or "file", in the read's messages. */
+  noun: string;
+  maxBytes: number;
+  /** Said when it is over `maxBytes`. */
+  tooLarge: string;
+  /** Whether a response of this (lower-cased) type is read at all. */
+  accepts: (mimeType: string) => boolean;
+  /** Said when it isn't. */
+  refused: string;
+};
+
+/**
+ * One file of the task, by the id its message gave, through the download the
+ * gateway issues for it (`artifacts.download`), read whole or not at all.
+ */
+export async function readIssued(
   ctx: ChatPictureContext,
   key: string,
   artifactId: string,
-): Promise<ChatPictureRead> {
-  if (!ctx.fetch) return failed("This device can't load pictures from the gateway.");
+  read: IssuedRead,
+): Promise<IssuedBytes> {
+  const { noun } = read;
+  const failed = (message: string, tooLarge = false): IssuedBytes => ({
+    ok: false,
+    tooLarge,
+    message,
+  });
+  if (!ctx.fetch) return failed(`This device can't load ${noun}s from the gateway.`);
   const origin = gatewayOrigin(ctx.gatewayUrl);
-  if (!origin) return failed("This connection can't load pictures from the gateway.");
+  if (!origin) return failed(`This connection can't load ${noun}s from the gateway.`);
   let answer: Record<string, unknown> | null;
   try {
     answer = asRecord(await ctx.request("artifacts.download", { sessionKey: key, artifactId }));
   } catch (error) {
     return failed(
-      `The gateway didn't give this picture: ${error instanceof Error ? error.message : String(error)}`,
+      `The gateway didn't give this ${noun}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   const path = issuedPath(key, answer?.url);
   const expires = expiry(answer?.expiresAt);
   if (!path || expires === null || !(expires > ctx.now()))
-    return failed("The gateway didn't give a download for this picture.");
+    return failed(`The gateway didn't give a download for this ${noun}.`);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PICTURE_FETCH_MS);
@@ -247,37 +276,68 @@ export async function readChatPicture(
       await response.body?.cancel().catch(() => {});
       return failed(
         response.status === 401
-          ? "The gateway refused this picture's download ticket."
-          : `The gateway answered ${response.status} for this picture.`,
+          ? `The gateway refused this ${noun}'s download ticket.`
+          : `The gateway answered ${response.status} for this ${noun}.`,
       );
     }
-    const body = await readPictureBody(response);
-    if (body === "not-a-picture")
-      return failed("The gateway sent something that isn't a picture this app shows.");
-    if (body === "too-large") return failed(TOO_LARGE);
-    if (body === "empty") return failed("The gateway sent no picture.");
-    const { mimeType, bytes } = body;
-    const size = bytes.length;
-    // Refused here, not by the gateway: the transfer's own reason, never "couldn't be reached".
-    let transfer: FileTransferStart;
-    try {
-      transfer = ctx.transfers.start(ctx.owner, bytes, ctx.maxChars);
-    } catch (error) {
-      return failed(error instanceof Error ? error.message : String(error));
+    // Media types are case-insensitive (RFC 9110): `Image/PNG` is a PNG, still checked by its bytes.
+    const mimeType = (response.headers.get("content-type") ?? "")
+      .split(";")[0]!
+      .trim()
+      .toLowerCase();
+    const declared = Number(response.headers.get("content-length") ?? NaN);
+    if (!read.accepts(mimeType)) {
+      await response.body?.cancel().catch(() => {});
+      return failed(read.refused);
     }
-    return { status: "content", kind: "image", mimeType, bytes: size, transfer };
+    if (declared > read.maxBytes) {
+      await response.body?.cancel().catch(() => {});
+      return failed(read.tooLarge, true);
+    }
+    const bytes = await readAtMost(response, read.maxBytes);
+    if (bytes === "empty") return failed(`The gateway sent no ${noun}.`);
+    if (bytes === "too-large") return failed(read.tooLarge, true);
+    return { ok: true, mimeType, bytes };
   } catch (error) {
     const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
     return failed(
       controller.signal.aborted
-        ? "The picture took too long to arrive."
+        ? `The ${noun} took too long to arrive.`
         : cause === "unexpected redirect"
-          ? "The gateway sent this picture somewhere else, and Clawtrate doesn't follow that."
-          : "The gateway couldn't be reached for this picture.",
+          ? `The gateway sent this ${noun} somewhere else, and Clawtrate doesn't follow that.`
+          : `The gateway couldn't be reached for this ${noun}.`,
     );
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** One picture of the task, by the id its message gave, read whole or not at all. */
+export async function readChatPicture(
+  ctx: ChatPictureContext,
+  key: string,
+  artifactId: string,
+): Promise<ChatPictureRead> {
+  const read = await readIssued(ctx, key, artifactId, {
+    noun: "picture",
+    maxBytes: MAX_PICTURE_BYTES,
+    tooLarge: TOO_LARGE,
+    accepts: (mimeType) => Object.hasOwn(SIGNATURES, mimeType),
+    refused: NOT_SHOWN,
+  });
+  if (!read.ok) return failed(read.message);
+  const { mimeType, bytes } = read;
+  // A body that ended before any byte is no picture yet: a read to try again.
+  if (bytes.length === 0) return failed("The gateway sent no picture.");
+  if (!matchesType(mimeType, bytes)) return failed(NOT_SHOWN);
+  // Refused here, not by the gateway: the transfer's own reason, never "couldn't be reached".
+  let transfer: FileTransferStart;
+  try {
+    transfer = ctx.transfers.start(ctx.owner, bytes, ctx.maxChars);
+  } catch (error) {
+    return failed(error instanceof Error ? error.message : String(error));
+  }
+  return { status: "content", kind: "image", mimeType, bytes: bytes.length, transfer };
 }
 
 // A person's own picture, read back from the gateway (#469) ----------------------------------
