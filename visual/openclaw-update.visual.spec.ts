@@ -33,6 +33,15 @@ const sent = (page: Page) =>
     ),
   );
 
+/** How many times the screens asked the gateway where updating stands (`update.status`). */
+const asks = (page: Page) =>
+  page.evaluate(
+    () =>
+      (window as unknown as Fixture).clawtrateFixture.sent.filter(
+        (command) => command.type === "checkOpenClawUpdate",
+      ).length,
+  );
+
 /** Settings, on its Updates pane. */
 async function updatesPane(page: Page) {
   await page.keyboard.press("ControlOrMeta+,");
@@ -216,6 +225,84 @@ test.describe("update openclaw behaviour", () => {
     await expect(
       dialog.getByRole("button", { name: "Update OpenClaw to 2026.11.6" }),
     ).toBeVisible();
+  });
+
+  test("F-589 F-591: only opening Settings › Updates, the confirmation and Check again ask the gateway where updating stands; a connect, a bot's settings, the Model menu, the line's link and Settings › Gateway ask nothing", async ({
+    page,
+  }) => {
+    // A connect, then a bot's Settings tab with the line.
+    await openFixture(page, `${ADMIN}&panel=open&tab=settings`, "dark");
+    await expect(page.getByTestId("update-link-notice")).toBeVisible();
+    expect(await asks(page)).toBe(0);
+    // The Model menu.
+    await page.getByTestId("model-select").click();
+    await expect(page.getByRole("menu")).toBeVisible();
+    expect(await asks(page)).toBe(0);
+    await page.keyboard.press("Escape");
+    // Settings › Gateway, with its line.
+    await page.keyboard.press("ControlOrMeta+,");
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    const line = dialog.getByTestId("update-link-gateway");
+    await expect(line).toBeVisible();
+    expect(await asks(page)).toBe(0);
+    // The line's link opens Settings › Updates, which asks once.
+    await line.getByRole("button", { name: "Settings › Updates" }).click();
+    await expect(dialog.getByTestId("update-offer-settings")).toBeVisible();
+    await expect.poll(() => asks(page)).toBe(1);
+    // The confirmation asks once more.
+    await dialog.getByRole("button", { name: "Update OpenClaw to 2026.11.6" }).click();
+    await page.getByRole("button", { name: "Not now" }).click();
+    await expect.poll(() => asks(page)).toBe(2);
+    // A held press: Settings › Updates asks once, and Check again once more.
+    await openFixture(page, `${ADMIN}&openclawRun=held`, "dark");
+    expect(await asks(page)).toBe(0);
+    const held = (await updatesPane(page)).getByTestId("update-looking-settings");
+    await expect.poll(() => asks(page)).toBe(1);
+    await held.getByRole("button", { name: "Check again" }).click();
+    await expect.poll(() => asks(page)).toBe(2);
+    expect(await sent(page)).toEqual([]);
+  });
+
+  test("F-591: in forced colours the bar's current step keeps a mark of its own", async ({
+    page,
+  }) => {
+    await page.emulateMedia({ forcedColors: "active" });
+    await openFixture(page, `${ADMIN}&openclawRun=running`, "dark");
+    const bar = (await updatesPane(page)).getByRole("progressbar", { name: "OpenClaw update" });
+    const border = (step: string) =>
+      bar
+        .locator(step ? `span[data-step="${step}"]` : "span:not([data-step])")
+        .first()
+        .evaluate((each) => getComputedStyle(each).borderTopWidth);
+    expect(await border("now")).toBe("3px");
+    expect(await border("")).toBe("1px");
+  });
+
+  test("F-591: a bot on the gateway's default model has the line and its link in its Settings tab", async ({
+    page,
+  }) => {
+    await openFixture(
+      page,
+      `scene=main&bot=quartermaster&access=admin&openclaw=behind&panel=open&tab=settings`,
+      "dark",
+    );
+    await expect(page.getByTestId("model-select")).toHaveCount(0);
+    const line = page.getByTestId("update-link-notice");
+    await expect(line).toContainText("Your gateway runs OpenClaw 2026.10.6, and 2026.11.6 is out.");
+    await line.getByRole("button", { name: "Settings › Updates" }).click();
+    await expect(
+      page
+        .getByRole("dialog", { name: "Settings" })
+        .getByRole("heading", { name: "OpenClaw on 127.0.0.1:18789" }),
+    ).toBeFocused();
+    // Without the gateway's report, nothing is said.
+    await openFixture(
+      page,
+      `scene=main&bot=quartermaster&access=admin&panel=open&tab=settings`,
+      "dark",
+    );
+    await expect(page.getByTestId("bot-settings")).toBeVisible();
+    await expect(page.getByTestId("update-link-notice")).toHaveCount(0);
   });
 
   test("F-591: while the gateway restarts, the strip, the footer and the announcement say OpenClaw is updating; past the usual time, that it is taking longer, with Retry; settled, as ever", async ({

@@ -32,6 +32,7 @@ import {
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
+import { UpdateOpenClawNote } from "./UpdateOpenClaw.tsx";
 import { ManageGroup } from "./DeleteBot.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
@@ -469,7 +470,13 @@ export function BotSettings({
           </>
         )}
         {binding.mode === "default-model" && (
-          <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
+          <>
+            <p className="b-hint">
+              The gateway's default model. Choose an account to pick another.
+            </p>
+            {/* With no Model menu, the update line stands here (#590). */}
+            <UpdateOpenClawNote />
+          </>
         )}
         <MemoryRow onOpen={() => go("memory")} />
         <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />

@@ -2,7 +2,13 @@
 // record and nothing invented. The phases and reason codes are the gateway's
 // own words, shown as text; the sentences around them are Clawtrate's.
 
-import type { ClawtrateState, OpenClawUpdateState, UpdateRunView } from "@clawtrate/core";
+import {
+  UPDATE_PHASES,
+  type ClawtrateState,
+  type OpenClawUpdateState,
+  type UpdatePhase,
+  type UpdateRunView,
+} from "@clawtrate/core";
 
 /** OpenClaw's own update instructions: they differ by install. */
 export const OPENCLAW_UPDATE_DOCS = "https://docs.openclaw.ai/install/updating";
@@ -114,19 +120,9 @@ export function gatewayWords(run: UpdateRunView): string | null {
   return run.note ?? run.reason;
 }
 
-const PHASES = [
-  "requested",
-  "staging",
-  "validating",
-  "repairing",
-  "activating",
-  "restarting",
-  "verifying",
-  "finished",
-];
 /** How many steps the gateway counts, and which of them a run is on (1 to 8). */
-export const UPDATE_STEPS = PHASES.length;
-export const stepNumber = (phase: string) => PHASES.indexOf(phase) + 1;
+export const UPDATE_STEPS = UPDATE_PHASES.length;
+export const stepNumber = (phase: UpdatePhase) => UPDATE_PHASES.indexOf(phase) + 1;
 
 /** The run's step in the gateway's words: "step 5 of 8, activating". */
 export function stepWords(run: UpdateRunView): string {

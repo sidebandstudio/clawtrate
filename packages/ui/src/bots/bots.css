@@ -1690,6 +1690,10 @@ button.b-open > .icon {
   .b-update-bar > span[data-step="done"] {
     background: CanvasText;
   }
+  /* The ring is a shadow, which forced colours drop: a thicker border marks the step instead. */
+  .b-update-bar > span[data-step="now"] {
+    border-width: 3px;
+  }
 }
 
 /* The one line a bot's settings and Settings › Gateway keep, and its link to Settings › Updates. */

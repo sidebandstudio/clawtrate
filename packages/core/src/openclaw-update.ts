@@ -165,7 +165,7 @@ export type OpenClawUpdateState = {
   looking: boolean;
   /** Asking the gateway about that press failed: Check again and Stop waiting are offered. */
   lookFailed: boolean;
-  /** The gateway (its identity) and the version of what `looking` waits on; read only while it does. */
+  /** The gateway (its identity) and the version of what `looking` waits on; gone when it ends. */
   held?: { gatewayId: string; to: string | null };
 };
 
@@ -399,7 +399,10 @@ export class OpenClawUpdates {
   }
 
   private patch(patch: Partial<OpenClawUpdateState>): void {
-    this.ctx.set({ ...this.state, ...patch });
+    const next = { ...this.state, ...patch };
+    // A hold that ends takes its gateway and version with it.
+    if (patch.looking === false) delete next.held;
+    this.ctx.set(next);
   }
 
   private patchRun(runId: string, patch: Partial<UpdateRunView>): void {

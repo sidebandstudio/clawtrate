@@ -436,6 +436,14 @@ describe("F-591: while OpenClaw updates, the strip and the footer say so", () =>
     const back = state({ run: run({ phase: "verifying" }) }, connection);
     expect(updatingHere(back)).toBeNull();
     expect(footer(back)).toBe("Connected");
+    // A hold that has ended says nothing, even if what it named were still there.
+    const ended = state({ looking: false, held: { gatewayId: "gw-a", to: "2026.11.6" } });
+    expect(updatingHere(ended)).toBeNull();
+    expect(strip(ended)).toMatchObject({ text: "Reconnecting", action: "retry", countdown: true });
+    expect(footer(ended)).toBe("Reconnecting…");
+    expect(updateLinkLine(ended, null)).not.toBe(
+      "An update may be under way from the last Update press.",
+    );
   });
 
   it("F-591: any other lost connection reads as today, and another gateway is unaffected", () => {

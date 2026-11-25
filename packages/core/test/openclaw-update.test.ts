@@ -1177,6 +1177,61 @@ describe("F-591: what the engine tells the strip, the footer and the card while 
     expect(t.state()).toMatchObject({ looking: true, held: { gatewayId: "gw-a", to: NEW } });
   });
 
+  it("F-591: when a hold is settled by the gateway's record, what it named is gone", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    const status = deferred<unknown>();
+    t.world.handlers["update.status"] = () => status.promise;
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    expect(t.state().held).toEqual({ gatewayId: "gw-a", to: NEW });
+    status.resolve({
+      sentinel: null,
+      updateAvailable: null,
+      activeRun: record({ phase: "staging", ...tagged() }),
+    });
+    await until(() => t.run()?.runId === RUN);
+    expect(t.state().looking).toBe(false);
+    expect(t.state()).not.toHaveProperty("held");
+  });
+
+  it("F-591: after Stop waiting, what the hold named is gone", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    t.world.handlers["update.status"] = () => {
+      throw new Refusal("UNAVAILABLE", "update status is temporarily unavailable");
+    };
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    for (const wait of UPDATE_ASK_WAITS_MS) {
+      await until(() => timersOf(t, wait).some((each) => !each.cancelled));
+      timersOf(t, wait)
+        .find((each) => !each.cancelled)!
+        .run();
+    }
+    await until(() => t.state().lookFailed);
+    expect(t.state().held).toEqual({ gatewayId: "gw-a", to: NEW });
+    await t.engine.release();
+    expect(t.state().looking).toBe(false);
+    expect(t.state()).not.toHaveProperty("held");
+  });
+
+  it("F-591: when the address answers as another gateway, the hold and what it named are gone", async () => {
+    const t = rig();
+    await t.storage.set(
+      UPDATE_RUN_KEY,
+      keptValue({ gatewayId: "gw-a", runId: null, tag: tagOf(9), from: OLD, to: NEW }),
+    );
+    t.world.handlers["update.status"] = () => new Promise(() => {});
+    // The connection still names gw-a, so the hold is set at once; the identity is gw-b.
+    t.world.identity = "gw-b";
+    await t.engine.onHello();
+    expect(t.state().looking).toBe(false);
+    expect(t.state()).not.toHaveProperty("held");
+  });
+
   it("F-591: a succeeded run's next-action note (command-line advice) is not kept as its outcome", async () => {
     const t = rig();
     t.world.handlers["update.run"] = () => started();
