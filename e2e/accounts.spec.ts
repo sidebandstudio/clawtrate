@@ -8,7 +8,7 @@
 //
 // With CLAWTRATE_ACCOUNT_SHOTS=<folder outside the repository>, it also saves
 // screenshots of what it checked there, at 1440 and 390 px in both themes.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,9 +17,10 @@ import { choiceFromPicture } from "../packages/core/src/avatar.ts";
 import { ACCOUNT_CLIENTS, SIGNIN_CHOICES } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { TERMINAL_CHAT_STATES, type OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { ACCOUNTS, test } from "./accounts-instance.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
-const INSTANCE = process.env.CLAWTRATE_E2E_ACCOUNTS!;
+const INSTANCE = ACCOUNTS;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const SHOTS = process.env.CLAWTRATE_ACCOUNT_SHOTS ?? null;
 /** A made-up key for the scripted API-key sign-in: its account is `acme:typed`. */
@@ -130,7 +131,9 @@ function hostFiles(dir: string): string {
   return text;
 }
 
-test.beforeAll(async ({ browser }) => {
+test.beforeAll(async ({ accountsInstance, browser }) => {
+  // Started by the first of the accounts instance's specs this worker runs (accounts-instance.ts).
+  expect(accountsInstance).toBe(INSTANCE);
   test.setTimeout(240_000);
   expect(INSTANCE, "this run's accounts instance").toMatch(/^e2e-[0-9a-f]{8}-acct$/);
   const row = listInstances().find((each) => each.name === INSTANCE);

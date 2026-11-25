@@ -38,3 +38,28 @@ describe.each([
     expect(after).toContain("cleanUp(RECORDS, record, resetInstance)");
   });
 });
+
+describe("which end-to-end runs start the accounts instance", () => {
+  it("only a runner that runs one of its specs: their worker fixture starts it, global setup never does", () => {
+    const setup = source("e2e/global-setup.ts");
+    expect(setup).not.toContain("-acct`");
+    expect(setup).not.toContain("--with-accounts");
+    const fixture = source("e2e/accounts-instance.ts");
+    expect(fixture).toContain("= `e2e-${record.run}-acct`;");
+    expect(fixture).toContain('{ scope: "worker"');
+    // Recorded before it starts, and reset after the worker's last use of it.
+    const saved = fixture.indexOf("saveRecord(RECORDS, record)");
+    expect(saved).toBeGreaterThan(-1);
+    expect(fixture.indexOf('"--with-accounts"')).toBeGreaterThan(saved);
+    // Started, used and reset through whileStarted, which resets it also when the start's checks
+    // throw (test/e2e-accounts-instance.test.ts).
+    expect(fixture.replace(/\s+/g, " ")).toContain(
+      "whileStarted( start, () => use(ACCOUNTS), () => cleanUp(RECORDS, record, resetInstance), )",
+    );
+    for (const file of ["e2e/accounts.spec.ts", "e2e/machines.spec.ts", "e2e/check-ins.spec.ts"]) {
+      const { spec, before } = hooks(file);
+      expect(spec, file).toContain('import { ACCOUNTS, test } from "./accounts-instance.ts";');
+      expect(before, file).toContain("accountsInstance");
+    }
+  });
+});

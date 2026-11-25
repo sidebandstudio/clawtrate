@@ -198,6 +198,25 @@ describe("F-562: Show the gateway's own bot", () => {
     client.stop();
   });
 
+  it("F-562: two quick changes keep the last one asked, in storage and in the state, when the first write finishes last", async () => {
+    const { client, storage } = await connected();
+    const set = storage.set.bind(storage);
+    const first = deferred<void>();
+    let writes = 0;
+    storage.set = async (key, value) => {
+      if (key === "show-gateway-bot" && (writes += 1) === 1) await first.promise;
+      return set(key, value);
+    };
+    const on = client.setShowGatewayBot(true);
+    const off = client.setShowGatewayBot(false);
+    await sleep(20);
+    first.resolve();
+    await Promise.all([on, off]);
+    expect(storage.data.get("show-gateway-bot")).toBe("false");
+    expect(client.state.showGatewayBot).toBe(false);
+    client.stop();
+  });
+
   it("F-562: the bridge takes the command with a flag and nothing else", () => {
     expect(parseBridgeCommand({ type: "setShowGatewayBot", on: true })).toEqual({
       type: "setShowGatewayBot",
