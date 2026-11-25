@@ -42,6 +42,8 @@ import {
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
 import { IMAGE_PROMPT, SEND_PICTURE_AFTER, SEND_PICTURE_TEXT } from "./scenarios.ts";
+import { FOLLOW_UP_MESSAGE, HAND_OFF, HAND_OFF_HIDDEN, HAND_OFF_PARTNER } from "./scenarios.ts";
+import { startedTaskReply } from "./scripts.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
@@ -1028,8 +1030,12 @@ export const EXPECTED_OFFERED_TOOLS = [
   "ls",
   "progress_card",
   "read",
+  "sessions_history",
   "sessions_list",
   "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
   "web_search",
   "write",
 ].sort();
@@ -1044,8 +1050,12 @@ export const EXPECTED_EFFECTIVE_TOOLS = [
   "ls",
   "progress_card",
   "read",
+  "sessions_history",
   "sessions_list",
   "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
   "web_search",
   "write",
 ].sort();
@@ -1219,6 +1229,172 @@ async function messageCheck(h: Harness, directive: string) {
 
 const RECIPIENT = MESSAGING_PAIR[0];
 const RECIPIENT_SESSION = `agent:${RECIPIENT}:main`;
+
+/** What Clawtrate asks `sessions.list` for: the task list's own filters. */
+const TASK_LIST_PARAMS = {
+  excludeCron: true,
+  excludeSubagents: true,
+  includeDerivedTitles: true,
+  includeLastMessage: true,
+};
+
+/** A visible task a bot started (`agent:<bot>:dashboard:<uuid>`) or a hidden helper (`subagent`). */
+const startedKey = (botId: string, visible: boolean) =>
+  new RegExp(`^agent:${botId}:${visible ? "dashboard" : "subagent"}:[0-9a-f-]{36}$`);
+
+/** How the gateway titles a sessions_spawn call's item. */
+const spawnTitle = (args: JsonRecord) =>
+  args.agentId
+    ? `Sub-agent label ${String(args.label)}, agent ${String(args.agentId)}`
+    : `Sub-agent ${String(args.label)}`;
+
+/** A sessions_spawn call the gateway accepted: indented JSON of its details. */
+function spawnCall(
+  args: JsonRecord,
+  childKey: RegExp,
+  title: string,
+  hidden: boolean,
+): CallExpectation {
+  let seen: JsonRecord | undefined;
+  return {
+    name: "sessions_spawn",
+    args,
+    isError: false,
+    details: (d: JsonRecord | undefined, where: string) => {
+      seen = d;
+      const common = {
+        status: "accepted",
+        childSessionKey: matchesPattern(childKey),
+        runId: matchesPattern(UUID),
+        mode: "run",
+        expectsCompletionMessage: true,
+      };
+      detailsLike(
+        hidden
+          ? // A hidden helper runs on the bot's own model, in a context of its own.
+            {
+              ...common,
+              context: "isolated",
+              note: matchesPattern(/completion events/),
+              modelApplied: true,
+              resolvedModel: "scripted/dev-1",
+              resolvedProvider: "scripted",
+            }
+          : {
+              ...common,
+              cleanup: "keep",
+              publicRead: false,
+              label: args.label,
+              // The person, since a person's turn in their own task started it. Its label is the
+              // gateway host account's full name (macOS `id -F`, Linux's passwd comment), left out
+              // when the account has none other than its login, as on CI's Linux runner.
+              owner: (value: unknown, at: string) => {
+                same([rec(value).type, rec(value).id], ["human", "gateway-owner"], at);
+                const label = rec(value).label;
+                expect(
+                  label === undefined || (typeof label === "string" && label.length > 0),
+                  `${at}.label: absent or a name, got ${JSON.stringify(label)}`,
+                );
+              },
+            },
+      )(d, where);
+    },
+    content: (texts: string[], where: string) =>
+      textsLike([jsonText(where, () => seen)])(texts, where),
+    title,
+  };
+}
+
+/**
+ * The task a bot's sessions_spawn started: its first run, which answers the brief, and the turn
+ * its end starts in the task it came from (`announce:v1:<child>:<run>`), with its short report.
+ */
+async function startedRuns(
+  h: Harness,
+  view: RunView,
+  childKey: RegExp,
+  report: string,
+): Promise<{ key: string; firstRun: string; child: RunView; wake: RunView }> {
+  const details = view.result("sessions_spawn").details;
+  const key = String(details.childSessionKey);
+  expect(childKey.test(key), `the started task's key ${key}`);
+  const firstRun = String(details.runId);
+  LEDGER.add(key);
+  const child = new RunView(h.op("plain"), firstRun, key, view.from);
+  await h.wait(child, 60_000);
+  child.expectCalls([]);
+  child.expectEnd("final", scriptedFinalText("#text"));
+  const wake = await wakeOf(h, view, key, firstRun, report);
+  return { key, firstRun, child, wake };
+}
+
+/** The turn a started task's run starts in the task it came from, ended with its report. */
+async function wakeOf(
+  h: Harness,
+  view: RunView,
+  childKey: string,
+  childRun: string,
+  report: string,
+): Promise<RunView> {
+  const runId = `announce:v1:${childKey}:${childRun}`;
+  await h
+    .op("plain")
+    .waitFor(
+      `the report of ${childKey} in ${view.sessionKey}`,
+      (e) => isChat("final")(e) && rec(e.payload).runId === runId,
+      60_000,
+      view.from,
+    );
+  const wake = new RunView(h.op("plain"), runId, view.sessionKey, view.from);
+  await h.wait(wake, 10_000);
+  same(rec(wake.terminal).sessionKey, view.sessionKey, "the report's task");
+  wake.expectCalls([]);
+  wake.expectEnd("final", report);
+  return wake;
+}
+
+/** The task's row as Clawtrate's own list gives it, or undefined when the list leaves it out. */
+async function listedRow(h: Harness, key: string): Promise<JsonRecord | undefined> {
+  const listed = await h
+    .op("plain")
+    .request<{ sessions: JsonRecord[] }>("sessions.list", TASK_LIST_PARAMS);
+  return listed.sessions.find((row) => row.key === key);
+}
+
+/**
+ * What identifies a started task's brief: its history starts with a user row holding exactly the
+ * brief, stored under `<first run>:user`, written once the gateway had created the task; the
+ * history's `sessionInfo` says the task was created by spawn.
+ */
+async function checkBrief(h: Harness, key: string, firstRun: string, brief: string) {
+  const history = await h.op("plain").request<{
+    messages: JsonRecord[];
+    hasMore?: boolean;
+    sessionInfo?: JsonRecord;
+  }>("chat.history", { sessionKey: key, limit: 200 });
+  const info = rec(history.sessionInfo);
+  same([info.createdVia, history.hasMore], ["spawn", false], "the started task's history");
+  const first = history.messages[0]!;
+  same(
+    [first.role, first.content, rec(first.__openclaw).idempotencyKey],
+    ["user", brief, `${firstRun}:user`],
+    "the brief's row",
+  );
+  expect(
+    typeof first.timestamp === "number" &&
+      typeof info.createdAt === "number" &&
+      first.timestamp >= info.createdAt,
+    `the brief was written once the task existed (${String(first.timestamp)}, created ${String(info.createdAt)})`,
+  );
+  // The gateway names the person as its sender, though the bot wrote it.
+  h.observe(
+    `a started task's brief row: sender ${String(rec(first.__openclaw).senderId)}, fields ${Object.keys(
+      rec(first.__openclaw),
+    )
+      .sort()
+      .join(",")}`,
+  );
+}
 
 export const SCENARIO_CHECKS: ScenarioCheck[] = [
   {
@@ -3089,6 +3265,217 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         },
       ]);
       view.expectEnd("final", scriptedFinalText("#plan"));
+    },
+  },
+  {
+    name: "a task a bot starts, which the person opens and writes in",
+    covers: ["#hand-off"],
+    run: async (h) => {
+      const key = await h.session("pip", "hand-off");
+      const view = await h.run("plain", key, "#hand-off");
+      const args = { task: HAND_OFF.task, label: HAND_OFF.label, visible: true };
+      same(scriptedArgs("#hand-off", "sessions_spawn", "pip"), args, "the scripted call");
+      const visible = startedKey("pip", true);
+      view.expectCalls([spawnCall(args, visible, spawnTitle(args), false)]);
+      view.expectEnd("final", `I started a task for it: ${HAND_OFF.label}.`);
+      const started = await startedRuns(
+        h,
+        view,
+        visible,
+        startedTaskReply({ label: HAND_OFF.label, visible: true }),
+      );
+      // Listed as a task of the bot's, titled by its label, by the gateway's own fields.
+      const row = await listedRow(h, started.key);
+      expect(row, "the started task is in the task list");
+      same(
+        [row.agentId, row.label, row.createdVia, row.spawnedBy, rec(row.createdActor).type],
+        ["pip", HAND_OFF.label, "spawn", key, "agent"],
+        "the started task's row",
+      );
+      same(rec(row.createdActor).id, "pip", "the bot that started it");
+      same(row.sendDisabledReason ?? null, null, "the person can write in it");
+      await checkBrief(h, started.key, started.firstRun, HAND_OFF.task);
+      // The person writes in it, and the bot answers there; no report goes back for that.
+      const yours = await h.run("plain", started.key, "#text");
+      yours.expectCalls([]);
+      yours.expectEnd("final", scriptedFinalText("#text"));
+      // A bot's task labels are its own and unique: the same label again is refused.
+      const again = await h.run("plain", await h.session("pip", "hand-off-again"), "#hand-off");
+      const error = `label already in use: ${HAND_OFF.label}`;
+      const refusal = { status: "error", tool: "sessions_spawn", error };
+      again.expectCalls([
+        {
+          name: "sessions_spawn",
+          args,
+          isError: true,
+          details: refusal,
+          content: (texts: string[], where: string) =>
+            textsLike([jsonText(where, () => refusal)])(texts, where),
+          title: spawnTitle(args),
+          status: "failed",
+        },
+      ]);
+      again.expectEnd("final", `The task did not start (error): ${error}`);
+    },
+  },
+  {
+    name: "a hidden helper a bot starts stays out of the task list",
+    covers: ["#hand-off-hidden"],
+    run: async (h) => {
+      const key = await h.session("pip", "hand-off-hidden");
+      const view = await h.run("plain", key, "#hand-off-hidden");
+      const args = { task: HAND_OFF_HIDDEN.task, label: HAND_OFF_HIDDEN.label };
+      same(scriptedArgs("#hand-off-hidden", "sessions_spawn", "pip"), args, "the scripted call");
+      const hidden = startedKey("pip", false);
+      view.expectCalls([spawnCall(args, hidden, spawnTitle(args), true)]);
+      view.expectEnd("final", "I started a helper on it in the background.");
+      const started = await startedRuns(
+        h,
+        view,
+        hidden,
+        startedTaskReply({ label: HAND_OFF_HIDDEN.label, visible: false }),
+      );
+      same(await listedRow(h, started.key), undefined, "the helper in the task list");
+      const all = await h
+        .op("plain")
+        .request<{ sessions: JsonRecord[] }>("sessions.list", { includeDerivedTitles: true });
+      const row = all.sessions.find((each) => each.key === started.key);
+      same(
+        [row?.createdVia, row?.spawnedBy, row?.classification],
+        ["spawn", key, "subagent"],
+        "the helper's row without the task list's filters",
+      );
+    },
+  },
+  {
+    name: "a follow-up a bot sends to the task it started",
+    covers: ["#follow-up"],
+    run: async (h) => {
+      // With nothing started in the conversation, there is nothing to add to.
+      const empty = await h.run("plain", await h.session("pip", "follow-up-none"), "#follow-up");
+      empty.expectCalls([]);
+      empty.expectEnd("final", "I have started no task here to add to.");
+      // Marlow: a label is the bot's own, and Pip's task already has this one.
+      const key = await h.session(RECIPIENT, "follow-up");
+      const view = await h.run("plain", key, "#hand-off");
+      const visible = startedKey(RECIPIENT, true);
+      view.expectCalls([
+        spawnCall(
+          { task: HAND_OFF.task, label: HAND_OFF.label, visible: true },
+          visible,
+          `Sub-agent ${HAND_OFF.label}`,
+          false,
+        ),
+      ]);
+      view.expectEnd("final", `I started a task for it: ${HAND_OFF.label}.`);
+      const report = startedTaskReply({ label: HAND_OFF.label, visible: true });
+      const started = await startedRuns(h, view, visible, report);
+      const follow = await h.run("plain", key, "#follow-up");
+      const args = { sessionKey: started.key, message: FOLLOW_UP_MESSAGE, timeoutSeconds: 0 };
+      let seen: JsonRecord | undefined;
+      follow.expectCalls([
+        {
+          name: "sessions_send",
+          args,
+          isError: false,
+          details: (d: JsonRecord | undefined, where: string) => {
+            seen = d;
+            detailsLike({
+              runId: matchesPattern(UUID),
+              status: "accepted",
+              sessionKey: started.key,
+              targetDisposition: "queued",
+              delivery: { status: "pending" },
+            })(d, where);
+          },
+          content: (texts: string[], where: string) =>
+            textsLike([jsonText(where, () => seen)])(texts, where),
+          title: `Session Send ${started.key}`,
+        },
+      ]);
+      follow.expectEnd("final", "I added that to the task.");
+      const sent = String(follow.result("sessions_send").details.runId);
+      const answer = new RunView(h.op("plain"), sent, started.key, follow.from);
+      await h.wait(answer, 60_000);
+      answer.expectCalls([]);
+      answer.expectEnd("final", scriptedFinalText("#text"));
+      // Its answer reports back too, named by the task's label, not the follow-up's text.
+      await wakeOf(h, follow, started.key, sent, report);
+      const history = await h
+        .op("plain")
+        .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: started.key });
+      const forwarded = history.messages.filter((m) => rec(m.provenance).kind === "inter_session");
+      same(
+        forwarded.map((m) => [m.role, rec(m.provenance).sourceSessionKey, m.content]),
+        [["assistant", key, FOLLOW_UP_MESSAGE]],
+        "the follow-up in the started task",
+      );
+    },
+  },
+  {
+    name: "a task a bot starts for its partner, and a bot outside the pair cannot",
+    covers: ["#hand-off-to-partner"],
+    run: async (h) => {
+      const key = await h.session("pip", "hand-off-partner");
+      const view = await h.run("plain", key, "#hand-off-to-partner");
+      const args = {
+        task: HAND_OFF_PARTNER.task,
+        label: HAND_OFF_PARTNER.label,
+        visible: true,
+        agentId: RECIPIENT,
+      };
+      same(
+        scriptedArgs("#hand-off-to-partner", "sessions_spawn", "pip"),
+        args,
+        "the scripted call",
+      );
+      const under = startedKey(RECIPIENT, true);
+      view.expectCalls([spawnCall(args, under, spawnTitle(args), false)]);
+      view.expectEnd("final", `I started a task for it under Marlow: ${HAND_OFF_PARTNER.label}.`);
+      const started = await startedRuns(
+        h,
+        view,
+        under,
+        startedTaskReply({ label: HAND_OFF_PARTNER.label, visible: true }),
+      );
+      const row = await listedRow(h, started.key);
+      expect(row, "the partner's task is in the task list");
+      same(
+        [row.agentId, row.label, row.createdVia, row.spawnedBy, rec(row.createdActor).id],
+        [RECIPIENT, HAND_OFF_PARTNER.label, "spawn", key, "pip"],
+        "the partner's task: listed under Marlow, started by Pip from Pip's task",
+      );
+      await checkBrief(h, started.key, started.firstRun, HAND_OFF_PARTNER.task);
+      // Juniper may start tasks only under itself.
+      const outside = await h.run(
+        "plain",
+        await h.session("main", "hand-off-outside"),
+        "#hand-off-to-partner",
+      );
+      const refused = outside.result("sessions_spawn");
+      same(
+        [refused.isError, refused.details.status],
+        [true, "forbidden"],
+        "a task for a bot outside the pair",
+      );
+      const error = String(refused.details.error);
+      h.observe(`a spawn under a bot outside the pair: ${error}`);
+      outside.expectCalls([
+        {
+          name: "sessions_spawn",
+          args: { ...args, agentId: RECIPIENT },
+          isError: true,
+          details: { status: "forbidden", error, role: RECIPIENT },
+          content: (texts: string[], where: string) =>
+            textsLike([jsonText(where, () => ({ status: "forbidden", error, role: RECIPIENT }))])(
+              texts,
+              where,
+            ),
+          title: spawnTitle(args),
+          status: "blocked",
+        },
+      ]);
+      outside.expectEnd("final", `The task did not start (forbidden): ${error}`);
     },
   },
   {

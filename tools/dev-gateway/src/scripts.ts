@@ -159,6 +159,52 @@ export function imageCompletion(text: string): { ok: boolean; media: string[] } 
   return { ok: text.includes("\nstatus: completed successfully\n"), media };
 }
 
+/**
+ * The gateway's report that a task the bot started with sessions_spawn ended, or answered a
+ * follow-up (OpenClaw 2026.10.6, formatTaskCompletionEvent, in a runtime context block as data):
+ * the task's label as the bot wrote it, and whether the person can open it (a hidden helper's
+ * key is `agent:<bot>:subagent:<id>`). Null for any other text.
+ */
+export function startedTaskCompletion(
+  text: string,
+): { key: string; label: string; visible: boolean } | null {
+  if (!text.trimStart().startsWith("OpenClaw runtime context:")) return null;
+  const at = text.indexOf("[Internal task completion event]");
+  if (at < 0) return null;
+  const event = text.slice(at);
+  const field = (name: string) =>
+    new RegExp(`(?:\\\\n|\\n)${name}: (.*?)(?:\\\\n|\\n)`).exec(event)?.[1]?.trim() ?? "";
+  if (field("source") === "image_generation") return null;
+  const key = field("session_key");
+  return {
+    key,
+    label: field("task") || "The task",
+    visible: !/^agent:[^:]+:subagent:/.test(key),
+  };
+}
+
+/**
+ * The label a sessions_spawn call of this conversation gave the task with this key. A follow-up's
+ * report names the follow-up's text as its task instead, so the label is taken from the start.
+ */
+function spawnedLabel(messages: ChatMessage[], key: string): string | null {
+  for (const result of toolResults(messages)) {
+    if (result.name !== "sessions_spawn") continue;
+    try {
+      const details = JSON.parse(result.text) as { childSessionKey?: unknown; label?: unknown };
+      if (details.childSessionKey === key && typeof details.label === "string")
+        return details.label;
+    } catch {
+      // not the gateway's JSON result
+    }
+  }
+  return null;
+}
+
+/** What the bot says when a task it started reports back. */
+export const startedTaskReply = ({ label, visible }: { label: string; visible: boolean }) =>
+  visible ? `${label} finished. Its answer is in that task.` : `${label} finished.`;
+
 /** The reply to a finished image task: a caption and its pictures, as the gateway asks. */
 export const IMAGE_READY_REPLY = "Here is the picture you asked for.";
 export const IMAGE_FAILED_REPLY = "The picture could not be made.";
@@ -266,6 +312,21 @@ export function planReply(
     if (!completion.ok) return [{ kind: "text", text: IMAGE_FAILED_REPLY }];
     return [{ kind: "text", text: [IMAGE_READY_REPLY, "", ...completion.media].join("\n") }];
   }
+  // A task the bot started ended, or answered a follow-up: a short report, in this turn's
+  // prompt or a runtime context block after it.
+  const finished = [
+    prompt,
+    ...messages
+      .slice(lastUserIndex + 1)
+      .filter(isRuntimeContext)
+      .map(messageText),
+  ]
+    .map(startedTaskCompletion)
+    .find((found) => found !== null);
+  if (finished) {
+    const label = spawnedLabel(messages, finished.key) ?? finished.label;
+    return [{ kind: "text", text: startedTaskReply({ ...finished, label }) }];
+  }
   if (isGatewayTurn(prompt) && !forwarded) return [{ kind: "text", text: SILENT_REPLY }];
 
   // The gateway's background skill review, after the conversation it reviews, on an instance
@@ -303,6 +364,7 @@ export function planReply(
       pagesOrigin: options.pagesOrigin ?? null,
       prompt,
       results: toolResults(after),
+      history: toolResults(messages),
     };
     const round = scenarioRounds(selection)[roundIndex];
     if (!round) return [{ kind: "text", text: "That covers it." }];

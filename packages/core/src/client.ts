@@ -172,6 +172,7 @@ import {
   isTaskSession,
   mapAgents,
   mapHistory,
+  startedTaskSince,
   mergeSessionRow,
   sessionChangeRow,
   sessionRowKey,
@@ -6086,7 +6087,11 @@ export class ClawtrateClient {
     if (!this.state.transcripts[key]) return null;
     // The length needed is not known here: the most the gateway gives. An item it still cut says so.
     const history = await this.readHistoryWhole(key, MAX_HISTORY_READ_CHARS);
-    return mapHistory(history?.messages).find((item) => item.id === itemId) ?? null;
+    return (
+      mapHistory(history?.messages, { startedAt: startedTaskSince(history) }).find(
+        (item) => item.id === itemId,
+      ) ?? null
+    );
   }
 
   /**
@@ -9528,7 +9533,7 @@ export class ClawtrateClient {
           this.keepSentPictures(message);
       }
       const activity = markUnconfirmed(reconciled);
-      const items = mapHistory(messages);
+      const items = mapHistory(messages, { startedAt: startedTaskSince(history) });
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
