@@ -206,7 +206,49 @@ describe("F-565: the bot's brief in a task it started", () => {
   });
 
   it("F-565: nothing is marked when the history read does not reach the task's start", () => {
-    expect(briefs(spawnedHistory.slice(1), { ...sessionInfo(), hasMore: true })).toEqual([]);
+    // The window starts at the person's own message, nine seconds after the task was made.
+    expect(briefs(spawnedHistory.slice(4), { ...sessionInfo(), hasMore: true })).toEqual([]);
+  });
+
+  it("F-565: a message the person sends before the bot's first reply is theirs", () => {
+    const queued = [
+      userRow(BRIEF, CREATED + 30, `${FIRST_RUN}:user`),
+      userRow("Also check the shade.", CREATED + 500, "q1:user"),
+      botRow("The lake loop, and it has shade.", CREATED + 1_100, FIRST_RUN),
+    ];
+    expect(briefs(queued, sessionInfo())).toEqual([BRIEF]);
+  });
+
+  it("F-565: after a reset, the person's next message is theirs", () => {
+    // The gateway's reset keeps the task's createdVia, createdAt and spawnedBy, and writes a
+    // reset row; a reset that starts a new transcript by itself (daily, idle) writes none.
+    const reset = {
+      role: "system",
+      timestamp: CREATED + 60_000,
+      content: "",
+      __openclaw: { kind: "reset", id: "reset-1" },
+    };
+    const afterReset = [reset, userRow("#text", CREATED + 60_050, "r1:user")];
+    expect(briefs(afterReset, sessionInfo())).toEqual([]);
+    const untimedReset = [
+      { ...reset, timestamp: undefined },
+      userRow("#text", CREATED + 50, "r1:user"),
+    ];
+    expect(briefs(untimedReset, sessionInfo())).toEqual([]);
+    const nextDay = [
+      userRow("Morning.", CREATED + 3_600_000, "r2:user"),
+      botRow("Morning.", CREATED + 3_601_000, "r2"),
+    ];
+    expect(briefs(nextDay, sessionInfo())).toEqual([]);
+  });
+
+  it("F-565: a first row stored later than its task was made is not the brief", () => {
+    expect(briefs([userRow(BRIEF, CREATED + 30_001, `${FIRST_RUN}:user`)], sessionInfo())).toEqual(
+      [],
+    );
+    expect(briefs([userRow(BRIEF, CREATED + 30_000, `${FIRST_RUN}:user`)], sessionInfo())).toEqual([
+      BRIEF,
+    ]);
   });
 
   it("F-565: nothing is marked when the first row is not a turn's own input, or has no time", () => {

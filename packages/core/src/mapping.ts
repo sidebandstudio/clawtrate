@@ -456,6 +456,14 @@ function isWrittenSince(message: RawRecord, since: number | null): boolean {
 }
 
 /**
+ * How soon after the gateway created a task its brief is stored: it writes the brief as it
+ * creates the task (30 to 332 ms on OpenClaw 2026.10.6). A first row stored later is not the
+ * brief: a transcript the gateway started over by itself (a daily or idle reset) keeps the task's
+ * creation time, and its first row is the person's.
+ */
+export const BRIEF_WINDOW_MS = 30_000;
+
+/**
  * `chat.history` messages to display items. Consecutive assistant messages of
  * one run (tool rounds) become a single assistant turn, and each tool result is
  * attached to the call that produced it.
@@ -464,10 +472,11 @@ export function mapHistory(
   messages: unknown,
   options: {
     /**
-     * In a task a bot started, when the gateway created it (`startedTaskSince`). The first user
-     * row it stored from then on is the bot's brief: the gateway writes the brief as the task's
-     * first turn (`<run>:user`), and a forked task's copied rows keep the earlier times they were
-     * written. Nothing is marked when that row is not a turn's own input.
+     * In a task a bot started, when the gateway created it (`startedTaskSince`). The first row
+     * it stored from then on, of any role, is the bot's brief when it is a user row, a turn's own
+     * input (`<run>:user`), stored within `BRIEF_WINDOW_MS` of then: the gateway writes the brief
+     * as the task's first turn, and a forked task's copied rows keep the earlier times they were
+     * written. A reset or compaction row ends the search: nothing after it is the brief.
      */
     startedAt?: number | null;
   } = {},
@@ -492,6 +501,14 @@ export function mapHistory(
     const kind = str(info.kind);
     // The gateway cut this row to its display length.
     const cutByGateway = info.truncated === true;
+    // The first row the task stored itself, of any role, ends the search for the brief; so does
+    // a reset or compaction row, whatever its time.
+    let first = false;
+    if (briefSought && kind && SYSTEM_ROW_TEXT[kind]) briefSought = false;
+    else if (briefSought && isWrittenSince(message, startedAt)) {
+      briefSought = false;
+      first = message.role === "user";
+    }
 
     if (kind && SYSTEM_ROW_TEXT[kind]) {
       precedingRun = null;
@@ -512,9 +529,6 @@ export function mapHistory(
         const text = textOf(message.content);
         currentRun = null;
         const gatewayTurn = gatewayTurnText(message);
-        // The first row the task stored itself: the brief, if it is a turn's own input.
-        const first = briefSought && isWrittenSince(message, startedAt);
-        if (first) briefSought = false;
         if (gatewayTurn) {
           precedingRun = null;
           pendingUsers.length = 0;
@@ -533,7 +547,10 @@ export function mapHistory(
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
-        const brief = first && idempotencyKey?.endsWith(":user") === true;
+        const brief =
+          first &&
+          idempotencyKey?.endsWith(":user") === true &&
+          num(message.timestamp)! - startedAt! <= BRIEF_WINDOW_MS;
         const user: TranscriptItem = {
           id,
           role: "user",
@@ -552,8 +569,6 @@ export function mapHistory(
         return;
       }
       case "assistant": {
-        // A reply the task stored before any input of its own: no row of it is the brief.
-        if (briefSought && isWrittenSince(message, startedAt)) briefSought = false;
         const blocks = assistantBlocks(message.content);
         for (const block of blocks) {
           if (block.kind === "tool-call" && block.callId) pendingCalls.set(block.callId, block);
