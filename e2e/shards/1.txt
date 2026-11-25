@@ -8,4 +8,3 @@ routines.spec.ts
 ui-pictures.spec.ts
 search.spec.ts
 channel-chats.spec.ts
-ui-bot-files.spec.ts

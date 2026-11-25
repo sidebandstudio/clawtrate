@@ -8,3 +8,4 @@ skill-notes.spec.ts
 setup.spec.ts
 work-files.spec.ts
 memory.spec.ts
+ui-bot-files.spec.ts
