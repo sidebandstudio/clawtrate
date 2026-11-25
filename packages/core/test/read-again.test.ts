@@ -4,7 +4,11 @@
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DISCOVERY_NOT_READY, LIVE_UPDATES_NOT_STARTED } from "../src/client.ts";
+import {
+  type ClawtrateClient,
+  DISCOVERY_NOT_READY,
+  LIVE_UPDATES_NOT_STARTED,
+} from "../src/client.ts";
 import {
   answerKind,
   READ_AGAIN_MAX_MS,
@@ -348,7 +352,11 @@ describe("#592: the open task's reads belong to their connection", () => {
 
   it("live updates that can't be started say so on the task, and Try again subscribes again", async () => {
     const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({
+      messages: [{ role: "user", content: "hello", __openclaw: { id: "u1", seq: 1 } }],
+    });
     const { client } = await openTask({ gateway });
+    expect(client.state.transcripts[KEY]?.items).toHaveLength(1);
     const answer = gateway.handlers["sessions.messages.subscribe"]!;
     let failing = true;
     gateway.handlers["sessions.messages.subscribe"] = (params) => {
@@ -363,12 +371,47 @@ describe("#592: the open task's reads belong to their connection", () => {
     expect(gateway.calls("sessions.messages.subscribe").length - before).toBe(5);
     expect(client.state.transcripts[KEY]?.error).toBe(LIVE_UPDATES_NOT_STARTED);
     // The history still shows.
-    expect(client.state.transcripts[KEY]?.items.length ?? 0).toBeGreaterThanOrEqual(0);
+    expect(client.state.transcripts[KEY]?.items).toHaveLength(1);
     failing = false;
     client.reloadSession(KEY);
     await until(() => client.state.transcripts[KEY]?.status === "ready");
     expect(gateway.calls("sessions.messages.subscribe").length - before).toBe(6);
     client.stop();
+  });
+
+  it("a Try again, or a second view, that comes while the failure is being published still subscribes again", async () => {
+    const presses = {
+      "Try again": (client: ClawtrateClient) => client.reloadSession(KEY),
+      "a second view": (client: ClawtrateClient) => client.openSession(KEY),
+    };
+    for (const [name, press] of Object.entries(presses)) {
+      const gateway = grantingGateway();
+      const { client } = await openTask({ gateway });
+      const answer = gateway.handlers["sessions.messages.subscribe"]!;
+      let failing = true;
+      gateway.handlers["sessions.messages.subscribe"] = (params) => {
+        if (failing) throw new GatewayError(REGISTRY_CHANGING);
+        return answer(params);
+      };
+      // Pressed from a listener of the failure's own publication: the read that published it
+      // hasn't ended, so the press waits for it, and clears the failure meanwhile.
+      let pressedAt: number | null = null;
+      client.store.subscribe(({ transcripts }) => {
+        if (pressedAt !== null || transcripts[KEY]?.error !== LIVE_UPDATES_NOT_STARTED) return;
+        pressedAt = gateway.calls("sessions.messages.subscribe").length;
+        failing = false;
+        press(client);
+      });
+      const connects = gateway.connects.length;
+      gateway.dropAll();
+      await until(() => gateway.connects.length > connects);
+      await until(() => pressedAt !== null);
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      // Ready only through a subscription that succeeded: never history alone.
+      expect(gateway.calls("sessions.messages.subscribe").length, name).toBe(pressedAt! + 1);
+      expect(client.state.transcripts[KEY]?.error, name).toBeNull();
+      client.stop();
+    }
   });
 
   it("a later history read keeps the live-updates failure and tries the subscription again; only a subscription that succeeds clears it", async () => {

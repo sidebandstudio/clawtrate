@@ -56,9 +56,10 @@ export function taskInSync(state: ClawtrateState, taskKey: string | null): boole
  * `connected` is the connection alone: only it makes the composer say "Offline", an outgoing
  * message "Sends when reconnected" and the window read as lost. Loads being tried again, or
  * failed, never do (#592). `current` is that the open task's live work on screen is this
- * connection's: the connection is up, the task's live updates were started, and after a drop
- * the task has loaded again since the connection came back. Until then, and after that reload
- * failed, the run line and the action cards say what was last seen. Bots and tasks don't hold
+ * connection's: the connection is up, the task's live updates were started, and nothing it
+ * shows is from before the connection came back. After a drop the task must have loaded again
+ * since; otherwise a history it holds must have been loaded since. Until then, and after that
+ * reload failed, the run line and the action cards say what was last seen. Bots and tasks don't hold
  * it: they don't change what the open task shows.
  */
 export function liveFlags(
@@ -70,7 +71,16 @@ export function liveFlags(
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
   if (!connected || transcript?.error === LIVE_UPDATES_NOT_STARTED)
     return { connected, current: false };
-  return { connected, current: phase !== "dropped" || taskInSync(state, taskKey) };
+  if (phase === "dropped") return { connected, current: taskInSync(state, taskKey) };
+  // The phase is the window's: a task opened after the open one synced may hold a history from
+  // before this connection. Until it loads again, its live work is last seen. One not loaded
+  // yet has nothing on screen to call last seen.
+  const loadedAt = transcript?.loadedAt ?? null;
+  const connectedAt = state.connection.connectedAt;
+  return {
+    connected,
+    current: loadedAt === null || connectedAt === null || loadedAt >= connectedAt,
+  };
 }
 
 export function useSyncPhase(state: ClawtrateState, taskKey: string | null): SyncPhase {

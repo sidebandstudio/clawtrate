@@ -2772,13 +2772,16 @@ export class ClawtrateClient {
       // A read that published its failure while this retry arrived (its listeners run before it
       // ends) settles nothing more: still loading once it ends, the task is read again. A close
       // and reopen between here and then is a different task, so its incarnation must still match.
+      // That read subscribes again, as a retry of a failed task does when no read is under way:
+      // the failure cleared above may have been its live updates (#592).
       void load.done.then(() => {
         if (
           this.openSessions.has(key) &&
           this.incarnations.get(key) === incarnation &&
-          this.state.transcripts[key]?.status === "loading"
+          this.state.transcripts[key]?.status === "loading" &&
+          this.state.connection.status === "connected"
         )
-          this.reloadSession(key);
+          void this.loadTranscript(key, true, null);
       });
       return;
     }

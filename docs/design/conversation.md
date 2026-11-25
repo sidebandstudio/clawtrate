@@ -246,6 +246,7 @@ The last thing in a running turn: the bot's avatar at 28 px and one short phrase
 | The machine is unreachable                                      | Can't reach <machine>                                                 |
 | The connection is lost                                          | Reconnecting. Last seen <last phrase, lower case>                     |
 | Back on the connection, the open task not loaded again yet      | Catching up. Last seen <last phrase, lower case>                      |
+| A task opened since, its history from before the connection     | Catching up. Last seen <last phrase, lower case>                      |
 | The open task's reload or live updates failed, connected        | Last seen <last phrase, lower case>                                   |
 
 Phrases are in the user's language, have no bot name in front and no trailing ellipsis except "Stopping…". A tool the app has no kind for gets the general card's words, built from its name (8.3), so the phrase is never the gateway's English title. (F-082, F-083)

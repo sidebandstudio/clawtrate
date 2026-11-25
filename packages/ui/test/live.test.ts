@@ -700,6 +700,25 @@ describe("#592: once the connection is up, nothing says offline, whatever the lo
     }
   });
 
+  it("a task switched to after the open one synced: a history from before this connection is last seen until it loads again", () => {
+    for (const phase of ["synced", "none"] as const) {
+      // Kept from before the connection came back: its runs are what was last seen.
+      const stale = says({ ...up, transcripts: { [key]: before } }, phase);
+      expect(stale.line.phrase, phase).toBe("Catching up. Last seen thinking");
+      expect(stale.composer.offline, phase).toBe(false);
+      // Loaded since: live.
+      expect(says({ ...up, transcripts: { [key]: open } }, phase).line.state, phase).not.toBe(
+        "blocked",
+      );
+      // Not loaded yet: nothing on screen is from before, so nothing flashes "last seen".
+      const fresh = { ...open, loadedAt: null };
+      expect(liveFlags({ ...up, transcripts: { [key]: fresh } }, phase, key), phase).toEqual({
+        connected: true,
+        current: true,
+      });
+    }
+  });
+
   it("while the connection is down, the composer and the run line say so", () => {
     for (const status of ["reconnecting", "connecting", "error", "disconnected"] as const) {
       const down = {
