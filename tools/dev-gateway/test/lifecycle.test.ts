@@ -6,7 +6,16 @@ import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:chi
 import { chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { list, openInstance, prune, reset, start, stop } from "../src/cli.ts";
+import {
+  gatewayStartProblem,
+  list,
+  logTail,
+  openInstance,
+  prune,
+  reset,
+  start,
+  stop,
+} from "../src/cli.ts";
 import { GATE_SCRIPT, gatedSpawn, OpenclawRunner } from "../src/env.ts";
 import { stateDirFor } from "../src/instance.ts";
 import { instanceLockPath, lockDir, withLock } from "../src/lock.ts";
@@ -319,9 +328,10 @@ describe("a process is recorded before it can run (B1)", () => {
 });
 
 /** OpenClaw and the scripted model replaced by gated `sleep` stand-ins, under a temporary HOME. */
-function fakedInstance(home: string, runRoot: string, name: string | null) {
-  const stand = (options: SpawnOptions): ChildProcess => {
-    const child = spawn("/bin/sh", ["-c", GATE_SCRIPT, "sleep", "120"], {
+/** `gateway`, when given, is a shell command the gateway's stand-in runs instead of waiting. */
+function fakedInstance(home: string, runRoot: string, name: string | null, gateway?: string) {
+  const stand = (options: SpawnOptions, command = ["sleep", "120"]): ChildProcess => {
+    const child = spawn("/bin/sh", ["-c", GATE_SCRIPT, ...command], {
       ...options,
       env: { PATH: realPath },
     });
@@ -329,7 +339,10 @@ function fakedInstance(home: string, runRoot: string, name: string | null) {
     return child;
   };
   const fakeSpawn = ((bin: string, args: string[], options: SpawnOptions) => {
-    if (bin === "/bin/sh" && args[0] === "-c") return stand(options);
+    if (bin === "/bin/sh" && args[0] === "-c")
+      return gateway && args.includes("gateway") && args.includes("run")
+        ? stand(options, ["/bin/sh", "-c", gateway])
+        : stand(options);
     // An OpenClaw CLI call: health answers, and the exec policy is denied
     // everywhere but the shell bot, which asks.
     const out = args.includes("approvals")
@@ -650,4 +663,77 @@ describe("migrating from an older version of the tool (ruling 6)", () => {
       expect(snapshot(aside)).toEqual(asideBefore);
     });
   }
+});
+
+describe("a start whose gateway never answers says what the gateway was doing (#537)", () => {
+  it("stops as soon as the gateway exits, with the end of its log", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const inst = fakedInstance(
+      home,
+      runRoot,
+      "alpha",
+      "echo '[gateway] startup phase: config.auth starting'; echo 'config is invalid' >&2; exit 3",
+    );
+    const began = Date.now();
+    const failure = await start(inst, { seed: false }).then(
+      () => new Error("the start succeeded"),
+      (error: unknown) => error as Error,
+    );
+    // Long before the start's ceiling: the exit ends the wait.
+    expect(Date.now() - began).toBeLessThan(30_000);
+    expect(failure.message).toMatch(
+      /^the development gateway exited after \d+ s, before it answered\n {2}last health check: /,
+    );
+    expect(failure.message).toContain(
+      `  the end of its log, ${join(inst.runDir, "gateway.log")}:\n` +
+        "    [gateway] startup phase: config.auth starting\n    config is invalid",
+    );
+    await reset(inst);
+  }, 60_000);
+
+  it("names the wait, the last health check and the log's end when the time runs out", () => {
+    expect(
+      gatewayStartProblem({
+        waitedMs: 480_400,
+        exited: false,
+        lastSeen: "health exited 1: gateway timeout after 3000ms",
+        log: "/run/gateway.log",
+        tail: "[gateway] startup phase: config.auth starting\nsecond line",
+      }),
+    ).toBe(
+      [
+        "timed out after 480 s waiting for the development gateway, which is still running",
+        "  last health check: health exited 1: gateway timeout after 3000ms",
+        "  the end of its log, /run/gateway.log:",
+        "    [gateway] startup phase: config.auth starting",
+        "    second line",
+      ].join("\n"),
+    );
+    expect(
+      gatewayStartProblem({
+        waitedMs: 2_000,
+        exited: true,
+        lastSeen: null,
+        log: "/g.log",
+        tail: "",
+      }),
+    ).toBe(
+      [
+        "the development gateway exited after 2 s, before it answered",
+        "  last health check: none",
+        "  its log, /g.log, is empty",
+      ].join("\n"),
+    );
+  });
+
+  it("reads the last lines of a log, each cut to a readable length", () => {
+    const dir = tempDir("clawtrate-log-");
+    const log = join(dir, "gateway.log");
+    expect(logTail(log)).toBe("");
+    writeFileSync(log, `${Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n")}\n`);
+    expect(logTail(log, 3)).toBe("line 48\nline 49\nline 50");
+    writeFileSync(log, `${"x".repeat(10)}\n`);
+    expect(logTail(log, 40, 4)).toBe("xxxx…");
+  });
 });

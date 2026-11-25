@@ -918,11 +918,78 @@ function writeFreshConfig(
 
 /** Healthy means the guard allows OpenClaw and the gateway answers; a refusal spawns nothing. */
 async function gatewayHealthy(inst: DevInstance): Promise<boolean> {
+  return (await gatewayHealth(inst)).healthy;
+}
+
+/** The health check, with what it saw when the gateway is not healthy. */
+async function gatewayHealth(inst: DevInstance): Promise<{ healthy: boolean; seen: string }> {
   const runner = inst.runner;
-  if (runner.refusal()) return false;
-  if (!(await inst.listening(runner.gatewayPort()))) return false;
+  const refusal = runner.refusal();
+  if (refusal) return { healthy: false, seen: refusal };
+  if (!(await inst.listening(runner.gatewayPort())))
+    return { healthy: false, seen: "its port is not open" };
   const result = await runner.run(["gateway", "call", "health", "--json", "--timeout", "3000"]);
-  return result.status === 0;
+  const said = `${result.stdout}${result.stderr}`.trim().split("\n").at(-1) ?? "";
+  return { healthy: result.status === 0, seen: `health exited ${result.status}: ${said}` };
+}
+
+/**
+ * A ceiling on a condition, not a wait. Locally a start takes seconds. On GitHub's Xcode 27 runner,
+ * starts in the iOS workflow's logs took 59 to 254 s, and one ran out at 240 s (#537).
+ */
+const GATEWAY_START_MS = 480_000;
+
+/** The last lines of a log, each cut to a readable length; "" when there is none. */
+export function logTail(path: string, lines = 40, width = 300): string {
+  if (!existsSync(path)) return "";
+  return readFileSync(path, "utf8")
+    .trimEnd()
+    .split("\n")
+    .slice(-lines)
+    .map((line) => (line.length > width ? `${line.slice(0, width)}…` : line))
+    .join("\n");
+}
+
+/** Why a start's gateway never answered: how long, whether it exited, what it last said. */
+export function gatewayStartProblem(problem: {
+  waitedMs: number;
+  exited: boolean;
+  lastSeen: string | null;
+  log: string;
+  tail: string;
+}): string {
+  const seconds = Math.round(problem.waitedMs / 1000);
+  return [
+    problem.exited
+      ? `the development gateway exited after ${seconds} s, before it answered`
+      : `timed out after ${seconds} s waiting for the development gateway, which is still running`,
+    `  last health check: ${problem.lastSeen ?? "none"}`,
+    problem.tail
+      ? `  the end of its log, ${problem.log}:\n${problem.tail.replace(/^/gm, "    ")}`
+      : `  its log, ${problem.log}, is empty`,
+  ].join("\n");
+}
+
+/** Wait for a start's gateway to answer. Stop as soon as its process exits, and say why. */
+async function waitForGateway(inst: DevInstance): Promise<void> {
+  const started = Date.now();
+  let lastSeen: string | null = null;
+  for (;;) {
+    const marker = readMarker(inst.stateDir);
+    const exited =
+      processState(marker?.gatewayPid, marker?.gatewayIdentity, inst.identify) === "dead";
+    if (!exited) {
+      const health = await gatewayHealth(inst);
+      if (health.healthy) return;
+      lastSeen = health.seen;
+    }
+    const waitedMs = Date.now() - started;
+    if (exited || waitedMs >= GATEWAY_START_MS) {
+      const log = join(inst.runDir, "gateway.log");
+      throw new Error(gatewayStartProblem({ waitedMs, exited, lastSeen, log, tail: logTail(log) }));
+    }
+    await sleep(250);
+  }
 }
 
 type ExecScope = {
@@ -1300,9 +1367,7 @@ export async function start(
     }
     // The lock is held until the gateway is healthy, sandboxed and seeded, so
     // no other command acts on an instance that is still starting.
-    // A ceiling on a condition, not a wait: on a heavily loaded machine a cold start of the
-    // gateway has taken more than 90 seconds.
-    await waitFor("the development gateway", () => gatewayHealthy(inst), 240_000);
+    await waitForGateway(inst);
     await assertExecDenied(inst);
     if (options.node) await startScriptedNode(inst, runId, ports);
     const marker = readMarker(inst.stateDir);
