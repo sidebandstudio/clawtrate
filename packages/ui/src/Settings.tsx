@@ -20,6 +20,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
+import { BotGuidesPane } from "./BotGuides.tsx";
 import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
@@ -375,6 +376,7 @@ function ConversationPane({
         </div>
       )}
       <BotVoicePane canWrite={canWrite} announce={announce} />
+      <BotGuidesPane announce={announce} />
     </>
   );
 }

@@ -94,6 +94,7 @@ import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts"
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { voiceCommands, type VoiceParams } from "./voice.ts";
+import { guidesCommands } from "./guides.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 import {
   NO_SEARCH_PARAMS,
@@ -577,6 +578,8 @@ export function createFixtureBridge(
     checkIns?: CheckInParams;
     search?: SearchParams;
     voice?: VoiceParams;
+    /** The bots' guides (guides.ts): `guides=` in the address. */
+    guides?: string | null;
     /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
     fullPairing?: boolean;
     /** A name given to the fixture gateway on this device (`?gatewayName=`). */
@@ -817,6 +820,11 @@ export function createFixtureBridge(
     () => gatewayStamp(state.connection),
     now,
   );
+  const guides = guidesCommands(
+    options.guides ?? null,
+    () => state.connection.canAdmin,
+    () => gatewayStamp(state.connection),
+  );
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
@@ -833,6 +841,10 @@ export function createFixtureBridge(
     if (command.type === "readBotVoice" || command.type === "setBotVoice") {
       sent.push(command);
       return voice(command);
+    }
+    if (command.type === "readBotGuides" || command.type === "changeBotGuides") {
+      sent.push(command);
+      return guides(command);
     }
     if (
       command.type === "listMemory" ||

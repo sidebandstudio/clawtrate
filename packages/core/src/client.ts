@@ -3,6 +3,19 @@
 
 import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
+import { startTasksFrom } from "./start-tasks.ts";
+import {
+  applyGuidesChange,
+  GUIDES_NOT_RECORDED,
+  GUIDES_NOT_SAVED,
+  guidesKey,
+  parseGuidesRecord,
+  readGuideFolders,
+  withdrawnRecord,
+  type BotGuidesAnswer,
+  type GuidesChange,
+  type GuidesRecord,
+} from "./guides.ts";
 import {
   readVoice,
   setVoice,
@@ -1538,6 +1551,8 @@ export class ClawtrateClient {
   private readonly foreignReads = new Map<string, Set<{ cancelled: boolean }>>();
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
+  /** The last guide change in line (`oneGuidesChangeAtATime`). */
+  private guidesChanges: Promise<unknown> = Promise.resolve();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private discoveryRead: { sessionsChanged: boolean; botsChanged: boolean } | null = null;
   /** The pairing request this client last saw pending, and when. */
@@ -5540,18 +5555,24 @@ export class ClawtrateClient {
     }
     const map = mcpToolMap(answer, MAX_MCP_TOOLS);
     const builtin = builtinToolNames(answer, MAX_BUILTIN_TOOLS);
+    const startTasks = startTasksFrom(answer);
     const current = this.state.transcripts[key];
     if (
       !current ||
       (JSON.stringify(current.mcpTools) === JSON.stringify(map) &&
-        JSON.stringify(current.builtinTools) === JSON.stringify(builtin))
+        JSON.stringify(current.builtinTools) === JSON.stringify(builtin) &&
+        JSON.stringify(current.startTasks ?? null) === JSON.stringify(startTasks))
     )
       return;
-    this.setTranscript(key, () => ({
-      ...this.state.transcripts[key]!,
-      mcpTools: map,
-      builtinTools: builtin,
-    }));
+    this.setTranscript(key, () => {
+      const { startTasks: _was, ...rest } = this.state.transcripts[key]!;
+      return {
+        ...rest,
+        mcpTools: map,
+        builtinTools: builtin,
+        ...(startTasks ? { startTasks } : {}),
+      };
+    });
   }
 
   /**
@@ -6456,9 +6477,23 @@ export class ClawtrateClient {
    * host still has that target and that gateway connected.
    */
   async createBot(input: CreateBotInput, stamp?: GatewayStamp): Promise<CreatedBot> {
-    if (stamp === undefined) return this.accounts.createBot(input);
+    const bound = stamp === undefined ? undefined : await this.requireSameGateway(stamp);
+    // The connection the bot is made on: its guides go there or nowhere.
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
     // Checked there: both known and current. The whole write stays bound to them.
-    return this.accounts.createBot(input, await this.requireSameGateway(stamp));
+    const created = await this.accounts.createBot(input, bound);
+    const gatewayId = bound?.gatewayId ?? this.state.connection.gatewayId;
+    const request = (method: string, params: unknown) =>
+      protocol && this.protocol === protocol && this.epoch === epoch && this.target === target
+        ? this.request(method, params)
+        : Promise.reject(new Error(CONNECTION_CHANGED));
+    if (gatewayId)
+      await this.guidesForNewBot(created.botId, gatewayId, request).catch((error: unknown) =>
+        this.logFailure("warn", "guides for a new bot", error),
+      );
+    return created;
   }
 
   /**
@@ -7071,6 +7106,166 @@ export class ClawtrateClient {
       this.voiceAdvertised,
     );
     return { ...voice, stamp: { gatewayId: alive() ? gatewayId : null, target } };
+  }
+
+  /**
+   * Clawtrate's guides in the bots' `AGENTS.md` (guides.ts), read now, with this device's record
+   * of the person's answer and whether the voice plugin adds its guide too, stamped with where
+   * it was read. Reads need `operator.read`.
+   */
+  async readBotGuides(): Promise<BotGuidesAnswer> {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === target &&
+      this.state.connection.status === "connected";
+    const gatewayId = await this.readGatewayIdentity();
+    this.confirmGatewayIdentity(gatewayId, alive);
+    const record = gatewayId === null ? null : await this.guidesRecord(gatewayId);
+    const request = (method: string, params: unknown) => this.request(method, params);
+    const [folders, voice] = await Promise.all([
+      readGuideFolders(request, record),
+      readVoice(request, this.voiceAdvertised).catch(() => null),
+    ]);
+    return {
+      folders,
+      record,
+      voicePlugin: voice?.status === "read" && voice.on && voice.hook === "allowed",
+      errors: [],
+      stamp: { gatewayId: alive() ? gatewayId : null, target },
+    };
+  }
+
+  /**
+   * Change the guides as the person asked (`GuidesChange`), on the gateway and bots the screen
+   * was read from (`stamp`), then read them back: the answer is what the files hold, never what
+   * was sent. Writing needs `operator.admin`, and so does saying yes to new bots; "Not now" and
+   * turning "New bots too" off write nothing to the gateway, and need neither. The voice
+   * plugin's own setting is never changed from here. Nothing is sent once `owner`, the viewer
+   * that asked, is gone.
+   */
+  async changeBotGuides(
+    change: GuidesChange,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<BotGuidesAnswer> {
+    const withdrawal = change.action === "decline" || (change.action === "newBots" && !change.on);
+    if (!withdrawal && (this.options.readOnly || !this.state.connection.canAdmin))
+      throw new AdminNeededError("Changing the bots' instructions");
+    const { gatewayId } = await this.requireSameGateway(stamp);
+    this.checkNotWithdrawn(owner);
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const request = (method: string, params: unknown) =>
+      protocol && this.protocol === protocol && this.epoch === epoch && this.target === stamp.target
+        ? this.request(method, params)
+        : Promise.reject(new Error(CONNECTION_CHANGED));
+    const save = (record: GuidesRecord) =>
+      this.host.storage.set(guidesKey(gatewayId), JSON.stringify(record)).then(
+        () => true,
+        () => false,
+      );
+    const { errors } = await this.oneGuidesChangeAtATime(async () => {
+      const before = await this.guidesRecord(gatewayId);
+      // A yes taken back is saved first: if it can't be, nothing is changed, so the files and
+      // this device's record never disagree about what the person last asked for.
+      const withdrawn = withdrawnRecord(before, change);
+      if (withdrawn) {
+        if (!(await save(withdrawn))) return { record: before, errors: [GUIDES_NOT_SAVED] };
+        return applyGuidesChange(request, withdrawn, change);
+      }
+      // A yes given is saved last, once the files hold it.
+      const result = await applyGuidesChange(request, before, change);
+      if (result.record && !(await save(result.record)))
+        return {
+          ...result,
+          errors: [
+            ...result.errors,
+            change.action === "newBots" ? GUIDES_NOT_SAVED : GUIDES_NOT_RECORDED,
+          ],
+        };
+      return result;
+    });
+    const read = await this.readBotGuides();
+    return { ...read, errors };
+  }
+
+  private async guidesRecord(gatewayId: string): Promise<GuidesRecord | null> {
+    return parseGuidesRecord(await this.host.storage.get(guidesKey(gatewayId)).catch(() => null));
+  }
+
+  /**
+   * The guide changes (the person's, a new bot's, the update after a connect) run one at a
+   * time, each from reading the record to saving it, so none acts on a record another changed
+   * meanwhile: a Remove that finished is never undone by a change that read the record before it.
+   */
+  private oneGuidesChangeAtATime<T>(run: () => Promise<T>): Promise<T> {
+    const turn = this.guidesChanges.then(run, run);
+    this.guidesChanges = turn.catch(() => undefined);
+    return turn;
+  }
+
+  /**
+   * After a connect with admin access, on a gateway where this device added the section: each
+   * section of an older version that is still as Clawtrate wrote it is brought up to date, held
+   * to the hash read. A section changed or removed outside Clawtrate is left. Nothing is done
+   * from a read-only viewer, below admin, or on a gateway this device has no yes for.
+   */
+  private async keepGuidesCurrent(generation: number, epoch: number): Promise<void> {
+    const current = () =>
+      generation === this.generation &&
+      epoch === this.epoch &&
+      this.state.connection.status === "connected" &&
+      this.state.connection.canAdmin &&
+      !this.options.readOnly;
+    if (!current()) return;
+    // Only where the person said yes from this device: nothing is read on any other gateway.
+    const gatewayId = await this.readGatewayIdentity();
+    if (gatewayId === null) return;
+    const request = (method: string, params: unknown) =>
+      current() ? this.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED));
+    const errors = await this.oneGuidesChangeAtATime(async () => {
+      const record = await this.guidesRecord(gatewayId);
+      if (!current() || !record || record.bots.length === 0) return [];
+      const result = await applyGuidesChange(request, record, { action: "update" }).catch(
+        (error: unknown) => ({ errors: [error instanceof Error ? error.message : String(error)] }),
+      );
+      return result.errors;
+    });
+    for (const error of errors) this.logFailure("warn", "guides update", error);
+  }
+
+  /**
+   * A bot made in Clawtrate gets the section when the person said yes to "New bots too" on this
+   * device for this gateway, with admin access, on the connection it was made on (`request`),
+   * unless it would make the file too long to be kept whole. It never fails the creation.
+   */
+  private async guidesForNewBot(
+    botId: string,
+    gatewayId: string,
+    request: (method: string, params: unknown) => Promise<unknown>,
+  ): Promise<void> {
+    if (this.options.readOnly || !this.state.connection.canAdmin) return;
+    await this.oneGuidesChangeAtATime(async () => {
+      const record = await this.guidesRecord(gatewayId);
+      if (!record?.newBots) return;
+      const result = await applyGuidesChange(request, record, {
+        action: "add",
+        bots: [botId],
+        newBots: true,
+        background: true,
+      }).catch((error: unknown) => ({
+        record,
+        errors: [error instanceof Error ? error.message : String(error)],
+      }));
+      for (const error of result.errors) this.logFailure("warn", "guides for a new bot", error);
+      if (result.record)
+        await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(result.record));
+    });
   }
 
   /** Settings reads the voice setting again (`state.voiceChanges`). */
@@ -9140,6 +9335,7 @@ export class ClawtrateClient {
       // Every connect reads the list again: runs that started or ended while away are in it.
       if (this.state.connection.status === "connected") void this.routines.load();
       this.usage.onHello();
+      void this.keepGuidesCurrent(generation, epoch);
     });
   }
 

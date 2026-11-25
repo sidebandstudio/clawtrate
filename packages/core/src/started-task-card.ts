@@ -10,11 +10,9 @@ import { BOT_MESSAGE_TOOL, callArgs, resultBody, sendDetails } from "./cards.ts"
 import { cleanLine } from "./gateway-names.ts";
 import { asRecord, botIdFromSessionKey, REPORT_RUN_PREFIX } from "./mapping.ts";
 import { isOpenStep, type Run, type Step, type StepRaw } from "./runs.ts";
+import { START_TASK_TOOL } from "./start-tasks.ts";
 import { MAX_TITLE_CHARS } from "./state-bounds.ts";
 import type { ClawtrateState, Task, TaskStatus, TranscriptItem } from "./types.ts";
-
-/** The gateway's tool a bot starts a task with. */
-export const START_TASK_TOOL = "sessions_spawn";
 
 /** The longest first line of a brief a card shows. */
 export const MAX_BRIEF_LINE_CHARS = 280;

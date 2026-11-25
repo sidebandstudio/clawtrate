@@ -118,3 +118,6 @@ export {
   type MemoryList,
 } from "./memory.ts";
 export { type BotVoice, type BotVoiceAnswer, type VoiceHook } from "./voice.ts";
+export * from "./start-tasks.ts";
+export * from "./guides.ts";
+export * from "./guide-text.ts";

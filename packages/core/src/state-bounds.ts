@@ -69,6 +69,7 @@ import {
   type Bound,
 } from "./bounds.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
+import { MAX_START_TASKS_REASON_CHARS, type StartTasks } from "./start-tasks.ts";
 import {
   MAX_BUDGET_ID_CHARS,
   MAX_BUDGETS,
@@ -692,6 +693,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   // Names and a root are ids: a cut one would name another tool or folder.
   builtinTools: list(MAX_BUILTIN_TOOLS, id(MAX_TOOL_NAME_CHARS)),
   workspaceRoot: id(MAX_STEP_PATH_CHARS),
+  startTasks: object<StartTasks>()({ can: FLAG, reason: text(MAX_START_TASKS_REASON_CHARS) }),
   reactions: map(MAX_REACTED_MESSAGES, MAX_ID_CHARS, list(MAX_REACTIONS_PER_MESSAGE, reaction)),
   loadedAt: NUMBER,
 });

@@ -5,6 +5,7 @@
 // leaving no trace.
 
 import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
+import { GUIDES_NOT_SAVED, guidesKey, withSection } from "../src/guides.ts";
 import { describe, expect, it, vi } from "vitest";
 import {
   ACCOUNTS,
@@ -1108,6 +1109,210 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     (fake.gateway as unknown as { requests: Array<{ method: string }> }).requests.map(
       (each) => each.method,
     );
+
+  it("gets Clawtrate's guides at the top of its AGENTS.md when this device said yes to New bots too, and not otherwise", async () => {
+    for (const newBots of [true, false]) {
+      const fake = new AccountsGateway();
+      fake.identity = "gw-guides";
+      const { client, storage } = await accountsClient({ gateway: fake });
+      await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots }));
+      expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+      expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(
+        newBots ? withSection("# AGENTS.md\n") : "# AGENTS.md\n",
+      );
+      // Nothing else of the bot's, or of another bot's, was written for it.
+      expect(
+        fake.gateway
+          .calls("agents.files.set")
+          .map(
+            (call) => `${(call as { agentId: string }).agentId}/${(call as { name: string }).name}`,
+          ),
+      ).toEqual(newBots ? ["viral/IDENTITY.md", "viral/AGENTS.md"] : ["viral/IDENTITY.md"]);
+      client.stop();
+    }
+  });
+
+  it("gets no guides on a connection other than the one it was made on", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    // Right after the bot is made, as its guides are looked up, the connection is replaced by a
+    // new one to the same gateway. Once: the new connection's own reads go through as usual.
+    let switched = false;
+    const get = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (
+        key !== guidesKey("gw-guides") ||
+        switched ||
+        fake.gateway.calls("agents.create").length === 0
+      )
+        return get(key);
+      switched = true;
+      const was = client.state.connection.connectedAt;
+      fake.gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== was,
+      );
+      return get(key);
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(switched).toBe(true);
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    expect(
+      fake.gateway
+        .calls("agents.files.set")
+        .filter((call) => (call as { name: string }).name === "AGENTS.md"),
+    ).toEqual([]);
+    client.stop();
+  });
+
+  it("never keeps its guides, or New bots too, once the person removed them while it was made", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: ["pip"], newBots: true }));
+    const { stamp } = await client.readBotGuides();
+    // Right after the new bot's guides read the record (New bots too), the person presses
+    // Remove from all bots.
+    let removal: Promise<unknown> | null = null;
+    const get = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (
+        removal ||
+        key !== guidesKey("gw-guides") ||
+        fake.gateway.calls("agents.create").length === 0
+      )
+        return get(key);
+      const read = await get(key);
+      removal = client.changeBotGuides({ action: "remove" }, stamp);
+      // Left to finish first if it may: the bot's guides must not undo it.
+      await Promise.race([removal, new Promise<void>((resolve) => setTimeout(resolve, 200))]);
+      return read;
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(removal).not.toBeNull();
+    await removal;
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    expect(JSON.parse((await get(guidesKey("gw-guides")))!)).toEqual({ bots: [], newBots: false });
+    client.stop();
+  });
+
+  it("gets no guides once New bots too is turned off with every bot already current, and turning it off writes nothing", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    for (const bot of fake.bots) {
+      fake.seedWorkspace(bot.id);
+      fake.files.get(bot.id)!.set("AGENTS.md", withSection("# AGENTS.md\n"));
+    }
+    const { client, storage } = await accountsClient({ gateway: fake });
+    const everyone = fake.bots.map((bot) => bot.id);
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: everyone, newBots: true }));
+    const { stamp, folders } = await client.readBotGuides();
+    expect(folders.every((folder) => folder.state === "current")).toBe(true);
+    const off = await client.changeBotGuides({ action: "newBots", on: false }, stamp);
+    expect(off.record).toEqual({ bots: everyone, newBots: false });
+    expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    client.stop();
+  });
+
+  it("gets guides once New bots too is turned on, and turning it on adds or updates nothing by itself", async () => {
+    for (const record of [{ bots: [], newBots: false }, null]) {
+      const fake = new AccountsGateway();
+      fake.identity = "gw-guides";
+      const { client, storage } = await accountsClient({ gateway: fake });
+      if (record) await storage.set(guidesKey("gw-guides"), JSON.stringify(record));
+      const { stamp } = await client.readBotGuides();
+      const on = await client.changeBotGuides({ action: "newBots", on: true }, stamp);
+      expect(on.record).toEqual({ bots: [], newBots: true });
+      expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+      expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+      expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+      client.stop();
+    }
+  });
+
+  it("gets no guides when its AGENTS.md is already long enough to be cut from a prompt", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const long = `# AGENTS.md\n${"x".repeat(19_000)}\n`;
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = (params) => {
+      const made = create(params) as { agentId: string };
+      fake.files.get(made.agentId)!.set("AGENTS.md", long);
+      return made;
+    };
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(long);
+    client.stop();
+  });
+
+  it("keeps New bots too as this device saved it when an Add carries a stale tick", async () => {
+    // Another window turned New bots too off; this one still showed it ticked and pressed Add.
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: false }));
+    const shown = await client.readBotGuides();
+    await client.changeBotGuides({ action: "add", bots: [], newBots: true }, shown.stamp);
+    expect(JSON.parse(storage.data.get(guidesKey("gw-guides"))!)).toMatchObject({
+      newBots: false,
+    });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    client.stop();
+  });
+
+  it("takes New bots too from the press on the first Add, when this device has no record yet", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    const shown = await client.readBotGuides();
+    await client.changeBotGuides({ action: "add", bots: [], newBots: true }, shown.stamp);
+    expect(JSON.parse(storage.data.get(guidesKey("gw-guides"))!)).toMatchObject({
+      newBots: true,
+    });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+    client.stop();
+  });
+
+  it("follows the record really saved after a Remove that couldn't be saved", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    const set = storage.set.bind(storage);
+    storage.set = (key: string, value: string) =>
+      key === guidesKey("gw-guides") ? Promise.reject(new Error("disk full")) : set(key, value);
+    const shown = await client.readBotGuides();
+    const removed = await client.changeBotGuides({ action: "remove" }, shown.stamp);
+    expect(removed.errors).toEqual([GUIDES_NOT_SAVED]);
+    // Nothing was taken back, so New bots too is still what this device holds, and it acts.
+    expect(removed.record).toEqual({ bots: [], newBots: true });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+    client.stop();
+  });
+
+  it("is made even when this device can't save its record of the guides afterwards", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    const set = storage.set.bind(storage);
+    storage.set = (key: string, value: string) =>
+      key === guidesKey("gw-guides") ? Promise.reject(new Error("disk full")) : set(key, value);
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+    client.stop();
+  });
 
   it("right after agents.create, writes its name into IDENTITY.md, held to the template it read, and keeps the other starting files", async () => {
     const { client, fake, accounts } = await accountsClient();
