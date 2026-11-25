@@ -137,6 +137,8 @@ function statesOf(cards: SelectedCards | undefined): string {
  */
 export function isCardCall(step: Step): boolean {
   if (step.kind !== "tool" || !step.toolName) return false;
+  // A task start is not read whole: its card draws from what the step keeps of the call and its
+  // result, and its Raw view reads the payload only when opened.
   return step.toolName === BOT_MESSAGE_TOOL || step.toolName.includes("__");
 }
 
@@ -258,5 +260,5 @@ export function useCards(
     [steps, reads],
   );
 
-  return { selected, rawState, settledRaw };
+  return { selected, rawState, settledRaw, rawOf };
 }
