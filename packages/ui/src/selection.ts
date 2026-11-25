@@ -173,6 +173,9 @@ const SEEN_KEY = "seen";
 /** No local reads: unread is the gateway's alone. */
 const NOTHING_SEEN: SeenMap = Object.freeze({}) as SeenMap;
 
+/** A bot of one gateway: its id and the gateway it was seen on. */
+type OnGateway = { id: string; gatewayId: string | null };
+
 /**
  * `gatewayOwnsUnread`: the connection writes, so reading a task is a change the
  * gateway accepts or refuses. Then the dot and the badge are what the gateway
@@ -204,20 +207,25 @@ export function useSelection(
   // from a link or a search result, or from the rail while it waited. A bot starting to wait never
   // takes the selection. One the person opened stays open, and in the rail, until they open
   // another bot: after its wait ends, and when the switch is turned off while it waits.
-  const [keptOpen, setKeptOpen] = useState<string | null>(null);
+  // Both are a gateway's: a bot of another gateway with the same id (its own is often `main`) was
+  // never opened there, so it is neither kept nor on screen.
+  const gatewayId = state.connection.gatewayId;
+  const [keptOpen, setKeptOpen] = useState<OnGateway | null>(null);
   /** The bot on screen in the last render. */
-  const [onScreen, setOnScreen] = useState<string | null>(null);
+  const [onScreen, setOnScreen] = useState<OnGateway | null>(null);
+  const keptHere = keptOpen?.gatewayId === gatewayId ? keptOpen.id : null;
+  const onScreenHere = onScreen?.gatewayId === gatewayId ? onScreen.id : null;
   const shownByRule = (each: Bot) => !gatewayBotHidden(each, state.bots, showGatewayBot);
   const chosen = state.bots.find((b) => b.id === botId);
   // On screen and still listed because it waits, though the rule now leaves it out (the switch
   // was turned off): the person's choice, kept.
   const stays =
     chosen !== undefined &&
-    onScreen === chosen.id &&
+    onScreenHere === chosen.id &&
     !shownByRule(chosen) &&
     byRule.includes(chosen);
-  const kept = stays ? chosen.id : keptOpen;
-  if (kept !== keptOpen) setKeptOpen(kept);
+  const kept = stays ? chosen.id : keptHere;
+  if (kept !== keptHere) setKeptOpen(kept === null ? null : { id: kept, gatewayId });
   /** The bots the rail lists, with the one the person keeps open. */
   const listed =
     kept === null
@@ -232,23 +240,25 @@ export function useSelection(
     setBotId(bot.id);
     writePreference("bot", bot.id);
   }
-  if ((bot?.id ?? null) !== onScreen) setOnScreen(bot?.id ?? null);
+  if ((bot?.id ?? null) !== onScreenHere) setOnScreen(bot ? { id: bot.id, gatewayId } : null);
   const keepIfLeftOut = useCallback(
     (id: string) => {
       const target = state.bots.find((each) => each.id === id);
       // Another task of the bot kept open keeps it, whatever the switch says now; only opening
       // another bot lets it go.
       setKeptOpen((kept) =>
-        kept === id || (target && gatewayBotHidden(target, state.bots, showGatewayBot)) ? id : null,
+        (kept?.gatewayId === gatewayId && kept.id === id) ||
+        (target && gatewayBotHidden(target, state.bots, showGatewayBot))
+          ? { id, gatewayId }
+          : null,
       );
     },
-    [state.bots, showGatewayBot],
+    [state.bots, showGatewayBot, gatewayId],
   );
   const tasks = useMemo(
     () => (bot ? (state.tasksByBot[bot.id] ?? []) : []),
     [bot, state.tasksByBot],
   );
-  const gatewayId = state.connection.gatewayId;
   const [linked, setLinked] = useState<{ task: Task; gatewayId: string | null } | null>(null);
   const remembered = bot ? taskByBot[bot.id] : undefined;
   if (

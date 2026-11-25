@@ -331,6 +331,28 @@ test.describe("the gateway's own bot", () => {
     await expect(railBot(page, "Juniper")).toBeVisible();
   });
 
+  test("F-562: a gateway's own bot kept open on one gateway is neither listed nor opened on another whose own bot has the same id", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_DISK}&panel=closed&gatewaybot=off&search=on`, "light");
+    const heading = page.getByRole("heading", { level: 1 });
+    // Juniper, the gateway's own bot (`main`), opened from a search result and kept.
+    await page.keyboard.press("ControlOrMeta+K");
+    const palette = page.getByTestId("search-palette");
+    await palette.getByRole("combobox", { name: "Search" }).fill("coffee");
+    await palette.getByTestId("search-group-messages").getByRole("option").first().click();
+    await expect(heading).toHaveText("Caffeine cutoff time");
+    await expect(railBot(page, "Juniper")).toBeVisible();
+    // Another gateway, whose own bot is also `main` and hidden.
+    await setState(
+      page,
+      `(state) => ({ ...state, connection: { ...state.connection, gatewayId: "another-gateway" } })`,
+    );
+    await expect(railBot(page, "Juniper")).toHaveCount(0);
+    await expect(heading).not.toHaveText("Caffeine cutoff time");
+    await expect(railBot(page, "Marlow")).toBeVisible();
+  });
+
   test("F-562: a new routine whose bot is deleted falls back to a bot the rail lists, never the gateway's own", async ({
     page,
   }) => {
