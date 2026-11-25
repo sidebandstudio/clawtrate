@@ -27,7 +27,7 @@ import { StartedTaskCardView } from "../src/cards/StartedTaskCard.tsx";
 // The "Show commands" switch reads the device's storage, which a markup render has none of: off,
 // as by default, so a card's foot holds only its actions.
 vi.mock("../src/preferences.ts", async (original) => ({
-  ...(await original<typeof import("../src/preferences.ts")>()),
+  ...(await original<Record<string, unknown>>()),
   useShowCommands: () => [false, () => {}],
 }));
 
