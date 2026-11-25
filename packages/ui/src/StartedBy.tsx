@@ -25,17 +25,16 @@ export function starterOf(
   const started = task.startedBy;
   if (!started) return null;
   const bot = bots.find((each) => each.id === started.botId) ?? null;
-  const from = started.fromKey
-    ? (Object.values(tasksByBot)
-        .flat()
-        .find((each) => each.key === started.fromKey) ?? null)
-    : null;
+  const from =
+    Object.values(tasksByBot)
+      .flat()
+      .find((each) => each.key === started.fromKey) ?? null;
   return { name: bot?.name ?? started.botId, bot, from };
 }
 
 /**
  * "Pip started this task from Main · Open Main". Without the task it came from, or a way to
- * open it, the line says only what it can: who started it, and from where when that is known.
+ * open it, the line says only what it can: who started it, and from where when that is listed.
  */
 export function StartedLine({
   starter,

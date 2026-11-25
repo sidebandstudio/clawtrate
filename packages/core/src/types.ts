@@ -239,9 +239,8 @@ export type Task = {
    */
   channel?: string;
   /**
-   * A bot started this task with the gateway's `sessions_spawn` (`createdVia: "spawn"`): the bot
-   * the gateway records as its creator, and the task it was started from (`spawnedBy`), or null
-   * when the gateway names none. Absent for every other task.
+   * A bot started this task with the gateway's `sessions_spawn` (`createdVia: "spawn"`): the task
+   * it was started from (`spawnedBy`) and that task's bot. Absent for every other task.
    */
   startedBy?: TaskStarter;
   /** Paths of fields cut to their bound. */
@@ -252,7 +251,7 @@ export type Task = {
 export type TaskStarter = {
   botId: string;
   /** The session key of the task it was started from. */
-  fromKey: string | null;
+  fromKey: string;
 };
 
 export type TaskContext = {

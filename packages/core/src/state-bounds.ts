@@ -901,6 +901,7 @@ const SESSION_ROW_FIELDS = [
   "classification",
   "contextTokens",
   "createdAt",
+  "createdVia",
   "derivedTitle",
   "displayName",
   "groupChannel",

@@ -215,18 +215,16 @@ export function mapSessionRow(row: RawRecord): Task | null {
 }
 
 /**
- * Who started a task a bot started with `sessions_spawn`: only from the gateway's own fields,
- * `createdVia: "spawn"`, the bot it records as the creator (`createdActor`), else the bot of the
- * task named in `spawnedBy`, and that task. Nothing the bot wrote, its label or brief, counts.
+ * Who started a task a bot started with `sessions_spawn`, only from the gateway's own fields:
+ * `createdVia: "spawn"`, and `spawnedBy`, the task it was started from, whose bot started it
+ * (the gateway's `createdActor` names the same bot). Nothing the bot wrote, its label or brief,
+ * counts.
  */
 function startedByOf(row: RawRecord): { startedBy: TaskStarter } | Record<string, never> {
   if (row.createdVia !== "spawn") return {};
   const fromKey = str(row.spawnedBy);
-  const actor = asRecord(row.createdActor);
-  const botId =
-    (actor?.type === "agent" ? str(actor.id) : null) ??
-    (fromKey ? botIdFromSessionKey(fromKey) : null);
-  return botId ? { startedBy: { botId, fromKey } } : {};
+  const botId = fromKey ? botIdFromSessionKey(fromKey) : null;
+  return fromKey && botId ? { startedBy: { botId, fromKey } } : {};
 }
 
 /**

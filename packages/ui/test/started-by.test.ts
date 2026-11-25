@@ -68,12 +68,6 @@ describe("F-565: the line a task a bot started shows", () => {
     const markup = html(StartedLine({ starter, onOpen: () => {} }));
     expect(text(markup)).toBe("Pip started this task.");
     expect(markup).not.toContain("<button");
-    const unnamed = starterOf({ ...started, startedBy: { botId: "pip", fromKey: null } }, [pip], {
-      pip: [main],
-    })!;
-    expect(text(html(StartedLine({ starter: unnamed, onOpen: () => {} })))).toBe(
-      "Pip started this task.",
-    );
   });
 
   it("F-565: when it cannot be opened from here, the line offers nothing", () => {

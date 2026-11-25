@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { mapHistory, mapSessionRow, startedTaskSince } from "../src/mapping.ts";
+import { SESSION_ROW } from "../src/state-bounds.ts";
 
 const PARENT = "agent:pip:main";
 const CHILD = "agent:pip:dashboard:0fcf7cc4-7434-467a-bae5-d830db7970f5";
@@ -88,7 +89,7 @@ const sessionInfo = (extra: Record<string, unknown> = {}) => ({
 });
 
 describe("F-565: a task a bot started, from its session row", () => {
-  it("F-565: names the bot the gateway records as its creator and the task it came from", () => {
+  it("F-565: names the task it came from and that task's bot", () => {
     const task = mapSessionRow(spawnRow());
     expect(task).toMatchObject({ key: CHILD, botId: "pip", title: "Compare trail maps" });
     expect(task!.startedBy).toEqual({ botId: "pip", fromKey: PARENT });
@@ -106,33 +107,24 @@ describe("F-565: a task a bot started, from its session row", () => {
     expect(task!.startedBy).toEqual({ botId: "pip", fromKey: PARENT });
   });
 
-  it("F-565: without a recorded bot creator it is the bot of the task it came from", () => {
-    expect(mapSessionRow(spawnRow({ createdActor: undefined }))!.startedBy).toEqual({
-      botId: "pip",
-      fromKey: PARENT,
-    });
-    // A person recorded as the creator is not a bot: the starting task's bot is.
-    expect(
-      mapSessionRow(spawnRow({ key: CHILD, createdActor: { type: "human", id: "gateway-owner" } }))!
-        .startedBy,
-    ).toEqual({ botId: "pip", fromKey: PARENT });
+  it("F-565: the row the client keeps still says who started it", () => {
+    // The task list keeps only the fields it reads (`SESSION_ROW`); a started task's survive it.
+    const task = mapSessionRow(SESSION_ROW(spawnRow()));
+    expect(task!.startedBy).toEqual({ botId: "pip", fromKey: PARENT });
   });
 
-  it("F-565: says who started it when the gateway names no task it came from", () => {
-    expect(mapSessionRow(spawnRow({ spawnedBy: undefined }))!.startedBy).toEqual({
-      botId: "pip",
-      fromKey: null,
-    });
+  it("F-565: without the task it came from, nobody is named", () => {
+    // The gateway's spawnedBy is what names the starter; a creator alone does not.
+    expect(mapSessionRow(spawnRow({ spawnedBy: undefined }))!.startedBy).toBeUndefined();
   });
 
   it("F-565: malformed fields name nobody", () => {
-    const task = mapSessionRow(spawnRow({ createdActor: "pip", spawnedBy: 42 }));
+    const task = mapSessionRow(spawnRow({ spawnedBy: 42 }));
     expect(task).not.toBeNull();
     expect(task!.startedBy).toBeUndefined();
-    expect(
-      mapSessionRow(spawnRow({ createdActor: { type: "agent", id: "" }, spawnedBy: "" }))!
-        .startedBy,
-    ).toBeUndefined();
+    expect(mapSessionRow(spawnRow({ spawnedBy: "" }))!.startedBy).toBeUndefined();
+    expect(mapSessionRow(spawnRow({ spawnedBy: "not-a-session-key" }))!.startedBy).toBeUndefined();
+    expect(mapSessionRow(spawnRow({ createdVia: ["spawn"] }))!.startedBy).toBeUndefined();
   });
 
   it("F-565: a task another client started is not marked, whatever it is called", () => {
