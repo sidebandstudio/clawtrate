@@ -66,6 +66,8 @@ function recordingInstance(home: string, name: string | null, runRoot: string) {
   const base = testInstance(home, runRoot, name);
   const runner = new OpenclawRunner({
     instance: name,
+    // A stand-in path: the fake spawn below runs it, never an OpenClaw.
+    bin: "/test/openclaw",
     stateDir: base.stateDir,
     runFile: base.runFile,
     checkout: CHECKOUT,
