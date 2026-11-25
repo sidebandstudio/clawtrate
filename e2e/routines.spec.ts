@@ -109,6 +109,15 @@ test.beforeAll(async ({ browser }) => {
     .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
     .toMatch(/^Approved /m);
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+  // These checks read a routine's runs under its bot, which "Show sessions from other tools"
+  // lists (F-563): turned on as a person turns it on.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
+  const others = settings.getByRole("switch", { name: "Show sessions from other tools" });
+  await others.click();
+  await expect(others).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
 });
 
 test.afterAll(async () => {

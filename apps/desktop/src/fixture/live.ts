@@ -1002,6 +1002,9 @@ export function liveCommand(
     case "setShowChannelChats":
       set({ ...get(), showChannelChats: command.on });
       return Promise.resolve();
+    case "setShowOtherToolSessions":
+      set({ ...get(), showOtherToolSessions: command.on });
+      return Promise.resolve();
     case "readComposerMenu":
       // As the gateway lists them for Otto: its skills and commands, or the bots and a routine.
       return Promise.resolve(

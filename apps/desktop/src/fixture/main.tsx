@@ -122,6 +122,9 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   gatewayName: params.get("gatewayName"),
 });
 if (params.has("hold")) bridge.hold();
+// "Show sessions from other tools" on, for checks of what it lists (F-563, F-193).
+if (params.get("others") === "show")
+  bridge.setState((state) => ({ ...state, showOtherToolSessions: true }));
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.
 if (params.get("uview") === "usage")
   requestUsagePage(params.get("bot") ?? OPEN_BOT, params.get("budget") === "invalid");

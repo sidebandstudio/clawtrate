@@ -124,6 +124,19 @@ type FilesState =
   | { status: "unloaded" }
   | { status: "run"; bots: FileBot[]; roster: string[] };
 
+/** For a task the list doesn't hold whose history lacks the message, why it can't open. */
+function unheldLine(state: ClawtrateState, key: string, wasListed: boolean): string | null {
+  if (
+    Object.values(state.tasksByBot)
+      .flat()
+      .some((each) => each.key === key)
+  )
+    return null;
+  return wasListed
+    ? "This task is no longer in this device's task list."
+    : `This task isn't in this device's task list, which keeps up to ${LISTED} tasks.`;
+}
+
 type Opening = {
   rowKey: string;
   key: string;
@@ -525,20 +538,20 @@ export function SearchPalette({
     [bridge],
   );
 
-  /** The place a result names, checked against what the app keeps now; the line when it can't open. */
+  /**
+   * The place a result names, checked against what the app keeps now; the line when it can't open.
+   * A task the list doesn't hold, such as one a switch in Settings hides (F-563), is not refused
+   * here: its history is read, and it opens only if that history holds the message (`unheldLine`).
+   */
   const goneLine = useCallback(
-    (botId: string, key: string, sessionId: string | null, wasListed: boolean): string | null => {
+    (botId: string, key: string, sessionId: string | null): string | null => {
       const now = latest.current.state;
       if (!now.bots.some((bot) => bot.id === botId))
         return `${botName(botId)} is no longer in this connection's list of bots.`;
       const task = Object.values(now.tasksByBot)
         .flat()
         .find((each) => each.key === key);
-      if (!task)
-        return wasListed
-          ? "This task is no longer in this device's task list."
-          : `This task isn't in this device's task list, which keeps up to ${LISTED} tasks.`;
-      if (sessionId !== null && task.sessionId !== null && task.sessionId !== sessionId)
+      if (task && sessionId !== null && task.sessionId !== null && task.sessionId !== sessionId)
         return "This task's conversation was replaced since the search. Search again.";
       return null;
     },
@@ -553,7 +566,7 @@ export function SearchPalette({
       if (open.gen !== generation.current || open.reread) return;
       const transcript = latest.current.state.transcripts[open.key];
       if (!transcript || transcript.status === "loading") return;
-      const gone = goneLine(open.hit.botId, open.key, open.sessionId, open.wasListed);
+      const gone = goneLine(open.hit.botId, open.key, open.sessionId);
       if (gone) {
         setOpening({ ...open, status: "gone", line: gone });
         return;
@@ -566,7 +579,8 @@ export function SearchPalette({
         });
         return;
       }
-      if (messageOf(transcript, open.hit.messageId)) {
+      // The history read for this hit's own task, holding the message: only then does it open.
+      if (transcript.sessionKey === open.key && messageOf(transcript, open.hit.messageId)) {
         if (opened.current === open.key) opened.current = null;
         onOpen({
           kind: "message",
@@ -575,6 +589,11 @@ export function SearchPalette({
           messageId: open.hit.messageId,
           said: open.hit.said,
         });
+        return;
+      }
+      const unheld = unheldLine(latest.current.state, open.key, open.wasListed);
+      if (unheld) {
+        setOpening({ ...open, status: "gone", line: unheld });
         return;
       }
       const oldest = transcript.items.find((item) => item.timestamp !== null)?.timestamp ?? null;
@@ -659,7 +678,7 @@ export function SearchPalette({
       wasListed: boolean,
       title: string,
     ) => {
-      const gone = goneLine(hit.botId, hit.sessionKey, hit.sessionId, wasListed);
+      const gone = goneLine(hit.botId, hit.sessionKey, hit.sessionId);
       const said = `Opened ${title}, at ${hit.role === "user" ? "the user message" : `${botName(hit.botId)}'s reply`}${hit.timestamp !== null ? ` of ${dayAndTime(hit.timestamp)}` : ""}`;
       const open: Opening = {
         rowKey,
@@ -1361,7 +1380,9 @@ export function SearchPalette({
                     name: "Open the task at its latest",
                     first: "Open the task at its latest",
                     open: () => {
-                      const gone = goneLine(opening.hit.botId, opening.key, null, true);
+                      const gone =
+                        goneLine(opening.hit.botId, opening.key, null) ??
+                        unheldLine(latest.current.state, opening.key, true);
                       if (gone) setOpening({ ...opening, status: "gone", line: gone });
                       else {
                         if (opened.current === opening.key) opened.current = null;

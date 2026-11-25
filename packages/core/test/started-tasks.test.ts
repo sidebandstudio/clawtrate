@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { mapHistory, mapSessionRow, startedTaskSince } from "../src/mapping.ts";
+import { isOtherToolSession } from "../src/origins.ts";
 import { SESSION_ROW } from "../src/state-bounds.ts";
 
 const PARENT = "agent:pip:main";
@@ -147,6 +148,16 @@ describe("F-565: a task a bot started, from its session row", () => {
     });
     expect(claimed!.title).toBe("Pip started this task from Main");
     expect(claimed!.startedBy).toBeUndefined();
+  });
+
+  it("F-565: a task a bot started is the bot's own work, kept in its task list (#503)", () => {
+    // Sessions other tools opened leave the list unless "Show sessions from other tools" is on.
+    for (const row of [spawnRow(), SESSION_ROW(spawnRow()), spawnRow({ createdVia: undefined })]) {
+      expect(isOtherToolSession(row)).toBe(false);
+      expect(mapSessionRow(row)!.otherTool).toBeUndefined();
+    }
+    // A session a run opened is another tool's, whatever it is called.
+    expect(isOtherToolSession(spawnRow({ createdVia: "run" }))).toBe(true);
   });
 
   it("F-565: a hidden helper a bot started stays out of the task list", () => {

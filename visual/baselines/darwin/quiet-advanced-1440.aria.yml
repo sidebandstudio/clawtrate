@@ -26,6 +26,9 @@
       - text: Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or another channel stay out of the task list, its previews and its unread marks. A bot's main conversation always shows. If the gateway sends a channel's direct messages to it, which it does unless its
       - code: session.dmScope
       - text: setting gives each channel conversation its own session, those messages still appear there.
+    - text: Show sessions from other tools
+    - switch "Show sessions from other tools"
+    - paragraph: Off by default. Sessions that an API client, a scheduled routine or another tool started with a bot stay out of the task list, its previews and its unread marks. A routine's runs open from Routines. One that is waiting for your approval or answer always shows.
   - status
 - navigation "Bots":
   - button "Routines"

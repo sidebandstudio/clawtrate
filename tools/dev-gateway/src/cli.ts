@@ -419,6 +419,11 @@ export type StartOptions = {
    */
   messageTool?: boolean;
   /**
+   * The gateway's OpenAI-compatible HTTP API (`POST /v1/chat/completions`), on the gateway's own
+   * loopback port with its token; named instances only. Another tool's sessions come from it.
+   */
+  httpApi?: boolean;
+  /**
    * The `skill_workshop` tool offered to every bot, so the gateway's background skill review
    * runs after a task's work; named instances only. The scripted model saves a skill in a
    * review only after `#learn` (scenarios.ts, `skillReviewReply`).
@@ -460,6 +465,7 @@ export function devConfig(
       // Require explicit approval even on loopback, so the pairing flow is real,
       // unless this instance was started to see the gateway's own default.
       ...(options.defaultLocalPairing ? {} : { nodes: { pairing: { autoApproveLocal: false } } }),
+      ...(options.httpApi ? { http: { endpoints: { chatCompletions: { enabled: true } } } } : {}),
     },
     discovery: { mdns: { mode: "off" } },
     update: { checkOnStart: false },
@@ -815,12 +821,14 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
         key !== "renewTimeoutMs" &&
         key !== "images" &&
         key !== "messageTool" &&
+        key !== "httpApi" &&
         key !== "skillReview",
     ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).images) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).messageTool) ||
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).httpApi) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).skillReview) ||
     !renewChoice((recorded as StartOptions).renewTimeoutMs)
   ) {
@@ -1118,6 +1126,8 @@ export async function start(
     images?: boolean;
     /** The message tool for every bot (`StartOptions.messageTool`). */
     messageTool?: boolean;
+    /** The gateway's HTTP API (`StartOptions.httpApi`). */
+    httpApi?: boolean;
     /** The background skill review (`StartOptions.skillReview`). */
     skillReview?: boolean;
   } = {},
@@ -1139,6 +1149,9 @@ export async function start(
   if (options.messageTool && inst.name === null) {
     throw new Error("the default instance never offers the message tool; use --instance <name>");
   }
+  if (options.httpApi && inst.name === null) {
+    throw new Error("the default instance never serves the HTTP API; use --instance <name>");
+  }
   if (options.skillReview && inst.name === null) {
     throw new Error("the default instance never reviews tasks for skills; use --instance <name>");
   }
@@ -1153,6 +1166,7 @@ export async function start(
     ...(options.renewTimeoutMs !== undefined ? { renewTimeoutMs: options.renewTimeoutMs } : {}),
     ...(options.images ? { images: true } : {}),
     ...(options.messageTool ? { messageTool: true } : {}),
+    ...(options.httpApi ? { httpApi: true } : {}),
     ...(options.skillReview ? { skillReview: true } : {}),
   };
   // Refused before anything changes: a name that is not this checkout's own
@@ -1878,6 +1892,11 @@ async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void>
   for (const task of bot.tasks) {
     const key = sessionKeyFor(bot.id, task.slug);
     const alreadySeeded = existing.has(key);
+    // Made as Clawtrate makes a task, by an operator (`createdVia: "operator"`), so the sample
+    // conversations count as the person's own; the turns then run in it as the gateway's owner.
+    if (!alreadySeeded) {
+      await callGateway(inst, "sessions.create", { key, agentId: bot.id, label: task.label });
+    }
     for (const turn of alreadySeeded ? [] : task.turns) {
       const output = parseJsonOutput<AgentRunOutput>(
         await must(inst, [
@@ -1896,7 +1915,6 @@ async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void>
       const problem = checkTurnOutcome(output, turn);
       if (problem) throw new Error(`${bot.name} / ${task.label}: ${problem}`);
     }
-    if (!alreadySeeded) await callGateway(inst, "sessions.patch", { key, label: task.label });
     const history = await callGateway<{ messages?: HistoryMessage[] }>(inst, "chat.history", {
       sessionKey: key,
       limit: 200,
@@ -2215,7 +2233,7 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
+  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2235,6 +2253,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "renew-timeout-ms": { type: "string" },
       "with-images": { type: "boolean", default: false },
       "with-message-tool": { type: "boolean", default: false },
+      "with-http-api": { type: "boolean", default: false },
       "with-skill-review": { type: "boolean", default: false },
       agent: { type: "string" },
       provider: { type: "string" },
@@ -2276,6 +2295,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     "default-local-pairing",
     "with-images",
     "with-message-tool",
+    "with-http-api",
     "with-skill-review",
   ] as const) {
     if (values[option] && command !== "start" && command !== "up") {
@@ -2300,6 +2320,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         node: values["with-node"],
         images: values["with-images"],
         messageTool: values["with-message-tool"],
+        httpApi: values["with-http-api"],
         skillReview: values["with-skill-review"],
         ...(renew !== undefined ? { renewTimeoutMs: Number(renew) } : {}),
       });

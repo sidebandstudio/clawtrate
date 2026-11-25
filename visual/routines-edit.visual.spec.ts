@@ -10,7 +10,8 @@ import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixtur
 
 type Scene = { name: string; query?: string; ready: (page: Page, phone: boolean) => Promise<void> };
 
-const ADMIN = "scene=main&routines=on&access=admin";
+// "Show sessions from other tools" on, so a routine's latest run is a row under its bot (F-193).
+const ADMIN = "scene=main&routines=on&access=admin&others=show";
 const view = (page: Page) => page.getByTestId("routines-view");
 const editor = (page: Page) => page.getByTestId("routine-editor");
 const row = (page: Page, name: string) =>

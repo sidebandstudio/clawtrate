@@ -769,6 +769,7 @@ const task = flagged<Task>()({
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
+  otherTool: FLAG,
   channel: NAME,
   startedBy: object<TaskStarter>()({ botId: ID, fromKey: ID }),
 });
@@ -1294,6 +1295,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
   voiceChanges: NUMBER,
+  showOtherToolSessions: FLAG,
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
 });
