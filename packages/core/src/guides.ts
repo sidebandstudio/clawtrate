@@ -120,14 +120,16 @@ export function findSection(file: string): FoundSection {
 /**
  * The file with this version's section: in place of the one there, or at the top, with a blank
  * line before what was there, an empty file's included, so a line added below it later is never
- * taken for Clawtrate's. Nothing else in the file changes.
+ * taken for Clawtrate's; a leading byte-order mark stays first. Nothing else in the file changes.
  */
 export function withSection(file: string): string {
   const found = findSection(file);
   if (found.kind === "changed" && !found.replaceable) return file;
   if (found.kind !== "none")
     return file.slice(0, found.start) + GUIDES_SECTION + file.slice(found.end);
-  return `${GUIDES_SECTION}\n${file}`;
+  // A byte-order mark stays first, before the section, as findSection reads it.
+  const top = file.startsWith("\uFEFF") ? 1 : 0;
+  return `${file.slice(0, top)}${GUIDES_SECTION}\n${file.slice(top)}`;
 }
 
 /**

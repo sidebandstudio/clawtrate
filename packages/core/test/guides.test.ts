@@ -117,6 +117,13 @@ describe("the section", () => {
     // it later is theirs, and stays when the section is taken out.
     expect(withSection("")).toBe(`${GUIDES_SECTION}\n`);
     expect(withoutSection(`${withSection("")}\n# Theirs\n`)).toBe("\n# Theirs\n");
+    // A byte-order mark stays first: the section goes right after it, and comes out again.
+    for (const before of ["\uFEFF# Otto\n", "\uFEFF"]) {
+      const added = withSection(before);
+      expect(added).toBe(`\uFEFF${GUIDES_SECTION}\n${before.slice(1)}`);
+      expect(findSection(added)).toMatchObject({ kind: "ours", current: true, start: 1 });
+      expect(withoutSection(added)).toBe(before);
+    }
     expect(withoutSection(BOT_FILE)).toBe(BOT_FILE);
   });
 
