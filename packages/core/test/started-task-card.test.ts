@@ -283,6 +283,16 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
         step.result ? { ...step, result: { ...step.result, totalChars: 99_999 } } : step,
       ),
     }));
+    // A result text the gateway cut when it stored the row says nothing, even if it parses.
+    const gatewayCut = runs.map((run) => ({
+      ...run,
+      steps: run.steps.map((step) => (step.result ? { ...step, resultCut: true as const } : step)),
+    }));
+    const [cutByGateway] = selectStartedTasks(
+      { runs: gatewayCut, items: mapHistory(rows), taskKey: HERE, tasks: listed("running") },
+      () => null,
+    );
+    expect(cutByGateway).toMatchObject({ state: "unknown", taskKey: null, task: null });
     const [partial] = selectStartedTasks(
       { runs: cut, items: mapHistory(rows), taskKey: HERE, tasks: listed("running") },
       () => null,
@@ -535,10 +545,12 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
 
 describe("the task list a card may use", () => {
   const task = listed("running").pip![0]!;
-  const state = (read: { target: number; gatewayId: string | null } | null) => ({
+  const state = (
+    read: { target: number; gatewayId: string | null; connectedAt?: number } | null,
+  ) => ({
     tasksByBot: { pip: [task] },
-    discovery: { ...initialDiscoveryState, tasksRead: read && { ...read, connectedAt: 1 } },
-    connection: { ...initialConnectionState, target: 3, gatewayId: "gw-a" },
+    discovery: { ...initialDiscoveryState, tasksRead: read && { connectedAt: 1, ...read } },
+    connection: { ...initialConnectionState, target: 3, gatewayId: "gw-a", connectedAt: 1 },
   });
 
   it("is the list in state only when it was read on the gateway the host is pointed at", () => {
@@ -548,6 +560,8 @@ describe("the task list a card may use", () => {
     // Read before a switch to another gateway, or from another gateway at the same address.
     expect(tasksShownHere(state({ target: 2, gatewayId: "gw-a" }))).toEqual({});
     expect(tasksShownHere(state({ target: 3, gatewayId: "gw-b" }))).toEqual({});
+    // Read before the gateway named itself, on a connection since replaced: it may be another's.
+    expect(tasksShownHere(state({ target: 3, gatewayId: null, connectedAt: 0 }))).toEqual({});
   });
 
   it("finds a task only by its key and the conversation the list says it was started from", () => {

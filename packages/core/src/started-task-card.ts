@@ -128,7 +128,14 @@ function argsOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null
  */
 function resultOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null {
   const details = sendDetails(resultBody(raw));
-  if (details || !step.result || step.result.text.length < step.result.totalChars) return details;
+  // Kept whole by this app, and not cut by the gateway when it stored the row (`resultCut`).
+  if (
+    details ||
+    !step.result ||
+    step.resultCut === true ||
+    step.result.text.length < step.result.totalChars
+  )
+    return details;
   try {
     const kept = asRecord(JSON.parse(step.result.text));
     return kept && !Array.isArray(kept) && str(kept.status) ? kept : null;
@@ -164,11 +171,14 @@ export function tasksShownHere(
   state: Pick<ClawtrateState, "tasksByBot" | "discovery" | "connection">,
 ): Record<string, Task[]> {
   const read = state.discovery.tasksRead;
-  const { target, gatewayId } = state.connection;
+  const { target, gatewayId, connectedAt } = state.connection;
   if (!read) return state.tasksByBot;
+  // A list read before the gateway named itself holds only on the connection that read it.
   const same =
     read.target === target &&
-    (read.gatewayId === null || gatewayId === null || read.gatewayId === gatewayId);
+    (read.gatewayId === null
+      ? read.connectedAt === connectedAt
+      : gatewayId === null || read.gatewayId === gatewayId);
   return same ? state.tasksByBot : NONE;
 }
 
