@@ -38,6 +38,9 @@ export const JOBS: readonly (readonly string[])[] = [
   ],
 ];
 
+/** The pairing check: it sets the app up itself and ends in the paired session. */
+export const PAIRING = "F-002 F-003 F-009:";
+
 /**
  * The checks that set the app up themselves. Every other check starts where the pairing check
  * leaves the app: paired read-only through the check's proxy, on Home. A job without the
@@ -45,7 +48,7 @@ export const JOBS: readonly (readonly string[])[] = [
  */
 export const OWN_START: readonly string[] = [
   "F-001 F-009 F-263:", // launches the app fresh
-  "F-002 F-003 F-009:", // starts on the address screen the welcome check leaves
+  PAIRING, // starts on the address screen the welcome check leaves
   "on iPhone, a paired gateway that repeats",
   "on iPhone, a bot whose tasks the gateway failed",
   "on iPhone, a long bot name",
@@ -54,7 +57,7 @@ export const OWN_START: readonly string[] = [
 
 /** A check that starts where another leaves the app, so both run in one job, in this order. */
 export const FOLLOWS: Readonly<Record<string, string>> = {
-  "F-002 F-003 F-009:": "F-001 F-009 F-263:",
+  [PAIRING]: "F-001 F-009 F-263:",
 };
 
 const names = (entry: string, title: string) => title.startsWith(entry);

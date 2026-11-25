@@ -20,7 +20,16 @@ import {
   plainPreview,
   type AvatarChoice,
 } from "@clawtrate/core";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+} from "vitest";
 import {
   CLEARTEXT_WORDS,
   CONNECT_WORDS,
@@ -89,7 +98,7 @@ import {
   workspaceFor,
   type Step,
 } from "./harness.ts";
-import { startsOnItsOwn } from "./jobs.ts";
+import { PAIRING, startsOnItsOwn } from "./jobs.ts";
 
 type SessionRow = {
   key: string;
@@ -318,6 +327,11 @@ afterAll(async () => {
 beforeEach(async ({ task }) => {
   if (!deviceId && !startsOnItsOwn(task.name)) await pairedSession();
 }, 15 * 60_000);
+// A check that set the app up itself leaves it on another gateway, with a new identity: the next
+// check pairs again. The pairing check alone ends in the paired session.
+afterEach(({ task }) => {
+  if (startsOnItsOwn(task.name) && !task.name.startsWith(PAIRING)) deviceId = "";
+});
 
 describe("the iOS app", () => {
   it("F-001 F-009 F-263: on iPhone, the first screen is the welcome with the mark, the tagline and Connect a gateway; an empty address, a gateway nobody answers and one on another protocol each get the desktop's words and a way on, and Retry repeats only the handshake", async () => {

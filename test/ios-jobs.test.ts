@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   JOBS,
+  PAIRING,
   SUITE,
   jobPattern,
   jobProblems,
@@ -40,6 +41,8 @@ describe("the iOS job lists", () => {
       // The first two checks set the app up themselves, and the first after them doesn't.
       expect(titles.slice(0, 2).every((title) => startsOnItsOwn(title))).toBe(true);
       expect(startsOnItsOwn(titles[2]!)).toBe(false);
+      // The second is the pairing check, which ends in the session the others start from.
+      expect(titles.filter((title) => title.startsWith(PAIRING))).toEqual([titles[1]]);
     },
     LISTING,
   );
