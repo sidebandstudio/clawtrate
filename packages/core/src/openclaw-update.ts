@@ -174,6 +174,13 @@ export type UpdateRunView = {
 
 export type OpenClawUpdateState = {
   run: UpdateRunView | null;
+  /** The updates this device's own press started and saw succeed, the latest last; absent when none. */
+  updated?: UpdatedRun[];
+  /**
+   * Connected, and what this device keeps for the gateway on screen (a run of its press, or a
+   * press whose answer was lost) hasn't been read yet: Update is held until it is. Absent otherwise.
+   */
+  checkingKept?: true;
   /** The press being sent, until the gateway answers. */
   starting: boolean;
   /** Why this gateway can't update itself, in its words: no button while it runs. */
@@ -187,13 +194,6 @@ export type OpenClawUpdateState = {
   looking: boolean;
   /** Asking the gateway about that press failed: Check again and Stop waiting are offered. */
   lookFailed: boolean;
-  /** The updates this device's own press started and saw succeed, the latest last; absent when none. */
-  updated?: UpdatedRun[];
-  /**
-   * Connected, and what this device keeps for the gateway on screen (a run of its press, or a
-   * press whose answer was lost) hasn't been read yet: Update is held until it is. Absent otherwise.
-   */
-  checkingKept?: true;
 };
 
 export const initialOpenClawUpdate: OpenClawUpdateState = {

@@ -798,6 +798,11 @@ const updateRun = object<UpdateRunView>()({
 });
 const openclawUpdating = object<OpenClawUpdateState>()({
   run: updateRun,
+  updated: list(
+    MAX_UPDATED_RUNS,
+    object<UpdatedRun>()({ gatewayId: ID, runId: ID, to: NAME, at: NUMBER }),
+  ),
+  checkingKept: FLAG,
   starting: FLAG,
   blocked: object<NonNullable<OpenClawUpdateState["blocked"]>>()({
     reason: text(MAX_UPDATE_REASON_CHARS),
@@ -806,11 +811,6 @@ const openclawUpdating = object<OpenClawUpdateState>()({
   error: text(MAX_UPDATE_NOTE_CHARS),
   looking: FLAG,
   lookFailed: FLAG,
-  updated: list(
-    MAX_UPDATED_RUNS,
-    object<UpdatedRun>()({ gatewayId: ID, runId: ID, to: NAME, at: NUMBER }),
-  ),
-  checkingKept: FLAG,
 });
 const task = flagged<Task>()({
   key: ID,
