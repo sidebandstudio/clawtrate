@@ -23,7 +23,7 @@ import { READ_SCOPES } from "../src/scopes.ts";
 import { enforceState } from "../src/state-bounds.ts";
 import type { Task, Transcript } from "../src/types.ts";
 import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
-import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const PDF = "artifact_managed_media_470797d5-f45d-444a-901d-21a6bd2c2f96";
 const NOTES = "artifact_managed_media_dcdee85c-5f62-4293-9cc5-68c53084eba3";
@@ -544,6 +544,62 @@ describe("F-115: a file a bot attaches, read", () => {
     });
     expect(() => parseBridgeCommand({ type: "readChatFile", key: KEY, stamp })).toThrow();
     expect(() => parseBridgeCommand({ type: "readChatFile", key: KEY, artifactId: PDF })).toThrow();
+  });
+
+  it("F-115: a viewer that leaves while the read waits for the gateway's identity asks nothing", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { client, gateway } = await open(async () => {
+      await held;
+      return response(200, {}, BYTES);
+    });
+    // Four reads hold the file reads' places, so the viewer's read waits for one.
+    const busy = Array.from({ length: 4 }, () => client.readChatFile(KEY, PDF));
+    await until(() => gateway.calls("artifacts.download").length === 4);
+    const viewer = {};
+    const stamp = { gatewayId: "gateway-a", target: client.state.connection.target };
+    const reading = client.readChatFile(KEY, PDF, { owner: viewer }, stamp);
+    // Meanwhile the identity the client knew is forgotten: the next check asks again, and waits.
+    const identity = deferred<unknown>();
+    gateway.handlers["gateway.identity.get"] = () => identity.promise;
+    (client as unknown as { gatewayIdentity: unknown }).gatewayIdentity = null;
+    const asked = gateway.calls("gateway.identity.get").length;
+    // The places free up; the viewer's read takes one and waits on the identity, then the viewer goes.
+    release();
+    await Promise.allSettled(busy);
+    await until(() => gateway.calls("gateway.identity.get").length > asked);
+    client.withdraw(viewer);
+    identity.resolve({ deviceId: "gateway-a" });
+    await expect(reading).rejects.toThrow();
+    expect(gateway.calls("artifacts.download")).toHaveLength(4);
+    client.stop();
+  });
+
+  it("F-115: a file read that a reconnect crosses is refused and its transfer let go; on the same socket it reads", async () => {
+    let release: () => void = () => {};
+    let held = new Promise<void>((resolve) => (release = resolve));
+    const { client, gateway } = await open(async () => {
+      await held;
+      return response(200, {}, BYTES);
+    });
+    const transfers = (client as unknown as { fileTransfers: { size: number } }).fileTransfers;
+    const crossing = client.readChatFile(KEY, PDF, { maxChars: 1 });
+    await until(() => gateway.calls("artifacts.download").length === 1);
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "connected");
+    release();
+    expect(await crossing).toEqual({
+      status: "failed",
+      message: "The connection changed while this file was read.",
+    });
+    expect(transfers.size).toBe(0);
+    // The same read on one socket from start to end gives the file.
+    held = Promise.resolve();
+    expect(await client.readChatFile(KEY, PDF)).toMatchObject({
+      status: "content",
+      bytes: BYTES.length,
+    });
+    client.stop();
   });
 
   it("F-115: a file read that waited for a place checks its gateway again before asking", async () => {

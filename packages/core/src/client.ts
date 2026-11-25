@@ -7037,13 +7037,18 @@ export class ClawtrateClient {
     this.checkNotWithdrawn(options.owner);
     const refused = refusal ? await refusal() : null;
     if (refused !== null) return { status: "failed", message: refused };
+    // The refusal can wait for the gateway's identity: the viewer is checked again, last.
+    this.checkNotWithdrawn(options.owner);
+    // The socket the read is asked on: one that answers after a reconnect is another's.
+    const epoch = this.epoch;
     const gatewayUrl = this.state.connection.gatewayUrl ?? "";
     const answer = await this.fileRead(
       (ctx) => read({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }),
       options,
     );
-    // Bytes that arrive after a switch to another gateway are the old one's: none reach a viewer.
-    if (generation !== this.generation) {
+    // Bytes that arrive after a switch to another gateway, or a reconnect, are the old
+    // connection's: none reach a viewer.
+    if (generation !== this.generation || epoch !== this.epoch) {
       const transfer = (answer as { transfer?: { id: string | null } }).transfer;
       if (answer.status === "content" && transfer?.id)
         this.fileTransfers.release(options.owner ?? DIRECT_CALLER, transfer.id);
