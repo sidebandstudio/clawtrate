@@ -238,6 +238,8 @@ What `modelPolicy.allow: ["acme/dev-1"]` limits, on a named development instance
 | `config.patch` of `otto`'s `model.primary` to `acme/dev-2`, then a run | taken; the run asked for `dev-2`  | same       |
 | `config.patch` of `agents.defaults.model.primary` to `acme/dev-2`, then a run on `main` | taken; `dev-2` | same |
 
+Run again on both versions with two models named, `["acme/dev-1", "globex/dev-1"]`, every row came out the same; the picker, for `main` and `otto`, and a refresh of `acme` listed only the named models, and `view: "all"` listed all four.
+
 2026.11.10's development config needs `agents.defaults.heartbeat` left out and its own migrations of `tools.deny` and `meta` allowed; that was done for this run only and is not in the tool. The start log has one "remote model catalog refresh failed; next check in 6 hours" (the instance's proxy refuses the download); refreshes added no such line. A model added to a declared provider's list in the config (the development instance's `acme/dev-3`, `pnpm scenarios`) is listed by the next refresh.
 
 What a real provider's discovery reports, and the hosted list adding a model, cannot be shown with the scripted providers.

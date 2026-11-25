@@ -17,15 +17,17 @@ import {
   modelIdProblem,
   type AccountsState,
   type CatalogModel,
+  type ClawtrateState,
   type ConnectionState,
   type ModelList,
   type ModelRefresh,
   type OpenClawUpdate,
+  type UpdateRunView,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { Select, type SelectRow, type SelectSection } from "./parts.tsx";
-import { UpdateOpenClawNote, useUpdateLinkLine, useUpdateRun } from "./UpdateOpenClaw.tsx";
+import { UpdateOpenClawNote, useUpdateRun } from "./UpdateOpenClaw.tsx";
 import { updateLinkLine } from "./update-words.ts";
 import { levelWord, modelsOf, providerName } from "./words.ts";
 
@@ -244,6 +246,23 @@ export function refreshWords(
 }
 
 /**
+ * What the note under the menu says (#594's one line), as the pair shows it: only with an update
+ * run in view or a newer OpenClaw reported, and then the line, if any. `offer` when it is the line
+ * that a newer OpenClaw is out, not where an update stands.
+ */
+export function noteBelow(
+  state: ClawtrateState,
+  run: UpdateRunView | null,
+  update: OpenClawUpdate | null,
+): { line: string; offer: boolean } | null {
+  if (!run && !update) return null;
+  const line = updateLinkLine(state, run);
+  if (line === null) return null;
+  const offer = updateLinkLine({ ...state, openclawUpdating: initialOpenClawUpdate }, null);
+  return { line, offer: line === offer };
+}
+
+/**
  * The OpenClaw versions on which what the config's model list limits was established, on a
  * development gateway of each: it limits what the gateway lists and what a task may switch to, and
  * not a bot's own model or the default (docs/research/model-catalog.md, section 8).
@@ -330,13 +349,10 @@ export function ModelPair({
   // What the note under the menu says now (#594's one line): that a newer OpenClaw is out, where
   // an update stands, or nothing. The result points to it only as it is.
   const state = useClawtrateState();
-  const noteLine = useUpdateLinkLine();
-  const noteIsOffer =
-    noteLine !== null &&
-    noteLine === updateLinkLine({ ...state, openclawUpdating: initialOpenClawUpdate }, null);
+  const note = noteBelow(state, updateRun, update);
   const foundWords =
     found && found.status !== "looking"
-      ? refreshWords(found, who, noteIsOffer ? update : null, noteLine !== null && !noteIsOffer)
+      ? refreshWords(found, who, note?.offer ? update : null, note !== null && !note.offer)
       : null;
   const limits = allowlistLine(accounts, provider, state.connection.serverVersion);
   // What a Refresh found is said once, politely, when it arrives; focus stays where it was.

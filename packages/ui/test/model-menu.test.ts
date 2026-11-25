@@ -5,14 +5,23 @@
 import {
   initialAccountsState,
   initialConnectionState,
+  initialOpenClawUpdate,
+  initialState,
   type AccountsState,
   type CatalogModel,
   type ConnectionState,
   type ModelRefresh,
   type OpenClawUpdate,
+  type UpdateRunView,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { allowlistLine, heldKey, modelMenu, refreshWords } from "../src/bots/ModelPair.tsx";
+import {
+  allowlistLine,
+  heldKey,
+  modelMenu,
+  noteBelow,
+  refreshWords,
+} from "../src/bots/ModelPair.tsx";
 
 const model = (id: string, available = true): CatalogModel => ({
   provider: "openai",
@@ -189,6 +198,31 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(limited([], "2027.1.1")).toBeNull();
     expect(limited([], null)).toBeNull();
   });
+  it("F-588: points to the note under the menu only as the pair shows it: the offer, where an update stands, or nothing", () => {
+    const offer: OpenClawUpdate = { current: "2026.10.6", latest: "2026.11.6", channel: "latest" };
+    const at = (update: OpenClawUpdate | null, looking: boolean) => ({
+      ...initialState,
+      connection: { ...initialState.connection, gatewayId: "gw-a", openclawUpdate: update },
+      openclawUpdating: { ...initialOpenClawUpdate, looking },
+    });
+    const running = {
+      runId: "r1",
+      gatewayId: "gw-a",
+      mine: true,
+      from: "2026.10.6",
+      to: "2026.11.6",
+      phase: "staging",
+      outcome: "running",
+    } as UpdateRunView;
+    expect(noteBelow(at(offer, false), null, offer)).toMatchObject({ offer: true });
+    expect(noteBelow(at(offer, false), running, offer)).toMatchObject({ offer: false });
+    expect(noteBelow(at(offer, true), null, offer)).toMatchObject({ offer: false });
+    expect(noteBelow(at(null, false), null, null)).toBeNull();
+    // A hold from an earlier Update press, with no run in view and no newer OpenClaw reported:
+    // the pair shows no note, so the result points to none.
+    expect(noteBelow(at(null, true), null, null)).toBeNull();
+  });
+
   it("F-588: an answer is held for one provider and one connection: another gateway, a reconnect or a hidden pair is another key", () => {
     const connection: ConnectionState = {
       ...initialConnectionState,

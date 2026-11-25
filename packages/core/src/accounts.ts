@@ -201,7 +201,7 @@ export const MAX_REFRESH_NAME_CHARS = 64;
 export const MAX_REFRESH_ERROR_CHARS = 200;
 /** How long Clawtrate waits for the gateway to look again before it says it didn't answer. */
 export const REFRESH_MODELS_MS = 45_000;
-/** The most `agents.defaults.models` entries read for `modelAllowlist`. */
+/** The most entries of the config's model list for bots read for `modelAllowlist`. */
 export const MAX_ALLOWLIST_ENTRIES = 1024;
 
 export type RefreshOutcome = "ready" | "auth-rejected" | "unavailable" | null;
@@ -250,9 +250,10 @@ export type ModelRefresh =
 /**
  * The models the gateway's config lets the default bot use, as the Model menu needs it: null when
  * nothing limits them. The bot's own `modelPolicy.allow`, else `agents.defaults.modelPolicy.allow`,
- * else the old `agents.defaults.models` while the config is unmigrated; the gateway lists, and
- * runs, only what it names (docs/research/model-catalog.md, section 8). `whole` is the providers
- * a `<provider>/*` entry leaves whole.
+ * else the old `agents.defaults.models` while the config is unmigrated. The gateway lists, and
+ * lets a task switch to, only what it names; a bot's own model and the default can still be
+ * others (docs/research/model-catalog.md, section 8). `whole` is the providers a `<provider>/*`
+ * entry leaves whole.
  */
 export type ModelAllowlist = { whole: string[] };
 
@@ -487,7 +488,7 @@ export type AccountsState = {
   models: CatalogModel[];
   /** Providers whose picker rows were cut at `MAX_CATALOG_MODELS`, with how many it listed. */
   modelsCut: PickerCut[];
-  /** The config's `agents.defaults.models`, or null when it has none. */
+  /** The config's model list for the default bot (`ModelAllowlist`), or null when it has none. */
   modelAllowlist: ModelAllowlist | null;
   bindings: BotBinding[];
   signIn: SignInState | null;
@@ -898,7 +899,7 @@ export function checksHostedList(config: RawRecord | null): boolean {
   return asRecord(asRecord(root?.models)?.catalogRefresh)?.enabled !== false;
 }
 
-/** The config's `agents.defaults.models` as the Model menu needs it (`ModelAllowlist`). */
+/** The config's model list for a bot, as the Model menu needs it (`ModelAllowlist`). */
 export function readModelAllowlist(config: RawRecord | null, botId: string): ModelAllowlist | null {
   const root = asRecord(config?.config);
   const agents = asRecord(root?.agents);
