@@ -2136,12 +2136,14 @@ async function seedConversations(
 export async function seed(inst: DevInstance): Promise<void> {
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
-  if (!(await gatewayHealthy(inst))) {
-    throw new Error(
-      `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
-    );
-  }
   try {
+    // Inside the diagnostics: a gateway that no longer answers its health call is one whose log
+    // says why.
+    if (!(await gatewayHealthy(inst))) {
+      throw new Error(
+        `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
+      );
+    }
     await seedBotsAndTasks(inst);
   } catch (error) {
     const logs = [
