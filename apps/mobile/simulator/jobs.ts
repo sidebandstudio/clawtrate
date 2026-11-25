@@ -35,7 +35,7 @@ export const JOBS: readonly (readonly string[])[] = [
     "on iPhone, a paired gateway that repeats", // 15
     "on iPhone, a long bot name", // 23
     "F-017:",
-    "F-557:", // not yet run there; about 6 on an M1 Max, which is four to five times as fast
+    "F-557:", // not run there yet: about 16, from 3.6 on an M1 Max at a fifth of the time
   ],
 ];
 
