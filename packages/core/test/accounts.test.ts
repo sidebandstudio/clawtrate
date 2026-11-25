@@ -223,6 +223,7 @@ describe("the Model menu's lists", () => {
       refreshBots: () => Promise.resolve(),
       gateway: () => Promise.resolve("gateway-a"),
       gatewayNow: () => "gateway-a",
+      readStamp: () => ({ gatewayId: "gateway-a", target: 1, connectedAt: 1 }),
       target: () => 0,
       createMainTask: () => Promise.resolve(),
       now: () => 0,

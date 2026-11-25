@@ -374,6 +374,7 @@ import {
 } from "./computer.ts";
 import { readMachine, type MachineFacts } from "./machine.ts";
 import {
+  CONNECTION_CHANGED_AFTER_SEND,
   gatewayStamp,
   initialConnectionState,
   initialScopeUpgrade,
@@ -382,6 +383,7 @@ import {
   type ClawtrateState,
   type ConnectionState,
   type GatewayStamp,
+  type ReadStamp,
   type DiscoveryState,
   type MessageReaction,
   type ScopeUpgradeState,
@@ -409,8 +411,7 @@ const IDENTITY_RETRY_MS = 500;
 export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 /** Why a write that had already sent part of itself stopped: what the gateway did is not known. */
-export const CONNECTION_CHANGED_AFTER_SEND =
-  "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
+export { CONNECTION_CHANGED_AFTER_SEND };
 
 /** What a task action asks that changes nothing: the rest of its requests are writes. */
 const taskRead = (method: string) =>
@@ -1679,6 +1680,11 @@ export class ClawtrateClient {
     refreshBots: () => this.refreshBots(),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
+    readStamp: () => ({
+      gatewayId: this.state.connection.gatewayId,
+      target: this.target,
+      connectedAt: this.state.connection.connectedAt,
+    }),
     target: () => this.target,
     createMainTask: async (botId) => {
       const generation = this.generation;
@@ -4294,6 +4300,15 @@ export class ClawtrateClient {
       }
       return next;
     });
+    // The run is named now: a deferred Stop's check, kept under the message id, moves to the run's
+    // own id, which the run keeps once history holds its message and drops the message id.
+    if (runId && runId !== messageId) {
+      const check = this.deferredStops.get(`${key}\u0000${messageId}`);
+      if (check) {
+        this.deferredStops.delete(`${key}\u0000${messageId}`);
+        this.deferredStops.set(`${key}\u0000${runId}`, check);
+      }
+    }
     // Stop was pressed before the gateway had taken the send: abort the run it named now.
     if (runId && !command && message.mode !== "steer") {
       const run = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
@@ -4377,6 +4392,15 @@ export class ClawtrateClient {
         }));
       return stopping;
     });
+    // An action's Stop of a run not named yet keeps its check before the wait for write access:
+    // the send's answer can name the run meanwhile, and its abort must find the check. With no
+    // room left for it, the Stop is given up now rather than sent unbound later.
+    // Kept before the wait: the abort is then the send's answer's, or a history read's, alone.
+    const deferred = options.bound !== undefined && !run.bound;
+    if (deferred && !this.keepDeferredStop(key, runId, options.bound!)) {
+      this.updateActivity(key, (activity) => revertStop(activity, runId, TOO_MANY_STOPS));
+      return;
+    }
     try {
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       this.checkNotWithdrawn(options.owner);
@@ -4389,30 +4413,41 @@ export class ClawtrateClient {
       if (!current.bound) {
         if (options.taskOnly && options.owner)
           this.unsentStops.set(`${key}\u0000${runId}`, options.owner);
-        // The abort sent once the run is named stays on the action's connection, as this one would.
-        // With no room left for its check, the Stop is given up rather than sent unbound later.
-        if (options.bound && !this.keepDeferredStop(key, runId, options.bound))
-          this.updateActivity(key, (activity) => revertStop(activity, runId, TOO_MANY_STOPS));
+        // The abort sent once the run is named stays on the action's connection: its check is kept.
         return;
       }
+      // Named during the wait: the send's answer has aborted it already, with the check.
+      if (deferred) return;
       await this.abortRun(key, current.id, options.bound);
     } catch (error) {
       this.noteMissingScope(error);
       this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+      // Given up (withdrawn, or no write access): its check goes with it, wherever it was moved,
+      // so no later Stop of the run takes this action's connection.
+      if (deferred) {
+        for (const [held, check] of this.deferredStops)
+          if (check === options.bound && held.startsWith(`${key}\u0000`))
+            this.deferredStops.delete(held);
+      }
     }
   }
 
   /**
-   * Keep a deferred Stop's check (the action's connection) until its run settles. Checks whose
-   * runs are no longer stopping are let go first; a check still waiting is never let go for a
-   * newer one. False when `MAX_DEFERRED_STOPS` are all still waiting.
+   * Keep a deferred Stop's check (the action's connection) until its run ends. Checks whose runs
+   * have ended are let go first; a check still needed is never let go for a newer one. False when
+   * `MAX_DEFERRED_STOPS` are all still needed.
    */
   private keepDeferredStop(key: string, runId: string, bound: () => boolean): boolean {
     for (const held of [...this.deferredStops.keys()]) {
       const [task, id] = held.split("\u0000") as [string, string];
       const activity = this.state.transcripts[task];
       const run = activity?.runs.find((each) => each.id === id || each.messageId === id);
-      if (run?.state !== "stopping") this.deferredStops.delete(held);
+      // Still stopping, or stopped with no known outcome after a Stop: a history read that names
+      // it can still abort it (`readTranscript`), and that abort needs the check.
+      const needed =
+        run?.state === "stopping" ||
+        (run?.state === "stopped" && !run.outcomeKnown && run.stopRequestedAt !== null);
+      if (!needed) this.deferredStops.delete(held);
     }
     if (this.deferredStops.size >= MAX_DEFERRED_STOPS) return false;
     this.deferredStops.set(`${key}\u0000${runId}`, bound);
@@ -4429,6 +4464,14 @@ export class ClawtrateClient {
       if (bound) return bound;
     }
     return undefined;
+  }
+
+  /**
+   * The check of a deferred Stop a history read aborts: kept under the run's id from before the
+   * gateway named it, its message id, whatever id the run has now (`deliver` renames it).
+   */
+  private historyStopCheck(key: string, run: Pick<Run, "id" | "messageId">) {
+    return this.deferredStop(key, run.id, run.messageId ?? run.id);
   }
 
   /**
@@ -8931,6 +8974,30 @@ export class ClawtrateClient {
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
+    if (current()) this.settleReadStamps(id);
+  }
+
+  /**
+   * A list or the accounts read on this connection before its identity was known carry no name:
+   * once the gateway names itself on that same connection, so do they, and their rows act again.
+   */
+  private settleReadStamps(id: string): void {
+    const here = (read: ReadStamp | null) =>
+      read !== null &&
+      read.gatewayId === null &&
+      read.target === this.target &&
+      read.connectedAt === this.state.connection.connectedAt;
+    const { discovery, accounts } = this.state;
+    if (!here(discovery.tasksRead) && !here(accounts.readOn)) return;
+    this.store.update((state) => ({
+      ...state,
+      discovery: here(state.discovery.tasksRead)
+        ? { ...state.discovery, tasksRead: { ...state.discovery.tasksRead!, gatewayId: id } }
+        : state.discovery,
+      accounts: here(state.accounts.readOn)
+        ? { ...state.accounts, readOn: { ...state.accounts.readOn!, gatewayId: id } }
+        : state.accounts,
+    }));
   }
 
   /** Read the identity again, a few times further apart, while this connection lasts without it. */
@@ -9021,7 +9088,19 @@ export class ClawtrateClient {
     const failures: string[] = [];
     if (agents.status !== "fulfilled") failures.push(`bots: ${errorMessage(agents.reason)}`);
     if (sessions.status === "fulfilled") {
-      this.replaceRows(sessions.value.rows, sessions.value.epoch);
+      // The rows are this connection's, and so is the identity read on it: settled first, and
+      // published only while this read is still the current one.
+      const named = await gatewayId;
+      if (!current()) return;
+      this.replaceRows(
+        sessions.value.rows,
+        {
+          gatewayId: named,
+          target: this.target,
+          connectedAt: this.state.connection.connectedAt,
+        },
+        sessions.value.epoch,
+      );
       if (read.sessionsChanged) await this.refreshSessions(generation);
     } else {
       failures.push(`tasks: ${errorMessage(sessions.reason)}`);
@@ -9107,13 +9186,17 @@ export class ClawtrateClient {
   }
 
   /**
-   * Take a list read's rows. A task that began waiting while the read ran may have been cut from
-   * a page before it waited: if one is missing, the list is read once more. Only a change during
-   * the read asks again, so a waiting key the gateway doesn't list is not read for without end.
+   * Take a whole task list, read on the connection `read` names: the rows shown and where they
+   * were read change together, so a row's write never carries an identity its read didn't have.
+   * A task that began waiting while the read ran may have been cut from a page before it waited:
+   * if one is missing, the list is read once more. Only a change during the read asks again, so a
+   * waiting key the gateway doesn't list is not read for without end.
    */
-  private replaceRows(rows: Map<string, RawRecord>, epoch: number): void {
+  private replaceRows(rows: Map<string, RawRecord>, read: ReadStamp, epoch: number): void {
     this.rows = rows;
+    // The rows first: between the two, a row shown with the earlier stamp is refused, never sent.
     this.publishTasks();
+    this.setDiscovery({ tasksRead: read });
     if (epoch !== this.waitingEpoch && this.waiting.keys().some(this.unheldWait))
       this.scheduleRefresh(this.generation);
   }
@@ -9222,7 +9305,15 @@ export class ClawtrateClient {
             const botId = rowBotOf(key, row);
             if (botId && this.removedDuringRead.has(botId)) rows.delete(key);
           }
-          this.replaceRows(rows, epoch);
+          this.replaceRows(
+            rows,
+            {
+              gatewayId: this.state.connection.gatewayId,
+              target: this.target,
+              connectedAt: this.state.connection.connectedAt,
+            },
+            epoch,
+          );
           this.setDiscovery({ partial });
         } catch (error) {
           this.logFailure("warn", "sessions.list", error);
@@ -9254,6 +9345,15 @@ export class ClawtrateClient {
     if (row?.phase === "message" && key && this.tracked(key)) this.scheduleHistory(key);
   }
 
+  /** Whether the task rows shown were read on the connection open now (`discovery.tasksRead`). */
+  private rowsReadHere(): boolean {
+    const read = this.state.discovery.tasksRead;
+    return (
+      read === null ||
+      (read.target === this.target && read.connectedAt === this.state.connection.connectedAt)
+    );
+  }
+
   /**
    * Apply a `sessions.changed` event with the same membership rules as the list.
    * A known row is merged and re-checked. An unknown row whose key is not ruled
@@ -9278,6 +9378,12 @@ export class ClawtrateClient {
       // Deleted elsewhere: the pictures you sent in it go too. An archived task keeps them.
       this.dropTaskPictures(key);
       if (this.rows.delete(key)) this.publishTasks();
+      return;
+    }
+    // Rows read on an earlier connection are not merged with this one's events: another gateway
+    // may answer at the same address with the same keys. The list is read again instead.
+    if (!this.rowsReadHere()) {
+      this.scheduleRefresh(generation);
       return;
     }
     if (row.archived === true) this.cancelAllQueued(key);
@@ -9576,7 +9682,7 @@ export class ClawtrateClient {
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
       for (const run of toStop) {
         this.unsentStops.delete(`${key}\u0000${run.id}`);
-        void this.abortRun(key, run.id, this.deferredStop(key, run.id));
+        void this.abortRun(key, run.id, this.historyStopCheck(key, run));
       }
       void this.readRecipients(key, generation);
       void this.backfillQuestions(key, generation);
@@ -10025,6 +10131,11 @@ export class ClawtrateClient {
             this.stopRun(key, run.id, { ...(owner ? { owner } : {}), everyRun: true, bound }),
           ),
         );
+        // A Stop refused for want of room for its check: the action says so now, not after its wait.
+        const refused = (this.state.transcripts[key]?.runs ?? []).some(
+          (run) => run.stopError === TOO_MANY_STOPS && runs.some((each) => each.id === run.id),
+        );
+        if (refused) throw new Error(TOO_MANY_STOPS);
         return (this.state.transcripts[key]?.runs ?? []).filter((run) => isActive(run.state))
           .length;
       },
@@ -10046,6 +10157,9 @@ export class ClawtrateClient {
       this.rows = newestRows([...this.rows.values(), created.row], this.keeps);
       this.publishTasks();
     }
+    // Made while the rows shown were read on an earlier connection: the list is read again, so
+    // the task joins rows of this connection's own read.
+    if (!this.rowsReadHere()) this.scheduleRefresh(this.generation);
     return created.key;
   }
 

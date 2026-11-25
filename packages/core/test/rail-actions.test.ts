@@ -554,6 +554,10 @@ describe("an archive or a delete bound to the connection it began on", () => {
   type Deferred = {
     deferredStop(key: string, ...ids: string[]): (() => boolean) | undefined;
     keepDeferredStop(key: string, runId: string, bound: () => boolean): boolean;
+    historyStopCheck(
+      key: string,
+      run: { id: string; messageId: string | null },
+    ): (() => boolean) | undefined;
   };
 
   /**
@@ -563,6 +567,7 @@ describe("an archive or a delete bound to the connection it began on", () => {
   async function deferredStop(
     meanwhile: (client: ClawtrateClient, run: string) => void,
     before: (client: ClawtrateClient) => void = () => {},
+    afterReplaced: () => void = () => {},
   ) {
     const id = { value: "gateway-a" };
     const gateway = grantingGateway();
@@ -592,6 +597,7 @@ describe("an archive or a delete bound to the connection it began on", () => {
     named.resolve({ runId: run, status: "started" });
     await until(() => gateway.calls("chat.abort").length === 1);
     await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    afterReplaced();
     await sleep(600);
     expect(gateway.calls("chat.abort")).toHaveLength(1);
     expect(await archived).not.toBe("done");
@@ -687,7 +693,11 @@ describe("an archive or a delete bound to the connection it began on", () => {
     await until(() => gateway.calls("chat.send").length === 1);
     expect(waitingStops(client, run, MAX_DEFERRED_STOPS)).toBe(MAX_DEFERRED_STOPS);
     const stamp = gatewayStamp(client.state.connection);
+    const started = Date.now();
     const archived = outcome(client.archiveTask(KEY, { stop: true, stamp }));
+    // The archive says so at once, not after the wait for its run to stop.
+    expect(await archived).toContain("nothing was sent for this one");
+    expect(Date.now() - started).toBeLessThan(2_000);
     // The archive's Stop is given up at once, and says nothing was sent for it.
     await until(
       () =>
@@ -704,6 +714,206 @@ describe("an archive or a delete bound to the connection it began on", () => {
     expect(gateway.calls("chat.abort")).toEqual([]);
     expect(await archived).not.toBe("done");
     expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
+  it("a deferred Stop's check is kept before its wait for write access, so the send's answer meanwhile aborts on the action's connection", async () => {
+    let release: () => void = () => {};
+    await deferredStop(
+      (client, run) => {
+        // The Stop is still waiting for write access when the send's answer comes: its check is
+        // already kept, so that answer's abort, and any retry of it, stays on this connection.
+        expect((client as unknown as Deferred).deferredStop(KEY, run)).toBeTypeOf("function");
+      },
+      (client) => {
+        // The Stop's own wait for write access lasts past the send's answer.
+        const host = client as unknown as {
+          ensureScope: (scope: string, owner: object | null) => Promise<void>;
+        };
+        const ensure = host.ensureScope.bind(client);
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        host.ensureScope = async (scope, owner) => {
+          const stopping = client.state.transcripts[KEY]?.runs.some(
+            (each) => each.state === "stopping",
+          );
+          if (stopping) await gate;
+          return ensure(scope, owner);
+        };
+      },
+      () => release(),
+    );
+  });
+
+  it("a deferred Stop's check stays while its run is stopped with no known outcome, for the history read that can still abort it", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.send"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    const sent = client.sendMessage(KEY, "Take your time");
+    await until(() => transcript().runs.some((each) => each.id === sent));
+    const live = transcript().runs.find((each) => each.id === sent)!;
+    // A run that settled with no known outcome after a Stop, as `readTranscript` may yet abort.
+    const unsure = {
+      ...live,
+      id: "run-unsure",
+      messageId: "run-unsure",
+      state: "stopped" as const,
+      outcomeKnown: false,
+      stopRequestedAt: 1,
+    };
+    client.store.update((state) => ({
+      ...state,
+      transcripts: {
+        ...state.transcripts,
+        [KEY]: { ...state.transcripts[KEY]!, runs: [...state.transcripts[KEY]!.runs, unsure] },
+      },
+    }));
+    const host = client as unknown as Deferred;
+    expect(host.keepDeferredStop(KEY, "run-unsure", () => true)).toBe(true);
+    // Another Stop is kept, which lets go of the checks no longer needed.
+    expect(host.keepDeferredStop(KEY, "ended", () => true)).toBe(true);
+    expect(host.deferredStop(KEY, "run-unsure")).toBeTypeOf("function");
+    client.stop();
+  });
+
+  it("a history read that aborts a deferred Stop's run finds its check, though the gateway named the run with another id", async () => {
+    const client = new ClawtrateClient(testHost(grantingGateway()), FAST);
+    const host = client as unknown as Deferred;
+    const check = () => true;
+    // Kept under the run's id before it was named: its message id.
+    expect(host.keepDeferredStop(KEY, "message-1", check)).toBe(true);
+    // The send's answer named it "gateway-run-1", and the run now has that id.
+    expect(host.historyStopCheck(KEY, { id: "gateway-run-1", messageId: "message-1" })).toBe(check);
+    client.stop();
+  });
+
+  it("a deferred Stop named during its wait for write access is aborted once", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    const named = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => named.promise;
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [] });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    // The Stop's wait for write access lasts past the send's answer.
+    const host = client as unknown as {
+      ensureScope: (scope: string, owner: object | null) => Promise<void>;
+    };
+    const ensure = host.ensureScope.bind(client);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    host.ensureScope = async (scope, owner) => {
+      if (client.state.transcripts[KEY]?.runs.some((each) => each.state === "stopping")) await gate;
+      return ensure(scope, owner);
+    };
+    void client
+      .archiveTask(KEY, { stop: true, stamp: gatewayStamp(client.state.connection) })
+      .catch(() => {});
+    await until(() => transcript().runs.find((each) => each.id === run)?.state === "stopping");
+    named.resolve({ runId: run, status: "started" });
+    await until(() => gateway.calls("chat.abort").length === 1);
+    release();
+    await sleep(300);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("a deferred Stop's run, once history holds its message, is not aborted on another gateway that a later history read finds it in flight on", async () => {
+    const id = { value: "gateway-a" };
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id.value });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    const named = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => named.promise;
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [] });
+    let inFlight: unknown = undefined;
+    gateway.handlers["chat.history"] = () => ({
+      messages: [],
+      hasMore: false,
+      ...(inFlight ? { inFlightRun: inFlight } : {}),
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    const message = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    void client
+      .archiveTask(KEY, { stop: true, stamp: gatewayStamp(client.state.connection) })
+      .catch(() => {});
+    await until(() => transcript().runs.find((each) => each.id === message)?.state === "stopping");
+    // The send's answer names the run with the gateway's own id, and its abort goes on this
+    // connection, with the archive's check.
+    named.resolve({ runId: "gateway-run-1", status: "started" });
+    await until(() => gateway.calls("chat.abort").length === 1);
+    // A read that holds the message drops its id from the run; the run settles with no known
+    // outcome, as a read that no longer finds it in flight leaves it.
+    client.store.update((state) => ({
+      ...state,
+      transcripts: {
+        ...state.transcripts,
+        [KEY]: {
+          ...state.transcripts[KEY]!,
+          runs: state.transcripts[KEY]!.runs.map((run) =>
+            run.id === "gateway-run-1"
+              ? { ...run, messageId: null, state: "stopped" as const, outcomeKnown: false }
+              : run,
+          ),
+        },
+      },
+    }));
+    // Another gateway answers the reconnect at the same address, and its history read finds the
+    // run in flight: that read would abort it, but the archive's connection is gone.
+    inFlight = { runId: "gateway-run-1" };
+    id.value = "gateway-x";
+    gateway.dropAll();
+    await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+    await until(() => gateway.calls("chat.history").length >= 2);
+    await sleep(600);
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("a deferred Stop given up during its wait for write access leaves no check for a later Stop", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: true },
+    });
+    gateway.handlers["chat.send"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    const run = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    // The Stop's wait for write access lasts until its viewer has gone.
+    const host = client as unknown as {
+      ensureScope: (scope: string, owner: object | null) => Promise<void>;
+    };
+    const ensure = host.ensureScope.bind(client);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    host.ensureScope = async (scope, owner) => {
+      if (client.state.transcripts[KEY]?.runs.some((each) => each.state === "stopping")) await gate;
+      return ensure(scope, owner);
+    };
+    const viewer = {};
+    void client
+      .archiveTask(KEY, {
+        stop: true,
+        owner: viewer,
+        stamp: gatewayStamp(client.state.connection),
+      })
+      .catch(() => {});
+    await until(() => transcript().runs.find((each) => each.id === run)?.state === "stopping");
+    expect((client as unknown as Deferred).deferredStop(KEY, run)).toBeTypeOf("function");
+    client.withdraw(viewer);
+    release();
+    await until(() => transcript().runs.find((each) => each.id === run)?.state !== "stopping");
+    expect((client as unknown as Deferred).deferredStop(KEY, run)).toBeUndefined();
     client.stop();
   });
 
