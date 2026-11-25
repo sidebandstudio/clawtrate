@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import { connect, createServer, Socket, type Server } from "node:net";
+import { createServer, Socket, type Server } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -564,13 +564,20 @@ export class Proxy {
   private listen(port: number) {
     const server = createServer((client) => {
       this.connections += 1;
-      client.once("data", (chunk: Buffer) => {
-        const head = chunk.toString("latin1");
+      // Classified once its whole header is in, which may take more than one chunk.
+      let head = "";
+      const classify = (chunk: Buffer) => {
+        head += chunk.toString("latin1");
+        const end = head.indexOf("\r\n\r\n");
+        if (end < 0 && head.length < 16_384) return;
+        client.off("data", classify);
+        const header = end < 0 ? head : head.slice(0, end + 2);
         this.requests.push({
-          line: head.split("\r\n", 1)[0]!,
-          upgrade: /\r\nupgrade:[ \t]*websocket\r\n/i.test(head),
+          line: header.split("\r\n", 1)[0]!,
+          upgrade: /\r\nupgrade:[ \t]*websocket\r\n/i.test(header),
         });
-      });
+      };
+      client.on("data", classify);
       const upstream = new Socket();
       upstream.connect(this.target, "127.0.0.1");
       for (const socket of [client, upstream]) {
@@ -615,6 +622,8 @@ export type FrontRequest = {
   method: string;
   url: string;
   authorization: string | undefined;
+  /** How many Authorization fields it carried, before Node keeps only the first. */
+  authorizations: number;
   cookie: string | undefined;
 };
 
@@ -639,13 +648,19 @@ function ownAddress(): string {
  * the check's own, listening on that address alone and taking connections from this Mac alone.
  * Its certificate comes from a throwaway authority that `openssl` makes in a temporary folder, and
  * only the check's own device trusts it (`simctl keychain add-root-cert`); the device goes with the
- * run. A WebSocket passes through to the gateway. Each other request is recorded and served by the
+ * run. A WebSocket is relayed to the gateway. Each other request is recorded and served by the
  * gateway, with a cookie added to the answer, unless `answer` gives one of its own.
  */
 export async function protectedFront(
   gatewayPort: number,
   answer: (url: URL) => { status: number; headers: Record<string, string> } | null = () => null,
-): Promise<{ url: string; requests: FrontRequest[]; close: () => Promise<void> }> {
+): Promise<{
+  url: string;
+  requests: FrontRequest[];
+  /** The device token the gateway last issued over this address, or null. */
+  issued: () => string | null;
+  close: () => Promise<void>;
+}> {
   const address = ownAddress();
   const dir = mkdtempSync(join(tmpdir(), "clawtrate-front-"));
   const file = (name: string) => join(dir, name);
@@ -700,6 +715,9 @@ export async function protectedFront(
         method: req.method ?? "",
         url: req.url ?? "",
         authorization: req.headers.authorization,
+        authorizations: req.rawHeaders.filter(
+          (field, i) => i % 2 === 0 && field.toLowerCase() === "authorization",
+        ).length,
         cookie: req.headers.cookie,
       });
       const own = answer(new URL(req.url ?? "/", `https://${address}`));
@@ -724,23 +742,42 @@ export async function protectedFront(
       req.pipe(upstream);
     },
   );
-  server.on("upgrade", (req, client: Socket, head: Buffer) => {
-    const upstream = connect(gatewayPort, "127.0.0.1", () => {
-      const lines = [`${req.method} ${req.url} HTTP/1.1`];
-      for (let i = 0; i < req.rawHeaders.length; i += 2)
-        lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-      upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
-      upstream.write(head);
-      client.pipe(upstream).pipe(client);
-    });
-    for (const socket of [client, upstream]) {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
-      socket.on("error", () => {
-        client.destroy();
-        upstream.destroy();
+  // The gateway socket is relayed frame by frame, as `relay` does, to keep the device token the
+  // gateway issues in its `hello-ok`: the token a ticket request must carry.
+  const issued: string[] = [];
+  const relays = new Set<WebSocket>();
+  const phones = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket: Socket, head: Buffer) => {
+    phones.handleUpgrade(req, socket, head, (phone) => {
+      const gateway = new WebSocket(`ws://127.0.0.1:${gatewayPort}${req.url ?? "/"}`);
+      const waiting: string[] = [];
+      for (const each of [phone, gateway]) {
+        relays.add(each);
+        each.on("close", () => relays.delete(each));
+      }
+      gateway.on("open", () => {
+        for (const data of waiting.splice(0)) gateway.send(data);
       });
-    }
+      phone.on("message", (data) => {
+        if (gateway.readyState === WebSocket.OPEN) gateway.send(String(data));
+        else waiting.push(String(data));
+      });
+      gateway.on("message", (data) => {
+        const text = String(data);
+        try {
+          const frame = JSON.parse(text) as { payload?: { auth?: { deviceToken?: unknown } } };
+          const token = frame.payload?.auth?.deviceToken;
+          if (typeof token === "string") issued.push(token);
+        } catch {
+          // Not a frame of the gateway's protocol: passed on as it is.
+        }
+        if (phone.readyState === WebSocket.OPEN) phone.send(text);
+      });
+      gateway.on("close", () => phone.close());
+      gateway.on("error", () => phone.terminate());
+      phone.on("close", () => gateway.terminate());
+      phone.on("error", () => gateway.terminate());
+    });
   });
   server.on("connection", (socket: Socket) => {
     if (socket.remoteAddress?.replace(/^::ffff:/, "") !== address) return void socket.destroy();
@@ -755,7 +792,9 @@ export async function protectedFront(
   return {
     url: `wss://${address}:${port}`,
     requests,
+    issued: () => issued.at(-1) ?? null,
     close: async () => {
+      for (const each of relays) each.terminate();
       for (const socket of sockets) socket.destroy();
       await closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
       rmSync(dir, { recursive: true, force: true });

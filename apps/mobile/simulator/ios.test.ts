@@ -99,6 +99,7 @@ import {
   waitFor,
   waitGone,
   workspaceFor,
+  type FrontRequest,
   type Step,
 } from "./harness.ts";
 import { PAIRING, startsOnItsOwn } from "./jobs.ts";
@@ -1918,57 +1919,60 @@ describe("the iOS app", () => {
     const shot = solid(SHOT_RGB);
     const words = "Here is the shelf I mentioned.";
     const own = await gatewayTask("pip", "Picture check");
-    await gatewayCall("chat.send", {
-      sessionKey: own.key,
-      message: words,
-      idempotencyKey: `ios-picture-${Date.now().toString(36)}`,
-      queueMode: "followup",
-      attachments: [
-        {
-          type: "image",
-          mimeType: "image/png",
-          fileName: "shot.png",
-          content: shot.toString("base64"),
-        },
-        {
-          type: "image",
-          mimeType: "image/png",
-          fileName: "moved.png",
-          content: solid([200, 120, 40]).toString("base64"),
-        },
-      ],
-    });
-    await until("the message's files in history", async () => {
-      const history = await gatewayCall<{ messages?: unknown[] }>("chat.history", {
-        sessionKey: own.key,
-        limit: 20,
-      });
-      const text = JSON.stringify(history.messages ?? []);
-      return text.includes("media://inbound/shot") && text.includes("media://inbound/moved");
-    });
-    const lineFor = (name: string) =>
-      `${lit(name)}, \\d+ KB\\. ${lit(SENT_PICTURE_LINES["cannot-load"])}`;
-    const openTask = (name: string): Step[] => [
-      waitFor({ id: "bot-pip" }, 120_000),
-      tap({ id: "bot-pip" }),
-      waitFor({ id: `task-${lit(own.key)}` }, 60_000),
-      tap({ id: `task-${lit(own.key)}` }),
-      waitFor(lit(words), 60_000),
-      // The message's files under it, the last one in view.
-      scrollTo({ id: "sent-picture", text: name }, "DOWN"),
-    ];
-
-    // At a loopback ws:// address: each picture says this connection can't load it.
-    const loopback = new Proxy(Number(new URL(env.gateway).port));
-    const nearUrl = await loopback.start();
-    const gatewayPort = Number(new URL(env.gateway).port);
-    const media = (url: string) => url.startsWith(INBOUND_MEDIA_ROUTE);
-    const front = await protectedFront(gatewayPort, (url) =>
-      media(url.pathname) && url.searchParams.get("source")?.startsWith("media://inbound/moved")
-        ? { status: 302, headers: { location: "/elsewhere" } }
-        : null,
-    );
+    // Everything made from here on is released at the end, whatever fails.
+    let loopback: Proxy | null = null;
+    let front: Awaited<ReturnType<typeof protectedFront>> | null = null;
     try {
+      await gatewayCall("chat.send", {
+        sessionKey: own.key,
+        message: words,
+        idempotencyKey: `ios-picture-${Date.now().toString(36)}`,
+        queueMode: "followup",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "shot.png",
+            content: shot.toString("base64"),
+          },
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "moved.png",
+            content: solid([200, 120, 40]).toString("base64"),
+          },
+        ],
+      });
+      await until("the message's files in history", async () => {
+        const history = await gatewayCall<{ messages?: unknown[] }>("chat.history", {
+          sessionKey: own.key,
+          limit: 20,
+        });
+        const text = JSON.stringify(history.messages ?? []);
+        return text.includes("media://inbound/shot") && text.includes("media://inbound/moved");
+      });
+      const lineFor = (name: string) =>
+        `${lit(name)}, \\d+ KB\\. ${lit(SENT_PICTURE_LINES["cannot-load"])}`;
+      const openTask = (name: string): Step[] => [
+        waitFor({ id: "bot-pip" }, 120_000),
+        tap({ id: "bot-pip" }),
+        waitFor({ id: `task-${lit(own.key)}` }, 60_000),
+        tap({ id: `task-${lit(own.key)}` }),
+        waitFor(lit(words), 60_000),
+        // The message's files under it, the last one in view.
+        scrollTo({ id: "sent-picture", text: name }, "DOWN"),
+      ];
+
+      // At a loopback ws:// address: each picture says this connection can't load it.
+      loopback = new Proxy(Number(new URL(env.gateway).port));
+      const nearUrl = await loopback.start();
+      const gatewayPort = Number(new URL(env.gateway).port);
+      const media = (url: string) => url.startsWith(INBOUND_MEDIA_ROUTE);
+      front = await protectedFront(gatewayPort, (url) =>
+        media(url.pathname) && url.searchParams.get("source")?.startsWith("media://inbound/moved")
+          ? { status: 302, headers: { location: "/elsewhere" } }
+          : null,
+      );
       launch({ fresh: true, devGateway: nearUrl });
       await steps("picture-near-connect", [
         waitFor({ id: "welcome" }),
@@ -2035,14 +2039,21 @@ describe("the iOS app", () => {
       expect(ticketFor("moved")).toHaveLength(1);
       expect(bytes).toHaveLength(1);
       expect(bytes[0]!.url).toContain(encodeURIComponent("media://inbound/shot"));
-      const tokens = [...ticketFor("shot"), ...ticketFor("moved")].map(
-        (request) => request.authorization?.match(/^Bearer (\S+)$/)?.[1],
-      );
-      expect(tokens.every((token) => typeof token === "string" && token.length > 8)).toBe(true);
-      expect(bytes[0]!.authorization).toBeUndefined();
-      expect(asked.every((request) => tokens.every((token) => !request.url.includes(token!)))).toBe(
-        true,
-      );
+      // Each ticket request, the redirected one too, carries one Authorization field with the
+      // token the gateway issued this device; the bytes request carries none. The token is
+      // compared here and never printed, and no address holds it, raw or decoded.
+      const issued = front.issued();
+      expect(issued !== null && issued.length > 8).toBe(true);
+      const tickets = [...ticketFor("shot"), ...ticketFor("moved")];
+      expect(tickets.map((request) => request.authorizations)).toEqual([1, 1]);
+      expect(tickets.every((request) => request.authorization === `Bearer ${issued}`)).toBe(true);
+      expect(bytes[0]!.authorizations).toBe(0);
+      const holds = (request: FrontRequest) =>
+        request.url.includes(issued!) ||
+        [...new URL(request.url, "https://front").searchParams].some(
+          ([name, value]) => name.includes(issued!) || value.includes(issued!),
+        );
+      expect(asked.some(holds)).toBe(false);
       expect(asked.some((request) => request.url.startsWith("/elsewhere"))).toBe(false);
 
       // A tap opens it larger, as on the desktop, and Close brings the chat back.
@@ -2058,8 +2069,8 @@ describe("the iOS app", () => {
         see({ id: "sent-picture", text: lit(alt) }),
       ]);
     } finally {
-      await loopback.stop();
-      await front.close();
+      await loopback?.stop();
+      await front?.close();
       await gatewayCall("sessions.delete", { key: own.key, deleteTranscript: true }).catch(
         () => {},
       );
