@@ -1,7 +1,22 @@
-import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
+import { mapSessionRow, type Bot, type ClawtrateState, type Task } from "@clawtrate/core";
 import { useCallback, useMemo, useState } from "react";
 import { readIdSet, readPreference, writeIdSet, writePreference } from "./preferences.ts";
 import { isUnread, markSeen, type SeenMap } from "./unread.ts";
+
+/**
+ * The task a link opens beside the bot's list: the one given, or, for a key the list doesn't
+ * hold (a session a switch hides, F-519, F-563), one made from the key, so the link opens it
+ * rather than the bot's newest task. Null when the list holds it.
+ */
+export function linkTarget(
+  listed: Task[] | undefined,
+  botId: string,
+  key: string,
+  given: Task | null,
+): Task | null {
+  if (given) return given;
+  return listed?.some((task) => task.key === key) ? null : mapSessionRow({ key, agentId: botId });
+}
 
 /** Rows shown under an unfolded bot before "Show all". */
 export const TASK_CAP = 6;
@@ -276,7 +291,8 @@ export function useSelection(
   /** Open a task under any bot: one operation for the bot, the task and what is read. */
   const selectTask = useCallback(
     (id: string, key: string, linkedTask: Task | null = null) => {
-      setLinked(linkedTask && { task: linkedTask, gatewayId });
+      const linkedTo = linkTarget(state.tasksByBot[id], id, key, linkedTask);
+      setLinked(linkedTo && { task: linkedTo, gatewayId });
       // The task shown may be only the bot's newest, nothing chosen: choosing it remembers it,
       // so a newer task of the bot does not take its place.
       if (id === bot?.id && key === remembered) return;
@@ -301,7 +317,7 @@ export function useSelection(
         return next;
       });
     },
-    [bot, task, remembered, gatewayId, markRead, setFolded],
+    [bot, task, remembered, gatewayId, markRead, setFolded, state.tasksByBot],
   );
 
   const isOpen = useCallback(

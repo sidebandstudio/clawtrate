@@ -105,6 +105,14 @@ pnpm dev-gateway start --instance pictures --with-images --with-message-tool
 
 A development gateway denies the `message` tool. `--with-message-tool` (named instances only) offers it to every bot. No channel is configured, so a `send` that names no channel or target is the gateway's reply in the bot's own task: it stages the media and writes the message as a row of its own in the run, with the picture. Send `#send-picture` to Pip: it sends the trail map from its workspace this way, then says one more line. `pnpm e2e` starts its main instance with it, and `pnpm scenarios` runs its check on the image instance.
 
+## Another tool's sessions
+
+```bash
+pnpm dev-gateway start --instance tools --with-http-api
+```
+
+`--with-http-api` (named instances only) turns on the gateway's OpenAI-compatible HTTP API, `POST /v1/chat/completions`, on the instance's own loopback port, behind its token (`connection.json`). A request with `model: "openclaw/<bot>"` and a `user` opens the session `agent:<bot>:openai-user:<user>`, as an API client's does. A routine run in a session of its own (`cron.add` with `sessionTarget: "session:<id>"`, then `cron.run` with `mode: "force"`) gives a scheduled run's. Clawtrate leaves both out of a bot's task list until "Show sessions from other tools" is on ([which tool opened a session](../research/session-origins.md)). `e2e/other-tools.spec.ts` starts an instance of its own with it.
+
 ## Background skill reviews
 
 ```bash
@@ -195,7 +203,7 @@ Where it matters which bot you ask:
 - **Routines** (`#schedule`): the gateway offers its `automations` tool only in runs started as its owner, which the scenario check does through the CLI. Sent from a paired client, the run reports "Tool automations not found".
 - **Questions and approvals** need a client with the right scopes. The read-only preview does not show them yet; answer from a client with `operator.questions` or `operator.approvals`.
 
-After `start`, the seed has left finished examples, played through a paired client called "Clawtrate seed" that answers and approves as the user and is unpaired afterwards: Juniper's "Show your work" (reasoning and steps), "A step that fails" and "Hand off to the coding agent" (an MCP call); Pip's "Ask Marlow about the plan" (a bot-to-bot exchange) and "Which route on Saturday" (an answered question); Marlow's "Notes for Pip", where Pip's message arrived; and Otto's "List the workspace (approved)" (a resolved approval).
+The seed creates each sample task with `sessions.create`, as Clawtrate creates one, before its scripted turns, so the sample tasks count as the person's own. After `start`, the seed has left finished examples, played through a paired client called "Clawtrate seed" that answers and approves as the user and is unpaired afterwards: Juniper's "Show your work" (reasoning and steps), "A step that fails" and "Hand off to the coding agent" (an MCP call); Pip's "Ask Marlow about the plan" (a bot-to-bot exchange) and "Which route on Saturday" (an answered question); Marlow's "Notes for Pip", where Pip's message arrived; and Otto's "List the workspace (approved)" (a resolved approval).
 
 ### Scheduled jobs
 

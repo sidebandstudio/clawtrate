@@ -22,7 +22,8 @@ const routinePage = (name: string) => async (page: Page, phone: boolean) => {
   await expect(view(page).getByTestId("run-row").first()).toBeVisible();
 };
 
-const ON = "scene=main&routines=on";
+// "Show sessions from other tools" on, so a routine's latest run is a row under its bot (F-193).
+const ON = "scene=main&routines=on&others=show";
 
 const SCENES: Scene[] = [
   { name: "list", query: ON, ready: routines },
@@ -66,7 +67,7 @@ const SCENES: Scene[] = [
   },
   {
     name: "running",
-    query: "scene=main&routines=running",
+    query: "scene=main&routines=running&others=show",
     ready: async (page, phone) => {
       if (phone) await page.getByRole("button", { name: "Back to bots" }).click();
       await expect(

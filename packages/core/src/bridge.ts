@@ -153,6 +153,8 @@ export type BridgeCommand =
   | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
+  /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
+  | { type: "setShowOtherToolSessions"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
@@ -1443,6 +1445,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setShowChannelChats":
       if (typeof command.on !== "boolean") throw new Error("invalid channel chats setting");
       return { type: "setShowChannelChats", on: command.on };
+    case "setShowOtherToolSessions":
+      if (typeof command.on !== "boolean") throw new Error("invalid other tools setting");
+      return { type: "setShowOtherToolSessions", on: command.on };
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
@@ -2257,6 +2262,8 @@ class ViewerSession implements BridgeSession {
         return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":
         return client.setShowChannelChats(command.on);
+      case "setShowOtherToolSessions":
+        return client.setShowOtherToolSessions(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":
