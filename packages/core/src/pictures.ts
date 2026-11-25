@@ -178,6 +178,8 @@ async function readPictureBody(
   }
   const bytes = await readAtMost(response, MAX_PICTURE_BYTES);
   if (bytes === "empty" || bytes === "too-large") return bytes;
+  // A body that ended before any byte is no picture yet: a read to try again.
+  if (bytes.length === 0) return "empty";
   return matchesType(mimeType, bytes) ? { mimeType, bytes } : "not-a-picture";
 }
 
@@ -285,6 +287,22 @@ export const INBOUND_MEDIA_ROUTE = "/__openclaw__/assistant-media";
 /** The most the ticket's answer may be. */
 export const MAX_TICKET_ANSWER_BYTES = 4096;
 
+/**
+ * Whether a person's picture may be read back over this connection's address: `wss://`, not
+ * loopback (`protectedGatewayUrl`), and the origin's root itself, with no path and no query. A
+ * gateway reached under a path sits behind something else at that origin, whose root was never
+ * shown to be the gateway, so nothing is asked there.
+ */
+export function readBackAddress(gatewayUrl: string): boolean {
+  if (!protectedGatewayUrl(gatewayUrl)) return false;
+  try {
+    const url = new URL(gatewayUrl.trim());
+    return (url.pathname === "" || url.pathname === "/") && url.search === "";
+  } catch {
+    return false;
+  }
+}
+
 /** A query of the route's own parameters, each value encoded whole. */
 const queryOf = (query: Record<string, string>) =>
   Object.entries(query)
@@ -333,7 +351,7 @@ export async function fetchInboundPicture(
     !ctx.fetch ||
     !ctx.token ||
     !source ||
-    !protectedGatewayUrl(ctx.gatewayUrl) ||
+    !readBackAddress(ctx.gatewayUrl) ||
     !origin?.startsWith("https://")
   )
     return CANNOT_LOAD;

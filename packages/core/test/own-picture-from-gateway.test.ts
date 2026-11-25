@@ -220,6 +220,10 @@ describe("F-557: reading a person's picture back from the gateway", () => {
       "wss://localhost:19001",
       "wss://[::1]:19001",
       "wss://gateway.localhost",
+      // Under a path, or with a query: the origin's root was never shown to be the gateway.
+      "wss://gateway.example/base",
+      "wss://gateway.example/base/",
+      "wss://gateway.example/?x=1",
     ])
       expect(await fetchInboundPicture(ctxOf(fetch, { gatewayUrl }), KEY, SHOT.url)).toEqual({
         status: "cannot-load",
@@ -274,6 +278,8 @@ describe("F-557: reading a person's picture back from the gateway", () => {
       [() => ticket({ mediaTicketExpiresAt: NOW + 300_000 }), png],
       [() => ticket(), () => response(401, {}, [])],
       [() => ticket(), () => ({ status: 200, headers: { get: () => "image/png" }, body: null })],
+      // A body that ends before its first byte: no picture yet, so a read to try again.
+      [() => ticket(), () => response(200, { "content-type": "image/png" }, [])],
     ] as Array<[() => HttpResponseLike, () => HttpResponseLike]>) {
       const { fetch } = route(meta, bytes);
       expect((await fetchInboundPicture(ctxOf(fetch), KEY, SHOT.url)).status).toBe("failed");
@@ -534,4 +540,97 @@ describe("F-557: your picture on another device, and after a restart", () => {
     await until(() => client.readBackPictureBytes === 0);
     client.stop();
   }, 30_000);
+
+  it("F-557: more pictures on screen at once than the file reads' places all load, the rest queued", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { fetch: answer } = live();
+    const fetch: HttpFetch = async (url, init) => {
+      await held;
+      return answer(url, init);
+    };
+    const rows = Array.from({ length: 6 }, (_, i) => sentRow(`m${i}`, `p${i}`, [SHOT], i + 1));
+    const { client } = await elsewhere(fetch, rows);
+    const reads = rows.map((_, i) => client.readSentPicture(KEY, `m${i}:user`, 0));
+    setTimeout(release, 50);
+    expect((await Promise.all(reads)).map((read) => read.status)).toEqual(Array(6).fill("content"));
+    client.stop();
+  });
+
+  it("F-557: at an address with a path or a query, nothing is asked: the origin's root isn't the gateway shown", async () => {
+    for (const url of ["wss://gateway.example/base", "wss://gateway.example/?x=1"]) {
+      const { fetch, fetched } = live();
+      const { client } = await elsewhere(fetch, [sentRow("m1", "look", [SHOT])], url);
+      expect(await client.readSentPicture(KEY, "m1:user", 0)).toEqual({ status: "cannot-load" });
+      expect(fetched).toEqual([]);
+      client.stop();
+    }
+  });
+
+  it("F-557: no token is sent when the address being connected isn't the one the read was asked on", async () => {
+    const { fetch, fetched } = live();
+    const { client } = await elsewhere(fetch, [sentRow("m1", "look", [SHOT])]);
+    // A Connect to another address chosen, the connection's state not yet following it.
+    const inner = client as unknown as { settings: { url: string } };
+    inner.settings = { ...inner.settings, url: "wss://other.example" };
+    expect(await client.readSentPicture(KEY, "m1:user", 0)).toEqual({ status: "cannot-load" });
+    expect(fetched).toEqual([]);
+    client.stop();
+  });
+
+  it("F-557: a picture read while its task is deleted, or while the socket reconnects, is dropped and not kept", async () => {
+    for (const interrupt of ["delete", "reconnect"] as const) {
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const { fetch: answer } = live();
+      const fetch: HttpFetch = async (url, init) => {
+        await held;
+        return answer(url, init);
+      };
+      const { client, gateway } = await elsewhere(fetch, [sentRow("m1", "look", [SHOT])]);
+      const reading = client.readSentPicture(KEY, "m1:user", 0);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      if (interrupt === "delete")
+        gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
+      else {
+        // Each close and each hello moves the connection's epoch on.
+        const epochOf = () => (client as unknown as { epoch: number }).epoch;
+        const before = epochOf();
+        gateway.dropAll();
+        await until(
+          () => epochOf() >= before + 2 && client.state.connection.status === "connected",
+        );
+      }
+      release();
+      expect(await reading, interrupt).toEqual({
+        status: "failed",
+        message: "The connection changed while this picture was read.",
+      });
+      expect(client.readBackPictureBytes, interrupt).toBe(0);
+      client.stop();
+    }
+  });
+
+  it("F-557: a viewer that leaves during the read is handed no transfer", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { fetch: answer } = live();
+    const fetch: HttpFetch = async (url, init) => {
+      await held;
+      return answer(url, init);
+    };
+    const { client } = await elsewhere(fetch, [sentRow("m1", "look", [SHOT])]);
+    const viewer = {};
+    // One-byte parts, so a picture would hold a transfer for its viewer until read.
+    const reading = client.readSentPicture(KEY, "m1:user", 0, { owner: viewer, maxChars: 1 });
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    client.withdraw(viewer);
+    release();
+    const read = await reading.catch(() => ({ status: "refused" }));
+    expect(["failed", "refused"]).toContain(read.status);
+    const transfers = (client as unknown as { fileTransfers: { held: Map<string, unknown> } })
+      .fileTransfers;
+    expect(transfers.held.size).toBe(0);
+    client.stop();
+  });
 });

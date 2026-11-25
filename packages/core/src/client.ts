@@ -148,6 +148,7 @@ import {
 import {
   fetchInboundPicture,
   isDrawnPicture,
+  readBackAddress,
   isShownPictureType,
   MAX_PICTURE_BYTES,
   ownPictureRead,
@@ -1576,6 +1577,8 @@ export class ClawtrateClient {
     { task: string; mimeType: string; content: string; bytes: number }
   >();
   private readBackBytes = 0;
+  /** Raised whenever a task's or a bot's pictures are let go: a read back in flight then keeps nothing. */
+  private taskPictureDrops = 0;
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /**
@@ -3428,6 +3431,7 @@ export class ClawtrateClient {
 
   /** Let go of every picture kept for one task, when the task itself is gone. */
   private dropTaskPictures(key: string): void {
+    this.taskPictureDrops += 1;
     for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
     for (const [id, kept] of this.readBackPictures)
       if (kept.task === key) this.dropReadBackPicture(id);
@@ -6624,6 +6628,7 @@ export class ClawtrateClient {
       if (outcome.kind === "answered")
         for (const [id, kept] of this.readBackPictures)
           if (botIdFromSessionKey(kept.task) === request.botId) this.dropReadBackPicture(id);
+      if (outcome.kind === "answered") this.taskPictureDrops += 1;
       return outcome;
     } finally {
       this.botDeletes.delete(key);
@@ -7076,7 +7081,7 @@ export class ClawtrateClient {
     }
     const ref = this.sentSources.get(key)?.get(`${messageKey}\u0000${index}`);
     // Nothing is asked for at a loopback or `ws://` address, or without the row's own reference.
-    if (!ref || !this.host.fetch || !protectedGatewayUrl(this.state.connection.gatewayUrl ?? ""))
+    if (!ref || !this.host.fetch || !readBackAddress(this.state.connection.gatewayUrl ?? ""))
       return { status: "cannot-load" };
     return this.readBackPicture(key, id, ref, options, start, stamp);
   }
@@ -7091,9 +7096,12 @@ export class ClawtrateClient {
     stamp: GatewayStamp | undefined,
   ): Promise<SentPictureRead> {
     const generation = this.generation;
-    // The connection it was asked on, and the gateway the screen was drawn for: never another.
+    const epoch = this.epoch;
+    const drops = this.taskPictureDrops;
+    // The socket it was asked on, and the gateway the screen was drawn for: never another.
     const elsewhere = () =>
       generation !== this.generation ||
+      epoch !== this.epoch ||
       (stamp !== undefined &&
         (stamp.gatewayId === null ||
           stamp.target !== this.target ||
@@ -7103,32 +7111,35 @@ export class ClawtrateClient {
       message: "The connection changed while this picture was read.",
     } as const;
     if (elsewhere()) return changed;
+    // Pictures on screen together queue for a place: nothing is awaited between the last look
+    // at the gate and the read taking its place, so none is refused for another's.
     for (let waited = 0; this.fileReads >= MAX_FILE_READS && waited < 300; waited += 1)
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
     if (elsewhere()) return changed;
     this.checkNotWithdrawn(options.owner);
     const gatewayUrl = this.state.connection.gatewayUrl ?? "";
     const deviceId = this.state.connection.deviceId;
-    // This device's token for the gateway connected now, and no other gateway's.
-    const token =
-      deviceId && this.settings?.url === gatewayUrl
-        ? ((await this.loadToken(gatewayUrl, deviceId, "operator"))?.token ?? null)
-        : null;
-    if (elsewhere()) return changed;
-    const read = await this.fileRead(
-      (ctx) =>
-        fetchInboundPicture(
-          { fetch: this.host.fetch ?? null, gatewayUrl, token, now: ctx.now },
-          key,
-          ref,
-        ),
-      options,
-    );
-    // Bytes that arrive after a switch are the old gateway's: none are kept or shown.
-    if (elsewhere()) return changed;
+    const read = await this.fileRead(async (ctx) => {
+      // This device's token for the gateway connected now, and no other gateway's.
+      const token =
+        deviceId && this.settings?.url === gatewayUrl
+          ? ((await this.loadToken(gatewayUrl, deviceId, "operator"))?.token ?? null)
+          : null;
+      if (elsewhere()) return changed;
+      return fetchInboundPicture(
+        { fetch: this.host.fetch ?? null, gatewayUrl, token, now: ctx.now },
+        key,
+        ref,
+      );
+    }, options);
+    // Bytes that arrive after a switch are the old gateway's, and a task deleted meanwhile keeps
+    // none: neither is kept or shown.
+    if (elsewhere() || drops !== this.taskPictureDrops) return changed;
     if (read.status !== "bytes") return read;
     this.keepReadBack(id, key, read.mimeType, read.bytes);
     try {
+      // A viewer that left during the read is handed nothing.
+      this.checkNotWithdrawn(options.owner);
       return {
         status: "content",
         kind: "image",
