@@ -122,6 +122,7 @@ function gateway(agents: Agent[] = BOTS) {
     },
     admin: () => admin,
     wanted: () => wanted,
+    sending: () => {},
     deleted: (id) => confirmed.push(id),
   };
   return {
@@ -1080,6 +1081,85 @@ describe("deleting a bot: one gateway, one connection", () => {
     });
     expect(outcome.kind).toBe("answered");
     expect(transcript().outbox[1]).toMatchObject({ status: "queued", text: "Then this" });
+    client.stop();
+  });
+
+  it("F-050: a task the list moves to another bot while the delete reads the bots keeps its queued message", async () => {
+    const { client, fake } = await adminClient();
+    const MOVED = "agent:marlow:move";
+    relist(fake, [{ key: MOVED, agentId: "pip", updatedAt: 4 }], MOVED);
+    await until(() => (client.state.tasksByBot.pip ?? []).some((each) => each.key === MOVED));
+    client.openSession(MOVED);
+    await until(() => client.state.transcripts[MOVED]?.status === "ready");
+    client.sendMessage(MOVED, "Take your time");
+    const transcript = () => client.state.transcripts[MOVED]!;
+    await until(
+      () => transcript().runs[0]?.bound === true && transcript().runs[0]?.state === "running",
+    );
+    client.sendMessage(MOVED, "Then this", { mode: "queue" });
+    await until(() => transcript().outbox[1]?.status === "queued");
+    const read = await client.readBotDelete("pip");
+    // The delete's own read of the bots is held, and meanwhile the list moves the task to Marlow.
+    const roster = fake.handlers["agents.list"]!;
+    const held = deferred<void>();
+    let holding = true;
+    fake.handlers["agents.list"] = async (params) => {
+      if (holding) {
+        holding = false;
+        await held.promise;
+      }
+      return roster(params);
+    };
+    const asked = fake.calls("agents.list").length;
+    const deleting = client.deleteBot({
+      botId: "pip",
+      stamp: read.stamp,
+      deleteFiles: false,
+      reviewed: reviewOf(read),
+      typed: "Pip",
+    });
+    await until(() => fake.calls("agents.list").length > asked);
+    fake.emit("sessions.changed", { sessionKey: MOVED, agentId: "marlow", updatedAt: 9 });
+    await until(() => (client.state.tasksByBot.marlow ?? []).some((each) => each.key === MOVED));
+    held.resolve();
+    expect((await deleting).kind).toBe("answered");
+    expect(transcript().outbox[1]).toMatchObject({ status: "queued", text: "Then this" });
+    client.stop();
+  });
+
+  it("F-557: a picture whose task the list no longer places under a bot goes by the bot noted when it was sent", async () => {
+    const { client, fake } = await adminClient();
+    const UNPREFIXED = "webchat:direct:u1";
+    relist(fake, [{ key: UNPREFIXED, agentId: "pip", updatedAt: 5 }], UNPREFIXED);
+    await until(() => (client.state.tasksByBot.pip ?? []).some((each) => each.key === UNPREFIXED));
+    let history: unknown[] = [];
+    fake.handlers["chat.history"] = () => ({ messages: history });
+    const png = solidPng(8, 8, [10, 120, 200]);
+    client.openSession(UNPREFIXED);
+    await until(() => client.state.transcripts[UNPREFIXED]?.status === "ready");
+    const id = client.sendMessage(UNPREFIXED, "look", {
+      attachments: [
+        { type: "image", mimeType: "image/png", fileName: "shot.png", content: toBase64(png) },
+      ],
+    });
+    await until(() => client.state.transcripts[UNPREFIXED]!.outbox[0]?.status === "sent");
+    history = [sentRow(id, "look", [SHOT])];
+    fake.emit("sessions.changed", { sessionKey: UNPREFIXED, phase: "message", updatedAt: 6 });
+    await until(() => client.state.transcripts[UNPREFIXED]!.outbox.length === 0);
+    expect(client.keptPictureBytes).toBe(png.length);
+    // The gateway keeps the row but no longer names its bot, so the rail can't place it.
+    fake.emit("sessions.changed", { sessionKey: UNPREFIXED, agentId: null, updatedAt: 8 });
+    await until(() => !(client.state.tasksByBot.pip ?? []).some((each) => each.key === UNPREFIXED));
+    const read = await client.readBotDelete("pip");
+    const outcome = await client.deleteBot({
+      botId: "pip",
+      stamp: read.stamp,
+      deleteFiles: false,
+      reviewed: reviewOf(read),
+      typed: "Pip",
+    });
+    expect(outcome.kind).toBe("answered");
+    expect(client.keptPictureBytes).toBe(0);
     client.stop();
   });
 

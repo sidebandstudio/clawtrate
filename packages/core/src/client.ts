@@ -6946,15 +6946,12 @@ export class ClawtrateClient {
     stamp: { gatewayId: string; target: number },
     owner?: object,
   ): BotDeleteContext {
-    // The bot each listed task is under as the delete starts: the read of the bots that drops the
+    // The bot each listed task is under as the delete is sent: the read of the bots that drops the
     // deleted bot's rows can land before the gateway's answer to the delete.
-    const listedUnder = new Map<string, string | null>();
-    for (const key of this.rows.keys()) listedUnder.set(key, this.taskBot(key));
-    /** A task listed as the delete started goes by that bot; one not listed, by `unlisted`. */
-    const botOf = (task: string, unlisted: string | null) => {
-      const id = capId(task, MAX_ID_CHARS);
-      return listedUnder.has(id) ? (listedUnder.get(id) ?? null) : unlisted;
-    };
+    const listedUnder = new Map<string, string>();
+    /** A task listed under a bot as the delete was sent goes by it; any other by `unlisted`. */
+    const botOf = (task: string, unlisted: string | null) =>
+      listedUnder.get(capId(task, MAX_ID_CHARS)) ?? unlisted;
     return {
       stamp,
       wanted: () => !(owner && this.withdrawnOwners.has(owner)),
@@ -6966,6 +6963,13 @@ export class ClawtrateClient {
         if (shown) this.applyBots(result);
         // Asked again whenever it matters: a newer list shown since, or another connection, ends it.
         return { result, current: () => shown && link.alive() && this.botsShown === issued };
+      },
+      sending: () => {
+        listedUnder.clear();
+        for (const key of this.rows.keys()) {
+          const bot = this.taskBot(key);
+          if (bot !== null) listedUnder.set(key, bot);
+        }
       },
       // The one evidence that the bot is gone, acted on as it arrives, whatever follows.
       deleted: (botId) => {

@@ -185,7 +185,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/client.ts:readRecipientRuns>activeBefore":
     "one history read; the run ids active before it was asked, at most the named ids', dropped when it returns",
   "packages/core/src/client.ts:botDeleteContext>listedUnder":
-    "one delete or its dialog's read; the bot each listed task is under, at most `MAX_LISTED_TASKS`, dropped with the context",
+    "one delete; the bot each listed task is under as the delete is sent, at most `MAX_LISTED_TASKS`, dropped with the context",
   "packages/core/src/client.ts:readRecipientRuns>inferred":
     "one history read; the run ids whose end that read does not establish, at most 40 messages' runs, dropped when it returns",
   // The renderer's side of the web bridge, in a browser tab, not the host.
