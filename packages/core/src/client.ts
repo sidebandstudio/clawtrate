@@ -10059,23 +10059,51 @@ export class ClawtrateClient {
     return this.listCreated(await newMainTask(this.actionContext(options.owner ?? null), botId));
   }
 
-  async renameTask(key: string, label: string, options: { owner?: object } = {}): Promise<void> {
+  /**
+   * A stamped task action's write access, then its guard. Access first: asking for it can
+   * reconnect, and the guard reads the connection it ends on. The action's own context is made
+   * only after both, so the grant's reconnect doesn't end it.
+   */
+  private async settleTaskWrite(
+    owner: object | null,
+    stamp: GatewayStamp | undefined,
+  ): Promise<void> {
+    // Unstamped, nothing names the gateway the action was for, so the grant's reconnect still ends
+    // it rather than send it to whichever gateway answered.
+    if (!stamp) return;
+    await this.actionContext(owner).ensureWrite();
+    await this.requireSameGateway(stamp);
+  }
+
+  /** With `stamp`, as for `archiveTask`. */
+  async renameTask(
+    key: string,
+    label: string,
+    options: { owner?: object; stamp?: GatewayStamp } = {},
+  ): Promise<void> {
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     await renameTask(this.actionContext(options.owner ?? null), key, label);
   }
 
-  async pinTask(key: string, pinned: boolean, options: { owner?: object } = {}): Promise<void> {
+  /** With `stamp`, as for `archiveTask`. */
+  async pinTask(
+    key: string,
+    pinned: boolean,
+    options: { owner?: object; stamp?: GatewayStamp } = {},
+  ): Promise<void> {
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     await pinTask(this.actionContext(options.owner ?? null), key, pinned);
   }
 
   /**
-   * Mark a task unread or read. `opened` is a read the person did not ask for
-   * (opening the task): it names the unread marker it saw, and is made only
+   * Mark a task unread or read, with `stamp` as for `archiveTask`. `opened` is a read the person
+   * did not ask for (opening the task): it names the unread marker it saw, and is made only
    * while the connection already writes, never asking for access.
    */
   async markTask(
     key: string,
     unread: boolean,
-    options: { owner?: object; opened?: boolean } = {},
+    options: { owner?: object; opened?: boolean; stamp?: GatewayStamp } = {},
   ): Promise<void> {
     if (options.opened) {
       if (!this.holds(WRITE_SCOPE) || this.options.readOnly) return;
@@ -10092,6 +10120,7 @@ export class ClawtrateClient {
       }
       return;
     }
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     await markTask(this.actionContext(options.owner ?? null), key, unread);
   }
 
@@ -10103,13 +10132,7 @@ export class ClawtrateClient {
     key: string,
     options: { stop?: boolean; owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<ArchiveResult> {
-    // Write access first: asking for it can reconnect, and the guard reads the connection it ends
-    // on. The action is bound to that connection only after both, so the grant's reconnect doesn't
-    // end it.
-    if (options.stamp) {
-      await this.actionContext(options.owner ?? null).ensureWrite();
-      await this.requireSameGateway(options.stamp);
-    }
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     return archiveTask(this.actionContext(options.owner ?? null), key, {
       stop: options.stop === true,
     });
@@ -10124,10 +10147,7 @@ export class ClawtrateClient {
     key: string,
     options: { owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<void> {
-    if (options.stamp) {
-      await this.actionContext(options.owner ?? null).ensureWrite();
-      await this.requireSameGateway(options.stamp);
-    }
+    await this.settleTaskWrite(options.owner ?? null, options.stamp);
     await deleteTask(this.actionContext(options.owner ?? null), key);
     // Its conversation is gone from the gateway: so are the pictures you sent in it.
     this.dropTaskPictures(key);

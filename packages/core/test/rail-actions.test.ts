@@ -8,7 +8,7 @@ import {
   CONNECTION_CHANGED_AFTER_SEND,
   MAX_DEFERRED_STOPS,
 } from "../src/client.ts";
-import { gatewayStamp } from "../src/types.ts";
+import { gatewayStamp, type GatewayStamp } from "../src/types.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
@@ -917,7 +917,7 @@ describe("an archive or a delete bound to the connection it began on", () => {
     client.stop();
   });
 
-  /** A read-tier host whose archive waits for an access grant the gateway approves. */
+  /** A read-tier host whose task action waits for an access grant the gateway approves. */
   async function granted(after: string) {
     const { client, gateway } = await connected(READ_SCOPES);
     let id = "gateway-a";
@@ -965,4 +965,43 @@ describe("an archive or a delete bound to the connection it began on", () => {
     expect(gateway.calls("sessions.patch")).toEqual([]);
     client.stop();
   });
+
+  const changes = [
+    {
+      title: "F-056: a rename",
+      act: (client: ClawtrateClient, stamp: GatewayStamp) =>
+        client.renameTask("agent:pip:main", "Weekly", { stamp }),
+      patch: { key: "agent:pip:main", label: "Weekly" },
+    },
+    {
+      title: "F-014: a task's pin",
+      act: (client: ClawtrateClient, stamp: GatewayStamp) =>
+        client.pinTask("agent:pip:main", true, { stamp }),
+      patch: { key: "agent:pip:main", pinned: true },
+    },
+    {
+      title: "F-022: a Mark as unread",
+      act: (client: ClawtrateClient, stamp: GatewayStamp) =>
+        client.markTask("agent:pip:main", true, { stamp }),
+      patch: { key: "agent:pip:main", unread: true },
+    },
+  ];
+  for (const { title, act, patch } of changes) {
+    it(`${title} that waits for an access grant goes through once the same gateway grants it`, async () => {
+      const { client, gateway, stamp } = await granted("gateway-a");
+      expect(await outcome(act(client, stamp))).toBe("done");
+      expect(client.state.connection.target).toBe(stamp.target);
+      expect(gateway.calls("sessions.patch")).toEqual([patch]);
+      client.stop();
+    });
+
+    it(`${title} that waits for an access grant is refused when another gateway answers the grant's reconnect`, async () => {
+      const { client, gateway, stamp } = await granted("gateway-x");
+      expect(await outcome(act(client, stamp))).toBe(
+        "This change was made for another gateway, so nothing was sent.",
+      );
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+      client.stop();
+    });
+  }
 });
