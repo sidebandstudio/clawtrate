@@ -42,7 +42,7 @@ const HISTORY = [
 ];
 
 /** Otto's open task as a task Otto started from another, with its brief first. */
-async function startedFrom(page: Page, fromKey: string | null) {
+async function startedFrom(page: Page, fromKey: string) {
   const items = mapHistory(HISTORY, { startedAt: CREATED });
   await page.evaluate(
     ({ items, key, fromKey }) => {
