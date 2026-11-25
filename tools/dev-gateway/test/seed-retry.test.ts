@@ -1,12 +1,18 @@
 // The seed's calls that are safe to repeat are tried again when the gateway doesn't answer, and
 // a failed seed prints the end of the gateway's and the scripted model's logs (#610).
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   isTransportFailure,
+  openInstance,
   retryOnTransport,
+  seed,
   SEED_RETRY_DELAYS_MS,
   seedProblem,
 } from "../src/cli.ts";
+import type { OpenclawRunner, RunResult } from "../src/env.ts";
 
 /** A failed `openclaw gateway call`, as `must` throws it, around the CLI's JSON answer. */
 const failed = (error: Record<string, unknown>) =>
@@ -131,5 +137,51 @@ describe("a failed seed's message", () => {
         "  the scripted model's log, /run/provider.log, is empty",
       ].join("\n"),
     );
+  });
+});
+
+describe("a seed whose gateway stops answering its health call", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("says so with the end of the gateway's and the scripted model's logs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clawtrate-seed-"));
+    dirs.push(root);
+    const calls: string[][] = [];
+    // A runner the guard accepts, whose health call times out; nothing else is ever run.
+    const runner = {
+      refusal: () => null,
+      gatewayPort: () => 19_999,
+      run: async (args: string[]): Promise<RunResult> => {
+        calls.push(args);
+        return { status: 1, stdout: "", stderr: "gateway timeout after 3000ms" };
+      },
+    } as unknown as OpenclawRunner;
+    const inst = openInstance("seed-health", {
+      home: join(root, "home"),
+      runRoot: join(root, "run"),
+      runner,
+      listening: async () => true,
+    });
+    mkdirSync(inst.runDir, { recursive: true });
+    writeFileSync(join(inst.runDir, "gateway.log"), "[gateway] ready\n[gateway] closing\n");
+    writeFileSync(join(inst.runDir, "provider.log"), "scripted model on 127.0.0.1\n");
+    const failure = await seed(inst).then(
+      () => new Error("the seed succeeded"),
+      (error: unknown) => error as Error,
+    );
+    expect(failure.message).toBe(
+      [
+        "the seed stopped: the development gateway is not running. Run `pnpm dev-gateway start --instance seed-health` first.",
+        `  the end of the development gateway's log, ${join(inst.runDir, "gateway.log")}:`,
+        "    [gateway] ready",
+        "    [gateway] closing",
+        `  the end of the scripted model's log, ${join(inst.runDir, "provider.log")}:`,
+        "    scripted model on 127.0.0.1",
+      ].join("\n"),
+    );
+    expect(calls).toEqual([["gateway", "call", "health", "--json", "--timeout", "3000"]]);
   });
 });
