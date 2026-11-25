@@ -10,6 +10,16 @@ on:
         description: Run only the packaged Keychain check, on a discarded macOS runner
         type: boolean
         default: false
+      # A run by hand holds a macOS runner only when asked to, so a run that proves something
+      # on Linux or Windows does not wait for one, or keep main's own run waiting.
+      macos:
+        description: Run the macos job (Mac packaging, the Mac-only tests, the macOS screenshot set)
+        type: boolean
+        default: false
+      visual:
+        description: Run the screenshot tests in the Linux image
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -23,12 +33,20 @@ concurrency:
 jobs:
   # A pull request that changes only documentation cannot change what the end-to-end, visual and
   # packaging jobs test, so they are skipped for it. `check` always runs: its unit tests read
-  # docs/parity.md. Pushes to main and runs by hand run everything.
+  # docs/parity.md. Pushes to main run everything; runs by hand run what their inputs choose.
+  #
+  # The macos job runs on a pull request only when it changes one of MACOS_PATHS, the files the
+  # job's steps use, or a Linux baseline that has a macOS twin (#392). A change that redraws a
+  # picture in the macOS set redraws its Linux twin too, and the Linux job fails until that is
+  # recorded, so the twin brings in the macos job. test/ci-macos-gate.test.ts checks
+  # the list against the job's steps. Every push to main runs the macos job.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      macos: ${{ steps.diff.outputs.macos }}
+      visual: ${{ steps.diff.outputs.visual }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,10 +55,62 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           KEYCHAIN_ONLY: ${{ inputs.keychain == true }}
+          MACOS_INPUT: ${{ inputs.macos == true }}
+          VISUAL_INPUT: ${{ inputs.visual != false }}
+          # Git pathspecs, read with :(glob). Workspace packages under packages/ are left out:
+          # they hold no macOS code, and the Linux and Windows jobs test them on every change.
+          MACOS_PATHS: |
+            .github/workflows/ci.yml
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            vitest.config.ts
+            playwright.updates.config.ts
+            playwright.visual.config.ts
+            apps/desktop/package.json
+            apps/desktop/electron.vite.config.ts
+            apps/desktop/src/main/**
+            apps/desktop/src/preload/**
+            apps/desktop/src/setup/**
+            apps/desktop/src/host/runtime.ts
+            apps/desktop/src/web-host/setup-look.ts
+            apps/desktop/packaging/**
+            apps/desktop/resources/**
+            apps/desktop/test/update/**
+            apps/desktop/test/fixtures/local-gateway.ts
+            apps/desktop/test/fixtures/openclaw-outputs.ts
+            apps/desktop/test/settings-reader.test.ts
+            apps/desktop/test/local-prove.test.ts
+            apps/desktop/test/local-connect.test.ts
+            apps/desktop/test/setup-connect-boundaries.test.ts
+            tools/dev-gateway/src/instance.ts
+            tools/dev-gateway/src/state-guard.ts
+            tools/dev-gateway/src/endpoint.ts
+            tools/brand/src/make-icons.ts
+            tools/brand/src/png.ts
+            assets/brand/logo.png
+            assets/brand/generated.json
+            e2e/ports.ts
+            e2e-updates/**
+            e2e-packaged/**
+            visual/fixture.ts
+            visual/shortcuts.visual.spec.ts
+            visual/search.visual.spec.ts
+            visual/messages.visual.spec.ts
+            visual/shell.visual.spec.ts
+            visual/baselines/darwin/**
+            packages/ui/package.json
+            packages/ui/src/styles/tokens.css
         run: |
           code=true
+          macos=true
+          visual=true
           # A run by hand for the Keychain check alone runs no other end-to-end or packaging job.
           if [ "$KEYCHAIN_ONLY" = "true" ]; then code=false; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            macos=$MACOS_INPUT
+            visual=$VISUAL_INPUT
+          fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # Without rename detection a file moved into docs/ also lists the path it left.
             files=$(git diff --name-only --no-renames "origin/$BASE...HEAD")
@@ -48,8 +118,28 @@ jobs:
             if ! printf '%s\n' "$files" | grep -qvE '^(docs/|[^/]+\.md$|LICENSE$|\.github/ISSUE_TEMPLATE/|\.github/pull_request_template\.md$)'; then
               code=false
             fi
+            set -f
+            pathspecs=$(printf '%s\n' "$MACOS_PATHS" | sed -e '/^$/d' -e 's/^/:(glob)/')
+            # shellcheck disable=SC2086
+            ours=$(git diff --name-only --no-renames "origin/$BASE...HEAD" -- $pathspecs)
+            set +f
+            twins=$(printf '%s\n' "$files" | sed -n 's#^visual/baselines/linux/##p' |
+              while IFS= read -r name; do
+                if [ -e "visual/baselines/darwin/$name" ]; then echo "visual/baselines/linux/$name"; fi
+              done)
+            if [ -n "$ours$twins" ]; then
+              echo "The macos job runs for:"
+              printf '%s\n' "$ours" "$twins" | sed '/^$/d'
+            else
+              echo "No file the macos job uses changed."
+              macos=false
+            fi
           fi
+          # Jobs that test code run only when code does.
+          if [ "$code" = "false" ]; then macos=false; visual=false; fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "macos=$macos" >> "$GITHUB_OUTPUT"
+          echo "visual=$visual" >> "$GITHUB_OUTPUT"
 
   check:
     runs-on: ubuntu-latest
@@ -108,10 +198,13 @@ jobs:
           path: test-results/
           retention-days: 3
 
+  # What needs a Mac: the native helpers' tests, local connect's proof, the desktop update tests,
+  # Mac packaging and the macOS screenshot set. On a pull request it runs only when its own
+  # sources change (the changes job); every push to main runs it.
   macos:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # The visual baselines were taken on macOS 15; font rasterising differs between releases.
+    if: needs.changes.outputs.macos == 'true'
+    # The macOS baselines were taken on macOS 15; font rasterising differs between releases.
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -177,6 +270,7 @@ jobs:
           echo "CLAWTRATE_OTHER_ACCOUNT_LISTENER=19417:$fixture/log" >> "$GITHUB_ENV"
       - run: OPENCLAW_BIN="$(npm prefix --global)/bin/openclaw" CLAWTRATE_LOCAL_GATEWAY=1 pnpm exec vitest run apps/desktop/test/local-prove.test.ts apps/desktop/test/local-connect.test.ts apps/desktop/test/setup-connect-boundaries.test.ts
       - run: pnpm exec playwright install chromium
+      # On a Mac this runs only the macOS set (playwright.visual.config.ts).
       - run: pnpm visual
       # What a failed or flaky check saw: the first attempt's actual and difference pictures,
       # traces and attachments, even when the retry passed. Passing attempts leave their
@@ -191,13 +285,12 @@ jobs:
       - run: pnpm test:desktop-updates
       - run: pnpm package:mac
 
-  # The screenshot tests in the pinned Linux image (visual/linux/), against visual/baselines/linux/,
-  # split by test across three runners. Until the Linux baselines replace the macOS ones (#392) it
-  # runs the specs that have Linux baselines and the specs that take no screenshot, and the
-  # macos job's `pnpm visual` stays the required check.
+  # Every screenshot test, in the pinned Linux image (visual/linux/), against
+  # visual/baselines/linux/, split by test across three runners. This is the screenshot gate;
+  # the macos job runs the small macOS set.
   visual-linux:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.visual == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -212,7 +305,9 @@ jobs:
           path: ${{ runner.temp }}/pnpm-store
           key: visual-linux-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: visual-linux-pnpm-
-      - run: bash visual/linux/run.sh --shard=${{ matrix.shard }}/3 $(grep -v '^#' visual/linux/specs.txt)
+      # The github reporter puts each runner's summary on the run's page, naming each test that
+      # passed only on its retry, so a flaky check is seen without opening three logs.
+      - run: bash visual/linux/run.sh --shard=${{ matrix.shard }}/3 --reporter=list,github
         env:
           CLAWTRATE_VISUAL_IMAGE: clawtrate-visual
           CLAWTRATE_VISUAL_STORE: ${{ runner.temp }}/pnpm-store

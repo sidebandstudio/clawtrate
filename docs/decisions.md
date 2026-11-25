@@ -459,11 +459,12 @@ The newer-build test in the launch check (`e2e-packaged/launch.spec.ts`) shows i
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` has read-only permissions and uses no secrets. It runs on pushes to `main`, on pull requests and by hand (`workflow_dispatch`). Its artifacts are what a failed check saw, and the Windows job's unsigned installer, each kept three days. It runs four jobs:
+`.github/workflows/ci.yml` has read-only permissions and uses no secrets. It runs on pushes to `main`, on pull requests and by hand (`workflow_dispatch`). Its artifacts are what a failed check saw, and the Windows job's unsigned installer, each kept three days. It runs these jobs:
 
 - lint, typecheck and unit tests on Linux;
 - `pnpm e2e` on Linux, with `openclaw@2026.10.6` installed from npm (it needs Node 26.12.1 or later, which `setup-node` provides);
-- `pnpm visual` and an unsigned `pnpm package:mac` on `macos-15`, the release the baselines were taken on;
+- every screenshot test in a pinned Linux image, split across three runners;
+- on `macos-15`, what needs a Mac: the native helpers' tests, local connect's checks, the desktop update tests, the macOS screenshot set and an unsigned `pnpm package:mac`. It runs on every push to `main`, and on a pull request only when the pull request changes a file the job uses, so most interface changes need no macOS runner (#392);
 - on `windows-2025`, `pnpm package:win`, a silent install of the installer, the launch check against the installed app and a silent uninstall (see the Windows job under Packaging).
 
 `.github/workflows/site.yml` deploys the website to GitHub Pages with the Beta feed ([Where a beta's files live](#where-a-betas-files-live)). Its build job reads the repository and its releases; only its deploy job may write to Pages, with the `pages: write` and `id-token: write` that `actions/deploy-pages` needs. It uses no secret but the workflow's own token, and builds nothing: the release script runs on the maintainer's Mac.
@@ -833,7 +834,8 @@ Built from `docs/design/controls.md` sections 16 to 19 (`packages/core/src/usage
 - **Visual tests.** `pnpm visual` (`playwright.visual.config.ts`, tests in `visual/`) builds and serves the fixture and runs three things: screenshots of the connect, pairing and main views, Work closed and open, in light and dark at 1440, 1100 and 800 px and at phone width (390 × 844 with a touch pointer), plus the phone's bot list; a legibility audit over fourteen states in both themes at 1440 px and phone width that measures every rendered text node's size (at least 12 px) and its contrast against its composited background (at least 4.5:1), skipping only what is inert behind the drawer's scrim; and behaviour checks for the rail, the Work pane, the strip and the phone. The clock is fixed and the time zone is America/New_York, so times are stable.
 - **Tests default to dark.** The end-to-end and visual Playwright configs set the colour scheme to dark, and the fixture's helpers take dark when a test names no theme, so a check that asks for nothing sees what a new user sees. Checks that cover both themes still name each one: a light case asks for light with `?theme=light` or the stored choice, because the system's scheme alone no longer makes the app light. The packaged-app check launches with no stored choice and checks that the window opens dark.
 - **Tolerance.** A pixel differs when its colour moves more than Playwright's 0.2 threshold; a screenshot passes with at most 0.2% of pixels different. Animations are stopped and the caret hidden.
-- **The baselines are specific to macOS.** Font rasterising differs between operating systems, so the baselines live under `visual/baselines/darwin/` and only that platform can compare against them. They are not part of the CI workflow. They were approved by the builder's own review, not yet by the owner.
+- **The Linux baselines are the gate.** Font rasterising differs between operating systems, so a baseline is valid only on the platform in its path. Every spec has a baseline under `visual/baselines/linux/`, drawn in a pinned Ubuntu image with pinned fonts (`visual/linux/`), which CI runs on its Linux runners and a Mac runs through Docker. Pull requests had waited hours for a hosted macOS runner, which only the screenshot tests needed (#392). The image's arm64 and amd64 builds draw the same pictures within the tolerance, and the text snapshots are identical on Linux and macOS, so the move changed no content.
+- **A small macOS set stays.** macOS draws some characters from system fonts that cannot ship in an image: the shortcuts sheet's ⌘ ⇧ ⌥ ⌃, the search palette's ↵ and the reactions' emoji. Those specs and the whole window (`MACOS_SPECS` in `playwright.visual.config.ts`) keep baselines under `visual/baselines/darwin/`, and a Mac runs only those.
 
 ## Read-only flows: what the gateway gives, checked in its source
 
