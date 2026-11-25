@@ -197,6 +197,14 @@ describe("F-565: the bot's brief in a task it started", () => {
       botRow("The lake loop.", CREATED + 1_424, FIRST_RUN),
     ];
     expect(briefs(forked, sessionInfo())).toEqual([BRIEF]);
+    // A reset row copied from the requester keeps its earlier time, like the rows around it.
+    const copiedReset = {
+      role: "system",
+      timestamp: CREATED - 7_000,
+      content: "",
+      __openclaw: { kind: "reset", id: "reset-0" },
+    };
+    expect(briefs([copiedReset, ...forked], sessionInfo())).toEqual([BRIEF]);
   });
 
   it("F-565: nothing is marked in a task no bot started", () => {
@@ -230,6 +238,12 @@ describe("F-565: the bot's brief in a task it started", () => {
     };
     const afterReset = [reset, userRow("#text", CREATED + 60_050, "r1:user")];
     expect(briefs(afterReset, sessionInfo())).toEqual([]);
+    // A reset within seconds of the task's start: its row, not the time, ends the search.
+    const soonAfter = [
+      { ...reset, timestamp: CREATED + 5_000 },
+      userRow("#text", CREATED + 5_050, "r1:user"),
+    ];
+    expect(briefs(soonAfter, sessionInfo())).toEqual([]);
     const untimedReset = [
       { ...reset, timestamp: undefined },
       userRow("#text", CREATED + 50, "r1:user"),
@@ -255,8 +269,14 @@ describe("F-565: the bot's brief in a task it started", () => {
     const keyless = [userRow(BRIEF, CREATED + 30, null), ...spawnedHistory.slice(1)];
     expect(briefs(keyless, sessionInfo())).toEqual([]);
     const untimed = [{ ...spawnedHistory[0], timestamp: undefined }, ...spawnedHistory.slice(1)];
-    // The untimed row is skipped, and the person's later message is still not the brief.
+    // A row with no time ends the search: the person's later message is not the brief, even one
+    // queued before the bot's first reply.
     expect(briefs(untimed, sessionInfo())).toEqual([]);
+    const untimedThenQueued = [
+      { ...spawnedHistory[0], timestamp: undefined },
+      userRow("Also check the shade.", CREATED + 500, "q1:user"),
+    ];
+    expect(briefs(untimedThenQueued, sessionInfo())).toEqual([]);
     const replyFirst = [botRow("Hello.", CREATED + 10, FIRST_RUN), ...spawnedHistory];
     expect(briefs(replyFirst, sessionInfo())).toEqual([]);
     expect(briefs(spawnedHistory, sessionInfo({ createdAt: "soon" }))).toEqual([]);

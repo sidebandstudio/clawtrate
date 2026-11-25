@@ -476,7 +476,8 @@ export function mapHistory(
      * it stored from then on, of any role, is the bot's brief when it is a user row, a turn's own
      * input (`<run>:user`), stored within `BRIEF_WINDOW_MS` of then: the gateway writes the brief
      * as the task's first turn, and a forked task's copied rows keep the earlier times they were
-     * written. A reset or compaction row ends the search: nothing after it is the brief.
+     * written. A reset's row, stored after the task was made, or a row with no time ends the
+     * search: nothing after it is the brief.
      */
     startedAt?: number | null;
   } = {},
@@ -501,10 +502,10 @@ export function mapHistory(
     const kind = str(info.kind);
     // The gateway cut this row to its display length.
     const cutByGateway = info.truncated === true;
-    // The first row the task stored itself, of any role, ends the search for the brief; so does
-    // a reset or compaction row, whatever its time.
+    // The first row the task stored itself, of any role (a reset's row too), ends the search for
+    // the brief; so does a row with no time, which could be the task's own or a copied one.
     let first = false;
-    if (briefSought && kind && SYSTEM_ROW_TEXT[kind]) briefSought = false;
+    if (briefSought && num(message.timestamp) === null) briefSought = false;
     else if (briefSought && isWrittenSince(message, startedAt)) {
       briefSought = false;
       first = message.role === "user";

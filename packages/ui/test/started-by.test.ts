@@ -39,7 +39,13 @@ const html = (element: ReactElement) =>
   renderToStaticMarkup(
     createElement(BridgeProvider, { bridge: {} as ClawtrateBridge, children: element }),
   );
-const text = (markup: string) => markup.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'");
+/** The words React's own markup reads as, for comparing; never markup to show. */
+const text = (markup: string) =>
+  markup
+    .split(/<[^>]*>/)
+    .join("")
+    .split("&#x27;")
+    .join("'");
 
 describe("F-565: the line a task a bot started shows", () => {
   it("F-565: names the bot and the task it came from, with a button that opens it", () => {
@@ -58,9 +64,10 @@ describe("F-565: the line a task a bot started shows", () => {
 
   it("F-565: a task started under another bot names the bot that started it", () => {
     const starter = starterOf(forMarlow, [pip], { pip: [main], marlow: [forMarlow] })!;
-    expect(text(html(StartedLine({ starter, onOpen: () => {} })))).toBe(
-      "Pip started this task from Main · Open Main",
-    );
+    // Every bot's main task is "Main": the line and the button say whose.
+    const markup = html(StartedLine({ starter, onOpen: () => {} }));
+    expect(text(markup)).toBe("Pip started this task from Pip's Main · Open Pip's Main");
+    expect(markup).toContain(">Open Pip&#x27;s Main</button>");
   });
 
   it("F-565: when the task it came from is not listed, the line says only who started it", () => {

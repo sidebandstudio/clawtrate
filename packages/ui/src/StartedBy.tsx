@@ -14,6 +14,11 @@ export type Starter = {
   bot: Bot | null;
   /** The task it was started from, when this client lists it. */
   from: Task | null;
+  /**
+   * What the line calls that task: its title, or in a task under another bot "Pip's Main", since
+   * every bot's main task is "Main".
+   */
+  fromName: string | null;
 };
 
 /** The starter of a task a bot started, from the bots and tasks this client lists; null otherwise. */
@@ -29,11 +34,14 @@ export function starterOf(
     Object.values(tasksByBot)
       .flat()
       .find((each) => each.key === started.fromKey) ?? null;
-  return { name: bot?.name ?? started.botId, bot, from };
+  const name = bot?.name ?? started.botId;
+  const fromName = from && (from.botId === task.botId ? from.title : `${name}'s ${from.title}`);
+  return { name, bot, from, fromName };
 }
 
 /**
- * "Pip started this task from Main · Open Main". Without the task it came from, or a way to
+ * "Pip started this task from Main · Open Main", or in a task under another bot "Pip started this
+ * task from Pip's Main · Open Pip's Main". Without the task it came from, or a way to
  * open it, the line says only what it can: who started it, and from where when that is listed.
  */
 export function StartedLine({
@@ -43,12 +51,12 @@ export function StartedLine({
   starter: Starter;
   onOpen: ((botId: string, key: string) => void) | null;
 }) {
-  const { name, from } = starter;
+  const { name, from, fromName } = starter;
   return (
     <p className="started-by" data-testid="started-by">
       {from ? (
         <>
-          {name} started this task from <span className="started-from">{from.title}</span>
+          {name} started this task from <span className="started-from">{fromName}</span>
           {onOpen ? (
             <>
               <span aria-hidden="true"> · </span>
@@ -58,7 +66,7 @@ export function StartedLine({
                 data-testid="open-started-from"
                 onClick={() => onOpen(from.botId, from.key)}
               >
-                Open {from.title}
+                Open {fromName}
               </button>
             </>
           ) : (

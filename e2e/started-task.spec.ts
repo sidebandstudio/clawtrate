@@ -75,8 +75,10 @@ test.beforeAll(async ({ browser }) => {
   );
   const data = mkdtempSync(join(tmpdir(), "clawtrate-started-"));
   const started = startHost(INSTANCE, STATIC, data);
+  // Kept before its address is awaited, so the host is stopped afterwards even if it never says.
+  host = { child: started.host, url: "", data };
   started.gated.release();
-  host = { child: started.host, url: await started.url, data };
+  host.url = await started.url;
   page = await pairedPage(browser, host.url);
   // Interactive access, asked as the person asks it: Request access in the access bar.
   await botRow(page, "Juniper").first().click();
