@@ -17,7 +17,7 @@ import { mapAgents } from "../packages/core/src/mapping.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
-import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -346,9 +346,8 @@ test("F-562: the gateway's own bot shows when it is the only bot, and leaves onc
 }) => {
   test.setTimeout(600_000);
   // An unseeded instance of this file's own, recorded before it starts.
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this process's start time");
-  record.runner.identity = self.identity;
+  const self = ownIdentity();
+  record.runner.identity = self;
   const runId = newRunId();
   record.instances.push({ name: ALONE, runId });
   saveRecord(RECORDS, record);

@@ -48,6 +48,7 @@ import {
   inUseRefusal,
   markerProblems,
   newRunId,
+  ownIdentity,
   ownership,
   prepareFreshState,
   processIdentity,
@@ -1305,8 +1306,7 @@ export async function start(
     await stopLocked(inst);
     const blocked = await deletionRefusal(inst);
     if (blocked) throw new StateInUseError(blocked);
-    const self = inst.identify(process.pid);
-    if (self.state !== "alive") throw new Error("could not determine this process's start time");
+    const selfIdentity = ownIdentity(inst.identify);
     // Ports are chosen and recorded in the new marker under one lock, so two
     // starts on this machine never take the same ones.
     const ports = await withLock(
@@ -1338,7 +1338,7 @@ export async function start(
             ...picked,
             checkout: inst.checkout,
             startPid: process.pid,
-            startIdentity: self.identity,
+            startIdentity: selfIdentity,
           },
           inst.identify,
         );

@@ -22,7 +22,12 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, writeSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
-import { newRunId, processIdentity, processState } from "../tools/dev-gateway/src/state-guard.ts";
+import {
+  newRunId,
+  ownIdentity,
+  processIdentity,
+  processState,
+} from "../tools/dev-gateway/src/state-guard.ts";
 import { cleanUp, recoverDeadRuns, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -215,12 +220,6 @@ export function startHost(
   return { host, url, gated };
 }
 
-function selfIdentity(): string {
-  const found = processIdentity(process.pid);
-  if (found.state !== "alive") throw new Error("could not determine this process's start time");
-  return found.identity;
-}
-
 export default async function globalSetup() {
   const run = process.env.CLAWTRATE_E2E_RUN ?? randomBytes(4).toString("hex");
   if (!/^[0-9a-f]{8}$/.test(run)) throw new Error(`CLAWTRATE_E2E_RUN must be 8 hex digits`);
@@ -239,7 +238,7 @@ export default async function globalSetup() {
   // Registered before anything is started.
   const record: RunRecord = {
     run,
-    runner: { pid: process.pid, identity: selfIdentity() },
+    runner: { pid: process.pid, identity: ownIdentity() },
     instances: [],
     host: null,
     dirs: [],
