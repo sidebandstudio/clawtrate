@@ -230,11 +230,10 @@ export type ModelRefresh =
       outcome: RefreshOutcome;
       /** The gateway's config declares the provider's models (`models.providers`). */
       configured: boolean;
-      /**
-       * The gateway answered while still finding the provider's models (`pendingProviders`) or
-       * after a refresh that failed (`refreshFailed`).
-       */
+      /** The gateway answered while still finding the provider's models (`pendingProviders`). */
       partial: boolean;
+      /** The gateway's refresh of its catalogue failed (`refreshFailed`): try again. */
+      failed: boolean;
     }
   | { status: "error"; error: string };
 
@@ -855,7 +854,8 @@ export function readModelRefresh(
         removedCount: removed.length,
         outcome,
         configured,
-        partial: pending || record?.refreshFailed === true,
+        partial: pending,
+        failed: record?.refreshFailed === true,
       };
     },
   };

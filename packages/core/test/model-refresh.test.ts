@@ -84,6 +84,7 @@ describe("F-588: Refresh in the Model menu", () => {
       outcome: null,
       configured: false,
       partial: false,
+      failed: false,
     });
     fake.config.models = {
       mode: "replace",
@@ -114,9 +115,10 @@ describe("F-588: Refresh in the Model menu", () => {
     };
     expect(await ask()).toMatchObject({ outcome: "ready" });
     fake.refreshMarkers = { pendingProviders: ["acme"] };
-    expect(await ask()).toMatchObject({ outcome: null, partial: true });
+    expect(await ask()).toMatchObject({ outcome: null, partial: true, failed: false });
+    // A refresh the gateway says failed is not one still under way.
     fake.refreshMarkers = { refreshFailed: true };
-    expect(await ask()).toMatchObject({ partial: true });
+    expect(await ask()).toMatchObject({ partial: false, failed: true });
     client.stop();
   });
 
@@ -275,6 +277,49 @@ describe("F-588: Refresh in the Model menu", () => {
     // Once it has answered, another press asks again.
     await client.refreshModels("acme", stamp);
     expect(fake.gateway.calls("models.list").filter((c) => (c as Json).refresh)).toHaveLength(2);
+    client.stop();
+  });
+
+  it("F-588: a press for the same provider on another gateway or target is refused, not given the running answer", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    const held = deferred<void>();
+    fake.holdRefresh = held.promise;
+    const first = client.refreshModels("acme", stampOn("gateway-a", client));
+    await expect(client.refreshModels("acme", stampOn("gateway-b", client))).rejects.toThrow(
+      /gateway changed/,
+    );
+    await expect(
+      client.refreshModels("acme", stampOn("gateway-a", client.state.connection.target + 1)),
+    ).rejects.toThrow(/gateway changed/);
+    held.resolve();
+    await expect(first).resolves.toMatchObject({ status: "done" });
+    client.stop();
+  });
+
+  it("F-588: Create waits for the whole refresh, its config read included", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    const held = deferred<void>();
+    const config = fake.gateway.handlers["config.get"]!;
+    fake.gateway.handlers["config.get"] = (params) => held.promise.then(() => config(params));
+    const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
+    await until(() => fake.gateway.calls("config.get").length > 0);
+    const creating = client.createBot({
+      name: "Early",
+      account: null,
+      provider: "acme",
+      model: "dev-1",
+      effort: null,
+      avatar: null,
+    });
+    await settle();
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    fake.gateway.handlers["config.get"] = config;
+    held.resolve();
+    await refreshing;
+    await creating.catch(() => {});
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
     client.stop();
   });
 

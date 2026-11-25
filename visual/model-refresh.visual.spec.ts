@@ -100,6 +100,7 @@ test.describe("F-588: Refresh in the Model menu", () => {
       ["refused", "Nothing new. The gateway couldn't ask OpenAI: OpenAI refused the account."],
       ["unreached", "Nothing new. The gateway couldn't get an answer from OpenAI."],
       ["pending", "Nothing new yet. The gateway is still looking for OpenAI's models."],
+      ["failed", "Nothing new. The gateway's refresh failed. Try Refresh again."],
       ["error", "Couldn't refresh: The gateway didn't answer in time."],
       [
         "none",
@@ -138,6 +139,19 @@ test.describe("F-588: Refresh in the Model menu", () => {
     await page.keyboard.press("Escape");
     await openMenu(page, SETTINGS);
     await expect(menu(page).getByText(words)).toHaveCount(0);
+  });
+
+  test("F-588: a second Refresh that finds the same models says nothing new and lists each once", async ({
+    page,
+  }) => {
+    await openMenu(page, `${SETTINGS}&refresh=new`);
+    await refreshRow(page).click();
+    await expect(menu(page).getByText("New: gpt-6.2-sol and gpt-6.2-astra.")).toBeVisible();
+    await refreshRow(page).click();
+    await expect(
+      menu(page).getByText(/^Nothing new\. The gateway asked OpenAI again/),
+    ).toBeVisible();
+    await expect(menu(page).getByRole("menuitemradio", { name: "gpt-6.2-sol" })).toHaveCount(1);
   });
 
   test("F-588: New bot's Model menu has the same Refresh", async ({ page }) => {

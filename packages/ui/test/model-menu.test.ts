@@ -85,6 +85,7 @@ describe("F-588: Refresh in the Model menu", () => {
     outcome: null,
     configured: false,
     partial: false,
+    failed: false,
     ...change,
   });
   const update: OpenClawUpdate = { current: "2026.10.6", latest: "2026.11.6", channel: "latest" };
@@ -127,6 +128,10 @@ describe("F-588: Refresh in the Model menu", () => {
     );
     expect(refreshWords(done({ partial: true }), "OpenAI", update)).toBe(
       "Nothing new yet. The gateway is still looking for OpenAI's models.",
+    );
+    // A refresh the gateway says failed is said as one, never as still looking.
+    expect(refreshWords(done({ failed: true }), "OpenAI", update)).toBe(
+      "Nothing new. The gateway's refresh failed. Try Refresh again.",
     );
     expect(
       refreshWords(

@@ -105,11 +105,9 @@ export function useModelList(provider: string, connection: ConnectionState, show
   const lookAgain = () => {
     if (refresh?.status === "looking" || key === "") return;
     const n = ++refreshes.current;
+    // View more's answer stays: a model chosen from it keeps its row, and its levels.
     const keep = (next: HeldRefresh) => {
-      if (n !== refreshes.current) return;
-      setRefresh(next);
-      // The full list the gateway gave before is read again when View more is opened.
-      if (next.status === "done") setHeld((was) => (was?.status === "loading" ? was : null));
+      if (n === refreshes.current) setRefresh(next);
     };
     setRefresh({ status: "looking" });
     bridge
@@ -214,7 +212,8 @@ export function refreshWords(
     said.push(`The gateway couldn't ask ${who}: ${who} refused the account.`);
   else if (result.outcome === "unavailable")
     said.push(`The gateway couldn't get an answer from ${who}.`);
-  if (result.partial) said.push(`The gateway is still looking for ${who}'s models.`);
+  if (result.failed) said.push("The gateway's refresh failed. Try Refresh again.");
+  else if (result.partial) said.push(`The gateway is still looking for ${who}'s models.`);
   else if (!changed && result.outcome === "ready")
     said.push(`The gateway asked ${who} again, and its list is the same.`);
   else if (!changed && result.outcome === null) {

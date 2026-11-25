@@ -983,10 +983,11 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         "no provider asked again, and no failed refresh",
       );
       const path = "models.providers.acme.models";
-      await patchConfig(h, { models: { providers: { acme: { models: grownModels("acme") } } } }, [
-        path,
-      ]);
       try {
+        // Inside the try: a growth that half landed is put back too.
+        await patchConfig(h, { models: { providers: { acme: { models: grownModels("acme") } } } }, [
+          path,
+        ]);
         const grown = await refresh();
         same(ids(grown), [...ACCOUNT_MODELS.acme, LATER_MODELS.acme], "acme's models after");
         same(grown.providerOutcomes ?? null, null, "still no provider asked again");

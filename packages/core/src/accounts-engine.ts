@@ -216,7 +216,11 @@ export class AccountsEngine {
   private loading: Promise<void> | null = null;
   private loadAgain = false;
   /** The Refresh under way (#565), which a second press of the same provider shares. */
-  private refreshing: { provider: string; promise: Promise<ModelRefresh> } | null = null;
+  private refreshing: {
+    provider: string;
+    stamp: GatewayStamp;
+    promise: Promise<ModelRefresh>;
+  } | null = null;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
   private signInAbort: AbortController | null = null;
   /**
@@ -365,15 +369,21 @@ export class AccountsEngine {
   refreshModels(provider: string, stamp: GatewayStamp): Promise<ModelRefresh> {
     const running = this.refreshing;
     if (running) {
-      if (running.provider === provider) return running.promise;
+      // Shared only with a press for the same provider on the same gateway and target.
+      if (running.provider === provider && sameStamp(running.stamp, stamp)) return running.promise;
+      if (running.provider === provider) return Promise.reject(new Error(MODELS_GATEWAY_CHANGED));
       return Promise.reject(
         new Error("Clawtrate is already looking for another provider's models."),
       );
     }
     const promise: Promise<ModelRefresh> = this.lookAgain(provider, stamp).finally(() => {
       if (this.refreshing?.promise === promise) this.refreshing = null;
+      if (this.pickerRead === waited) this.pickerRead = null;
     });
-    this.refreshing = { provider, promise };
+    // Create waits for the whole refresh, its config read included, rather than overlap it.
+    const waited = promise.catch(() => null);
+    this.pickerRead = waited;
+    this.refreshing = { provider, stamp, promise };
     return promise;
   }
 
@@ -415,8 +425,6 @@ export class AccountsEngine {
         { agentId: defaultBot, provider, refresh: true },
         { timeoutMs: REFRESH_MODELS_MS },
       );
-      // Create waits for it rather than overlap it, as for the picker.
-      this.pickerRead = asked.catch(() => null);
       answer = await asked;
     } catch (error) {
       if (gone()) throw new Error(MODELS_GATEWAY_CHANGED, { cause: error });
@@ -426,8 +434,6 @@ export class AccountsEngine {
           ? "The gateway didn't answer in time."
           : this.scrub(errorText(error));
       return { status: "error", error: cleanLine(words, MAX_REFRESH_ERROR_CHARS) };
-    } finally {
-      this.pickerRead = null;
     }
     if (gone()) throw new Error(MODELS_GATEWAY_CHANGED);
     const found = readModelRefresh(answer, provider, before, declaresModels(config, provider));

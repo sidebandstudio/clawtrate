@@ -116,7 +116,9 @@ test.beforeAll(async ({ accountsInstance, browser }) => {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-refresh-"));
   const started = startHost(INSTANCE, STATIC, data);
   started.gated.release();
-  host = { child: started.host, url: await started.url, data };
+  // Kept before its address is awaited, so afterAll stops it and removes its folder either way.
+  host = { child: started.host, url: "", data };
+  host.url = await started.url;
   page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
   await page.goto(host.url);
   await page.getByRole("button", { name: "Use the development gateway" }).click();

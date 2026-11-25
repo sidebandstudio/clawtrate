@@ -35,12 +35,12 @@
 //   effort=none               the open bot keeps no effort
 //   openclaw=behind|beta      the gateway reports a newer OpenClaw than it runs: 2026.11.6, or
 //                             2026.11.10-beta.1 on the beta channel
-//   refresh=new|many|gone|asked|config|refused|unreached|pending|error|slow
+//   refresh=new|many|gone|asked|config|refused|unreached|pending|failed|error|slow
 //                             what the Model menu's Refresh finds (#565): two new OpenAI models,
 //                             seven, one gone, nothing new from a provider asked again, nothing
 //                             from one the gateway's config lists, a provider that refused the
 //                             account, one that didn't answer, one still being looked for, a
-//                             gateway that didn't answer in time, or two new ones held until
+//                             refresh the gateway says failed, a gateway that didn't answer in time, or two new ones held until
 //                             releaseRefresh(); without it, nothing new from a provider the
 //                             gateway didn't ask again
 //   allowlist=1               the gateway's config names the models bots may use
@@ -569,6 +569,7 @@ function loadCatalog(
 function refreshCatalog(
   command: Extract<BridgeCommand, { type: "refreshModels" }>,
   params: AccountParams,
+  get: () => AccountsState,
   put: (change: (a: AccountsState) => AccountsState) => void,
   later: (ms: number, run: () => void) => void,
 ): Promise<ModelRefresh> {
@@ -592,6 +593,7 @@ function refreshCatalog(
     outcome: null,
     configured: false,
     partial: false,
+    failed: false,
   };
   const answer = (): ModelRefresh => {
     switch (kind) {
@@ -608,8 +610,21 @@ function refreshCatalog(
                 "gpt-6.2-nova",
               ].concat(["gpt-6.2-mini", "gpt-6.2-nano"])
             : ["gpt-6.2-sol", "gpt-6.2-astra"];
-        put((a) => ({ ...a, models: [...a.models, ...ids.map(row)] }));
-        return { ...nothing, added: ids.slice(0, 5), addedCount: ids.length, outcome: "ready" };
+        // As the engine does: the provider's rows replaced, and only what it lacked is new.
+        const had = new Set(
+          get()
+            .models.filter((m) => m.provider === provider)
+            .map((m) => m.id),
+        );
+        const added = ids.filter((id) => !had.has(id));
+        put((a) => ({
+          ...a,
+          models: [
+            ...a.models.filter((m) => m.provider !== provider || !ids.includes(m.id)),
+            ...ids.map(row),
+          ],
+        }));
+        return { ...nothing, added: added.slice(0, 5), addedCount: added.length, outcome: "ready" };
       }
       case "gone":
         put((a) => ({
@@ -627,6 +642,8 @@ function refreshCatalog(
         return { ...nothing, outcome: "unavailable" };
       case "pending":
         return { ...nothing, partial: true };
+      case "failed":
+        return { ...nothing, failed: true };
       case "error":
         return { status: "error", error: "The gateway didn't answer in time." };
       default:
@@ -944,7 +961,7 @@ export function accountCommand(
           put((a) => ({ ...a, models: fixtureAccounts(Date.now(), NO_ACCOUNT_PARAMS).models }));
       return loadCatalog(command, params, later);
     case "refreshModels":
-      return refreshCatalog(command, params, put, later);
+      return refreshCatalog(command, params, accounts, put, later);
     case "refreshAccounts":
       pendingRead?.();
       pendingRead = null;
