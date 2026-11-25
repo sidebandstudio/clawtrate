@@ -263,6 +263,9 @@ importers:
 
   tools/openclaw-update-check:
     dependencies:
+      '@clawtrate/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@openclaw/gateway-client':
         specifier: 2026.10.6
         version: 2026.10.6
