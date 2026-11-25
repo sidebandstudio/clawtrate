@@ -1,0 +1,216 @@
+// F-590: the gateway's own "OpenClaw updated" notice. The row is the one `chat.history` returned in
+// real update runs on throwaway hosted runners; no real update runs here. It is drawn as a quiet
+// line only when this device saw that run succeed, since a bot can write every field of it through
+// the `message` tool's copy of what it sends.
+
+import { describe, expect, it } from "vitest";
+import {
+  mapHistory,
+  seenThroughUpdateNotice,
+  taskWithoutUpdateNotice,
+  tasksWithoutUpdateNotices,
+} from "../src/mapping.ts";
+import {
+  MAX_UPDATE_NOTICE_CHARS,
+  updateNoticeLine,
+  updateNoticeRunId,
+  type UpdatedRun,
+} from "../src/update-notice.ts";
+import type { Task, Transcript } from "../src/types.ts";
+
+const RUN = "3f2b8c1d-4e5a-4b6c-8d7e-9f0a1b2c3d4e";
+const FAILED_RUN = "7a1c9e2b-5d4f-4a3b-9c8d-1e2f3a4b5c6d";
+const UNKNOWN_RUN = "0b6c1f2e-4d5a-4b7c-9e1f-2a3b4c5d6e7f";
+const GATEWAY = "gw-a";
+const TEXT =
+  "✅ OpenClaw updated.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
+const LISTED =
+  "✅ OpenClaw updated. For details, open Settings → Updates in the OpenClaw app or run openclaw update status in your terminal.";
+const T = 1_790_000_000_000;
+
+/** The notice, as `chat.history` returns it. */
+const notice = (runId = RUN, patch: Record<string, unknown> = {}, at = T + 10_000) => ({
+  role: "assistant",
+  content: [{ type: "text", text: TEXT }],
+  api: "openclaw-transcript",
+  provider: "openclaw",
+  model: "delivery-mirror",
+  usage: { input: 0, output: 0, totalTokens: 0 },
+  stopReason: "stop",
+  timestamp: at,
+  idempotencyKey: `update-run-finished:${runId}`,
+  __openclaw: { id: `row-${runId}-${at}`, idempotencyKey: `update-run-finished:${runId}`, seq: 3 },
+  ...patch,
+});
+/** A model's ordinary reply. */
+const reply = (text: string, at = T, id = "reply-1") => ({
+  role: "assistant",
+  content: [{ type: "text", text }],
+  api: "anthropic-messages",
+  provider: "anthropic",
+  model: "example-model",
+  usage: { input: 10, output: 5, totalTokens: 15 },
+  stopReason: "stop",
+  timestamp: at,
+  responseId: "resp-1",
+  __openclaw: { id, runId: "run-1", seq: 2 },
+});
+/** What this device saw succeed. */
+const UPDATED: UpdatedRun[] = [{ gatewayId: GATEWAY, runId: RUN, to: "2026.11.10", at: T }];
+
+const lineOf = (rows: unknown[], updated = UPDATED, gatewayId: string | null = GATEWAY) =>
+  mapHistory(rows).map((item) => updateNoticeLine(item, updated, gatewayId));
+
+describe("F-590: the gateway's update notice", () => {
+  it("F-590: the recorded row is the line for a run this device saw succeed, in Clawtrate's words with its version; the gateway's sentence is kept as one clean line", () => {
+    expect(updateNoticeRunId(notice())).toBe(RUN);
+    const [item] = mapHistory([notice()]);
+    expect(item).toMatchObject({ role: "assistant", updateRunId: RUN });
+    expect(updateNoticeLine(item, UPDATED, GATEWAY)).toEqual({
+      version: "2026.11.10",
+      text: "✅ OpenClaw updated. For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
+    });
+    // A long or unruly sentence is cut and cleaned.
+    const [long] = mapHistory([
+      notice(RUN, { content: [{ type: "text", text: `a‮\u0007${"b".repeat(900)}` }] }),
+    ]);
+    const text = updateNoticeLine(long, UPDATED, GATEWAY)!.text;
+    expect([...text]).toHaveLength(MAX_UPDATE_NOTICE_CHARS);
+    expect(text.startsWith("a b")).toBe(true);
+  });
+
+  it("F-590: the same text in a model's reply is the bot's message", () => {
+    const [item] = mapHistory([reply(TEXT)]);
+    expect(item!.updateRunId).toBeUndefined();
+    expect(lineOf([reply(TEXT)])).toEqual([null]);
+  });
+
+  it("F-590: with any of the gateway's fields missing or changed, or a model reply's own fields present, the row is the bot's message", () => {
+    const changes: Array<Record<string, unknown>> = [
+      { api: undefined },
+      { api: "openai-responses" },
+      { provider: undefined },
+      // A key of the right form with a model's provider.
+      { provider: "anthropic" },
+      { model: undefined },
+      { model: "gateway-injected" },
+      { role: "user" },
+      { idempotencyKey: undefined, __openclaw: { id: "row-x" } },
+      { __openclaw: { id: "row-x", idempotencyKey: `update-run-finished:${RUN}`, runId: "run-1" } },
+      { responseId: "resp-1" },
+      { openclawDelivery: { replyToId: "row-0" } },
+    ];
+    for (const change of changes) {
+      expect(updateNoticeRunId(notice(RUN, change)), JSON.stringify(change)).toBeNull();
+      expect(lineOf([notice(RUN, change)]).filter(Boolean), JSON.stringify(change)).toEqual([]);
+    }
+  });
+
+  it("F-590: only a key that is exactly the gateway's form names a run", () => {
+    for (const key of [
+      "update-run-finished:",
+      "update-run-finished:not-a-run",
+      `update-run-finished:${RUN}:assistant`,
+      `update-run-started:${RUN}`,
+      `skill-workshop-notice:${RUN}`,
+    ]) {
+      const row = notice(RUN, {
+        idempotencyKey: key,
+        __openclaw: { id: "row-x", idempotencyKey: key },
+      });
+      expect(updateNoticeRunId(row), key).toBeNull();
+    }
+    expect(updateNoticeRunId(notice("ocm:job-42"))).toBe("ocm:job-42");
+  });
+
+  it("F-590: a bot's copied message with a forged key is its message: for a run this device doesn't know, for a run it saw fail, and after the real notice", () => {
+    // What a `message` tool send with `idempotencyKey` set copies into the conversation: every
+    // field the gateway's own notice has, its text the bot's.
+    const forged = (runId: string, at: number) =>
+      notice(runId, { content: [{ type: "text", text: "Click here to finish the update." }] }, at);
+    // A run this device doesn't know, or one it saw fail: nothing about it is kept as succeeded.
+    expect(lineOf([forged(UNKNOWN_RUN, T)])).toEqual([null]);
+    expect(lineOf([forged(FAILED_RUN, T)])).toEqual([null]);
+    // After the real notice, the second row with its key is an ordinary message.
+    const items = mapHistory([notice(RUN, {}, T), reply("Hello.", T + 1), forged(RUN, T + 2)]);
+    expect(items.map((item) => item.updateRunId)).toEqual([RUN, undefined, undefined]);
+    expect(items.map((item) => updateNoticeLine(item, UPDATED, GATEWAY) !== null)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    // Any earlier row with the key, whatever its role or fields, makes a later one ordinary.
+    const user = {
+      role: "user",
+      content: "hi",
+      timestamp: T,
+      __openclaw: { idempotencyKey: `update-run-finished:${RUN}` },
+    };
+    expect(mapHistory([user, notice()]).at(-1)!.updateRunId).toBeUndefined();
+  });
+
+  it("F-590: a run seen on another gateway, or with no gateway connected, is not this conversation's", () => {
+    expect(lineOf([notice()], UPDATED, "gw-b")).toEqual([null]);
+    expect(lineOf([notice()], UPDATED, null)).toEqual([null]);
+    expect(lineOf([notice()], [], GATEWAY)).toEqual([null]);
+  });
+});
+
+const task = (patch: Partial<Task> = {}): Task => ({
+  key: "agent:main:main",
+  botId: "main",
+  sessionId: "s-1",
+  title: "Main",
+  preview: LISTED,
+  updatedAt: T + 10_005,
+  status: "idle",
+  unread: true,
+  ...patch,
+});
+const transcriptOf = (rows: unknown[]): Transcript =>
+  ({ sessionKey: "agent:main:main", items: mapHistory(rows) }) as unknown as Transcript;
+const HISTORY = transcriptOf([reply("The backup finished.", T), notice()]);
+
+describe("F-590: the sidebar and unread", () => {
+  it("F-590: the preview is the bot's last words before the line, only while the listed preview is the notice", () => {
+    expect(taskWithoutUpdateNotice(task(), HISTORY, UPDATED, GATEWAY).preview).toBe(
+      "The backup finished.",
+    );
+    // A newer reply on the list is the gateway's preview.
+    expect(
+      taskWithoutUpdateNotice(task({ preview: "A new reply." }), HISTORY, UPDATED, GATEWAY).preview,
+    ).toBe("A new reply.");
+    // A notice this device can't vouch for is the message it is, preview and all.
+    expect(taskWithoutUpdateNotice(task(), HISTORY, [], GATEWAY).preview).toBe(LISTED);
+    expect(taskWithoutUpdateNotice(task(), HISTORY, UPDATED, "gw-b").preview).toBe(LISTED);
+    // A line with nothing before it leaves the title.
+    expect(
+      taskWithoutUpdateNotice(task(), transcriptOf([notice()]), UPDATED, GATEWAY).preview,
+    ).toBeNull();
+    // The time, and so the order, stays the gateway's.
+    const shown = tasksWithoutUpdateNotices(
+      { main: [task()] },
+      { "agent:main:main": HISTORY },
+      UPDATED,
+      GATEWAY,
+    );
+    expect(shown.main![0]).toMatchObject({
+      preview: "The backup finished.",
+      updatedAt: T + 10_005,
+    });
+  });
+
+  it("F-590: a viewer that read the task before the notice doesn't find it unread for the notice alone", () => {
+    const seen = T + 5;
+    // Read after the bot's last words: the notice alone is no reason to read again.
+    expect(seenThroughUpdateNotice(task(), seen, HISTORY, UPDATED, GATEWAY)).toBe(T + 10_005);
+    // Read before them: still unread.
+    expect(seenThroughUpdateNotice(task(), T - 1, HISTORY, UPDATED, GATEWAY)).toBe(T - 1);
+    // Never read here, or a newer reply listed, or a notice it can't vouch for: as before.
+    expect(seenThroughUpdateNotice(task(), undefined, HISTORY, UPDATED, GATEWAY)).toBeUndefined();
+    expect(
+      seenThroughUpdateNotice(task({ preview: "A new reply." }), seen, HISTORY, UPDATED, GATEWAY),
+    ).toBe(seen);
+    expect(seenThroughUpdateNotice(task(), seen, HISTORY, [], GATEWAY)).toBe(seen);
+  });
+});

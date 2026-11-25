@@ -2,6 +2,7 @@ import {
   gatewayBotHidden,
   listedBots,
   mapSessionRow,
+  seenThroughUpdateNotice,
   type Bot,
   type ClawtrateState,
   type Task,
@@ -270,6 +271,26 @@ export function useSelection(
     },
     [state.bots, showGatewayBot, gatewayId, target, here],
   );
+  // A read-only connection's own memory of what it read, past the gateway's update line when that
+  // is all that came since (F-590): the notice alone doesn't make a task unread.
+  const updated = state.openclawUpdating?.updated;
+  const unreadSeen = useMemo(() => {
+    if (gatewayOwnsUnread) return NOTHING_SEEN;
+    if (!updated?.length) return seen;
+    let next: SeenMap | null = null;
+    for (const each of Object.values(state.tasksByBot).flat()) {
+      const through = seenThroughUpdateNotice(
+        each,
+        seen[each.key],
+        state.transcripts[each.key],
+        updated,
+        gatewayId,
+      );
+      if (through !== undefined && through !== seen[each.key])
+        (next ??= { ...seen })[each.key] = through;
+    }
+    return next ?? seen;
+  }, [gatewayOwnsUnread, seen, updated, state.tasksByBot, state.transcripts, gatewayId]);
   const tasks = useMemo(
     () => (bot ? (state.tasksByBot[bot.id] ?? []) : []),
     [bot, state.tasksByBot],
@@ -478,7 +499,7 @@ export function useSelection(
     tasks,
     task,
     seen,
-    unreadSeen: gatewayOwnsUnread ? NOTHING_SEEN : seen,
+    unreadSeen,
     showAll,
     isOpen,
     selectBot,

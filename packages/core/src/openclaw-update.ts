@@ -27,6 +27,12 @@ import { isOpenClawVersion } from "./gateway-update.ts";
 import type { KeyValueStore } from "./host.ts";
 import { asRecord } from "./mapping.ts";
 import type { ConnectionState, GatewayStamp } from "./types.ts";
+import {
+  MAX_UPDATED_RUNS,
+  UPDATE_RUN_ID,
+  UPDATED_RUN_MAX_AGE_MS,
+  type UpdatedRun,
+} from "./update-notice.ts";
 
 /** The gateway's phases, in its order (`UPDATE_RUN_PHASES`). */
 export const UPDATE_PHASES = [
@@ -43,9 +49,7 @@ export type UpdatePhase = (typeof UPDATE_PHASES)[number];
 const RUN_STATUSES = ["running", "succeeded", "failed", "rolled-back", "skipped"] as const;
 export type UpdateRunStatus = (typeof RUN_STATUSES)[number];
 
-/** A run id as the gateway writes one: a UUID, or `ocm:` and a job id. */
-const RUN_ID =
-  /^(ocm:[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+const RUN_ID = UPDATE_RUN_ID;
 /** The longest reason code kept, and the longest of the gateway's own sentences. */
 export const MAX_UPDATE_REASON_CHARS = 128;
 export const MAX_UPDATE_NOTE_CHARS = 400;
@@ -83,6 +87,20 @@ export const UPDATE_RUN_KEY = "clawtrate.openclaw-update";
 export const MAX_KEPT_GATEWAYS = 4;
 /** A kept value longer than this isn't read. */
 const MAX_KEPT_CHARS = 8_192;
+/**
+ * The updates this device saw succeed (`UpdatedRun`), kept so the gateway's notice of each is
+ * drawn as Clawtrate's line after the app is opened again: at most `MAX_UPDATED_RUNS`, none older
+ * than `UPDATED_RUN_MAX_AGE_MS`. A value longer than `MAX_UPDATED_CHARS` isn't read.
+ */
+export const UPDATED_RUNS_KEY = "clawtrate.openclaw-updated";
+const MAX_UPDATED_CHARS = 32_768;
+/**
+ * How long after an update this app followed to "Updated" it reads the main bot's main
+ * conversation again, once: the gateway marks the run succeeded as it starts and writes its
+ * notice in a startup task after that, and sends no event when it does (OpenClaw 2026.10.6,
+ * `server-restart-sentinel`).
+ */
+export const UPDATE_NOTICE_READ_AFTER_MS = 5_000;
 
 /**
  * Reasons a gateway gives for not updating itself (`update.run` 2026.10.6): no button is
@@ -162,6 +180,8 @@ export type OpenClawUpdateState = {
   looking: boolean;
   /** Asking the gateway about that press failed: Check again and Stop waiting are offered. */
   lookFailed: boolean;
+  /** The updates this device saw succeed, the latest last; absent when none. */
+  updated?: UpdatedRun[];
 };
 
 export const initialOpenClawUpdate: OpenClawUpdateState = {
@@ -281,6 +301,35 @@ function readKeptEntry(value: unknown): Kept | null {
   return { gatewayId, runId, tag, from: version(kept?.from), to: version(kept?.to) };
 }
 
+/** The updates kept as seen to succeed, read field by field: the latest last, none too old. */
+function readUpdated(raw: string | null, now: number): UpdatedRun[] {
+  if (raw === null || raw.length > MAX_UPDATED_CHARS) return [];
+  try {
+    const list = asRecord(JSON.parse(raw))?.runs;
+    if (!Array.isArray(list)) return [];
+    const runs: UpdatedRun[] = [];
+    for (const each of list.slice(-MAX_UPDATED_RUNS)) {
+      const { gatewayId, runId, to, at } = asRecord(each) ?? {};
+      if (
+        typeof gatewayId === "string" &&
+        gatewayId &&
+        gatewayId.length <= 1_024 &&
+        typeof runId === "string" &&
+        RUN_ID.test(runId) &&
+        typeof to === "string" &&
+        isOpenClawVersion(to) &&
+        typeof at === "number" &&
+        Number.isSafeInteger(at) &&
+        now - at <= UPDATED_RUN_MAX_AGE_MS
+      )
+        runs.push({ gatewayId, runId, to, at });
+    }
+    return runs;
+  } catch {
+    return [];
+  }
+}
+
 /** What is kept, one entry per gateway (its identity), the latest last, at most `MAX_KEPT_GATEWAYS`. */
 function readKept(raw: string | null): Kept[] {
   if (raw === null || raw.length > MAX_KEPT_CHARS) return [];
@@ -318,6 +367,8 @@ export type OpenClawUpdatesContext = {
   missingScope: (error: unknown) => boolean;
   /** The model list, read again the way the app reads it on connect. */
   refreshModels: () => Promise<void>;
+  /** Read the main bot's main conversation on gateway `gatewayId` again, if it is open. */
+  readMainAgain: (gatewayId: string) => void;
   /** A new tag for one press. */
   newTag: () => string;
   now: () => number;
@@ -383,6 +434,8 @@ export class OpenClawUpdates {
   private reading: string | null = null;
   /** When the followed run last moved (an event or a record that changed it). */
   private movedAt = 0;
+  /** The updates seen to succeed have been read from storage. */
+  private updatedRead = false;
   private readonly ctx: OpenClawUpdatesContext;
 
   constructor(ctx: OpenClawUpdatesContext) {
@@ -652,6 +705,12 @@ export class OpenClawUpdates {
     this.cancelAway = null;
     this.cancelLate?.();
     this.cancelLate = null;
+    if (!this.updatedRead) {
+      this.updatedRead = true;
+      const raw = await this.ctx.storage.get(UPDATED_RUNS_KEY).catch(() => null);
+      const updated = readUpdated(raw, this.ctx.now());
+      if (updated.length > 0) this.patch({ updated });
+    }
     if (!this.ctx.admin()) return;
     const kept = readKept(await this.ctx.storage.get(UPDATE_RUN_KEY).catch(() => null));
     if (epoch !== this.epoch) return;
@@ -958,7 +1017,9 @@ export class OpenClawUpdates {
     this.released = null;
     this.refused = null;
     this.reading = null;
-    if (this.ctx.get()) this.ctx.set(initialOpenClawUpdate);
+    // The updates seen to succeed are each tied to their gateway, so they stay.
+    const updated = this.ctx.get()?.updated;
+    if (this.ctx.get()) this.ctx.set({ ...initialOpenClawUpdate, ...(updated ? { updated } : {}) });
   }
 
   /** A press went out and its answer was lost: held, kept, and asked about at once. */
@@ -1055,6 +1116,10 @@ export class OpenClawUpdates {
         reason: null,
         note: null,
       });
+      await this.remember({ gatewayId: run.gatewayId, runId, to: expected, at: this.ctx.now() });
+      // The gateway's notice of it comes with no event: the main conversation is read again.
+      const gatewayId = run.gatewayId;
+      this.ctx.later(() => this.ctx.readMainAgain(gatewayId), UPDATE_NOTICE_READ_AFTER_MS);
       await this.forget(run.gatewayId, runId);
       // The newer OpenClaw's models: read again the way the app reads them, once.
       await this.ctx.refreshModels().catch((error: unknown) => {
@@ -1073,6 +1138,37 @@ export class OpenClawUpdates {
     });
     // The record has ended: what it says is shown here, and nothing more holds Update.
     await this.forget(run.gatewayId, runId);
+  }
+
+  /**
+   * Keep `run` among the updates seen to succeed, in the state and in storage, from what storage
+   * holds (one write after another): the latest last, the oldest gone past the bounds.
+   */
+  private remember(run: UpdatedRun): Promise<void> {
+    const write = this.keeping.then(async () => {
+      const now = this.ctx.now();
+      const stored = readUpdated(
+        await this.ctx.storage.get(UPDATED_RUNS_KEY).catch(() => null),
+        now,
+      );
+      const same = (a: UpdatedRun, b: UpdatedRun) =>
+        a.gatewayId === b.gatewayId && a.runId === b.runId;
+      const others = [...stored, ...(this.state.updated ?? [])].filter(
+        (each, index, all) =>
+          !same(each, run) &&
+          now - each.at <= UPDATED_RUN_MAX_AGE_MS &&
+          all.findIndex((other) => same(other, each)) === index,
+      );
+      const updated = [...others, run].slice(-MAX_UPDATED_RUNS);
+      this.patch({ updated });
+      try {
+        await this.ctx.storage.set(UPDATED_RUNS_KEY, JSON.stringify({ runs: updated }));
+      } catch (error) {
+        this.ctx.log(`could not keep the finished update: ${errorText(error)}`);
+      }
+    });
+    this.keeping = write;
+    return write;
   }
 
   private async keep(run: UpdateRunView): Promise<void> {

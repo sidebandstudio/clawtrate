@@ -5,6 +5,7 @@ import {
   NOT_OPEN_IN_VIEW,
   tasksWithFilePreviews,
   tasksWithoutSkillNotes,
+  tasksWithoutUpdateNotices,
   type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
@@ -321,15 +322,23 @@ export function Shell({
   // With commands hidden, the rail's preview of a task whose loaded, current history ends with the
   // gateway's skill notes is the last thing before them; its time, order and unread are unchanged (F-560).
   // One whose history ends with a bot's message that is only files reads as their names (F-115).
+  // One whose history ends with the gateway's update line shows what came before it (F-590).
   const [commandsShown] = useShowCommands();
   const { tasksByBot, transcripts } = state;
+  const updated = state.openclawUpdating?.updated;
+  const gatewayId = state.connection.gatewayId;
   const listedTasks = useMemo(
     () =>
       tasksWithFilePreviews(
-        commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts),
+        tasksWithoutUpdateNotices(
+          commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts),
+          transcripts,
+          updated,
+          gatewayId,
+        ),
         transcripts,
       ),
-    [commandsShown, tasksByBot, transcripts],
+    [commandsShown, tasksByBot, transcripts, updated, gatewayId],
   );
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.

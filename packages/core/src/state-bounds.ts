@@ -13,6 +13,7 @@ import {
   type UpdateRunView,
 } from "./openclaw-update.ts";
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
+import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
 import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
@@ -639,6 +640,7 @@ const item = flagged<TranscriptItem>()({
   skillNote: FLAG,
   brief: FLAG,
   reportRunId: ID,
+  updateRunId: ID,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
@@ -803,6 +805,10 @@ const openclawUpdating = object<OpenClawUpdateState>()({
   error: text(MAX_UPDATE_NOTE_CHARS),
   looking: FLAG,
   lookFailed: FLAG,
+  updated: list(
+    MAX_UPDATED_RUNS,
+    object<UpdatedRun>()({ gatewayId: ID, runId: ID, to: NAME, at: NUMBER }),
+  ),
 });
 const task = flagged<Task>()({
   key: ID,

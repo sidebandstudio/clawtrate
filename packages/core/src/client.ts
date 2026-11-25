@@ -1852,6 +1852,13 @@ export class ClawtrateClient {
       return isMissingScope(error);
     },
     refreshModels: () => this.accounts.load(),
+    readMainAgain: (gatewayId) => {
+      if (this.state.connection.gatewayId !== gatewayId) return;
+      // The main bot's main conversation, where the gateway writes its notice (F-590).
+      const main = this.state.bots.find((bot) => bot.isDefault);
+      const task = main && this.state.tasksByBot[main.id]?.find((each) => each.isMain === true);
+      if (task && this.tracked(task.key)) this.scheduleHistory(task.key);
+    },
     newTag: () => this.randomId(),
     now: () => this.now(),
     storage: {
