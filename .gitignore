@@ -21,3 +21,5 @@ test-results/
 
 # Development gateway run state (PIDs, logs, local token)
 tools/dev-gateway/.run/
+# The OpenClaw (and Node) the development gateway runs, installed by pnpm dev-gateway setup
+tools/dev-gateway/.openclaw/

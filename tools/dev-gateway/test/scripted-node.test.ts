@@ -82,6 +82,8 @@ describe("the scripted node", () => {
     }) as unknown as typeof spawn;
     const runner = new OpenclawRunner({
       instance: "alpha",
+      // A stand-in path: the fake spawn below runs it, never an OpenClaw.
+      bin: "/test/openclaw",
       stateDir,
       runFile: join(home, "run.json"),
       spawnImpl: fakeSpawn,

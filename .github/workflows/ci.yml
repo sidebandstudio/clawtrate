@@ -189,6 +189,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The gateway version the project tests against (docs/decisions.md), from the public registry.
       - run: npm install --global openclaw@2026.10.6
+      # The development gateway runs this runner's copy, which is the pinned version.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
       - run: openclaw --version
       - run: pnpm exec playwright install --with-deps chromium
       # e2e/setup.spec.ts drives the desktop app's development build, which needs a display.
@@ -487,6 +489,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The gateway version the project tests against (docs/decisions.md), from the public registry.
       - run: npm install --global openclaw@2026.10.6
+      # The development gateway runs this runner's copy, which is the pinned version.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
       - name: Make a disposable keychain the default
         id: keychain
         run: |

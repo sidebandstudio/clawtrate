@@ -112,6 +112,8 @@ if (mode === "hold") {
     listening: async (port) => role === "gateway" && port === providerPort,
     runner: new OpenclawRunner({
       instance: name,
+      // A stand-in path: the fake spawn below runs it, never an OpenClaw.
+      bin: "/test/openclaw",
       stateDir: base.stateDir,
       runFile: base.runFile,
       checkout: "/test/worker",
