@@ -39,6 +39,20 @@
     - link "How to set it up":
       - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#turning-it-on-for-a-gateway
     - group: What the guide asks the bots to do
+    - heading "How bots work in Clawtrate" [level=4]
+    - paragraph: Your bots aren't told what a task is in Clawtrate, so a bot asked to put something in a task may not start one.
+    - paragraph:
+      - text: Clawtrate can add a short section, marked as Clawtrate's, to the top of each bot's instructions file (
+      - code: AGENTS.md
+      - text: "): how to talk to you, and what a task is in Clawtrate. Your bots get it in every conversation, task and routine, including outside Clawtrate. It adds about 3,100 characters to each prompt. Clawtrate keeps it up to date and changes nothing else in the file. Remove it here any time, and Clawtrate takes it out."
+    - group: Read it
+    - list "How bots work in Clawtrate":
+      - listitem: Juniper Not added
+      - listitem: Marlow Not added
+      - listitem: Otto Not added
+      - listitem: Pip Not added
+      - listitem: Quartermaster of the Family Calendar and Errands Not added
+    - paragraph: Adding or removing it needs admin access.
   - status
 - navigation "Bots":
   - button "Routines"

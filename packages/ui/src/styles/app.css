@@ -2718,7 +2718,8 @@ textarea {
   padding-left: 1.25em;
 }
 
-.bot-voice-guide {
+.bot-voice-guide,
+.bot-guides-text {
   margin: 0;
   padding: 10px 14px;
   border-radius: var(--radius-md);
