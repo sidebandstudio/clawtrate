@@ -140,7 +140,7 @@
       - menuitemradio "gpt-5.5-mini"
       - menuitemradio "gpt-5.5-codex": gpt-5.5-codex Not available
       - menuitem "Refresh": Refresh Look for new models
-      - text: "The gateway's config names which of OpenAI's models bots can use, and lists only those. Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw. OpenClaw 2026.11.6 is out: see the note below."
+      - text: "The gateway's config names which of OpenAI's models bots can use, and lists only those. Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours. OpenClaw 2026.11.6 is out: see the note below. To use a model that isn't listed, choose Use another model and type its id."
       - menuitem "View more"
       - menuitem "Use another model…": Use another model… Type its id
     - 'button "Effort: Medium"': Effort Medium
@@ -148,6 +148,7 @@
     - paragraph:
       - link "OpenClaw's update instructions":
         - /url: https://docs.openclaw.ai/install/updating
+    - button "Update OpenClaw to 2026.11.6"
     - paragraph: OpenAI's models, as the gateway lists them. Which ones this account may use is OpenAI's decision.
     - heading "Memory" [level=3]
     - button "Memory"
@@ -157,5 +158,5 @@
     - 'button "Where Otto runs: Command setting: media-box. Open."': "Where Otto runs Command setting: media-box"
     - heading "Manage" [level=3]
     - button "Delete bot…"
-  - status: "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw. OpenClaw 2026.11.6 is out: see the note below. The gateway's config names which of OpenAI's models bots can use, and lists only those."
+  - status: "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours. OpenClaw 2026.11.6 is out: see the note below. To use a model that isn't listed, choose Use another model and type its id. The gateway's config names which of OpenAI's models bots can use, and lists only those."
 - status

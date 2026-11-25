@@ -35,12 +35,13 @@
 //   effort=none               the open bot keeps no effort
 //   openclaw=behind|beta      the gateway reports a newer OpenClaw than it runs: 2026.11.6, or
 //                             2026.11.10-beta.1 on the beta channel
-//   refresh=new|many|gone|asked|config|refused|unreached|pending|failed|error|slow
+//   refresh=new|many|gone|asked|config|refused|unreached|pending|failed|cut|error|slow
 //                             what the Model menu's Refresh finds (#565): two new OpenAI models,
 //                             seven, one gone, nothing new from a provider asked again, nothing
 //                             from one the gateway's config lists, a provider that refused the
 //                             account, one that didn't answer, one still being looked for, a
-//                             refresh the gateway says failed, a gateway that didn't answer in time, or two new ones held until
+//                             refresh the gateway says failed, a list cut at its bound that grew,
+//                             a gateway that didn't answer in time, or two new ones held until
 //                             releaseRefresh(); without it, nothing new from a provider the
 //                             gateway didn't ask again
 //   allowlist=1               the gateway's config names the models bots may use
@@ -599,6 +600,8 @@ function refreshCatalog(
     removedCount: 0,
     outcome: null,
     configured: false,
+    hostedList: true,
+    counts: null,
     partial: false,
     failed: false,
   };
@@ -651,6 +654,8 @@ function refreshCatalog(
         return { ...nothing, partial: true };
       case "failed":
         return { ...nothing, failed: true };
+      case "cut":
+        return { ...nothing, outcome: "ready", counts: { before: 140, now: 141 } };
       case "error":
         return { status: "error", error: "The gateway didn't answer in time." };
       default:

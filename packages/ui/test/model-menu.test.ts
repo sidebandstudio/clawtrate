@@ -84,6 +84,8 @@ describe("F-588: Refresh in the Model menu", () => {
     removedCount: 0,
     outcome: null,
     configured: false,
+    hostedList: true,
+    counts: null,
     partial: false,
     failed: false,
     ...change,
@@ -101,6 +103,21 @@ describe("F-588: Refresh in the Model menu", () => {
         update,
       ),
     ).toBe("New: a, b, c, d, e and 7 more. No longer listed: z.");
+    // A list cut at its bound: the counts, nothing named new, and only what the gateway dropped.
+    expect(
+      refreshWords(
+        done({ outcome: "ready", counts: { before: 140, now: 141 } }),
+        "OpenRouter",
+        null,
+      ),
+    ).toBe("OpenRouter lists 141 models now (140 before).");
+    expect(
+      refreshWords(
+        done({ counts: { before: 140, now: 139 }, removed: ["m-1"], removedCount: 1 }),
+        "OpenRouter",
+        null,
+      ),
+    ).toBe("OpenRouter lists 139 models now (140 before). No longer listed: m-1.");
   });
 
   it("F-588: nothing new says why: asked again, the gateway's config, or a list that comes with OpenClaw", () => {
@@ -110,12 +127,24 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(refreshWords(done({ configured: true }), "Acme", update)).toBe(
       "Nothing new. Acme's models are the ones the gateway's config lists.",
     );
-    expect(refreshWords(done(), "OpenAI", null)).toBe(
-      "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw.",
+    const notAsked =
+      "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours.";
+    const typeIt = "To use a model that isn't listed, choose Use another model and type its id.";
+    expect(refreshWords(done(), "OpenAI", null)).toBe(`${notAsked} ${typeIt}`);
+    // A gateway whose config turns the online list off gets newer models from a newer OpenClaw only.
+    expect(refreshWords(done({ hostedList: false }), "OpenAI", null)).toBe(
+      `Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw. ${typeIt}`,
     );
     // With the gateway's report of a newer OpenClaw: its version, and the note under the menu.
     expect(refreshWords(done(), "OpenAI", update)).toBe(
-      "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw. OpenClaw 2026.11.6 is out: see the note below.",
+      `${notAsked} OpenClaw 2026.11.6 is out: see the note below. ${typeIt}`,
+    );
+    // While an update runs, or once it has ended, the note below is its line, not the version's.
+    expect(refreshWords(done(), "OpenAI", update, true)).toBe(
+      `${notAsked} The note below says where the OpenClaw update stands. ${typeIt}`,
+    );
+    expect(refreshWords(done(), "OpenAI", null, true)).toBe(
+      `${notAsked} The note below says where the OpenClaw update stands. ${typeIt}`,
     );
   });
 

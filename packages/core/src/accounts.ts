@@ -228,8 +228,18 @@ export type ModelRefresh =
        * (`unavailable`), or not asked again (null): its list is the one the gateway already had.
        */
       outcome: RefreshOutcome;
-      /** The gateway's config declares the provider's models (`models.providers`). */
+      /**
+       * Every model the gateway lists for the provider is one its config declares
+       * (`models.providers`): the config's list is the whole list.
+       */
       configured: boolean;
+      /** The gateway checks OpenClaw's model list online every 6 hours (`models.catalogRefresh`). */
+      hostedList: boolean;
+      /**
+       * The menu showed the provider cut at its bound before: how many models the gateway listed
+       * then and lists now. Nothing is named new then, since the cut hid some.
+       */
+      counts: { before: number; now: number } | null;
       /** The gateway answered while still finding the provider's models (`pendingProviders`). */
       partial: boolean;
       /** The gateway's refresh of its catalogue failed (`refreshFailed`): try again. */
@@ -238,11 +248,11 @@ export type ModelRefresh =
   | { status: "error"; error: string };
 
 /**
- * The gateway config's model list for every bot (`agents.defaults.models`), as the Model menu
- * needs it: null when there is none. While there is one, the gateway lists, and runs, only the
- * models it names and the ones its config declares (docs/research/model-catalog.md, section 2).
- * `whole` is the providers it leaves whole: a `<provider>/*` entry, or, when the config replaces
- * every other provider (`models.mode: "replace"`), one whose models the config declares.
+ * The models the gateway's config lets the default bot use, as the Model menu needs it: null when
+ * nothing limits them. The bot's own `modelPolicy.allow`, else `agents.defaults.modelPolicy.allow`,
+ * else the old `agents.defaults.models` while the config is unmigrated; the gateway lists, and
+ * runs, only what it names (docs/research/model-catalog.md, section 8). `whole` is the providers
+ * a `<provider>/*` entry leaves whole.
  */
 export type ModelAllowlist = { whole: string[] };
 
@@ -830,21 +840,32 @@ export function readModelRefresh(
   answer: unknown,
   provider: string,
   before: readonly string[],
-  configured: boolean,
-): { rows: CatalogModel[]; compare: (after: readonly string[]) => ModelRefresh } {
+  /** The provider's model ids its entry in the gateway's config declares. */
+  declared: ReadonlySet<string>,
+  /** The gateway checks OpenClaw's model list online (`models.catalogRefresh`). */
+  hostedList: boolean,
+): {
+  rows: CatalogModel[];
+  compare: (shown: readonly string[], cutBefore: number | null) => ModelRefresh;
+} {
   const record = asRecord(answer);
   const rows = modelRows(answer).filter((row) => row.provider === provider);
   const pending = Array.isArray(record?.pendingProviders)
     ? record.pendingProviders.includes(provider)
     : false;
   const outcome = outcomeOf(answer, provider);
+  // The config's list is the whole list only when every model the gateway lists is one it
+  // declares: otherwise OpenClaw's own or a plugin's are listed beside them.
+  const configured = rows.length > 0 && rows.every((row) => declared.has(row.id));
   return {
     rows,
-    compare: (after) => {
+    compare: (shown, cutBefore) => {
       const was = new Set(before);
-      const now = new Set(after);
-      const added = [...now].filter((id) => !was.has(id));
-      const removed = [...was].filter((id) => !now.has(id));
+      const listed = new Set(rows.map((row) => row.id));
+      // Gone only when the gateway no longer lists it, not when a cut no longer shows it; new only
+      // when the menu showed the provider whole before, so a cut can't make a model look new.
+      const added = cutBefore === null ? shown.filter((id) => !was.has(id)) : [];
+      const removed = [...was].filter((id) => !listed.has(id));
       return {
         status: "done",
         provider,
@@ -852,8 +873,10 @@ export function readModelRefresh(
         addedCount: added.length,
         removed: named(removed),
         removedCount: removed.length,
+        counts: cutBefore === null ? null : { before: cutBefore, now: rows.length },
         outcome,
         configured,
+        hostedList,
         partial: pending,
         failed: record?.refreshFailed === true,
       };
@@ -862,28 +885,46 @@ export function readModelRefresh(
 }
 
 /** Whether the gateway's config declares models for a provider (`models.providers.<id>.models`). */
-export function declaresModels(config: RawRecord | null, provider: string): boolean {
+export function declaredModels(config: RawRecord | null, provider: string): Set<string> {
   const root = asRecord(config?.config);
   const entry = asRecord(asRecord(asRecord(root?.models)?.providers)?.[provider]);
-  return Array.isArray(entry?.models) && entry.models.length > 0;
+  const models = Array.isArray(entry?.models) ? entry.models.slice(0, MAX_PROVIDER_MODELS) : [];
+  return new Set(models.map((model) => str(asRecord(model)?.id)).filter((id) => id !== null));
+}
+
+/** The gateway checks OpenClaw's model list online, unless its config turns that off. */
+export function checksHostedList(config: RawRecord | null): boolean {
+  const root = asRecord(config?.config);
+  return asRecord(asRecord(root?.models)?.catalogRefresh)?.enabled !== false;
 }
 
 /** The config's `agents.defaults.models` as the Model menu needs it (`ModelAllowlist`). */
-export function readModelAllowlist(config: RawRecord | null): ModelAllowlist | null {
+export function readModelAllowlist(config: RawRecord | null, botId: string): ModelAllowlist | null {
   const root = asRecord(config?.config);
-  const list = asRecord(asRecord(asRecord(root?.agents)?.defaults)?.models);
-  const keys = list ? Object.keys(list).slice(0, MAX_ALLOWLIST_ENTRIES) : [];
-  // An empty list, or one that names every model, limits nothing.
-  if (keys.length === 0 || keys.some((key) => key === "*" || key === "*/*")) return null;
+  const agents = asRecord(root?.agents);
+  const defaults = asRecord(agents?.defaults);
+  const own = asRecord(asRecord(asRecord(agents?.entries)?.[botId])?.modelPolicy);
+  const policy = asRecord(defaults?.modelPolicy);
+  const migrated = asRecord(asRecord(root?.meta)?.migrations)?.modelPolicyAllowlist === true;
+  // As the gateway resolves it (`resolveConfiguredModelPolicyAllow`): the bot's own policy when it
+  // has an `allow`, then the default policy's; the old `agents.defaults.models` only while there
+  // is no default policy and the config hasn't been migrated, which any config write does.
+  let refs: unknown[] = [];
+  if (own && Object.hasOwn(own, "allow")) refs = Array.isArray(own.allow) ? own.allow : [];
+  else if (policy && Object.hasOwn(policy, "allow"))
+    refs = Array.isArray(policy.allow) ? policy.allow : [];
+  else if (!policy && !migrated) refs = Object.keys(asRecord(defaults?.models) ?? {});
+  const keys = refs
+    .slice(0, MAX_ALLOWLIST_ENTRIES)
+    .filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0)
+    .map((ref) => ref.trim());
+  // An empty list limits nothing.
+  if (keys.length === 0) return null;
   const whole = new Set<string>();
   for (const key of keys) {
-    const slash = key.indexOf("/");
-    if (slash > 0 && key.slice(slash + 1) === "*") whole.add(key.slice(0, slash));
-  }
-  const models = asRecord(root?.models);
-  if (models?.mode === "replace") {
-    for (const provider of Object.keys(asRecord(models.providers) ?? {}))
-      if (declaresModels(config, provider)) whole.add(provider);
+    // Only `<provider>/*` leaves a provider whole; a longer wildcard limits within it.
+    const match = /^([^/*\s]+)\/\*$/.exec(key);
+    if (match) whole.add(match[1]!.toLowerCase());
   }
   return {
     whole: [...whole]

@@ -191,21 +191,29 @@ export function namesLine(names: string[], count: number): string {
 
 /**
  * What a Refresh found, in plain words (#565): the new models by name, the first few and a
- * count; the ones no longer listed; "Nothing new"; a provider the gateway couldn't ask, with the
- * gateway's reason. When nothing changed and the gateway didn't ask the provider again, it says
- * whether the gateway's config lists the models, or that lists coming with OpenClaw get newer
- * models from a newer OpenClaw, and names the version the gateway reports, which the note under
- * the menu is about. The gateway doesn't say which lists come with OpenClaw
- * (docs/research/model-catalog.md, section 8), so neither does this.
+ * count; the ones no longer listed; for a list cut at its bound, how many the gateway lists now
+ * and before, and nothing named new on the strength of the cut; "Nothing new"; a provider the
+ * gateway couldn't ask, with the gateway's reason. When nothing changed and the gateway didn't
+ * ask the provider again: whether the gateway's config is the whole list, or where lists that
+ * come with OpenClaw get newer models (a newer OpenClaw, and OpenClaw's model list online, which
+ * the gateway checks every 6 hours unless its config turns that off) and what the person can do.
+ * Of a newer OpenClaw it says what the note under the menu says: that one is out, or, while an
+ * update runs or has just ended (`updating`), where it stands. The gateway doesn't say which
+ * lists come with OpenClaw (docs/research/model-catalog.md, section 8), so neither does this.
  */
 export function refreshWords(
   result: ModelRefresh,
   who: string,
   update: OpenClawUpdate | null,
+  updating = false,
 ): string {
   if (result.status === "error") return `Couldn't refresh: ${result.error}`;
   const said: string[] = [];
   if (result.addedCount > 0) said.push(`New: ${namesLine(result.added, result.addedCount)}.`);
+  if (result.counts && result.counts.now !== result.counts.before)
+    said.push(
+      `${who} lists ${count(result.counts.now)} models now (${count(result.counts.before)} before).`,
+    );
   if (result.removedCount > 0)
     said.push(`No longer listed: ${namesLine(result.removed, result.removedCount)}.`);
   const changed = said.length > 0;
@@ -222,9 +230,14 @@ export function refreshWords(
     if (result.configured) said.push(`${who}'s models are the ones the gateway's config lists.`);
     else {
       said.push(
-        `The gateway didn't ask ${who} again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw.`,
+        `The gateway didn't ask ${who} again, so its list is the one it had.`,
+        result.hostedList
+          ? "Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours."
+          : "Lists that come with OpenClaw get newer models from a newer OpenClaw.",
       );
-      if (update) said.push(`OpenClaw ${update.latest} is out: see the note below.`);
+      if (updating) said.push("The note below says where the OpenClaw update stands.");
+      else if (update) said.push(`OpenClaw ${update.latest} is out: see the note below.`);
+      said.push("To use a model that isn't listed, choose Use another model and type its id.");
     }
   }
   return said.join(" ");
@@ -299,7 +312,10 @@ export function ModelPair({
   const updateRun = useUpdateRun();
   const held = list.state;
   const found = list.refresh;
-  const foundWords = found && found.status !== "looking" ? refreshWords(found, who, update) : null;
+  const foundWords =
+    found && found.status !== "looking"
+      ? refreshWords(found, who, update, updateRun !== null)
+      : null;
   const limits = allowlistLine(accounts, provider);
   // What a Refresh found is said once, politely, when it arrives; focus stays where it was.
   const said =

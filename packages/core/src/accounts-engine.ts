@@ -32,7 +32,8 @@ import {
   readPickerCuts,
   readProviderCatalog,
   type ModelList,
-  declaresModels,
+  checksHostedList,
+  declaredModels,
   MAX_CATALOG_MODELS,
   MAX_KEY_PROVIDERS,
   MAX_REFRESH_ERROR_CHARS,
@@ -436,7 +437,13 @@ export class AccountsEngine {
       return { status: "error", error: cleanLine(words, MAX_REFRESH_ERROR_CHARS) };
     }
     if (gone()) throw new Error(MODELS_GATEWAY_CHANGED);
-    const found = readModelRefresh(answer, provider, before, declaresModels(config, provider));
+    const found = readModelRefresh(
+      answer,
+      provider,
+      before,
+      declaredModels(config, provider),
+      checksHostedList(config),
+    );
     let result: ModelRefresh | null = null;
     ctx.update((a) => {
       // Only into the rows read on this same gateway.
@@ -452,18 +459,28 @@ export class AccountsEngine {
               ...kept,
               ...a.models.slice(at).filter((m) => m.provider !== provider),
             ];
+      const cutBefore = a.modelsCut.find((c) => c.provider === provider)?.total ?? null;
       const cut = a.modelsCut.filter((c) => c.provider !== provider);
       if (kept.length < found.rows.length) cut.push({ provider, total: found.rows.length });
-      result = found.compare(kept.map((m) => m.id));
+      result = found.compare(
+        kept.map((m) => m.id),
+        cutBefore,
+      );
       return {
         ...a,
         models,
         modelsCut: cut.slice(0, MAX_KEY_PROVIDERS),
-        ...(config ? { modelAllowlist: readModelAllowlist(config) } : {}),
+        ...(config ? { modelAllowlist: readModelAllowlist(config, defaultBot) } : {}),
       };
     });
     if (result === null) throw new Error(MODELS_GATEWAY_CHANGED);
     return result;
+  }
+
+  /** The gateway's default bot, whose picker the Model menu reads for every bot. */
+  private defaultBot(): string {
+    const bots = this.ctx.bots();
+    return bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
   }
 
   private async readViews(botIds: string[]): Promise<Map<string, BotView>> {
@@ -542,7 +559,7 @@ export class AccountsEngine {
       methods: readMethods(anyView?.capabilities ?? []),
       keyProviders: readKeyProviders(anyView),
       models: catalog,
-      modelAllowlist: readModelAllowlist(config),
+      modelAllowlist: readModelAllowlist(config, this.defaultBot()),
       bindings,
     };
   }
@@ -1514,6 +1531,9 @@ export class AccountsEngine {
     // The picker read already under way is answered before anything is written: a new bot's
     // writes and first task never overlap it (the gateway refuses them alongside each other).
     await this.pickerRead;
+    // And a Refresh under way, whole: an account read can take the picker's place in the wait
+    // while the refresh it held back is still to ask (#565).
+    await this.refreshing?.promise.catch(() => {});
     return this.boundTo(binding, (ctx, mark) => this.create(ctx, input, mark));
   }
 

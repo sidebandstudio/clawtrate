@@ -101,14 +101,15 @@ test.describe("F-588: Refresh in the Model menu", () => {
       ["unreached", "Nothing new. The gateway couldn't get an answer from OpenAI."],
       ["pending", "Nothing new yet. The gateway is still looking for OpenAI's models."],
       ["failed", "Nothing new. The gateway's refresh failed. Try Refresh again."],
+      ["cut", "OpenAI lists 141 models now (140 before)."],
       ["error", "Couldn't refresh: The gateway didn't answer in time."],
       [
         "none",
-        "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw.",
+        "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours. To use a model that isn't listed, choose Use another model and type its id.",
       ],
       [
         "none&openclaw=behind",
-        "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw. OpenClaw 2026.11.6 is out: see the note below.",
+        "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours. OpenClaw 2026.11.6 is out: see the note below. To use a model that isn't listed, choose Use another model and type its id.",
       ],
     ];
     for (const [refresh, words] of cases) {
@@ -134,7 +135,7 @@ test.describe("F-588: Refresh in the Model menu", () => {
     await expect
       .poll(() => announcements(page))
       .toEqual([
-        `Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw. ${words}`,
+        `Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours. To use a model that isn't listed, choose Use another model and type its id. ${words}`,
       ]);
     await page.keyboard.press("Escape");
     await openMenu(page, SETTINGS);
@@ -152,6 +153,45 @@ test.describe("F-588: Refresh in the Model menu", () => {
       menu(page).getByText(/^Nothing new\. The gateway asked OpenAI again/),
     ).toBeVisible();
     await expect(menu(page).getByRole("menuitemradio", { name: "gpt-6.2-sol" })).toHaveCount(1);
+  });
+
+  test("F-588: an answer that comes back after a reconnect to the same gateway is dropped by the screen", async ({
+    page,
+  }) => {
+    await openMenu(page, `${SETTINGS}&refresh=slow`);
+    await press(page);
+    await expect(refreshRow(page)).toHaveAccessibleDescription("Looking…");
+    await page.keyboard.press("Escape");
+    // Connected again to the same address, gateway and target: only the time it connected moves.
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (
+              change: (state: { connection: { connectedAt: number | null } }) => unknown,
+            ) => void;
+          };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, connectedAt: (state.connection.connectedAt ?? 0) + 1 },
+      })),
+    );
+    await releaseRefresh(page);
+    await page.getByTestId("model-select").click();
+    await expect(refreshRow(page)).toHaveAccessibleDescription("Look for new models");
+    await expect(menu(page).getByText(/^New: /)).toHaveCount(0);
+  });
+
+  test("F-588: while an update of OpenClaw runs, the result points to the note's line about it, not to a version", async ({
+    page,
+  }) => {
+    await openMenu(page, `${SETTINGS}&openclaw=behind&openclawRun=running`);
+    await refreshRow(page).click();
+    await expect(
+      menu(page).getByText(/The note below says where the OpenClaw update stands\./),
+    ).toBeVisible();
+    await expect(menu(page).getByText(/is out: see the note below/)).toHaveCount(0);
   });
 
   test("F-588: New bot's Model menu has the same Refresh", async ({ page }) => {

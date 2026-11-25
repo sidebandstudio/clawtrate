@@ -13,6 +13,9 @@ import {
   readModelAllowlist,
 } from "../src/accounts.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
+import { AccountsEngine } from "../src/accounts-engine.ts";
+import { initialAccountsState, type AccountsState } from "../src/accounts.ts";
+import type { ReadStamp } from "../src/types.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
 import { stampOn } from "./client-harness.ts";
 import { deferred, until } from "./fake-gateway.ts";
@@ -74,28 +77,40 @@ describe("F-588: Refresh in the Model menu", () => {
     client.stop();
   });
 
-  it("F-588: nothing new: the provider not asked again, and whether the gateway's config declares its models", async () => {
+  it("F-588: nothing new: the provider not asked again, and the config's list is the whole list only when it declares every model listed", async () => {
     const fake = new AccountsGateway();
     const { client } = await accountsClient({ gateway: fake });
-    const plain = await client.refreshModels("acme", stampOn("gateway-a", client));
-    expect(plain).toMatchObject({
+    const ask = () => client.refreshModels("acme", stampOn("gateway-a", client));
+    expect(await ask()).toMatchObject({
       addedCount: 0,
       removedCount: 0,
       outcome: null,
       configured: false,
+      hostedList: true,
+      counts: null,
       partial: false,
       failed: false,
     });
-    fake.config.models = {
-      mode: "replace",
-      providers: { acme: { baseUrl: "http://127.0.0.1:1/v1", models: [{ id: "dev-1" }] } },
+    const declare = (ids: string[], extra: Json = {}) => {
+      fake.config.models = {
+        providers: {
+          acme: { baseUrl: "http://127.0.0.1:1/v1", models: ids.map((id) => ({ id })) },
+        },
+        ...extra,
+      };
+      fake.revision += 1;
     };
-    fake.revision += 1;
-    const declared = await client.refreshModels("acme", stampOn("gateway-a", client));
-    expect(declared).toMatchObject({ addedCount: 0, outcome: null, configured: true });
+    // Every model the gateway lists for acme is declared: the config's list is the whole list.
+    declare(["dev-1", "dev-2"]);
+    expect(await ask()).toMatchObject({ outcome: null, configured: true });
+    // One declared beside others the gateway lists of its own (merge mode): not the config's list.
+    declare(["dev-1"]);
+    expect(await ask()).toMatchObject({ outcome: null, configured: false });
+    // The gateway that doesn't check OpenClaw's list online says so.
+    declare(["dev-1"], { catalogRefresh: { enabled: false } });
+    expect(await ask()).toMatchObject({ hostedList: false });
     client.stop();
   });
-
   it("F-588: a provider the gateway couldn't ask, with the gateway's reason; one account that answered is enough", async () => {
     const fake = new AccountsGateway();
     const { client } = await accountsClient({ gateway: fake });
@@ -323,6 +338,88 @@ describe("F-588: Refresh in the Model menu", () => {
     client.stop();
   });
 
+  it("F-588: Create pressed while a refresh waits behind an account read still waits for the whole refresh", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    // The account read's config read, then the refresh's, each held until let through.
+    const config = fake.gateway.handlers["config.get"]!;
+    const holds = [deferred<void>(), deferred<void>()];
+    let n = 0;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const hold = holds[n++];
+      return hold ? hold.promise.then(() => config(params)) : config(params);
+    };
+    const reading = client.refreshAccounts();
+    await until(() => n === 1);
+    const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
+    holds[0]!.resolve();
+    await reading;
+    await until(() => n === 2);
+    const creating = client.createBot({
+      name: "Early",
+      account: null,
+      provider: "acme",
+      model: "dev-1",
+      effort: null,
+      avatar: null,
+    });
+    await settle();
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    holds[1]!.resolve();
+    await refreshing;
+    await creating.catch(() => {});
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-588: a refresh pressed while an account read runs asks only once that read has answered", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    const config = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let first = true;
+    fake.gateway.handlers["config.get"] = (params) => {
+      if (!first) return config(params);
+      first = false;
+      return held.promise.then(() => config(params));
+    };
+    const reading = client.refreshAccounts();
+    const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
+    await settle();
+    expect(fake.gateway.calls("models.list").filter((c) => (c as Json).refresh)).toEqual([]);
+    held.resolve();
+    await Promise.all([reading, refreshing]);
+    expect(fake.gateway.calls("models.list").filter((c) => (c as Json).refresh)).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-588: a provider cut at the bound: nothing is called gone or new on the strength of the cut, and the counts are said", async () => {
+    const fake = new AccountsGateway();
+    const acme = Array.from({ length: 200 }, (_, i) => row(`m-${i}`));
+    fake.pickerCatalog = () => ({ models: [row("dev-1", "globex"), ...acme] });
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accounts().modelsCut).toEqual([{ provider: "acme", total: 200 }]);
+    // The gateway gains a model early in the provider's order, which pushes the last shown past
+    // the cut: it is still listed, so it isn't gone.
+    fake.refreshed = { acme: [row("m-new"), ...acme] };
+    const result = await client.refreshModels("acme", stampOn("gateway-a", client));
+    expect(result).toMatchObject({
+      added: [],
+      addedCount: 0,
+      removed: [],
+      removedCount: 0,
+      counts: { before: 200, now: 201 },
+    });
+    // A model the gateway no longer lists is still named as gone.
+    fake.refreshed = { acme: [row("m-new"), ...acme.slice(1)] };
+    expect(await client.refreshModels("acme", stampOn("gateway-a", client))).toMatchObject({
+      removed: ["m-0"],
+      removedCount: 1,
+      counts: { before: 201, now: 200 },
+    });
+    client.stop();
+  });
+
   it("F-588: never alongside an account read: an account read asked meanwhile waits for it", async () => {
     const fake = new AccountsGateway();
     const { client } = await accountsClient({ gateway: fake });
@@ -352,35 +449,170 @@ describe("F-588: Refresh in the Model menu", () => {
   });
 });
 
-describe("F-588: the gateway config's model list for bots", () => {
-  const config = (models: Json | undefined, extra: Json = {}) => ({
-    config: { agents: { defaults: models === undefined ? {} : { models } }, ...extra },
-  });
-
-  it("F-588: none, or an empty one, limits nothing; a <provider>/* entry leaves the provider whole", () => {
-    expect(readModelAllowlist(config(undefined))).toBeNull();
-    expect(readModelAllowlist(config({}))).toBeNull();
-    expect(readModelAllowlist(config({ "*": {} }))).toBeNull();
-    expect(readModelAllowlist(config({ "acme/dev-1": {}, "globex/*": {} }))).toEqual({
-      whole: ["globex"],
+describe("F-588: Refresh, the engine alone", () => {
+  /**
+   * The engine on the fake gateway with a connection the test moves: its stamp, and whether a
+   * refresh's `models.list` answer is held until the test lets it through.
+   */
+  function engineOn(fake: AccountsGateway) {
+    let state: AccountsState = initialAccountsState;
+    // Requests here go straight to the handlers, so the refresh's is noted as it is asked.
+    const list = fake.gateway.handlers["models.list"]!;
+    fake.gateway.handlers["models.list"] = (params) => {
+      if ((params as Json).refresh === true) refreshAsked = true;
+      return list(params);
+    };
+    let stamp: ReadStamp = { gatewayId: "gateway-a", target: 1, connectedAt: 1 };
+    const engine = new AccountsEngine({
+      request: (method, params) =>
+        Promise.resolve().then(() => fake.gateway.handlers[method]!(params)),
+      get: () => state,
+      update: (change) => {
+        state = change(state);
+      },
+      bots: () => [{ id: "main", name: "main", isDefault: true, avatarUrl: null }],
+      connected: () => true,
+      admin: () => true,
+      refreshBots: () => Promise.resolve(),
+      gateway: () => Promise.resolve("gateway-a"),
+      gatewayNow: () => "gateway-a",
+      readStamp: () => stamp,
+      target: () => stamp.target,
+      createMainTask: () => Promise.resolve(),
+      now: () => 0,
+      randomId: () => "id",
+      log: () => {},
     });
+    return {
+      engine,
+      asked: () => refreshAsked,
+      state: () => state,
+      setState: (next: AccountsState) => (state = next),
+      move: (next: Partial<ReadStamp>) => (stamp = { ...stamp, ...next }),
+    };
+  }
+  const press = { gatewayId: "gateway-a", target: 1 };
+  let refreshAsked = false;
+
+  it("F-588: an answer given on a connection made since the press is dropped, though the gateway is the same", async () => {
+    const fake = new AccountsGateway();
+    refreshAsked = false;
+    const on = engineOn(fake);
+    const asked = on.asked;
+    await on.engine.load();
+    const held = deferred<void>();
+    fake.holdRefresh = held.promise;
+    fake.refreshed = { acme: [row("dev-1"), row("dev-9")] };
+    const outcome = on.engine.refreshModels("acme", press).then(
+      () => "given",
+      (error: Error) => error.message,
+    );
+    await until(asked);
+    // Reconnected to the same gateway and target: the answer still comes, on this fake.
+    on.move({ connectedAt: 2 });
+    held.resolve();
+    expect(await outcome).toMatch(/gateway changed/);
+    expect(on.state().models.some((m) => m.id === "dev-9")).toBe(false);
   });
 
-  it("F-588: a provider whose models the config declares is whole only when the config replaces every other", () => {
-    const providers = { acme: { models: [{ id: "dev-1" }] }, globex: { models: [] } };
+  it("F-588: rows go only into the menu read on the same gateway: one read on another meanwhile is left alone", async () => {
+    const fake = new AccountsGateway();
+    refreshAsked = false;
+    const on = engineOn(fake);
+    const asked = on.asked;
+    await on.engine.load();
+    const held = deferred<void>();
+    fake.holdRefresh = held.promise;
+    fake.refreshed = { acme: [row("dev-1"), row("dev-9")] };
+    const outcome = on.engine.refreshModels("acme", press).then(
+      () => "given",
+      (error: Error) => error.message,
+    );
+    await until(asked);
+    // The menu's rows were read again meanwhile, on another gateway's identity.
+    const other = { ...on.state(), readOn: { gatewayId: "gateway-b", target: 1, connectedAt: 1 } };
+    on.setState(other);
+    held.resolve();
+    expect(await outcome).toMatch(/gateway changed/);
+    expect(on.state().models.some((m) => m.id === "dev-9")).toBe(false);
+  });
+});
+
+describe("F-588: the gateway config's model list for bots", () => {
+  /** A config with the default policy, the old list, the bot's own policy and the marker given. */
+  const config = (parts: {
+    policy?: Json;
+    legacy?: Json;
+    own?: Json;
+    migrated?: boolean;
+  }): Json => ({
+    config: {
+      agents: {
+        defaults: {
+          ...(parts.policy ? { modelPolicy: parts.policy } : {}),
+          ...(parts.legacy ? { models: parts.legacy } : {}),
+        },
+        entries: { main: parts.own ? { modelPolicy: parts.own } : {} },
+      },
+      ...(parts.migrated ? { meta: { migrations: { modelPolicyAllowlist: true } } } : {}),
+    },
+  });
+  const legacy = { "acme/dev-1": {}, "globex/dev-1": {} };
+
+  it("F-588: the old agents.defaults.models limits only while the config is unmigrated and has no default policy", () => {
+    expect(readModelAllowlist(config({ legacy }), "main")).toEqual({ whole: [] });
+    expect(readModelAllowlist(config({ legacy, migrated: true }), "main")).toBeNull();
+    expect(readModelAllowlist(config({ legacy, policy: {} }), "main")).toBeNull();
+  });
+
+  it("F-588: agents.defaults.modelPolicy.allow limits, migrated or not; empty or absent limits nothing", () => {
+    for (const migrated of [true, false]) {
+      expect(
+        readModelAllowlist(
+          config({ policy: { allow: ["acme/dev-1", "globex/*"] }, legacy, migrated }),
+          "main",
+        ),
+      ).toEqual({ whole: ["globex"] });
+      expect(
+        readModelAllowlist(config({ policy: { allow: [] }, legacy, migrated }), "main"),
+      ).toBeNull();
+    }
+    expect(readModelAllowlist(config({ migrated: true }), "main")).toBeNull();
+    expect(readModelAllowlist(config({}), "main")).toBeNull();
+  });
+
+  it("F-588: the bot's own modelPolicy.allow replaces the default's, an empty one included", () => {
+    const policy = { allow: ["acme/dev-1"] };
     expect(
-      readModelAllowlist(config({ "acme/dev-1": {} }, { models: { mode: "replace", providers } })),
+      readModelAllowlist(config({ policy, own: { allow: ["acme/*"] }, migrated: true }), "main"),
     ).toEqual({ whole: ["acme"] });
-    expect(readModelAllowlist(config({ "acme/dev-1": {} }, { models: { providers } }))).toEqual({
+    expect(
+      readModelAllowlist(config({ policy, own: { allow: [] }, migrated: true }), "main"),
+    ).toBeNull();
+    // A policy of its own without `allow` keeps the default's.
+    expect(readModelAllowlist(config({ policy, own: {}, migrated: true }), "main")).toEqual({
       whole: [],
     });
+    // Another bot's policy is not the default bot's.
+    expect(
+      readModelAllowlist(config({ own: { allow: ["acme/dev-1"] }, migrated: true }), "pip"),
+    ).toBeNull();
   });
 
-  it("F-588: it is read with the accounts", async () => {
+  it("F-588: only <provider>/* leaves a provider whole: * and */* are not wildcards, and a longer one limits within it", () => {
+    expect(
+      readModelAllowlist(
+        config({ policy: { allow: ["*", "*/*", "openrouter/anthropic/*", "acme/*"] } }),
+        "main",
+      ),
+    ).toEqual({ whole: ["acme"] });
+  });
+
+  it("F-588: it is read with the accounts, for the default bot", async () => {
     const fake = new AccountsGateway();
     (fake.config.agents as Json).defaults = {
       ...((fake.config.agents as Json).defaults as Json),
-      models: { "acme/dev-1": {}, "globex/dev-1": {} },
+      modelPolicy: { allow: ["acme/dev-1"] },
     };
     const { client, accounts } = await accountsClient({ gateway: fake });
     expect(accounts().modelAllowlist).toEqual({ whole: [] });
