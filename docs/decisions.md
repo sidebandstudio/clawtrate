@@ -127,42 +127,40 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
 
 - **Per task**, count × cap:
 
-  | Part      | Count × cap                                                          | JSON characters |
-  | --------- | -------------------------------------------------------------------- | --------------: |
-  | Runs      | 32 runs × 118,643, plus 128 steps × 26,383 shared by the task's runs |       7,173,762 |
-  | Outbox    | 16 × 64,696                                                          |       1,035,154 |
-  | Questions | (4 pending + 4 settled) × 81,509                                     |         652,082 |
-  | Approvals | (16 pending + 8 settled) × 88,109                                    |       2,114,642 |
-
-| History page | 200 items × 8,580, plus 300 blocks × 4,172, 16 pictures × 2,978, 40 files a bot handed over × 2,990 and 40 sent files × 919 shared by the page | 3,172,206 |
-| Inter-session messages | 64 × 5,772 | 369,474 |
-| Linked runs | 32 × (key 1,024 + 2,204) | 103,362 |
-| Steer aliases | 16 × (key 1,024 + 1,024) | 32,802 |
-| Queue aliases | 16 × (key 1,024 + 1,024) | 32,802 |
-| Tool map | `MAX_MCP_TOOLS` (128) tool-server tools by effective name, from `tools.effective` | 84,738 |
-| Tool inventory and workspace root | `MAX_BUILTIN_TOOLS` (256) built-in and plugin tool names from `tools.effective`, and the bot's workspace root from `agents.files.list` | 33,538 |
-| Reactions | 200 messages shown × (key 1,024 + 12 emoji × 123), from `session.reactions.list` and `session.reaction` | 503,202 |
-| Streaming text, ids, error and the rest | streaming text 16,384, plus field names | 22,268 |
-| Per task | | 15,330,032 |
+  | Part                                    | Count × cap                                                                                                                                    | JSON characters |
+  | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------: |
+  | Runs                                    | 32 runs × 118,643, plus 128 steps × 26,383 shared by the task's runs                                                                           |       7,173,762 |
+  | Outbox                                  | 16 × 64,696                                                                                                                                    |       1,035,154 |
+  | Questions                               | (4 pending + 4 settled) × 81,509                                                                                                               |         652,082 |
+  | Approvals                               | (16 pending + 8 settled) × 88,109                                                                                                              |       2,114,642 |
+  | History page                            | 200 items × 8,580, plus 300 blocks × 4,172, 16 pictures × 2,978, 40 files a bot handed over × 2,990 and 40 sent files × 919 shared by the page |       3,172,206 |
+  | Inter-session messages                  | 64 × 5,772                                                                                                                                     |         369,474 |
+  | Linked runs                             | 32 × (key 1,024 + 2,204)                                                                                                                       |         103,362 |
+  | Steer aliases                           | 16 × (key 1,024 + 1,024)                                                                                                                       |          32,802 |
+  | Queue aliases                           | 16 × (key 1,024 + 1,024)                                                                                                                       |          32,802 |
+  | Tool map                                | `MAX_MCP_TOOLS` (128) tool-server tools by effective name, from `tools.effective`                                                              |          84,738 |
+  | Tool inventory and workspace root       | `MAX_BUILTIN_TOOLS` (256) built-in and plugin tool names from `tools.effective`, and the bot's workspace root from `agents.files.list`         |          33,538 |
+  | Reactions                               | 200 messages shown × (key 1,024 + 12 emoji × 123), from `session.reactions.list` and `session.reaction`                                        |         503,202 |
+  | Streaming text, ids, error and the rest | streaming text 16,384, plus field names                                                                                                        |          22,268 |
+  | Per task                                |                                                                                                                                                |      15,330,032 |
 
 - **The state**, and what one viewer is sent:
 
-  | Part | Count × cap | JSON characters |
-  | ---- | ----------- | --------------: |
-
-| Transcripts | 8 followed tasks × 15,330,032, with their keys | 122,648,466 |
-| Bots | 32 × 35,693 | 1,142,210 |
-| Unrouted approvals | 16 × 88,109 | 1,409,762 |
-| Task creations | 8 × 40,546 | 324,378 |
-| Accounts | 64 accounts, 32 sign-in methods, 64 key providers, 128 models and 64 providers' cut counts, 32 bots' bindings, one sign-in, one creation, one write | 2,396,575 |
-| Routines | 200 routines from `cron.list`, each instruction at most 4,096, and the last one removed; runs and conversations are not kept | 2,299,134 |
-| Usage | 16 warning budgets and their counts, 16 providers' limits × 8 windows | 186,584 |
-| Check-ins | 32 bots' IDs, jobs and settings, the default (33 bots, a prompt), scheduler and save; prompts of at most 4,000 | 945,024 |
-| Task list, connection and the rest | 500 listed tasks × 8,933 across 32 bots, connection 106,029, setup on this computer, field names | 4,739,548 |
-| Computer tab | 8 viewers' panes (16 tabs, a view and a control each), 32 control events | 776,161 |
-| Bot names | 32 cards: a bot's id, its name and the one it wrote, its read's gateway stamp, a reason | 151,842 |
-| State | | 137,019,684 |
-| One viewer's snapshot | the state with only its 4 open tasks | 75,695,452 |
+  | Part                               | Count × cap                                                                                                                                         | JSON characters |
+  | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------: |
+  | Transcripts                        | 8 followed tasks × 15,330,032, with their keys                                                                                                      |     122,648,466 |
+  | Bots                               | 32 × 35,693                                                                                                                                         |       1,142,210 |
+  | Unrouted approvals                 | 16 × 88,109                                                                                                                                         |       1,409,762 |
+  | Task creations                     | 8 × 40,546                                                                                                                                          |         324,378 |
+  | Accounts                           | 64 accounts, 32 sign-in methods, 64 key providers, 128 models and 64 providers' cut counts, 32 bots' bindings, one sign-in, one creation, one write |       2,396,575 |
+  | Routines                           | 200 routines from `cron.list`, each instruction at most 4,096, and the last one removed; runs and conversations are not kept                        |       2,299,134 |
+  | Usage                              | 16 warning budgets and their counts, 16 providers' limits × 8 windows                                                                               |         186,584 |
+  | Check-ins                          | 32 bots' IDs, jobs and settings, the default (33 bots, a prompt), scheduler and save; prompts of at most 4,000                                      |         945,024 |
+  | Task list, connection and the rest | 500 listed tasks × 8,933 across 32 bots, connection 106,029, setup on this computer, field names                                                    |       4,739,548 |
+  | Computer tab                       | 8 viewers' panes (16 tabs, a view and a control each), 32 control events                                                                            |         776,161 |
+  | Bot names                          | 32 cards: a bot's id, its name and the one it wrote, its read's gateway stamp, a reason                                                             |         151,842 |
+  | State                              |                                                                                                                                                     |     137,019,684 |
+  | One viewer's snapshot              | the state with only its 4 open tasks                                                                                                                |      75,695,452 |
 
 - **The host:** what the engine retains between events: the state, and everything else the host process keeps for it. Files count in base64 characters, as they are kept. Lists and pages being read from the gateway are in flight, not retained: their row states their gate, and their size is the gateway's.
 
@@ -933,7 +931,7 @@ A bot starts a task with the gateway's own `sessions_spawn` tool; with `visible:
 
 - **The hole that remains.** At the start of the run the gateway writes its own "⬆️ Updating OpenClaw…" row into the same conversation, under the key `update-run-ack:<run id>`, so the press's run id is in the history while the update installs. A bot that runs a turn then can read it and send a message with the key `update-run-finished:<run id>` before the gateway writes its notice. That one row is then drawn behind a true "OpenClaw updated to <version>" line, its text one press away under "Message text", and the gateway writes no notice of its own, because it finds the key taken in that conversation. A conversation reset starts a new transcript, so the same can happen there again with that run's id.
 - **What is kept.** Each such run's gateway identity, run id, the version it went to and when this device saw it, in the state (`openclawUpdating.updated`) and in the host's storage (`clawtrate.openclaw-updated`): at most 16, the latest kept, none older than a year. Each entry is read field by field, and the whole value only up to 32,768 characters. They are read from storage on every connection, so a switch to another gateway, Disconnect, or putting the run's line away in Settings keeps them, and the oldest age out. Nothing is asked of the gateway for this: no `update.status` and no update history.
-- **Read once after the update.** The gateway marks the run succeeded as it starts, writes the notice in a later startup task and sends no event when it does. So after an update this device's press made and followed to "Updated", the main bot's main conversation, when it is open and that gateway is still the one connected, is read again once, 5 seconds later (`UPDATE_NOTICE_READ_AFTER_MS`). How long the gateway takes to write the notice after a real update was not measured.
+- **Read again after the update, at most twice.** The gateway marks the run succeeded as it starts, writes the notice in a later startup task and sends no event when it does; after a real update of a macOS gateway the notice came about 4 seconds after the run finished. So after an update this device's press made and followed to "Updated", the main bot's main conversation, when it is open and that gateway is still the one connected, is read again 5 seconds later (`UPDATE_NOTICE_READ_AFTER_MS`). If that read finds no notice of the run, it is read once more 25 seconds after it (`UPDATE_NOTICE_READ_LAST_MS`, 30 seconds after "Updated"), to cover a pending handoff, which retries every 2 seconds, and a slow start on a loaded host; then not again. Both reads belong to the connection that saw "Updated": after a drop, another hello or a reset, neither goes out. A notice later than that shows the next time the conversation is read.
 - **The rail.** While the main conversation's loaded history ends with the line and its listed preview is the one the gateway makes of the notice (`gatewayPreviewOf`: its text trimmed, its Markdown flattened to one line, cut to 240 characters with "..."), the bot's preview is the last thing written before it. The order stays the gateway's. On a connection that writes, the unread mark is the gateway's, and the notice doesn't raise it: writing it moves only the row's `updatedAt` (`deriveSessionUnread`). A read-only connection keeps its own memory of what it read; there, a task read at or after the latest row before the notice (every row of a merged turn) is not unread for the notice alone. While the main conversation isn't open, its history isn't loaded, so the rail shows the gateway's preview, the notice's sentence included.
 
 ## Sessions other tools opened
