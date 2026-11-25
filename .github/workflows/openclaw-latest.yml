@@ -71,6 +71,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: npm install --global "openclaw@$OPENCLAW_UNDER_TEST"
       - run: openclaw --version
+      # The development gateway runs only the program OPENCLAW_BIN names, of a listed version.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
       # The computer checks start the Chromium that Playwright installs.
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm scenarios
@@ -97,6 +99,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: npm install --global "openclaw@$OPENCLAW_UNDER_TEST"
       - run: openclaw --version
+      # The development gateway runs only the program OPENCLAW_BIN names, of a listed version.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
       - run: pnpm exec playwright install --with-deps chromium
       - run: node e2e/shards.ts ${{ matrix.shard }} | tee "$RUNNER_TEMP/e2e-shard.txt"
       - run: xvfb-run --auto-servernum pnpm e2e --test-list "$RUNNER_TEMP/e2e-shard.txt"
