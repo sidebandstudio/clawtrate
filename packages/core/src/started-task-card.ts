@@ -6,7 +6,7 @@
 // (`childSessionKey`), and the task list of this connection lists that task as started from this
 // conversation (`Task.startedBy.fromKey`).
 
-import { callArgs, resultBody, sendDetails } from "./cards.ts";
+import { BOT_MESSAGE_TOOL, callArgs, resultBody, sendDetails } from "./cards.ts";
 import { cleanLine } from "./gateway-names.ts";
 import { asRecord, botIdFromSessionKey, REPORT_RUN_PREFIX } from "./mapping.ts";
 import { isOpenStep, type Run, type Step, type StepRaw } from "./runs.ts";
@@ -189,15 +189,67 @@ export function startedTaskOf(
   return null;
 }
 
-/** The bot's report after this start's own run ended: the item whose run is exactly that report. */
+/**
+ * Whether a run id as `chat.history` gives it is `id` with parts masked. The gateway's history
+ * redaction can take a secret-looking stretch of a report's run id (a run of digits in a random
+ * key, say) and keep only its first and last characters around "…" (`maskToken`, OpenClaw
+ * 2026.10.6). So each "…" stands for at least one character, and what it keeps is in order.
+ */
+export function maskedFrom(seen: string, id: string): boolean {
+  const parts = seen.split("…");
+  if (parts.length < 2 || !id.startsWith(parts[0]!)) return false;
+  let at = parts[0]!.length;
+  for (const part of parts.slice(1, -1)) {
+    const found = id.indexOf(part, at + 1);
+    if (found < 0) return false;
+    at = found + part.length;
+  }
+  const last = parts.at(-1)!;
+  return id.endsWith(last) && id.length - last.length > at;
+}
+
+/**
+ * The bot's report after this start's own run ended: the item whose run is exactly that report.
+ * One the gateway's redaction masked counts only when, of every report this conversation's own
+ * calls can bring (`candidates`: each start's and each follow-up's), this start's alone fits it.
+ */
 function reportOf(
   items: TranscriptItem[],
   key: string | null,
   runId: string | null,
+  candidates: readonly string[],
 ): string | null {
   if (!key || !runId) return null;
   const run = `${REPORT_RUN_PREFIX}${key}:${runId}`;
-  return items.find((item) => item.role === "assistant" && item.reportRunId === run)?.id ?? null;
+  const reports = items.filter((item) => item.role === "assistant" && item.reportRunId);
+  const exact = reports.find((item) => item.reportRunId === run);
+  if (exact) return exact.id;
+  const masked = reports.find(
+    (item) =>
+      item.reportRunId!.includes("…") &&
+      maskedFrom(item.reportRunId!, run) &&
+      candidates.filter((each) => maskedFrom(item.reportRunId!, each)).length === 1,
+  );
+  return masked?.id ?? null;
+}
+
+/**
+ * Every report this conversation's own calls can bring, as `announce:v1:<task key>:<run>`: each
+ * accepted start's (hidden helpers' included) and each follow-up's, from the gateway's results.
+ */
+function reportCandidates(runs: Run[], rawOf: (step: Step) => StepRaw | null): string[] {
+  const out: string[] = [];
+  for (const run of runs) {
+    for (const step of run.steps) {
+      if (step.kind !== "tool") continue;
+      if (step.toolName !== START_TASK_TOOL && step.toolName !== BOT_MESSAGE_TOOL) continue;
+      const result = resultOf(step, rawOf(step));
+      const key = str(result?.childSessionKey) ?? str(result?.sessionKey);
+      const child = str(result?.runId);
+      if (key && child) out.push(`${REPORT_RUN_PREFIX}${key}:${child}`);
+    }
+  }
+  return out;
 }
 
 function startedTaskCard(
@@ -205,6 +257,7 @@ function startedTaskCard(
   run: Run,
   raw: StepRaw | null,
   input: StartedTaskInput,
+  candidates: readonly string[],
 ): StartedTaskCard {
   const args = argsOf(step, raw);
   const details = resultOf(step, raw);
@@ -245,7 +298,7 @@ function startedTaskCard(
     state,
     reason: reason === null ? null : cleanLine(reason, MAX_REFUSAL_CHARS) || null,
     resultStatus: status,
-    reportedBack: reportOf(input.items, taskKey, childRun),
+    reportedBack: reportOf(input.items, taskKey, childRun, candidates),
     requestedAt: step.startedAt,
     endedAt: step.endedAt,
     correction: step.correction,
@@ -258,10 +311,11 @@ export function selectStartedTasks(
   rawOf: (step: Step) => StepRaw | null = (step) => step.raw,
 ): StartedTaskCard[] {
   const cards: StartedTaskCard[] = [];
+  const candidates = reportCandidates(input.runs, rawOf);
   for (const run of input.runs) {
     for (const step of run.steps) {
       const raw = rawOf(step);
-      if (isTaskStart(step, raw)) cards.push(startedTaskCard(step, run, raw, input));
+      if (isTaskStart(step, raw)) cards.push(startedTaskCard(step, run, raw, input, candidates));
     }
   }
   return cards;
