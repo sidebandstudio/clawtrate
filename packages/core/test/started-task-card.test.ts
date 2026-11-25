@@ -391,7 +391,8 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
   });
 
   it("keeps the joiners an emoji or a word needs, as the sidebar shows them", () => {
-    const [zwj, zwnj] = [0x200d, 0x200c].map((c) => String.fromCodePoint(c));
+    const zwj = String.fromCodePoint(0x200d);
+    const zwnj = String.fromCodePoint(0x200c);
     const coder = `${String.fromCodePoint(0x1f469)}${zwj}${String.fromCodePoint(0x1f4bb)}`;
     const word = `می${zwnj}خواهم`;
     const [card] = cards(

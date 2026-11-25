@@ -41,7 +41,8 @@ describe("F-526: gateway names", () => {
   });
 
   it("a name keeps the zero-width joiner and non-joiner an emoji or a word needs, and a name of joiners alone is none", () => {
-    const [zwj, zwnj] = [0x200d, 0x200c].map((c) => String.fromCodePoint(c));
+    const zwj = String.fromCodePoint(0x200d);
+    const zwnj = String.fromCodePoint(0x200c);
     const coder = `${String.fromCodePoint(0x1f469)}${zwj}${String.fromCodePoint(0x1f4bb)}`;
     // Changed on purpose: these joiners used to become a space, splitting the emoji and the word.
     expect(cleanGatewayName(`${coder} Lab`)).toBe(`${coder} Lab`);
