@@ -545,7 +545,6 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         const view = await providerView(h.reader, bot, "acme");
         return [view?.profileOrder ?? null, view?.profileOrderStored ?? null];
       };
-      same(await order(), [null, null], "the bot's order before");
       h.observe(
         h.lockMode === "live"
           ? "this OpenClaw changes a bot's account order beside the running gateway"

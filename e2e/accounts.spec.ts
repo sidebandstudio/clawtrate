@@ -674,8 +674,9 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
   await expect(settings.getByTestId("bound-note")).toContainText(
     "Bound. Second runs on Acme · Home.",
   );
-  // The lock command, for the gateway's owner to run, in the instance's own form.
-  const command = settings.getByTestId("command");
+  // The lock command, for the gateway's owner to run, in the instance's own form; on a gateway
+  // that changes orders only while stopped, between the steps that stop and start it.
+  const command = settings.getByTestId("command").filter({ hasText: "models auth order set" });
   await expect(command).toContainText(
     `openclaw --profile clawtrate-dev-${INSTANCE} models auth order set --provider acme --agent second acme:home`,
   );
@@ -719,9 +720,9 @@ test("F-473: changing a locked bot to another account of its provider shows the 
     "The lock is out of date. Second runs on Acme · Work first, but the gateway's order for Second still lists only Acme · Home",
     { timeout: 20_000 },
   );
-  await expect(settings.getByTestId("command").first()).toContainText(
-    "order set --provider acme --agent second acme:work",
-  );
+  await expect(
+    settings.getByTestId("command").filter({ hasText: "models auth order set" }),
+  ).toContainText("order set --provider acme --agent second acme:work");
   expect(entry(await config(), "second")!.model).toEqual({
     primary: "acme/dev-1@acme:work",
     fallbacks: [],
