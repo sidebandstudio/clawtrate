@@ -353,6 +353,49 @@ test.describe("the gateway's own bot", () => {
     await expect(railBot(page, "Marlow")).toBeVisible();
   });
 
+  test("F-562: a gateway's own bot kept open stays open, listed and saved through a reconnect to the same gateway, before and after its name returns", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_DISK}&panel=closed&gatewaybot=off&search=on`, "light");
+    const heading = page.getByRole("heading", { level: 1 });
+    await page.keyboard.press("ControlOrMeta+K");
+    const palette = page.getByTestId("search-palette");
+    await palette.getByRole("combobox", { name: "Search" }).fill("coffee");
+    await palette.getByTestId("search-group-messages").getByRole("option").first().click();
+    await expect(heading).toHaveText("Caffeine cutoff time");
+    const saved = () => page.evaluate(() => localStorage.getItem("clawtrate.bot"));
+    expect(await saved()).toBe("main");
+    const named = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            clawtrateFixture: { getState(): { connection: { gatewayId: string | null } } };
+          }
+        ).clawtrateFixture.getState().connection.gatewayId,
+    );
+    expect(named, "the fixture's gateway has a name").not.toBeNull();
+    // The connection drops, and comes back on the same target with the identity answer held.
+    await setState(
+      page,
+      `(state) => ({ ...state, connection: { ...state.connection, status: "reconnecting", gatewayId: null } })`,
+    );
+    await setState(
+      page,
+      `(state) => ({ ...state, connection: { ...state.connection, status: "connected", gatewayId: null } })`,
+    );
+    await expect(railBot(page, "Juniper")).toBeVisible();
+    await expect(heading).toHaveText("Caffeine cutoff time");
+    expect(await saved()).toBe("main");
+    // The name returns.
+    await setState(
+      page,
+      `(state) => ({ ...state, connection: { ...state.connection, gatewayId: ${JSON.stringify(named)} } })`,
+    );
+    await expect(railBot(page, "Juniper")).toBeVisible();
+    await expect(heading).toHaveText("Caffeine cutoff time");
+    expect(await saved()).toBe("main");
+  });
+
   test("F-562: a new routine whose bot is deleted falls back to a bot the rail lists, never the gateway's own", async ({
     page,
   }) => {
