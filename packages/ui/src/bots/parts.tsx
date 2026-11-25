@@ -170,6 +170,8 @@ export type SelectRow = {
   close?: boolean;
   /** It shows a second section in place: focus moves to that section's first choice. */
   expands?: boolean;
+  /** Lines of text under the row, such as what its action found. */
+  lines?: string[];
   onSelect: () => void;
 };
 
@@ -251,7 +253,13 @@ export function Select({
       each.onSelect();
     },
   });
-  const entries: MenuEntry[] = [...choices.map(radio), ...rows.map(row)];
+  const entries: MenuEntry[] = [
+    ...choices.map(radio),
+    ...rows.flatMap((each) => [
+      row(each),
+      ...(each.lines ?? []).map((text): MenuEntry => ({ kind: "label", text })),
+    ]),
+  ];
   // After a row that shows the second section, focus moves to its first choice.
   const focusAt =
     expanding && section && section.choices.length > 0

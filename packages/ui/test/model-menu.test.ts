@@ -2,9 +2,17 @@
 // the provider's full list behind "View more", held by the screen that read it,
 // and the chosen model always has one checked row, whatever has arrived.
 
-import { initialAccountsState, type AccountsState, type CatalogModel } from "@clawtrate/core";
+import {
+  initialAccountsState,
+  initialConnectionState,
+  type AccountsState,
+  type CatalogModel,
+  type ConnectionState,
+  type ModelRefresh,
+  type OpenClawUpdate,
+} from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { modelMenu } from "../src/bots/ModelPair.tsx";
+import { allowlistLine, heldKey, modelMenu, refreshWords } from "../src/bots/ModelPair.tsx";
 
 const model = (id: string, available = true): CatalogModel => ({
   provider: "openai",
@@ -63,5 +71,104 @@ describe("the Model menu", () => {
     expect([before.pinned, before.row]).toEqual(["gpt-5.4", undefined]);
     const after = modelMenu(state(PICKER), "openai", "gpt-5.4", FULL);
     expect([after.pinned, after.row?.id]).toEqual([null, "gpt-5.4"]);
+  });
+});
+
+describe("F-588: Refresh in the Model menu", () => {
+  const done = (change: Partial<Extract<ModelRefresh, { status: "done" }>> = {}): ModelRefresh => ({
+    status: "done",
+    provider: "openai",
+    added: [],
+    addedCount: 0,
+    removed: [],
+    removedCount: 0,
+    outcome: null,
+    configured: false,
+    partial: false,
+    ...change,
+  });
+  const update: OpenClawUpdate = { current: "2026.10.6", latest: "2026.11.6", channel: "latest" };
+
+  it("F-588: names the new models, the first few and a count, and the ones no longer listed", () => {
+    expect(refreshWords(done({ added: ["gpt-6.2-sol"], addedCount: 1 }), "OpenAI", null)).toBe(
+      "New: gpt-6.2-sol.",
+    );
+    expect(
+      refreshWords(
+        done({ added: ["a", "b", "c", "d", "e"], addedCount: 12, removed: ["z"], removedCount: 1 }),
+        "OpenAI",
+        update,
+      ),
+    ).toBe("New: a, b, c, d, e and 7 more. No longer listed: z.");
+  });
+
+  it("F-588: nothing new says why: asked again, the gateway's config, or a list that comes with OpenClaw", () => {
+    expect(refreshWords(done({ outcome: "ready" }), "OpenAI", update)).toBe(
+      "Nothing new. The gateway asked OpenAI again, and its list is the same.",
+    );
+    expect(refreshWords(done({ configured: true }), "Acme", update)).toBe(
+      "Nothing new. Acme's models are the ones the gateway's config lists.",
+    );
+    expect(refreshWords(done(), "OpenAI", null)).toBe(
+      "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw.",
+    );
+    // With the gateway's report of a newer OpenClaw: its version, and the note under the menu.
+    expect(refreshWords(done(), "OpenAI", update)).toBe(
+      "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw. OpenClaw 2026.11.6 is out: see the note below.",
+    );
+  });
+
+  it("F-588: a provider the gateway couldn't ask, with the gateway's reason, and a refresh that failed", () => {
+    expect(refreshWords(done({ outcome: "auth-rejected" }), "OpenAI", update)).toBe(
+      "Nothing new. The gateway couldn't ask OpenAI: OpenAI refused the account.",
+    );
+    expect(refreshWords(done({ outcome: "unavailable" }), "OpenAI", update)).toBe(
+      "Nothing new. The gateway couldn't get an answer from OpenAI.",
+    );
+    expect(refreshWords(done({ partial: true }), "OpenAI", update)).toBe(
+      "Nothing new yet. The gateway is still looking for OpenAI's models.",
+    );
+    expect(
+      refreshWords(
+        { status: "error", error: "The gateway didn't answer in time." },
+        "OpenAI",
+        null,
+      ),
+    ).toBe("Couldn't refresh: The gateway didn't answer in time.");
+  });
+
+  it("F-588: says when the gateway's config limits a provider's models, and only then", () => {
+    const limited = (whole: string[] | null) =>
+      allowlistLine(
+        { ...initialAccountsState, modelAllowlist: whole === null ? null : { whole } },
+        "openai",
+      );
+    expect(limited(null)).toBeNull();
+    expect(limited(["openai"])).toBeNull();
+    expect(limited(["anthropic"])).toBe(
+      "The gateway's config names which of OpenAI's models bots can use, and lists only those.",
+    );
+  });
+
+  it("F-588: an answer is held for one provider and one connection: another gateway, a reconnect or a hidden pair is another key", () => {
+    const connection: ConnectionState = {
+      ...initialConnectionState,
+      status: "connected",
+      gatewayUrl: "ws://127.0.0.1:19001",
+      gatewayId: "gateway-a",
+      target: 4,
+      connectedAt: 1_000,
+    };
+    const key = heldKey("openai", connection, true);
+    expect(heldKey("openai", { ...connection }, true)).toBe(key);
+    for (const other of [
+      heldKey("anthropic", connection, true),
+      heldKey("openai", { ...connection, gatewayId: "gateway-b" }, true),
+      heldKey("openai", { ...connection, connectedAt: 2_000 }, true),
+      heldKey("openai", { ...connection, target: 5 }, true),
+      heldKey("openai", { ...connection, status: "reconnecting" }, true),
+    ])
+      expect(other).not.toBe(key);
+    expect(heldKey("openai", connection, false)).toBe("");
   });
 });
