@@ -102,7 +102,7 @@ function Turn({
           )}
           <SentFiles
             taskKey={taskKey}
-            messageKey={item.idempotencyKey ?? null}
+            messageKey={item.idempotencyKey ?? item.messageId ?? null}
             files={item.attachments ?? []}
           />
         </MessageUnit>
