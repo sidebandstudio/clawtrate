@@ -192,8 +192,35 @@ test.describe("F-588: Refresh in the Model menu", () => {
       menu(page).getByText(/The note below says where the OpenClaw update stands\./),
     ).toBeVisible();
     await expect(menu(page).getByText(/is out: see the note below/)).toHaveCount(0);
+    await expect(page.getByTestId("openclaw-update")).toContainText("OpenClaw is updating");
   });
 
+  test("F-588: the result says only what the note under the menu says: where an update stands, the version again once a run failed, and nothing without a note", async ({
+    page,
+  }) => {
+    // Held: the note says an update may be under way.
+    await openMenu(page, `${SETTINGS}&openclaw=behind&openclawRun=held`);
+    await refreshRow(page).click();
+    await expect(
+      menu(page).getByText(/The note below says where the OpenClaw update stands\./),
+    ).toBeVisible();
+    await expect(page.getByTestId("openclaw-update")).toContainText("may be under way");
+    await page.keyboard.press("Escape");
+    // Failed: the note names the newer version again, and so does the result.
+    await openMenu(page, `${SETTINGS}&openclaw=behind&openclawRun=failed`);
+    await refreshRow(page).click();
+    await expect(
+      menu(page).getByText(/OpenClaw 2026\.11\.6 is out: see the note below\./),
+    ).toBeVisible();
+    await expect(page.getByTestId("openclaw-update")).toContainText("2026.11.6 is out");
+    await page.keyboard.press("Escape");
+    // No note: nothing about versions.
+    await openMenu(page, SETTINGS);
+    await refreshRow(page).click();
+    await expect(menu(page).getByText(/^Nothing new\./)).toBeVisible();
+    await expect(menu(page).getByText(/note below/)).toHaveCount(0);
+    await expect(page.getByTestId("openclaw-update")).toHaveCount(0);
+  });
   test("F-588: New bot's Model menu has the same Refresh", async ({ page }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&refresh=new`, "light");
     await page.keyboard.press("ControlOrMeta+n");

@@ -144,11 +144,9 @@
       - menuitem "View more"
       - menuitem "Use another model…": Use another model… Type its id
     - 'button "Effort: Medium"': Effort Medium
-    - paragraph: Your gateway runs OpenClaw 2026.10.6, and 2026.11.6 is out. Updating the gateway is how newer models get listed.
     - paragraph:
-      - link "OpenClaw's update instructions":
-        - /url: https://docs.openclaw.ai/install/updating
-    - button "Update OpenClaw to 2026.11.6"
+      - text: Your gateway runs OpenClaw 2026.10.6, and 2026.11.6 is out. Updating the gateway is how newer models get listed.
+      - button "Settings › Updates"
     - paragraph: OpenAI's models, as the gateway lists them. Which ones this account may use is OpenAI's decision.
     - heading "Memory" [level=3]
     - button "Memory"
