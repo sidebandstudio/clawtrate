@@ -974,9 +974,28 @@ export function startProblem(problem: {
       ? `${problem.what} exited after ${seconds} s, before it answered`
       : `timed out after ${seconds} s waiting for ${problem.what}, which is still running`,
     `  last health check: ${problem.lastSeen ?? "none"}`,
-    problem.tail
-      ? `  the end of its log, ${problem.log}:\n${problem.tail.replace(/^/gm, "    ")}`
-      : `  its log, ${problem.log}, is empty`,
+    logSection("its", problem.log, problem.tail),
+  ].join("\n");
+}
+
+/** The end of a process's log, as a failure prints it under its first line. */
+function logSection(owner: string, log: string, tail: string): string {
+  return tail
+    ? `  the end of ${owner} log, ${log}:\n${tail.replace(/^/gm, "    ")}`
+    : `  ${owner} log, ${log}, is empty`;
+}
+
+/**
+ * Why a seed stopped: what failed, then the end of the gateway's and the scripted model's logs,
+ * which the instance's reset removes, so a failed CI job still shows what the gateway was doing.
+ */
+export function seedProblem(problem: {
+  error: string;
+  logs: Array<{ owner: string; log: string; tail: string }>;
+}): string {
+  return [
+    `the seed stopped: ${problem.error}`,
+    ...problem.logs.map(({ owner, log, tail }) => logSection(owner, log, tail)),
   ].join("\n");
 }
 
@@ -1871,6 +1890,52 @@ export async function callGateway<T>(
   );
 }
 
+/** A gateway call that failed reaching or hearing from the gateway, not one the gateway refused. */
+export function isTransportFailure(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /"type":\s*"gateway_transport_error"/.test(text);
+}
+
+/**
+ * The waits between tries of a seed call the gateway didn't answer, about 3 minutes in all, each
+ * try with its own 60 s timeout. On GitHub's Xcode runner the gateway answered the start's health
+ * check and then, minutes later, timed out or refused the connection on the seed's first
+ * `sessions.create` (#610).
+ */
+export const SEED_RETRY_DELAYS_MS: readonly number[] = [
+  5_000, 10_000, 20_000, 40_000, 60_000, 60_000,
+];
+
+/**
+ * `call`, tried again after each delay while it fails on transport; any other failure is thrown.
+ * Only for calls that are safe to repeat: a read, or one the gateway carries out once whatever
+ * number of times it comes, as `sessions.create` does for a key and label it already has.
+ */
+export async function retryOnTransport<T>(
+  call: () => Promise<T>,
+  options: {
+    delays?: readonly number[];
+    sleep?: (ms: number) => Promise<unknown>;
+    log?: (line: string) => void;
+    what?: string;
+  } = {},
+): Promise<T> {
+  const delays = options.delays ?? SEED_RETRY_DELAYS_MS;
+  const wait = options.sleep ?? sleep;
+  const log = options.log ?? console.log;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isTransportFailure(error) || attempt >= delays.length) throw error;
+      log(
+        `  the gateway didn't answer ${options.what ?? "a call"}; trying again in ${delays[attempt]! / 1000} s`,
+      );
+      await wait(delays[attempt]!);
+    }
+  }
+}
+
 type AgentRow = { id: string; workspace?: string };
 
 async function existingSessionKeys(inst: DevInstance, botId: string): Promise<Set<string>> {
@@ -2022,7 +2087,11 @@ async function seedConversations(
     // Made as Clawtrate makes a task, by an operator (`createdVia: "operator"`), so the sample
     // conversations count as the person's own; the turns then run in it as the gateway's owner.
     if (!alreadySeeded) {
-      await callGateway(inst, "sessions.create", { key, agentId: bot.id, label: task.label });
+      // Answered with the same task when it comes again, so safe to try again.
+      const params = { key, agentId: bot.id, label: task.label };
+      await retryOnTransport(() => callGateway(inst, "sessions.create", params), {
+        what: `sessions.create for ${key}`,
+      });
     }
     for (const turn of alreadySeeded ? [] : task.turns) {
       const output = parseJsonOutput<AgentRunOutput>(
@@ -2042,10 +2111,15 @@ async function seedConversations(
       const problem = checkTurnOutcome(output, turn);
       if (problem) throw new Error(`${bot.name} / ${task.label}: ${problem}`);
     }
-    const history = await callGateway<{ messages?: HistoryMessage[] }>(inst, "chat.history", {
-      sessionKey: key,
-      limit: 200,
-    });
+    // A read, so safe to try again.
+    const history = await retryOnTransport(
+      () =>
+        callGateway<{ messages?: HistoryMessage[] }>(inst, "chat.history", {
+          sessionKey: key,
+          limit: 200,
+        }),
+      { what: `chat.history for ${key}` },
+    );
     const problems = checkHistory(history.messages ?? [], task);
     if (problems.length > 0) {
       const advice = alreadySeeded
@@ -2067,6 +2141,19 @@ export async function seed(inst: DevInstance): Promise<void> {
       `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
     );
   }
+  try {
+    await seedBotsAndTasks(inst);
+  } catch (error) {
+    const logs = [
+      { owner: "the development gateway's", log: join(inst.runDir, "gateway.log") },
+      { owner: "the scripted model's", log: join(inst.runDir, "provider.log") },
+    ].map((each) => ({ ...each, tail: logTail(each.log) }));
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(seedProblem({ error: message, logs }), { cause: error });
+  }
+}
+
+async function seedBotsAndTasks(inst: DevInstance): Promise<void> {
   const listed = parseJsonOutput<AgentRow[] | { agents: AgentRow[] }>(
     await must(inst, ["agents", "list", "--json"]),
   );
