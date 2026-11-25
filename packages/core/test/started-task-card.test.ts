@@ -562,6 +562,17 @@ describe("the task list a card may use", () => {
     expect(tasksShownHere(state({ target: 3, gatewayId: "gw-b" }))).toEqual({});
     // Read before the gateway named itself, on a connection since replaced: it may be another's.
     expect(tasksShownHere(state({ target: 3, gatewayId: null, connectedAt: 0 }))).toEqual({});
+    // A named list after a reconnect, before the gateway names itself again: it may be another's.
+    const reconnected = {
+      ...state({ target: 3, gatewayId: "gw-a", connectedAt: 0 }),
+      connection: { ...initialConnectionState, target: 3, gatewayId: null, connectedAt: 1 },
+    };
+    expect(tasksShownHere(reconnected)).toEqual({});
+    // The same connection, its gateway's name not read yet: the list it read holds.
+    expect(
+      tasksShownHere({ ...reconnected, connection: { ...reconnected.connection, connectedAt: 0 } })
+        .pip,
+    ).toHaveLength(1);
   });
 
   it("finds a task only by its key and the conversation the list says it was started from", () => {

@@ -173,12 +173,14 @@ export function tasksShownHere(
   const read = state.discovery.tasksRead;
   const { target, gatewayId, connectedAt } = state.connection;
   if (!read) return state.tasksByBot;
-  // A list read before the gateway named itself holds only on the connection that read it.
+  // While either side's gateway is unnamed (a list read before the gateway named itself, or a
+  // connection whose gateway hasn't named itself yet), the list holds only on the connection that
+  // read it; once both are named, they must name the same gateway.
   const same =
     read.target === target &&
-    (read.gatewayId === null
+    (read.gatewayId === null || gatewayId === null
       ? read.connectedAt === connectedAt
-      : gatewayId === null || read.gatewayId === gatewayId);
+      : read.gatewayId === gatewayId);
   return same ? state.tasksByBot : NONE;
 }
 
