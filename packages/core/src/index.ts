@@ -4,7 +4,6 @@ export * from "./gateway-names.ts";
 export * from "./host.ts";
 export * from "./mapping.ts";
 export * from "./origins.ts";
-export * from "./skill-notes.ts";
 export * from "./avatar.ts";
 export * from "./gateway-update.ts";
 export * from "./openclaw-update.ts";

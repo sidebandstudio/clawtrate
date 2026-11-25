@@ -41,7 +41,13 @@ import {
   type PlanContext,
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
-import { IMAGE_PROMPT, SEND_PICTURE_AFTER, SEND_PICTURE_TEXT } from "./scenarios.ts";
+import {
+  IMAGE_PROMPT,
+  SEND_KEYED_KEY,
+  SEND_KEYED_TEXT,
+  SEND_PICTURE_AFTER,
+  SEND_PICTURE_TEXT,
+} from "./scenarios.ts";
 import { FOLLOW_UP_MESSAGE, HAND_OFF, HAND_OFF_HIDDEN, HAND_OFF_PARTNER } from "./scenarios.ts";
 import { startedTaskReply } from "./scripts.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
@@ -1074,6 +1080,7 @@ const SCHEDULE_HISTORY_DETAILS = true;
 /** The check that runs only on an instance with the stand-in image provider. */
 export const IMAGE_CHECK = "a picture from the image tool";
 export const SEND_PICTURE_CHECK = "a picture sent with the message tool";
+export const SEND_KEYED_CHECK = "a message sent with a key of the skill note's shape";
 const IMAGE_CALL_TITLE = "Image Generation";
 
 export type ScenarioCheck = {
@@ -3952,6 +3959,55 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         `the download's path: ${String(download.url)}`,
       );
       same(rec(download.artifact).sizeBytes, trailMap().length, "the picture's size");
+    },
+  },
+  // Only on an instance started with `--with-message-tool` (SEND_KEYED_CHECK).
+  {
+    name: SEND_KEYED_CHECK,
+    covers: ["#send-keyed"],
+    run: async (h) => {
+      const key = await h.session(FILES_BOT, "send-keyed");
+      const view = await h.run("plain", key, "#send-keyed");
+      view.expectCalls([
+        {
+          name: "message",
+          args: { action: "send", message: SEND_KEYED_TEXT, idempotencyKey: SEND_KEYED_KEY },
+          isError: false,
+          content: (texts, where) =>
+            same(
+              texts,
+              ["Sent visible reply to the current source conversation via internal-ui."],
+              where,
+            ),
+          details: (details: JsonRecord | undefined, where: string) =>
+            same(
+              [details?.status, details?.deliveryStatus, details?.target, details?.message],
+              ["ok", "sent", "current-run", SEND_KEYED_TEXT],
+              `${where} details`,
+            ),
+          title: "Message",
+        },
+      ]);
+      view.expectEnd("final", null);
+      // The gateway copies the bot's message into the task with the fields it gives its own
+      // notes, and keeps the bot's key, on the row and under __openclaw (docs/decisions.md,
+      // "The gateway's skill notes").
+      const history = await h
+        .op("plain")
+        .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key });
+      const delivered = history.messages.filter(
+        (m) => m.role === "assistant" && m.model === "delivery-mirror",
+      );
+      same(delivered.length, 1, "rows the gateway delivered");
+      const row = delivered[0]!;
+      same(
+        [row.api, row.provider, row.idempotencyKey, rec(row.__openclaw).idempotencyKey],
+        ["openclaw-transcript", "openclaw", SEND_KEYED_KEY, SEND_KEYED_KEY],
+        "the delivered row's fields",
+      );
+      same(rec(row.__openclaw).runId, view.runId, "the delivered row's run");
+      same(row.content, [{ type: "text", text: SEND_KEYED_TEXT }], "the delivered text");
+      same(history.messages.at(-1)?.role, "toolResult", "nothing said after the message");
     },
   },
   {
