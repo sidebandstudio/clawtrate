@@ -26,6 +26,13 @@ export const ACCOUNT_MODELS: Record<AccountProvider, readonly string[]> = {
   globex: ["dev-1"],
 };
 
+/**
+ * A model a provider gains later, as a real provider's list grows: a check adds it to the
+ * provider's entry in the config and a Refresh lists it (#565). The contract takes the list
+ * as started or with it added (`grownModels`).
+ */
+export const LATER_MODELS: Partial<Record<AccountProvider, string>> = { acme: "dev-3" };
+
 /** How a credential is stored: the gateway's storage types. */
 export type CredentialKind = "api_key" | "token" | "oauth";
 
@@ -121,6 +128,22 @@ const scriptedModel = (id: string) => ({
   contextWindow: 128000,
   maxTokens: 8192,
 });
+
+/** A provider's model entries with its later model added, as a check writes them. */
+export function grownModels(provider: AccountProvider) {
+  const later = LATER_MODELS[provider];
+  return [...ACCOUNT_MODELS[provider], ...(later ? [later] : [])].map(scriptedModel);
+}
+
+/** The contract for one provider's models: as started, or with its later model added. */
+export function modelsContract(provider: AccountProvider): Contract {
+  const lists = [ACCOUNT_MODELS[provider].map(scriptedModel), grownModels(provider)].map((list) =>
+    JSON.stringify(list),
+  );
+  return matching(`${provider}'s scripted models, or those and its later one`, (value) =>
+    lists.includes(JSON.stringify(value)),
+  );
+}
 
 /**
  * The provider entries an instance with accounts adds. No `apiKey`: the
