@@ -7,7 +7,9 @@
 import {
   accountWord,
   lockCommand,
+  orderNeedsStoppedGateway,
   retainedOrder,
+  stoppedGatewaySteps,
   unlockCommand,
   type AccountsState,
   type Bot,
@@ -58,6 +60,41 @@ import {
 /** How often the Account page reads the order: 4 s after the lock command was copied, else 30 s. */
 export const WATCH_MS = 4_000;
 export const CHECK_MS = 30_000;
+
+/** Why a gateway's order changes need it stopped (OpenClaw 2026.10.10 on), and what that means. */
+const STOPPED_WHY =
+  "This version of OpenClaw changes a bot's account order only while the gateway is stopped. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway.";
+
+/** An order command as such a gateway needs it, in its own steps: stop it, run the command, start it. */
+function StoppedSteps({
+  cli,
+  command,
+  label,
+  onCopied,
+}: {
+  cli: string;
+  command: string;
+  label: string;
+  onCopied?: () => void;
+}) {
+  const [stop, run, start] = stoppedGatewaySteps(cli, command);
+  return (
+    <ol className="b-steps" data-testid="stopped-steps">
+      <li>
+        <p>Stop the gateway, and wait until it has stopped:</p>
+        <CommandBlock command={stop} label="Copy stop command" />
+      </li>
+      <li>
+        <p>Then run:</p>
+        <CommandBlock command={run} label={label} {...(onCopied ? { onCopied } : {})} />
+      </li>
+      <li>
+        <p>Start the gateway again:</p>
+        <CommandBlock command={start} label="Copy start command" />
+      </li>
+    </ol>
+  );
+}
 
 type View = "main" | "account" | "change" | "connect" | "runs" | "memory";
 
@@ -225,6 +262,7 @@ export function BotSettings({
   }, [word, announce, name, focusIn]);
 
   const cli = gatewayCli(info, connection);
+  const stopped = orderNeedsStoppedGateway(connection.serverVersion);
   const foot = granted ? (
     <GrantedBar />
   ) : !admin ? (
@@ -793,9 +831,20 @@ export function BotSettings({
             The gateway still has an order for {name} that names only{" "}
             {keptAccount ? accountName(keptAccount, accounts) : kept}, so it keeps using that
             account alone. To let the gateway choose among {who}'s accounts, the gateway's owner can
-            clear it on the gateway's machine:
+            clear it on the gateway's machine{stopped ? `. ${STOPPED_WHY}` : ":"}
           </p>
-          <CommandBlock command={unlockCommand(cli, bot.id, provider)} label="Copy clear command" />
+          {stopped ? (
+            <StoppedSteps
+              cli={cli}
+              command={unlockCommand(cli, bot.id, provider)}
+              label="Copy clear command"
+            />
+          ) : (
+            <CommandBlock
+              command={unlockCommand(cli, bot.id, provider)}
+              label="Copy clear command"
+            />
+          )}
         </Note>,
       );
     page.push(changeButton(binding.suffixLost ? "Choose an account" : "Bind to an account", true));
@@ -994,14 +1043,33 @@ export function BotSettings({
           Unlock
         </summary>
         <div className="b-disclosure-body">
-          <p className="b-hint" style={{ marginTop: 4 }}>
-            Run this on the gateway's machine. Clawtrate sees the change by itself. {name} then
-            follows the gateway's other orders.
-          </p>
-          <CommandBlock
-            command={unlockCommand(cli, bot.id, account.provider)}
-            label="Copy unlock command"
-          />
+          {stopped ? (
+            <>
+              <p className="b-hint" style={{ marginTop: 4 }}>
+                {STOPPED_WHY} On the gateway's machine:
+              </p>
+              <StoppedSteps
+                cli={cli}
+                command={unlockCommand(cli, bot.id, account.provider)}
+                label="Copy unlock command"
+              />
+              <p className="b-hint">
+                Clawtrate sees the change when the gateway is back. {name} then follows the
+                gateway's other orders.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="b-hint" style={{ marginTop: 4 }}>
+                Run this on the gateway's machine. Clawtrate sees the change by itself. {name} then
+                follows the gateway's other orders.
+              </p>
+              <CommandBlock
+                command={unlockCommand(cli, bot.id, account.provider)}
+                label="Copy unlock command"
+              />
+            </>
+          )}
         </div>
       </details>
     );
@@ -1032,15 +1100,33 @@ export function BotSettings({
         <h4 className="b-group" key="h">
           Lock to {me}
         </h4>,
-        <p className="b-step" key="p">
-          Run this on the gateway's machine:
-        </p>,
-        <CommandBlock
-          key="c"
-          command={lockCommand(cli, binding, account.id)}
-          label="Copy lock command"
-          onCopied={() => setWatching(true)}
-        />,
+        ...(stopped
+          ? [
+              <p className="b-step" key="p">
+                {STOPPED_WHY} On the gateway's machine:
+              </p>,
+              <StoppedSteps
+                key="c"
+                cli={cli}
+                command={lockCommand(cli, binding, account.id)}
+                label="Copy lock command"
+                onCopied={() => setWatching(true)}
+              />,
+              <p className="b-hint" key="back">
+                Clawtrate reads the lock from the gateway when it is back.
+              </p>,
+            ]
+          : [
+              <p className="b-step" key="p">
+                Run this on the gateway's machine:
+              </p>,
+              <CommandBlock
+                key="c"
+                command={lockCommand(cli, binding, account.id)}
+                label="Copy lock command"
+                onCopied={() => setWatching(true)}
+              />,
+            ]),
         evidenceRow,
         unlock,
       );
@@ -1059,17 +1145,37 @@ export function BotSettings({
         <h4 className="b-group" key="h">
           Lock to this account
         </h4>,
-        <p className="b-step" key="p">
-          To keep this bot on this account alone, run this on the gateway's machine. A sign-in can
-          also leave a bot limited to one account; Clawtrate shows the limit it finds, however it
-          was made:
-        </p>,
-        <CommandBlock
-          key="c"
-          command={lockCommand(cli, binding, account.id)}
-          label="Copy lock command"
-          onCopied={() => setWatching(true)}
-        />,
+        ...(stopped
+          ? [
+              <p className="b-step" key="p">
+                To keep this bot on this account alone, change its order on the gateway's machine. A
+                sign-in can also leave a bot limited to one account; Clawtrate shows the limit it
+                finds, however it was made. {STOPPED_WHY} On the gateway's machine:
+              </p>,
+              <StoppedSteps
+                key="c"
+                cli={cli}
+                command={lockCommand(cli, binding, account.id)}
+                label="Copy lock command"
+                onCopied={() => setWatching(true)}
+              />,
+              <p className="b-hint" key="back">
+                Clawtrate reads the lock from the gateway when it is back.
+              </p>,
+            ]
+          : [
+              <p className="b-step" key="p">
+                To keep this bot on this account alone, run this on the gateway's machine. A sign-in
+                can also leave a bot limited to one account; Clawtrate shows the limit it finds,
+                however it was made:
+              </p>,
+              <CommandBlock
+                key="c"
+                command={lockCommand(cli, binding, account.id)}
+                label="Copy lock command"
+                onCopied={() => setWatching(true)}
+              />,
+            ]),
         evidenceRow,
         <p className="b-hint" key="cannot">
           What this cannot see: if {me} is pausing after a failure, a run can start on another {who}{" "}

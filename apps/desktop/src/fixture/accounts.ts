@@ -35,6 +35,8 @@
 //   effort=none               the open bot keeps no effort
 //   openclaw=behind|beta      the gateway reports a newer OpenClaw than it runs: 2026.11.6, or
 //                             2026.11.10-beta.1 on the beta channel
+//   version=<version>         the OpenClaw version the gateway runs (default 2026.10.6), such as
+//                             2026.11.10, which changes a bot's account order only while stopped
 
 import { isUpdateRunScene, type UpdateRunScene } from "./openclaw-update.ts";
 import {
@@ -91,6 +93,8 @@ export type AccountParams = {
   openclaw: "behind" | "beta" | null;
   /** An update of OpenClaw under way or ended, or a gateway that can't update itself (F-589). */
   openclawRun: UpdateRunScene | null;
+  /** The OpenClaw version the gateway runs, when the address names one. */
+  version: string | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -135,6 +139,9 @@ export function accountParams(params: URLSearchParams): AccountParams {
     openclawRun: isUpdateRunScene(params.get("openclawRun"))
       ? (params.get("openclawRun") as UpdateRunScene)
       : null,
+    version: /^\d{4}\.\d{1,2}\.\d{1,3}$/.test(params.get("version") ?? "")
+      ? params.get("version")
+      : null,
   };
 }
 
@@ -159,6 +166,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   noEffort: false,
   openclaw: null,
   openclawRun: null,
+  version: null,
 };
 
 const MINUTE = 60_000;

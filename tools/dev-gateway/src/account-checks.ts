@@ -67,6 +67,18 @@ export type AccountHarness = {
   stateDir: string;
   /** Set (a profile id) or clear (null) a bot's stored one-account order, with the tool's lock. */
   lock(bot: string, provider: string, profileId: string | null): Promise<string[] | null>;
+  /**
+   * How the instance's command line changes an order, and so how `lock` runs it: beside the
+   * running gateway (`live`, OpenClaw before 2026.10.10), or with the gateway stopped first and
+   * started again afterwards (`stopped`, 2026.10.10 on).
+   */
+  lockMode: "live" | "stopped";
+  /** The same command run beside the running gateway, without stopping it: its status and output. */
+  orderBeside(
+    bot: string,
+    provider: string,
+    profileId: string | null,
+  ): Promise<{ status: number | null; output: string }>;
   /** A line for the report. */
   observe(line: string): void;
   /** Something the gateway did that docs/design/bots.md section 20 says otherwise. */
@@ -518,6 +530,56 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         [null, null],
         "the bot's order as models.authStatus reports it after unlock",
       );
+    },
+  },
+  {
+    name: "the gateway's command line changes a bot's order beside the running gateway, or only while it is stopped",
+    rows: [12, 14],
+    run: async (h) => {
+      const bot = await createBot(h, "acct-order-mode", "acme/dev-1");
+      const one = await signInKey(h, bot, "modeone");
+      await signInKey(h, bot, "modetwo");
+      await setModel(h, bot, `acme/dev-1@${one}`);
+      // The order as Clawtrate reads it: models.authStatus, on the read-only client.
+      const order = async () => {
+        const view = await providerView(h.reader, bot, "acme");
+        return [view?.profileOrder ?? null, view?.profileOrderStored ?? null];
+      };
+      same(await order(), [null, null], "the bot's order before");
+      h.observe(
+        h.lockMode === "live"
+          ? "this OpenClaw changes a bot's account order beside the running gateway"
+          : "this OpenClaw changes a bot's account order only while the gateway is stopped: lock and unlock stop it, run the command and start it again",
+      );
+      for (const [profileId, after] of [
+        [one, [[one], true]],
+        [null, [null, null]],
+      ] as const) {
+        const what = profileId ? "the lock" : "the unlock";
+        const before = await order();
+        const beside = await h.orderBeside(bot, "acme", profileId);
+        if (h.lockMode === "live") {
+          same(beside.status, 0, `${what} beside the running gateway (${beside.output.trim()})`);
+          same(await order(), after, `the order the gateway reports after ${what}`);
+          continue;
+        }
+        // The refusal OpenClaw words, and nothing changed.
+        expect(
+          beside.status !== 0 &&
+            beside.output.includes("This command is offline-only.") &&
+            beside.output.includes("No local mutation was attempted.") &&
+            beside.output.includes("stop the Gateway through its service owner"),
+          `${what} beside the running gateway was not refused as offline-only: status ${beside.status}`,
+        );
+        same(await order(), before, `the order the gateway reports after ${what} was refused`);
+        // As the gateway's owner then does it: stopped, the command, started again.
+        same(
+          await h.lock(bot, "acme", profileId),
+          profileId ? [profileId] : null,
+          `${what} with the gateway stopped, as the command line reads it back`,
+        );
+        same(await order(), after, `the order the gateway reports once it is back`);
+      }
     },
   },
   {
