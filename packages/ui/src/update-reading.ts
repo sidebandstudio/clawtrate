@@ -156,12 +156,20 @@ export class UpdateReading {
       }
       this.accept(reply.snapshot);
       const current = this.value.snapshot!;
+      // A refused restart whose offer is gone by the reply, with no restart under way instead:
+      // nothing newer on the screen says why it didn't restart, so the refusal does.
+      const refusedGone =
+        command.kind === "restart" &&
+        (reply.outcome === "stale" || reply.outcome === "superseded") &&
+        !restartCapability(current) &&
+        !handoffLocked(current.state);
       if (
         (choosing ? this.choice : this.work) !== command ||
         current.revision !== reply.snapshot.revision ||
         current.pendingTrack ||
         (current.state.kind !== "not-checked" &&
           current.revision !== snapshot.revision &&
+          !refusedGone &&
           !(command.kind === "restart" && restartCapability(current)?.offerId === command.offerId))
       )
         return;

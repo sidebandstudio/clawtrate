@@ -175,7 +175,17 @@ function loaded(now: number): ClawtrateState {
   const bots = fixtureBots();
   return {
     connection: { ...connected, connectedAt: now - 1000 },
-    discovery: { status: "ready", error: null, partial: false },
+    discovery: {
+      status: "ready",
+      error: null,
+      partial: false,
+      // The task list was read on this connection, as the host stamps it.
+      tasksRead: {
+        gatewayId: connected.gatewayId,
+        target: connected.target,
+        connectedAt: now - 1000,
+      },
+    },
     bots,
     tasksByBot: fixtureTasks(now, bots),
     transcripts: fixtureTranscripts(now, bots),
@@ -251,7 +261,16 @@ const catchingUp = (state: ClawtrateState): ClawtrateState => ({
 /** Bots and tasks have loaded again; open transcripts have not reloaded yet. */
 const discovered = (state: ClawtrateState): ClawtrateState => ({
   ...state,
-  discovery: { status: "ready", error: null, partial: false },
+  discovery: {
+    status: "ready",
+    error: null,
+    partial: false,
+    tasksRead: {
+      gatewayId: state.connection.gatewayId,
+      target: state.connection.target,
+      connectedAt: state.connection.connectedAt,
+    },
+  },
 });
 
 /** Every transcript that did not fail has reloaded. */
@@ -404,6 +423,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
             status: "error",
             error: "agents.list failed: the gateway is restarting.",
             partial: false,
+            tasksRead: base.discovery.tasksRead,
           },
         },
         steps: [],
@@ -618,6 +638,17 @@ export function createFixtureBridge(
       },
       accountParams,
     );
+  if (accountParams.openclaw)
+    state = {
+      ...state,
+      connection: {
+        ...state.connection,
+        openclawUpdate:
+          accountParams.openclaw === "beta"
+            ? { current: "2026.10.6", latest: "2026.11.10-beta.1", channel: "beta" }
+            : { current: "2026.10.6", latest: "2026.11.6", channel: "latest" },
+      },
+    };
   const checkInParams = options.checkIns ?? {
     checkins: null,
     defaultPrompt: false,

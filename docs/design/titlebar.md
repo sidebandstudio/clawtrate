@@ -2,14 +2,14 @@
 
 Four changes to the app's frame: a title bar with Clawtrate's mark, wordmark and a Beta pill; the update button moved into it; a gear for Settings; and a name for the gateway connection.
 
-This changes two earlier decisions. `docs/decisions.md` ("Brand") says the mark appears only on the connection and pairing screens, and section 7 of [visual-language.md](visual-language.md) says the rail has no product name. Both are rewritten when this is built.
+It rewrote two earlier decisions: the Brand entry in `docs/decisions.md`, where the mark had appeared only on the connection and pairing screens, and section 7 of [visual-language.md](visual-language.md), where the rail had no product name.
 
-## 1. Where things are today
+## 1. Where things are
 
-- **The update button** is `.update-entry` in [`Rail.tsx`](../../packages/ui/src/Rail.tsx): a round download icon named "Open Updates" that opens Settings → Updates. It shows in the rail's footer in the two-pane layout and in `.rail-top` on the phone. `showUpdateFooter` in [`Updates.tsx`](../../packages/ui/src/Updates.tsx) decides when it shows. "Restart to Update" exists only inside Settings → Updates, behind the `Confirm` dialog.
-- **Settings** has no button of its own in the two-pane layout. It is an item in the gateway menu, which the footer card opens, and ⌘, opens it. On the phone, a round button at the top left shows `SettingsIcon` with the connection dot. That icon is two sliders, not a gear, and the button opens the gateway menu, not Settings.
-- **The saved connection** is one record in the host's storage under the key `connection`: `{ url, token, suspended? }` (`ConnectionSettings` in [`client.ts`](../../packages/core/src/client.ts)). It has no label. A host holds one saved connection at a time, and Disconnect deletes it. Device tokens are stored per address and survive Disconnect.
-- **The macOS window** uses `titleBarStyle: "hiddenInset"` ([`main/index.ts`](../../apps/desktop/src/main/index.ts)). There is no title bar row. `.rail-top` is the drag band, with 84 px of left padding for the window controls. The conversation header drags the rest. There is no sidebar toggle.
+- **The update button** is `UpdateButton` in [`TitleBar.tsx`](../../packages/ui/src/TitleBar.tsx): in the title row on the desktop, and in its round form at the start of `.rail-top` in the one-pane layout. [`update-entry.ts`](../../packages/ui/src/update-entry.ts) maps the host's update snapshot to its words and what a press does. The rail's footer no longer has an update button.
+- **Settings** has a gear of its own, `GearIcon`, beside the connection card in the rail's footer, at every width. The gateway menu keeps its Settings item, and ⌘, (Ctrl+, elsewhere) opens it. `SettingsIcon`, the two sliders, stays for the iPhone app, which draws the desktop's icons from it.
+- **Gateway names** are kept in the host's storage under `gateway-names` ([`gateway-names.ts`](../../packages/core/src/gateway-names.ts)), beside the saved connection `{ url, token, suspended? }`, which has no label of its own. Section 4 says how.
+- **The macOS window** uses `titleBarStyle: "hiddenInset"` with `trafficLightPosition: { x: 13, y: 12 }` ([`main/index.ts`](../../apps/desktop/src/main/index.ts)), which centres the window controls in the 40 px title row. The title row is the drag band; `.rail-top` no longer pads for the controls.
 - **The track.** Beta is `nightly` in code. `DesktopUpdateSnapshot.runningTrack` comes from the validated running version. It is null in a development build or when the version can't be read.
 
 ## 2. Layout
@@ -65,6 +65,8 @@ The button reads the same `DesktopUpdateSnapshot` that Settings → Updates read
 - "Restart to Update" uses the updater's own words and capitals, as the button in Settings does.
 - The percentage is rounded down to 10s, as the existing announcement does, so it doesn't jitter.
 - The title bar never downloads or restarts on its own. Restart always passes through the same confirmation as Settings.
+- While a download or another update action runs, a press opens Updates, where its progress shows; "Restart to Update" asks to confirm only once nothing else runs.
+- A restart the host refuses, or whose request gets no reply, opens Updates with the reason. That includes a refusal that arrives after the offer itself is gone, as long as no restart began instead.
 
 ## 4. The gateway's name
 
@@ -84,7 +86,7 @@ The gateway menu gets "Rename gateway…" (or "Name this gateway…" when there 
 
 - **Title:** "Rename gateway" or "Name this gateway".
 - **Body:** "The name shows in the sidebar instead of the address. It stays on this device and is never sent to the gateway." The full address follows in mono.
-- **Field:** "Name", prefilled with the current name and selected. Placeholder "For example, Devbox". At most 40 characters. Text is trimmed, and line breaks and control characters are removed.
+- **Field:** "Name", prefilled with the current name and selected. Placeholder "For example, Devbox". At most 40 characters. Text is trimmed, and line breaks, control and format characters, and lone surrogates are removed.
 - **Hint:** "Leave it empty to show the address." Save with an empty field removes the name.
 - **Actions:** Cancel and Save. Enter saves; Escape cancels. Focus returns to the card.
 
@@ -95,6 +97,7 @@ The gateway menu gets "Rename gateway…" (or "Name this gateway…" when there 
 - In the **host's storage**, the place that holds the saved connection, under its own key `gateway-names`: a map from address to name, at most 32 entries, oldest dropped first. On the desktop that is Electron's main process. In the web preview it is the preview host, shared by that host's viewers like the saved connection. It is never in `localStorage`, never in a gateway request, and never in `users.prefs`.
 - A bridge command `nameGateway { gatewayUrl, name }` writes it. The engine refuses it unless `gatewayUrl` is the address now selected, as `disconnect` does. The state carries `connection.gatewayName: string | null` for the current address.
 - **The key is the address**, normalised: scheme, lowercase host, port and path without a trailing slash. A host holds one saved connection at a time, so two connections to the same address are the same saved connection and show the same name. That holds across Disconnect and reconnecting, across windows, and across viewers of one web preview host. If a different gateway later answers at the same address, it shows the same name until it is renamed; the dialog shows the address, so this is visible. The pairing steps show the address beside the name for the same reason. The same gateway reached at two addresses, such as a LAN address and a Tailscale name, has two names.
+- **Names are saved one at a time**, in order, and the startup read of them takes its place in the same line, so two quick renames both keep their names.
 - **Disconnect keeps the name**, as it keeps the device token for that address, so reconnecting to "Devbox" shows "Devbox" again. Removing the name is Rename with an empty field.
 
 ## 5. Copy
@@ -116,6 +119,7 @@ The gateway menu gets "Rename gateway…" (or "Name this gateway…" when there 
 - **Not colour alone.** "Beta" is written. The ready button is filled and also says "Restart to Update". Warning states carry the warning mark and their own words. The card's state is in words whenever it isn't "Connected".
 - **Announcements.** One polite live region, outside the title bar so the phone has it too, speaks when the button appears and on each change of state, with the button's name less "Open Updates": "Update available: Clawtrate 0.2.0", "Restart to Update: Clawtrate 0.2.0", "Couldn't check". It never speaks progress ticks; Updates in Settings keeps its own 10% announcements.
 - **Restarting** is `aria-disabled`, not `disabled`, so it stays focusable and readable.
+- **Focus with nowhere to return.** When Settings closes and the control that opened it is gone, focus goes to the first control that is shown, never to the title bar's buttons hidden on a phone.
 - **Touch.** The round form is 40 px on touch, like the rail's other buttons. The card's row is at least 44 px.
 
 ## 7. Motion

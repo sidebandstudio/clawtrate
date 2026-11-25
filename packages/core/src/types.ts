@@ -1,6 +1,7 @@
 // View models the interface renders. Gateway payloads are mapped into these in
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
+import type { OpenClawUpdate } from "./gateway-update.ts";
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
@@ -91,6 +92,11 @@ export type ConnectionState = {
    */
   target: number;
   serverVersion: string | null;
+  /**
+   * A newer OpenClaw, when the gateway's own update check reports one
+   * (`hello-ok` `snapshot.updateAvailable`, the `update.available` event).
+   */
+  openclawUpdate: OpenClawUpdate | null;
   protocol: number | null;
   /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
   scopes: string[];
@@ -150,6 +156,20 @@ export const sameStamp = (a: GatewayStamp | null | undefined, b: GatewayStamp | 
   a.gatewayId !== null &&
   a.gatewayId === b.gatewayId &&
   a.target === b.target;
+
+/**
+ * Where a list the screen draws was read: its stamp, and the connection (its hello) it was read
+ * on. A row's write carries it, so a row read before a reconnect never takes the identity of the
+ * gateway that answers it.
+ */
+export type ReadStamp = GatewayStamp & { connectedAt: number | null };
+
+/**
+ * Why a write that had already sent part of itself stopped: the connection changed before its
+ * outcome was read back, so what the gateway did is not known (a bot's Rename, a setting, a task).
+ */
+export const CONNECTION_CHANGED_AFTER_SEND =
+  "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
 
 /** The stamp of what is read on the connection as it is now. */
 export const gatewayStamp = (
@@ -470,6 +490,8 @@ export type DiscoveryState = {
   error: string | null;
   /** True when the gateway reported more tasks than the client loaded. */
   partial: boolean;
+  /** Where the task list shown was read (`ReadStamp`); null before the first list. */
+  tasksRead: ReadStamp | null;
 };
 
 export type ClawtrateState = {
@@ -635,6 +657,7 @@ export const initialConnectionState: ConnectionState = {
   gatewayName: null,
   target: 0,
   serverVersion: null,
+  openclawUpdate: null,
   protocol: null,
   scopes: [],
   requestedScopes: [],
@@ -658,6 +681,7 @@ export const initialDiscoveryState: DiscoveryState = {
   status: "idle",
   error: null,
   partial: false,
+  tasksRead: null,
 };
 
 export const initialState: ClawtrateState = {

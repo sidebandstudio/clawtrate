@@ -45,6 +45,7 @@ import {
   SLOW_CREATE_MS,
   unreadEvidence,
   withoutSecret,
+  initialAccountsState,
   type AccountsState,
   type MissingStep,
   type AccountWrite,
@@ -60,6 +61,7 @@ import {
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import type { ReadStamp } from "./types.ts";
 
 /** What the engine needs from the client. */
 export type AccountsContext = {
@@ -81,6 +83,8 @@ export type AccountsContext = {
   gateway(): Promise<string | null>;
   /** The identity the connection has read so far, without asking: null until it is known. */
   gatewayNow(): string | null;
+  /** Where a read made now is made: the identity, the target and the connection's hello. */
+  readStamp(): ReadStamp;
   /** The host's target now (`ConnectionState.target`). */
   target(): number;
   /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
@@ -237,6 +241,8 @@ export class AccountsEngine {
     if (!ctx.connected()) return;
     // A reset since the read began (another gateway) retires it: nothing it read is published.
     const resets = this.resets;
+    // Where this read is made: its requests all go now, and a close ends every one of them.
+    const readOn = ctx.readStamp();
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
     try {
       const bots = ctx.bots();
@@ -250,7 +256,26 @@ export class AccountsEngine {
       if (resets !== this.resets) return;
       this.readPrefs(prefs);
       const at = ctx.now();
-      ctx.update((a) => this.compose(a, config, views, a.models, at));
+      // Read before the gateway named itself on this connection, and named since: the read is its.
+      const now = ctx.readStamp();
+      const read =
+        readOn.gatewayId === null &&
+        now.target === readOn.target &&
+        now.connectedAt === readOn.connectedAt
+          ? { ...readOn, gatewayId: now.gatewayId }
+          : readOn;
+      ctx.update((a) => {
+        // The catalog is kept only for the same gateway, named on both reads: one read on
+        // another (an answer at the same address after a reconnect) is never shown beside this
+        // read's stamp. The picker below reads this one's.
+        const same =
+          read.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === read.gatewayId;
+        return {
+          ...this.compose(a, config, views, same ? a.models : [], at),
+          ...(same ? {} : { modelsCut: initialAccountsState.modelsCut }),
+          readOn: read,
+        };
+      });
       // The default bot's picker, the Model menu's rows (section 9), asked once the accounts are
       // published and in the same read, so it never overlaps another account read or what a
       // read is awaited for (a new bot's first task): the gateway refuses it alongside the reads

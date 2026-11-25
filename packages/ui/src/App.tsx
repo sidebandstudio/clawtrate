@@ -34,6 +34,13 @@ function useInputAndMotion() {
 /** The first control on the screen, for when focus has nowhere else to go. */
 const FIRST_CONTROL = ".app :is(input, button, [tabindex='0']):not([disabled], [tabindex='-1'])";
 
+/** The first of those that is shown and not behind a dialog: the title bar's are hidden on a phone. */
+function firstControl(): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>(FIRST_CONTROL)].find(
+    (el) => el.getClientRects().length > 0 && !el.closest("[inert]"),
+  );
+}
+
 /**
  * The connection screen is for connecting and pairing. Once a gateway has
  * delivered anything, the shell stays mounted through reconnects, keeping
@@ -78,7 +85,7 @@ export function App({
           [...document.querySelectorAll<HTMLElement>(".gateway-pill")].find(
             (el) => el.getClientRects().length,
           );
-        (gateway || document.querySelector<HTMLElement>(FIRST_CONTROL))?.focus();
+        (gateway || firstControl())?.focus();
       }
     });
   }, []);
@@ -108,7 +115,7 @@ export function App({
     if (shown.current === screen) return;
     shown.current = screen;
     if (document.activeElement && document.activeElement !== document.body) return;
-    document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
+    firstControl()?.focus();
   }, [screen]);
   // One flag for the whole window: while the connection is anything but
   // connected, and after a reconnect until the open task has caught up,
