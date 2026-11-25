@@ -47,6 +47,7 @@ import {
   deadPort,
   devGateway,
   devices,
+  displays,
   echoingGateway,
   env,
   gatewayCall,
@@ -56,6 +57,7 @@ import {
   launch,
   layout,
   lit,
+  measuredWindows,
   moves,
   near,
   notSee,
@@ -426,30 +428,35 @@ describe("the iOS app", () => {
     expect(first.scopes).toEqual(["operator.read"]);
     deviceId = first.deviceId!;
     const command = `pnpm dev-gateway approve --instance ${env.instance}`;
+    // From the top down; on a screen shorter than the list (iPhone Duo folded) the
+    // steps scroll to what they look at, and on an iPhone nothing needs to scroll.
     await steps("pairing", [
       waitFor({ id: "pairing" }, 90_000),
       see(lit(CONNECT_WORDS.approveTitle)),
       see({ id: "mark", text: PRODUCT_NAME }),
       see({ id: "approve-command", text: lit(command) }),
       notSee(".*openclaw devices approve.*"),
-      see({ id: "setup-step-0", text: lit(`Connected to ${hostOf(gateway)}`) }),
-      see({ id: "setup-step-1", text: `${lit(CONNECT_WORDS.waiting)}.*` }),
-      see({ id: "setup-step-2", text: "Load bots" }),
-      see({ id: "scope-operator.read", text: lit("Read bots, tasks and conversations") }),
+      tap({ id: "copy-command" }),
+      waitFor({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }, 30_000),
+      scrollTo({ id: "setup-step-0", text: lit(`Connected to ${hostOf(gateway)}`) }, "DOWN"),
+      scrollTo({ id: "setup-step-1", text: `${lit(CONNECT_WORDS.waiting)}.*` }, "DOWN"),
+      scrollTo({ id: "setup-step-2", text: "Load bots" }, "DOWN"),
+      scrollTo(
+        { id: "scope-operator.read", text: lit("Read bots, tasks and conversations") },
+        "DOWN",
+      ),
       notSee({ id: "scope-operator.write" }),
       notSee({ id: "scope-operator.approvals" }),
       notSee({ id: "scope-operator.questions" }),
       notSee({ id: "scope-operator.admin" }),
       // The gateway's echo is what this device signed: nothing to point out.
       notSee({ id: "scopes-differ" }),
-      tap({ id: "copy-command" }),
-      waitFor({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }, 30_000),
-      waitFor(
+      scrollTo(
         {
           id: "connect-foot",
           text: `Request ${first.requestId!.slice(0, 8)} · this device ${deviceId.slice(0, 8)} · .*`,
         },
-        30_000,
+        "DOWN",
       ),
     ]);
     expect(pasteboard()).toBe(command);
@@ -529,6 +536,58 @@ describe("the iOS app", () => {
     const paired = (await devices()).paired.find((d) => d.deviceId === deviceId);
     expect(paired?.scopes).toEqual(["operator.read"]);
   });
+
+  // Registered only when `pnpm mobile:check` runs on an iPhone Duo (CLAWTRATE_IOS_DEVICE_TYPE),
+  // never on the run's usual iPhone; see docs/development/ios.md.
+  if (process.env.CLAWTRATE_IOS_FORM === "duo") {
+    it("on iPhone Duo folded, the outer display keeps the phone's layout: Home, a bot's tasks and a task's chat each fill the screen inside its safe area, one at a time, clear of the clock and camera at its side, and Back goes from the chat to the bot's tasks and on to Home", async () => {
+      // Folded: the outer display is the one in use, and the inner one is off.
+      const [outer, inner] = displays().sort((a, b) => a.width * a.height - b.width * b.height);
+      expect(outer?.active).toBe(true);
+      expect(inner?.active).toBe(false);
+      expect(inner?.on).toBe(false);
+      // The app found the hinge, and only ever measured the outer display's compact window.
+      const seen = measuredWindows(Math.ceil((Date.now() - started) / 1000) + 30);
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.at(-1)).toMatchObject({ hinge: true, sizeClass: "compact" });
+      expect(seen.every((w) => w.sizeClass === "compact")).toBe(true);
+      const { width, safe } = seen.at(-1)!;
+      expect(Math.abs(width - outer!.width)).toBeLessThanOrEqual(1);
+      // The outer display keeps its clock and camera at a side, not along the top.
+      expect(safe.left + safe.right).toBeGreaterThan(0);
+      /** The element spans the window between its side safe areas, as a screen spans an iPhone. */
+      const fills = async (id: string) => {
+        const box = (await layout()).get(id)?.[0];
+        expect(box, id).toBeDefined();
+        expect(Math.abs(box!.x1 - safe.left), id).toBeLessThanOrEqual(1);
+        expect(Math.abs(box!.x2 - (width - safe.right)), id).toBeLessThanOrEqual(1);
+      };
+      await steps("duo-folded-home", [waitFor({ id: "home" }, 30_000), notSee({ id: "no-chat" })]);
+      await fills("home");
+      await shoot("duo-folded-home");
+      await steps("duo-folded-bot", [
+        tap({ id: "bot-otto" }),
+        waitFor({ id: "bot-tasks-otto" }, 20_000),
+        notSee({ id: "no-chat" }),
+      ]);
+      await fills("bot-tasks-otto");
+      await shoot("duo-folded-bot-tasks");
+      await steps("duo-folded-chat", [
+        tap({ id: `task-${lit("agent:otto:disk-space")}` }),
+        waitFor({ id: "turn-bot" }, 60_000),
+        notSee({ id: "bot-tasks-otto" }),
+        see({ id: "back", text: "Back to Otto's tasks" }),
+      ]);
+      await fills("transcript");
+      await shoot("duo-folded-chat");
+      await steps("duo-folded-back", [
+        tap({ id: "back", text: "Back to Otto's tasks" }),
+        waitFor({ id: "bot-tasks-otto" }, 20_000),
+        tap({ id: "back", text: "Back to bots" }),
+        waitFor({ id: "home" }, 20_000),
+      ]);
+    });
+  }
 
   it("on iPhone, the app switcher shows the privacy cover after leaving Home", async () => {
     // The app switcher's picture of the app is the cover: the background and the mark.
@@ -1839,8 +1898,9 @@ function anotherGateway(): Step[] {
   return [
     {
       runFlow: {
-        when: { visible: { id: "use-another" } },
-        commands: [tap({ id: "use-another" })],
+        // On the step list it is under the error, below the foot of a short screen.
+        when: { visible: { id: "setup" } },
+        commands: [scrollTo({ id: "use-another" }, "DOWN"), tap({ id: "use-another" })],
       },
     },
   ];
