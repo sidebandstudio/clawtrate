@@ -392,6 +392,9 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "botNames.declines":
     "Not now as read from the host's storage, at most `MAX_NAME_DECLINES` names, each bounded when read",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
+  "openclawUpdates.ctx": "the client's own functions, handed to the OpenClaw update engine",
+  "openclawUpdates.lookFor":
+    "one lost press's gateway identity and time, at most one, read on the next hello",
 };
 
 /** The class of each client property whose own collections are named under it. */
@@ -405,6 +408,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   routines: "RoutinesEngine",
   usage: "UsageEngine",
   botNames: "BotNames",
+  openclawUpdates: "OpenClawUpdates",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
   computer: "ComputerViews",

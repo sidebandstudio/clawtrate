@@ -380,6 +380,12 @@ export type BridgeCommand =
   /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
   | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
   | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
+  /**
+   * Update OpenClaw, after its confirmation (`ClawtrateState.openclawUpdating`): sent only to the
+   * gateway the screen showed (`stamp`). Dismiss puts away a finished update's line.
+   */
+  | { type: "startOpenClawUpdate"; stamp: GatewayStamp }
+  | { type: "dismissOpenClawUpdate" }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
   | {
       type: "setBotPicture";
@@ -1265,6 +1271,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
         stamp: gatewayStampOf(command.stamp),
       };
+    case "startOpenClawUpdate":
+      return { type: "startOpenClawUpdate", stamp: gatewayStampOf(command.stamp) };
+    case "dismissOpenClawUpdate":
+      return { type: "dismissOpenClawUpdate" };
     case "declineBotName":
       return {
         type: "declineBotName",
@@ -2172,6 +2182,10 @@ class ViewerSession implements BridgeSession {
         return client.acceptBotName(command.botId, command.name, command.stamp);
       case "declineBotName":
         return client.declineBotName(command.botId, command.name, command.stamp);
+      case "startOpenClawUpdate":
+        return client.startOpenClawUpdate(command.stamp);
+      case "dismissOpenClawUpdate":
+        return client.dismissOpenClawUpdate();
       case "setBotPicture":
         return client.setBotPicture(command.botId, command.avatar, command.stamp);
       case "refreshCheckIns":

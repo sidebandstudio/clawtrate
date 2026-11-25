@@ -1,0 +1,107 @@
+// What Clawtrate says while it updates OpenClaw (#565), from the gateway's
+// record and nothing invented. The phases and reason codes are the gateway's
+// own words, shown as text; the sentences around them are Clawtrate's.
+
+import type { OpenClawUpdateState, UpdateRunView } from "@clawtrate/core";
+
+/** OpenClaw's own update instructions: they differ by install. */
+export const OPENCLAW_UPDATE_DOCS = "https://docs.openclaw.ai/install/updating";
+
+/** What a reason code the gateway gives for not updating itself means, in plain words. */
+const CANNOT_WORDS: Record<string, string> = {
+  "unmanaged-package-install": "OpenClaw runs from a package folder it doesn't manage.",
+  "container-image-install":
+    "OpenClaw runs in a container, which is updated by replacing its image.",
+  "external-supervisor-update-required": "Another program manages the gateway, and updates it.",
+  "restart-unavailable": "The gateway can't restart itself.",
+  "restart-disabled": "Restarting the gateway is turned off in its settings.",
+  "not-openclaw-root": "The gateway couldn't find its own install.",
+  "immutable-native-updater-required":
+    "OpenClaw is installed read-only, and is updated by its owner on the gateway's machine.",
+};
+
+/** Why this gateway can't update itself: Clawtrate's sentence, then the gateway's words. */
+export function blockedWords(blocked: NonNullable<OpenClawUpdateState["blocked"]>): {
+  why: string;
+  gateway: string | null;
+} {
+  const why = CANNOT_WORDS[blocked.reason] ?? "The gateway can't update OpenClaw itself.";
+  return { why, gateway: blocked.note ?? (blocked.reason === "refused" ? null : blocked.reason) };
+}
+
+/** Where the run stands, in a line; the phase is the gateway's word for its step. */
+export function runLine(run: UpdateRunView): string {
+  const to = run.to ? ` to ${run.to}` : "";
+  switch (run.outcome) {
+    case "running": {
+      const step = `step ${phaseNumber(run.phase)} of 8, ${run.phase}`;
+      return run.mine
+        ? `Updating OpenClaw${to}: ${step}.`
+        : `An update of OpenClaw${to}, started elsewhere, is under way: ${step}.`;
+    }
+    case "updated":
+      return `Updated to OpenClaw ${run.to}.`;
+    case "unconfirmed":
+      return run.reported
+        ? `The gateway's record says the update finished, but the gateway still reports OpenClaw ${run.reported}.`
+        : run.note
+          ? `${run.note} Clawtrate can't say whether OpenClaw was updated.`
+          : `The gateway's record says the update finished, but the gateway hasn't reported OpenClaw${to} yet.`;
+    case "failed":
+      return "The update failed.";
+    case "rolled-back":
+      return "The update was rolled back: OpenClaw went back to the version it ran before.";
+    case "skipped":
+      return "The update was skipped.";
+    case "away":
+      return "The gateway hasn't come back since the update restarted it.";
+    case "elsewhere":
+      return "Clawtrate is connected to another gateway now, so it can't say how the update went.";
+  }
+}
+
+/** What the person can do after an outcome, or null while it runs or when it worked. */
+export function nextStep(run: UpdateRunView): string | null {
+  switch (run.outcome) {
+    case "failed":
+    case "rolled-back":
+    case "skipped":
+      return "You can try again, or update OpenClaw on the gateway's machine with its update instructions.";
+    case "unconfirmed":
+      return "Check the gateway's version in Settings, then try again if it wasn't updated.";
+    case "away":
+      return "Check that the gateway's machine is on and that OpenClaw is running there. Clawtrate keeps trying to reconnect.";
+    default:
+      return null;
+  }
+}
+
+/** The gateway's own words about the outcome: its sentence, then its reason code. */
+export function gatewayWords(run: UpdateRunView): string | null {
+  if (!["failed", "rolled-back", "skipped"].includes(run.outcome)) return null;
+  const parts = [run.note, run.reason].filter((each): each is string => !!each);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+const PHASES = [
+  "requested",
+  "staging",
+  "validating",
+  "repairing",
+  "activating",
+  "restarting",
+  "verifying",
+  "finished",
+];
+const phaseNumber = (phase: string) => PHASES.indexOf(phase) + 1;
+
+/** The confirmation's sentence about running work, with how many tasks are working now. */
+export function workWords(working: number): string {
+  const now =
+    working === 0
+      ? "No task is working now."
+      : working === 1
+        ? "1 task is working now."
+        : `${working} tasks are working now.`;
+  return `${now} Before it restarts, OpenClaw stops taking new work and waits up to 5 minutes for running work to finish. Work still running then is interrupted, and OpenClaw resumes interrupted conversations when it's back.`;
+}

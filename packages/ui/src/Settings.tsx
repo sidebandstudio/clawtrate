@@ -30,6 +30,7 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
+import { UpdateOpenClaw } from "./bots/UpdateOpenClaw.tsx";
 import { FullControlAsk, isFullRequest, notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayTitle } from "./format.ts";
@@ -1023,6 +1024,8 @@ export function Settings({
           </div>
         )}
       </dl>
+      {/* A newer OpenClaw, its update and how that went (#565). */}
+      <UpdateOpenClaw where="settings" />
       {missing.length > 0 && (
         <p className="settings-note" data-testid="narrower-grant">
           {narrower}

@@ -76,6 +76,7 @@ import {
   sentPictureAnswers,
 } from "./pictures.ts";
 import { BOT_NAME_SCENES, botNameCommand, botNameScene, isBotNameScene } from "./bot-name.ts";
+import { updateRunCommand, updateRunScene } from "./openclaw-update.ts";
 import {
   computerFixture,
   FIXTURE_VIEWER,
@@ -655,6 +656,7 @@ export function createFixtureBridge(
             : { current: "2026.10.6", latest: "2026.11.6", channel: "latest" },
       },
     };
+  if (accountParams.openclawRun) state = updateRunScene(accountParams.openclawRun, state);
   const checkInParams = options.checkIns ?? {
     checkins: null,
     defaultPrompt: false,
@@ -883,6 +885,15 @@ export function createFixtureBridge(
     if (named) {
       sent.push(command);
       return named;
+    }
+    const updated = updateRunCommand(
+      command,
+      () => state,
+      (next) => set(next),
+    );
+    if (updated) {
+      sent.push(command);
+      return updated;
     }
     const live = liveCommand(command, () => state, setAnswer, files, deferred);
     sent.push(command);
