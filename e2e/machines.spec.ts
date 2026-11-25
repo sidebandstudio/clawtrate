@@ -9,7 +9,7 @@
 //
 // With CLAWTRATE_MACHINE_SHOTS=<folder outside the repository>, it also saves
 // screenshots of what it checked there, at 1440 light and dark and 390 light.
-import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,9 +17,10 @@ import { join } from "node:path";
 import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { ACCOUNTS, test } from "./accounts-instance.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
-const INSTANCE = process.env.CLAWTRATE_E2E_ACCOUNTS!;
+const INSTANCE = ACCOUNTS;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const SHOTS = process.env.CLAWTRATE_MACHINE_SHOTS ?? null;
 
@@ -128,7 +129,9 @@ async function machines(page: Page) {
   return settings;
 }
 
-test.beforeAll(async ({ browser }) => {
+test.beforeAll(async ({ accountsInstance, browser }) => {
+  // Started by the first of the accounts instance's specs this worker runs (accounts-instance.ts).
+  expect(accountsInstance).toBe(INSTANCE);
   test.setTimeout(300_000);
   expect(INSTANCE, "this run's accounts instance").toMatch(/^e2e-[0-9a-f]{8}-acct$/);
   expect(listInstances().find((each) => each.name === INSTANCE)?.gatewayRunning).toBe(true);
