@@ -1132,6 +1132,19 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     }
   });
 
+  it("is made even when this device can't save its record of the guides afterwards", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    const set = storage.set.bind(storage);
+    storage.set = (key: string, value: string) =>
+      key === guidesKey("gw-guides") ? Promise.reject(new Error("disk full")) : set(key, value);
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+    client.stop();
+  });
+
   it("right after agents.create, writes its name into IDENTITY.md, held to the template it read, and keeps the other starting files", async () => {
     const { client, fake, accounts } = await accountsClient();
     expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });

@@ -8,6 +8,9 @@ import { VOICE_GET } from "../src/voice.ts";
 import {
   applyGuidesChange,
   findSection,
+  GUIDES_LONG_CHARS,
+  GUIDES_PINNED_SHA256,
+  GUIDES_VERSION,
   GUIDES_NOTICE,
   GUIDES_SECTION,
   GUIDES_SIZE,
@@ -19,6 +22,8 @@ import {
   withSection,
 } from "../src/guides.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { createBridgeSession } from "../src/bridge.ts";
+import type { BotGuidesAnswer, GuidesChange } from "../src/guides.ts";
 import { grantingGateway, openTask } from "./client-harness.ts";
 import { memoryStorage, tokenKey, until } from "./fake-gateway.ts";
 import { URL_A } from "./client-harness.ts";
@@ -33,8 +38,14 @@ function olderSection(text = "## An older guide\n") {
 }
 
 /** A gateway's bots and their AGENTS.md, answering agents.list, .files.get and .files.set. */
-function fakeFiles(files: Record<string, string | null>, workspaces: Record<string, string> = {}) {
+function fakeFiles(
+  files: Record<string, string | null>,
+  workspaces: Record<string, string> = {},
+  /** The hash of a file's bytes on disk, where they aren't the UTF-8 of its text. */
+  bytesHash: Record<string, string> = {},
+) {
   const store = new Map(Object.entries(files));
+  const hashOf = (key: string, content: string) => bytesHash[key] ?? hash(content);
   const sets: { agentId: string; content: string }[] = [];
   const faults = { conflicts: 0 };
   const folder = (agentId: string) => workspaces[agentId] ?? agentId;
@@ -49,10 +60,11 @@ function fakeFiles(files: Record<string, string | null>, workspaces: Record<stri
         file:
           content === null
             ? { name: "AGENTS.md", missing: true }
-            : { name: "AGENTS.md", content, hash: hash(content) },
+            : { name: "AGENTS.md", content, hash: hashOf(key, content) },
       };
     if (method === "agents.files.set") {
-      const held = content === null ? p.expectedMissing === true : p.expectedHash === hash(content);
+      const held =
+        content === null ? p.expectedMissing === true : p.expectedHash === hashOf(key, content);
       if (!held || faults.conflicts > 0) {
         faults.conflicts = Math.max(0, faults.conflicts - 1);
         throw Object.assign(new Error("file changed"), {
@@ -60,6 +72,7 @@ function fakeFiles(files: Record<string, string | null>, workspaces: Record<stri
         });
       }
       store.set(key, p.content as string);
+      delete bytesHash[key];
       sets.push({ agentId: p.agentId as string, content: p.content as string });
       return { ok: true };
     }
@@ -118,9 +131,10 @@ describe("the section", () => {
     expect(findSection(twice).kind).toBe("changed");
     const loose = "<!-- clawtrate:guides begin v1 -->\nhi\n<!-- clawtrate:guides end -->\nrest\n";
     const found = findSection(loose);
-    expect(found).toMatchObject({ kind: "changed", start: 0 });
-    // Replace puts this version in its place, and the rest stays.
-    expect(withSection(loose)).toBe(`${GUIDES_SECTION}rest\n`);
+    expect(found).toMatchObject({ kind: "changed", replaceable: false, start: 0 });
+    // Markers out of shape: nothing can tell where the section ends, so nothing is written.
+    expect(withSection(loose)).toBe(loose);
+    expect(withoutSection(loose)).toBe(loose);
     // A marker inside other text is not one: only whole lines count.
     expect(findSection("See `<!-- clawtrate:guides begin` in the docs.\n").kind).toBe("none");
   });
@@ -157,7 +171,14 @@ describe("the bots' states", () => {
       throw new Error("missing scope: operator.read");
     }, null);
     expect(folders).toEqual([
-      { bots: ["pip"], state: null, changedText: null, error: "missing scope: operator.read" },
+      {
+        bots: ["pip"],
+        state: null,
+        replaceable: false,
+        length: null,
+        changedText: null,
+        error: "missing scope: operator.read",
+      },
     ]);
   });
 });
@@ -355,7 +376,43 @@ describe("the guides in the client", () => {
     }
   });
 
-  it("turns the voice plugin's own guide off before adding the section, so none gets it twice", async () => {
+  it("brings nothing up to date from a read-only viewer, even where this device said yes", async () => {
+    const files = fakeFiles({ otto: olderSection() + BOT_FILE });
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ bots: ["otto"], newBots: false }));
+    const { client, gateway } = await openTask({ storage, client: { readOnly: true } });
+    withFiles(gateway, files);
+    try {
+      gateway.dropAll();
+      await until(() => client.state.connection.status === "connected");
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      expect(files.sets).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("refuses a change from a viewer that went away before it was sent", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, gateway } = await openTask({ storage: adminStorage() });
+    withFiles(gateway, files);
+    try {
+      const viewer = createBridgeSession(client);
+      const shown = (await viewer.apply({ type: "readBotGuides" })) as BotGuidesAnswer;
+      const change = viewer.apply({
+        type: "changeBotGuides",
+        change: { action: "add", bots: ["pip"], newBots: false },
+        stamp: shown.stamp,
+      });
+      viewer.dispose();
+      await expect(change).rejects.toThrow(/withdrawn/);
+      expect(files.sets).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("never changes the voice plugin's own guide: adding the section sends nothing to the plugin", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
     const gateway = grantingGateway();
     const reply = gateway.connectReply;
@@ -391,11 +448,124 @@ describe("the guides in the client", () => {
         { action: "add", bots: ["pip"], newBots: false },
         shown.stamp,
       );
-      expect(voiceSets).toEqual([{ on: false }]);
-      expect(after.voicePlugin).toBe(false);
+      expect(voiceSets).toEqual([]);
+      expect(after.voicePlugin).toBe(true);
       expect(after.folders[0]?.state).toBe("current");
+      await client.changeBotGuides({ action: "remove" }, after.stamp);
+      expect(voiceSets).toEqual([]);
     } finally {
       client.stop();
     }
+  });
+});
+
+/** A section of a later version, as a newer build of Clawtrate writes it. */
+function newerSection(text = "## A newer guide\n") {
+  const inner = `${GUIDES_NOTICE}\n${text}`;
+  return `<!-- clawtrate:guides begin v${GUIDES_VERSION + 1} sha256=${hash(inner)} -->\n${inner}<!-- clawtrate:guides end -->\n`;
+}
+const END_LINE = "<!-- clawtrate:guides end -->\n";
+
+describe("files Clawtrate leaves alone", () => {
+  it("refuses a file that isn't plain UTF-8, so its bytes are never rewritten", async () => {
+    // Latin-1 "café règles": the gateway gives the text with U+FFFD and the hash of the bytes.
+    const bytes = Uint8Array.from([...`# Otto\ncaf\xe9 r\xe8gles\n`].map((c) => c.charCodeAt(0)));
+    const text = "# Otto\ncaf\uFFFD r\uFFFDgles\n";
+    for (const [content, change] of [
+      [text, { action: "add", bots: ["otto"], newBots: false }],
+      [withSection(text), { action: "remove" }],
+      [olderSection() + text, { action: "update" }],
+      [withSection(text).replace("Be warm", "Be cold"), { action: "replace", bot: "otto" }],
+    ] as [string, GuidesChange][]) {
+      const files = fakeFiles({ otto: content }, {}, { otto: sha256Hex(bytes) });
+      const result = await applyGuidesChange(files.request, null, change);
+      expect(files.sets).toEqual([]);
+      expect(result.errors).toEqual([
+        "otto: otto's AGENTS.md isn't plain UTF-8 text, so Clawtrate leaves it as it is.",
+      ]);
+      const [folder] = await readGuideFolders(files.request, null);
+      expect(folder).toMatchObject({ state: null, error: expect.stringMatching(/plain UTF-8/) });
+    }
+  });
+
+  it("replaces only one well-formed pair at the top, and writes nothing to a file whose markers are out of shape", async () => {
+    const edited = withSection(BOT_FILE).replace("Be warm", "Be cold");
+    // Replaceable: one pair, at the top (or right after a byte-order mark), its hash failing.
+    expect(findSection(edited)).toMatchObject({ kind: "changed", replaceable: true });
+    expect(findSection(`\uFEFF${edited}`)).toMatchObject({ kind: "changed", replaceable: true });
+    const shapes = {
+      "the end marker deleted": edited.replace(END_LINE, ""),
+      "the begin marker deleted": edited.slice(edited.indexOf("\n") + 1),
+      "a quoted end marker below": `${edited}\nTo turn it off:\n\n\`\`\`\n${END_LINE}\`\`\`\n`,
+      "a marker in a code block only": `# Mine\n\n\`\`\`\n${END_LINE}\`\`\`\nMore.\n`,
+      "a pair lower down": `# Mine\n\n${edited}`,
+    };
+    for (const [name, file] of Object.entries(shapes)) {
+      expect(findSection(file), name).toMatchObject({ kind: "changed", replaceable: false });
+      for (const change of [
+        { action: "replace", bot: "pip" },
+        { action: "add", bots: ["pip"], newBots: true },
+        { action: "remove" },
+        { action: "update" },
+      ] as GuidesChange[]) {
+        const files = fakeFiles({ pip: file });
+        await applyGuidesChange(files.request, { bots: ["pip"], newBots: true }, change);
+        expect(files.sets, `${name}: ${change.action}`).toEqual([]);
+      }
+      const [folder] = await readGuideFolders(fakeFiles({ pip: file }).request, null);
+      expect(folder).toMatchObject({ state: "changed", replaceable: false });
+    }
+    const files = fakeFiles({ pip: edited });
+    await applyGuidesChange(files.request, null, { action: "replace", bot: "pip" });
+    expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+  });
+
+  it("leaves a section of this version or a newer one alone, and updates only a lower one", async () => {
+    const newer = newerSection() + BOT_FILE;
+    expect(findSection(newer)).toMatchObject({ kind: "ours", current: true });
+    for (const change of [
+      { action: "update" },
+      { action: "add", bots: ["pip"], newBots: true },
+    ] as GuidesChange[]) {
+      const files = fakeFiles({ pip: newer });
+      await applyGuidesChange(files.request, { bots: ["pip"], newBots: true }, change);
+      expect(files.sets).toEqual([]);
+    }
+    const [folder] = await readGuideFolders(fakeFiles({ pip: newer }).request, null);
+    expect(folder?.state).toBe("current");
+  });
+
+  it("pins the text to its version: changing the text means a new version", () => {
+    expect(GUIDES_SECTION.split("\n")[0]).toBe(
+      `<!-- clawtrate:guides begin v${GUIDES_VERSION} sha256=${GUIDES_PINNED_SHA256} -->`,
+    );
+    expect(GUIDES_VERSION).toBe(1);
+  });
+
+  it("says a long file would be cut, and never makes one longer than the limit in the background", async () => {
+    const long = `# Pip\n${"x".repeat(GUIDES_LONG_CHARS - GUIDES_SIZE)}\n`;
+    const short = BOT_FILE;
+    const files = fakeFiles({ pip: long, otto: short });
+    const folders = await readGuideFolders(files.request, null);
+    expect(folders.map((f) => [f.bots[0], f.length])).toEqual([
+      ["pip", long.length],
+      ["otto", short.length],
+    ]);
+    // The background update and New bots too leave a file the section would push past the limit.
+    const older = fakeFiles({ pip: olderSection("## Old\n") + long });
+    await applyGuidesChange(older.request, { bots: ["pip"], newBots: true }, { action: "update" });
+    expect(older.sets).toEqual([]);
+    const newBot = fakeFiles({ pip: long });
+    await applyGuidesChange(newBot.request, null, {
+      action: "add",
+      bots: ["pip"],
+      newBots: true,
+      background: true,
+    });
+    expect(newBot.sets).toEqual([]);
+    // The person's own Add still adds it.
+    const asked = fakeFiles({ pip: long });
+    await applyGuidesChange(asked.request, null, { action: "add", bots: ["pip"], newBots: true });
+    expect(asked.sets).toHaveLength(1);
   });
 });

@@ -15,8 +15,24 @@ import type { GatewayStamp } from "./types.ts";
 
 /** The file the section goes into: the only one the gateway gives every kind of run. */
 export const GUIDES_FILE = "AGENTS.md";
-/** The section's version. A section of an older version is replaced by this one. */
+/**
+ * The section's version. A section of a lower version is replaced by this one; one of this
+ * version or a newer one, written by this or a later build, is left as it is.
+ */
 export const GUIDES_VERSION = 1;
+/**
+ * The SHA-256 of this version's text between the markers. A test holds the text to it, so the
+ * text can't change without the version changing with it.
+ */
+export const GUIDES_PINNED_SHA256 =
+  "3b11747ce00c0e535b052b5affbc460bc65e7c5920bf9c0d38d02ac194e48347";
+/**
+ * Where OpenClaw 2026.10.6 starts cutting a long `AGENTS.md` out of a prompt by default
+ * (`bootstrapMaxChars`). Clawtrate doesn't read the gateway's own setting, so it says "may".
+ */
+export const GUIDES_LONG_CHARS = 20_000;
+/** Whether a file of this many characters, with the section added, may be cut from a prompt. */
+export const guidesWouldBeCut = (length: number) => length + GUIDES_SIZE > GUIDES_LONG_CHARS;
 /** The second line of the section: whose it is, and where it is turned off. */
 export const GUIDES_NOTICE =
   "<!-- Added by Clawtrate, which keeps it current. Turn it off in Clawtrate: Settings, Conversation. -->";
@@ -44,14 +60,24 @@ export const MAX_CHANGED_SECTION_CHARS = 16_384;
 export type FoundSection =
   | { kind: "none" }
   | { kind: "ours"; current: boolean; start: number; end: number }
-  | { kind: "changed"; start: number; end: number; text: string };
+  /**
+   * Changed outside Clawtrate. `replaceable` only for one well-formed pair at the top of the
+   * file (offset 0, or 1 after a leading byte-order mark) whose hash fails: anything else with a
+   * marker in it can't be told apart from the person's own text, so nothing writes to it.
+   */
+  | { kind: "changed"; replaceable: boolean; start: number; end: number; text: string };
 
 /**
  * Find Clawtrate's section. It is ours when exactly one well-formed pair of markers is there and
- * what lies between them hashes to the first marker's hash; current when it is also this
- * version's text. Anything else that carries a marker changed outside Clawtrate.
+ * what lies between them hashes to the first marker's hash; current when its version is this
+ * build's or a later one. Anything else that carries a marker changed outside Clawtrate.
  */
 export function findSection(file: string): FoundSection {
+  // A leading byte-order mark stands before the first line: the section is read past it.
+  if (file.startsWith("\uFEFF")) {
+    const found = findSection(file.slice(1));
+    return found.kind === "none" ? found : { ...found, start: found.start + 1, end: found.end + 1 };
+  }
   const markers = [...file.matchAll(ANY_MARKER)];
   if (markers.length === 0) return { kind: "none" };
   const begin = BEGIN_LINE.exec(file);
@@ -63,15 +89,21 @@ export function findSection(file: string): FoundSection {
     const last = markers.at(-1)!;
     const start = first.index;
     const stop = last.index + last[0].length;
-    return { kind: "changed", start, end: stop, text: file.slice(start, stop) };
+    return { kind: "changed", replaceable: false, start, end: stop, text: file.slice(start, stop) };
   }
   const inner = file.slice(innerStart, innerStart + end.index);
   const stop = innerStart + end.index + end[0].length;
   if (hash(inner) !== begin[2])
-    return { kind: "changed", start: begin.index, end: stop, text: file.slice(begin.index, stop) };
+    return {
+      kind: "changed",
+      replaceable: begin.index === 0,
+      start: begin.index,
+      end: stop,
+      text: file.slice(begin.index, stop),
+    };
   return {
     kind: "ours",
-    current: Number(begin[1]) === GUIDES_VERSION && inner === INNER,
+    current: Number(begin[1]) >= GUIDES_VERSION,
     start: begin.index,
     end: stop,
   };
@@ -83,6 +115,7 @@ export function findSection(file: string): FoundSection {
  */
 export function withSection(file: string): string {
   const found = findSection(file);
+  if (found.kind === "changed" && !found.replaceable) return file;
   if (found.kind !== "none")
     return file.slice(0, found.start) + GUIDES_SECTION + file.slice(found.end);
   return file === "" ? GUIDES_SECTION : `${GUIDES_SECTION}\n${file}`;
@@ -94,9 +127,10 @@ export function withSection(file: string): string {
  */
 export function withoutSection(file: string): string {
   const found = findSection(file);
-  if (found.kind === "none") return file;
+  if (found.kind !== "ours") return file;
   let after = file.slice(found.end);
-  if (found.start === 0 && after.startsWith("\n")) after = after.slice(1);
+  const top = file.startsWith("\uFEFF") ? 1 : 0;
+  if (found.start === top && after.startsWith("\n")) after = after.slice(1);
   return file.slice(0, found.start) + after;
 }
 
@@ -123,8 +157,12 @@ export type GuideState = "none" | "current" | "older" | "changed" | "removed";
 /** One instructions file, and the bots that read it: bots can share a workspace folder. */
 export type GuideFolder = {
   bots: string[];
-  /** Null when the file couldn't be read; `error` says why. */
+  /** Null when the file couldn't be read, or isn't plain UTF-8 text; `error` says why. */
   state: GuideState | null;
+  /** A changed section Replace may write over: one well-formed pair at the top (`FoundSection`). */
+  replaceable: boolean;
+  /** The file's length in characters, null when it couldn't be read: see `guidesWouldBeCut`. */
+  length: number | null;
   /** The text between the markers of a changed section, for Show, cut to its bound. */
   changedText: string | null;
   error: string | null;
@@ -164,6 +202,12 @@ async function readFile(
   if (file.missing === true) return { content: "", held: { expectedMissing: true } };
   if (typeof file.content !== "string" || !isHash(file.hash))
     throw new Error(`The gateway did not return ${agentId}'s ${GUIDES_FILE} and its revision.`);
+  // The gateway hashes the bytes and decodes them as UTF-8: bytes that aren't come back as
+  // U+FFFD under the bytes' hash. Written back, they would be changed for good.
+  if (hash(file.content) !== file.hash.toLowerCase())
+    throw new Error(
+      `${agentId}'s ${GUIDES_FILE} isn't plain UTF-8 text, so Clawtrate leaves it as it is.`,
+    );
   return { content: file.content, held: { expectedHash: file.hash } };
 }
 
@@ -246,6 +290,8 @@ export async function readGuideFolders(
         return {
           bots,
           state,
+          replaceable: found.kind === "changed" && found.replaceable,
+          length: content.length,
           changedText:
             found.kind === "changed" ? found.text.slice(0, MAX_CHANGED_SECTION_CHARS) : null,
           error: null,
@@ -254,6 +300,8 @@ export async function readGuideFolders(
         return {
           bots,
           state: null,
+          replaceable: false,
+          length: null,
           changedText: null,
           error: error instanceof Error ? error.message : String(error),
         };
@@ -287,7 +335,8 @@ export function parseGuidesRecord(value: string | null): GuidesRecord | null {
  * - `update`: bring each section of an older version up to date (after a connect).
  */
 export type GuidesChange =
-  | { action: "add"; bots: string[]; newBots: boolean }
+  /** `background`: a new bot's, not the person's own Add: it never makes a file too long. */
+  | { action: "add"; bots: string[]; newBots: boolean; background?: boolean }
   | { action: "replace"; bot: string }
   | { action: "remove" }
   | { action: "decline" }
@@ -320,17 +369,27 @@ export async function applyGuidesChange(
       return false;
     }
   };
-  const addOrUpdate = (file: string, found: FoundSection) =>
-    found.kind === "none" || (found.kind === "ours" && !found.current) ? withSection(file) : null;
+  /** What Clawtrate writes by itself never takes a file past the length the gateway keeps whole. */
+  const fits = (next: string, background: boolean) =>
+    !background || next.length <= GUIDES_LONG_CHARS ? next : null;
+  const addOrUpdate = (background: boolean) => (file: string, found: FoundSection) =>
+    found.kind === "none" || (found.kind === "ours" && !found.current)
+      ? fits(withSection(file), background)
+      : null;
   if (change.action === "add") {
+    const background = change.background === true;
     for (const bots of folders.filter((group) => group.some((bot) => change.bots.includes(bot))))
-      if (await each(bots, addOrUpdate)) for (const bot of bots) kept.add(bot);
+      if (await each(bots, addOrUpdate(background))) for (const bot of bots) kept.add(bot);
     return { record: { bots: [...kept], newBots: change.newBots }, errors };
   }
   if (change.action === "replace") {
     const bots = folders.find((group) => group.includes(change.bot));
     if (!bots) return { record, errors: [`${change.bot} isn't on the gateway's list of bots.`] };
-    if (await each(bots, (file, found) => (found.kind === "changed" ? withSection(file) : null)))
+    if (
+      await each(bots, (file, found) =>
+        found.kind === "changed" && found.replaceable ? withSection(file) : null,
+      )
+    )
       for (const bot of bots) kept.add(bot);
     return { record: { bots: [...kept], newBots: record?.newBots ?? false }, errors };
   }
@@ -342,7 +401,7 @@ export async function applyGuidesChange(
           ? withoutSection(file)
           : found.current
             ? null
-            : withSection(file),
+            : fits(withSection(file), true),
     );
   return {
     record: change.action === "remove" ? { bots: [], newBots: false } : record,

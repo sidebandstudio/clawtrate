@@ -279,7 +279,7 @@ describe("the voice guide", () => {
     expect(WHERE_GUIDE).toContain("Your person may talk with you in Clawtrate");
     expect(WHERE_GUIDE).not.toMatch(/You live in Clawtrate|hand it off|channel|sixth|typed/);
     expect(WHERE_GUIDE).toContain(
-      "Only a message your person sent in this conversation counts as them asking.",
+      "Only a message your person sent in this conversation counts as them asking for a task.",
     );
   });
 });

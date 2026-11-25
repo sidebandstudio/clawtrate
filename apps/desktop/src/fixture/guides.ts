@@ -5,13 +5,17 @@
 //   guides=added   every bot has this version
 //   guides=mixed   Juniper current, Marlow older, Otto changed outside Clawtrate, Pip removed
 //                  outside Clawtrate, Quartermaster not added
-//   guides=voice   none added, and the voice plugin adds its own guide
+//   guides=odd     as another device sees it: Marlow older, which this device didn't add;
+//                  Otto's markers out of shape; Quartermaster's instructions long
+//   guides=voice   Juniper added, the rest not, and the voice plugin adds its own guide
 //   guides=fail    the read fails
+//   guidesave=fail a change writes nothing: every file kept changing while it was written
 //
 // A change applies to the fixture's files as the client applies it to a gateway's, and answers
 // with what they hold afterwards.
 
 import {
+  GUIDES_LONG_CHARS,
   GUIDES_SECTION,
   type BotGuidesAnswer,
   type BridgeCommand,
@@ -23,13 +27,18 @@ import {
 
 const BOTS = ["main", "marlow", "otto", "pip", "quartermaster"];
 
-export const guidesParam = (params: URLSearchParams) => params.get("guides");
+export const guidesParam = (params: URLSearchParams) =>
+  params.get("guidesave") === "fail"
+    ? `${params.get("guides") ?? ""}+savefail`
+    : params.get("guides");
 
 export function guidesCommands(
-  param: string | null,
+  given: string | null,
   canAdmin: () => boolean,
   stampNow: () => GatewayStamp,
 ) {
+  const saveFails = given?.endsWith("+savefail") === true;
+  const param = saveFails ? given!.slice(0, -"+savefail".length) || null : given;
   const mixed: Record<string, GuideState> = {
     main: "current",
     marlow: "older",
@@ -40,9 +49,17 @@ export function guidesCommands(
   const states = new Map<string, GuideState>(
     BOTS.map((bot) => [
       bot,
-      param === "added" ? "current" : param === "mixed" ? mixed[bot]! : "none",
+      param === "added"
+        ? "current"
+        : param === "mixed" || param === "odd"
+          ? mixed[bot]!
+          : param === "voice" && bot === "main"
+            ? "current"
+            : "none",
     ]),
   );
+  // Another device's view: Pip's section isn't on this device's record, so it reads not added.
+  if (param === "odd") states.set("pip", "none");
   let record: GuidesRecord | null =
     param === "offer" || param === "voice"
       ? null
@@ -50,12 +67,16 @@ export function guidesCommands(
         ? { bots: BOTS, newBots: true }
         : param === "mixed"
           ? { bots: ["main", "marlow", "otto", "pip"], newBots: true }
-          : { bots: [], newBots: false };
-  let voicePlugin = param === "voice";
+          : param === "odd"
+            ? { bots: ["main"], newBots: false }
+            : { bots: [], newBots: false };
+  const voicePlugin = param === "voice";
   const folders = (): GuideFolder[] =>
     BOTS.map((bot) => ({
       bots: [bot],
       state: states.get(bot)!,
+      replaceable: states.get(bot) === "changed" && param !== "odd",
+      length: param === "odd" && bot === "quartermaster" ? GUIDES_LONG_CHARS - 1_000 : 1_200,
       changedText:
         states.get(bot) === "changed"
           ? GUIDES_SECTION.replace("Lead with the answer", "Lead with a short joke")
@@ -80,16 +101,20 @@ export function guidesCommands(
       return answer();
     }
     if (!canAdmin()) throw new Error("Changing the bots' instructions needs admin access.");
+    if (saveFails)
+      return answer([
+        "otto: AGENTS.md kept changing while Clawtrate wrote it, so it was left as it is.",
+      ]);
     if (change.action === "add") {
-      voicePlugin = false;
       for (const bot of change.bots)
-        if (states.get(bot) === "none" || states.get(bot) === "removed") states.set(bot, "current");
+        if (["none", "removed", "older"].includes(states.get(bot)!)) states.set(bot, "current");
       record = {
         bots: [...new Set([...(record?.bots ?? []), ...change.bots])],
         newBots: change.newBots,
       };
     } else if (change.action === "replace") {
-      if (states.get(change.bot) === "changed") states.set(change.bot, "current");
+      if (states.get(change.bot) === "changed" && param !== "odd")
+        states.set(change.bot, "current");
     } else if (change.action === "remove") {
       for (const bot of BOTS)
         if (states.get(bot) === "current" || states.get(bot) === "older") states.set(bot, "none");

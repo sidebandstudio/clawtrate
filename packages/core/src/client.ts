@@ -6317,10 +6317,20 @@ export class ClawtrateClient {
    */
   async createBot(input: CreateBotInput, stamp?: GatewayStamp): Promise<CreatedBot> {
     const bound = stamp === undefined ? undefined : await this.requireSameGateway(stamp);
+    // The connection the bot is made on: its guides go there or nowhere.
+    const protocol = this.protocol;
+    const target = this.target;
     // Checked there: both known and current. The whole write stays bound to them.
     const created = await this.accounts.createBot(input, bound);
     const gatewayId = bound?.gatewayId ?? this.state.connection.gatewayId;
-    if (gatewayId) await this.guidesForNewBot(created.botId, gatewayId);
+    const request = (method: string, params: unknown) =>
+      protocol && this.protocol === protocol && this.target === target
+        ? this.request(method, params)
+        : Promise.reject(new Error(CONNECTION_CHANGED));
+    if (gatewayId)
+      await this.guidesForNewBot(created.botId, gatewayId, request).catch((error: unknown) =>
+        this.logFailure("warn", "guides for a new bot", error),
+      );
     return created;
   }
 
@@ -6971,9 +6981,9 @@ export class ClawtrateClient {
   /**
    * Change the guides as the person asked (`GuidesChange`), on the gateway and bots the screen
    * was read from (`stamp`), then read them back: the answer is what the files hold, never what
-   * was sent. Writing needs `operator.admin`; "Not now" writes nothing to the gateway. Adding
-   * the section while the voice plugin adds its guide turns the plugin's guide off first, so no
-   * bot gets the voice guide twice. Nothing is sent once `owner`, the viewer that asked, is gone.
+   * was sent. Writing needs `operator.admin`; "Not now" writes nothing to the gateway. The voice
+   * plugin's own setting is never changed from here. Nothing is sent once `owner`, the viewer
+   * that asked, is gone.
    */
   async changeBotGuides(
     change: GuidesChange,
@@ -6990,11 +7000,6 @@ export class ClawtrateClient {
         ? this.request(method, params)
         : Promise.reject(new Error(CONNECTION_CHANGED));
     const before = await this.guidesRecord(gatewayId);
-    if (change.action === "add" && change.bots.length > 0) {
-      const voice = await readVoice(request, this.voiceAdvertised).catch(() => null);
-      if (voice?.status === "read" && voice.on && voice.hook === "allowed")
-        await setVoice(request, false);
-    }
     const { record, errors } = await applyGuidesChange(request, before, change);
     if (record) await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(record));
     const read = await this.readBotGuides();
@@ -7033,17 +7038,22 @@ export class ClawtrateClient {
 
   /**
    * A bot made in Clawtrate gets the section when the person said yes to "New bots too" on this
-   * device for this gateway, with admin access.
+   * device for this gateway, with admin access, on the connection it was made on (`request`),
+   * unless it would make the file too long to be kept whole. It never fails the creation.
    */
-  private async guidesForNewBot(botId: string, gatewayId: string): Promise<void> {
+  private async guidesForNewBot(
+    botId: string,
+    gatewayId: string,
+    request: (method: string, params: unknown) => Promise<unknown>,
+  ): Promise<void> {
     if (this.options.readOnly || !this.state.connection.canAdmin) return;
     const record = await this.guidesRecord(gatewayId);
     if (!record?.newBots) return;
-    const request = (method: string, params: unknown) => this.request(method, params);
     const result = await applyGuidesChange(request, record, {
       action: "add",
       bots: [botId],
       newBots: true,
+      background: true,
     }).catch((error: unknown) => ({
       record,
       errors: [error instanceof Error ? error.message : String(error)],

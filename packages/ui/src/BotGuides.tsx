@@ -5,8 +5,9 @@
 // announced that wasn't read back.
 
 import {
+  guidesWouldBeCut,
+  GUIDES_SECTION,
   GUIDES_SIZE,
-  GUIDES_TEXT,
   type Bot,
   type BotGuidesAnswer,
   type GatewayStamp,
@@ -25,15 +26,22 @@ const names = (bots: readonly Bot[], ids: string[]) =>
 const list = (items: string[]) =>
   items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 
-/** What a folder's state says, in a few words. */
-function stateWords(folder: GuideFolder): string {
+/**
+ * What a folder's state says, in a few words. `mine`: this device added it, so this device
+ * brings an older version up to date by itself.
+ */
+function stateWords(folder: GuideFolder, mine: boolean): string {
   switch (folder.state) {
     case "current":
       return "Added";
     case "older":
-      return "An older version. Clawtrate updates it when it connects with admin access.";
+      return mine
+        ? "An older version. Clawtrate updates it when it connects with admin access."
+        : "An older version. Tick it and press Add to bring it up to date.";
     case "changed":
-      return "Changed outside Clawtrate, so Clawtrate leaves it as it is.";
+      return folder.replaceable
+        ? "Changed outside Clawtrate, so Clawtrate leaves it as it is."
+        : "Its markers aren't as Clawtrate wrote them, so Clawtrate can't tell where its section ends. Edit the file, or remove the section's text yourself.";
     case "removed":
       return "Removed outside Clawtrate. Clawtrate won't add it again unless you ask.";
     case "none":
@@ -144,15 +152,21 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
       </div>
     );
   const folders = shown.folders;
-  const addable = folders.filter((f) => f.state === "none" || f.state === "removed");
+  const addable = folders.filter(
+    (f) => f.state === "none" || f.state === "removed" || f.state === "older",
+  );
+  /** A file the section would make longer than the gateway keeps whole in a prompt. */
+  const long = (f: GuideFolder) => f.length !== null && guidesWouldBeCut(f.length);
   const anyOurs = folders.some((f) => f.state === "current" || f.state === "older");
   // Bots with no section at all: an older or a changed one may still say what a task is.
   const untaught = folders
     .filter((f) => f.state === "none" || f.state === "removed" || f.state === null)
     .flatMap((f) => f.bots);
-  // Every bot not yet added is ticked, unless it was taken out outside Clawtrate.
+  // Every bot not yet added, or with an older version, is ticked, unless its section was taken
+  // out outside Clawtrate or its file is long.
   const ticked =
-    chosen ?? new Set(addable.filter((f) => f.state === "none").flatMap((f) => f.bots));
+    chosen ??
+    new Set(addable.filter((f) => f.state !== "removed" && !long(f)).flatMap((f) => f.bots));
   const tickedFolders = addable.filter((f) => f.bots.some((bot) => ticked.has(bot)));
   const count = tickedFolders.reduce((n, f) => n + f.bots.length, 0);
   const add = () =>
@@ -187,14 +201,22 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
           Read it
         </summary>
         <div className="b-disclosure-body">
-          <pre className="bot-guides-text">{GUIDES_TEXT}</pre>
+          <pre className="bot-guides-text">{GUIDES_SECTION}</pre>
         </div>
       </details>
       <ul className="bot-guides-list" aria-labelledby="bot-guides-title">
         {folders.map((folder) => {
           const label = list(names(bots, folder.bots));
           const key = folder.bots.join(",");
-          const canAdd = admin && (folder.state === "none" || folder.state === "removed");
+          const canAdd = admin && addable.includes(folder);
+          const mine = folder.bots.some((bot) => shown.record?.bots.includes(bot) === true);
+          const words = stateWords(folder, mine);
+          const longWords =
+            canAdd || folder.state === "none" || folder.state === "older"
+              ? long(folder)
+                ? `Its instructions are long: with this section, the gateway may leave part of them out of ${label}'s prompt.`
+                : null
+              : null;
           return (
             <li key={key} data-testid={`bot-guide-${folder.bots[0]}`} data-state={folder.state}>
               {canAdd ? (
@@ -214,14 +236,16 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                   <span>
                     {label}
                     {folder.bots.length > 1 && " (one shared folder)"}
-                    <small>{stateWords(folder)}</small>
+                    <small>{words}</small>
+                    {longWords && <small data-testid="bot-guide-long">{longWords}</small>}
                   </span>
                 </label>
               ) : (
                 <span className="bot-guides-row">
                   {label}
                   {folder.bots.length > 1 && " (one shared folder)"}
-                  <small>{stateWords(folder)}</small>
+                  <small>{words}</small>
+                  {longWords && <small data-testid="bot-guide-long">{longWords}</small>}
                 </span>
               )}
               {folder.state === "changed" && (
@@ -235,7 +259,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                   >
                     {showing === key ? "Hide" : "Show"}
                   </button>
-                  {admin && (
+                  {admin && folder.replaceable && (
                     <button
                       type="button"
                       className="button"
@@ -244,7 +268,12 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                       onClick={() =>
                         void guides
                           .change({ action: "replace", bot: folder.bots[0]! })
-                          .then((read) => read && announce(`Guides replaced for ${label}`))
+                          .then(
+                            (read) =>
+                              read &&
+                              read.errors.length === 0 &&
+                              announce(`Guides replaced for ${label}`),
+                          )
                       }
                     >
                       Replace
@@ -261,12 +290,14 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
           );
         })}
       </ul>
-      {shown.voicePlugin && (
-        <p className="b-hint" data-testid="bot-guides-voice">
-          The voice plugin also adds the voice guide. Adding this section turns the plugin's guide
-          off, so each bot gets it once.
-        </p>
-      )}
+      {shown.voicePlugin &&
+        (folders.some((f) => f.state !== "none" && f.state !== null) || count > 0) && (
+          <p className="b-hint" data-testid="bot-guides-voice">
+            The voice plugin also adds the voice guide to every bot, so a bot with this section gets
+            it twice. You can turn the plugin's guide off with the Bot voice switch above. Bots
+            without this section then get no voice guide.
+          </p>
+        )}
       {admin ? (
         <>
           {addable.length > 0 && (
