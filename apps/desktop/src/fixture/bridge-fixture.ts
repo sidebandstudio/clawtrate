@@ -638,6 +638,17 @@ export function createFixtureBridge(
       },
       accountParams,
     );
+  if (accountParams.openclaw)
+    state = {
+      ...state,
+      connection: {
+        ...state.connection,
+        openclawUpdate:
+          accountParams.openclaw === "beta"
+            ? { current: "2026.10.6", latest: "2026.11.10-beta.1", channel: "beta" }
+            : { current: "2026.10.6", latest: "2026.11.6", channel: "latest" },
+      },
+    };
   const checkInParams = options.checkIns ?? {
     checkins: null,
     defaultPrompt: false,

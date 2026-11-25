@@ -1,6 +1,7 @@
 // View models the interface renders. Gateway payloads are mapped into these in
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
+import type { OpenClawUpdate } from "./gateway-update.ts";
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
@@ -91,6 +92,11 @@ export type ConnectionState = {
    */
   target: number;
   serverVersion: string | null;
+  /**
+   * A newer OpenClaw, when the gateway's own update check reports one
+   * (`hello-ok` `snapshot.updateAvailable`, the `update.available` event).
+   */
+  openclawUpdate: OpenClawUpdate | null;
   protocol: number | null;
   /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
   scopes: string[];
@@ -633,6 +639,7 @@ export const initialConnectionState: ConnectionState = {
   gatewayName: null,
   target: 0,
   serverVersion: null,
+  openclawUpdate: null,
   protocol: null,
   scopes: [],
   requestedScopes: [],

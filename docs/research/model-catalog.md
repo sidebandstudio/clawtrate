@@ -1,6 +1,6 @@
 # The model list: where it comes from and how it gets newer
 
-Why a bot's Model menu can miss models a provider already offers, checked against OpenClaw 2026.10.6, the version `docs/decisions.md` names, and against OpenClaw 2026.11.6, the newest release on npm when this was written. It is the evidence behind parity rows F-478 and F-533 and the Model menu of `docs/design/bots.md` section 9.
+Why a bot's Model menu can miss models a provider already offers, checked against OpenClaw 2026.10.6, the version `docs/decisions.md` names, and against OpenClaw 2026.11.6, the newest release on npm when this was written. It is the evidence behind parity rows F-478, F-533 and F-534 and the Model menu of `docs/design/bots.md` section 9.
 
 How to read the citations, as in `steer-stop.md`:
 
@@ -146,7 +146,8 @@ So Clawtrate shows the gateway's own lists and keeps no model list of its own: t
 - `hello-ok` `snapshot.updateAvailable` is `{currentVersion, latestVersion, channel}` when the gateway's last update check found a newer OpenClaw, for any connection (`<openclaw>/dist/health-state-DDhO15ZI.mjs` lines 57-82, region `src/gateway/server/health-state.ts`; `<openclaw>/dist/events-ds0bML-H.mjs` lines 17-24). It is set from the check's saved state only when the latest version is newer than the running one (`<openclaw>/dist/update-startup-CW6kDiwm.mjs` lines 235-246, region `src/infra/update-startup.ts`).
 - The `update.available` event carries `{updateAvailable}` when that changes, with no scope required (`<openclaw>/dist/server-start-D6vaUNGz.mjs` line 4299; `<openclaw>/dist/server-startup-post-attach-CAUsg7sV.mjs` lines 576-583, region `src/gateway/server-startup-update-check.ts`).
 - `update.status` (`operator.admin`, `<openclaw>/dist/core-method-policy-DkntKRY_.mjs` lines 1132-1136) answers `{sentinel, updateAvailable, effectiveChannel, schedule, activeRun?, lastRun?}` (`<openclaw>/dist/update-DdfLxzzM.mjs` lines 792-799, region `src/gateway/server-methods/update-status.ts`).
-- The command the gateway's documentation gives is `openclaw update` on the gateway's machine (`<openclaw>/docs/cli/update.md`).
+- The command the gateway's documentation gives is `openclaw update` on the gateway's machine (`<openclaw>/docs/cli/update.md`). It is not every install's step: "For Docker, Podman, and Kubernetes image replacements, see Upgrading container images", and an app-owned package is updated through its app (`<openclaw>/docs/install/updating.md`, the opening section). So Clawtrate links to that page and names no command. It restarts the gateway by default: `--no-restart` is the option that skips "the updater's managed restart", and the interactive flow asks "whether to restart the Gateway afterward (defaults to restart)" (same page, the options table and "wizard"). A restart's drain "can interrupt ordinary work" once its budget runs out (same page, "--drain-timeout").
+- The report's `channel` is the npm tag of the gateway's update channel: `latest` for stable, or `beta`, `dev`, `extended-stable` (`channelToNpmTag`, `<openclaw>/dist/update-channels-BLoHtGj7.mjs` lines 36-38; `update-startup` lines 241-245).
 - For models, `models.list` answers `refreshFailed: true` when the catalogue's last refresh failed and `pendingProviders` while a provider's discovery is still running (`models-list-result` lines 530-535). No field names the Codex version or which models a newer one would add.
 
 ### Live
@@ -165,5 +166,5 @@ null
 - Show the gateway's picker as the menu did before, its unavailable models disabled. Behind "View more", read the provider's full list (`view: "all"`) when it is opened, and show the models the picker lacks in the gateway's order, never called newest first, with no availability verdict. Say when it is loading, failed or longer than kept, and offer no "View more" on a gateway that refuses `view: "all"` (F-478).
 - Ask for the picker after the account reads, never alongside them: the gateway refuses it while they prepare the bots' metadata.
 - Let a person type a model id the catalogue doesn't list, and leave the decision to the provider (F-533).
-- When the gateway reports `updateAvailable`, say near the Model menu that a newer OpenClaw is out and give `openclaw update`.
+- When the gateway reports `updateAvailable`, say near the Model menu that a newer OpenClaw is out, with the channel when it isn't stable, and link to OpenClaw's own update instructions rather than name a command: `openclaw update` skips container installs (`<openclaw>/docs/install/updating.md`) (F-534).
 - For OpenAI's newest models on a ChatGPT sign-in: update OpenClaw to 2026.11.6 or newer and keep a current `codex` on the gateway's `PATH`. That is what the documentation establishes; it was not run against a real account.

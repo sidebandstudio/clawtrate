@@ -33,6 +33,8 @@
 //                             or xAI's full list with grok-4.8, which its picker lacks
 //   model=<id>                the open bot's model
 //   effort=none               the open bot keeps no effort
+//   openclaw=behind|beta      the gateway reports a newer OpenClaw than it runs: 2026.11.6, or
+//                             2026.11.10-beta.1 on the beta channel
 
 import {
   ADMIN_SCOPES,
@@ -84,6 +86,8 @@ export type AccountParams = {
   model: string | null;
   /** The open bot keeps no effort. */
   noEffort: boolean;
+  /** The gateway reports a newer OpenClaw than it runs: a stable release, or a beta. */
+  openclaw: "behind" | "beta" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -121,6 +125,10 @@ export function accountParams(params: URLSearchParams): AccountParams {
     catalog: params.get("catalog"),
     model: params.get("model"),
     noEffort: params.get("effort") === "none",
+    openclaw:
+      params.get("openclaw") === "behind" || params.get("openclaw") === "beta"
+        ? (params.get("openclaw") as "behind" | "beta")
+        : null,
   };
 }
 
@@ -143,6 +151,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   catalog: null,
   model: null,
   noEffort: false,
+  openclaw: null,
 };
 
 const MINUTE = 60_000;
