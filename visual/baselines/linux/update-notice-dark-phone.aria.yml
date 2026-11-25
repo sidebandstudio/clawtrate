@@ -1,0 +1,23 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:38 PM
+    - paragraph: How much space is left on the disk?
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: About 40 GB are free. The cache uses most of the rest.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: OpenClaw updated to 2026.11.10
+    - group: The gateway's message
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status
