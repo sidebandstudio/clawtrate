@@ -1290,14 +1290,14 @@ export class ClawtrateClient {
    * publishes only typed outcomes: fixed codes and words, never the gateway's
    * own codes, text, request fields or version.
    */
-  /** A setup connection's update report, held until its setup succeeds (`holdSetupUpdate`). */
-  private setupUpdate: { generation: number; update: OpenClawUpdate } | null = null;
   private setupIntent: {
     url: string;
     reuse: boolean;
     /** A rejected code can recheck for a saved pairing. A changed pairing needs fresh consent. */
     refusal?: "invalid-code" | "pairing-changed";
   } | null = null;
+  /** A setup connection's update report, held until its setup succeeds (`holdSetupUpdate`). */
+  private setupUpdate: { generation: number; update: OpenClawUpdate } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
@@ -10276,7 +10276,6 @@ export class ClawtrateClient {
       });
   }
 
-  /** Whether the connection to `url` is the host's setup connection. */
   /**
    * A setup connection's report of a newer OpenClaw, validated and held, never published: it is
    * published only if this connection's setup succeeds (`bootstrap`), and dropped otherwise.
@@ -10286,6 +10285,7 @@ export class ClawtrateClient {
     this.setupUpdate = update ? { generation, update } : null;
   }
 
+  /** Whether the connection to `url` is the host's setup connection. */
   private isSetup(url: string | undefined): boolean {
     return url !== undefined && this.setupIntent?.url === url;
   }
