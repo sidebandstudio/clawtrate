@@ -4,6 +4,8 @@
 // the provider's full list each time it is opened, holds the answer for this
 // screen only, and shows the models the first list lacks in a section of their
 // own, with no verdict on any of them. The last row takes a model id typed in.
+// When the gateway reports a newer OpenClaw, a note says so, with a link to
+// OpenClaw's update instructions.
 
 import {
   gatewayStamp,
@@ -13,10 +15,12 @@ import {
   type CatalogModel,
   type ConnectionState,
   type ModelList,
+  type OpenClawUpdate,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState } from "react";
 import { useBridge } from "../bridge.tsx";
-import { Select, type SelectRow, type SelectSection } from "./parts.tsx";
+import { ArrowUpIcon, ExternalIcon } from "../icons.tsx";
+import { Note, Select, type SelectRow, type SelectSection } from "./parts.tsx";
 import { levelWord, modelsOf, providerName } from "./words.ts";
 
 /** One "View more" answer, as this screen holds it for the provider and connection it shows. */
@@ -129,6 +133,12 @@ export function modelMenu(
 const count = (n: number) => n.toLocaleString("en-US");
 
 /**
+ * OpenClaw's own page on updating, for every kind of install, a container's included
+ * (`docs/install/updating.md` in the OpenClaw package).
+ */
+const OPENCLAW_UPDATE_DOCS = "https://docs.openclaw.ai/install/updating";
+
+/**
  * A typed model id, or why it can't be one, under the rule the bridge applies to every model id
  * (`modelIdProblem`). A leading `<provider>/` is the provider's own and is dropped.
  */
@@ -160,6 +170,7 @@ export function ModelPair({
   onEffort,
   placeholder,
   anyAccount = false,
+  update = null,
 }: {
   accounts: AccountsState;
   provider: string;
@@ -176,6 +187,8 @@ export function ModelPair({
   placeholder?: string;
   /** The model is for whichever account the gateway chooses, not one account. */
   anyAccount?: boolean;
+  /** A newer OpenClaw, as the gateway reports it. */
+  update?: OpenClawUpdate | null;
 }) {
   const menu = modelMenu(accounts, provider, model, list.models);
   const who = providerName(provider);
@@ -371,6 +384,22 @@ export function ModelPair({
             </button>
           </div>
         </div>
+      )}
+      {update && (
+        <Note icon={<ArrowUpIcon />} testId="openclaw-update">
+          <p>
+            Your gateway runs OpenClaw {update.current}, and {update.latest} is out
+            {update.channel && update.channel !== "latest"
+              ? ` on its ${update.channel} channel${update.channel === "beta" || update.channel === "dev" ? ", not as a stable release" : ""}`
+              : ""}
+            . Updating the gateway is how newer models get listed.
+          </p>
+          <p>
+            <a href={OPENCLAW_UPDATE_DOCS} target="_blank" rel="noreferrer noopener">
+              OpenClaw's update instructions <ExternalIcon />
+            </a>
+          </p>
+        </Note>
       )}
       {typedId !== null && typedId === model && menu.row === undefined && !typing && (
         <p className="b-hint" data-testid="model-typed-line">

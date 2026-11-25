@@ -1,7 +1,8 @@
 // A bot's task list (visual-language.md, section 12): the bot's avatar and name,
 // then its task rows at touch size with the title, the time and at most one
 // mark. Back returns to Home. "New task" needs a connection that writes, which
-// this build does not ask for, so it is not shown.
+// this build does not ask for, so it is not shown. Beside the chat (iPhone Duo
+// unfolded), the open task's row is marked as the selected one.
 
 import type { Bot, ClawtrateState } from "@clawtrate/core";
 import { noTasksBody, TASK_WORDS } from "../presentation/summary.ts";
@@ -21,6 +22,7 @@ export function BotTasks({
   bot,
   seen,
   now,
+  openKey = null,
   onBack,
   onOpenTask,
 }: {
@@ -28,6 +30,8 @@ export function BotTasks({
   bot: Bot;
   seen: SeenMap;
   now: number;
+  /** The task whose chat shows beside the list. */
+  openKey?: string | null;
   onBack: () => void;
   onOpenTask: (key: string) => void;
 }) {
@@ -37,7 +41,7 @@ export function BotTasks({
   const rows = taskRows(state.tasksByBot[bot.id] ?? [], seen, now, current);
   const stack = stacked(useWindowDimensions().fontScale);
   return (
-    <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: c.bg }}>
+    <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.bg }}>
       <Top
         state={state}
         taskKey={null}
@@ -65,6 +69,7 @@ export function BotTasks({
             testID={`task-${redact(row.task.key)}`}
             accessibilityRole="button"
             accessibilityLabel={redact(row.spoken)}
+            accessibilityState={{ selected: row.task.key === openKey }}
             onPress={() => onOpenTask(row.task.key)}
             style={({ pressed }) => ({
               minHeight: TOUCH.taskRow,
@@ -74,7 +79,11 @@ export function BotTasks({
               paddingHorizontal: S["space-3"],
               paddingVertical: stack ? S["space-2"] : 0,
               borderRadius: S["radius-sm"],
-              backgroundColor: pressed ? c["bg-hover"] : "transparent",
+              backgroundColor: pressed
+                ? c["bg-hover"]
+                : row.task.key === openKey
+                  ? c["bg-selected"]
+                  : "transparent",
             })}
           >
             <View style={{ flex: 1, gap: 2 }}>

@@ -5,6 +5,7 @@ import { ClawtrateClient, GatewayChangedError } from "../src/client.ts";
 import {
   GATEWAY_NAMES_KEY,
   MAX_GATEWAY_NAMES,
+  MAX_GATEWAY_NAME_CHARS,
   cleanGatewayName,
   gatewayAddress,
   gatewayNameFor,
@@ -12,7 +13,7 @@ import {
   withGatewayName,
   writeGatewayNames,
 } from "../src/gateway-names.ts";
-import { FakeGateway, helloOk, memoryStorage, testHost, until } from "./fake-gateway.ts";
+import { FakeGateway, deferred, helloOk, memoryStorage, testHost, until } from "./fake-gateway.ts";
 
 const URL = "ws://127.0.0.1:19001";
 const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
@@ -37,6 +38,22 @@ describe("F-526: gateway names", () => {
     expect(withGatewayName(named, URL, "   ")).toEqual([]);
     expect(cleanGatewayName("  Dev\nbox\u0000 \u202e ")).toBe("Dev box");
     expect([...cleanGatewayName("x".repeat(60))]).toHaveLength(40);
+  });
+
+  it("a name stays within two JSON characters per character, lone surrogates and all", () => {
+    for (const raw of [
+      "\ud800".repeat(60),
+      "a\udfffb".repeat(20),
+      '"\\'.repeat(30),
+      "😀".repeat(60),
+    ]) {
+      const name = cleanGatewayName(raw);
+      expect(JSON.stringify(name).length - 2, JSON.stringify(raw).slice(0, 20)).toBeLessThanOrEqual(
+        2 * MAX_GATEWAY_NAME_CHARS,
+      );
+    }
+    expect(cleanGatewayName("Dev\ud800box")).toBe("Dev box");
+    expect(cleanGatewayName("😀 Lab")).toBe("😀 Lab");
   });
 
   it("keeps the newest 32 and reads anything unreadable as no names", () => {
@@ -124,5 +141,172 @@ describe("F-526: gateway names", () => {
     expect(() =>
       parseBridgeCommand({ type: "nameGateway", gatewayUrl: URL, name: "x".repeat(1001) }),
     ).toThrow("invalid name");
+  });
+});
+
+describe("F-526: gateway names saved one at a time", () => {
+  const OTHER = "ws://127.0.0.1:19002";
+  /** Storage whose next write of the names waits until the returned function is called. */
+  function heldNames(initial: Record<string, string> = {}) {
+    const storage = memoryStorage(initial);
+    const set = storage.set.bind(storage);
+    const get = storage.get.bind(storage);
+    let holdSet: Promise<void> | null = null;
+    let holdGet: Promise<void> | null = null;
+    storage.set = async (key, value) => {
+      if (key === GATEWAY_NAMES_KEY && holdSet) {
+        const gate = holdSet;
+        holdSet = null;
+        await gate;
+      }
+      return set(key, value);
+    };
+    storage.get = async (key) => {
+      if (key === GATEWAY_NAMES_KEY && holdGet) {
+        const value = await get(key);
+        const gate = holdGet;
+        holdGet = null;
+        await gate;
+        return value;
+      }
+      return get(key);
+    };
+    return {
+      storage,
+      holdNextSet: () => {
+        const gate = deferred<void>();
+        holdSet = gate.promise;
+        return () => gate.resolve();
+      },
+      holdNextGet: () => {
+        const gate = deferred<void>();
+        holdGet = gate.promise;
+        return () => gate.resolve();
+      },
+    };
+  }
+  async function connected(storage: ReturnType<typeof memoryStorage>) {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    return client;
+  }
+  const stored = (storage: ReturnType<typeof memoryStorage>) =>
+    readGatewayNames(storage.data.get(GATEWAY_NAMES_KEY) ?? null);
+
+  it("a second rename sent while the first is saving ends as the name, in memory and in storage", async () => {
+    const held = heldNames();
+    const client = await connected(held.storage);
+    const release = held.holdNextSet();
+    const first = client.nameGateway(URL, "Devbox");
+    const second = client.nameGateway(URL, "Lab");
+    release();
+    await Promise.all([first, second]);
+    expect(client.state.connection.gatewayName).toBe("Lab");
+    expect(stored(held.storage)).toEqual([{ address: URL, name: "Lab" }]);
+    client.stop();
+  });
+
+  it("two quick renames of two gateways both keep their names", async () => {
+    const held = heldNames();
+    const client = await connected(held.storage);
+    const release = held.holdNextSet();
+    const first = client.nameGateway(URL, "Devbox");
+    // Another gateway becomes the selected one before the first name has landed.
+    client.store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayUrl: OTHER },
+    }));
+    const second = client.nameGateway(OTHER, "Lab");
+    release();
+    await Promise.all([first, second]);
+    expect(stored(held.storage)).toEqual([
+      { address: URL, name: "Devbox" },
+      { address: OTHER, name: "Lab" },
+    ]);
+    expect(client.state.connection.gatewayName).toBe("Lab");
+    client.store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayUrl: URL },
+    }));
+    expect(client.state.connection.gatewayName, "kept in memory too").toBe("Devbox");
+    client.stop();
+  });
+
+  it("a name cleared while the startup read is on its way stays cleared", async () => {
+    const held = heldNames({
+      [GATEWAY_NAMES_KEY]: writeGatewayNames(withGatewayName([], URL, "Devbox")),
+    });
+    const gateway = new FakeGateway();
+    const client = new ClawtrateClient(testHost(gateway, held.storage), FAST);
+    const release = held.holdNextGet();
+    const starting = client.start({ resume: false });
+    await until(() => client.state.connection.deviceId !== null);
+    // The gateway it names is selected (a stand-in for a connection made meanwhile).
+    client.store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayUrl: URL },
+    }));
+    const clearing = client.nameGateway(URL, "");
+    release();
+    await Promise.all([starting, clearing]);
+    expect(client.state.connection.gatewayName).toBeNull();
+    expect(stored(held.storage)).toEqual([]);
+    client.stop();
+  });
+
+  it("a names read that never answers doesn't hold later starts or renames once stopped", async () => {
+    const storage = memoryStorage();
+    const get = storage.get.bind(storage);
+    let hang = true;
+    const settingsReads: number[] = [];
+    storage.get = (key) => {
+      if (key === GATEWAY_NAMES_KEY && hang) return new Promise(() => {});
+      if (key === "connection") settingsReads.push(Date.now());
+      return get(key);
+    };
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const first = client.start();
+    await until(() => client.state.connection.deviceId !== null);
+    client.stop();
+    await first;
+    hang = false;
+    await client.start();
+    expect(settingsReads.length, "the second start reached its settings read").toBeGreaterThan(0);
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    await client.nameGateway(URL, "Devbox");
+    expect(client.state.connection.gatewayName).toBe("Devbox");
+    client.stop();
+  });
+
+  it("a names read that fails on a later start keeps the names already held", async () => {
+    const OTHER_NAME = { address: OTHER, name: "Lab" };
+    const storage = memoryStorage({
+      [GATEWAY_NAMES_KEY]: writeGatewayNames([OTHER_NAME, { address: URL, name: "Devbox" }]),
+    });
+    const client = await connected(storage);
+    expect(client.state.connection.gatewayName).toBe("Devbox");
+    client.stop();
+    const get = storage.get.bind(storage);
+    storage.get = (key) =>
+      key === GATEWAY_NAMES_KEY ? Promise.reject(new Error("unreadable")) : get(key);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    await client.nameGateway(URL, "Home");
+    expect(stored(storage)).toEqual([OTHER_NAME, { address: URL, name: "Home" }]);
+    client.stop();
   });
 });

@@ -2457,6 +2457,63 @@ textarea {
   margin-top: 6px;
 }
 
+/* A task a bot started: who started it and from where, under its name (F-565). */
+.started-by {
+  max-width: 52ch;
+  margin: 0 auto 4px;
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.started-from {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* "Open …" wraps as one piece, never inside the task's name. */
+.started-by .link-button {
+  display: inline-block;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.started-by + .stamp {
+  margin-top: 6px;
+}
+
+/* The brief a bot wrote for a task it started: the bot's words on its side,
+   framed and named, so it never reads as the person's message. */
+.brief {
+  max-width: min(86%, 640px);
+  margin: 4px 0 0;
+  padding: 9px 14px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+
+.brief-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.brief-head .avatar {
+  width: 18px;
+  height: 18px;
+}
+
+.brief-text {
+  font-size: var(--text-base);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 /* A wide table extends into the empty space beside the bot's message, up to
    the transcript column; the bubble's text keeps its usual measure. Wider
    still, the table scrolls inside itself. */

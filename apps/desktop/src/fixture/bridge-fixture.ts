@@ -571,6 +571,11 @@ export function createFixtureBridge(
     fullPairing?: boolean;
     /** A name given to the fixture gateway on this device (`?gatewayName=`). */
     gatewayName?: string | null;
+    /**
+     * "Show the gateway's own bot" (F-562). On unless `gatewaybot=off`, so the scenes keep
+     * Juniper, the gateway's own bot, in the rail; `gatewaybot=off` shows the default.
+     */
+    showGatewayBot?: boolean;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -639,6 +644,17 @@ export function createFixtureBridge(
       },
       accountParams,
     );
+  if (accountParams.openclaw)
+    state = {
+      ...state,
+      connection: {
+        ...state.connection,
+        openclawUpdate:
+          accountParams.openclaw === "beta"
+            ? { current: "2026.10.6", latest: "2026.11.10-beta.1", channel: "beta" }
+            : { current: "2026.10.6", latest: "2026.11.6", channel: "latest" },
+      },
+    };
   const checkInParams = options.checkIns ?? {
     checkins: null,
     defaultPrompt: false,
@@ -682,6 +698,9 @@ export function createFixtureBridge(
   }
   if (options.fullPairing)
     state = { ...state, connection: { ...state.connection, fullPairing: true } };
+  // The host keeps the choice across every state it sets, as it keeps the target below.
+  let showGatewayBot = options.showGatewayBot ?? true;
+  state = { ...state, showGatewayBot };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
@@ -719,6 +738,8 @@ export function createFixtureBridge(
   const set = (next: ClawtrateState) => {
     // A state that already carries a higher target (a test's own) raises the counter with it.
     target = Math.max(target, next.connection.target);
+    if (next.showGatewayBot === undefined) next = { ...next, showGatewayBot };
+    else showGatewayBot = next.showGatewayBot;
     state = next.connection.target === target ? next : withConnection(next, { target });
     publish();
   };

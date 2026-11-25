@@ -32,6 +32,9 @@ export const CONVERSATION_WORDS = {
   /** The task has older messages than were loaded: the desktop's words for a partial history. */
   earlier: "Only part of this task's history is loaded here, so earlier messages may be missing.",
   jumpToLatest: "Jump to latest",
+  /** The chat pane beside the list, with no task open (iPhone Duo unfolded). */
+  noChatTitle: "No chat open",
+  noChatBody: "Choose a task to read its chat here.",
 } as const;
 
 /** A task with no messages yet, on a connection that reads. */

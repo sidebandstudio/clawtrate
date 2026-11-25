@@ -493,6 +493,7 @@ export function NewBot({
               accounts={accounts}
               provider={provider}
               anyAccount={draft.account === GATEWAY_CHOICE}
+              update={connection.openclawUpdate}
               model={draft.model}
               list={list}
               effort={shownEffort}

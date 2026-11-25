@@ -1,6 +1,7 @@
 // The gateway connection and the state it projects. Built on the official
 // browser-safe protocol client, with transport, storage and signing injected.
 
+import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
   readVoice,
@@ -175,6 +176,7 @@ import {
   mapAgents,
   mapHistory,
   sentSources,
+  startedTaskSince,
   mergeSessionRow,
   sessionChangeRow,
   sessionRowKey,
@@ -363,6 +365,7 @@ import {
 } from "./task-actions.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
+import { listedBots } from "./gateway-bot.ts";
 import {
   CONTROL_EVENT,
   ComputerViews,
@@ -467,6 +470,8 @@ const TURN_LIMIT_KEY = "turn-limit-minutes";
 const CHANNEL_CHATS_KEY = "show-channel-chats";
 /** Where the host keeps "Show sessions from other tools"; absent is off. */
 const OTHER_TOOLS_KEY = "show-other-tool-sessions";
+/** Where the host keeps "Show the gateway's own bot"; absent is off. */
+const GATEWAY_BOT_KEY = "show-gateway-bot";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
 /**
@@ -1310,6 +1315,8 @@ export class ClawtrateClient {
     /** A rejected code can recheck for a saved pairing. A changed pairing needs fresh consent. */
     refusal?: "invalid-code" | "pairing-changed";
   } | null = null;
+  /** A setup connection's update report, held until its setup succeeds (`holdSetupUpdate`). */
+  private setupUpdate: { generation: number; update: OpenClawUpdate } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
@@ -1430,8 +1437,26 @@ export class ClawtrateClient {
   private showChannelChats = false;
   /** "Show sessions from other tools": the person's choice, off until they turn it on. */
   private showOtherToolSessions = false;
+  /** "Show the gateway's own bot": the person's choice, off until they turn it on. */
+  private showGatewayBot = false;
   /** How often the person set each preference: a startup read begun before a change doesn't undo it. */
-  private readonly preferenceSets = { turnLimit: 0, channelChats: 0, otherTools: 0 };
+  private readonly preferenceSets = {
+    turnLimit: 0,
+    channelChats: 0,
+    gatewayNames: 0,
+    otherTools: 0,
+    gatewayBot: 0,
+  };
+  /**
+   * Reads and writes of the gateway names, one at a time and in order: each rename starts from
+   * the list the one before it left, so two quick renames both keep their names.
+   */
+  private gatewayNameWork: Promise<unknown> = Promise.resolve();
+  private queueGatewayNames<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.gatewayNameWork.then(work);
+    this.gatewayNameWork = run.catch(() => {});
+    return run;
+  }
   /**
    * The person this connection acts for, as the gateway names them (`users.self` profile id):
    * which reactions are this person's own. Read once per connection; null until then, or when
@@ -2029,9 +2054,24 @@ export class ClawtrateClient {
           (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
         const otherTools =
           (await this.host.storage.get(OTHER_TOOLS_KEY).catch(() => null)) === "true";
-        const names = readGatewayNames(
-          await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null),
+        // In the names' queue, so a rename sent meanwhile starts from what was read. A stop ends
+        // the wait, so a read that never answers can't hold the queue for later starts and
+        // renames. A failed or abandoned read is null: the names already held stay.
+        const names = await this.queueGatewayNames(() =>
+          this.raceStop<GatewayNames | null>(
+            stops,
+            async () => {
+              try {
+                return readGatewayNames(await this.host.storage.get(GATEWAY_NAMES_KEY));
+              } catch {
+                return null;
+              }
+            },
+            null,
+          ),
         );
+        const gatewayBot =
+          (await this.host.storage.get(GATEWAY_BOT_KEY).catch(() => null)) === "true";
         // A startup stopped while it read keeps nothing: the next one reads again. A preference
         // the person set meanwhile is newer than what was read.
         if (stops !== this.stops) return;
@@ -2043,15 +2083,17 @@ export class ClawtrateClient {
           this.turnLimitMs = limit * 60_000;
         if (sets.channelChats === this.preferenceSets.channelChats)
           this.showChannelChats = channelChats;
+        if (names !== null && sets.gatewayNames === this.preferenceSets.gatewayNames)
+          this.gatewayNames = names;
         if (sets.otherTools === this.preferenceSets.otherTools)
           this.showOtherToolSessions = otherTools;
-        // A name given meanwhile is newer than what was read.
-        if (this.gatewayNames.length === 0) this.gatewayNames = names;
+        if (sets.gatewayBot === this.preferenceSets.gatewayBot) this.showGatewayBot = gatewayBot;
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
           showChannelChats: this.showChannelChats,
           showOtherToolSessions: this.showOtherToolSessions,
+          showGatewayBot: this.showGatewayBot,
         }));
         if (options.resume === false) return;
         // Startup needs to open the socket without waiting for another client's credential write.
@@ -2162,6 +2204,7 @@ export class ClawtrateClient {
       this.setupCode = null;
       this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = null;
+      this.setupUpdate = null;
       this.pairingSeen = null;
       if (stops === this.stops) await this.open({ newTarget: true });
     });
@@ -2314,6 +2357,7 @@ export class ClawtrateClient {
       this.setupCode = null;
       this.setupCheck = null;
       this.setupIntent = null;
+      this.setupUpdate = null;
       this.settings = null;
       this.pairingSeen = null;
       this.rows = new Map();
@@ -2326,6 +2370,7 @@ export class ClawtrateClient {
         turnLimitMinutes: this.turnLimitMs / 60_000,
         showChannelChats: this.showChannelChats,
         showOtherToolSessions: this.showOtherToolSessions,
+        showGatewayBot: this.showGatewayBot,
         connection: {
           ...initialConnectionState,
           deviceId: this.identity?.deviceId ?? null,
@@ -5505,7 +5550,8 @@ export class ClawtrateClient {
       // The bots are read now: from the gateway the routines came from, or not at all.
       if (generation !== this.generation)
         throw new Error("The gateway changed while the list was read.");
-      return mentionRows(this.state.bots, routines);
+      // The bots the sidebar lists (F-562).
+      return mentionRows(listedBots(this.state), routines);
     }
     const agentId = botIdFromSessionKey(key);
     const [skills, metadata] = await Promise.all([
@@ -6131,7 +6177,11 @@ export class ClawtrateClient {
     if (!this.state.transcripts[key]) return null;
     // The length needed is not known here: the most the gateway gives. An item it still cut says so.
     const history = await this.readHistoryWhole(key, MAX_HISTORY_READ_CHARS);
-    return mapHistory(history?.messages).find((item) => item.id === itemId) ?? null;
+    return (
+      mapHistory(history?.messages, { startedAt: startedTaskSince(history) }).find(
+        (item) => item.id === itemId,
+      ) ?? null
+    );
   }
 
   /**
@@ -7573,10 +7623,13 @@ export class ClawtrateClient {
    */
   async nameGateway(gatewayUrl: string, name: string): Promise<void> {
     if (this.state.connection.gatewayUrl !== gatewayUrl) throw new GatewayChangedError();
-    const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
-    await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
-    this.gatewayNames = next;
-    this.store.update((state) => ({ ...state }));
+    return this.queueGatewayNames(async () => {
+      const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
+      await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
+      this.preferenceSets.gatewayNames += 1;
+      this.gatewayNames = next;
+      this.store.update((state) => ({ ...state }));
+    });
   }
 
   /**
@@ -7625,6 +7678,19 @@ export class ClawtrateClient {
     this.showOtherToolSessions = on;
     this.store.update((state) => ({ ...state, showOtherToolSessions: on }));
     this.publishTasks();
+  }
+
+  /**
+   * "Show the gateway's own bot": list the gateway's default bot beside the others, or leave it
+   * out while another bot exists (the default). Kept for the next start. Only what the app shows
+   * changes; nothing is sent to the gateway.
+   */
+  async setShowGatewayBot(on: boolean): Promise<void> {
+    // Kept first: a choice the host could not keep is not taken.
+    await this.host.storage.set(GATEWAY_BOT_KEY, String(on));
+    this.preferenceSets.gatewayBot += 1;
+    this.showGatewayBot = on;
+    this.store.update((state) => ({ ...state, showGatewayBot: on }));
   }
 
   private turnLimitReached(key: string, runId: string): void {
@@ -7747,6 +7813,7 @@ export class ClawtrateClient {
         turnLimitMinutes: this.turnLimitMs / 60_000,
         showChannelChats: this.showChannelChats,
         showOtherToolSessions: this.showOtherToolSessions,
+        showGatewayBot: this.showGatewayBot,
         connection: {
           ...initialConnectionState,
           target: this.target,
@@ -7826,6 +7893,7 @@ export class ClawtrateClient {
             turnLimitMinutes: this.turnLimitMs / 60_000,
             showChannelChats: this.showChannelChats,
             showOtherToolSessions: this.showOtherToolSessions,
+            showGatewayBot: this.showGatewayBot,
           }),
       connection: {
         ...initialConnectionState,
@@ -7837,6 +7905,10 @@ export class ClawtrateClient {
         requestedScopes: this.scopesToAsk(settings.url, stored),
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
+        // A setup connection publishes none of the gateway's versions, so an earlier connection's
+        // report isn't carried into one, even to the same address (the setup contract).
+        openclawUpdate:
+          sameGateway && !this.isSetup(settings.url) ? state.connection.openclawUpdate : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
       },
       transcripts: sameGateway
@@ -8865,6 +8937,10 @@ export class ClawtrateClient {
   }
 
   private handleHello(hello: HelloOk, generation: number): void {
+    this.holdSetupUpdate(
+      generation,
+      this.isSetup(this.settings?.url) ? asRecord(hello.snapshot)?.updateAvailable : null,
+    );
     const wasConnected = this.everConnected;
     this.everConnected = true;
     this.pairingSeen = null;
@@ -8895,6 +8971,11 @@ export class ClawtrateClient {
       serverVersion: this.isSetup(this.settings?.url)
         ? setupVersion(hello.server.version)
         : hello.server.version,
+      // A setup connection publishes none of the gateway's versions (the setup contract above):
+      // its report is held, below, until setup succeeds on this connection.
+      openclawUpdate: this.isSetup(this.settings?.url)
+        ? null
+        : readOpenClawUpdate(asRecord(hello.snapshot)?.updateAvailable),
       protocol: hello.protocol,
       scopes,
       canWrite,
@@ -9123,7 +9204,14 @@ export class ClawtrateClient {
     // also when the first bot read failed: the change it missed is read now.
     if (read.botsChanged) void this.refreshBotsOnChange(generation);
     const setup = this.isSetup(this.settings?.url);
-    if (setup && failures.length === 0) this.setupIntent = null;
+    if (setup && failures.length === 0) {
+      this.setupIntent = null;
+      // The connection is the saved gateway's own now, with no new hello: the report held while
+      // it was setup's is published, if it was this connection's.
+      const held = this.setupUpdate;
+      if (held?.generation === generation) this.setConnection({ openclawUpdate: held.update });
+    }
+    if (setup) this.setupUpdate = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
     // from then on the connection and its retries are the saved gateway's own.
     if (failures.length === 0 && this.setupCheck?.url === this.settings?.url)
@@ -9655,7 +9743,7 @@ export class ClawtrateClient {
           this.keepSentPictures(message);
       }
       const activity = markUnconfirmed(reconciled);
-      const items = mapHistory(messages);
+      const items = mapHistory(messages, { startedAt: startedTaskSince(history) });
       this.sentSources.set(key, sentSources(messages));
       const rebuilt: Transcript = {
         ...current,
@@ -9780,6 +9868,16 @@ export class ClawtrateClient {
 
   private handleEvent(event: EventFrame, generation: number): void {
     switch (event.event) {
+      case "update.available":
+        // While a setup connection is open, the report is held, never published.
+        if (this.isSetup(this.settings?.url)) {
+          this.holdSetupUpdate(generation, asRecord(event.payload)?.updateAvailable);
+          return;
+        }
+        this.setConnection({
+          openclawUpdate: readOpenClawUpdate(asRecord(event.payload)?.updateAvailable),
+        });
+        return;
       case "sessions.changed":
         this.handleSessionsChanged(event.payload, generation);
         return;
@@ -10540,6 +10638,15 @@ export class ClawtrateClient {
           hint: null,
         },
       });
+  }
+
+  /**
+   * A setup connection's report of a newer OpenClaw, validated and held, never published: it is
+   * published only if this connection's setup succeeds (`bootstrap`), and dropped otherwise.
+   */
+  private holdSetupUpdate(generation: number, value: unknown): void {
+    const update = readOpenClawUpdate(value);
+    this.setupUpdate = update ? { generation, update } : null;
   }
 
   /** Whether the connection to `url` is the host's setup connection. */

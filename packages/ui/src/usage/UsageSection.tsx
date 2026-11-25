@@ -5,6 +5,7 @@
 import {
   budgetPercent,
   currentCount,
+  listedBots,
   type Bot,
   type Budget,
   type ConnectionState,
@@ -181,7 +182,8 @@ function Budgets({
     );
   const budgets = usage?.budgets ?? [];
   const targets: Array<[string, string, BudgetTarget]> = [
-    ...bots.map((bot): [string, string, BudgetTarget] => [
+    // The bots the rail lists (F-562).
+    ...listedBots(state).map((bot): [string, string, BudgetTarget] => [
       `bot:${bot.id}`,
       bot.name,
       { botId: bot.id, routineId: null, routineName: null },

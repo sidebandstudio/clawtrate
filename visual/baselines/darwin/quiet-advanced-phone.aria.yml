@@ -19,6 +19,9 @@
     - text: Show sessions from other tools
     - switch "Show sessions from other tools"
     - paragraph: Off by default. Sessions that an API client, a scheduled routine or another tool started with a bot stay out of the task list, its previews and its unread marks. A routine's runs open from Routines. One that is waiting for your approval or answer always shows.
+    - text: Show the gateway's own bot
+    - switch "Show the gateway's own bot"
+    - paragraph: "Off by default. Every gateway has a bot of its own, its default bot: channel messages, other tools' calls and scheduled runs that name no bot land on it. While you have another bot, it stays out of the sidebar unless it is waiting on you."
   - status
 - region "Conversation":
   - button "Back to bots"

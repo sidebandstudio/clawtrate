@@ -6,7 +6,10 @@
 // its actions as one quiet line in the engine's words, and what a running task
 // is doing follow. Jump to latest takes a reader who is not at the end there,
 // and where the composer will be is the read-only explanation. Nothing shown
-// carries a credential the gateway sent back.
+// carries a credential the gateway sent back. When the chat changes width
+// (iPhone Duo folding, unfolding or turning), the reader stays at the same
+// message (presentation/reading-place.ts). Beside the list with no task open,
+// the chat pane says so (`NoChat`).
 
 import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
 import {
@@ -15,7 +18,16 @@ import {
   readOnlyWords,
 } from "../presentation/conversation-words.ts";
 import { useEffect, useRef, useState, type ComponentRef, type ReactNode } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import {
+  finishesReturn,
+  keptPlace,
+  nextReturning,
+  returnOffset,
+  type ReadingPlace,
+  type Returning,
+  type RowBox,
+} from "../presentation/reading-place.ts";
+import { Pressable, ScrollView, View, type LayoutChangeEvent } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Markdown } from "../components/Markdown.tsx";
 import { EyeIcon } from "../components/icons.tsx";
@@ -34,6 +46,10 @@ function redactRow(row: ChatRow, redact: (text: string) => string): ChatRow {
 
 /** Within this distance of the end, new content is followed. */
 const NEAR_END = 96;
+
+/** The title's key among the rows whose places are kept. */
+const TASK_LINE = "task-line";
+const rowKey = (row: ChatRow) => `${row.kind}:${row.id}`;
 
 function RowView({ row }: { row: ChatRow }) {
   const { c } = useTheme();
@@ -138,6 +154,29 @@ function RowView({ row }: { row: ChatRow }) {
         </View>
       );
   }
+}
+
+/** The chat pane beside the list when no task is open (iPhone Duo unfolded). */
+export function NoChat() {
+  const { c } = useTheme();
+  return (
+    <SafeAreaView
+      edges={["top", "bottom", "left", "right"]}
+      style={{ flex: 1, backgroundColor: c.bg, justifyContent: "center" }}
+    >
+      <View
+        testID="no-chat"
+        style={{ alignItems: "center", gap: S["space-2"], paddingHorizontal: S["space-6"] }}
+      >
+        <Txt weight="medium" accessibilityRole="header">
+          {W.noChatTitle}
+        </Txt>
+        <Txt size={S["text-sm"]} color="text-faint" style={{ textAlign: "center" }}>
+          {W.noChatBody}
+        </Txt>
+      </View>
+    </SafeAreaView>
+  );
 }
 
 /** The task's name, the first line of every transcript. */
@@ -281,6 +320,16 @@ export function Chat({
   const [atEnd, setAtEnd] = useState(false);
   const [contentHeight, setContentHeight] = useState(0);
   const [viewHeight, setViewHeight] = useState(0);
+  // Where the title and each row sit in the scroll content, the reader's place
+  // among them, and, while the view goes back to that place after the chat
+  // changed width, that width and whether the content has its layout there
+  // (`nextReturning` says when the return starts and ends).
+  const boxes = useRef(new Map<string, { y: number; height: number }>());
+  const bodyTop = useRef(0);
+  const extent = useRef({ width: 0, view: 0, content: 0, contentWidth: 0 });
+  const place = useRef<ReadingPlace | null>(null);
+  const scrollY = useRef(0);
+  const returning = useRef<Returning>(null);
 
   // The task is open while its chat is on screen.
   useEffect(() => {
@@ -308,6 +357,40 @@ export function Chat({
     : [];
   const hasConversation = items > 0 || rows.some((row) => row.kind === "bot");
   const running = rows.find((row) => row.kind === "running");
+  const laidOut = (): RowBox[] =>
+    [TASK_LINE, ...rows.map(rowKey)].flatMap((key) => {
+      const box = boxes.current.get(key);
+      if (!box) return [];
+      return [{ key, y: key === TASK_LINE ? box.y : bodyTop.current + box.y, height: box.height }];
+    });
+  const returnToPlace = () => {
+    // With nothing to go back to, the rows are not read: each row's layout calls this.
+    if (returning.current === null || place.current === null) return;
+    const { view, content } = extent.current;
+    const y = returnOffset(returning.current, place.current, laidOut(), content - view);
+    if (y !== null) scroller.current?.scrollTo({ y, animated: false });
+  };
+  /**
+   * Once the chat and its content both have the new width, in whichever order
+   * they came: on the next frame, when the rows have reported where they moved,
+   * go back to the place one last time and stop, so later growth does not move
+   * the reader.
+   */
+  const settle = () => {
+    const target = returning.current;
+    if (!finishesReturn(target)) return;
+    requestAnimationFrame(() => {
+      if (returning.current !== target) return;
+      returnToPlace();
+      returning.current = nextReturning(target, { kind: "settled" });
+    });
+  };
+  const measure = (key: string, event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    boxes.current.set(key, { y, height });
+    returnToPlace();
+  };
+
   let body: ReactNode;
   if (!online && !hasConversation) {
     // Nothing loaded to show; what the task was last seen doing is still said.
@@ -365,7 +448,13 @@ export function Chat({
     body = <Empty title={W.emptyTitle} body={redact(emptyBody(bot.name))} />;
   } else {
     body = (
-      <View style={{ gap: 4 }}>
+      <View
+        style={{ gap: 4 }}
+        onLayout={({ nativeEvent }) => {
+          bodyTop.current = nativeEvent.layout.y;
+          returnToPlace();
+        }}
+      >
         {transcript.status === "error" && (
           <View
             accessibilityRole="alert"
@@ -388,7 +477,11 @@ export function Chat({
             previous.kind !== "stamp" &&
             (previous.kind === "user") !== (row.kind === "user");
           return (
-            <View key={`${row.kind}:${row.id}`} style={{ marginTop: changes ? 12 : 0 }}>
+            <View
+              key={rowKey(row)}
+              style={{ marginTop: changes ? 12 : 0 }}
+              onLayout={(event) => measure(rowKey(row), event)}
+            >
               <RowView row={row} />
             </View>
           );
@@ -399,11 +492,15 @@ export function Chat({
 
   const toEnd = () => {
     following.current = true;
+    returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
     scroller.current?.scrollToEnd({ animated: true });
   };
 
   return (
-    <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: c.bg }}>
+    <SafeAreaView
+      edges={["top", "bottom", "left", "right"]}
+      style={{ flex: 1, backgroundColor: c.bg }}
+    >
       <View style={{ flex: 1 }}>
         <ScrollView
           ref={scroller}
@@ -423,14 +520,55 @@ export function Chat({
               contentSize.height - (contentOffset.y + layoutMeasurement.height) < NEAR_END;
             following.current = end;
             setAtEnd(end);
+            scrollY.current = contentOffset.y;
+            place.current = keptPlace(returning.current, place.current, laidOut(), scrollY.current);
           }}
-          onLayout={({ nativeEvent }) => setViewHeight(nativeEvent.layout.height)}
-          onContentSizeChange={(_width, height) => {
+          onScrollBeginDrag={() => {
+            returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
+          }}
+          onLayout={({ nativeEvent }) => {
+            const { width, height } = nativeEvent.layout;
+            setViewHeight(height);
+            const was = extent.current.width;
+            extent.current = { ...extent.current, width, view: height };
+            // A new width rewraps every message: go back to the reader's place.
+            returning.current = nextReturning(returning.current, {
+              kind: "resized",
+              from: was,
+              to: width,
+              contentWidth: extent.current.contentWidth,
+              following: following.current,
+              place: place.current,
+            });
+            returnToPlace();
+            settle();
+          }}
+          onContentSizeChange={(contentWidth, height) => {
             setContentHeight(height);
+            extent.current = { ...extent.current, content: height, contentWidth };
+            returning.current = nextReturning(returning.current, {
+              kind: "content-laid-out",
+              width: contentWidth,
+            });
             if (following.current) scroller.current?.scrollToEnd({ animated: false });
+            else returnToPlace();
+            // The rows moved without a scroll (a message grew): once they have
+            // reported, read the place again from where the view is.
+            if (returning.current === null)
+              requestAnimationFrame(() => {
+                place.current = keptPlace(
+                  returning.current,
+                  place.current,
+                  laidOut(),
+                  scrollY.current,
+                );
+              });
+            settle();
           }}
         >
-          <TaskLine task={task} />
+          <View onLayout={(event) => measure(TASK_LINE, event)}>
+            <TaskLine task={task} />
+          </View>
           {body}
         </ScrollView>
         {!atEnd && contentHeight > viewHeight && (

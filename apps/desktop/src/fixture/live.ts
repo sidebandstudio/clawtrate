@@ -3,6 +3,7 @@
 // on Otto's "Disk almost full on the media box" task. Invented content only.
 
 import {
+  listedBots,
   admitApproval,
   applyQuestionRequested,
   emptyActivity,
@@ -1005,6 +1006,9 @@ export function liveCommand(
     case "setShowOtherToolSessions":
       set({ ...get(), showOtherToolSessions: command.on });
       return Promise.resolve();
+    case "setShowGatewayBot":
+      set({ ...get(), showGatewayBot: command.on });
+      return Promise.resolve();
     case "readComposerMenu":
       // As the gateway lists them for Otto: its skills and commands, or the bots and a routine.
       return Promise.resolve(
@@ -1036,7 +1040,8 @@ export function liveCommand(
               },
             ]
           : [
-              ...get().bots.map((bot) => ({
+              // The bots the sidebar lists, as the client answers (F-562).
+              ...listedBots(get()).map((bot) => ({
                 kind: "bot" as const,
                 name: bot.name,
                 description: null,

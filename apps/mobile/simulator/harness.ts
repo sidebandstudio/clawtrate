@@ -237,9 +237,11 @@ export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
  */
 export function screen(pointsWide: number): (x: number, y: number) => [number, number, number] {
   const file = join(OUTPUT, "screen.png");
-  simctl("io", env.device, "screenshot", file);
+  const shown = screenshot(file);
   const image = decodePng(readFileSync(file));
-  const scale = image.width / pointsWide;
+  // On iPhone Duo the picture is of the display in use, whose width in points is known:
+  // there a side safe area can keep every element narrower than the screen.
+  const scale = image.width / (shown?.width ?? pointsWide);
   return (x, y) => {
     const i = (Math.round(y * scale) * image.width + Math.round(x * scale)) * 4;
     return [image.data[i]!, image.data[i + 1]!, image.data[i + 2]!];
@@ -261,6 +263,17 @@ function simctl(...args: string[]) {
   const result = spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`simctl ${args.join(" ")}: ${result.stderr}`);
   return result.stdout;
+}
+
+/**
+ * The screen as a PNG. iPhone Duo has two displays, and simctl takes the inner
+ * one unless told otherwise, so there the picture is of the display in use.
+ */
+function screenshot(file: string): Display | null {
+  const active =
+    process.env.CLAWTRATE_IOS_FORM === "duo" ? (displays().find((d) => d.active) ?? null) : null;
+  simctl("io", env.device, "screenshot", ...(active ? [`--display=${active.id}`] : []), file);
+  return active;
 }
 
 /**
@@ -388,12 +401,15 @@ export async function switcherSnapshot(after: number) {
   return { ...decodePng(readFileSync(png)), savedAt: snapshot.time };
 }
 
-/** The screen now, whole, as pixels. */
-export function frame(): { width: number; data: Uint8Array } {
+/**
+ * The screen now, whole, as pixels. On iPhone Duo it is the display in use, and
+ * `pointsWide` is that display's width in points.
+ */
+export function frame(): { width: number; data: Uint8Array; pointsWide: number | null } {
   const file = join(OUTPUT, "frame.png");
-  simctl("io", env.device, "screenshot", file);
+  const shown = screenshot(file);
   const image = decodePng(readFileSync(file));
-  return { width: image.width, data: image.data };
+  return { width: image.width, data: image.data, pointsWide: shown?.width ?? null };
 }
 
 /**
@@ -405,8 +421,9 @@ export async function moves(
   region: { x1: number; y1: number; x2: number; y2: number },
   pointsWide: number,
 ): Promise<boolean> {
-  const crop = ({ width, data }: { width: number; data: Uint8Array }) => {
-    const scale = width / pointsWide;
+  const crop = ({ width, data, pointsWide: shown }: ReturnType<typeof frame>) => {
+    // As in `screen`: a side safe area can keep every element narrower than the display.
+    const scale = width / (shown ?? pointsWide);
     const out: number[] = [];
     for (let y = Math.round(region.y1 * scale); y < Math.round(region.y2 * scale); y += 1)
       for (let x = Math.round(region.x1 * scale); x < Math.round(region.x2 * scale); x += 1) {
@@ -813,6 +830,90 @@ export function appLog(sinceSeconds: number): string {
   return result.stdout;
 }
 
+/** One of the device's built-in displays, as CoreDevice reports it, in points. */
+export type Display = {
+  id: number;
+  name: string;
+  active: boolean;
+  on: boolean;
+  width: number;
+  height: number;
+};
+
+/**
+ * The device's built-in displays and which one is in use. iPhone Duo has two:
+ * folded, the outer one is active and the inner one is off.
+ */
+export function displays(): Display[] {
+  mkdirSync(OUTPUT, { recursive: true });
+  const file = join(OUTPUT, "displays.json");
+  // The JSON output is devicectl's stable one; its text output is not.
+  const result = spawnSync(
+    "xcrun",
+    [
+      "devicectl",
+      "device",
+      "info",
+      "displays",
+      "--device",
+      env.device,
+      "--quiet",
+      "--json-output",
+      file,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) throw new Error(`devicectl device info displays: ${result.stderr}`);
+  const report = JSON.parse(readFileSync(file, "utf8")) as {
+    result: {
+      displays: Array<{
+        displayId: number;
+        name: string;
+        active: boolean;
+        backlightState: string;
+        nativeSize: [number, number];
+        pointScale: number;
+        type: Record<string, unknown>;
+      }>;
+    };
+  };
+  return report.result.displays
+    .filter((d) => "integrated" in d.type)
+    .map((d) => ({
+      id: d.displayId,
+      name: d.name,
+      active: d.active,
+      on: d.backlightState !== "off",
+      width: d.nativeSize[0] / d.pointScale,
+      height: d.nativeSize[1] / d.pointScale,
+    }));
+}
+
+/** What the app measured of its window (modules/clawtrate-layout logs each change), oldest first. */
+export type MeasuredWindow = {
+  width: number;
+  height: number;
+  hinge: boolean;
+  sizeClass: "compact" | "regular";
+  bar: "none" | "left" | "right";
+  regions: number;
+  safe: { top: number; bottom: number; left: number; right: number };
+};
+
+export function measuredWindows(sinceSeconds: number): MeasuredWindow[] {
+  const pattern =
+    /window (\d+)x(\d+) hinge=(true|false) sizeClass=(compact|regular) bar=(none|left|right) regions=(\d+) safe=(\d+),(\d+),(\d+),(\d+)/g;
+  return [...appLog(sinceSeconds).matchAll(pattern)].map((m) => ({
+    width: Number(m[1]),
+    height: Number(m[2]),
+    hinge: m[3] === "true",
+    sizeClass: m[4] as MeasuredWindow["sizeClass"],
+    bar: m[5] as MeasuredWindow["bar"],
+    regions: Number(m[6]),
+    safe: { top: Number(m[7]), bottom: Number(m[8]), left: Number(m[9]), right: Number(m[10]) },
+  }));
+}
+
 /** A loopback port nothing listens on. */
 export async function deadPort(): Promise<number> {
   const server = createServer();
@@ -834,7 +935,7 @@ export async function shoot(name: string) {
   for (const appearance of ["light", "dark"]) {
     simctl("ui", env.device, "appearance", appearance);
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    simctl("io", env.device, "screenshot", join(dir, `${name}-${appearance}.png`));
+    screenshot(join(dir, `${name}-${appearance}.png`));
   }
   simctl("ui", env.device, "appearance", "light");
   await new Promise((resolve) => setTimeout(resolve, 1000));
