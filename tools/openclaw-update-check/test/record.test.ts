@@ -287,9 +287,73 @@ describe("the update check's verdict", () => {
     expect(verdict.failures).toEqual([]);
     expect(verdict.facts.secondPress).toMatchObject({ ok: false });
     expect(judge(second("managed-service-handoff-started"), RUN, plan).failures).toEqual([
-      "the second update.run answered managed-service-handoff-started, not managed-service-handoff-already-running",
+      "the second update.run answered ok: false, managed-service-handoff-started, not ok: false, managed-service-handoff-already-running",
     ]);
     expect(judge(record(), RUN, plan).failures).toContain("update.run was sent 1 times, not 2");
+  });
+
+  it("fails a second press answered ok: true even with the expected reason", () => {
+    const plan: Plan = { expect: "updated", secondPress: true };
+    const entries = record();
+    entries.splice(
+      5,
+      0,
+      { at: T0 + 600, kind: "sent", method: "update.run", params: {} },
+      {
+        at: T0 + 900,
+        kind: "answer",
+        method: "update.run",
+        result: {
+          runId: "6b3e3f4e-8c1a-4a57-9d2f-0c1f1d6f7a11",
+          ok: true,
+          result: { reason: "managed-service-handoff-already-running" },
+        },
+      },
+    );
+    expect(judge(entries, RUN, plan).failures).toEqual([
+      "the second update.run answered ok: true, managed-service-handoff-already-running, not ok: false, managed-service-handoff-already-running",
+    ]);
+  });
+
+  it("fails a record without target.version", () => {
+    const entries = record().map((e) =>
+      e.kind === "answer" && e.method === "update.runs.get"
+        ? {
+            ...e,
+            result: {
+              run: { ...(e.result as { run: object }).run, target: {} },
+            },
+          }
+        : e,
+    );
+    expect(judge(entries, RUN, UPDATED).failures).toEqual(["the run record has no target.version"]);
+  });
+
+  it("reads identity only after the last hello in trace order, even in the same millisecond", () => {
+    const entries = record();
+    const hello = entries.findLastIndex((e) => e.kind === "hello");
+    // An identity answer from before the last hello, stamped with the hello's own millisecond,
+    // and the final read refused: no identity was read on the judged connection.
+    const at = entries[hello]!.at;
+    entries.splice(hello, 0, {
+      at,
+      kind: "answer",
+      method: "gateway.identity.get",
+      result: { deviceId: "gw" },
+    });
+    const judged = entries.filter(
+      (e, i) => !(i > hello + 1 && e.kind === "answer" && e.method === "gateway.identity.get"),
+    );
+    judged.push({
+      at: T0 + 57_000,
+      kind: "refused",
+      method: "gateway.identity.get",
+      code: "UNAVAILABLE",
+      message: "",
+    });
+    expect(judge(judged, RUN, UPDATED).failures).toEqual([
+      "gateway.identity.get was not read after the restart",
+    ]);
   });
 
   it("checks a client reopened mid-run finds the same run active", () => {
@@ -327,6 +391,44 @@ describe("the update check's verdict", () => {
     expect(judge(reopened("other"), RUN, plan).failures).toEqual([
       "after reopening mid-run, update.status did not list the same run as active",
     ]);
+  });
+
+  it("takes the reopen's status only from the reopened connection, before the gateway's next close", () => {
+    const plan: Plan = { expect: "updated", reopen: true };
+    const entries = record();
+    // The reopened connection's status read was refused; the status after the restart lists the
+    // run in verifying, and must not stand in for it.
+    entries.splice(
+      6,
+      0,
+      { at: T0 + 3_000, kind: "close", code: 1005, reason: "", own: true },
+      {
+        at: T0 + 3_500,
+        kind: "hello",
+        serverVersion: "2026.10.6",
+        updateAvailable: null,
+        uptimeMs: 1,
+      },
+      {
+        at: T0 + 3_600,
+        kind: "refused",
+        method: "update.status",
+        code: "UNAVAILABLE",
+        message: "",
+      },
+    );
+    expect(judge(entries, RUN, plan).failures).toEqual([
+      "after reopening mid-run, update.status did not list the same run as active",
+    ]);
+  });
+
+  it("says a case whose setup failed was not exercised", () => {
+    const verdict = judge(record(), RUN, {
+      expect: "updated",
+      notExercised: "the turn ended before the press",
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.failures[0]).toBe("not exercised: the turn ended before the press");
   });
 
   it("records how the turn in flight ended", () => {
@@ -635,6 +737,66 @@ describe("the requester and what the run delivers", () => {
     expect(judge(tagged({ extra: [notice] }), RUN, plan).failures).toEqual([
       "a transcript mentions the update: assistant: OpenClaw was updated to 2026.11.10.",
     ]);
+  });
+
+  it("compares the kept requester in any key order", () => {
+    const reordered = { senderId: TAG, channel: "webchat" };
+    expect(judge(tagged({ kept: reordered }), RUN, plan).failures).toEqual([]);
+    expect(judge(tagged({ kept: { channel: "webchat" } }), RUN, plan).failures).toEqual([
+      'the run record kept requester {"channel":"webchat"}, not {"channel":"webchat","senderId":"clawtrate-update:1"}',
+    ]);
+    expect(judge(tagged({ kept: { ...REQUESTER, extra: "x" } }), RUN, plan).failures).toHaveLength(
+      1,
+    );
+  });
+
+  it("needs a session list on each side of the press", () => {
+    const refusedAfter = tagged().map((e): Entry =>
+      e.kind === "answer" && e.method === "sessions.list" && e.at > T0
+        ? { at: e.at, kind: "refused", method: "sessions.list", code: "UNAVAILABLE", message: "" }
+        : e,
+    );
+    refusedAfter.splice(3, 0, {
+      at: T0 - 150,
+      kind: "sent",
+      method: "sessions.list",
+      params: {},
+    });
+    expect(judge(refusedAfter, RUN, plan).failures).toEqual([
+      "sessions.list did not answer both before and after the press",
+    ]);
+    // Two answered empty lists pass.
+    const empty = tagged({ sessionsAfter: [] }).map((e) =>
+      e.kind === "answer" && e.method === "sessions.list" ? { ...e, result: { sessions: [] } } : e,
+    );
+    expect(judge(empty, RUN, plan).failures).toEqual([]);
+  });
+
+  it("fails a dropped-answer case whose answer arrived after all", () => {
+    expect(judge(tagged(), RUN, { ...plan, dropAnswer: true }).failures).toEqual([
+      "the update.run answer arrived before the connection closed: no answer was lost",
+    ]);
+  });
+
+  it("ends the quiet gap when update.runs.get reports the end", () => {
+    const changed = (at: number, status = "running"): Entry => ({
+      at,
+      kind: "event",
+      event: "update.run.changed",
+      payload: { runId: RUN, phase: "validating", status },
+    });
+    const entries: Entry[] = [
+      { at: 0, kind: "sent", method: "update.run", params: {} },
+      changed(2_000),
+      {
+        at: 3_000,
+        kind: "answer",
+        method: "update.runs.get",
+        result: { run: { runId: RUN, phase: "finished", status: "succeeded" } },
+      },
+      changed(40_000, "succeeded"),
+    ];
+    expect(judge(entries, RUN, plan).facts.longestQuietMs).toBeNull();
   });
 
   it("counts answers that said the database is locked", () => {

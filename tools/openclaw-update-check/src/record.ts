@@ -41,6 +41,8 @@ export type Plan = {
   dropAnswer?: boolean;
   /** The press came while the gateway's own automatic update waited: it adopts that campaign. */
   campaign?: boolean;
+  /** Why the case's setup failed, so no update was sent: the case was not exercised. */
+  notExercised?: string;
 };
 
 /**
@@ -100,6 +102,15 @@ export function readRun(value: unknown): RunView {
       })),
     noticeDelivered: asRecord(run.verification).noticeDelivered ?? null,
   };
+}
+
+/** Two records with the same fields and the same string values, in any key order. */
+function sameFields(a: unknown, b: unknown): boolean {
+  const x = asRecord(a);
+  const y = asRecord(b);
+  const keys = Object.keys(x).sort();
+  if (keys.length === 0 || keys.join() !== Object.keys(y).sort().join()) return false;
+  return keys.every((k) => typeof x[k] === "string" && x[k] === y[k]);
 }
 
 /** A session as `sessions.list` lists it: its key and what changes when something lands in it. */
@@ -284,8 +295,15 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
     : null;
   const secondPress = plan.secondPress && runAnswers[1] ? readAnswer(runAnswers[1]) : null;
   const runRefused = after.find((e) => e.kind === "refused" && e.method === "update.run");
-  if (plan.dropAnswer) {
-    // The answer was lost on purpose; the run is found by its tag instead.
+  if (plan.notExercised !== undefined) {
+    failures.push(`not exercised: ${plan.notExercised}`);
+  } else if (plan.dropAnswer) {
+    // The answer must be lost; the run is then found by its tag.
+    if (runAnswers.length > 0) {
+      failures.push(
+        "the update.run answer arrived before the connection closed: no answer was lost",
+      );
+    }
   } else if (runRefused?.kind === "refused" && !handoff) {
     failures.push(`update.run was refused: ${runRefused.code} ${runRefused.message}`);
   } else if (!handoff) {
@@ -315,7 +333,9 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
   let dropAt: number | null = null;
   let reconnect: Extract<Entry, { kind: "hello" }> | null = null;
   let changedBeforeDrop = false;
-  let reopenedAt: number | null = null;
+  /** Where the check's own close is in the trace, and the gateway's next close after it. */
+  let reopenedIndex: number | null = null;
+  let closeAfterReopen: number | null = null;
   let longestQuietMs: number | null = null;
   let lastRunEventAt: number | null = null;
   let finished = false;
@@ -350,14 +370,16 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
       const run = readRun(asRecord(e.result).run);
       if (run.runId === null || (runId !== null && run.runId !== runId)) continue;
       seen(e.at, run.phase, run.status, "runs.get");
+      if (run.status !== null && STATUS_DONE.has(run.status)) finished = true;
       finalRun = run;
     } else if (e.kind === "refused" && e.method === "update.runs.get" && e.code === "UNAVAILABLE") {
       mark(unavailable, rel(e.at));
     } else if (e.kind === "close") {
       if (e.own) {
-        reopenedAt = e.at;
+        reopenedIndex = entries.indexOf(e);
         continue;
       }
+      if (reopenedIndex !== null) closeAfterReopen ??= entries.indexOf(e);
       closes += 1;
       dropAt ??= e.at;
       // A gap across a disconnection is the restart's, not a quiet run's.
@@ -377,7 +399,17 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
   const afterDrop = activeOf(firstStatusAfter(reconnectAt));
   const activeRunAfterDrop =
     afterDrop === null ? null : { phase: afterDrop.runId === runId ? afterDrop.phase : null };
-  const reopened = activeOf(firstStatusAfter(reopenedAt));
+  // The reopened connection's own status read: after the check's close, before the gateway's next.
+  const reopenStatus =
+    reopenedIndex === null
+      ? undefined
+      : entries
+          .slice(reopenedIndex + 1, closeAfterReopen ?? entries.length)
+          .find(
+            (e): e is Extract<Entry, { kind: "answer" }> =>
+              e.kind === "answer" && e.method === "update.status",
+          );
+  const reopened = activeOf(reopenStatus);
   const reopen =
     reopened === null
       ? null
@@ -409,7 +441,7 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
   }
   // An adopted campaign's record is the campaign's own; the press's tag is recorded as found.
   if (prefix !== undefined && run && !plan.campaign) {
-    if (JSON.stringify(run.requester) !== JSON.stringify(sentRequester)) {
+    if (!sameFields(run.requester, sentRequester)) {
       failures.push(
         `the run record kept requester ${JSON.stringify(run.requester)}, not ${JSON.stringify(sentRequester)}`,
       );
@@ -420,9 +452,12 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
   }
 
   // Nothing is delivered because of the run: no notice, no new or changed session.
-  const sessionLists = answers(entries, "sessions.list");
-  const sessionsBefore = sessionsOf(sessionLists[0]?.result);
-  const sessionsAfter = sessionsOf(sessionLists.at(-1)?.result);
+  // A snapshot on each side of the press: the last one before it, and the last one after it.
+  const listedSessions = entries.some((e) => e.kind === "sent" && e.method === "sessions.list");
+  const snapshotBefore = answers(before, "sessions.list").at(-1);
+  const snapshotAfter = answers(after, "sessions.list").at(-1);
+  const sessionsBefore = sessionsOf(snapshotBefore?.result);
+  const sessionsAfter = sessionsOf(snapshotAfter?.result);
   const busyKey = plan.busySession;
   const newSessions = [...sessionsAfter.keys()].filter((k) => !sessionsBefore.has(k));
   const changedSessions = [...sessionsAfter]
@@ -452,7 +487,9 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
   if (updateMessages.length > 0) {
     failures.push(`a transcript mentions the update: ${updateMessages.join(" | ")}`);
   }
-  if (sessionLists.length >= 2) {
+  if (listedSessions && (snapshotBefore === undefined || snapshotAfter === undefined)) {
+    failures.push("sessions.list did not answer both before and after the press");
+  } else if (snapshotBefore !== undefined && snapshotAfter !== undefined) {
     if (newSessions.length > 0) failures.push(`a session appeared: ${newSessions.join(", ")}`);
     if (changedSessions.length > 0) {
       failures.push(`a session changed: ${changedSessions.join(", ")}`);
@@ -479,15 +516,14 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
   ).length;
   if (databaseLocked > 0) failures.push(`${databaseLocked} answers said "database is locked"`);
 
+  // The judged connection is the last hello's: only what came after it in the trace counts.
   const lastHello = hellos.at(-1);
-  const serverVersionAfter = lastHello && lastHello.at > t0 ? lastHello.serverVersion : null;
+  const lastHelloIndex = lastHello ? entries.indexOf(lastHello) : -1;
+  const serverVersionAfter = lastHello && lastHelloIndex > sentAt ? lastHello.serverVersion : null;
   const identityAfter = lastHello
     ? text(
-        asRecord(
-          answers(after, "gateway.identity.get")
-            .filter((e) => e.at >= lastHello.at)
-            .at(-1)?.result,
-        ).deviceId,
+        asRecord(answers(entries.slice(lastHelloIndex + 1), "gateway.identity.get").at(-1)?.result)
+          .deviceId,
       )
     : null;
 
@@ -511,9 +547,13 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
     if (!plan.dropAnswer && handoff && (handoff.runId === null || !UUID.test(handoff.runId))) {
       failures.push(`update.run answered run id ${handoff.runId}, not a UUID`);
     }
-    if (plan.secondPress && secondPress?.reason !== "managed-service-handoff-already-running") {
+    if (
+      plan.secondPress &&
+      (secondPress?.ok !== false ||
+        secondPress.reason !== "managed-service-handoff-already-running")
+    ) {
       failures.push(
-        `the second update.run answered ${secondPress?.reason ?? "nothing"}, not managed-service-handoff-already-running`,
+        `the second update.run answered ok: ${String(secondPress?.ok)}, ${secondPress?.reason ?? "nothing"}, not ok: false, managed-service-handoff-already-running`,
       );
     }
     if (!run || run.status === null || !STATUS_DONE.has(run.status)) {
@@ -546,7 +586,9 @@ export function judge(entries: readonly Entry[], runId: string | null, plan: Pla
         if (latestBefore !== null && run.after !== latestBefore) {
           failures.push(`after.version is ${run.after}, but the gateway offered ${latestBefore}`);
         }
-        if (run.target !== null && run.after !== run.target) {
+        if (run.target === null) {
+          failures.push("the run record has no target.version");
+        } else if (run.after !== run.target) {
           failures.push(`after.version is ${run.after}, but target.version is ${run.target}`);
         }
       }

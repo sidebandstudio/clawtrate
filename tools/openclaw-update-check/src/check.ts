@@ -387,8 +387,19 @@ try {
   // What the gateway's sessions look like before, to see whether the run delivers anything.
   await call("sessions.list", { limit: 100, includeLastMessage: true });
 
+  // Check the case's setup once more, right before the press: a busy case needs its turn running,
+  // a warm one its short turn finished. Otherwise nothing is sent and the case says so.
+  if (busySeconds > 0 && !busyStarted) plan.notExercised = "the turn never reached the model";
+  else if (busySeconds > 0 && turnEnded) plan.notExercised = "the turn ended before the press";
+  else if (values["warm-session"] && !turnEnded) {
+    plan.notExercised = "the short turn had not ended before the press";
+  }
+  if (plan.notExercised !== undefined) note(`not pressing: ${plan.notExercised}`);
+
   const params = press();
-  if (plan.dropAnswer) {
+  if (plan.notExercised !== undefined) {
+    // No press.
+  } else if (plan.dropAnswer) {
     runId = await pressAndDrop(params);
   } else {
     const answer = await call("update.run", params, 120_000);

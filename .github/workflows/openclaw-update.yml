@@ -240,12 +240,23 @@ jobs:
           echo "$lines" | cut -c1-400
           other=$(echo "$lines" | grep -v 'notice skipped: no delivery target' | grep -v '^$' || true)
           if [ -n "$other" ]; then
-            echo "::error::the gateway logged an update notice other than 'skipped: no delivery target'"
-            exit 1
+            # A measuring job records it; a gating job fails.
+            case " $ARGS " in
+              *" --measure "*)
+                echo "::warning::the gateway logged an update notice other than 'skipped: no delivery target'"
+                echo "- Update notice other than 'skipped: no delivery target' in the gateway's log" >> "$GITHUB_STEP_SUMMARY"
+                ;;
+              *)
+                echo "::error::the gateway logged an update notice other than 'skipped: no delivery target'"
+                exit 1
+                ;;
+            esac
           fi
       - name: Collect the gateway's logs
         if: always()
         run: |
+          # Setup can fail before OUT is set: use the folder the upload reads.
+          OUT="${OUT:-$RUNNER_TEMP/openclaw-update}"
           mkdir -p "$OUT/logs"
           {
             echo "## openclaw on PATH"; openclaw --profile "$PROFILE" --version || true
@@ -262,7 +273,10 @@ jobs:
             find "$dir" -type f \( -name '*.log' -o -name '*.jsonl' -o -name '*.txt' \) -size -20M \
               -exec cp --parents {} "$OUT/logs/" \; 2> /dev/null || true
           done
-          grep -rlF "$OPENCLAW_CHECK_TOKEN" "$OUT" | xargs -r sed -i "s/$OPENCLAW_CHECK_TOKEN/[token]/g"
+          # Setup can also fail before the token exists; an empty pattern would match everything.
+          if [ -n "${OPENCLAW_CHECK_TOKEN:-}" ]; then
+            grep -rlF "$OPENCLAW_CHECK_TOKEN" "$OUT" | xargs -r sed -i "s/$OPENCLAW_CHECK_TOKEN/[token]/g" || true
+          fi
           # What the gateway's own logs say about locks and deliveries, for the run's page.
           logs=$(find "$OUT" -type f \( -name '*.log' -o -name 'journal.txt' \) ! -name 'scripted-model.log')
           {
