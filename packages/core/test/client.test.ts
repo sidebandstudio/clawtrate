@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
-import { ClawtrateClient, MAX_SESSION_PAGES, REQUESTED_SCOPES } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  DISCOVERY_NOT_READY,
+  MAX_SESSION_PAGES,
+  REQUESTED_SCOPES,
+} from "../src/client.ts";
 import {
   deferred,
   FakeGateway,
@@ -15,7 +20,7 @@ import {
 
 const URL_A = "ws://127.0.0.1:19001";
 const URL_B = "wss://gateway.example.com";
-const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
+const FAST = { reconnect: { initialMs: 20, maxMs: 40 }, readAgainMs: 5 };
 
 function connectParams(gateway: FakeGateway, index = 0) {
   return gateway.connects[index] as {
@@ -268,7 +273,9 @@ describe("discovery failures (B3)", () => {
     await client.connect({ url: URL_A, token: "t" });
     await until(() => client.state.discovery.status === "error");
     expect(client.state.connection.status).toBe("connected");
-    expect(client.state.discovery.error).toMatch(/synthetic list failure/);
+    // The gateway said it wasn't ready, every try: plain words, its own text beside them.
+    expect(client.state.discovery.error).toBe(DISCOVERY_NOT_READY);
+    expect(client.state.discovery.detail).toMatch(/synthetic list failure/);
     expect(client.state.tasksByBot.main?.map((task) => task.title)).toEqual(["A"]);
 
     fail = false;
@@ -276,6 +283,7 @@ describe("discovery failures (B3)", () => {
     await until(() => client.state.discovery.status === "ready");
     expect(client.state.bots.map((bot) => bot.name)).toEqual(["Juniper"]);
     expect(client.state.discovery.error).toBeNull();
+    expect(client.state.discovery.detail).toBeNull();
     client.stop();
   });
 });

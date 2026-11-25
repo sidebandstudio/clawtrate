@@ -30,6 +30,23 @@ export function taskInSync(state: ClawtrateState, taskKey: string | null): boole
   );
 }
 
+/**
+ * What is on screen is current: the connection is up and nothing is still loading again after
+ * a drop. A load that failed on the live connection ends the catching up too: it says that it
+ * failed (the strip), and nothing reads as offline. Only a connection that is down, or back and
+ * still loading, makes the composer say "Offline" and the run line "Reconnecting".
+ */
+export function caughtUpFor(
+  state: ClawtrateState,
+  phase: SyncPhase,
+  taskKey: string | null,
+): boolean {
+  if (state.connection.status !== "connected") return false;
+  if (phase !== "dropped") return true;
+  const transcript = taskKey ? state.transcripts[taskKey] : undefined;
+  return state.discovery.status === "error" || transcript?.status === "error";
+}
+
 export function useSyncPhase(state: ClawtrateState, taskKey: string | null): SyncPhase {
   const connected = state.connection.status === "connected";
   const [phase, setPhase] = useState<SyncPhase>(connected ? "none" : "dropped");
@@ -60,6 +77,8 @@ export type Strip = {
   short?: string;
   /** The explanation after the middle dot; it shortens first. */
   more: string | null;
+  /** The gateway's own words, when `more` says them plainly: in the strip's title, not its text. */
+  detail?: string | null;
   action: "retry" | "reload" | "reconnect" | null;
   /** Show the host's retry countdown in the text. */
   countdown: boolean;
@@ -115,6 +134,7 @@ export function stripFor(
       text: "Couldn't load bots and tasks",
       short: "Couldn't load bots",
       more: discovery.error,
+      detail: discovery.detail,
       action: "retry",
       countdown: false,
     };
@@ -173,7 +193,9 @@ export function StatusStrip({
       role="status"
       data-tone={strip.tone}
       data-testid="status-strip"
-      title={strip.more ? `${text} · ${strip.more}` : text}
+      title={[text, strip.more, strip.detail !== strip.more && strip.detail]
+        .filter(Boolean)
+        .join(" · ")}
     >
       <span className="status-dot" aria-hidden="true" />
       <span className="status-strip-text">

@@ -26,7 +26,7 @@ import { Rail } from "./Rail.tsx";
 import { summarize, useSelection } from "./selection.ts";
 import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
-import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
+import { caughtUpFor, refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
@@ -752,8 +752,9 @@ export function Shell({
   );
   const phase = useSyncPhase(state, taskKey);
   // Connected is not caught up: until bots, tasks and the open task have
-  // loaded again after a drop, what is on screen is last seen.
-  const caughtUp = state.connection.status === "connected" && phase !== "dropped";
+  // loaded again after a drop, what is on screen is last seen. A load that
+  // failed on the live connection is not a lost connection.
+  const caughtUp = caughtUpFor(state, phase, taskKey);
   useEffect(() => {
     onCaughtUp?.(caughtUp);
   }, [caughtUp, onCaughtUp]);

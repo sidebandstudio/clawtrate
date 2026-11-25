@@ -189,6 +189,7 @@ function loaded(now: number): ClawtrateState {
     discovery: {
       status: "ready",
       error: null,
+      detail: null,
       partial: false,
       // The task list was read on this connection, as the host stamps it.
       tasksRead: {
@@ -275,6 +276,7 @@ const discovered = (state: ClawtrateState): ClawtrateState => ({
   discovery: {
     status: "ready",
     error: null,
+    detail: null,
     partial: false,
     tasksRead: {
       gatewayId: state.connection.gatewayId,
@@ -433,6 +435,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
           discovery: {
             status: "error",
             error: "agents.list failed: the gateway is restarting.",
+            detail: null,
             partial: false,
             tasksRead: base.discovery.tasksRead,
           },

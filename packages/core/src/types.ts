@@ -532,6 +532,8 @@ export type DiscoveryState = {
   status: "idle" | "loading" | "ready" | "error";
   /** Set when a read failed; data from earlier successful reads is kept. */
   error: string | null;
+  /** The gateway's own words for the failure, when `error` says it plainly; null otherwise. */
+  detail: string | null;
   /** True when the gateway reported more tasks than the client loaded. */
   partial: boolean;
   /** Where the task list shown was read (`ReadStamp`); null before the first list. */
@@ -734,6 +736,7 @@ export const initialConnectionState: ConnectionState = {
 export const initialDiscoveryState: DiscoveryState = {
   status: "idle",
   error: null,
+  detail: null,
   partial: false,
   tasksRead: null,
 };

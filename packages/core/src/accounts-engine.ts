@@ -70,6 +70,11 @@ export type AccountsContext = {
     params: unknown,
     options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<unknown>;
+  /**
+   * Read, and ask again while the gateway answers that it isn't ready and `current()` holds
+   * (`readAgain`, with the client's waits).
+   */
+  readAgain<T>(read: () => Promise<T>, current: () => boolean): Promise<T>;
   get(): AccountsState;
   update(change: (accounts: AccountsState) => AccountsState): void;
   /** The bots the client lists: ids, names, which is the default, and their pictures. */
@@ -243,11 +248,21 @@ export class AccountsEngine {
     const resets = this.resets;
     // Where this read is made: its requests all go now, and a close ends every one of them.
     const readOn = ctx.readStamp();
+    // A read is asked again only on the connection it began on, for the same gateway.
+    const current = () => {
+      const now = ctx.readStamp();
+      return (
+        resets === this.resets &&
+        ctx.connected() &&
+        now.target === readOn.target &&
+        now.connectedAt === readOn.connectedAt
+      );
+    };
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
     try {
       const bots = ctx.bots();
       const [config, views, prefs] = await Promise.all([
-        ctx.request("config.get", {}).then(asRecord),
+        ctx.readAgain(() => ctx.request("config.get", {}), current).then(asRecord),
         this.readViews(bots.map((bot) => bot.id)),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
       ]);
@@ -283,7 +298,9 @@ export class AccountsEngine {
       // a reset; a failed read keeps the rows there are.
       const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
       // Kept while it is out: Create waits for it rather than overlap it (section 4).
-      const picker = ctx.request("models.list", { agentId: defaultBot }).catch(() => null);
+      const picker = ctx
+        .readAgain(() => ctx.request("models.list", { agentId: defaultBot }), current)
+        .catch(() => null);
       this.pickerRead = picker;
       const answer = await picker;
       if (this.pickerRead === picker) this.pickerRead = null;

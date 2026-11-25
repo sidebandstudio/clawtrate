@@ -17,7 +17,7 @@ function state(
   return {
     ...initialState,
     connection: { ...initialState.connection, status, gatewayUrl: "ws://127.0.0.1:19001" },
-    discovery: { status: discovery, error: null, partial: false, tasksRead: null },
+    discovery: { status: discovery, error: null, detail: null, partial: false, tasksRead: null },
   };
 }
 
@@ -100,6 +100,26 @@ describe("the status strip (visual-language.md, section 11)", () => {
   it("reports a failed discovery while connected", () => {
     expect(stripFor(state("connected", "error"), "none", null)).toMatchObject({
       tone: "danger",
+      action: "retry",
+    });
+  });
+
+  it("#592: bots and tasks the gateway wasn't ready for say so plainly, its own words kept aside", () => {
+    const detail =
+      "Could not load tasks: AgentDatabaseRegistryChangedError: Agent database registry ownership is changing during discovery";
+    const failed = state("connected", "error");
+    const strip = stripFor(
+      {
+        ...failed,
+        discovery: { ...failed.discovery, error: "The gateway wasn't ready.", detail },
+      },
+      "dropped",
+      null,
+    );
+    expect(strip).toMatchObject({
+      text: "Couldn't load bots and tasks",
+      more: "The gateway wasn't ready.",
+      detail,
       action: "retry",
     });
   });

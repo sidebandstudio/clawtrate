@@ -211,6 +211,7 @@ describe("the Model menu's lists", () => {
     const engine = new AccountsEngine({
       request: (method, params) =>
         Promise.resolve().then(() => fake.gateway.handlers[method]!(params)),
+      readAgain: (read) => read(),
       get: () => state,
       update: (change) => {
         state = change(state);

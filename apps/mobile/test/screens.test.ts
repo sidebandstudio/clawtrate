@@ -120,7 +120,7 @@ function state(extra: Partial<ClawtrateState> = {}): ClawtrateState {
       status: "connected",
       gatewayUrl: "ws://127.0.0.1:19201",
     },
-    discovery: { status: "ready", error: null, partial: false, tasksRead: null },
+    discovery: { status: "ready", error: null, detail: null, partial: false, tasksRead: null },
     ...extra,
   };
 }
@@ -128,7 +128,7 @@ function state(extra: Partial<ClawtrateState> = {}): ClawtrateState {
 describe("the iPhone app's screens", () => {
   it("F-003: opens Home as soon as the bots have loaded, before their tasks, and shows the steps until then", () => {
     const loading = state({
-      discovery: { status: "loading", error: null, partial: false, tasksRead: null },
+      discovery: { status: "loading", error: null, detail: null, partial: false, tasksRead: null },
     });
     expect(inShell(loading, null)).toBe(false);
     expect(connectView(loading, null, true)).toBe("setup");
@@ -298,7 +298,7 @@ describe("the iPhone app's screens", () => {
   it("claims no task count before discovery gives one, and says when the tasks could not be loaded", () => {
     const otto = bot("otto");
     const loading = state({
-      discovery: { status: "loading", error: null, partial: false, tasksRead: null },
+      discovery: { status: "loading", error: null, detail: null, partial: false, tasksRead: null },
       bots: [otto],
     });
     expect(homeModel(loading, {}, NOW).rows[0]).toMatchObject({
@@ -307,7 +307,13 @@ describe("the iPhone app's screens", () => {
     });
     const failed = {
       ...loading,
-      discovery: { status: "error" as const, error: "x", partial: false, tasksRead: null },
+      discovery: {
+        status: "error" as const,
+        error: "x",
+        detail: null,
+        partial: false,
+        tasksRead: null,
+      },
     };
     expect(homeModel(failed, {}, NOW).rows[0]).toMatchObject({
       spoken: "Otto",
