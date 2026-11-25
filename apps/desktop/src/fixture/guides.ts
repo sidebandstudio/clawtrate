@@ -106,7 +106,17 @@ export function guidesCommands(
       record ??= { bots: [], newBots: false };
       return answer();
     }
+    // "New bots too" is this device's alone: nothing in the files changes. Taking it back needs
+    // no admin access; saying yes does.
+    if (change.action === "newBots" && !change.on) {
+      record = { bots: record?.bots ?? [], newBots: false };
+      return answer();
+    }
     if (!canAdmin()) throw new Error("Changing the bots' instructions needs admin access.");
+    if (change.action === "newBots") {
+      record = { bots: record?.bots ?? [], newBots: true };
+      return answer();
+    }
     if (saveFails)
       return answer([
         "otto: AGENTS.md kept changing while Clawtrate wrote it, so it was left as it is.",

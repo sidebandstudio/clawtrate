@@ -46,7 +46,7 @@
       - listitem:
         - 'checkbox "Quartermaster of the Family Calendar and Errands Not added Its instructions are long: with this section, the gateway may leave part of them out of Quartermaster of the Family Calendar and Errands''s prompt."'
         - text: "Quartermaster of the Family Calendar and Errands Not added Its instructions are long: with this section, the gateway may leave part of them out of Quartermaster of the Family Calendar and Errands's prompt."
-    - checkbox "New bots too, when they're made in Clawtrate" [checked]
+    - checkbox "New bots too, when they're made in Clawtrate"
     - text: New bots too, when they're made in Clawtrate
     - button "Add to 2 bots"
     - button "Remove from all bots"

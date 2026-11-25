@@ -889,6 +889,9 @@ function guidesChange(value: unknown): GuidesChange {
     case "remove":
     case "decline":
       return { action: change.action };
+    case "newBots":
+      if (typeof change.on !== "boolean") throw new Error("invalid guides change");
+      return { action: "newBots", on: change.on };
     default:
       // "update" is the client's own, after a connect: never a viewer's.
       throw new Error("invalid guides change");

@@ -1200,6 +1200,42 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     client.stop();
   });
 
+  it("gets no guides once New bots too is turned off with every bot already current, and turning it off writes nothing", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    for (const bot of fake.bots) {
+      fake.seedWorkspace(bot.id);
+      fake.files.get(bot.id)!.set("AGENTS.md", withSection("# AGENTS.md\n"));
+    }
+    const { client, storage } = await accountsClient({ gateway: fake });
+    const everyone = fake.bots.map((bot) => bot.id);
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: everyone, newBots: true }));
+    const { stamp, folders } = await client.readBotGuides();
+    expect(folders.every((folder) => folder.state === "current")).toBe(true);
+    const off = await client.changeBotGuides({ action: "newBots", on: false }, stamp);
+    expect(off.record).toEqual({ bots: everyone, newBots: false });
+    expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    client.stop();
+  });
+
+  it("gets guides once New bots too is turned on, and turning it on adds or updates nothing by itself", async () => {
+    for (const record of [{ bots: [], newBots: false }, null]) {
+      const fake = new AccountsGateway();
+      fake.identity = "gw-guides";
+      const { client, storage } = await accountsClient({ gateway: fake });
+      if (record) await storage.set(guidesKey("gw-guides"), JSON.stringify(record));
+      const { stamp } = await client.readBotGuides();
+      const on = await client.changeBotGuides({ action: "newBots", on: true }, stamp);
+      expect(on.record).toEqual({ bots: [], newBots: true });
+      expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+      expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+      expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+      client.stop();
+    }
+  });
+
   it("gets no guides when its AGENTS.md is already long enough to be cut from a prompt", async () => {
     const fake = new AccountsGateway();
     fake.identity = "gw-guides";

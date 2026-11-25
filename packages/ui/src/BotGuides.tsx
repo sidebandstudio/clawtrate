@@ -54,6 +54,23 @@ function stateWords(folder: GuideFolder, mine: boolean): string {
   }
 }
 
+/** Whether an answer is the connected gateway's own (`GatewayStamp`): only that one is shown. */
+export const forConnection = (
+  stamp: GatewayStamp | undefined,
+  connection: { gatewayId: string | null; target: number },
+) => stamp?.gatewayId === connection.gatewayId && stamp.target === connection.target;
+
+/**
+ * What a change's answer does to the pane: shown when it is the connected gateway's; when the
+ * connection moved while the change ran, it is the earlier gateway's, so the pane reads the
+ * gateway now on screen again instead, and the change says nothing here.
+ */
+export const afterChange = (
+  read: BotGuidesAnswer,
+  connection: { gatewayId: string | null; target: number },
+): { show: BotGuidesAnswer } | { readAgain: true } =>
+  forConnection(read.stamp, connection) ? { show: read } : { readAgain: true };
+
 /** The guides as the connected gateway reads them now, and a way to change them. */
 function useGuides(active: boolean) {
   const bridge = useBridge();
@@ -70,6 +87,11 @@ function useGuides(active: boolean) {
     },
     [],
   );
+  // The connection as it is when a change finishes, not as it was when it was sent.
+  const now = useRef(connection);
+  useEffect(() => {
+    now.current = connection;
+  });
   useEffect(() => {
     if (!connected || !active) return;
     let live = true;
@@ -95,9 +117,7 @@ function useGuides(active: boolean) {
     connection.target,
   ]);
   // Only the connected gateway's own answer is shown (`GatewayStamp`).
-  const here = (stamp: GatewayStamp | undefined) =>
-    stamp?.gatewayId === connection.gatewayId && stamp.target === connection.target;
-  const shown = answer && here(answer.stamp) ? answer : null;
+  const shown = answer && forConnection(answer.stamp, connection) ? answer : null;
   const change = (next: GuidesChange) => {
     if (!shown) return Promise.resolve(null);
     setBusy(true);
@@ -106,8 +126,13 @@ function useGuides(active: boolean) {
       (read) => {
         if (!mounted.current) return null;
         setBusy(false);
-        setAnswer(read);
-        return read;
+        const next = afterChange(read, now.current);
+        if ("readAgain" in next) {
+          setReads((n) => n + 1);
+          return null;
+        }
+        setAnswer(next.show);
+        return next.show;
       },
       (failure: unknown) => {
         if (!mounted.current) return null;
@@ -177,9 +202,26 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
     new Set(addable.filter((f) => f.state !== "removed" && !long(f)).flatMap((f) => f.bots));
   const tickedFolders = addable.filter((f) => f.bots.some((bot) => ticked.has(bot)));
   const count = tickedFolders.reduce((n, f) => n + f.bots.length, 0);
+  // "New bots too" is part of the first Add. Once this device has answered for the gateway, or a
+  // bot has a section, it shows the saved answer and saves on its own, writing nothing to the
+  // gateway, so the yes can be taken back without removing anything.
+  const savesAtOnce =
+    shown.record !== null ||
+    folders.some((f) => f.state === "current" || f.state === "older" || f.state === "changed");
+  const newBotsOn = savesAtOnce ? (shown.record?.newBots ?? false) : newBots;
+  const saveNewBots = (on: boolean) =>
+    void guides
+      .change({ action: "newBots", on })
+      .then(
+        (read) =>
+          read &&
+          read.errors.length === 0 &&
+          read.record?.newBots === on &&
+          announce(on ? "New bots get this section" : "New bots don't get this section"),
+      );
   const add = () => {
     const asked = tickedFolders.flatMap((f) => f.bots);
-    void guides.change({ action: "add", bots: asked, newBots }).then((read) => {
+    void guides.change({ action: "add", bots: asked, newBots: newBotsOn }).then((read) => {
       setChosen(null);
       // Announced only when the files, read back, hold what was asked.
       if (read && read.errors.length === 0 && allCurrent(read, asked)) announce("Guides added");
@@ -323,29 +365,38 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
         )}
       {admin ? (
         <>
+          {(savesAtOnce || addable.length > 0) && (
+            <label className="b-delete-check bot-guides-check">
+              <input
+                type="checkbox"
+                checked={newBotsOn}
+                disabled={guides.busy}
+                onChange={(event) =>
+                  savesAtOnce ? saveNewBots(event.target.checked) : setNewBots(event.target.checked)
+                }
+              />
+              <span>
+                New bots too, when they're made in Clawtrate
+                {savesAtOnce && shown.record === null && (
+                  <small data-testid="bot-guides-new-here">
+                    For bots made from this device. Turning it on adds or updates nothing else.
+                  </small>
+                )}
+              </span>
+            </label>
+          )}
           {addable.length > 0 && (
-            <>
-              <label className="b-delete-check bot-guides-check">
-                <input
-                  type="checkbox"
-                  checked={newBots}
-                  disabled={guides.busy}
-                  onChange={(event) => setNewBots(event.target.checked)}
-                />
-                <span>New bots too, when they're made in Clawtrate</span>
-              </label>
-              <div className="b-actions">
-                <button
-                  type="button"
-                  className="button"
-                  data-variant="primary"
-                  disabled={guides.busy || count === 0}
-                  onClick={add}
-                >
-                  {`Add to ${count} ${count === 1 ? "bot" : "bots"}`}
-                </button>
-              </div>
-            </>
+            <div className="b-actions">
+              <button
+                type="button"
+                className="button"
+                data-variant="primary"
+                disabled={guides.busy || count === 0}
+                onClick={add}
+              >
+                {`Add to ${count} ${count === 1 ? "bot" : "bots"}`}
+              </button>
+            </div>
           )}
           {anyOurs && (
             <div className="b-actions">

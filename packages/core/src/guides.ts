@@ -354,6 +354,8 @@ export function parseGuidesRecord(value: string | null): GuidesRecord | null {
  * - `remove`: the section out of every file it is in as Clawtrate wrote it; a changed one is
  *   left as it is.
  * - `decline`: "Not now": nothing is written, and the offer isn't made again on this device.
+ * - `newBots`: whether bots made in Clawtrate from now on get it too, kept on this device only:
+ *   nothing is written to the gateway, and no bot that exists is added to or updated.
  * - `update`: bring each section of an older version up to date (after a connect).
  */
 export type GuidesChange =
@@ -363,6 +365,7 @@ export type GuidesChange =
   | { action: "replace"; bot: string; shown: string }
   | { action: "remove" }
   | { action: "decline" }
+  | { action: "newBots"; on: boolean }
   | { action: "update" };
 
 /**
@@ -377,6 +380,8 @@ export async function applyGuidesChange(
 ): Promise<{ record: GuidesRecord | null; errors: string[] }> {
   if (change.action === "decline")
     return { record: record ?? { bots: [], newBots: false }, errors: [] };
+  if (change.action === "newBots")
+    return { record: { bots: record?.bots ?? [], newBots: change.on }, errors: [] };
   const folders = guideFolders(await request("agents.list", {}));
   const errors: string[] = [];
   const kept = new Set(record?.bots ?? []);

@@ -126,6 +126,44 @@ test.describe("how bots work in Clawtrate", () => {
     await expect(pane.getByRole("button", { name: "Add to 2 bots" })).toBeEnabled();
   });
 
+  test("F-566: New bots too can be taken back with every bot added, writing nothing to the bots", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=added");
+    // Nothing to add, and still the yes for new bots is shown, as saved, and can be changed.
+    await expect(pane.getByRole("button", { name: /^Add to/ })).toHaveCount(0);
+    const newBots = pane.getByRole("checkbox", { name: /^New bots too/ });
+    await expect(newBots).toBeChecked();
+    await newBots.click();
+    await expect(newBots).not.toBeChecked();
+    await expect(page.getByText("New bots don't get this section")).toBeAttached();
+    await newBots.click();
+    await expect(newBots).toBeChecked();
+    await expect(page.getByText("New bots get this section")).toBeAttached();
+    // Only this device's answer changed: no file was added to or taken from.
+    expect(await changes(page)).toEqual([
+      { action: "newBots", on: false },
+      { action: "newBots", on: true },
+    ]);
+    for (const bot of ["main", "marlow", "otto", "pip", "quartermaster"])
+      await expect(pane.getByTestId(`bot-guide-${bot}`)).toHaveAttribute("data-state", "current");
+  });
+
+  test("F-566: on a device that hasn't answered, a section from elsewhere leaves New bots too off, and on says it's for new bots only", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=voice");
+    const newBots = pane.getByRole("checkbox", { name: /^New bots too/ });
+    await expect(newBots).not.toBeChecked();
+    await expect(pane.getByTestId("bot-guides-new-here")).toHaveText(
+      "For bots made from this device. Turning it on adds or updates nothing else.",
+    );
+    await newBots.click();
+    await expect(newBots).toBeChecked();
+    expect(await changes(page)).toEqual([{ action: "newBots", on: true }]);
+    await expect(pane.getByTestId("bot-guide-otto")).toHaveAttribute("data-state", "none");
+  });
+
   test("F-566: Replace says nothing was done when the gateway's files didn't take it", async ({
     page,
   }) => {

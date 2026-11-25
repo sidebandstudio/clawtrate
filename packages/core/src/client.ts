@@ -7140,7 +7140,8 @@ export class ClawtrateClient {
   /**
    * Change the guides as the person asked (`GuidesChange`), on the gateway and bots the screen
    * was read from (`stamp`), then read them back: the answer is what the files hold, never what
-   * was sent. Writing needs `operator.admin`; "Not now" writes nothing to the gateway. The voice
+   * was sent. Writing needs `operator.admin`, and so does saying yes to new bots; "Not now" and
+   * turning "New bots too" off write nothing to the gateway, and need neither. The voice
    * plugin's own setting is never changed from here. Nothing is sent once `owner`, the viewer
    * that asked, is gone.
    */
@@ -7149,7 +7150,8 @@ export class ClawtrateClient {
     stamp: GatewayStamp,
     owner: object | null = null,
   ): Promise<BotGuidesAnswer> {
-    if (change.action !== "decline" && (this.options.readOnly || !this.state.connection.canAdmin))
+    const withdrawal = change.action === "decline" || (change.action === "newBots" && !change.on);
+    if (!withdrawal && (this.options.readOnly || !this.state.connection.canAdmin))
       throw new AdminNeededError("Changing the bots' instructions");
     const { gatewayId } = await this.requireSameGateway(stamp);
     this.checkNotWithdrawn(owner);

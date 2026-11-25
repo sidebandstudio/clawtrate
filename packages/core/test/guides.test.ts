@@ -243,6 +243,19 @@ describe("the changes the person asks for", () => {
       ).toThrow("invalid guides change");
   });
 
+  it("takes New bots too from a viewer only as on or off", () => {
+    const command = {
+      type: "changeBotGuides",
+      change: { action: "newBots", on: false },
+      stamp: { gatewayId: "gw-a", target: 1 },
+    };
+    expect(parseBridgeCommand(command)).toEqual(command);
+    for (const on of [undefined, "false", 0])
+      expect(() => parseBridgeCommand({ ...command, change: { action: "newBots", on } })).toThrow(
+        "invalid guides change",
+      );
+  });
+
   it("brings an older version up to date after a connect, and leaves the rest", async () => {
     const files = fakeFiles({
       otto: olderSection() + BOT_FILE,
@@ -358,7 +371,7 @@ describe("the guides in the client", () => {
     }
   });
 
-  it("writes nothing below admin, or from a read-only viewer, and Not now writes nothing anywhere", async () => {
+  it("writes nothing below admin, or from a read-only viewer, and Not now or New bots too off writes nothing anywhere", async () => {
     for (const options of [
       { held: INTERACTIVE_SCOPES },
       { storage: adminStorage(), client: { readOnly: true } },
@@ -375,6 +388,13 @@ describe("the guides in the client", () => {
           bots: [],
           newBots: false,
         });
+        // A yes for new bots needs admin too; taking it back never does.
+        await expect(
+          client.changeBotGuides({ action: "newBots", on: true }, shown.stamp),
+        ).rejects.toThrow(/admin/i);
+        expect(
+          (await client.changeBotGuides({ action: "newBots", on: false }, shown.stamp)).record,
+        ).toEqual({ bots: [], newBots: false });
         expect(files.sets).toEqual([]);
       } finally {
         client.stop();
