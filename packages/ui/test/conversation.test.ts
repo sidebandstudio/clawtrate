@@ -1,6 +1,7 @@
 import {
   emptyActivity,
   initialState,
+  LIVE_UPDATES_NOT_STARTED,
   type ClawtrateState,
   type ConnectionStatus,
   type Transcript,
@@ -13,6 +14,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   DETAIL_SHOWN_CHARS,
   detailText,
+  refreshNoteShown,
+  refreshNoteWords,
   StatusStrip,
   stripFor,
   taskInSync,
@@ -152,8 +155,9 @@ describe("the status strip (visual-language.md, section 11)", () => {
         }),
       );
     const closed = render(false);
+    // Named the same everywhere; its words show beside Retry, its chevron alone on a phone.
     expect(closed).toMatch(
-      /<button type="button" aria-expanded="false" aria-controls="[^"]+">Gateway&#x27;s message<\/button>/,
+      /<button type="button" class="strip-detail-toggle" aria-label="Gateway&#x27;s message" aria-expanded="false" aria-controls="[^"]+"><span class="strip-long">Gateway&#x27;s message<\/span><svg[^>]*class="icon strip-short"/,
     );
     expect(closed).not.toContain("status-strip-detail");
     // The strip's own text, which its live region announces, holds none of the gateway's words.
@@ -167,6 +171,33 @@ describe("the status strip (visual-language.md, section 11)", () => {
     expect(after).toContain(`id="${id}"`);
     expect(after).toContain('role="region" aria-label="Gateway&#x27;s message"');
     expect(after).toContain("<p>Could not load tasks: busy\n\nTry later</p>");
+  });
+
+  it("#592: a task whose live updates didn't start says so: in the strip after a drop, in the note otherwise", () => {
+    const unsubscribed: Transcript = { ...failed, error: LIVE_UPDATES_NOT_STARTED };
+    expect(stripFor(withTask(state("connected"), unsubscribed), "dropped", KEY)).toMatchObject({
+      text: "Couldn't sync this task",
+      more: LIVE_UPDATES_NOT_STARTED,
+      action: "reload",
+    });
+    expect(refreshNoteWords(unsubscribed)).toBe(LIVE_UPDATES_NOT_STARTED);
+    expect(refreshNoteShown(withTask(state("connected"), unsubscribed), "none", unsubscribed)).toBe(
+      true,
+    );
+    // A reload that failed says that.
+    expect(stripFor(withTask(state("connected"), failed), "dropped", KEY)?.more).toBeNull();
+    expect(refreshNoteWords(failed)).toBe(
+      "Couldn't refresh this conversation. Showing what was loaded before.",
+    );
+  });
+
+  it("#592: after a drop, the open task's failed reload is the conversation's note when bots and tasks failed too", () => {
+    const both = withTask(state("connected", "error"), failed);
+    // The strip says bots and tasks couldn't be loaded; the note says the task's own failure.
+    expect(stripFor(both, "dropped", KEY)?.text).toBe("Couldn't load bots and tasks");
+    expect(refreshNoteShown(both, "dropped", failed)).toBe(true);
+    // Bots and tasks fine: the strip says the task couldn't sync, and no note repeats it.
+    expect(refreshNoteShown(withTask(state("connected"), failed), "dropped", failed)).toBe(false);
   });
 
   it("#592: the gateway's message is cleaned and bounded", () => {

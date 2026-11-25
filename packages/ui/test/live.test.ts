@@ -7,6 +7,7 @@ import {
   initialState,
   INTERACTIVE_SCOPES,
   newRun,
+  LIVE_UPDATES_NOT_STARTED,
   READ_SCOPES,
   type ClawtrateState,
   type ConnectionState,
@@ -631,7 +632,11 @@ describe("#592: once the connection is up, nothing says offline, whatever the lo
     return {
       connected,
       composer: composerFor(open, { ...otto, connected }),
-      line: statusLineFor(thinking, open, { connected, current, interactive: true }),
+      line: statusLineFor(thinking, (taskKey && state.transcripts[taskKey]) || open, {
+        connected,
+        current,
+        interactive: true,
+      }),
     };
   }
   /** The open task as it was before the drop: loaded before this connection's hello. */
@@ -674,7 +679,25 @@ describe("#592: once the connection is up, nothing says offline, whatever the lo
     const { composer, line } = says(failed, "dropped");
     expect(composer.offline).toBe(false);
     expect(composer.placeholder).not.toMatch(/Offline/);
-    expect(line.phrase).not.toMatch(/Reconnecting|Catching up/);
+    // The run from before the drop is not shown as live: it is what was last seen.
+    expect(line.phrase).toBe("Last seen thinking");
+    expect(line.state).toBe("blocked");
+  });
+
+  it("the open task's live updates didn't start: its run is last seen, with or without a drop, and the composer sends", () => {
+    for (const phase of ["none", "dropped"] as const) {
+      const task: Transcript = { ...open, status: "error", error: LIVE_UPDATES_NOT_STARTED };
+      const unsubscribed = { ...up, transcripts: { [key]: task } };
+      const { connected, current } = liveFlags(unsubscribed, phase, key);
+      expect({ connected, current }, phase).toEqual({ connected: true, current: false });
+      const line = statusLineFor(thinking, task, {
+        connected,
+        current,
+        interactive: true,
+      });
+      expect(line.phrase, phase).toBe("Last seen thinking");
+      expect(composerFor(open, { ...otto, connected }).placeholder).toBe("Message Otto");
+    }
   });
 
   it("while the connection is down, the composer and the run line say so", () => {

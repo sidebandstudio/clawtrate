@@ -371,6 +371,45 @@ describe("#592: the open task's reads belong to their connection", () => {
     client.stop();
   });
 
+  it("a later history read keeps the live-updates failure and tries the subscription again; only a subscription that succeeds clears it", async () => {
+    const gateway = grantingGateway();
+    const { client } = await openTask({ gateway });
+    const answer = gateway.handlers["sessions.messages.subscribe"]!;
+    let failing = true;
+    gateway.handlers["sessions.messages.subscribe"] = (params) => {
+      if (failing) throw new GatewayError(REGISTRY_CHANGING);
+      return answer(params);
+    };
+    const connects = gateway.connects.length;
+    gateway.dropAll();
+    await until(() => gateway.connects.length > connects);
+    await until(() => client.state.transcripts[KEY]?.error === LIVE_UPDATES_NOT_STARTED);
+    const statuses: Array<string | null> = [];
+    client.store.subscribe(({ transcripts }) => {
+      const error = transcripts[KEY]?.error ?? null;
+      if (statuses.at(-1) !== error) statuses.push(error);
+    });
+    // A message in the task: its history is read again, and so is the subscription, which
+    // still fails. The task never reads as fine meanwhile.
+    const subscribes = gateway.calls("sessions.messages.subscribe").length;
+    const histories = gateway.calls("chat.history").length;
+    gateway.emit("sessions.changed", { sessionKey: KEY, phase: "message" });
+    await until(() => gateway.calls("chat.history").length > histories);
+    await until(() => gateway.calls("sessions.messages.subscribe").length === subscribes + 5);
+    await sleep(60);
+    expect(client.state.transcripts[KEY]).toMatchObject({
+      status: "error",
+      error: LIVE_UPDATES_NOT_STARTED,
+    });
+    expect(statuses.filter((error) => error !== LIVE_UPDATES_NOT_STARTED)).toEqual([]);
+    // The next one succeeds: that clears it.
+    failing = false;
+    gateway.emit("sessions.changed", { sessionKey: KEY, phase: "message" });
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    expect(client.state.transcripts[KEY]?.error).toBeNull();
+    client.stop();
+  });
+
   it("the waiting questions read stops with its connection", async () => {
     const gateway = grantingGateway();
     const { client } = await openTask({ gateway, client: { readAgainMs: 200 } });
@@ -530,7 +569,7 @@ describe("readAgain's bound", () => {
   it("stops waiting when its connection ends", async () => {
     vi.useFakeTimers();
     let current = true;
-    const ended = deferred<void>();
+    const ended = new AbortController();
     let tries = 0;
     const read = readAgain(
       () => {
@@ -538,13 +577,45 @@ describe("readAgain's bound", () => {
         return Promise.reject(unclassified);
       },
       () => current,
-      { ended: ended.promise },
+      { ended: ended.signal },
     ).catch((caught: unknown) => caught);
     await vi.advanceTimersByTimeAsync(10);
     current = false;
-    ended.resolve();
+    ended.abort();
     await vi.advanceTimersByTimeAsync(0);
     expect(await Promise.race([read, Promise.resolve("still waiting")])).toBe(unclassified);
     expect(tries).toBe(1);
+  });
+
+  it("leaves no listener on its connection once a wait is over, so nothing builds up", async () => {
+    vi.useFakeTimers();
+    // A connection's end, counting the waits listening to it.
+    let listening = 0;
+    let most = 0;
+    const ended = {
+      aborted: false,
+      addEventListener: () => {
+        listening += 1;
+        most = Math.max(most, listening);
+      },
+      removeEventListener: () => {
+        listening -= 1;
+      },
+    } as unknown as AbortSignal;
+    for (let read = 0; read < 3; read += 1) {
+      const settled = readAgain(
+        () => Promise.reject(unclassified),
+        () => true,
+        {
+          ended,
+          firstMs: 10,
+        },
+      ).catch(() => {});
+      await vi.runAllTimersAsync();
+      await settled;
+    }
+    // Four waits each for three reads, one at a time, and none left listening.
+    expect(most).toBe(1);
+    expect(listening).toBe(0);
   });
 });

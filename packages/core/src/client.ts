@@ -1578,7 +1578,7 @@ export class ClawtrateClient {
    * Settles when the current connection ends (another hello, a drop, a close): a read waiting
    * to be asked again (`readAgain`) stops waiting then, and makes no try on the next connection.
    */
-  private connectionEnded = endable();
+  private connectionEnded = new AbortController();
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
   private readonly writes: ConnectionWrites;
@@ -10124,9 +10124,12 @@ export class ClawtrateClient {
         .map((run) => run.id),
     );
     // The task's live events come only through its subscription: asked again like the reads.
-    let live = true;
+    // A subscription that failed for good stays failed through later history reads, and each of
+    // them tries it again; only one that succeeds clears it.
+    const unsubscribed = this.state.transcripts[key]?.error === LIVE_UPDATES_NOT_STARTED;
+    let live = !unsubscribed;
     try {
-      if (subscribe) {
+      if (subscribe || unsubscribed) {
         live = await this.readAgain(
           () => this.request("sessions.messages.subscribe", { key }),
           () => !stale(),
@@ -10224,12 +10227,14 @@ export class ClawtrateClient {
           settleQuestionsOfEndedRuns(normalizeApprovals(activity, (runId) => this.otherRun(runId))),
         ),
         sessionKey: key,
-        status: "ready",
+        // History shows, but without its subscription nothing live reaches the task: it says
+        // so, and Try again subscribes again (`reloadSession`).
+        status: live ? "ready" : "error",
         items,
         interSession: interSessionMessages(messages),
         // Reactions leave with the history they belonged to (F-283).
         ...(current.reactions ? { reactions: reactionsShown(current.reactions, items) } : {}),
-        error: null,
+        error: live ? null : LIVE_UPDATES_NOT_STARTED,
         hasMore: history?.hasMore === true,
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
         loadedAt: this.now(),
@@ -10251,20 +10256,13 @@ export class ClawtrateClient {
       void this.readToolMap(key, generation);
       void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
-      // History shows, but nothing live will reach the task: it says so, and Try again
-      // subscribes again (`reloadSession`).
-      if (!live && !stale())
-        this.setTranscript(key, (now) => ({
-          ...(now ?? this.emptyTranscript(key)),
-          status: "error",
-          error: LIVE_UPDATES_NOT_STARTED,
-        }));
     } catch (error) {
       if (stale()) return;
+      // Without its subscription, that is what the task says: Try again reads both again.
       this.setTranscript(key, (current) => ({
         ...(current ?? this.emptyTranscript(key)),
         status: "error",
-        error: errorMessage(error),
+        error: live ? errorMessage(error) : LIVE_UPDATES_NOT_STARTED,
       }));
     }
   }
@@ -11070,14 +11068,14 @@ export class ClawtrateClient {
     return readAgain(read, current, {
       tries,
       firstMs: this.options.readAgainMs,
-      ended: this.connectionEnded.ended,
+      ended: this.connectionEnded.signal,
     });
   }
 
   /** The current connection has ended: reads waiting to be asked again stop waiting. */
   private endConnection(): void {
-    this.connectionEnded.end();
-    this.connectionEnded = endable();
+    this.connectionEnded.abort();
+    this.connectionEnded = new AbortController();
   }
 
   private request(
@@ -11695,13 +11693,6 @@ export function hostLimit(value: number | undefined, max: number, name: string):
   if (!Number.isInteger(value) || value < 1 || value > max)
     throw new RangeError(`${name} must be a whole number from 1 to ${max}.`);
   return value;
-}
-
-/** A promise that settles when `end` is called. */
-function endable(): { ended: Promise<void>; end: () => void } {
-  let end!: () => void;
-  const ended = new Promise<void>((resolve) => (end = resolve));
-  return { ended, end };
 }
 
 function errorMessage(error: unknown): string {

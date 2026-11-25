@@ -221,7 +221,13 @@ export function statusLineFor(
     return {
       state: "blocked",
       badge: "blocked",
-      phrase: options.connected ? `Catching up. ${seen}` : `Reconnecting. ${seen}`,
+      // Connected: still loading again, or its reload or live updates failed (the strip or the
+      // conversation says which); never a word about the connection then.
+      phrase: !options.connected
+        ? `Reconnecting. ${seen}`
+        : transcript.status === "error"
+          ? seen
+          : `Catching up. ${seen}`,
       tone: "muted",
       startedAt: null,
       callId: view.callId,

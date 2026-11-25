@@ -26,7 +26,13 @@ import { Rail } from "./Rail.tsx";
 import { summarize, useSelection } from "./selection.ts";
 import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
-import { liveFlags, refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
+import {
+  liveFlags,
+  refreshNoteShown,
+  StatusStrip,
+  stripFor,
+  useSyncPhase,
+} from "./StatusStrip.tsx";
 import { updatingHere, updatingStripWords } from "./bots/update-words.ts";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
@@ -915,7 +921,7 @@ export function Shell({
                       />
                     )
                   }
-                  refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+                  refreshNote={refreshNoteShown(state, phase, transcript)}
                   interactive={interactive}
                   connection={state.connection}
                   info={info}

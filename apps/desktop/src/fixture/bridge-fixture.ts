@@ -37,6 +37,7 @@ import {
   hasUnsettledWork,
   gatewayStamp,
   NOT_OPEN_IN_VIEW,
+  DISCOVERY_NOT_READY,
 } from "@clawtrate/core";
 import {
   CARD_SCENES,
@@ -434,8 +435,11 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
           ...base,
           discovery: {
             status: "error",
-            error: "agents.list failed: the gateway is restarting.",
-            detail: null,
+            // As the app writes it when the gateway marked its answers as passing (#592): the plain
+            // words, and the gateway's own behind the strip's disclosure.
+            error: DISCOVERY_NOT_READY,
+            detail:
+              "Could not load bots: agents.list unavailable during gateway startup; tasks: sessions.subscribe unavailable during gateway startup",
             partial: false,
             tasksRead: base.discovery.tasksRead,
           },

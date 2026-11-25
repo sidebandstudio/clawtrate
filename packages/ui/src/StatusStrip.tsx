@@ -1,7 +1,8 @@
-import type { ClawtrateState, Transcript } from "@clawtrate/core";
+import { LIVE_UPDATES_NOT_STARTED, type ClawtrateState, type Transcript } from "@clawtrate/core";
 import { useEffect, useId, useState } from "react";
 import { updatingHere, updatingStripWords } from "./bots/update-words.ts";
 import { gatewayTitle } from "./format.ts";
+import { ChevronIcon } from "./icons.tsx";
 
 /**
  * Where the shell is after a connection problem: "dropped" from the moment the
@@ -16,6 +17,25 @@ export const SYNCED_FOR_MS = 4000;
 /** The open task failed to reload but still shows what was loaded before. */
 export function refreshFailed(transcript: Transcript | undefined): boolean {
   return transcript?.status === "error" && transcript.items.length > 0;
+}
+
+/**
+ * The conversation notes that the open task failed to reload: always without a drop, and after
+ * one when bots and tasks failed too, since the strip then says that instead (#592).
+ */
+export function refreshNoteShown(
+  state: ClawtrateState,
+  phase: SyncPhase,
+  transcript: Transcript | undefined,
+): boolean {
+  return (phase !== "dropped" || state.discovery.status === "error") && refreshFailed(transcript);
+}
+
+/** The note's words: what failed, the task's live updates or its reload. */
+export function refreshNoteWords(transcript: Transcript | undefined): string {
+  return transcript?.error === LIVE_UPDATES_NOT_STARTED
+    ? LIVE_UPDATES_NOT_STARTED
+    : "Couldn't refresh this conversation. Showing what was loaded before.";
 }
 
 /**
@@ -35,10 +55,11 @@ export function taskInSync(state: ClawtrateState, taskKey: string | null): boole
  * What the conversation may say about the connection and about the open task's live work.
  * `connected` is the connection alone: only it makes the composer say "Offline", an outgoing
  * message "Sends when reconnected" and the window read as lost. Loads being tried again, or
- * failed, never do (#592). `current` is that the open task's live work is this connection's:
- * the connection is up, and after a drop the open task has loaded again since it came back, or
- * that load failed (the strip says so). Until then the run line and the action cards say what
- * was last seen. Bots and tasks don't hold it: they don't change what the open task shows.
+ * failed, never do (#592). `current` is that the open task's live work on screen is this
+ * connection's: the connection is up, the task's live updates were started, and after a drop
+ * the task has loaded again since the connection came back. Until then, and after that reload
+ * failed, the run line and the action cards say what was last seen. Bots and tasks don't hold
+ * it: they don't change what the open task shows.
  */
 export function liveFlags(
   state: ClawtrateState,
@@ -46,9 +67,10 @@ export function liveFlags(
   taskKey: string | null,
 ): { connected: boolean; current: boolean } {
   const connected = state.connection.status === "connected";
-  if (!connected || phase !== "dropped") return { connected, current: connected };
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
-  return { connected, current: transcript?.status === "error" || taskInSync(state, taskKey) };
+  if (!connected || transcript?.error === LIVE_UPDATES_NOT_STARTED)
+    return { connected, current: false };
+  return { connected, current: phase !== "dropped" || taskInSync(state, taskKey) };
 }
 
 export function useSyncPhase(state: ClawtrateState, taskKey: string | null): SyncPhase {
@@ -165,7 +187,8 @@ export function stripFor(
       return {
         tone: "danger",
         text: "Couldn't sync this task",
-        more: null,
+        // Its history loaded, but nothing live reaches it: that is the news (#592).
+        more: transcript.error === LIVE_UPDATES_NOT_STARTED ? LIVE_UPDATES_NOT_STARTED : null,
         action: "reload",
         countdown: false,
       };
@@ -251,14 +274,19 @@ export function StatusStrip({
           )}
           {strip.more && <span>· {strip.more}</span>}
         </span>
+        {/* On a phone the button is its chevron alone, so the strip stays one line and its
+            state stays whole; its name is the same everywhere. */}
         {detail && (
           <button
             type="button"
+            className="strip-detail-toggle"
+            aria-label="Gateway's message"
             aria-expanded={open}
             aria-controls={detailId}
             onClick={() => setOpen((was) => !was)}
           >
-            Gateway's message
+            <span className="strip-long">Gateway's message</span>
+            <ChevronIcon className="strip-short" />
           </button>
         )}
         {strip.action && (

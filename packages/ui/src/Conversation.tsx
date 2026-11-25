@@ -9,7 +9,8 @@ import type {
   Transcript,
   TranscriptItem,
 } from "@clawtrate/core";
-import { browserUse } from "@clawtrate/core";
+import { browserUse, LIVE_UPDATES_NOT_STARTED } from "@clawtrate/core";
+import { refreshNoteWords } from "./StatusStrip.tsx";
 import {
   useCallback,
   useContext,
@@ -1145,8 +1146,14 @@ export function Conversation({
       </div>
     );
   } else if (transcript.status === "error" && itemCount === 0 && !hasLive) {
+    // Its history may have loaded empty while its live updates didn't start (#592).
+    const live = transcript.error === LIVE_UPDATES_NOT_STARTED;
     body = (
-      <EmptyState bot={bot} title="Could not load this conversation" body={transcript.error}>
+      <EmptyState
+        bot={bot}
+        title={live ? "Live updates didn't start" : "Could not load this conversation"}
+        body={transcript.error}
+      >
         <button type="button" className="button" onClick={onReload}>
           Try again
         </button>
@@ -1186,7 +1193,7 @@ export function Conversation({
         note={
           refreshNote && (
             <p className="load-note" role="alert">
-              Couldn't refresh this conversation. Showing what was loaded before.
+              {refreshNoteWords(transcript)}
               <button type="button" className="button" data-size="sm" onClick={onReload}>
                 Try again
               </button>

@@ -62,9 +62,10 @@ export function askedAgain(error: unknown): boolean {
 /**
  * Read, and while the answer may pass (`askedAgain`) and `current()` holds (the same
  * connection, the same gateway), read again after a growing wait, at most `tries` more times.
- * Anything else, or the last answer, is thrown as it came. A wait ends early when `ended`
- * settles (the connection it belongs to has ended), and a try whose connection ended is never
- * made.
+ * Anything else, or the last answer, is thrown as it came. A wait ends early when `ended` is
+ * aborted (the connection it belongs to has ended), and a try whose connection ended is never
+ * made. Each wait takes its listener off `ended` when it ends, either way, so nothing builds up
+ * on a connection that lasts.
  */
 export async function readAgain<T>(
   read: () => Promise<T>,
@@ -72,7 +73,7 @@ export async function readAgain<T>(
   options: {
     tries?: number | undefined;
     firstMs?: number | undefined;
-    ended?: Promise<unknown> | undefined;
+    ended?: AbortSignal | undefined;
   } = {},
 ): Promise<T> {
   const tries = options.tries ?? READ_AGAIN_TRIES;
@@ -84,12 +85,16 @@ export async function readAgain<T>(
       if (attempt >= tries || !askedAgain(error) || !current()) throw error;
       const asked = (error as GatewayProtocolRequestError).retryAfterMs ?? 0;
       const wait = Math.min(Math.max(firstMs * 2 ** attempt, asked), READ_AGAIN_MAX_MS);
+      const ended = options.ended;
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, wait);
-        void options.ended?.then(() => {
+        if (ended?.aborted) return resolve();
+        const done = () => {
           clearTimeout(timer);
+          ended?.removeEventListener("abort", done);
           resolve();
-        });
+        };
+        const timer = setTimeout(done, wait);
+        ended?.addEventListener("abort", done, { once: true });
       });
       if (!current()) throw error;
     }

@@ -1434,6 +1434,18 @@ textarea {
   display: none;
 }
 
+/* The disclosure's chevron points down, and up while the message shows. */
+.strip-detail-toggle .icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: -3px;
+  transform: rotate(90deg);
+}
+
+.strip-detail-toggle[aria-expanded="true"] .icon {
+  transform: rotate(-90deg);
+}
+
 /* The gateway's own message, opened from the strip: under it, centred like it, in text. */
 .status-strip-detail {
   position: absolute;
@@ -1999,6 +2011,11 @@ textarea {
 
   .strip-short {
     display: inline;
+  }
+
+  /* The phone's disclosure is its chevron alone. */
+  .status-strip .strip-detail-toggle {
+    padding: 0 7px;
   }
 
   .ensemble {
