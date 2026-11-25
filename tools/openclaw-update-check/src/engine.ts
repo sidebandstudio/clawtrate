@@ -14,7 +14,8 @@
 // --warm-session gives the main bot a main task first, so the gateway's notice has a place to land.
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
@@ -99,7 +100,12 @@ let hellos = 0;
 let mainTurnEnded = false;
 const methods = new Map<string, string>();
 
-function makeClient(dataDir: string): { client: ClawtrateClient; bridge: BridgeSession } {
+function makeClient(dataDir: string): {
+  client: ClawtrateClient;
+  bridge: BridgeSession;
+  /** Stop recording this client's states. */
+  unsubscribe: () => void;
+} {
   const base = createNodeHost({
     dataDir,
     client: { displayName: DISPLAY_NAME, version: "0.0.0", platform: process.platform },
@@ -183,14 +189,14 @@ function makeClient(dataDir: string): { client: ClawtrateClient; bridge: BridgeS
   };
   const client = new ClawtrateClient(host);
   let last = "";
-  client.store.subscribe((state: ClawtrateState) => {
+  const unsubscribe = client.store.subscribe((state: ClawtrateState) => {
     const view = viewOf(state);
     const json = JSON.stringify(view);
     if (json === last) return;
     last = json;
     push({ at: Date.now(), kind: "state", view });
   });
-  return { client, bridge: createBridgeSession(client) };
+  return { client, bridge: createBridgeSession(client), unsubscribe };
 }
 
 function viewOf(state: ClawtrateState): EngineView {
@@ -263,8 +269,10 @@ async function until(
   }
 }
 
-const dataDir = join(out, "client-data");
-let { client, bridge } = makeClient(dataDir);
+// The client's key and stored device token stay out of the uploaded folder.
+const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-engine-"));
+let { client, bridge, unsubscribe } = makeClient(dataDir);
+let noticeRead: "ready" | "error" | "timeout" | null = null;
 const state = () => client.state;
 const connected = () => state().connection.status === "connected";
 const admin = () => connected() && state().connection.canAdmin;
@@ -331,22 +339,31 @@ try {
       () => state().openclawUpdating?.run?.phase === "validating",
       600_000,
     );
+    // The old client's own shutdown states are not the new client's.
+    unsubscribe();
     mark("reopen");
     client.stop();
     bridge.dispose();
-    ({ client, bridge } = makeClient(dataDir));
-    void client.start();
-    await until(
-      "the reopened client connected",
-      () => admin() && state().connection.gatewayId !== null,
-      120_000,
-    );
-    try {
-      await bridge.apply({ type: "startOpenClawUpdate", stamp: gatewayStamp(state().connection) });
-      mark("press-accepted");
-    } catch (error) {
-      mark("press-refused", error instanceof Error ? error.message : String(error));
-    }
+    ({ client, bridge, unsubscribe } = makeClient(dataDir));
+    // Press the moment the new client shows this gateway with admin, before anything else lands.
+    let pressed: Promise<void> | null = null;
+    const replacement = { client, bridge };
+    const stopWatching = client.store.subscribe((s: ClawtrateState) => {
+      const c = s.connection;
+      if (pressed || c.status !== "connected" || !c.canAdmin || c.gatewayId === null) return;
+      mark("press-sent");
+      pressed = replacement.bridge
+        .apply({ type: "startOpenClawUpdate", stamp: gatewayStamp(c) })
+        .then(
+          () => mark("press-accepted"),
+          (error: unknown) =>
+            mark("press-refused", error instanceof Error ? error.message : String(error)),
+        );
+    });
+    await client.start();
+    await until("the reopened client's press", () => pressed !== null, 120_000);
+    stopWatching();
+    await pressed;
   }
 
   // Follow until the engine says how it ended.
@@ -360,13 +377,19 @@ try {
 
   if (values["warm-session"]) {
     // The gateway's notice of the update, as the engine shows the main task.
+    // Read again, and wait for that read to finish: a failed read is not an empty one.
     await bridge.apply({ type: "reloadSession", key: MAIN }).catch(() => {});
-    await sleep(5_000);
+    const status = () => state().transcripts[MAIN]?.status;
+    await until("the history read to start", () => status() === "loading", 5_000).catch(() => {});
+    await until("the history read", () => status() !== "loading", 60_000).catch(() => {});
+    noticeRead = status() === "ready" ? "ready" : status() === "error" ? "error" : "timeout";
     const transcript = asRecord(state().transcripts[MAIN]);
     for (const item of Array.isArray(transcript.items) ? transcript.items : []) {
       if (JSON.stringify(item).includes("OpenClaw updated")) notice.push(item);
     }
-    note(`the main task shows ${notice.length} item(s) with the gateway's notice`);
+    note(
+      `history read ${noticeRead}; the main task shows ${notice.length} item(s) with the gateway's notice`,
+    );
   }
 } catch (error) {
   note(`stopped: ${error instanceof Error ? error.message : String(error)}`);
@@ -377,7 +400,7 @@ client.stop();
 const verdict = judgeEngine(entries, plan);
 writeFileSync(
   join(out, "engine-result.json"),
-  `${JSON.stringify({ mode, plan, verdict, notice, entries }, null, 2)}\n`,
+  `${JSON.stringify({ mode, plan, verdict, noticeRead, notice, entries }, null, 2)}\n`,
 );
 const report = engineSummary(verdict, values.measure ? `${mode}, measured, not a gate` : mode);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);

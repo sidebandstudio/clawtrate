@@ -49,6 +49,8 @@ export type EnginePlan = {
 };
 
 export const TAG_PREFIX = "clawtrate-update:";
+/** The tag as core reads it back from a gateway record (`openclaw-update.ts`): anything else is dropped. */
+const TAG = /^clawtrate-update:[A-Za-z0-9._-]{8,64}$/;
 const UPDATE_METHOD = /^update\.(status|run|runs\.)/;
 
 export type EngineVerdict = {
@@ -83,6 +85,27 @@ const sentOf = (entries: readonly EngineEntry[]) =>
   entries.filter((e): e is Extract<EngineEntry, { kind: "sent" }> => e.kind === "sent");
 const markAt = (entries: readonly EngineEntry[], name: string) =>
   entries.findIndex((e) => e.kind === "mark" && e.name === name);
+
+/** The answer to a request: the first one after it with the same socket and id, and where it is. */
+function answerTo(
+  entries: readonly EngineEntry[],
+  request: Extract<EngineEntry, { kind: "sent" }>,
+): { e: Extract<EngineEntry, { kind: "answer" }>; i: number } | null {
+  const from = entries.indexOf(request);
+  for (let i = from + 1; i < entries.length; i += 1) {
+    const e = entries[i]!;
+    if (e.kind === "answer" && e.socket === request.socket && e.id === request.id) return { e, i };
+  }
+  return null;
+}
+
+/** Run records in an answer: `update.status` activeRun/lastRun, `update.runs.get`, `.list`. */
+function recordsIn(payload: unknown): JsonRecord[] {
+  const p = asRecord(payload);
+  return [p.activeRun, p.lastRun, p.run, ...(Array.isArray(p.runs) ? p.runs : [])]
+    .map(asRecord)
+    .filter((r) => typeof r.runId === "string");
+}
 
 /** The verdict on one engine run. */
 export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): EngineVerdict {
@@ -132,18 +155,20 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
       keys.length !== 1 ||
       requester.channel !== "webchat" ||
       typeof requester.senderId !== "string" ||
-      !requester.senderId.startsWith(TAG_PREFIX)
+      !TAG.test(requester.senderId)
     ) {
       failures.push(`update.run was sent with ${JSON.stringify(press.params)}`);
     }
+    // An identity read on the press's own connection, answered with an identity before the press.
     const pressIndex = entries.indexOf(press);
-    const identity = indexed.some(
-      ({ e, i }) =>
-        i < pressIndex &&
-        e.kind === "sent" &&
-        e.method === "gateway.identity.get" &&
-        e.socket === press.socket,
-    );
+    const identity = sentOf(entries.slice(0, pressIndex)).some((s) => {
+      if (s.method !== "gateway.identity.get" || s.socket !== press.socket) return false;
+      const reply = answerTo(entries, s);
+      const id = asRecord(reply?.e.payload).deviceId;
+      return (
+        reply !== null && reply.i < pressIndex && reply.e.ok && typeof id === "string" && id !== ""
+      );
+    });
     if (!identity) failures.push("update.run was sent with no identity read on its connection");
   }
 
@@ -167,12 +192,29 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
     (stopAt === -1 ? states : states.filter((s) => entries.indexOf(s) < stopAt)).at(-1)?.view ??
     null;
   const run = final?.run ?? null;
+  // The press's own run: from its answer, or, when the answer was lost, the record carrying its tag.
+  const tag = press ? asRecord(asRecord(press.params).requester).senderId : null;
+  const reply = press ? answerTo(entries, press) : null;
+  const answered = reply?.e.ok ? asRecord(reply.e.payload).runId : null;
+  const tagged = entries
+    .filter((e): e is Extract<EngineEntry, { kind: "answer" }> => e.kind === "answer" && e.ok)
+    .flatMap((e) => recordsIn(e.payload))
+    .find((r) => tag !== null && asRecord(asRecord(r.origin).requester).senderId === tag)?.runId;
+  const pressRun =
+    typeof answered === "string" ? answered : typeof tagged === "string" ? tagged : null;
   if (!run) {
     failures.push("the engine showed no run");
   } else {
+    if (pressRun === null) {
+      failures.push("no answer or gateway record names the press's run");
+    } else if (run.runId !== pressRun) {
+      failures.push(`the engine followed run ${run.runId}, not the press's run ${pressRun}`);
+    }
     if (run.outcome !== "updated") failures.push(`the engine's outcome is ${run.outcome}`);
     if (run.mine !== true) failures.push(`the engine showed the run as mine: ${String(run.mine)}`);
-    if (run.outcome === "updated" && run.to !== final?.serverVersion) {
+    if (run.outcome === "updated" && (run.to === null || final?.serverVersion == null)) {
+      failures.push('"updated" with no version named');
+    } else if (run.outcome === "updated" && run.to !== final?.serverVersion) {
       failures.push(`"updated" to ${run.to}, but the gateway reports ${final?.serverVersion}`);
     }
     if (run.gatewayId !== final?.gatewayId) {
@@ -213,10 +255,12 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
         e.socket === press?.socket,
     );
     if (answered) failures.push("the update.run answer arrived before the connection dropped");
+    // What the first connection after the drop asked, on that connection only.
     const nextHello = indexed.find(({ e, i }) => i > dropAt && e.kind === "hello");
+    const socket = (nextHello?.e as { socket?: number } | undefined)?.socket;
     afterDrop = nextHello
       ? sentIn(nextHello.i, entries.length)
-          .filter((s) => UPDATE_METHOD.test(s.method))
+          .filter((s) => s.socket === socket && UPDATE_METHOD.test(s.method))
           .slice(0, 4)
           .map((s) => s.method)
       : [];
@@ -235,17 +279,15 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
     if (reopenAt === -1) {
       failures.push("the client was not reopened");
     } else {
-      const firstStatus = indexed.find(
-        ({ e, i }) => i > reopenAt && e.kind === "sent" && e.method === "update.status",
-      );
-      const answered = firstStatus
-        ? indexed.find(
-            ({ e, i }) =>
-              i > firstStatus.i &&
-              e.kind === "answer" &&
-              e.id === (firstStatus.e as { id: string }).id,
-          )
-        : undefined;
+      // The first successful status answer after the reopen, paired with its request by socket
+      // and id: a failed read keeps the hold, so the window goes on through it.
+      const statusAnswers = sentOf(entries.slice(reopenAt + 1))
+        .filter((s) => s.method === "update.status")
+        .map((s) => answerTo(entries, s))
+        .filter((a): a is NonNullable<typeof a> => a !== null && a.e.ok)
+        .sort((a, b) => a.i - b.i);
+      const answered = statusAnswers[0];
+      if (!answered) failures.push("update.status never answered after the reopen");
       // The states between the reopen and that answer, in trace order.
       const endIndex = answered?.i ?? entries.length;
       const end = entries[endIndex]?.at ?? entries.at(-1)?.at ?? 0;
@@ -267,8 +309,16 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
         if (pressable) unheld += next - e.at;
       });
       unheldMs = unheld;
-      if (!entries.some((e) => e.kind === "mark" && e.name === "press-refused")) {
+      // The press must have gone out before the status answered: the refusal may land after it.
+      const refusedAt = markAt(entries, "press-refused");
+      const sentAt = markAt(entries, "press-sent");
+      const pressedAt = sentAt === -1 ? refusedAt : sentAt;
+      if (refusedAt === -1) {
         failures.push("a press right after the reopen was not refused");
+      } else if (answered && pressedAt > answered.i) {
+        failures.push(
+          "the press after the reopen came after the status answered, so it shows no hold",
+        );
       }
     }
   }

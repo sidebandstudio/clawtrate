@@ -8,7 +8,8 @@ import {
 } from "../src/engine-record.ts";
 
 const RUN = "5b3e3f4e-8c1a-4a57-9d2f-0c1f1d6f7a10";
-const PRESS = { requester: { channel: "webchat", senderId: "clawtrate-update:1" } };
+const TAG = "clawtrate-update:abcdef12";
+const PRESS = { requester: { channel: "webchat", senderId: TAG } };
 const PLAN: EnginePlan = { reconnects: 2 };
 
 const view = (
@@ -50,13 +51,13 @@ const sent = (socket: number, id: string, method: string, params: unknown = null
   method,
   params,
 });
-const answer = (socket: number, id: string, ok = true): EngineEntry => ({
+const answer = (socket: number, id: string, ok = true, payload: unknown = null): EngineEntry => ({
   at: at(),
   kind: "answer",
   socket,
   id,
   ok,
-  payload: null,
+  payload,
 });
 const state = (v: EngineView): EngineEntry => ({ at: at(), kind: "state", view: v });
 const mark = (name: string, detail?: string): EngineEntry => ({
@@ -91,8 +92,9 @@ function trace(): EngineEntry[] {
     answer(3, "s1"),
     mark("press"),
     sent(3, "i4", "gateway.identity.get"),
+    answer(3, "i4", true, { deviceId: "gw" }),
     sent(3, "r1", "update.run", PRESS),
-    answer(3, "r1"),
+    answer(3, "r1", true, { runId: RUN, ok: true }),
     state(view({}, { phase: "validating" })),
     sent(4, "c4", "connect"),
     hello(4),
@@ -152,15 +154,24 @@ describe("the engine's verdict", () => {
     const elsewhere = trace().map((e) =>
       e.kind === "sent" && e.method === "update.run" ? { ...e, socket: 9 } : e,
     );
+    // Its answer, on the press's socket, no longer pairs with it either.
     expect(judgeEngine(elsewhere, PLAN).failures).toEqual([
       "update.run was sent with no identity read on its connection",
+      "no answer or gateway record names the press's run",
     ]);
   });
 
   it("fails an outcome other than updated, another device's run, or a version mismatch", () => {
     const last = (run: Partial<NonNullable<EngineView["run"]>>, version = "2026.11.10") => {
       const entries = trace();
-      entries.splice(25, 1, state(view({ serverVersion: version }, { phase: "finished", ...run })));
+      const updated = entries.findIndex(
+        (e) => e.kind === "state" && e.view.run?.outcome === "updated",
+      );
+      entries.splice(
+        updated,
+        1,
+        state(view({ serverVersion: version }, { phase: "finished", ...run })),
+      );
       return judgeEngine(entries, PLAN).failures;
     };
     expect(last({ outcome: "unconfirmed" })).toEqual(["the engine's outcome is unconfirmed"]);
@@ -189,11 +200,15 @@ describe("the engine's verdict", () => {
       entries.splice(
         press + 1,
         1,
-        ...(answered ? [answer(3, "r1")] : []),
+        ...(answered ? [answer(3, "r1", true, { runId: RUN, ok: true })] : []),
         mark("dropped"),
         sent(5, "c5", "connect"),
         hello(5),
         sent(5, "a1", first),
+        // The gateway's record of the press, found by its tag.
+        answer(5, "a1", true, {
+          activeRun: { runId: RUN, origin: { requester: PRESS.requester } },
+        }),
         sent(5, "a2", "update.runs.list"),
       );
       return entries;
@@ -245,5 +260,152 @@ describe("the engine's verdict", () => {
   it("judges the engine's last state before the driver stopped it", () => {
     const entries = [...trace(), mark("stop"), state(view({ status: "idle" }))];
     expect(judgeEngine(entries, PLAN).failures).toEqual([]);
+  });
+});
+
+describe("the engine's verdict, against what the gateway answered", () => {
+  const replace = (
+    entries: EngineEntry[],
+    match: (e: EngineEntry) => boolean,
+    ...by: EngineEntry[]
+  ) => {
+    const i = entries.findIndex(match);
+    entries.splice(i, 1, ...by);
+    return entries;
+  };
+  const isRun = (e: EngineEntry) => e.kind === "sent" && e.method === "update.run";
+  const isRunAnswer = (e: EngineEntry) => e.kind === "answer" && e.id === "r1";
+  const isIdentityAnswer = (e: EngineEntry) => e.kind === "answer" && e.id === "i4";
+
+  it("needs the tag core can read back, not just its prefix", () => {
+    const short = { requester: { channel: "webchat", senderId: "clawtrate-update:1" } };
+    const entries = replace(trace(), isRun, sent(3, "r1", "update.run", short));
+    expect(judgeEngine(entries, PLAN).failures).toEqual([
+      `update.run was sent with ${JSON.stringify(short)}`,
+    ]);
+  });
+
+  it("needs the identity answered, with an identity, before the press", () => {
+    const late = trace();
+    const answerAt = late.findIndex(isIdentityAnswer);
+    const [reply] = late.splice(answerAt, 1);
+    late.splice(late.findIndex(isRunAnswer) + 1, 0, reply!);
+    expect(judgeEngine(late, PLAN).failures).toEqual([
+      "update.run was sent with no identity read on its connection",
+    ]);
+    const empty = replace(trace(), isIdentityAnswer, answer(3, "i4", true, {}));
+    expect(judgeEngine(empty, PLAN).failures).toEqual([
+      "update.run was sent with no identity read on its connection",
+    ]);
+  });
+
+  it("needs the engine to follow the press's own run", () => {
+    const other = "6b3e3f4e-8c1a-4a57-9d2f-0c1f1d6f7a11";
+    const entries = replace(
+      trace(),
+      isRunAnswer,
+      answer(3, "r1", true, { runId: other, ok: true }),
+    );
+    expect(judgeEngine(entries, PLAN).failures).toEqual([
+      `the engine followed run ${RUN}, not the press's run ${other}`,
+    ]);
+    // A lost answer with no record carrying the tag names no run.
+    const lost = trace().filter((e) => !isRunAnswer(e));
+    expect(judgeEngine(lost, PLAN).failures).toEqual([
+      "no answer or gateway record names the press's run",
+    ]);
+  });
+
+  it('refuses "updated" with no version named', () => {
+    const entries = trace();
+    const updated = entries.findIndex(
+      (e) => e.kind === "state" && e.view.run?.outcome === "updated",
+    );
+    entries.splice(
+      updated,
+      1,
+      state(view({ serverVersion: null }, { phase: "finished", outcome: "updated", to: null })),
+    );
+    expect(judgeEngine(entries, PLAN).failures).toEqual(['"updated" with no version named']);
+  });
+
+  it("reads recovery only on the first connection after the drop", () => {
+    const plan: EnginePlan = { ...PLAN, dropAnswer: true };
+    const entries = trace();
+    const press = entries.findIndex(isRun);
+    entries.splice(
+      press + 1,
+      1,
+      mark("dropped"),
+      sent(5, "c5", "connect"),
+      hello(5),
+      // A silent first reconnect, then the asking on a later one.
+      sent(6, "c6", "connect"),
+      hello(6),
+      sent(6, "a1", "update.status"),
+      answer(6, "a1", true, { activeRun: { runId: RUN, origin: { requester: PRESS.requester } } }),
+    );
+    expect(judgeEngine(entries, plan).failures).toEqual([
+      "after the drop the engine asked nothing first, not update.status",
+    ]);
+  });
+
+  it("holds the reopen's window through a failed status read, and needs the press before the answer", () => {
+    const plan: EnginePlan = { ...PLAN, reopen: true };
+    const reopened = (...after: EngineEntry[]): EngineEntry[] => {
+      const entries = trace();
+      const validating = entries.findIndex(
+        (e) => e.kind === "state" && e.view.run?.phase === "validating",
+      );
+      clock = entries[validating]!.at;
+      entries.splice(
+        validating + 1,
+        0,
+        mark("reopen"),
+        sent(6, "c6", "connect"),
+        hello(6),
+        ...after,
+      );
+      return entries;
+    };
+    // A failed read, then Update shown as pressable, then the press refused, then the answer.
+    const failedFirst = reopened(
+      sent(6, "s6", "update.status"),
+      answer(6, "s6", false),
+      state(view({}, null)),
+      mark("press-refused", "An update is already under way."),
+      sent(6, "s7", "update.status"),
+      answer(6, "s7"),
+    );
+    const verdict = judgeEngine(failedFirst, plan);
+    expect(verdict.failures).toEqual([]);
+    // From that state to the successful answer.
+    expect(verdict.facts.unheldMs).toBe(300);
+    // No successful answer at all.
+    expect(
+      judgeEngine(
+        reopened(sent(6, "s6", "update.status"), answer(6, "s6", false), mark("press-refused")),
+        plan,
+      ).failures,
+    ).toEqual(["update.status never answered after the reopen"]);
+    // A refusal after the status answered shows no hold.
+    expect(
+      judgeEngine(
+        reopened(sent(6, "s6", "update.status"), answer(6, "s6"), mark("press-refused")),
+        plan,
+      ).failures,
+    ).toEqual(["the press after the reopen came after the status answered, so it shows no hold"]);
+    // A press sent before the answer counts, even when its refusal lands after it.
+    expect(
+      judgeEngine(
+        reopened(
+          sent(6, "s6", "update.status"),
+          mark("press-sent"),
+          answer(6, "s6"),
+          mark("press-refused"),
+        ),
+        plan,
+      ).failures,
+    ).toEqual([]);
   });
 });
