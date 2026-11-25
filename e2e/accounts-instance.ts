@@ -27,42 +27,69 @@ const record: RunRecord = {
 /** The instance's name, the same in every spec this worker runs. */
 export const ACCOUNTS = `e2e-${record.run}-acct`;
 
+/** Starts the instance, recorded first, and checks it runs on ports e2e may use. */
+function start(): void {
+  const self = processIdentity(process.pid);
+  if (self.state !== "alive") throw new Error("could not determine this worker's start time");
+  record.runner.identity = self.identity;
+  const runId = newRunId();
+  record.instances.push({ name: ACCOUNTS, runId });
+  saveRecord(RECORDS, record);
+  process.stdout.write(
+    devGateway(
+      ACCOUNTS,
+      "start",
+      "--run-id",
+      runId,
+      "--with-accounts",
+      "--with-plugin",
+      "clawtrate-dev-signin",
+      "--with-node",
+      "--no-seed",
+    ),
+  );
+  const mine = listInstances().find((row) => row.name === ACCOUNTS);
+  if (!mine?.gatewayRunning) throw new Error(`instance ${ACCOUNTS} is not running`);
+  for (const port of [mine.gatewayPort, mine.providerPort]) {
+    if (port === null || FORBIDDEN_PORTS.includes(port)) {
+      throw new Error(`instance ${ACCOUNTS} is on port ${port}, which e2e never uses`);
+    }
+  }
+}
+
+/**
+ * Runs `start`, then `use`, and `reset` after them whatever happened, so a start whose checks
+ * throw leaves no instance behind. Returns what `reset` reported; when `start` or `use` threw,
+ * prints it and throws their error instead.
+ */
+export async function whileStarted(
+  start: () => void,
+  use: () => Promise<void>,
+  reset: () => string[],
+): Promise<string[]> {
+  try {
+    start();
+    await use();
+  } catch (error) {
+    const problems = reset();
+    if (problems.length > 0) console.error(problems.join("\n"));
+    throw error;
+  }
+  return reset();
+}
+
 export const test = base.extend<object, { accountsInstance: string }>({
   accountsInstance: [
     // eslint-disable-next-line no-empty-pattern
     async ({}, use) => {
-      const self = processIdentity(process.pid);
-      if (self.state !== "alive") throw new Error("could not determine this worker's start time");
-      record.runner.identity = self.identity;
-      const runId = newRunId();
-      record.instances.push({ name: ACCOUNTS, runId });
-      saveRecord(RECORDS, record);
-      process.stdout.write(
-        devGateway(
-          ACCOUNTS,
-          "start",
-          "--run-id",
-          runId,
-          "--with-accounts",
-          "--with-plugin",
-          "clawtrate-dev-signin",
-          "--with-node",
-          "--no-seed",
-        ),
+      // The specs stop their hosts in their own afterAll; once the worker is done with the
+      // instance it is reset, and its record goes too.
+      const problems = await whileStarted(
+        start,
+        () => use(ACCOUNTS),
+        () => cleanUp(RECORDS, record, resetInstance),
       );
-      const mine = listInstances().find((row) => row.name === ACCOUNTS);
-      if (!mine?.gatewayRunning) throw new Error(`instance ${ACCOUNTS} is not running`);
-      for (const port of [mine.gatewayPort, mine.providerPort]) {
-        if (port === null || FORBIDDEN_PORTS.includes(port)) {
-          throw new Error(`instance ${ACCOUNTS} is on port ${port}, which e2e never uses`);
-        }
-      }
-      await use(ACCOUNTS);
-      // The specs stopped their hosts in their own afterAll; the instance is reset, and its record
-      // goes too.
-      expect(cleanUp(RECORDS, record, resetInstance), "the accounts instance's run record").toEqual(
-        [],
-      );
+      expect(problems, "the accounts instance's run record").toEqual([]);
       expect(existsSync(recordPath(RECORDS, record.run))).toBe(false);
       expect(
         listInstances().some((row) => row.name === ACCOUNTS),

@@ -51,8 +51,10 @@ describe("which end-to-end runs start the accounts instance", () => {
     const saved = fixture.indexOf("saveRecord(RECORDS, record)");
     expect(saved).toBeGreaterThan(-1);
     expect(fixture.indexOf('"--with-accounts"')).toBeGreaterThan(saved);
-    expect(fixture.indexOf("cleanUp(RECORDS, record, resetInstance)")).toBeGreaterThan(
-      fixture.indexOf("await use(ACCOUNTS)"),
+    // Started, used and reset through whileStarted, which resets it also when the start's checks
+    // throw (test/e2e-accounts-instance.test.ts).
+    expect(fixture.replace(/\s+/g, " ")).toContain(
+      "whileStarted( start, () => use(ACCOUNTS), () => cleanUp(RECORDS, record, resetInstance), )",
     );
     for (const file of ["e2e/accounts.spec.ts", "e2e/machines.spec.ts", "e2e/check-ins.spec.ts"]) {
       const { spec, before } = hooks(file);
