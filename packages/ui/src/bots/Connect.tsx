@@ -92,7 +92,7 @@ export function useConnect({
   const bridge = useBridge();
   const admin = connection.canAdmin;
   // Where Connect opened: a key typed here goes only to that gateway.
-  const [openedOn] = useState(() => shownStamp(connection));
+  const [openedOn] = useState(() => accounts.readOn ?? shownStamp(connection));
   // Done: the sign-in that finished is let go, so the component opens afresh next time.
   const finish = (account: string | null) => {
     remember(LABEL_KEPT, null);
