@@ -118,6 +118,11 @@ export type OpenClawUpdateState = {
   blocked: { reason: string; note: string | null } | null;
   /** Why the last press sent nothing, or what is not known of it. */
   error: string | null;
+  /**
+   * A press went out and its answer was lost: the update may be under way. No other press is
+   * sent until the gateway's record settles it, on the next connection.
+   */
+  looking: boolean;
 };
 
 export const initialOpenClawUpdate: OpenClawUpdateState = {
@@ -125,6 +130,7 @@ export const initialOpenClawUpdate: OpenClawUpdateState = {
   starting: false,
   blocked: null,
   error: null,
+  looking: false,
 };
 
 /** Text the gateway wrote, as Clawtrate shows it: one line, no control characters, bounded. */
@@ -197,7 +203,14 @@ export function readRunChanged(
 const cannotUpdate = (run: GatewayUpdateRun) =>
   run.status !== "running" && run.reason !== null && CANNOT_UPDATE.has(run.reason);
 
-type Kept = { gatewayId: string; runId: string; from: string | null; to: string | null };
+/** The run this device started, or the press whose answer was lost (`since`, with no run id). */
+type Kept = {
+  gatewayId: string;
+  runId: string | null;
+  since: number | null;
+  from: string | null;
+  to: string | null;
+};
 
 function readKept(raw: string | null): Kept | null {
   if (raw === null || raw.length > MAX_KEPT_CHARS) return null;
@@ -206,10 +219,13 @@ function readKept(raw: string | null): Kept | null {
     const gatewayId = kept?.gatewayId;
     const runId = kept?.runId;
     if (typeof gatewayId !== "string" || !gatewayId || gatewayId.length > 1_024) return null;
-    if (typeof runId !== "string" || !RUN_ID.test(runId)) return null;
+    const since =
+      typeof kept?.since === "number" && Number.isSafeInteger(kept.since) ? kept.since : null;
+    const run = typeof runId === "string" && RUN_ID.test(runId) ? runId : null;
+    if (run === null && since === null) return null;
     const version = (value: unknown) =>
       typeof value === "string" && isOpenClawVersion(value) ? value : null;
-    return { gatewayId, runId, from: version(kept?.from), to: version(kept?.to) };
+    return { gatewayId, runId: run, since, from: version(kept?.from), to: version(kept?.to) };
   } catch {
     return null;
   }
@@ -245,12 +261,16 @@ export type OpenClawUpdatesContext = {
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 export const UPDATE_NOT_SENT = "The connection changed, so nothing was sent.";
+export const UPDATE_NOT_STARTED =
+  "The gateway has no update from that press, so it didn't start. You can try again.";
 export const UPDATE_SENT_UNKNOWN =
   "The connection changed before the gateway answered. Clawtrate looks for the update when it reconnects.";
 
 export class OpenClawUpdates {
   /** Moves on with each hello and each reset: an answer read before it changes nothing. */
   private epoch = 0;
+  /** Moves on with each reset (another gateway, or none): a press begun before it writes nothing. */
+  private resets = 0;
   private cancelAway: (() => void) | null = null;
   /** A press whose answer was lost: the gateway and when, looked for on the next hello. */
   private lookFor: { gatewayId: string; since: number } | null = null;
@@ -282,7 +302,12 @@ export class OpenClawUpdates {
    */
   async start(stamp: GatewayStamp): Promise<void> {
     const state = this.state;
-    if (state.starting || state.run?.outcome === "running" || state.run?.outcome === "away")
+    if (
+      state.starting ||
+      state.looking ||
+      state.run?.outcome === "running" ||
+      state.run?.outcome === "away"
+    )
       throw new Error("An update is already under way.");
     if (!this.ctx.admin()) throw new Error("Updating OpenClaw needs admin access.");
     if (state.blocked) throw new Error("This gateway can't update itself, so nothing was sent.");
@@ -290,6 +315,9 @@ export class OpenClawUpdates {
     if (!offer)
       throw new Error("The gateway doesn't report a newer OpenClaw now, so nothing was sent.");
     const epoch = this.epoch;
+    const resets = this.resets;
+    // Still the gateway it was pressed for: after a reset, nothing here writes anything.
+    const current = () => resets === this.resets;
     this.patch({ starting: true, error: null });
     let sent = false;
     let answer: unknown;
@@ -299,7 +327,12 @@ export class OpenClawUpdates {
       if (epoch !== this.epoch) throw new Error(UPDATE_NOT_SENT);
       // As things are now, with no wait between this look and the send.
       const now = this.state;
-      if (now.run?.outcome === "running" || now.run?.outcome === "away" || now.blocked)
+      if (
+        now.looking ||
+        now.run?.outcome === "running" ||
+        now.run?.outcome === "away" ||
+        now.blocked
+      )
         throw new Error("An update is already under way.");
       if (!this.ctx.connection().openclawUpdate)
         throw new Error("The gateway doesn't report a newer OpenClaw now, so nothing was sent.");
@@ -307,12 +340,11 @@ export class OpenClawUpdates {
         sent = true;
       });
     } catch (error) {
+      if (!current()) throw error;
       this.patch({ starting: false });
       if (sent && !this.ctx.answered(error)) {
-        // It may have started: the next hello looks for it.
-        if (stamp.gatewayId)
-          this.lookFor = { gatewayId: stamp.gatewayId, since: Date.now() - 60_000 };
-        this.patch({ error: UPDATE_SENT_UNKNOWN });
+        // It may have started: held until the next connection's record settles it.
+        await this.lose(stamp.gatewayId!, offer);
         throw new Error(UPDATE_SENT_UNKNOWN, { cause: error });
       }
       if (sent && this.ctx.missingScope(error)) {
@@ -331,14 +363,14 @@ export class OpenClawUpdates {
       this.patch({ error: note });
       throw error;
     }
+    if (!current()) return;
     this.patch({ starting: false });
     const reply = asRecord(answer);
     const runId = reply?.runId;
     const gatewayId = stamp.gatewayId!;
     if (epoch !== this.epoch || typeof runId !== "string" || !RUN_ID.test(runId)) {
       // The answer came on a connection that is gone, or names no run: look for it again.
-      this.lookFor = { gatewayId, since: Date.now() - 60_000 };
-      this.patch({ error: UPDATE_SENT_UNKNOWN });
+      await this.lose(gatewayId, offer);
       return;
     }
     const view: UpdateRunView = {
@@ -360,7 +392,7 @@ export class OpenClawUpdates {
     }
     // Finished at once: the gateway's record says why, or its answer does.
     const record = await this.readRun(runId).catch(() => null);
-    if (epoch !== this.epoch) return;
+    if (epoch !== this.epoch || !current()) return;
     if (record) return this.apply(record, epoch);
     const result = asRecord(reply?.result);
     const reason = updateText(result?.reason, MAX_UPDATE_REASON_CHARS);
@@ -466,10 +498,15 @@ export class OpenClawUpdates {
         ? { reason: last.reason!, note: last.note }
         : this.refused;
     this.patch({ blocked });
-    const followed =
-      run?.runId ??
-      (kept?.gatewayId === id ? kept.runId : null) ??
-      this.lookedFor(id, active, last);
+    // A lost press, from memory or kept from before the app closed: settled by this answer.
+    const look =
+      this.lookFor ??
+      (kept?.gatewayId === id && kept.runId === null && kept.since !== null
+        ? { gatewayId: id, since: kept.since }
+        : null);
+    const found = status ? await this.lookedFor(id, look, active, last) : null;
+    if (epoch !== this.epoch) return;
+    const followed = run?.runId ?? (kept?.gatewayId === id ? kept.runId : null) ?? found;
     if (active) {
       const base = run?.runId === active.runId ? run : null;
       this.patch({
@@ -492,6 +529,9 @@ export class OpenClawUpdates {
         },
         error: null,
       });
+      const following = this.state.run;
+      // A run of this device's press is kept, so reopening the app follows it; another's isn't.
+      if (following?.mine) await this.keep(following);
       return;
     }
     if (!followed) return;
@@ -542,6 +582,7 @@ export class OpenClawUpdates {
   /** Another gateway, or none: nothing followed on the last one is shown. */
   reset(): void {
     this.epoch += 1;
+    this.resets += 1;
     this.cancelAway?.();
     this.cancelAway = null;
     this.lookFor = null;
@@ -549,17 +590,33 @@ export class OpenClawUpdates {
     if (this.ctx.get()) this.ctx.set(initialOpenClawUpdate);
   }
 
-  private lookedFor(
+  /**
+   * A press whose answer was lost, settled by the gateway's status: the run it started, or
+   * none, and then another press may be sent.
+   */
+  private async lookedFor(
     id: string,
+    look: { gatewayId: string; since: number } | null,
     active: GatewayUpdateRun | null,
     last: GatewayUpdateRun | null,
-  ): string | null {
-    const look = this.lookFor;
-    this.lookFor = null;
+  ): Promise<string | null> {
     if (!look || look.gatewayId !== id) return null;
+    this.lookFor = null;
     const found = [active, last].find((run) => run && run.createdAtMs >= look.since);
-    if (found) this.patch({ error: null });
+    this.patch({ looking: false, error: found ? null : UPDATE_NOT_STARTED });
+    if (!found) await this.forget(null);
     return found?.runId ?? null;
+  }
+
+  /** A press went out and its answer was lost: held, and kept, until the gateway settles it. */
+  private async lose(gatewayId: string, offer: { current: string; latest: string }): Promise<void> {
+    const since = Date.now() - 60_000;
+    this.lookFor = { gatewayId, since };
+    this.patch({ looking: true, error: UPDATE_SENT_UNKNOWN });
+    const kept: Kept = { gatewayId, runId: null, since, from: offer.current, to: offer.latest };
+    await this.ctx.storage.set(UPDATE_RUN_KEY, JSON.stringify(kept)).catch((error: unknown) => {
+      this.ctx.log(`could not keep the lost update press: ${errorText(error)}`);
+    });
   }
 
   private async readRun(runId: string): Promise<GatewayUpdateRun | null> {
@@ -655,13 +712,20 @@ export class OpenClawUpdates {
   }
 
   private async keep(run: UpdateRunView): Promise<void> {
-    const kept: Kept = { gatewayId: run.gatewayId, runId: run.runId, from: run.from, to: run.to };
+    const kept: Kept = {
+      gatewayId: run.gatewayId,
+      runId: run.runId,
+      since: null,
+      from: run.from,
+      to: run.to,
+    };
     await this.ctx.storage.set(UPDATE_RUN_KEY, JSON.stringify(kept)).catch((error: unknown) => {
       this.ctx.log(`could not keep the update run: ${errorText(error)}`);
     });
   }
 
-  private async forget(runId: string): Promise<void> {
+  /** Forget the kept run `runId`, or with null the kept lost press. */
+  private async forget(runId: string | null): Promise<void> {
     try {
       const kept = readKept(await this.ctx.storage.get(UPDATE_RUN_KEY));
       if (kept?.runId === runId) await this.ctx.storage.delete(UPDATE_RUN_KEY);

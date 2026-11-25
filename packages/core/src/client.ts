@@ -2505,7 +2505,19 @@ export class ClawtrateClient {
       if (stops !== this.stops) return;
       this.connectionCommands += 1;
     });
-    if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
+    if (reload !== null && reload === this.generation) {
+      const epoch = this.epoch;
+      await this.bootstrap(reload, null);
+      // A retry can finish setup on a connection whose hello skipped the update read: read it
+      // now, as the hello's continuation would have.
+      if (
+        reload === this.generation &&
+        epoch === this.epoch &&
+        this.state.connection.status === "connected" &&
+        !this.isSetup(this.settings?.url)
+      )
+        void this.openclawUpdates.onHello();
+    }
   }
 
   /**

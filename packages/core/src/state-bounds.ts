@@ -784,6 +784,7 @@ const openclawUpdating = object<OpenClawUpdateState>()({
     note: text(MAX_UPDATE_NOTE_CHARS),
   }),
   error: text(MAX_UPDATE_NOTE_CHARS),
+  looking: FLAG,
 });
 const task = flagged<Task>()({
   key: ID,

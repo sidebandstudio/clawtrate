@@ -64,6 +64,7 @@ const updating = (patch: Partial<OpenClawUpdateState>): OpenClawUpdateState => (
   starting: false,
   blocked: null,
   error: null,
+  looking: false,
   ...patch,
 });
 const text = (html: string) =>
@@ -147,7 +148,7 @@ describe("F-589: the confirmation", () => {
       "The gateway restarts during the update, so your bots can't be reached for a moment. Clawtrate reconnects by itself.",
     );
     expect(text(html)).toContain(
-      "2 tasks are working now. Before it restarts, OpenClaw stops taking new work and waits up to 5 minutes for running work to finish. Work still running then is interrupted, and OpenClaw resumes interrupted conversations when it's back.",
+      "2 tasks are working now. Before it restarts, OpenClaw stops taking new work and waits up to 5 minutes for running work to finish. Work still running then is interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.",
     );
     expect(html).toMatch(
       /<div class="b-actions"><button type="button" class="button" data-variant="quiet" data-b-focus="">Not now<\/button><button type="button" class="button" data-variant="primary">Update<\/button><\/div>/,

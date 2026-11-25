@@ -14,6 +14,7 @@ import {
   UPDATE_NOT_SENT,
   UPDATE_PHASES,
   UPDATE_RUN_KEY,
+  UPDATE_NOT_STARTED,
   UPDATE_SENT_UNKNOWN,
   updateText,
   type OpenClawUpdatesContext,
@@ -488,12 +489,16 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     expect(t.world.refreshes).toBe(0);
   });
 
-  it("F-589: a press whose answer is lost is looked for on the next hello, never sent again", async () => {
+  it("F-589: a press whose answer is lost holds every other press until the next connection settles it, and is never sent again", async () => {
     const t = rig();
     t.world.dropAfterSend = true;
     await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
-    expect(t.state().error).toBe(UPDATE_SENT_UNKNOWN);
+    expect(t.state()).toMatchObject({ error: UPDATE_SENT_UNKNOWN, looking: true });
     t.world.dropAfterSend = false;
+    t.world.handlers["update.run"] = () => started();
+    // The connection is still usable: a second press is still refused.
+    await expect(t.engine.start(t.stamp())).rejects.toThrow("already under way");
+    expect(writes(t.world)).toHaveLength(1);
     t.world.handlers["update.status"] = () => ({
       sentinel: null,
       updateAvailable: null,
@@ -501,8 +506,61 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     });
     await t.restart(OLD);
     expect(t.run()).toMatchObject({ runId: RUN, mine: true, outcome: "running" });
-    expect(t.state().error).toBeNull();
+    expect(t.state()).toMatchObject({ error: null, looking: false });
+    // The run it found is kept, so reopening the app follows it.
+    expect(JSON.parse(t.storage.data.get(UPDATE_RUN_KEY)!)).toMatchObject({ runId: RUN });
     expect(writes(t.world)).toHaveLength(1);
+  });
+
+  it("F-589: a lost press is kept across reopening the app; a gateway with no run from it lets the person try again", async () => {
+    const t = rig();
+    t.world.dropAfterSend = true;
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    expect(JSON.parse(t.storage.data.get(UPDATE_RUN_KEY)!)).toMatchObject({
+      gatewayId: "gw-a",
+      runId: null,
+    });
+    // Reopened: a new engine on the same storage finds the run that press started.
+    const reopened = rig();
+    await reopened.storage.set(UPDATE_RUN_KEY, t.storage.data.get(UPDATE_RUN_KEY)!);
+    reopened.world.handlers["update.status"] = () => ({
+      sentinel: null,
+      updateAvailable: null,
+      lastRun: record({
+        createdAtMs: Date.now(),
+        phase: "finished",
+        status: "failed",
+        reason: "x",
+      }),
+    });
+    reopened.world.handlers["update.runs.get"] = () => ({ run: null });
+    await reopened.engine.onHello();
+    expect(reopened.run()).toMatchObject({ runId: RUN, mine: true, outcome: "failed" });
+    // No run since the press: it didn't start, and another press may go.
+    const none = rig();
+    await none.storage.set(UPDATE_RUN_KEY, t.storage.data.get(UPDATE_RUN_KEY)!);
+    none.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    await none.engine.onHello();
+    expect(none.state()).toMatchObject({ looking: false, error: UPDATE_NOT_STARTED });
+    expect(none.storage.data.has(UPDATE_RUN_KEY)).toBe(false);
+    none.world.handlers["update.run"] = () => started();
+    await none.engine.start(none.stamp());
+    expect(writes(none.world)).toHaveLength(1);
+  });
+
+  it("F-589: a press still out when Clawtrate moves to another gateway writes nothing there", async () => {
+    const t = rig();
+    let answer: (value: unknown) => void = () => {};
+    t.world.handlers["update.run"] = () => new Promise((resolve) => (answer = resolve));
+    const press = t.engine.start(t.stamp());
+    await until(() => writes(t.world).length === 1);
+    t.engine.reset();
+    t.set({ gatewayId: "gw-b", target: 2 });
+    t.world.identity = "gw-b";
+    answer(started());
+    await press;
+    expect(t.state()).toEqual(initialOpenClawUpdate);
+    expect(t.storage.data.has(UPDATE_RUN_KEY)).toBe(false);
   });
 
   it("F-589: reopening the app follows the run this device started", async () => {

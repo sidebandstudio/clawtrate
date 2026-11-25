@@ -75,6 +75,13 @@ export function UpdateOpenClawView({
   const [confirming, setConfirming] = useState<GatewayStamp | null>(null);
   const update = connection.openclawUpdate;
   if (run) return <UpdateLine run={run} where={where} />;
+  // A press whose answer was lost: no second one until the gateway's record settles it.
+  if (updating.looking && updating.error)
+    return (
+      <div className="b-update" data-testid={`update-looking-${where}`}>
+        <p role="status">{updating.error}</p>
+      </div>
+    );
   if (!update || info.readOnly || connection.status !== "connected") return null;
   if (updating.blocked) {
     const words = blockedWords(updating.blocked);

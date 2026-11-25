@@ -104,5 +104,5 @@ export function workWords(working: number): string {
       : working === 1
         ? "1 task is working now."
         : `${working} tasks are working now.`;
-  return `${now} Before it restarts, OpenClaw stops taking new work and waits up to 5 minutes for running work to finish. Work still running then is interrupted, and OpenClaw resumes interrupted conversations when it's back.`;
+  return `${now} Before it restarts, OpenClaw stops taking new work and waits up to 5 minutes for running work to finish. Work still running then is interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.`;
 }

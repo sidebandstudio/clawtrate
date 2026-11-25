@@ -94,6 +94,7 @@ export function updateRunScene(scene: UpdateRunScene, state: ClawtrateState): Cl
       starting: false,
       blocked: null,
       error: null,
+      looking: false,
       ...runs[scene],
     },
   };
@@ -139,6 +140,7 @@ export function updateRunCommand(
       starting: false,
       blocked: null,
       error: null,
+      looking: false,
     },
   });
   return Promise.resolve();
