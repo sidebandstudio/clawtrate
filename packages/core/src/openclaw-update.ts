@@ -101,6 +101,13 @@ const MAX_UPDATED_CHARS = 32_768;
  * `server-restart-sentinel`).
  */
 export const UPDATE_NOTICE_READ_AFTER_MS = 5_000;
+/**
+ * When that read finds no notice yet, it is read once more this long after it (30 s after
+ * "Updated"), and then not again. The gateway writes it in the same startup task that marks the
+ * run succeeded, about 4 s later in a real update; a pending managed handoff retries every 2 s,
+ * and a loaded host starts slower. A later notice shows the next time the conversation is read.
+ */
+export const UPDATE_NOTICE_READ_LAST_MS = 25_000;
 
 /**
  * Reasons a gateway gives for not updating itself (`update.run` 2026.10.6): no button is
@@ -403,8 +410,12 @@ export type OpenClawUpdatesContext = {
   missingScope: (error: unknown) => boolean;
   /** The model list, read again the way the app reads it on connect. */
   refreshModels: () => Promise<void>;
-  /** Read the main bot's main conversation on gateway `gatewayId` again, if it is open. */
-  readMainAgain: (gatewayId: string) => void;
+  /**
+   * Read the main bot's main conversation on gateway `gatewayId` again, if it is open: true when
+   * the gateway's notice of run `runId` is in it then, false when it isn't, null when nothing was
+   * read.
+   */
+  readMainAgain: (gatewayId: string, runId: string) => Promise<boolean | null>;
   /** A new tag for one press. */
   newTag: () => string;
   now: () => number;
@@ -1184,8 +1195,7 @@ export class OpenClawUpdates {
       if (run.mine === true) {
         await this.remember({ gatewayId: run.gatewayId, runId, to: expected, at: this.ctx.now() });
         // The gateway's notice of it comes with no event: the main conversation is read again.
-        const gatewayId = run.gatewayId;
-        this.ctx.later(() => this.ctx.readMainAgain(gatewayId), UPDATE_NOTICE_READ_AFTER_MS);
+        this.readForNotice(run.gatewayId, runId, this.epoch, "first");
       }
       await this.forget(run.gatewayId, runId);
       // The newer OpenClaw's models: read again the way the app reads them, once.
@@ -1228,6 +1238,35 @@ export class OpenClawUpdates {
     });
     this.keeping = write;
     return write;
+  }
+
+  /**
+   * Read the main conversation again for the gateway's notice of `runId`: once after
+   * `UPDATE_NOTICE_READ_AFTER_MS`, and once more `UPDATE_NOTICE_READ_LAST_MS` later only when that
+   * read found no notice; then no more. Both belong to this connection: after another hello, a
+   * drop or a reset, nothing is read.
+   */
+  private readForNotice(
+    gatewayId: string,
+    runId: string,
+    epoch: number,
+    read: "first" | "last",
+  ): void {
+    this.ctx.later(
+      () => {
+        if (epoch !== this.epoch) return;
+        this.ctx.readMainAgain(gatewayId, runId).then(
+          (found) => {
+            if (found === false && read === "first" && epoch === this.epoch)
+              this.readForNotice(gatewayId, runId, epoch, "last");
+          },
+          (error: unknown) => {
+            this.ctx.log(`could not read the main conversation again: ${errorText(error)}`);
+          },
+        );
+      },
+      read === "first" ? UPDATE_NOTICE_READ_AFTER_MS : UPDATE_NOTICE_READ_LAST_MS,
+    );
   }
 
   private async keep(run: UpdateRunView): Promise<void> {

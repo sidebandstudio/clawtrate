@@ -8,7 +8,7 @@
 // notice", records why.
 
 import { cleanLine } from "./gateway-names.ts";
-import type { ClawtrateState, TranscriptItem } from "./types.ts";
+import type { ClawtrateState, Transcript, TranscriptItem } from "./types.ts";
 
 const record = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -154,4 +154,12 @@ export function mainToReadAgain(
   if (state.connection.gatewayId !== gatewayId) return null;
   const key = mainConversationKey(state);
   return key !== null && tracked(key) ? key : null;
+}
+
+/** Whether a conversation's loaded history holds a row naming itself the notice of run `runId`. */
+export function holdsUpdateNotice(
+  transcript: Pick<Transcript, "items"> | undefined,
+  runId: string,
+): boolean {
+  return transcript?.items.some((item) => item.updateRunId === runId) === true;
 }

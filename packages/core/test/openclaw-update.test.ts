@@ -26,6 +26,7 @@ import {
   UPDATE_UNTIED,
   UPDATE_SENT_UNKNOWN,
   UPDATE_NOTICE_READ_AFTER_MS,
+  UPDATE_NOTICE_READ_LAST_MS,
   UPDATED_RUNS_KEY,
   holdsUpdate,
   updateText,
@@ -116,6 +117,9 @@ function rig(options: { admin?: boolean; startedAt?: number | null } = {}) {
     refreshes: 0,
     /** The gateways whose main conversation the engine asked to read again. */
     rereads: [] as string[],
+    rereadRuns: [] as string[],
+    /** What reading the main conversation again finds: the notice, none yet, or nothing read. */
+    noticeFound: true as boolean | null,
     sent: [] as Array<{ method: string; params: unknown }>,
     handlers: {} as Record<string, (params: unknown) => unknown>,
     /** A request that goes out and then loses its connection. */
@@ -149,8 +153,10 @@ function rig(options: { admin?: boolean; startedAt?: number | null } = {}) {
     refreshModels: async () => {
       world.refreshes += 1;
     },
-    readMainAgain: (gatewayId) => {
+    readMainAgain: async (gatewayId, runId) => {
       world.rereads.push(gatewayId);
+      world.rereadRuns.push(runId);
+      return world.noticeFound;
     },
     newTag: () => `tag-${String((world.tags += 1)).padStart(4, "0")}`,
     now: () => world.now,
@@ -1264,6 +1270,62 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
         .slice(-(MAX_UPDATED_RUNS - 3))
         .map((each) => each.runId),
     );
+  });
+
+  /** Run the read timers of `ms` that are due and not cancelled, then let their reads settle. */
+  async function fire(t: Awaited<ReturnType<typeof updated>>, ms: number) {
+    const due = timersOf(t, ms).filter((each) => !each.cancelled && !fired.has(each));
+    for (const each of due) {
+      fired.add(each);
+      each.run();
+    }
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    return due.length;
+  }
+  const fired = new Set<object>();
+
+  it("F-590: when the first read again finds no notice yet, it is read once more 25 s later, and then not again", async () => {
+    const t = await updated();
+    t.world.noticeFound = false;
+    expect(await fire(t, UPDATE_NOTICE_READ_AFTER_MS)).toBe(1);
+    expect(t.world.rereadRuns).toEqual([RUN]);
+    expect(timersOf(t, UPDATE_NOTICE_READ_LAST_MS)).toHaveLength(1);
+    expect(await fire(t, UPDATE_NOTICE_READ_LAST_MS)).toBe(1);
+    expect(t.world.rereadRuns).toEqual([RUN, RUN]);
+    // Still missing: no third read, of either kind.
+    expect(await fire(t, UPDATE_NOTICE_READ_AFTER_MS)).toBe(0);
+    expect(await fire(t, UPDATE_NOTICE_READ_LAST_MS)).toBe(0);
+    expect(t.world.rereads).toEqual(["gw-a", "gw-a"]);
+  });
+
+  it("F-590: a first read that finds the notice, or reads nothing, is the only one", async () => {
+    for (const found of [true, null]) {
+      const t = await updated();
+      t.world.noticeFound = found;
+      expect(await fire(t, UPDATE_NOTICE_READ_AFTER_MS)).toBe(1);
+      expect(timersOf(t, UPDATE_NOTICE_READ_LAST_MS)).toHaveLength(0);
+      expect(t.world.rereads).toEqual(["gw-a"]);
+    }
+  });
+
+  it("F-590: after a drop, another hello or a reset, neither read goes out", async () => {
+    for (const leave of ["drop", "hello", "reset", "drop before the last"] as const) {
+      const t = await updated();
+      t.world.noticeFound = false;
+      if (leave === "drop before the last") {
+        await fire(t, UPDATE_NOTICE_READ_AFTER_MS);
+        t.engine.onDisconnect();
+        await fire(t, UPDATE_NOTICE_READ_LAST_MS);
+        expect(t.world.rereads, leave).toEqual(["gw-a"]);
+        continue;
+      }
+      if (leave === "drop") t.engine.onDisconnect();
+      if (leave === "hello") await t.engine.onHello();
+      if (leave === "reset") t.engine.reset();
+      await fire(t, UPDATE_NOTICE_READ_AFTER_MS);
+      expect(t.world.rereads, leave).toEqual([]);
+      expect(timersOf(t, UPDATE_NOTICE_READ_LAST_MS), leave).toHaveLength(0);
+    }
   });
 
   it("F-590: a run started elsewhere and followed to Updated keeps nothing and reads nothing again", async () => {

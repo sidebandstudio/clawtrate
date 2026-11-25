@@ -14,6 +14,7 @@ import {
   MAX_UPDATE_NOTICE_CHARS,
   updateNoticeLine,
   updateNoticeRunId,
+  holdsUpdateNotice,
   mainConversationKey,
   mainToReadAgain,
   type UpdatedRun,
@@ -283,6 +284,13 @@ describe("F-590: only in the main bot's main conversation", () => {
     }
     // With no main conversation listed, none.
     expect(lineOf([notice()], { ...SCOPE, mainKey: null })).toEqual([null]);
+  });
+
+  it("F-590: a read again finds the notice only when the history holds a row naming that run", () => {
+    expect(holdsUpdateNotice(HISTORY, RUN)).toBe(true);
+    expect(holdsUpdateNotice(HISTORY, UNKNOWN_RUN)).toBe(false);
+    expect(holdsUpdateNotice(transcriptOf([reply("Hello.")]), RUN)).toBe(false);
+    expect(holdsUpdateNotice(undefined, RUN)).toBe(false);
   });
 
   it("F-590: after Updated, the main conversation is read again only while that gateway is connected and the conversation is followed", () => {

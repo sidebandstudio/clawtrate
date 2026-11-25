@@ -199,7 +199,7 @@ import {
   sessionRowsFromList,
   type RawRecord,
 } from "./mapping.ts";
-import { mainToReadAgain } from "./update-notice.ts";
+import { holdsUpdateNotice, mainToReadAgain } from "./update-notice.ts";
 import {
   MAX_SEARCHES_IN_FLIGHT,
   searchFiles,
@@ -1853,10 +1853,13 @@ export class ClawtrateClient {
       return isMissingScope(error);
     },
     refreshModels: () => this.accounts.load(),
-    readMainAgain: (gatewayId) => {
+    readMainAgain: async (gatewayId, runId) => {
       // The main bot's main conversation, where the gateway writes its notice (F-590).
       const key = mainToReadAgain(this.state, gatewayId, (each) => this.tracked(each));
-      if (key) this.scheduleHistory(key);
+      if (!key) return null;
+      await this.loadTranscript(key, false, null);
+      if (this.state.connection.gatewayId !== gatewayId) return null;
+      return holdsUpdateNotice(this.state.transcripts[key], runId);
     },
     newTag: () => this.randomId(),
     now: () => this.now(),
