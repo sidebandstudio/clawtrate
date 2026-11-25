@@ -905,6 +905,9 @@ export class RoutinesEngine {
       for (const update of this.updates) if (update.id === jobId) update.removed = true;
       if (jobId) this.reads.delete(jobId);
     }
+    // Any event about a job whose read is out may be newer than that read's answer, a run's too.
+    const pending = jobId ? this.reads.get(jobId) : undefined;
+    if (pending) pending.again = true;
     const before = this.ctx.get();
     const kept = before.routines.find((each) => each.id === jobId);
     if (action !== "added" && jobId && before.removed?.id === jobId && !kept) return;
@@ -928,7 +931,7 @@ export class RoutinesEngine {
       (action === "added" &&
         !kept &&
         before.routines.length >= MAX_ROUTINES &&
-        (summary || parseRoutine(record.job) !== null)) ||
+        parseRoutine(record.job) !== null) ||
       (action === "finished" &&
         kept &&
         routines !== before.routines &&
@@ -973,11 +976,10 @@ export class RoutinesEngine {
   }
 
   private async readJobOnce(id: string, entry: { again: boolean }): Promise<void> {
-    const epoch = this.epoch;
     const target = this.ctx.target();
-    // After a reconnect, a switch or the job's removal, the answer is about nothing shown.
-    const current = () =>
-      this.reads.get(id) === entry && epoch === this.epoch && target === this.ctx.target();
+    // After a reconnect (which clears the reads), a switch or the job's removal, the answer is
+    // about nothing shown.
+    const current = () => this.reads.get(id) === entry && target === this.ctx.target();
     for (let attempt = 1; ; attempt += 1) {
       entry.again = false;
       let job: unknown;
@@ -999,10 +1001,15 @@ export class RoutinesEngine {
       }
       const routine = isJobSummary(job) ? null : parseRoutine(job);
       if (!routine || routine.id !== id) return;
+      const held = this.ctx.get().routines;
+      // Others filled the list while it was read: only the list can say what is left out.
+      if (held.length >= MAX_ROUTINES && !held.some((each) => each.id === id)) {
+        void this.load();
+        return;
+      }
       if (this.loading) this.invalidated = true;
       this.ctx.update((state) => {
         const at = state.routines.findIndex((each) => each.id === id);
-        if (at < 0 && state.routines.length >= MAX_ROUTINES) return state;
         return {
           ...state,
           routines:
@@ -1385,6 +1392,8 @@ export class RoutinesEngine {
     const drop = () => {
       // A write still in flight for it must not put it back when it answers.
       for (const update of this.updates) if (update.id === id) update.removed = true;
+      // Nor a read out for it, should the gateway's `removed` event be lost.
+      if (epoch === this.epoch) this.reads.delete(id);
       if (epoch === this.epoch && this.loading) this.invalidated = true;
       if (epoch === this.epoch)
         this.ctx.update((state) => ({

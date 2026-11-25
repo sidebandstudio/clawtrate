@@ -754,7 +754,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("removed: the routine goes whatever the event carries, and a read out for it is dropped", async () => {
     const get = heldGets();
-    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    const { routines, requests, state } = engine({ "cron.get": get.handler }, loaded(job()));
     routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
     await until(() => get.answers.length === 1);
     routines.onEvent({ jobId: JOB, action: "removed", job: summaryOf(job({ name: "Renamed" })) });
@@ -762,6 +762,8 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
     get.answers[0]!.answer(job({ name: "Renamed" }));
     await settle();
     expect(state().routines).toEqual([]);
+    // Dropped, not read again.
+    expect(gets(requests)).toBe(1);
   });
 
   it("a run's started and finished are merged without a read; a summary never adds a routine", async () => {
@@ -909,10 +911,155 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
     await until(() => get.answers.length === 1);
     routines.onClose();
     get.answers[0]!.answer(job());
-    routines.onEvent({ jobId: "j2", action: "added", job: summaryOf(job({ id: "j2" })) });
+    await settle();
+    expect(state().routines).toEqual([]);
+    // On the new connection the same job is read anew: the old read went with its connection.
+    routines.onEvent({ jobId: JOB, action: "added", job: summaryOf(job()) });
     await until(() => get.answers.length === 2);
+    expect(get.answers[1]!.id).toBe(JOB);
     target = 1;
-    get.answers[1]!.answer(job({ id: "j2" }));
+    get.answers[1]!.answer(job());
+    await settle();
+    expect(state().routines).toEqual([]);
+  });
+
+  it("a run's events while the read is out make its answer stale: a finished run is never undone", async () => {
+    const get = heldGets();
+    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => get.answers.length === 1);
+    routines.onEvent({
+      jobId: JOB,
+      action: "started",
+      runAtMs: 1_000,
+      job: summaryOf(job({ name: "Renamed" }, { runningAtMs: 1_000 })),
+    });
+    const ran = job({ name: "Renamed" }, { lastRunAtMs: 1_000, lastRunStatus: "ok" });
+    routines.onEvent({
+      jobId: JOB,
+      action: "finished",
+      runAtMs: 1_000,
+      durationMs: 5,
+      status: "ok",
+      nextRunAtMs: 1_795_093_200_000,
+      job: summaryOf(ran),
+    });
+    expect(state().routines[0]).toMatchObject({ lastRunAt: 1_000, lastStatus: "ok" });
+    // The gateway took this answer's snapshot before the run.
+    get.answers[0]!.answer(job({ name: "Renamed" }));
+    await until(() => get.answers.length === 2);
+    expect(state().routines[0]).toMatchObject({ lastRunAt: 1_000, lastStatus: "ok" });
+    get.answers[1]!.answer(ran);
+    await settle();
+    expect(state().routines[0]).toEqual(parseRoutine(ran));
+  });
+
+  it("near the cap, a routine read after a summary that no longer fits reads the list, so it is counted", async () => {
+    const get = heldGets();
+    const many = Array.from({ length: MAX_ROUTINES - 1 }, (_, index) => job({ id: `h${index}` }));
+    const { routines, requests, state } = engine(
+      {
+        "cron.get": get.handler,
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => ({
+          jobs: [...many, job({ id: "n1" }), job({ id: "n2" })],
+          hasMore: false,
+        }),
+      },
+      loaded(...many),
+    );
+    routines.onEvent({ jobId: "n1", action: "added", job: summaryOf(job({ id: "n1" })) });
+    routines.onEvent({ jobId: "n2", action: "added", job: summaryOf(job({ id: "n2" })) });
+    await until(() => get.answers.length === 2);
+    get.answers[0]!.answer(job({ id: "n1" }));
+    get.answers[1]!.answer(job({ id: "n2" }));
+    await until(() => state().omitted === 1);
+    expect(requests.some((each) => each.method === "cron.list")).toBe(true);
+    expect(state().routines).toHaveLength(MAX_ROUTINES);
+  });
+
+  it("at the cap, an added summary reads the list, not the job", async () => {
+    const many = Array.from({ length: MAX_ROUTINES }, (_, index) => job({ id: `h${index}` }));
+    const { routines, requests } = engine(
+      {
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => ({ jobs: many, hasMore: false }),
+      },
+      loaded(...many),
+    );
+    routines.onEvent({ jobId: "n1", action: "added", job: summaryOf(job({ id: "n1" })) });
+    await until(() => requests.some((each) => each.method === "cron.list"));
+    expect(gets(requests)).toBe(0);
+    routines.onClose();
+  });
+
+  it("a finished summary of a job not held reads nothing: a check-in's run is not a missing routine", async () => {
+    const { routines, requests } = engine({}, loaded(job()));
+    routines.onEvent({
+      jobId: heartbeat.id,
+      action: "finished",
+      runAtMs: 5,
+      status: "ok",
+      job: summaryOf({ ...heartbeat, state: { lastRunAtMs: 5, lastRunStatus: "ok" } }),
+    });
+    await settle();
+    expect(requests).toEqual([]);
+  });
+
+  it("an answer that lands while the list is read has the list read again", async () => {
+    const get = heldGets();
+    let lists = 0;
+    let answerList: (value: unknown) => void = () => {};
+    const { routines, state } = engine(
+      {
+        "cron.get": get.handler,
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => {
+          lists += 1;
+          // The first list was read before the change.
+          if (lists === 1) return new Promise((resolve) => (answerList = resolve));
+          return { jobs: [job({ name: "Renamed" })], hasMore: false };
+        },
+      },
+      loaded(job()),
+    );
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => get.answers.length === 1);
+    const loading = routines.load();
+    await until(() => lists === 1);
+    get.answers[0]!.answer(job({ name: "Renamed" }));
+    await settle();
+    answerList({ jobs: [job()], hasMore: false });
+    await loading;
+    expect(lists).toBe(2);
+    expect(state().routines[0]!.name).toBe("Renamed");
+    routines.onClose();
+  });
+
+  it("an answer that is itself a summary is not applied", async () => {
+    const get = heldGets();
+    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => get.answers.length === 1);
+    const merged = state().routines[0];
+    get.answers[0]!.answer(summaryOf(job({ name: "Renamed" })));
+    await settle();
+    expect(state().routines[0]).toBe(merged);
+    expect(state().routines[0]!.schedule.kind).toBe("cron");
+  });
+
+  it("a routine deleted from Clawtrate stays deleted when a read out for it answers", async () => {
+    const get = heldGets();
+    const { routines, state } = engine(
+      { "cron.get": get.handler, "cron.remove": () => ({ ok: true, removed: true }) },
+      { ...loaded(job()), listedOn: 0 },
+      ADMIN,
+    );
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => get.answers.length === 1);
+    expect(await routines.remove(JOB, null, 0)).toEqual({ status: "removed" });
+    // The gateway's `removed` event is dropped on a slow connection.
+    get.answers[0]!.answer(job({ name: "Renamed" }));
     await settle();
     expect(state().routines).toEqual([]);
   });
