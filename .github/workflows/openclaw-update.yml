@@ -172,6 +172,10 @@ jobs:
                 auth: { mode: "token", token: process.env.OPENCLAW_CHECK_TOKEN },
               },
               discovery: { mdns: { mode: "off" } },
+              // Scheduled turns of the gateway itself (heartbeat, memory upkeep) can run in the
+              // main session right after a restart. The update did not cause them, so they are
+              // off here. The campaign job keeps the scheduler, which its automatic update may use.
+              ...(campaign ? {} : { cron: { enabled: false } }),
               update: campaign
                 ? { checkOnStart: true, channel: "beta", auto: { enabled: true } }
                 : { checkOnStart: true, auto: { enabled: false } },
