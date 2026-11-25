@@ -6,6 +6,7 @@ export * from "./mapping.ts";
 export * from "./origins.ts";
 export * from "./skill-notes.ts";
 export * from "./avatar.ts";
+export * from "./gateway-update.ts";
 export * from "./runs.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";

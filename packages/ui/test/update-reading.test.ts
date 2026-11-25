@@ -282,6 +282,26 @@ it("F-231: a stale restart reply cannot replace or contradict a newer handoff", 
   expect(h.reader.get()).toMatchObject({ snapshot: { revision: 5 }, message: null });
 });
 
+it("F-524: a stale restart reply says why when the offer is gone and no restart began", async () => {
+  const h = harness();
+  const snapshot = {
+    ...base,
+    state: { kind: "verified", version: "1.1.0", offerId: "shown", size: 10 },
+    install: { kind: "restart-available", offerId: "shown" },
+  } as const;
+  h.event(snapshot);
+  const pending = h.reader.restart("shown");
+  // The offer was retired meanwhile: a newer check found nothing to restart into.
+  const gone = { ...base, revision: 5, state: { kind: "nothing-newer" } } as const;
+  h.reply.resolve({ outcome: "stale", snapshot: gone });
+  await pending;
+  expect(h.reader.get()).toMatchObject({
+    snapshot: { revision: 5 },
+    message: "This offer is no longer current.",
+    working: false,
+  });
+});
+
 it("F-554: the lists arriving at the same revision are shown, and older ones never replace them", async () => {
   const h = harness();
   h.first.resolve(base);
