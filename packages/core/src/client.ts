@@ -6319,12 +6319,13 @@ export class ClawtrateClient {
     const bound = stamp === undefined ? undefined : await this.requireSameGateway(stamp);
     // The connection the bot is made on: its guides go there or nowhere.
     const protocol = this.protocol;
+    const epoch = this.epoch;
     const target = this.target;
     // Checked there: both known and current. The whole write stays bound to them.
     const created = await this.accounts.createBot(input, bound);
     const gatewayId = bound?.gatewayId ?? this.state.connection.gatewayId;
     const request = (method: string, params: unknown) =>
-      protocol && this.protocol === protocol && this.target === target
+      protocol && this.protocol === protocol && this.epoch === epoch && this.target === target
         ? this.request(method, params)
         : Promise.reject(new Error(CONNECTION_CHANGED));
     if (gatewayId)
@@ -6995,8 +6996,9 @@ export class ClawtrateClient {
     const { gatewayId } = await this.requireSameGateway(stamp);
     this.checkNotWithdrawn(owner);
     const protocol = this.protocol;
+    const epoch = this.epoch;
     const request = (method: string, params: unknown) =>
-      protocol && this.protocol === protocol && this.target === stamp.target
+      protocol && this.protocol === protocol && this.epoch === epoch && this.target === stamp.target
         ? this.request(method, params)
         : Promise.reject(new Error(CONNECTION_CHANGED));
     const before = await this.guidesRecord(gatewayId);

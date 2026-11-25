@@ -1137,20 +1137,29 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     fake.identity = "gw-guides";
     const { client, storage } = await accountsClient({ gateway: fake });
     await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
-    // Right after the bot is made, the connection drops and comes back as a new one.
+    // Right after the bot is made, as its guides are looked up, the connection is replaced by a
+    // new one to the same gateway. Once: the new connection's own reads go through as usual.
+    let switched = false;
     const get = storage.get.bind(storage);
     storage.get = async (key: string) => {
-      if (key !== guidesKey("gw-guides")) return get(key);
-      const before = client.state.connection.connectedAt;
+      if (
+        key !== guidesKey("gw-guides") ||
+        switched ||
+        fake.gateway.calls("agents.create").length === 0
+      )
+        return get(key);
+      switched = true;
+      const was = client.state.connection.connectedAt;
       fake.gateway.dropAll();
       await until(
         () =>
           client.state.connection.status === "connected" &&
-          client.state.connection.connectedAt !== before,
+          client.state.connection.connectedAt !== was,
       );
       return get(key);
     };
     expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(switched).toBe(true);
     expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
     expect(
       fake.gateway
