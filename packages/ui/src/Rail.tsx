@@ -757,7 +757,11 @@ export function Rail({
         ? menu.task.botId
         : null;
   if (menuBotId && !bots.some((each) => each.id === menuBotId)) setMenu(null);
-  const [renaming, setRenaming] = useState<string | null>(null);
+  /**
+   * The task being renamed in place, and where its row was listed when the rename began: Enter
+   * sends that, since the field stays open while the list is read again, even on another gateway.
+   */
+  const [renaming, setRenaming] = useState<{ key: string; shown: ShownStamp } | null>(null);
   /** Bots whose Archived group is open. */
   const [archivedOpen, setArchivedOpen] = useState<Set<string>>(() => new Set());
   /** Bots whose New task is on its way; held across renders, read and written by events only. */
@@ -931,17 +935,17 @@ export function Rail({
 
   const taskActions: TaskActions | null = interactive
     ? {
-        renaming,
+        renaming: renaming?.key ?? null,
         onRename: (task) => {
           setTip(null);
-          setRenaming(task.key);
+          setRenaming({ key: task.key, shown: listedOn() });
         },
         commitRename: async (task, label) => {
           await bridge.invoke({
             type: "renameTask",
             key: task.key,
             label,
-            stamp: await screenStamp(bridge, listedOn()),
+            stamp: await screenStamp(bridge, renaming?.shown ?? listedOn()),
           });
           setAnnouncement(`Renamed to ${label}.`);
         },
@@ -1305,7 +1309,7 @@ export function Rail({
     ) {
       event.preventDefault();
       setTip(null);
-      setRenaming(row.dataset.key);
+      setRenaming({ key: row.dataset.key, shown: listedOn() });
     }
   };
 
@@ -1749,7 +1753,7 @@ export function Rail({
               hint: "F2",
               onSelect: () => {
                 close();
-                setRenaming(task.key);
+                setRenaming({ key: task.key, shown: listedOn() });
               },
             },
             {

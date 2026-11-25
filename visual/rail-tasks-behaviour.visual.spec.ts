@@ -573,6 +573,53 @@ test("F-056: double-click or F2 renames in place; Enter renames, Escape keeps th
   await expect(taskRow(page, "Router update")).toBeFocused();
 });
 
+test("F-056: a rename in place sends where its row was listed when the rename began, though the list is read again on another gateway before Enter", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  type Listed = { gatewayId: string | null; target: number; connectedAt: number | null };
+  const listed = () =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            clawtrateFixture: { getState: () => { discovery: { tasksRead: Listed } } };
+          }
+        ).clawtrateFixture.getState().discovery.tasksRead,
+    );
+  const before = await listed();
+  await taskRow(page, "Router firmware").focus();
+  await page.keyboard.press("F2");
+  const field = page.getByRole("textbox", { name: "Rename Router firmware" });
+  await expect(field).toBeFocused();
+  await field.fill("Router update");
+  // Another gateway answers at the same address and lists the same bot and task: the field and
+  // its draft stay.
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => {
+      const discovery = state.discovery as { tasksRead: Listed };
+      return {
+        ...state,
+        discovery: {
+          ...discovery,
+          tasksRead: {
+            gatewayId: "gateway-b",
+            target: discovery.tasksRead.target,
+            connectedAt: (discovery.tasksRead.connectedAt ?? 0) + 1,
+          },
+        },
+      };
+    });
+  });
+  await expect.poll(async () => (await listed()).gatewayId).toBe("gateway-b");
+  await expect(field).toHaveValue("Router update");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => sentStamp(page, "renameTask"))
+    .toEqual({ gatewayId: before.gatewayId, target: before.target });
+});
+
 test("F-277: Archive moves a task into the Archived group with focus on the next row; Restore brings it back", async ({
   page,
 }) => {
