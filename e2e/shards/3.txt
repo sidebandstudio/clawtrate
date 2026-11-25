@@ -1,0 +1,9 @@
+# CI's third e2e shard: see 1.txt.
+bot-delete.spec.ts
+work-computer.spec.ts
+bot-voice.spec.ts
+rail-tasks.spec.ts
+ui-pictures.spec.ts
+turns.engine.spec.ts
+work-files.spec.ts
+memory.spec.ts

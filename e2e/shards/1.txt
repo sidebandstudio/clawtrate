@@ -1,0 +1,10 @@
+# CI's first e2e shard (ci.yml), passed to `playwright test --test-list`, with paths from e2e/.
+# The three lists split the spec files by how long each takes on CI, so the shards end together
+# (#485). Every spec file is in exactly one list; test/e2e-shards.test.ts checks it. A new spec
+# goes in the list whose shard finishes first.
+preview.spec.ts
+accounts.spec.ts
+machines.spec.ts
+check-ins.spec.ts
+routines.spec.ts
+setup.spec.ts
