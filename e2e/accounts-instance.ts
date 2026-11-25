@@ -11,7 +11,7 @@ import { expect, test as base } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { devGateway, FORBIDDEN_PORTS, listInstances, resetInstance } from "./global-setup.ts";
 import { cleanUp, recordPath, saveRecord, type RunRecord } from "./run-record.ts";
 
@@ -29,9 +29,8 @@ export const ACCOUNTS = `e2e-${record.run}-acct`;
 
 /** Starts the instance, recorded first, and checks it runs on ports e2e may use. */
 function start(): void {
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this worker's start time");
-  record.runner.identity = self.identity;
+  const self = ownIdentity();
+  record.runner.identity = self;
   const runId = newRunId();
   record.instances.push({ name: ACCOUNTS, runId });
   saveRecord(RECORDS, record);

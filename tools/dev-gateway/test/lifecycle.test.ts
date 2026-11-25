@@ -23,6 +23,7 @@ import { instanceLockPath, lockDir, withLock } from "../src/lock.ts";
 import {
   MARKER_FILE,
   newRunId,
+  ownIdentity,
   processIdentity,
   processState,
   psIdentity,
@@ -51,12 +52,12 @@ afterEach(() => {
   process.env.PATH = realPath;
 });
 
-/** A process lookup whose `ps` misbehaves as `script` says. */
-function brokenPs(script: string): Identify {
+/** A process lookup whose `ps` misbehaves as `script` says, with `timeoutMs` to answer. */
+function brokenPs(script: string, timeoutMs?: number): Identify {
   const dir = tempDir("clawtrate-ps-");
   writeFileSync(join(dir, "ps"), `#!/bin/sh\n${script}\n`);
   chmodSync(join(dir, "ps"), 0o755);
-  return psIdentity([join(dir, "ps")]);
+  return psIdentity([join(dir, "ps")], timeoutMs);
 }
 
 /** A process lookup with no `ps` at all. */
@@ -154,7 +155,7 @@ describe("a process whose identity cannot be read is unknown, never exited (B2)"
 
   it("is unknown when ps does not answer in time, while the process lives", () => {
     const live = liveProcess();
-    const found = brokenPs("exec sleep 30")(live.pid);
+    const found = brokenPs("exec sleep 30", 500)(live.pid);
     expect(found.state).toBe("unknown");
     expect(found.state === "unknown" && found.reason).toMatch(/could not run ps/);
   }, 15_000);
@@ -921,5 +922,60 @@ describe("a start whose gateway never answers says what the gateway was doing (#
     expect(logTail(log, 3)).toBe("line 48\nline 49\nline 50");
     writeFileSync(log, `${"x".repeat(10)}\n`);
     expect(logTail(log, 40, 4)).toBe("xxxx…");
+  });
+});
+
+describe("this process looks itself up again when ps is slow, and never assumes (#582)", () => {
+  /** A `ps` that sleeps past the lookup's limit `slow` times, then answers. */
+  function slowPs(slow: number): Identify {
+    const dir = tempDir("clawtrate-ps-");
+    const count = join(dir, "count");
+    writeFileSync(count, "");
+    writeFileSync(
+      join(dir, "ps"),
+      [
+        "#!/bin/sh",
+        `n=$(wc -c < '${count}')`,
+        `printf x >> '${count}'`,
+        `[ "$n" -lt ${slow} ] && exec sleep 5`,
+        "echo 'S    Mon Nov 16 21:27:01 2026'",
+      ].join("\n"),
+    );
+    chmodSync(join(dir, "ps"), 0o755);
+    return psIdentity([join(dir, "ps")], 300);
+  }
+
+  it("answers when a slow ps answers on a later try", () => {
+    expect(ownIdentity(slowPs(2), 0)).toBe("2026-11-16T21:27:01Z");
+  });
+
+  it("throws with each lookup's reason when ps never answers in time", () => {
+    expect(() => ownIdentity(slowPs(3), 0)).toThrow(
+      new RegExp(
+        `^could not determine this process's start time: ` +
+          `could not run ps for pid ${process.pid}: .*ETIMEDOUT.*; .*; .*ETIMEDOUT`,
+      ),
+    );
+  });
+
+  it("asks a few times, and does not ask again when told it exited", () => {
+    let asked = 0;
+    const unknown: Identify = () => {
+      asked += 1;
+      return { state: "unknown", reason: "no answer" };
+    };
+    expect(() => ownIdentity(unknown, 0)).toThrow(
+      "could not determine this process's start time: no answer; no answer; no answer",
+    );
+    expect(asked).toBe(3);
+    asked = 0;
+    const exited: Identify = () => {
+      asked += 1;
+      return { state: "exited", how: "absent" };
+    };
+    expect(() => ownIdentity(exited, 0)).toThrow(
+      "could not determine this process's start time: it looked absent",
+    );
+    expect(asked).toBe(1);
   });
 });

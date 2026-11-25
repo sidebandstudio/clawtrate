@@ -2,6 +2,7 @@
 // browser-safe protocol client, with transport, storage and signing injected.
 
 import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
+import { OpenClawUpdates } from "./openclaw-update.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
@@ -1823,6 +1824,51 @@ export class ClawtrateClient {
     publish: (botNames) => this.store.update((state) => ({ ...state, botNames })),
     log: (message) => this.log("warn", message),
   });
+  /**
+   * Updating OpenClaw (`openclaw-update.ts`): a person's press, and the gateway's run followed
+   * across its restart; its state is `openclawUpdating`.
+   */
+  private readonly openclawUpdates = new OpenClawUpdates({
+    request: (method, params, onSent) =>
+      this.request(method, params, onSent ? { onSent: () => onSent() } : undefined),
+    connection: () => this.state.connection,
+    admin: () =>
+      this.state.connection.status === "connected" &&
+      this.state.connection.canAdmin &&
+      !this.options.readOnly,
+    identity: () => this.readGatewayIdentity(),
+    sameGateway: async (stamp) => {
+      await this.requireSameGateway(stamp);
+    },
+    startedAt: () => this.gatewayStartedAt,
+    answered: (error) => error instanceof GatewayProtocolRequestError,
+    refusalReason: (error) => {
+      if (!(error instanceof GatewayProtocolRequestError)) return null;
+      const reason = asRecord(error.details)?.reason;
+      return typeof reason === "string" ? reason : null;
+    },
+    missingScope: (error) => {
+      this.noteMissingScope(error);
+      return isMissingScope(error);
+    },
+    refreshModels: () => this.accounts.load(),
+    newTag: () => this.randomId(),
+    now: () => this.now(),
+    storage: {
+      get: (key) => this.host.storage.get(key),
+      set: (key, value) => this.host.storage.set(key, value),
+      delete: (key) => this.host.storage.delete(key),
+    },
+    get: () => this.state.openclawUpdating,
+    set: (openclawUpdating) => this.store.update((state) => ({ ...state, openclawUpdating })),
+    later: (run, ms) => {
+      const timer = setTimeout(run, ms);
+      return () => clearTimeout(timer);
+    },
+    log: (message) => this.log("warn", message),
+  });
+  /** When the connected gateway process started (its hello's `snapshot.uptimeMs`), or null. */
+  private gatewayStartedAt: number | null = null;
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
     request: (method, params) => this.request(method, params),
@@ -2481,7 +2527,19 @@ export class ClawtrateClient {
       if (stops !== this.stops) return;
       this.connectionCommands += 1;
     });
-    if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
+    if (reload !== null && reload === this.generation) {
+      const epoch = this.epoch;
+      await this.bootstrap(reload, null);
+      // A retry can finish setup on a connection whose hello skipped the update read: read it
+      // now, as the hello's continuation would have.
+      if (
+        reload === this.generation &&
+        epoch === this.epoch &&
+        this.state.connection.status === "connected" &&
+        !this.isSetup(this.settings?.url)
+      )
+        void this.openclawUpdates.onHello();
+    }
   }
 
   /**
@@ -6562,6 +6620,33 @@ export class ClawtrateClient {
     return this.botNames.accept(botId, name, stamp);
   }
 
+  /**
+   * Update OpenClaw (#565): the person's press, after the confirmation. One `update.run`, only to
+   * the gateway the screen showed (`stamp`), and only while it reports a newer OpenClaw.
+   */
+  startOpenClawUpdate(stamp: GatewayStamp): Promise<void> {
+    if (this.options.readOnly) return Promise.reject(new Error("This host only reads."));
+    return this.openclawUpdates.start(stamp);
+  }
+
+  /** Put away a finished update's line. Nothing is sent. */
+  dismissOpenClawUpdate(): Promise<void> {
+    return this.openclawUpdates.dismiss();
+  }
+
+  /**
+   * Ask the gateway where updating stands (`update.status`): when Settings › Gateway or the
+   * confirmation opens, and on Check again. Only reads.
+   */
+  checkOpenClawUpdate(): Promise<void> {
+    return this.openclawUpdates.look();
+  }
+
+  /** Stop waiting on a press whose answer was lost, once asking the gateway has failed. */
+  releaseOpenClawUpdateHold(): Promise<void> {
+    return this.openclawUpdates.release();
+  }
+
   /** Not now on a name card: kept on this device for that bot and that name. */
   /** Not now, with whether it answered the card shown now. */
   async declineBotName(
@@ -8897,6 +8982,7 @@ export class ClawtrateClient {
         this.invalidateCheckIns();
         this.routines.onClose();
         this.usage.onClose();
+        this.openclawUpdates.onDisconnect();
         const status = this.state.connection.status;
         if (status !== "pairing" && this.tokenGate?.generation === generation) {
           // The setup connection ended before its hello: its code is forgotten and it stops.
@@ -8980,6 +9066,7 @@ export class ClawtrateClient {
   private forgetGatewayState(): void {
     this.accounts.reset();
     this.botNames.reset();
+    this.openclawUpdates.reset();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
@@ -9258,6 +9345,11 @@ export class ClawtrateClient {
     const bootId = asRecord(hello.server)?.bootId;
     this.gatewayBootId =
       typeof bootId === "string" && bootId.length > 0 && bootId.length <= 96 ? bootId : null;
+    const uptimeMs = asRecord(hello.snapshot)?.uptimeMs;
+    this.gatewayStartedAt =
+      typeof uptimeMs === "number" && Number.isSafeInteger(uptimeMs) && uptimeMs >= 0
+        ? Date.now() - uptimeMs
+        : null;
     // Only what this connection asked for is used: the signed request is the ceiling. A
     // wider grant that implies an asked scope supplies it; an unasked scope never enters.
     const asked = this.state.connection.requestedScopes;
@@ -9335,6 +9427,7 @@ export class ClawtrateClient {
       // Every connect reads the list again: runs that started or ended while away are in it.
       if (this.state.connection.status === "connected") void this.routines.load();
       this.usage.onHello();
+      if (!this.isSetup(this.settings?.url)) void this.openclawUpdates.onHello();
       void this.keepGuidesCurrent(generation, epoch);
     });
   }
@@ -10187,6 +10280,9 @@ export class ClawtrateClient {
           openclawUpdate: readOpenClawUpdate(asRecord(event.payload)?.updateAvailable),
         });
         return;
+      case "update.run.changed":
+        if (!this.isSetup(this.settings?.url)) this.openclawUpdates.onRunChanged(event.payload);
+        return;
       case "sessions.changed":
         this.handleSessionsChanged(event.payload, generation);
         return;
@@ -10889,8 +10985,10 @@ export class ClawtrateClient {
   private setConnection(patch: Partial<ConnectionState>): void {
     // The host pointed anew (Suspend, Disconnect, a fresh pairing): no name card or skipped file
     // read before counts, even on a reconnect to the same address.
-    if (patch.target !== undefined && patch.target !== this.state.connection.target)
+    if (patch.target !== undefined && patch.target !== this.state.connection.target) {
       this.botNames.reset();
+      this.openclawUpdates.reset();
+    }
     const scrubbed = this.scrubConnection(patch);
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
   }
