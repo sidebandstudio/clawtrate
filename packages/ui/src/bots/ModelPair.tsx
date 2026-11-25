@@ -22,7 +22,7 @@ import {
   type OpenClawUpdate,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState } from "react";
-import { useBridge } from "../bridge.tsx";
+import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { ArrowUpIcon, ExternalIcon } from "../icons.tsx";
 import { Note, Select, type SelectRow, type SelectSection } from "./parts.tsx";
 import { UpdateOpenClaw, useUpdateRun } from "./UpdateOpenClaw.tsx";
@@ -243,12 +243,27 @@ export function refreshWords(
   return said.join(" ");
 }
 
-/** When the gateway's config limits a provider's models (`agents.defaults.models`). */
-export function allowlistLine(accounts: AccountsState, provider: string): string | null {
+/**
+ * The OpenClaw versions on which what the config's model list limits was established, on a
+ * development gateway of each: it limits what the gateway lists and what a task may switch to, and
+ * not a bot's own model or the default (docs/research/model-catalog.md, section 8).
+ */
+export const MODEL_LIMIT_VERSIONS: readonly string[] = ["2026.10.6", "2026.11.10"];
+
+/**
+ * When the gateway's config limits a provider's models for the default bot (`modelAllowlist`), on
+ * a version the gateway reports where what that limits is established; nothing elsewhere.
+ */
+export function allowlistLine(
+  accounts: AccountsState,
+  provider: string,
+  serverVersion: string | null,
+): string | null {
   const list = accounts.modelAllowlist;
   if (list === null || list.whole.includes(provider)) return null;
+  if (serverVersion === null || !MODEL_LIMIT_VERSIONS.includes(serverVersion)) return null;
   const who = providerName(provider);
-  return `The gateway's config names which of ${who}'s models bots can use, and lists only those.`;
+  return `The gateway's config names which of ${who}'s models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.`;
 }
 
 /**
@@ -316,7 +331,7 @@ export function ModelPair({
     found && found.status !== "looking"
       ? refreshWords(found, who, update, updateRun !== null)
       : null;
-  const limits = allowlistLine(accounts, provider);
+  const limits = allowlistLine(accounts, provider, useClawtrateState().connection.serverVersion);
   // What a Refresh found is said once, politely, when it arrives; focus stays where it was.
   const said =
     foundWords !== null && limits && found?.status === "done" && found.addedCount === 0

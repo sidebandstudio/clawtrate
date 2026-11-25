@@ -126,7 +126,7 @@ test.describe("F-588: Refresh in the Model menu", () => {
     page,
   }) => {
     const words =
-      "The gateway's config names which of OpenAI's models bots can use, and lists only those.";
+      "The gateway's config names which of OpenAI's models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.";
     await openMenu(page, `${SETTINGS}&allowlist=1`);
     await expect(menu(page).getByText(words)).toBeVisible();
     await recordAnnouncements(page);

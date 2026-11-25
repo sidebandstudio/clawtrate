@@ -171,19 +171,24 @@ describe("F-588: Refresh in the Model menu", () => {
     ).toBe("Couldn't refresh: The gateway didn't answer in time.");
   });
 
-  it("F-588: says when the gateway's config limits a provider's models, and only then", () => {
-    const limited = (whole: string[] | null) =>
+  it("F-588: says what the config's model list limits, only where that is established for the gateway's version", () => {
+    const limited = (whole: string[] | null, version: string | null = "2026.10.6") =>
       allowlistLine(
         { ...initialAccountsState, modelAllowlist: whole === null ? null : { whole } },
         "openai",
+        version,
       );
+    const line =
+      "The gateway's config names which of OpenAI's models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.";
     expect(limited(null)).toBeNull();
     expect(limited(["openai"])).toBeNull();
-    expect(limited(["anthropic"])).toBe(
-      "The gateway's config names which of OpenAI's models bots can use, and lists only those.",
-    );
+    expect(limited(["anthropic"])).toBe(line);
+    expect(limited([], "2026.11.10")).toBe(line);
+    // A version where it wasn't established, or none reported: nothing is said.
+    expect(limited([], "2026.11.6")).toBeNull();
+    expect(limited([], "2027.1.1")).toBeNull();
+    expect(limited([], null)).toBeNull();
   });
-
   it("F-588: an answer is held for one provider and one connection: another gateway, a reconnect or a hidden pair is another key", () => {
     const connection: ConnectionState = {
       ...initialConnectionState,
