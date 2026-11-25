@@ -147,7 +147,7 @@ jobs:
           cache: pnpm
       # The scripted model comes from the development gateway tool.
       - run: |
-          pnpm install --frozen-lockfile --filter @clawtrate/openclaw-update-check \
+          pnpm install --frozen-lockfile --filter "@clawtrate/openclaw-update-check..." \
             --filter @clawtrate/dev-gateway
       - run: |
           echo "OUT=$RUNNER_TEMP/openclaw-update" >> "$GITHUB_ENV"
