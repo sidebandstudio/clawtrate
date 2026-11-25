@@ -77,6 +77,14 @@ import {
 } from "./pictures.ts";
 import { BOT_NAME_SCENES, botNameCommand, botNameScene, isBotNameScene } from "./bot-name.ts";
 import {
+  BOT_FILE_SCENES,
+  botFileAnswer,
+  botFileSave,
+  botFileScene,
+  isBotFileScene,
+  type SavedFile,
+} from "./bot-files.ts";
+import {
   computerFixture,
   FIXTURE_VIEWER,
   withComputerRuns,
@@ -145,6 +153,7 @@ export const SCENES = [
   ...ACTION_SCENES,
   ...PICTURE_SCENES,
   ...BOT_NAME_SCENES,
+  ...BOT_FILE_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -494,6 +503,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
       if (isPictureScene(name)) return { initial: pictureScene(base, now, name), steps: [] };
+      if (isBotFileScene(name)) return { initial: botFileScene(base, now), steps: [] };
       if (isBotNameScene(name)) return { initial: botNameScene(name, base, now), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
@@ -618,6 +628,8 @@ export function createFixtureBridge(
   releaseSnapshots(): void;
   /** Takes the Computer pane has shown refused as busy so far (`computerFixture`'s `refusals`). */
   computerRefusals(): number;
+  /** What the host's own save wrote, in the scenes that have one (`bot-files`). */
+  savedFiles: SavedFile[];
 } {
   const now = Date.now();
   const setupName = isSetupState(options.setup ?? null) ? options.setup! : null;
@@ -779,6 +791,7 @@ export function createFixtureBridge(
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   const timers = holdableTimers();
+  const savedFiles: SavedFile[] = [];
   const { deferred } = timers;
   const searchCommand = searchCommands(search, deferred);
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
@@ -890,6 +903,7 @@ export function createFixtureBridge(
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
     if (command.type === "readChatPicture") return pictureAnswer();
     if (command.type === "readSentPicture") return sentPictureAnswer(command);
+    if (command.type === "readChatFile") return botFileAnswer(command);
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;
@@ -1303,6 +1317,10 @@ export function createFixtureBridge(
       await apply(command);
     },
     invoke: answer,
+    ...(isBotFileScene(name)
+      ? { save: botFileSave(savedFiles, (run) => timers.deferred(run, 0)) }
+      : {}),
+    savedFiles,
     attach: async (file) => {
       const info = {
         id: `file-${files.size + 1}`,

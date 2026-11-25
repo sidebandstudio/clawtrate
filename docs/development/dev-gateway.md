@@ -195,6 +195,7 @@ The scripted model can put a run into every situation the live conversation has 
 | `#browse-outside`      | open an outside address                | Navigates to an address outside loopback, then to another loopback port, and reads what the tab shows; both are refused.                                                                                                                                           | a bot with a browser of its own |
 | `#image`               | draw the sun over a green hill         | Asks the image tool for a picture; it arrives in the gateway's next turn in the same task.                                                                                                                                                                         | any bot, with `--with-images`   |
 | `#send-picture`        | send me the trail map                  | Sends the trail map from Pip's workspace with the message tool; it shows as a message in the task with the picture.                                                                                                                                                | Pip, with `--with-message-tool` |
+| `#attach`              | attach the reviews                     | Writes a two-page PDF (reports/reviews-draft.pdf) and a text note (reports/reviews.txt) in the bot's workspace, then ends its answer with a `MEDIA:` line for each: the gateway hands both over as files on the reply.                                             | any bot                         |
 
 Where it matters which bot you ask:
 

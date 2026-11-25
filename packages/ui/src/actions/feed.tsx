@@ -35,6 +35,7 @@ import {
   type Step,
   type Transcript,
   type TranscriptItem,
+  type ChatFile,
   type ChatPicture,
 } from "@clawtrate/core";
 import {
@@ -59,6 +60,7 @@ import {
 import { fullDate } from "../format.ts";
 import { Markdown } from "../Markdown.tsx";
 import { MessageUnit } from "../Messages.tsx";
+import { BotFiles } from "../BotFiles.tsx";
 import { Pictures } from "../Pictures.tsx";
 import { useShowCommands, useShowThinking } from "../preferences.ts";
 import {
@@ -80,6 +82,8 @@ export type FeedRef =
       messageId?: string | undefined;
       /** The pictures the message of this bubble carried, drawn under it (F-535). */
       pictures?: ChatPicture[];
+      /** The other files it carried, drawn under them (F-115). */
+      files?: ChatFile[];
     }
   | { t: "preamble"; preamble: Preamble }
   | { t: "reply"; run: Run }
@@ -91,9 +95,12 @@ export type FeedRef =
 
 type Groups = FeedGroup<FeedRef>[];
 
+/** The pictures (by id) and files of an item drawn with a bubble; the rest go under the turn. */
+type Placed = { pictures: ReadonlySet<string>; files: ReadonlySet<ChatFile> };
+
 type Feeds = {
   /** The groups of each assistant history item, by item id, and the pictures drawn with a bubble. */
-  items: Map<string, { groups: Groups; revision: number; placed: ReadonlySet<string> }>;
+  items: Map<string, { groups: Groups; revision: number; placed: Placed }>;
   /** The groups of each run drawn from the engine, by run id. */
   runs: Map<string, { groups: Groups; revision: number }>;
   /** Each run's account of what is drawn (`retentionAccount`), and its drawn calls the engine holds. */
@@ -246,6 +253,15 @@ class Tally {
   }
 }
 
+/** The last bubble of the message with this id, or -1. */
+const bubbleOf = (entries: FeedEntry<FeedRef>[], messageId: string | undefined) =>
+  messageId
+    ? entries.findLastIndex(
+        (entry) =>
+          entry.type === "bubble" && entry.ref.t === "text" && entry.ref.messageId === messageId,
+      )
+    : -1;
+
 /**
  * Each picture of an item goes under the last bubble of the message that carried
  * it, so a picture a bot sent with its message tool shows with that message, not
@@ -258,13 +274,7 @@ export function placePictures(
 ): ReadonlySet<string> {
   const placed = new Set<string>();
   for (const picture of item.pictures ?? []) {
-    if (!picture.messageId) continue;
-    const at = entries.findLastIndex(
-      (entry) =>
-        entry.type === "bubble" &&
-        entry.ref.t === "text" &&
-        entry.ref.messageId === picture.messageId,
-    );
+    const at = bubbleOf(entries, picture.messageId);
     const entry = entries[at];
     if (entry?.type !== "bubble" || entry.ref.t !== "text") continue;
     entries[at] = {
@@ -272,6 +282,22 @@ export function placePictures(
       ref: { ...entry.ref, pictures: [...(entry.ref.pictures ?? []), picture] },
     };
     placed.add(picture.artifactId);
+  }
+  return placed;
+}
+
+/** The same for the item's other files (F-115), after its pictures. Returns the files placed. */
+export function placeFiles(
+  item: TranscriptItem,
+  entries: FeedEntry<FeedRef>[],
+): ReadonlySet<ChatFile> {
+  const placed = new Set<ChatFile>();
+  for (const file of item.files ?? []) {
+    const at = bubbleOf(entries, file.messageId);
+    const entry = entries[at];
+    if (entry?.type !== "bubble" || entry.ref.t !== "text") continue;
+    entries[at] = { ...entry, ref: { ...entry.ref, files: [...(entry.ref.files ?? []), file] } };
+    placed.add(file);
   }
   return placed;
 }
@@ -684,7 +710,7 @@ export function ActionScope({
       id: string;
       entries: FeedEntry<FeedRef>[];
       revision: number;
-      placed: ReadonlySet<string>;
+      placed: Placed;
     }> = [];
     for (const item of transcript.items) {
       if (item.role !== "assistant") continue;
@@ -699,7 +725,7 @@ export function ActionScope({
           ? engineRecord(run, inRows, drawn, lastItem.get(run.id) === item.id, tally)
           : null;
       const entries = itemEntries(item, run, index, skip, cards, tally, fromEngine, record);
-      const placed = placePictures(item, entries);
+      const placed = { pictures: placePictures(item, entries), files: placeFiles(item, entries) };
       built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0, placed });
     }
     const builtRuns: Array<{ id: string; entries: FeedEntry<FeedRef>[]; revision: number }> = [];
@@ -737,10 +763,7 @@ export function ActionScope({
     for (const each of built) listOf(runOf.get(each.id)?.id, each.entries);
     for (const each of builtRuns) listOf(each.id, each.entries);
     for (const lists of listsOf.values()) markRepeats(lists, ctx);
-    const items = new Map<
-      string,
-      { groups: Groups; revision: number; placed: ReadonlySet<string> }
-    >();
+    const items = new Map<string, { groups: Groups; revision: number; placed: Placed }>();
     const runs = new Map<string, { groups: Groups; revision: number }>();
     const hidden = new Map<string, { groups: Groups; revision: number }>();
     // Without commands shown, each run's cards go to its run line, in order (7.11).
@@ -965,6 +988,7 @@ function GroupView({
                 <Markdown text={ref.text} />
               </Bubble>
               {ref.pictures && <BubblePictures pictures={ref.pictures} />}
+              {ref.files && <BubbleFiles files={ref.files} />}
             </MessageUnit>
           );
         case "preamble":
@@ -1025,11 +1049,22 @@ function BubblePictures({ pictures }: { pictures: ChatPicture[] }) {
   return env ? <Pictures taskKey={env.taskKey} pictures={pictures} /> : null;
 }
 
-/** The pictures of an item that no bubble of it draws: under the turn, in their order. */
+function BubbleFiles({ files }: { files: ChatFile[] }) {
+  const env = useContext(ActionEnvContext);
+  return env ? <BotFiles taskKey={env.taskKey} files={files} /> : null;
+}
+
+/** The pictures and files of an item that no bubble of it draws: under the turn, in their order. */
 export function TurnPictures({ taskKey, item }: { taskKey: string; item: TranscriptItem }) {
   const placed = useFeeds().items.get(item.id)?.placed;
-  const rest = (item.pictures ?? []).filter((picture) => !placed?.has(picture.artifactId));
-  return <Pictures taskKey={taskKey} pictures={rest} />;
+  const rest = (item.pictures ?? []).filter((picture) => !placed?.pictures.has(picture.artifactId));
+  const files = (item.files ?? []).filter((file) => !placed?.files.has(file));
+  return (
+    <>
+      <Pictures taskKey={taskKey} pictures={rest} />
+      <BotFiles taskKey={taskKey} files={files} />
+    </>
+  );
 }
 
 /** An assistant history item's bubbles, cards and Thought lines. */
