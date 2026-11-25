@@ -1842,7 +1842,7 @@ test("F-533: an id the bridge would refuse is refused where it is typed, and not
   expect((await sent(page)).filter((each) => each.type === "setBotModel")).toEqual([]);
 });
 
-test("F-534: when the gateway reports a newer OpenClaw, New bot and Settings say so under the model, with a link to OpenClaw's update instructions and no command", async ({
+test("F-534: when the gateway reports a newer OpenClaw, New bot and Settings say so under the model, with a link to Settings › Updates and no command", async ({
   page,
 }) => {
   await openFixture(page, `${ADMIN}&openclaw=behind`, "light");
@@ -1853,10 +1853,8 @@ test("F-534: when the gateway reports a newer OpenClaw, New bot and Settings say
   await expect(note).toContainText(
     "Your gateway runs OpenClaw 2026.10.6, and 2026.11.6 is out. Updating the gateway is how newer models get listed.",
   );
-  await expect(note.getByRole("link", { name: /OpenClaw's update instructions/ })).toHaveAttribute(
-    "href",
-    "https://docs.openclaw.ai/install/updating",
-  );
+  // The update is made in Settings › Updates; the note links there.
+  await expect(note.getByRole("button", { name: "Settings › Updates" })).toBeVisible();
   // No command: the step differs by install, a container's included.
   await expect(note.getByTestId("command")).toHaveCount(0);
   await expect(note).not.toContainText("openclaw update");

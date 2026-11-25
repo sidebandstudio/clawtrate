@@ -4,14 +4,15 @@
 // the provider's full list each time it is opened, holds the answer for this
 // screen only, and shows the models the first list lacks in a section of their
 // own, with no verdict on any of them. The last row takes a model id typed in.
-// When the gateway reports a newer OpenClaw, a note says so, with a link to
-// OpenClaw's update instructions and the button that updates it (#565); while
-// an update runs, and once it ends, its line takes the note's place. "Refresh"
-// asks the gateway to look for the provider's models again, on a person's press
-// only, and says once what changed or why nothing did (#565).
+// When the gateway reports a newer OpenClaw, or while an update runs, a note
+// says so in one line, with a link to Settings › Updates, where the update is
+// made and followed (#565, #590).
+// "Refresh" asks the gateway to look for the provider's models again, on a
+// person's press only, and says once what changed or why nothing did (#565).
 
 import {
   gatewayStamp,
+  initialOpenClawUpdate,
   MAX_MODEL_ID_CHARS,
   modelIdProblem,
   type AccountsState,
@@ -23,10 +24,9 @@ import {
 } from "@clawtrate/core";
 import { useEffect, useRef, useState } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
-import { ArrowUpIcon, ExternalIcon } from "../icons.tsx";
-import { Note, Select, type SelectRow, type SelectSection } from "./parts.tsx";
-import { UpdateOpenClaw, useUpdateRun } from "./UpdateOpenClaw.tsx";
-import { OPENCLAW_UPDATE_DOCS } from "./update-words.ts";
+import { Select, type SelectRow, type SelectSection } from "./parts.tsx";
+import { UpdateOpenClawNote, useUpdateLinkLine, useUpdateRun } from "./UpdateOpenClaw.tsx";
+import { updateLinkLine } from "./update-words.ts";
 import { levelWord, modelsOf, providerName } from "./words.ts";
 
 /** One "View more" answer, as this screen holds it for the provider and connection it shows. */
@@ -197,8 +197,8 @@ export function namesLine(names: string[], count: number): string {
  * ask the provider again: whether the gateway's config is the whole list, or where lists that
  * come with OpenClaw get newer models (a newer OpenClaw, and OpenClaw's model list online, which
  * the gateway checks every 6 hours unless its config turns that off) and what the person can do.
- * Of a newer OpenClaw it says what the note under the menu says: that one is out, or, while an
- * update runs or has just ended (`updating`), where it stands. The gateway doesn't say which
+ * Of a newer OpenClaw it says only what the note under the menu says (#594's one line): that one
+ * is out (`update` given), or that the note says where an update stands (`updating`). The gateway doesn't say which
  * lists come with OpenClaw (docs/research/model-catalog.md, section 8), so neither does this.
  */
 export function refreshWords(
@@ -327,11 +327,18 @@ export function ModelPair({
   const updateRun = useUpdateRun();
   const held = list.state;
   const found = list.refresh;
+  // What the note under the menu says now (#594's one line): that a newer OpenClaw is out, where
+  // an update stands, or nothing. The result points to it only as it is.
+  const state = useClawtrateState();
+  const noteLine = useUpdateLinkLine();
+  const noteIsOffer =
+    noteLine !== null &&
+    noteLine === updateLinkLine({ ...state, openclawUpdating: initialOpenClawUpdate }, null);
   const foundWords =
     found && found.status !== "looking"
-      ? refreshWords(found, who, update, updateRun !== null)
+      ? refreshWords(found, who, noteIsOffer ? update : null, noteLine !== null && !noteIsOffer)
       : null;
-  const limits = allowlistLine(accounts, provider, useClawtrateState().connection.serverVersion);
+  const limits = allowlistLine(accounts, provider, state.connection.serverVersion);
   // What a Refresh found is said once, politely, when it arrives; focus stays where it was.
   const said =
     foundWords !== null && limits && found?.status === "done" && found.addedCount === 0
@@ -555,29 +562,7 @@ export function ModelPair({
           </div>
         </div>
       )}
-      {updateRun ? (
-        <Note icon={<ArrowUpIcon />} testId="openclaw-update">
-          <UpdateOpenClaw where="notice" />
-        </Note>
-      ) : (
-        update && (
-          <Note icon={<ArrowUpIcon />} testId="openclaw-update">
-            <p>
-              Your gateway runs OpenClaw {update.current}, and {update.latest} is out
-              {update.channel && update.channel !== "latest"
-                ? ` on its ${update.channel} channel${update.channel === "beta" || update.channel === "dev" ? ", not as a stable release" : ""}`
-                : ""}
-              . Updating the gateway is how newer models get listed.
-            </p>
-            <p>
-              <a href={OPENCLAW_UPDATE_DOCS} target="_blank" rel="noreferrer noopener">
-                OpenClaw's update instructions <ExternalIcon />
-              </a>
-            </p>
-            <UpdateOpenClaw where="notice" />
-          </Note>
-        )
-      )}
+      {(updateRun || update) && <UpdateOpenClawNote />}
       {typedId !== null && typedId === model && menu.row === undefined && !typing && (
         <p className="b-hint" data-testid="model-typed-line">
           {typedId} was typed in.
