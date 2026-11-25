@@ -1,0 +1,155 @@
+name: OpenClaw latest
+
+# The scenario check and the end-to-end tests against npm's newest OpenClaw, the version Update
+# OpenClaw moves a person's gateway to. ci.yml tests the version docs/decisions.md pins, so a
+# pull request is never held up by an OpenClaw release it didn't cause. This workflow shows that
+# drift before a person meets it. It reports and never gates: it is not a required check, and no
+# release step reads its runs. Keep its jobs out of ci.yml.
+#
+# A run started by hand can name another version or dist-tag. A pull request runs it only when it
+# changes this file. A failed run on main, from a push or the schedule, is kept in one open issue,
+# found by its label, until a later run on main passes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/openclaw-latest.yml
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+    inputs:
+      openclaw:
+        description: OpenClaw version or npm dist-tag to test
+        type: string
+        default: latest
+
+permissions:
+  contents: read
+
+# A newer push to main or to the pull request replaces the older run; nightly and hand-started
+# runs keep their own.
+concurrency:
+  group: openclaw-latest-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # One version for every job of the run, even if npm's latest moves while it runs.
+  resolve:
+    name: latest version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - id: resolve
+        env:
+          SPEC: ${{ inputs.openclaw || 'latest' }}
+        run: |
+          version=$(npm view "openclaw@$SPEC" version | tail -n 1)
+          [ -n "$version" ] || { echo "npm has no openclaw@$SPEC" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Testing OpenClaw $version (openclaw@$SPEC)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Named apart from ci.yml's jobs, so no required check by name can match these.
+  scenarios:
+    name: latest scenarios
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      OPENCLAW_UNDER_TEST: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: npm install --global "openclaw@$OPENCLAW_UNDER_TEST"
+      - run: openclaw --version
+      # The development gateway runs only the program OPENCLAW_BIN names, of a version it lists.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
+      # The computer checks start the Chromium that Playwright installs.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm scenarios
+
+  # The same three runners and lists as ci.yml's e2e job.
+  e2e:
+    name: latest e2e (${{ matrix.shard }})
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OPENCLAW_UNDER_TEST: ${{ needs.resolve.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: npm install --global "openclaw@$OPENCLAW_UNDER_TEST"
+      - run: openclaw --version
+      # The development gateway runs only the program OPENCLAW_BIN names, of a version it lists.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: node e2e/shards.ts ${{ matrix.shard }} | tee "$RUNNER_TEMP/e2e-shard.txt"
+      - run: xvfb-run --auto-servernum pnpm e2e --test-list "$RUNNER_TEMP/e2e-shard.txt"
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-latest-e2e-results-${{ matrix.shard }}
+          path: test-results/
+          retention-days: 3
+
+  # A run on main that failed or ran out of time opens the issue, or adds to it. A push run adds a
+  # comment only for an OpenClaw version the issue doesn't name yet, so a day of pushes against
+  # the same release leaves one comment; the nightly run always adds one. A pass on main closes it.
+  # This is its own job so the test jobs keep contents: read.
+  report:
+    name: latest report
+    needs: [resolve, scenarios, e2e]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      RESOLVE: ${{ needs.resolve.result }}
+      SCENARIOS: ${{ needs.scenarios.result }}
+      E2E: ${{ needs.e2e.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      LABEL: "ci: openclaw latest"
+    steps:
+      - run: |
+          open=$(gh issue list --state open --label "$LABEL" --json number --jq '.[0].number // empty')
+          if [ "$RESOLVE" = success ] && [ "$SCENARIOS" = success ] && [ "$E2E" = success ]; then
+            if [ -n "$open" ]; then
+              gh issue close "$open" --comment "The run $RUN_URL passed with OpenClaw $VERSION on main at $GITHUB_SHA."
+            fi
+            exit 0
+          fi
+          message="The run $RUN_URL failed with OpenClaw ${VERSION:-(unresolved)} on main at $GITHUB_SHA: scenario check $SCENARIOS, end-to-end tests $E2E."
+          if [ -z "$open" ]; then
+            gh label create "$LABEL" --force --color b60205 \
+              --description "The checks against npm's newest OpenClaw are failing on main"
+            gh issue create --title "The checks against the newest OpenClaw are failing" --label "$LABEL" --body "$message"
+            exit 0
+          fi
+          if [ "$GITHUB_EVENT_NAME" = push ] && gh issue view "$open" --json body,comments \
+            --jq '[.body, .comments[].body] | join("\n")' | grep -qF "with OpenClaw $VERSION on main"; then
+            exit 0
+          fi
+          gh issue comment "$open" --body "$message"
