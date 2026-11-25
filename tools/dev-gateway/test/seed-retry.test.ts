@@ -32,6 +32,13 @@ const CONNECT = failed({
   code: 4000,
   reason: "connect timeout",
 });
+// And run 45705727512's: the gateway's port didn't finish the WebSocket handshake in time.
+const UNREACHABLE = failed({
+  type: "gateway_transport_error",
+  kind: "closed",
+  message: "Gateway not reachable at ws://127.0.0.1:19780 (ETIMEDOUT).",
+  reason: "Opening handshake has timed out",
+});
 const REFUSED = failed({
   type: "gateway_error",
   code: "INVALID_REQUEST",
@@ -39,9 +46,10 @@ const REFUSED = failed({
 });
 
 describe("which seed failures are the gateway not answering", () => {
-  it("a timeout and a connection the gateway closed are; a refusal is not", () => {
+  it("a timeout, a connection the gateway closed and one it never took are; a refusal is not", () => {
     expect(isTransportFailure(TIMEOUT)).toBe(true);
     expect(isTransportFailure(CONNECT)).toBe(true);
+    expect(isTransportFailure(UNREACHABLE)).toBe(true);
     expect(isTransportFailure(REFUSED)).toBe(false);
     expect(
       isTransportFailure(new Error("Marlow / Notes: the replies differ from the script")),
@@ -54,7 +62,7 @@ describe("a seed call tried again when the gateway doesn't answer", () => {
 
   it("waits after each failure to answer, then has the answer", async () => {
     const waits: number[] = [];
-    const answers = [TIMEOUT, CONNECT, "made"];
+    const answers = [TIMEOUT, CONNECT, UNREACHABLE, "made"];
     const made = await retryOnTransport(
       async () => {
         const next = answers.shift()!;
@@ -64,7 +72,7 @@ describe("a seed call tried again when the gateway doesn't answer", () => {
       { ...quiet, sleep: async (ms) => waits.push(ms) },
     );
     expect(made).toBe("made");
-    expect(waits).toEqual(SEED_RETRY_DELAYS_MS.slice(0, 2));
+    expect(waits).toEqual(SEED_RETRY_DELAYS_MS.slice(0, 3));
   });
 
   it("throws a refusal at once, without trying again", async () => {
