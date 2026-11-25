@@ -3,9 +3,8 @@ accounts.spec.ts
 machines.spec.ts
 check-ins.spec.ts
 scenarios.spec.ts
-routines-edit.spec.ts
-skill-notes.spec.ts
+usage-budgets.spec.ts
+routines.spec.ts
 setup.spec.ts
-work-files.spec.ts
-memory.spec.ts
-ui-bot-files.spec.ts
+turns.engine.spec.ts
+channel-chats.spec.ts

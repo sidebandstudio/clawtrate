@@ -1,8 +1,10 @@
 # CI's third e2e shard: see 1.txt. It also runs every spec file that no list names.
 work-computer.spec.ts
 ui-cards.spec.ts
-usage-budgets.spec.ts
-bot-voice.spec.ts
-other-tools.spec.ts
-turns.engine.spec.ts
+rail-tasks.spec.ts
+routines-edit.spec.ts
+skill-notes.spec.ts
+started-task.spec.ts
+work-files.spec.ts
 bot-delete.spec.ts
+ui-bot-files.spec.ts
