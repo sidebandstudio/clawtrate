@@ -7,10 +7,11 @@
 //   pnpm dev-gateway setup   installs it; `pnpm dev-gateway start` does so too when it is missing
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -122,6 +123,48 @@ export function nodeArchive(
   return { name: `node-v${NODE_VERSION}-${platform}-${arch}`, sha256 };
 }
 
+/**
+ * What setup passes to npm, and so to the install scripts of OpenClaw's dependencies: the Node to
+ * run first on PATH, the home folder, npm's own cache, registry and proxy settings, the proxy
+ * variables, and the locale. No token or key from the caller's shell.
+ */
+export const SETUP_ENV = [
+  "HOME",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "TZ",
+  "USER",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "NODE_EXTRA_CA_CERTS",
+] as const;
+const NPM_SETTING = /^npm_config_(?:cache|registry|proxy|https_proxy|noproxy|cafile|strict_ssl)$/i;
+
+/** The environment setup runs npm and tar with, from the caller's: an allowlist, nothing else. */
+export function setupEnv(source: NodeJS.ProcessEnv, nodeBin: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { PATH: `${nodeBin}:${source.PATH ?? "/usr/bin:/bin"}` };
+  for (const [key, value] of Object.entries(source))
+    if (value && ((SETUP_ENV as readonly string[]).includes(key) || NPM_SETTING.test(key)))
+      env[key] = value;
+  return env;
+}
+
+/** A staging folder of this run's own: a run killed part-way never leaves one another reuses. */
+export function stagingFor(dir: string, name: string): string {
+  return join(dir, `${name}.partial-${process.pid}-${randomBytes(4).toString("hex")}`);
+}
+
+/** Remove the staging folders earlier runs left, finished or not. */
+export function removeLeftovers(dir: string): void {
+  for (const name of readdirSync(dir))
+    if (/\.partial(?:-|$)/.test(name)) rmSync(join(dir, name), { recursive: true, force: true });
+}
+
 function run(command: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string): void {
   const result = spawnSync(command, args, { env, cwd, stdio: "inherit" });
   if (result.status !== 0)
@@ -138,6 +181,7 @@ export async function setupOpenclaw(
   await withLock(
     join(dir, "setup.lock"),
     async () => {
+      removeLeftovers(dir);
       const node = nodeFor(env, dir, process.versions.node, process.execPath);
       // A Node named by OPENCLAW_NODE is the user's to provide; setup never stands in for it.
       if (env.OPENCLAW_NODE && !existsSync(node))
@@ -150,23 +194,23 @@ export async function setupOpenclaw(
         const archive = Buffer.from(await response.arrayBuffer());
         const got = createHash("sha256").update(archive).digest("hex");
         if (got !== sha256) throw new Error(`Node's download has SHA-256 ${got}, not ${sha256}`);
-        const staging = join(dir, `node-${NODE_VERSION}.partial`);
-        rmSync(staging, { recursive: true, force: true });
+        const staging = stagingFor(dir, `node-${NODE_VERSION}`);
         mkdirSync(staging);
         const file = join(staging, "node.tar.gz");
         writeFileSync(file, archive);
-        run("tar", ["-xzf", file, "-C", staging, "--strip-components", "1"], env);
+        run(
+          "tar",
+          ["-xzf", file, "-C", staging, "--strip-components", "1"],
+          setupEnv(env, "/usr/bin"),
+        );
         rmSync(file);
         rmSync(join(dir, `node-${NODE_VERSION}`), { recursive: true, force: true });
         renameSync(staging, join(dir, `node-${NODE_VERSION}`));
       }
       if (!existsSync(entryIn(dir))) {
         log(`Installing OpenClaw ${OPENCLAW_VERSION} for the development gateway, in ${dir}…`);
-        const staging = join(dir, `openclaw-${OPENCLAW_VERSION}.partial`);
-        rmSync(staging, { recursive: true, force: true });
+        const staging = stagingFor(dir, `openclaw-${OPENCLAW_VERSION}`);
         mkdirSync(staging);
-        // npm and OpenClaw's own install scripts run on the Node the gateway will run on.
-        const path = `${dirname(node)}:${env.PATH ?? ""}`;
         run(
           "npm",
           [
@@ -179,7 +223,8 @@ export async function setupOpenclaw(
             "--no-package-lock",
             `openclaw@${OPENCLAW_VERSION}`,
           ],
-          { ...env, PATH: path },
+          // npm and the install scripts run on the gateway's Node, with nothing secret.
+          setupEnv(env, dirname(node)),
         );
         rmSync(join(dir, `openclaw-${OPENCLAW_VERSION}`), { recursive: true, force: true });
         renameSync(staging, join(dir, `openclaw-${OPENCLAW_VERSION}`));

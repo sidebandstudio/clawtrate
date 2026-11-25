@@ -1,6 +1,15 @@
 // The development gateway runs a pinned OpenClaw, never the one on PATH (#597): which program it
 // picks, which Node runs it, and what it refuses.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,7 +20,10 @@ import {
   openclawProgram,
   openclawReady,
   programVersion,
+  removeLeftovers,
+  setupEnv,
   setupOpenclaw,
+  stagingFor,
   supportsNode,
 } from "../src/pinned.ts";
 
@@ -128,6 +140,57 @@ describe("the development gateway's OpenClaw (#597)", () => {
         () => {},
       ),
     ).rejects.toThrow("OPENCLAW_NODE names /no/such/node, which does not exist.");
+  });
+
+  it("gives npm and the install scripts no token or key from the caller's shell", () => {
+    const env = setupEnv(
+      {
+        PATH: "/usr/bin:/bin",
+        HOME: "/home/dev",
+        LANG: "en_US.UTF-8",
+        HTTPS_PROXY: "http://proxy.test:3128",
+        npm_config_registry: "https://registry.test/",
+        npm_config_cache: "/home/dev/.npm",
+        GH_TOKEN: "ghp_secret",
+        GITHUB_TOKEN: "ghs_secret",
+        ANTHROPIC_API_KEY: "sk-ant-secret",
+        OPENAI_API_KEY: "sk-secret",
+        AWS_SECRET_ACCESS_KEY: "secret",
+        NPM_TOKEN: "npm_secret",
+        npm_config__authToken: "npm_secret",
+        OPENCLAW_GATEWAY_TOKEN: "secret",
+      },
+      "/tool/node/bin",
+    );
+    expect(env).toEqual({
+      PATH: "/tool/node/bin:/usr/bin:/bin",
+      HOME: "/home/dev",
+      LANG: "en_US.UTF-8",
+      HTTPS_PROXY: "http://proxy.test:3128",
+      npm_config_registry: "https://registry.test/",
+      npm_config_cache: "/home/dev/.npm",
+    });
+    expect(JSON.stringify(env)).not.toMatch(/secret/);
+  });
+
+  it("stages each run in a folder of its own, and the next setup removes what a killed one left", async () => {
+    const dir = join(realpathSync(temp()), "tool");
+    mkdirSync(dir);
+    const first = stagingFor(dir, `openclaw-${OPENCLAW_VERSION}`);
+    const second = stagingFor(dir, `openclaw-${OPENCLAW_VERSION}`);
+    expect(first).not.toBe(second);
+    // What killed runs left: a staging folder of today's form and one of the old, fixed form.
+    mkdirSync(first);
+    writeFileSync(join(first, "half-written"), "");
+    mkdirSync(join(dir, `node-${NODE_VERSION}.partial`));
+    removeLeftovers(dir);
+    expect(readdirSync(dir)).toEqual([]);
+    // A setup with both already in place installs nothing, and clears the leftovers first.
+    const ready = realpathSync(setUp(true));
+    mkdirSync(stagingFor(ready, `openclaw-${OPENCLAW_VERSION}`));
+    await setupOpenclaw(ready, { OPENCLAW_NODE: process.execPath }, () => {});
+    expect(readdirSync(ready).filter((name) => name.includes(".partial"))).toEqual([]);
+    expect(existsSync(join(ready, `openclaw-${OPENCLAW_VERSION}`))).toBe(true);
   });
 
   it("downloads Node only for a computer whose archive it knows", () => {
