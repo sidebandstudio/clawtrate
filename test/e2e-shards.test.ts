@@ -3,7 +3,7 @@
 // runner; one in two lists would run twice, and a list naming a missing file is a mistake.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { shardFiles, shardLists, shardProblems, unlisted } from "../e2e/shards.ts";
@@ -20,7 +20,10 @@ function folder(specs: string[], lists: string[][]): string {
   const dir = mkdtempSync(join(tmpdir(), "clawtrate-shards-"));
   dirs.push(dir);
   mkdirSync(join(dir, "shards"));
-  for (const spec of specs) writeFileSync(join(dir, spec), "");
+  for (const spec of specs) {
+    mkdirSync(dirname(join(dir, spec)), { recursive: true });
+    writeFileSync(join(dir, spec), "");
+  }
   lists.forEach((files, i) =>
     writeFileSync(join(dir, "shards", `${i + 1}.txt`), `# runner ${i + 1}\n${files.join("\n")}\n`),
   );
@@ -59,6 +62,24 @@ describe("the e2e shard lists", () => {
     expect(shardFiles(dir, 2)).toEqual(["b.spec.ts"]);
     expect(shardFiles(dir, 3)).toEqual(["c.spec.ts", "scratch.spec.ts"]);
     expect(() => shardFiles(dir, 4)).toThrow(/3 e2e runners/);
+  });
+
+  it("name a nested spec file by its path from e2e/, placed or not", () => {
+    const dir = folder(
+      ["a.spec.ts", "nested/b.spec.ts", "nested/deeper/c.spec.ts"],
+      [["a.spec.ts"], ["nested/b.spec.ts"]],
+    );
+    expect(shardProblems(dir)).toEqual([]);
+    expect(unlisted(dir)).toEqual(["nested/deeper/c.spec.ts"]);
+    expect(shardFiles(dir, 2)).toEqual(["nested/b.spec.ts", "nested/deeper/c.spec.ts"]);
+    // A nested file named only by its own name is not that file.
+    const bare = folder(["nested/b.spec.ts"], [["b.spec.ts"]]);
+    expect(shardProblems(bare)).toEqual([
+      "1.txt names b.spec.ts, which is not a spec file in e2e/",
+    ]);
+    expect(unlisted(bare)).toEqual(["nested/b.spec.ts"]);
+    const twice = folder(["nested/b.spec.ts"], [["nested/b.spec.ts"], ["nested/b.spec.ts"]]);
+    expect(shardProblems(twice)).toEqual(["nested/b.spec.ts is in both 1.txt and 2.txt"]);
   });
 
   it("find a spec file in two lists, and a list naming a file that doesn't exist", () => {

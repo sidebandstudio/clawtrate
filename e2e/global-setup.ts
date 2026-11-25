@@ -226,16 +226,13 @@ export default async function globalSetup() {
   if (!/^[0-9a-f]{8}$/.test(run)) throw new Error(`CLAWTRATE_E2E_RUN must be 8 hex digits`);
   const name = `e2e-${run}`;
   const sentinel = `e2e-${run}-other`;
-  // Provider accounts (docs/design/bots.md) run on an instance of their own, with scripted
-  // accounts and sign-ins, so nothing they create reaches the seeded instance's checks.
-  const accounts = `e2e-${run}-acct`;
-  // The Computer tab's checks and bot voice's start their own instances, in
-  // e2e/work-computer.spec.ts and e2e/bot-voice.spec.ts: only where those files run.
-  const own = [name, sentinel, accounts];
+  // An instance only some specs use is started by those specs, only where they run: the accounts
+  // instance by e2e/accounts-instance.ts, and the Computer tab's, bot voice's and others' by their
+  // own spec files.
+  const own = [name, sentinel];
   // The spec's own dev-gateway calls address this run's instance.
   process.env.CLAWTRATE_DEV_INSTANCE = name;
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
-  process.env.CLAWTRATE_E2E_ACCOUNTS = accounts;
 
   recoverDeadRuns(RECORDS, resetInstance);
 
@@ -357,22 +354,11 @@ export default async function globalSetup() {
       "--with-images",
       "--with-message-tool",
     );
-    // It also has a paired machine (`--with-node`), for Settings, Machines and "Where a bot runs".
-    await startInstance(
-      accounts,
-      "--with-accounts",
-      "--with-plugin",
-      "clawtrate-dev-signin",
-      "--with-node",
-      "--no-seed",
-    );
-    for (const instance of [name, accounts]) {
-      const mine = listInstances().find((row) => row.name === instance);
-      if (!mine?.gatewayRunning) throw new Error(`instance ${instance} is not running`);
-      for (const port of [mine.gatewayPort, mine.providerPort]) {
-        if (port === null || FORBIDDEN_PORTS.includes(port)) {
-          throw new Error(`instance ${instance} is on port ${port}, which e2e never uses`);
-        }
+    const mine = listInstances().find((row) => row.name === name);
+    if (!mine?.gatewayRunning) throw new Error(`instance ${name} is not running`);
+    for (const port of [mine.gatewayPort, mine.providerPort]) {
+      if (port === null || FORBIDDEN_PORTS.includes(port)) {
+        throw new Error(`instance ${name} is on port ${port}, which e2e never uses`);
       }
     }
 

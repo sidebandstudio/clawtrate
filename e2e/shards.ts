@@ -4,7 +4,7 @@
 //
 //   node e2e/shards.ts <runner>   prints that runner's files, one per line, from e2e/
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 /** The lists, in runner order (`1.txt`, `2.txt`, …), each with the files it names. */
 export function shardLists(e2e: string): { name: string; files: string[] }[] {
@@ -21,9 +21,11 @@ export function shardLists(e2e: string): { name: string; files: string[] }[] {
     }));
 }
 
+/** Every spec file under e2e/, nested ones too, by its path from e2e/ as the lists name it. */
 const specFiles = (e2e: string) =>
-  readdirSync(e2e)
-    .filter((name) => name.endsWith(".spec.ts"))
+  readdirSync(e2e, { recursive: true, encoding: "utf8" })
+    .filter((path) => path.endsWith(".spec.ts"))
+    .map((path) => path.split(sep).join("/"))
     .sort();
 
 /** The spec files no list names: they run with the last runner. */

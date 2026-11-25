@@ -552,7 +552,12 @@ test("F-056: double-click or F2 renames in place; Enter renames, Escape keeps th
   await expect(taskRow(page, "Router update")).toBeFocused();
   await expect(page.getByRole("heading", { level: 1, name: "Router update" })).toBeVisible();
   expect(await sent(page, "renameTask")).toEqual([
-    { type: "renameTask", key: "agent:otto:router-firmware", label: "Router update" },
+    {
+      type: "renameTask",
+      key: "agent:otto:router-firmware",
+      label: "Router update",
+      stamp: expect.any(Object),
+    },
   ]);
 
   // The menu's Rename; a taken name stays in the field with the gateway's reason.
@@ -566,6 +571,53 @@ test("F-056: double-click or F2 renames in place; Enter renames, Escape keeps th
   await expect(page.getByRole("textbox", { name: "Rename Router update" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(taskRow(page, "Router update")).toBeFocused();
+});
+
+test("F-056: a rename in place sends where its row was listed when the rename began, though the list is read again on another gateway before Enter", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  type Listed = { gatewayId: string | null; target: number; connectedAt: number | null };
+  const listed = () =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            clawtrateFixture: { getState: () => { discovery: { tasksRead: Listed } } };
+          }
+        ).clawtrateFixture.getState().discovery.tasksRead,
+    );
+  const before = await listed();
+  await taskRow(page, "Router firmware").focus();
+  await page.keyboard.press("F2");
+  const field = page.getByRole("textbox", { name: "Rename Router firmware" });
+  await expect(field).toBeFocused();
+  await field.fill("Router update");
+  // Another gateway answers at the same address and lists the same bot and task: the field and
+  // its draft stay.
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => {
+      const discovery = state.discovery as { tasksRead: Listed };
+      return {
+        ...state,
+        discovery: {
+          ...discovery,
+          tasksRead: {
+            gatewayId: "gateway-b",
+            target: discovery.tasksRead.target,
+            connectedAt: (discovery.tasksRead.connectedAt ?? 0) + 1,
+          },
+        },
+      };
+    });
+  });
+  await expect.poll(async () => (await listed()).gatewayId).toBe("gateway-b");
+  await expect(field).toHaveValue("Router update");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => sentStamp(page, "renameTask"))
+    .toEqual({ gatewayId: before.gatewayId, target: before.target });
 });
 
 test("F-277: Archive moves a task into the Archived group with focus on the next row; Restore brings it back", async ({
@@ -714,8 +766,20 @@ test("F-022: Mark as unread and Mark as read in a task's menu, sent to the host;
   );
   expect(await sent(page, "markTask")).toEqual(
     expect.arrayContaining([
-      { type: "markTask", key: "agent:otto:cert-renewal", unread: true, opened: false },
-      { type: "markTask", key: "agent:otto:cert-renewal", unread: false, opened: false },
+      {
+        type: "markTask",
+        key: "agent:otto:cert-renewal",
+        unread: true,
+        opened: false,
+        stamp: expect.any(Object),
+      },
+      {
+        type: "markTask",
+        key: "agent:otto:cert-renewal",
+        unread: false,
+        opened: false,
+        stamp: expect.any(Object),
+      },
     ]),
   );
   // Opening an unread task reads it on the gateway too.
