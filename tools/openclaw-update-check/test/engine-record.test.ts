@@ -316,6 +316,27 @@ describe("the engine's verdict, against what the gateway answered", () => {
     ]);
   });
 
+  it("needs the engine to end on the gateway where Update was pressed", () => {
+    const entries = trace();
+    const updated = entries.findIndex(
+      (e) => e.kind === "state" && e.view.run?.outcome === "updated",
+    );
+    // Both the connection and the run name another gateway than the one the press read.
+    entries.splice(
+      updated,
+      1,
+      state(
+        view(
+          { gatewayId: "other", serverVersion: "2026.11.10" },
+          { phase: "finished", outcome: "updated", gatewayId: "other" },
+        ),
+      ),
+    );
+    expect(judgeEngine(entries, PLAN).failures).toEqual([
+      "the engine ended on gateway other, not gw, where Update was pressed",
+    ]);
+  });
+
   it('refuses "updated" with no version named', () => {
     const entries = trace();
     const updated = entries.findIndex(

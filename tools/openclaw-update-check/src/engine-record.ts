@@ -148,6 +148,8 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
   const presses = sentOf(entries).filter((s) => s.method === "update.run");
   if (presses.length !== 1) failures.push(`update.run was sent ${presses.length} times, not once`);
   const press = presses[0];
+  /** The gateway the press was made on: the identity its connection read just before it. */
+  let pressedGateway: string | null = null;
   if (press) {
     const requester = asRecord(asRecord(press.params).requester);
     const keys = Object.keys(asRecord(press.params));
@@ -161,15 +163,23 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
     }
     // An identity read on the press's own connection, answered with an identity before the press.
     const pressIndex = entries.indexOf(press);
-    const identity = sentOf(entries.slice(0, pressIndex)).some((s) => {
-      if (s.method !== "gateway.identity.get" || s.socket !== press.socket) return false;
+    for (const s of sentOf(entries.slice(0, pressIndex))) {
+      if (s.method !== "gateway.identity.get" || s.socket !== press.socket) continue;
       const reply = answerTo(entries, s);
       const id = asRecord(reply?.e.payload).deviceId;
-      return (
-        reply !== null && reply.i < pressIndex && reply.e.ok && typeof id === "string" && id !== ""
-      );
-    });
-    if (!identity) failures.push("update.run was sent with no identity read on its connection");
+      if (
+        reply !== null &&
+        reply.i < pressIndex &&
+        reply.e.ok &&
+        typeof id === "string" &&
+        id !== ""
+      ) {
+        pressedGateway = id;
+      }
+    }
+    if (pressedGateway === null) {
+      failures.push("update.run was sent with no identity read on its connection");
+    }
   }
 
   // The outcomes the engine showed, and its last word.
@@ -219,6 +229,12 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
     }
     if (run.gatewayId !== final?.gatewayId) {
       failures.push("the run's gateway is not the connected one");
+    }
+    // Both must be the gateway the press was made on.
+    if (pressedGateway !== null && final?.gatewayId !== pressedGateway) {
+      failures.push(
+        `the engine ended on gateway ${final?.gatewayId}, not ${pressedGateway}, where Update was pressed`,
+      );
     }
   }
 
