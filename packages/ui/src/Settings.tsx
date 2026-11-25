@@ -111,7 +111,11 @@ export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["machines", "Machines", "Where the bots run"],
   ["checkins", "Check-ins", "When each bot checks in on its own"],
   ["updates", "Updates", "Clawtrate's own updates"],
-  ["advanced", "Advanced", "Showing commands, thinking and external channel chats"],
+  [
+    "advanced",
+    "Advanced",
+    "Showing commands, thinking, external channel chats, other tools' sessions and the gateway's own bot",
+  ],
 ];
 
 /**
@@ -255,6 +259,49 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
       {otherToolsError && (
         <div className="form-error" role="alert">
           {otherToolsError}
+        </div>
+      )}
+      <GatewayBotSwitch announce={announce} />
+    </>
+  );
+}
+
+/** "Show the gateway's own bot", off by default and kept by the host (F-562). */
+function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
+  const send = useCommand();
+  const shown = useClawtrateState().showGatewayBot === true;
+  const [error, setError] = useState<string | null>(null);
+  const toggle = () => {
+    const on = !shown;
+    setError(null);
+    void send({ type: "setShowGatewayBot", on }).then(
+      () => announce(on ? "The gateway's own bot shown" : "The gateway's own bot hidden"),
+      (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)),
+    );
+  };
+  return (
+    <>
+      <div className="b-field channel-chats-field">
+        <span id="gateway-bot-label">Show the gateway&apos;s own bot</span>
+        <button
+          type="button"
+          className="b-switch"
+          role="switch"
+          aria-checked={shown}
+          aria-labelledby="gateway-bot-label"
+          aria-describedby="gateway-bot-note"
+          data-testid="gateway-bot"
+          onClick={toggle}
+        />
+      </div>
+      <p className="b-hint" id="gateway-bot-note">
+        Off by default. Every gateway has a bot of its own, its default bot: channel messages, other
+        tools&apos; calls and scheduled runs that name no bot land on it. While you have another
+        bot, it stays out of the sidebar unless it is waiting on you.
+      </p>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
         </div>
       )}
     </>

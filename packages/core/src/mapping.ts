@@ -9,6 +9,7 @@ import type {
   Bot,
   Task,
   TaskContext,
+  TaskStarter,
   TaskStatus,
   ToolResult,
   TranscriptBlock,
@@ -52,6 +53,8 @@ export function mapAgents(result: unknown): Bot[] {
   const record = asRecord(result);
   if (!record) return [];
   const defaultId = str(record.defaultId);
+  // With no owner the gateway still names a `defaultId`: only its first bot (F-562).
+  const ownerless = record.selectionRequired === true;
   const bots: Bot[] = [];
   for (const entry of arr(record.agents)) {
     const agent = asRecord(entry);
@@ -67,6 +70,7 @@ export function mapAgents(result: unknown): Bot[] {
       theme: str(identity.theme),
       model: str(model?.primary) ?? (typeof agent.model === "string" ? agent.model : null),
       isDefault: id === defaultId,
+      ...(ownerless && id === defaultId ? { ownerless: true } : {}),
     });
   }
   return bots.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
@@ -211,7 +215,33 @@ export function mapSessionRow(row: RawRecord): Task | null {
     ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
     ...(isOtherToolSession(row) ? { otherTool: true as const } : {}),
     ...(channel ? { channel } : {}),
+    ...startedByOf(row),
   };
+}
+
+/**
+ * Who started a task a bot started with `sessions_spawn`, only from the gateway's own fields:
+ * `createdVia: "spawn"`, and `spawnedBy`, the task it was started from, whose bot started it
+ * (the gateway's `createdActor` names the same bot). Nothing the bot wrote, its label or brief,
+ * counts.
+ */
+function startedByOf(row: RawRecord): { startedBy: TaskStarter } | Record<string, never> {
+  if (row.createdVia !== "spawn") return {};
+  const fromKey = str(row.spawnedBy);
+  const botId = fromKey ? botIdFromSessionKey(fromKey) : null;
+  return fromKey && botId ? { startedBy: { botId, fromKey } } : {};
+}
+
+/**
+ * When a bot started the task in `chat.history`'s `sessionInfo`, the time the gateway created it
+ * (`createdAt`), so `mapHistory` can find the brief; null for any other task, and when the
+ * history read does not reach the task's first row (`hasMore`).
+ */
+export function startedTaskSince(history: unknown): number | null {
+  const record = asRecord(history);
+  const info = asRecord(record?.sessionInfo);
+  if (!info || info.createdVia !== "spawn" || record?.hasMore === true) return null;
+  return num(info.createdAt);
 }
 
 /**
@@ -422,13 +452,42 @@ function gatewayTurnText(message: RawRecord): string | null {
     : "The gateway started a turn by itself";
 }
 
+/** The row's own time (`timestamp`, kept as written when a row is copied) is at or after `since`. */
+function isWrittenSince(message: RawRecord, since: number | null): boolean {
+  const written = num(message.timestamp);
+  return since !== null && written !== null && written >= since;
+}
+
+/**
+ * How soon after the gateway created a task its brief is stored: it writes the brief as it
+ * creates the task (30 to 332 ms on OpenClaw 2026.10.6). A first row stored later is not the
+ * brief: a transcript the gateway started over by itself (a daily or idle reset) keeps the task's
+ * creation time, and its first row is the person's.
+ */
+export const BRIEF_WINDOW_MS = 30_000;
+
 /**
  * `chat.history` messages to display items. Consecutive assistant messages of
  * one run (tool rounds) become a single assistant turn, and each tool result is
  * attached to the call that produced it.
  */
-export function mapHistory(messages: unknown): TranscriptItem[] {
+export function mapHistory(
+  messages: unknown,
+  options: {
+    /**
+     * In a task a bot started, when the gateway created it (`startedTaskSince`). The first row
+     * it stored from then on, of any role, is the bot's brief when it is a user row, a turn's own
+     * input (`<run>:user`), stored within `BRIEF_WINDOW_MS` of then: the gateway writes the brief
+     * as the task's first turn, and a forked task's copied rows keep the earlier times they were
+     * written. A reset's row, stored after the task was made, or a row with no time ends the
+     * search: nothing after it is the brief.
+     */
+    startedAt?: number | null;
+  } = {},
+): TranscriptItem[] {
   const items: TranscriptItem[] = [];
+  const startedAt = options.startedAt ?? null;
+  let briefSought = startedAt !== null;
   let currentRun: string | null = null;
   // The user rows between two assistant rows can all join at the same tool boundary.
   let precedingRun: string | null = null;
@@ -446,6 +505,14 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
     const kind = str(info.kind);
     // The gateway cut this row to its display length.
     const cutByGateway = info.truncated === true;
+    // The first row the task stored itself, of any role (a reset's row too), ends the search for
+    // the brief; so does a row with no time, which could be the task's own or a copied one.
+    let first = false;
+    if (briefSought && num(message.timestamp) === null) briefSought = false;
+    else if (briefSought && isWrittenSince(message, startedAt)) {
+      briefSought = false;
+      first = message.role === "user";
+    }
 
     if (kind && SYSTEM_ROW_TEXT[kind]) {
       precedingRun = null;
@@ -484,6 +551,10 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
+        const brief =
+          first &&
+          idempotencyKey?.endsWith(":user") === true &&
+          num(message.timestamp)! - startedAt! <= BRIEF_WINDOW_MS;
         const user: TranscriptItem = {
           id,
           role: "user",
@@ -495,6 +566,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(brief ? { brief: true as const } : {}),
         };
         items.push(user);
         if (precedingRun !== null) pendingUsers.push(user);

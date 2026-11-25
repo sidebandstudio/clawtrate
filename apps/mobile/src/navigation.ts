@@ -2,7 +2,9 @@
 // the gateway's bots have loaded, the app is three screens deep
 // (docs/design/visual-language.md, section 12): Home, a bot's task list, a
 // task's chat. Back goes from the chat to the task list and from there to
-// Home, whatever the bot's number of tasks. Pure, so the unit tests cover it.
+// Home, whatever the bot's number of tasks. iPhone Duo unfolded shows the
+// same route as two panes, the list beside the chat (`panesFor`), so folding
+// and unfolding keep the open bot and task. Pure, so the unit tests cover it.
 
 import type { ClawtrateState, ConnectionError } from "@clawtrate/core";
 import { screenFor } from "../../../packages/ui/src/screen.ts";
@@ -33,6 +35,21 @@ export function current(route: Route, state: ClawtrateState): Route {
       return { name: "bot", botId: route.botId };
   }
   return route;
+}
+
+/**
+ * What a route shows. One screen at a time: the chat for a task, else the
+ * list (Home, or the bot's tasks). Side by side: the list (the bot's tasks
+ * for a bot or a task, else Home) and the chat pane, with the task's chat or,
+ * with no task open, the words that say so.
+ */
+export function panesFor(
+  route: Route,
+  split: boolean,
+): { list: "home" | "bot" | null; chat: "task" | "none" | null } {
+  const list = route.name === "home" ? "home" : "bot";
+  if (!split) return route.name === "task" ? { list: null, chat: "task" } : { list, chat: null };
+  return { list, chat: route.name === "task" ? "task" : "none" };
 }
 
 export type ConnectView = "welcome" | "address" | "setup" | "pairing" | "protocol";
