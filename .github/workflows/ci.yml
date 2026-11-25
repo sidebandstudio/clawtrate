@@ -166,7 +166,8 @@ jobs:
       - run: pnpm test
 
   # The suite runs one test at a time against one gateway, so it is split by file across three
-  # runners, each with a gateway of its own. The first shard holds the slowest files (#485).
+  # runners, each with a gateway of its own. The lists in e2e/shards/ split the files by how long
+  # each takes, so the runners finish together (#485).
   e2e:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -189,7 +190,9 @@ jobs:
       - run: openclaw --version
       - run: pnpm exec playwright install --with-deps chromium
       # e2e/setup.spec.ts drives the desktop app's development build, which needs a display.
-      - run: xvfb-run --auto-servernum pnpm e2e --shard=${{ matrix.shard }}/3
+      # This runner's list; the last one also runs every spec file that no list names.
+      - run: node e2e/shards.ts ${{ matrix.shard }} | tee "$RUNNER_TEMP/e2e-shard.txt"
+      - run: xvfb-run --auto-servernum pnpm e2e --test-list "$RUNNER_TEMP/e2e-shard.txt"
       # What a failed check saw: traces and error contexts, kept for a few days.
       - if: failure()
         uses: actions/upload-artifact@v7

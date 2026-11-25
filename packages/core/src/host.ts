@@ -61,11 +61,19 @@ export type HttpResponseLike = {
 
 /**
  * An HTTP GET with no cookies and no redirects. Core asks it only for a path on the
- * gateway's own origin that the gateway itself issued (`pictures.ts`).
+ * gateway's own origin that the gateway itself issued, or for the gateway's media route
+ * (`pictures.ts`). `headers` carries this device's token, and only on the media route's
+ * ticket request at a protected address (`fetchInboundPicture`); no other request has it.
  */
 export type HttpFetch = (
   url: string,
-  init: { method: "GET"; redirect: "error"; credentials: "omit"; signal: AbortSignal },
+  init: {
+    method: "GET";
+    redirect: "error";
+    credentials: "omit";
+    signal: AbortSignal;
+    headers?: { authorization: string };
+  },
 ) => Promise<HttpResponseLike>;
 
 export type ApprovalInstructions = { command: string; note: string | null };
@@ -94,6 +102,6 @@ export type ClawtrateHost = {
    * gateway is the local development one; core falls back to the generic command.
    */
   approvalInstructions?: (gatewayUrl: string, requestId: string) => ApprovalInstructions;
-  /** Fetches the downloads the gateway issues for pictures (`pictures.ts`); without it, none is shown. */
+  /** Fetches the pictures the gateway serves (`pictures.ts`); without it, none is shown from the gateway. */
   fetch?: HttpFetch;
 };

@@ -154,6 +154,8 @@ export type BridgeCommand =
   | { type: "setShowChannelChats"; on: boolean }
   /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
   | { type: "setShowOtherToolSessions"; on: boolean }
+  /** "Show the gateway's own bot": list the gateway's default bot beside the others, or not. */
+  | { type: "setShowGatewayBot"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
@@ -240,10 +242,18 @@ export type BridgeCommand =
   /** A picture the bot handed over in the task, by the id its message gave (`ChatPictureRead`). */
   | { type: "readChatPicture"; key: string; artifactId: string }
   /**
-   * A picture you sent, from this app's own copy (`SentPictureRead`): by the outgoing message's
-   * id, or the key history stored its row under, and its place among the message's files.
+   * A picture you sent (`SentPictureRead`): by the outgoing message's id, or the key history
+   * stored its row under, and its place among the message's files. From this app's own copy,
+   * or read back from the gateway; `stamp` is where the conversation was drawn, and a read
+   * back goes only to that gateway.
    */
-  | { type: "readSentPicture"; key: string; messageKey: string; index: number }
+  | {
+      type: "readSentPicture";
+      key: string;
+      messageKey: string;
+      index: number;
+      stamp?: GatewayStamp;
+    }
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
@@ -1435,6 +1445,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setShowOtherToolSessions":
       if (typeof command.on !== "boolean") throw new Error("invalid other tools setting");
       return { type: "setShowOtherToolSessions", on: command.on };
+    case "setShowGatewayBot":
+      if (typeof command.on !== "boolean") throw new Error("invalid gateway bot setting");
+      return { type: "setShowGatewayBot", on: command.on };
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
@@ -1595,6 +1608,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         messageKey: id(command.messageKey, "message key"),
         index: count(command.index, MAX_ATTACHMENTS_PER_MESSAGE - 1, "file index"),
+        ...(command.stamp === undefined ? {} : { stamp: gatewayStampOf(command.stamp) }),
       };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
@@ -2244,6 +2258,8 @@ class ViewerSession implements BridgeSession {
         return client.setShowChannelChats(command.on);
       case "setShowOtherToolSessions":
         return client.setShowOtherToolSessions(command.on);
+      case "setShowGatewayBot":
+        return client.setShowGatewayBot(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":
@@ -2310,6 +2326,7 @@ class ViewerSession implements BridgeSession {
           command.messageKey,
           command.index,
           this.fileOptions(),
+          command.stamp,
         );
       case "listMemory":
         return client.listMemory(command.botId);
