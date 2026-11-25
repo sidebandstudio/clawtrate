@@ -20,7 +20,8 @@
 // notary service receives anything; nothing is published.
 //
 // Publishing takes that SHA-256 and requires release.json to have it, the
-// folder to hold exactly that release and every file to be unchanged. It
+// folder to hold exactly that release and every file to be unchanged, and both
+// Beta feed addresses to serve a feed already. It
 // creates the GitHub prerelease as a draft, compares GitHub's digest of each
 // uploaded file and the draft's notes with the prepared ones, and only then
 // makes it public, reads it back, reads every file back and waits for the site
@@ -29,6 +30,7 @@
 // docs/development/releases.md is the runbook, including what a killed run
 // leaves behind and how to remove it.
 
+import { extractFile, uncache } from "@electron/asar";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -51,6 +53,8 @@ import { isNewer, parseVersion } from "../src/main/update/version.ts";
 import {
   BETA_FEED_URL,
   betaTag,
+  LEGACY_BETA_FEED_URL,
+  LEGACY_BETA_PIN,
   checkBetaFiles,
   FEED_NAME,
   LATEST_MAC_NAME,
@@ -551,6 +555,24 @@ export function verifyApp(
   ), "spctl --assess --type execute (notarized Developer ID)", gatekeeper);
   tool("xcrun", ["stapler", "validate", app], "xcrun stapler validate");
   return { teamId: signature.teamId! };
+}
+
+/**
+ * The Beta feed address the app's main bundle is compiled with must be
+ * `BETA_FEED_URL`, and never the legacy one, so the address a release records
+ * is the one its build reads (docs/decisions.md, "Moving betas to three numbers").
+ */
+export function requireCompiledFeed(app: string): void {
+  const archive = join(app, "Contents/Resources/app.asar");
+  let main: string;
+  try {
+    uncache(archive);
+    main = extractFile(archive, "out/main/index.js").toString("utf8");
+  } catch {
+    stop(`${app}: its main bundle could not be read from app.asar.`);
+  }
+  if (!main.includes(JSON.stringify(BETA_FEED_URL)) || main.includes(LEGACY_BETA_FEED_URL))
+    stop(`${app} is not built to read ${BETA_FEED_URL} alone.`);
 }
 
 /**
@@ -1189,6 +1211,7 @@ async function prepareLocked(
       }
       // The zip as it will be staged, after any second stapling.
       checkZip(zip);
+      requireCompiledFeed(app);
       if (checked.teamId !== signing.teamId)
         stop(`${key} is signed by team ${checked.teamId}, not ${signing.teamId}.`);
       teamId = checked.teamId;
@@ -1196,7 +1219,12 @@ async function prepareLocked(
     }
 
     // Everything below is made from the verified copies, then staged.
-    const feed = makeFeed({ version, releaseDate, folder: releaseFolder(tag), dir: temp });
+    // The feed records the address both apps were just checked to read; installed
+    // builds ignore the field, and the site requires it of a pinned beta.
+    const feed = {
+      ...makeFeed({ version, releaseDate, folder: releaseFolder(tag), dir: temp }),
+      buildFeed: BETA_FEED_URL,
+    };
     const feedText = `${JSON.stringify(feed, null, 2)}\n`;
     const zips = Object.values(MAC_ARCHITECTURES).map((key) => {
       const name = artifactName(version, key);
@@ -1322,9 +1350,12 @@ export function stagedRelease(
   const feed = JSON.parse(feedText) as {
     releaseDate: string;
     files: Record<string, { size: number; sha512: string }>;
+    buildFeed?: unknown;
   };
   const latest = JSON.parse(latestText) as LatestMac;
   if (feed.releaseDate !== plan.releaseDate) stop("The feed's date is not release.json's.");
+  if (feed.buildFeed !== BETA_FEED_URL)
+    stop(`The feed does not record that this build reads ${BETA_FEED_URL}. Prepare it again.`);
   if (latest.teamIdentifier !== plan.teamId)
     stop(`latest-mac.json names team ${latest.teamIdentifier}, release.json ${plan.teamId}.`);
   const zips = plan.files.slice(0, 2);
@@ -1379,19 +1410,23 @@ async function download(
   }
 }
 
-/** What the site serves at the Beta feed's address, read once. */
+/** What the site serves at a Beta feed's address, read once. */
 export type SiteReading =
   | { kind: "feed"; version: string; body: Buffer }
   | { kind: "absent" }
   | { kind: "inconclusive"; reason: string };
 
-export async function readSite(net: Net, ms = net.requestMs): Promise<SiteReading> {
+export async function readSite(
+  net: Net,
+  ms = net.requestMs,
+  url = BETA_FEED_URL,
+): Promise<SiteReading> {
   // The configured address itself, with no redirect followed: a 404 elsewhere proves nothing.
-  const got = await download(net, BETA_FEED_URL, ms, false);
+  const got = await download(net, url, ms, false);
   if (!got.ok)
     return got.status === 404 ? { kind: "absent" } : { kind: "inconclusive", reason: got.reason };
   const text = got.body.toString("utf8");
-  const parsed = parseFeed(text, new URL(BETA_FEED_URL), null, undefined, "nightly");
+  const parsed = parseFeed(text, new URL(url), null, undefined, "nightly");
   if (!parsed.ok) return { kind: "inconclusive", reason: `not a Beta feed (${parsed.cause})` };
   return {
     kind: "feed",
@@ -1404,12 +1439,13 @@ export async function readSite(net: Net, ms = net.requestMs): Promise<SiteReadin
  * Reads the site until `done` accepts a reading or the wait ends; returns the
  * last reading completed in time, or an inconclusive result for a late read.
  */
-async function watchSite(net: Net, done: (reading: SiteReading) => boolean) {
+async function watchSite(net: Net, done: (reading: SiteReading) => boolean, url = BETA_FEED_URL) {
   const deadline = Date.now() + net.waitMs;
   for (;;) {
     const reading = await readSite(
       net,
       Math.max(1, Math.min(net.requestMs, deadline - Date.now())),
+      url,
     );
     if (Date.now() > deadline)
       return {
@@ -1502,6 +1538,7 @@ export async function publish(
   recordSha256: string,
   net: Net = NET,
   staging = STAGING,
+  pin: string | null = LEGACY_BETA_PIN,
 ): Promise<void> {
   const { plan, notes } = stagedRelease(staging, version, recordSha256);
   const dir = join(staging, version);
@@ -1536,6 +1573,7 @@ export async function publish(
   if (tags.includes(plan.tag)) stop(`${plan.tag} already exists on GitHub.`);
   requireNewest(version, tags);
   requireSameSigner(runner, releases, plan.tag, plan.teamId);
+  await requireSiteReady(net, releases, pin);
 
   const created = runner(
     "gh",
@@ -1635,18 +1673,100 @@ export async function publish(
   // The feed as recorded and published, not the staging file read again.
   const feed = plan.files.find((file) => file.name === FEED_NAME)!;
   console.log(`Waiting for ${BETA_FEED_URL} to offer ${version}…`);
-  const seen = await watchSite(
-    net,
-    (reading) =>
-      reading.kind === "feed" &&
-      reading.body.length === feed.size &&
-      sha("sha512", reading.body, "base64") === feed.sha512,
-  );
+  const isPrepared = (reading: SiteReading) =>
+    reading.kind === "feed" &&
+    reading.body.length === feed.size &&
+    sha("sha512", reading.body, "base64") === feed.sha512;
+  const seen = await watchSite(net, isPrepared);
   if (!seen.done)
     stop(
       `The site does not serve the new feed yet (${describe(seen.reading)}). Look at the Site workflow's run on main, then check ${BETA_FEED_URL}.`,
     );
   console.log(`The Beta feed offers ${version}.`);
+  await watchLegacy(runner, net, pin, isPrepared);
+}
+
+/**
+ * Before anything is published: both Beta feed addresses already serve a Beta
+ * feed, the legacy one the same beta as the new one, or the pinned beta while
+ * it is pinned. This beta's build reads only the new address, so publishing it
+ * while the site doesn't serve that address would leave its copies with no feed,
+ * and a release once public can't be published again.
+ */
+async function requireSiteReady(
+  net: Net,
+  releases: readonly ReleaseRow[],
+  pin: string | null,
+): Promise<void> {
+  const fix = `Run the Site workflow on main (gh workflow run site.yml --repo ${REPOSITORY} --ref main), wait for it to finish, and publish again. Nothing was published.`;
+  // Only before the first beta may neither address serve a feed.
+  const first = newestBeta(releases) === null;
+  const current = await readSite(net);
+  if (current.kind !== "feed" && !(first && current.kind === "absent"))
+    stop(`${BETA_FEED_URL} does not serve a Beta feed (${describe(current)}). ${fix}`);
+  // The pinned beta's own feed.json, by GitHub's digest of it, checked before anything
+  // is created: a cached feed of the right version is not enough.
+  const digest = pin === null ? null : pinnedFeedDigest(releases, pin);
+  if (pin !== null && !digest)
+    stop(
+      `The legacy Beta feed is pinned to ${pin}, but GitHub lists no published ${FEED_NAME} with a digest for it. Nothing was published.`,
+    );
+  const legacy = await readSite(net, net.requestMs, LEGACY_BETA_FEED_URL);
+  const wanted = pin ?? (current.kind === "feed" ? current.version : null);
+  const served =
+    wanted === null
+      ? legacy.kind === "absent"
+      : legacy.kind === "feed" &&
+        legacy.version === wanted &&
+        (digest === null || `sha256:${sha("sha256", legacy.body, "hex")}` === digest);
+  if (!served)
+    stop(
+      `${LEGACY_BETA_FEED_URL} does not serve ${wanted === null ? "what the new address serves" : `the feed of ${wanted}`} (${describe(legacy)}). ${fix}`,
+    );
+}
+
+/** GitHub's digest of the pinned beta's feed.json, when that beta is published and has one. */
+function pinnedFeedDigest(releases: readonly ReleaseRow[], pin: string): string | null {
+  const row = releases.find((each) => each.tag_name === `v${pin}`);
+  if (!row || row.draft) return null;
+  return row.assets.find((asset) => asset.name === FEED_NAME)?.digest ?? null;
+}
+
+/**
+ * After the Beta feed's address serves what it should: waits for the legacy
+ * address, which betas published before it read, to serve what the Site
+ * workflow puts there. That is the pinned beta's own feed.json, by GitHub's
+ * digest of it, while the legacy feed is pinned, and otherwise what `same`
+ * accepted at the new address.
+ */
+async function watchLegacy(
+  runner: Run,
+  net: Net,
+  pin: string | null,
+  same: (reading: SiteReading) => boolean,
+): Promise<void> {
+  let accept = same;
+  let what = `what ${BETA_FEED_URL} serves`;
+  if (pin !== null) {
+    const digest = pinnedFeedDigest(githubReleases(runner), pin);
+    if (!digest)
+      stop(
+        `The legacy Beta feed is pinned to ${pin}, but GitHub lists no published ${FEED_NAME} with a digest for it. Check ${LEGACY_BETA_FEED_URL} yourself.`,
+      );
+    accept = (reading) =>
+      reading.kind === "feed" && `sha256:${sha("sha256", reading.body, "hex")}` === digest;
+    what = `the feed of ${pin}`;
+  }
+  const seen = await watchSite(net, accept, LEGACY_BETA_FEED_URL);
+  if (!seen.done)
+    stop(
+      `The site does not serve ${what} at ${LEGACY_BETA_FEED_URL} yet (${describe(seen.reading)}). Look at the Site workflow's run on main, then check it.`,
+    );
+  console.log(
+    seen.reading.kind === "feed"
+      ? `The legacy Beta feed offers ${seen.reading.version}.`
+      : "The legacy Beta feed serves no feed either.",
+  );
 }
 
 /**
@@ -1678,8 +1798,18 @@ function describe(reading: SiteReading): string {
   return `inconclusive: ${reading.reason}`;
 }
 
-export async function withdraw(runner: Run, version: string, net: Net = NET): Promise<void> {
+export async function withdraw(
+  runner: Run,
+  version: string,
+  net: Net = NET,
+  pin: string | null = LEGACY_BETA_PIN,
+): Promise<void> {
   const tag = tagOf(version);
+  // Betas published before the new feed address reach the others through it.
+  if (version === pin)
+    stop(
+      `${version} is the beta the legacy Beta feed is pinned to, so it is never withdrawn: copies from before ${BETA_FEED_URL} update through it. Nothing was changed.`,
+    );
   const edited =
     runner("gh", ["release", "edit", tag, "--repo", REPOSITORY, "--draft=true"], { inherit: true })
       .status === 0;
@@ -1759,6 +1889,9 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
       reading.kind === "feed"
         ? `The Beta feed offers ${reading.version}.`
         : "The site serves no Beta feed, and GitHub lists no published beta.",
+    );
+    await watchLegacy(runner, net, pin, (legacy) =>
+      expected ? isNextFeed(legacy) : legacy.kind === "absent",
     );
     return;
   }
