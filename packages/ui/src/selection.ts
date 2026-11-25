@@ -2,6 +2,8 @@ import {
   gatewayBotHidden,
   listedBots,
   mapSessionRow,
+  seenThroughUpdateNotice,
+  updateNoticeScope,
   type Bot,
   type ClawtrateState,
   type Task,
@@ -181,6 +183,36 @@ const NOTHING_SEEN: SeenMap = Object.freeze({}) as SeenMap;
 type OnGateway = { id: string; gatewayId: string | null; target: number };
 
 /**
+ * What this viewer read, for unread. On a connection that writes, nothing: the gateway's word
+ * alone. On a read-only one, its own memory, past the gateway's update line where that is all that
+ * came since (F-590): the notice alone doesn't make a task unread.
+ */
+export function unreadSeenOf(
+  seen: SeenMap,
+  gatewayOwnsUnread: boolean,
+  state: Pick<
+    ClawtrateState,
+    "bots" | "tasksByBot" | "transcripts" | "connection" | "openclawUpdating"
+  >,
+): SeenMap {
+  if (gatewayOwnsUnread) return NOTHING_SEEN;
+  const scope = updateNoticeScope(state);
+  if (!scope.updated?.length || scope.mainKey === null) return seen;
+  let next: SeenMap | null = null;
+  for (const each of Object.values(state.tasksByBot).flat()) {
+    const through = seenThroughUpdateNotice(
+      each,
+      seen[each.key],
+      state.transcripts[each.key],
+      scope,
+    );
+    if (through !== undefined && through !== seen[each.key])
+      (next ??= { ...seen })[each.key] = through;
+  }
+  return next ?? seen;
+}
+
+/**
  * `gatewayOwnsUnread`: the connection writes, so reading a task is a change the
  * gateway accepts or refuses. Then the dot and the badge are what the gateway
  * reports (`unreadSeen` is empty) and nothing this viewer does locally clears
@@ -269,6 +301,18 @@ export function useSelection(
       );
     },
     [state.bots, showGatewayBot, gatewayId, target, here],
+  );
+  const { openclawUpdating, tasksByBot, transcripts, bots, connection } = state;
+  const unreadSeen = useMemo(
+    () =>
+      unreadSeenOf(seen, gatewayOwnsUnread, {
+        ...(openclawUpdating ? { openclawUpdating } : {}),
+        tasksByBot,
+        transcripts,
+        bots,
+        connection,
+      }),
+    [seen, gatewayOwnsUnread, openclawUpdating, tasksByBot, transcripts, bots, connection],
   );
   const tasks = useMemo(
     () => (bot ? (state.tasksByBot[bot.id] ?? []) : []),
@@ -478,7 +522,7 @@ export function useSelection(
     tasks,
     task,
     seen,
-    unreadSeen: gatewayOwnsUnread ? NOTHING_SEEN : seen,
+    unreadSeen,
     showAll,
     isOpen,
     selectBot,
