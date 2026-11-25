@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSyn
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
-  gatewayStartProblem,
+  startProblem,
   list,
   logTail,
   openInstance,
@@ -15,7 +15,7 @@ import {
   reset,
   start,
   stop,
-  waitForGateway,
+  waitForStart,
 } from "../src/cli.ts";
 import { GATE_SCRIPT, gatedSpawn, OpenclawRunner } from "../src/env.ts";
 import { stateDirFor } from "../src/instance.ts";
@@ -329,8 +329,13 @@ describe("a process is recorded before it can run (B1)", () => {
 });
 
 /** OpenClaw and the scripted model replaced by gated `sleep` stand-ins, under a temporary HOME. */
-/** `gateway`, when given, is a shell command the gateway's stand-in runs instead of waiting. */
-function fakedInstance(home: string, runRoot: string, name: string | null, gateway?: string) {
+/** `stands` holds shell commands the gateway's or the provider's stand-in runs instead of waiting. */
+function fakedInstance(
+  home: string,
+  runRoot: string,
+  name: string | null,
+  stands: { gateway?: string; provider?: string } = {},
+) {
   const stand = (options: SpawnOptions, command = ["sleep", "120"]): ChildProcess => {
     const child = spawn("/bin/sh", ["-c", GATE_SCRIPT, ...command], {
       ...options,
@@ -341,9 +346,11 @@ function fakedInstance(home: string, runRoot: string, name: string | null, gatew
   };
   const fakeSpawn = ((bin: string, args: string[], options: SpawnOptions) => {
     if (bin === "/bin/sh" && args[0] === "-c")
-      return gateway && args.includes("gateway") && args.includes("run")
-        ? stand(options, ["/bin/sh", "-c", gateway])
-        : stand(options);
+      return stands.gateway && args.includes("gateway") && args.includes("run")
+        ? stand(options, ["/bin/sh", "-c", stands.gateway])
+        : stands.provider && args.some((arg) => arg.endsWith("provider-main.ts"))
+          ? stand(options, ["/bin/sh", "-c", stands.provider])
+          : stand(options);
     // An OpenClaw CLI call: health answers, and the exec policy is denied
     // everywhere but the shell bot, which asks.
     const out = args.includes("approvals")
@@ -670,12 +677,10 @@ describe("a start whose gateway never answers says what the gateway was doing (#
   it("stops as soon as the gateway exits, with the end of its log", async () => {
     const home = tempDir("clawtrate-home-");
     const runRoot = tempDir("clawtrate-run-");
-    const faked = fakedInstance(
-      home,
-      runRoot,
-      "alpha",
-      "echo '[gateway] startup phase: config.auth starting'; echo 'config is invalid' >&2; exit 3",
-    );
+    const faked = fakedInstance(home, runRoot, "alpha", {
+      gateway:
+        "echo '[gateway] startup phase: config.auth starting'; echo 'config is invalid' >&2; exit 3",
+    });
     // This gateway never opens its port, so no health check can answer before it exits.
     const inst = {
       ...faked,
@@ -699,9 +704,64 @@ describe("a start whose gateway never answers says what the gateway was doing (#
     await reset(inst);
   }, 60_000);
 
+  it("stops as soon as the scripted provider exits, with the end of its log (#574)", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const faked = fakedInstance(home, runRoot, "alpha", {
+      provider: "echo 'Error: Cannot find module fake-provider.ts' >&2; exit 1",
+    });
+    // This provider never opens its port.
+    const inst = {
+      ...faked,
+      listening: async (port: number) =>
+        port !== readMarker(faked.stateDir)?.providerPort && faked.listening(port),
+    };
+    const began = Date.now();
+    const failure = await start(inst, { seed: false }).then(
+      () => new Error("the start succeeded"),
+      (error: unknown) => error as Error,
+    );
+    // Long before the provider's ceiling: the exit ends the wait.
+    expect(Date.now() - began).toBeLessThan(30_000);
+    expect(failure.message).toMatch(
+      /^the scripted provider exited after \d+ s, before it answered\n {2}last health check: /,
+    );
+    expect(failure.message).toContain(
+      `  the end of its log, ${join(inst.runDir, "provider.log")}:\n` +
+        "    Error: Cannot find module fake-provider.ts",
+    );
+    await reset(inst);
+  }, 60_000);
+
+  it("waits for the scripted provider's port, and says when it never opens", async () => {
+    const log = join(tempDir("clawtrate-log-"), "provider.log");
+    writeFileSync(log, "starting\n");
+    const failure = await waitForStart(
+      {
+        what: "the scripted provider",
+        exited: () => false,
+        health: async () => ({ healthy: false, seen: "its port is not open" }),
+        log,
+      },
+      300,
+    ).then(
+      () => new Error("the wait succeeded"),
+      (error: unknown) => error as Error,
+    );
+    expect(failure.message.replace(/after \d+ s/, "after N s")).toBe(
+      [
+        "timed out after N s waiting for the scripted provider, which is still running",
+        "  last health check: its port is not open",
+        `  the end of its log, ${log}:`,
+        "    starting",
+      ].join("\n"),
+    );
+  });
+
   it("names the wait, the last health check and the log's end when the time runs out", () => {
     expect(
-      gatewayStartProblem({
+      startProblem({
+        what: "the development gateway",
         waitedMs: 480_400,
         exited: false,
         lastSeen: "health exited 1: gateway timeout after 3000ms",
@@ -718,7 +778,8 @@ describe("a start whose gateway never answers says what the gateway was doing (#
       ].join("\n"),
     );
     expect(
-      gatewayStartProblem({
+      startProblem({
+        what: "the development gateway",
         waitedMs: 2_000,
         exited: true,
         lastSeen: null,
@@ -738,14 +799,18 @@ describe("a start whose gateway never answers says what the gateway was doing (#
     const log = join(tempDir("clawtrate-log-"), "gateway.log");
     writeFileSync(log, "[gateway] startup phase: config.auth starting\n");
     let alive = true;
-    const failure = await waitForGateway({
-      exited: () => !alive,
-      health: async () => {
-        alive = false;
-        throw new Error("the gateway is not running");
+    const failure = await waitForStart(
+      {
+        what: "the development gateway",
+        exited: () => !alive,
+        health: async () => {
+          alive = false;
+          throw new Error("the gateway is not running");
+        },
+        log,
       },
-      log,
-    }).then(
+      60_000,
+    ).then(
       () => new Error("the wait succeeded"),
       (error: unknown) => error as Error,
     );
@@ -761,8 +826,9 @@ describe("a start whose gateway never answers says what the gateway was doing (#
   it("says the gateway exited when it exits during the probe that ends past the deadline", async () => {
     const log = join(tempDir("clawtrate-log-"), "gateway.log");
     let alive = true;
-    const failure = await waitForGateway(
+    const failure = await waitForStart(
       {
+        what: "the development gateway",
         exited: () => !alive,
         health: async () => {
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -787,14 +853,18 @@ describe("a start whose gateway never answers says what the gateway was doing (#
     const log = join(tempDir("clawtrate-log-"), "gateway.log");
     const said = `health exited 1: ${"x".repeat(400)}`;
     let alive = true;
-    const failure = await waitForGateway({
-      exited: () => !alive,
-      health: async () => {
-        alive = false;
-        return { healthy: false, seen: said };
+    const failure = await waitForStart(
+      {
+        what: "the development gateway",
+        exited: () => !alive,
+        health: async () => {
+          alive = false;
+          return { healthy: false, seen: said };
+        },
+        log,
       },
-      log,
-    }).then(
+      60_000,
+    ).then(
       () => new Error("the wait succeeded"),
       (error: unknown) => error as Error,
     );

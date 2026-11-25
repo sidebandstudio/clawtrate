@@ -934,10 +934,14 @@ async function gatewayHealth(inst: DevInstance): Promise<{ healthy: boolean; see
 }
 
 /**
- * A ceiling on a condition, not a wait. Locally a start takes seconds. On GitHub's Xcode 27 runner,
- * starts in the iOS workflow's logs took 59 to 254 s, and one ran out at 240 s (#537).
+ * Ceilings on a condition, not waits. Locally the gateway starts in seconds; on GitHub's Xcode 27
+ * runner, starts in the iOS workflow's logs took 59 to 254 s, and one ran out at 240 s (#537).
+ * The scripted provider is a small Node server that listens in under a second locally; at the
+ * runner's slowest seen ratio to local, 8 to 36 times, it needs up to about 25 s there, and it
+ * once missed a limit of 10 s (#574).
  */
 const GATEWAY_START_MS = 480_000;
+const SCRIPTED_START_MS = 120_000;
 
 /** A line of a process's output, cut to a readable length. */
 const cut = (line: string, width = 300) =>
@@ -954,8 +958,9 @@ export function logTail(path: string, lines = 40, width = 300): string {
     .join("\n");
 }
 
-/** Why a start's gateway never answered: how long, whether it exited, what it last said. */
-export function gatewayStartProblem(problem: {
+/** Why a process a start waits for never answered: how long, whether it exited, what it last said. */
+export function startProblem(problem: {
+  what: string;
   waitedMs: number;
   exited: boolean;
   lastSeen: string | null;
@@ -965,8 +970,8 @@ export function gatewayStartProblem(problem: {
   const seconds = Math.round(problem.waitedMs / 1000);
   return [
     problem.exited
-      ? `the development gateway exited after ${seconds} s, before it answered`
-      : `timed out after ${seconds} s waiting for the development gateway, which is still running`,
+      ? `${problem.what} exited after ${seconds} s, before it answered`
+      : `timed out after ${seconds} s waiting for ${problem.what}, which is still running`,
     `  last health check: ${problem.lastSeen ?? "none"}`,
     problem.tail
       ? `  the end of its log, ${problem.log}:\n${problem.tail.replace(/^/gm, "    ")}`
@@ -974,23 +979,21 @@ export function gatewayStartProblem(problem: {
   ].join("\n");
 }
 
-/** What a start watches while its gateway comes up. */
-export type GatewayWatch = {
+/** What a start watches while one of its processes comes up. */
+export type StartWatch = {
+  what: string;
   exited: () => boolean;
   health: () => Promise<{ healthy: boolean; seen: string }>;
   log: string;
 };
 
-/** Wait for a start's gateway to answer. Stop as soon as its process exits, and say why. */
-export async function waitForGateway(
-  watch: GatewayWatch,
-  timeoutMs = GATEWAY_START_MS,
-): Promise<void> {
+/** Wait for a process a start began to answer. Stop as soon as it exits, and say why. */
+export async function waitForStart(watch: StartWatch, timeoutMs: number): Promise<void> {
   const started = Date.now();
   let lastSeen: string | null = null;
   for (;;) {
     if (!watch.exited()) {
-      // A probe can fail outright, for one when the gateway exits while it runs.
+      // A probe can fail outright, for one when the process exits while it runs.
       const health = await watch.health().catch((error: unknown) => ({
         healthy: false,
         seen: `the health check failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -998,15 +1001,37 @@ export async function waitForGateway(
       if (health.healthy) return;
       lastSeen = cut(health.seen);
     }
-    // Read again after the probe, which can end after the gateway exited.
+    // Read again after the probe, which can end after the process exited.
     const exited = watch.exited();
     const waitedMs = Date.now() - started;
     if (exited || waitedMs >= timeoutMs) {
-      const tail = logTail(watch.log);
-      throw new Error(gatewayStartProblem({ waitedMs, exited, lastSeen, log: watch.log, tail }));
+      const { what, log } = watch;
+      const tail = logTail(log);
+      throw new Error(startProblem({ what, waitedMs, exited, lastSeen, log, tail }));
     }
     await sleep(250);
   }
+}
+
+/** Whether the process a start recorded in a role has exited. */
+function recordedExited(inst: DevInstance, role: "gateway" | "provider"): boolean {
+  const marker = readMarker(inst.stateDir);
+  return (
+    processState(marker?.[`${role}Pid`], marker?.[`${role}Identity`], inst.identify) === "dead"
+  );
+}
+
+/** The scripted provider's process, answering on one of its ports. */
+function scriptedWatch(inst: DevInstance, what: string, port: number): StartWatch {
+  return {
+    what,
+    exited: () => recordedExited(inst, "provider"),
+    health: async () =>
+      (await inst.listening(port))
+        ? { healthy: true, seen: "" }
+        : { healthy: false, seen: "its port is not open" },
+    log: join(inst.runDir, "provider.log"),
+  };
 }
 
 type ExecScope = {
@@ -1364,10 +1389,13 @@ export async function start(
         ),
       );
       closeSync(providerLog);
-      await waitFor("the scripted provider", () => inst.listening(ports.providerPort), 10_000);
+      await waitForStart(
+        scriptedWatch(inst, "the scripted provider", ports.providerPort),
+        SCRIPTED_START_MS,
+      );
       if (browserBots.length > 0) {
         const { pagesPort } = browserPorts(ports, browserBots);
-        await waitFor("the scripted pages", () => inst.listening(pagesPort), 10_000);
+        await waitForStart(scriptedWatch(inst, "the scripted pages", pagesPort), SCRIPTED_START_MS);
       }
 
       const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "w");
@@ -1384,14 +1412,15 @@ export async function start(
     }
     // The lock is held until the gateway is healthy, sandboxed and seeded, so
     // no other command acts on an instance that is still starting.
-    await waitForGateway({
-      exited: () => {
-        const marker = readMarker(inst.stateDir);
-        return processState(marker?.gatewayPid, marker?.gatewayIdentity, inst.identify) === "dead";
+    await waitForStart(
+      {
+        what: "the development gateway",
+        exited: () => recordedExited(inst, "gateway"),
+        health: () => gatewayHealth(inst),
+        log: join(inst.runDir, "gateway.log"),
       },
-      health: () => gatewayHealth(inst),
-      log: join(inst.runDir, "gateway.log"),
-    });
+      GATEWAY_START_MS,
+    );
     await assertExecDenied(inst);
     if (options.node) await startScriptedNode(inst, runId, ports);
     const marker = readMarker(inst.stateDir);
