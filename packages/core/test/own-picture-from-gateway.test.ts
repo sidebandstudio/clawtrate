@@ -16,7 +16,7 @@ import {
   MAX_RETAINED_ATTACHMENT_BYTES,
   type OutgoingAttachment,
 } from "../src/client.ts";
-import type { HttpFetch, HttpResponseLike } from "../src/host.ts";
+import type { HttpFetch, HttpResponseLike, KeyValueStore } from "../src/host.ts";
 import { inboundRef, MAX_SENT_SOURCES, sentSources } from "../src/mapping.ts";
 import {
   fetchInboundPicture,
@@ -662,6 +662,44 @@ describe("F-557: a read's token", () => {
       message: "The connection changed while this picture was read.",
     });
     expect(fetched).toEqual([]);
+    client.stop();
+  });
+
+  it("F-557: a token bound to a proved route is never sent on a picture read", async () => {
+    const { fetch, fetched } = live();
+    const { client } = await elsewhere(fetch, [sentRow("m1", "look", [SHOT])]);
+    const storage = (client as unknown as { host: { storage: KeyValueStore } }).host.storage;
+    await storage.set(
+      tokenKey(PROTECTED),
+      JSON.stringify({
+        token: TOKEN,
+        grantedScopes: INTERACTIVE_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+        route: "local-profile",
+      }),
+    );
+    expect(await client.readSentPicture(KEY, "m1:user", 0)).toEqual({ status: "cannot-load" });
+    expect(fetched).toEqual([]);
+    client.stop();
+  });
+});
+
+describe("F-557: a task deleted during a read", () => {
+  it("F-557: another task deleted while a picture is read leaves that read to finish", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { fetch: answer } = live();
+    const fetch: HttpFetch = async (url, init) => {
+      await held;
+      return answer(url, init);
+    };
+    const { client, gateway } = await elsewhere(fetch, [sentRow("m1", "look", [SHOT])]);
+    const reading = client.readSentPicture(KEY, "m1:user", 0);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    gateway.emit("sessions.changed", { sessionKey: "agent:otto:other-task", reason: "delete" });
+    release();
+    expect((await reading).status).toBe("content");
+    expect(client.readBackPictureBytes).toBe(RED.length);
     client.stop();
   });
 });

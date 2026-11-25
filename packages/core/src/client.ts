@@ -1577,8 +1577,8 @@ export class ClawtrateClient {
     { task: string; mimeType: string; content: string; bytes: number }
   >();
   private readBackBytes = 0;
-  /** Raised whenever a task's or a bot's pictures are let go: a read back in flight then keeps nothing. */
-  private taskPictureDrops = 0;
+  /** Reads back in flight, by task: one whose task's or bot's pictures are let go keeps nothing. */
+  private readonly pictureReadsInFlight = new Set<{ task: string; dropped: boolean }>();
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /**
@@ -3431,7 +3431,7 @@ export class ClawtrateClient {
 
   /** Let go of every picture kept for one task, when the task itself is gone. */
   private dropTaskPictures(key: string): void {
-    this.taskPictureDrops += 1;
+    for (const flight of this.pictureReadsInFlight) if (flight.task === key) flight.dropped = true;
     for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
     for (const [id, kept] of this.readBackPictures)
       if (kept.task === key) this.dropReadBackPicture(id);
@@ -6628,7 +6628,9 @@ export class ClawtrateClient {
       if (outcome.kind === "answered")
         for (const [id, kept] of this.readBackPictures)
           if (botIdFromSessionKey(kept.task) === request.botId) this.dropReadBackPicture(id);
-      if (outcome.kind === "answered") this.taskPictureDrops += 1;
+      if (outcome.kind === "answered")
+        for (const flight of this.pictureReadsInFlight)
+          if (botIdFromSessionKey(flight.task) === request.botId) flight.dropped = true;
       return outcome;
     } finally {
       this.botDeletes.delete(key);
@@ -7097,58 +7099,68 @@ export class ClawtrateClient {
   ): Promise<SentPictureRead> {
     const generation = this.generation;
     const epoch = this.epoch;
-    const drops = this.taskPictureDrops;
-    // The socket it was asked on, and the gateway the screen was drawn for: never another.
-    const elsewhere = () =>
-      generation !== this.generation ||
-      epoch !== this.epoch ||
-      (stamp !== undefined &&
-        (stamp.gatewayId === null ||
-          stamp.target !== this.target ||
-          this.state.connection.gatewayId !== stamp.gatewayId));
-    const changed = {
-      status: "failed",
-      message: "The connection changed while this picture was read.",
-    } as const;
-    if (elsewhere()) return changed;
-    // Pictures on screen together queue for a place: nothing is awaited between the last look
-    // at the gate and the read taking its place, so none is refused for another's.
-    for (let waited = 0; this.fileReads >= MAX_FILE_READS && waited < 300; waited += 1)
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
-    if (elsewhere()) return changed;
-    this.checkNotWithdrawn(options.owner);
-    const gatewayUrl = this.state.connection.gatewayUrl ?? "";
-    const deviceId = this.state.connection.deviceId;
-    const read = await this.fileRead(async (ctx) => {
-      // This device's token for the gateway connected now, and no other gateway's.
-      const token =
-        deviceId && this.settings?.url === gatewayUrl
-          ? ((await this.loadToken(gatewayUrl, deviceId, "operator"))?.token ?? null)
-          : null;
-      if (elsewhere()) return changed;
-      return fetchInboundPicture(
-        { fetch: this.host.fetch ?? null, gatewayUrl, token, now: ctx.now },
-        key,
-        ref,
-      );
-    }, options);
-    // Bytes that arrive after a switch are the old gateway's, and a task deleted meanwhile keeps
-    // none: neither is kept or shown.
-    if (elsewhere() || drops !== this.taskPictureDrops) return changed;
-    if (read.status !== "bytes") return read;
-    this.keepReadBack(id, key, read.mimeType, read.bytes);
+    // Dropped when its task, or its bot, is deleted while it is read: a read for another task
+    // goes on.
+    const flight = { task: key, dropped: false };
+    this.pictureReadsInFlight.add(flight);
     try {
-      // A viewer that left during the read is handed nothing.
+      // The socket it was asked on, and the gateway the screen was drawn for: never another.
+      const elsewhere = () =>
+        generation !== this.generation ||
+        epoch !== this.epoch ||
+        (stamp !== undefined &&
+          (stamp.gatewayId === null ||
+            stamp.target !== this.target ||
+            this.state.connection.gatewayId !== stamp.gatewayId));
+      const changed = {
+        status: "failed",
+        message: "The connection changed while this picture was read.",
+      } as const;
+      if (elsewhere()) return changed;
+      // Pictures on screen together queue for a place: nothing is awaited between the last look
+      // at the gate and the read taking its place, so none is refused for another's.
+      for (let waited = 0; this.fileReads >= MAX_FILE_READS && waited < 300; waited += 1)
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+      if (elsewhere()) return changed;
       this.checkNotWithdrawn(options.owner);
-      return {
-        status: "content",
-        kind: "image",
-        mimeType: read.mimeType,
-        bytes: read.bytes.length,
-        transfer: start(read.bytes),
-      };
-    } catch (error) {
-      return { status: "failed", message: errorMessage(error) };
+      const gatewayUrl = this.state.connection.gatewayUrl ?? "";
+      const deviceId = this.state.connection.deviceId;
+      const read = await this.fileRead(async (ctx) => {
+        // This device's token for the gateway connected now, and no other gateway's.
+        const held =
+          deviceId && this.settings?.url === gatewayUrl
+            ? await this.loadToken(gatewayUrl, deviceId, "operator")
+            : null;
+        if (elsewhere()) return changed;
+        // A token bound to a proved route goes only on that route's sockets, never on this request.
+        if (held?.route !== undefined) return { status: "cannot-load" } as const;
+        const token = held?.token ?? null;
+        return fetchInboundPicture(
+          { fetch: this.host.fetch ?? null, gatewayUrl, token, now: ctx.now },
+          key,
+          ref,
+        );
+      }, options);
+      // Bytes that arrive after a switch are the old gateway's, and a task deleted meanwhile keeps
+      // none: neither is kept or shown.
+      if (elsewhere() || flight.dropped) return changed;
+      if (read.status !== "bytes") return read;
+      this.keepReadBack(id, key, read.mimeType, read.bytes);
+      try {
+        // A viewer that left during the read is handed nothing.
+        this.checkNotWithdrawn(options.owner);
+        return {
+          status: "content",
+          kind: "image",
+          mimeType: read.mimeType,
+          bytes: read.bytes.length,
+          transfer: start(read.bytes),
+        };
+      } catch (error) {
+        return { status: "failed", message: errorMessage(error) };
+      }
+    } finally {
+      this.pictureReadsInFlight.delete(flight);
     }
   }
 
