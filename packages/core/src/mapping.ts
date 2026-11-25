@@ -742,6 +742,10 @@ export function mapHistory(
           currentRun = runId;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           if (runId?.startsWith(REPORT_RUN_PREFIX)) item.reportRunId = runId;
+          // A row that names no run, not even as a reply kept after an abort, is no run's reply.
+          if (runId === null && str(asRecord(message.openclawAbort)?.runId) === null) {
+            item.runless = true;
+          }
           items.push(item);
         }
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.

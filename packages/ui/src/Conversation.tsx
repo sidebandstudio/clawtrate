@@ -682,6 +682,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         .find(
           (item) =>
             item.role === "assistant" &&
+            item.runless !== true &&
             item.blocks.some((block) => block.kind === "text" && block.text.trim()),
         );
       // The gateway writes a failure as the run's last row, its text the error itself: the

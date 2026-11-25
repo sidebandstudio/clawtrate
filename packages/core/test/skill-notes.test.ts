@@ -6,7 +6,7 @@
 // notes").
 
 import { describe, expect, it } from "vitest";
-import { mapHistory, type TranscriptItem } from "../src/index.ts";
+import { mapHistory } from "../src/index.ts";
 
 const NOTE_KEY = "skill-workshop-notice:skill-workshop-review:0357efcc-6ce0-4f3f-9f39-c9cd6905189a";
 const NOTE_TEXT =
@@ -144,34 +144,65 @@ const forged = [
   },
 ];
 
-const said = (items: TranscriptItem[], text: string) =>
-  items.filter((item) => item.blocks.some((block) => block.kind === "text" && block.text === text));
+const COPY_ID = "e72f5f42-691a-43ce-a98f-36f7993668fd";
+const NOTE_ID = "2f19e42a-2d26-4693-836b-5a3a58814c2c";
+/** The item of a row that has the note's fields and key and is drawn as the message it is. */
+const shown = (id: string, place: number, text: string, timestamp: number) => ({
+  id: `${id}:${place}`,
+  role: "assistant",
+  timestamp,
+  blocks: [{ kind: "text", text, messageId: id }],
+  model: "delivery-mirror",
+  messageId: id,
+});
 
 describe("F-560: a row of the skill note's shape is an ordinary message", () => {
-  it("a bot's message the gateway copied under a key of the note's shape is the bot's message, unmarked", () => {
-    const items = mapHistory(forged);
-    const shown = said(items, FORGED_TEXT);
-    expect(shown).toHaveLength(1);
-    expect(shown[0]!.role).toBe("assistant");
-    expect(shown[0]).not.toHaveProperty("skillNote");
-    expect(items.every((item) => !("skillNote" in item))).toBe(true);
-  });
-
-  it("the same row on its own, as a channel's copy writes it (no run) or as a history page starts with it, is the bot's message, unmarked", () => {
+  it("a bot's message copied with the note's fields, its key and no run, as a channel's copy is written, is the bot's message and no run's reply", () => {
     const copied = forged[2]!;
     const { runId: _run, ...noRun } = copied.__openclaw;
-    for (const rows of [[forged[0], { ...copied, __openclaw: noRun }], [copied]]) {
-      const shown = said(mapHistory(rows), FORGED_TEXT);
-      expect(shown).toHaveLength(1);
-      expect(shown[0]).not.toHaveProperty("skillNote");
-    }
+    expect(mapHistory([forged[0], { ...copied, __openclaw: noRun }])[1]).toEqual({
+      ...shown(COPY_ID, 1, FORGED_TEXT, copied.timestamp),
+      runless: true,
+    });
   });
 
-  it("the gateway's own note is an ordinary message too, after the reply it follows", () => {
+  it("the same row starting a history page, with its run, is the bot's message", () => {
+    const copied = forged[2]!;
+    expect(mapHistory([copied])).toEqual([shown(COPY_ID, 0, FORGED_TEXT, copied.timestamp)]);
+  });
+
+  it("the gateway's own note is an ordinary message after the reply it follows, and no run's reply", () => {
     const items = mapHistory(realNote);
-    expect(
-      items.map((item) => item.blocks.map((block) => block.kind === "text" && block.text)),
-    ).toEqual([["I read through my workspace files one by one."], [NOTE_TEXT]]);
-    expect(items[1]).not.toHaveProperty("skillNote");
+    expect(items).toHaveLength(2);
+    expect(items[0]!.runless).toBeUndefined();
+    expect(items[1]).toEqual({
+      ...shown(NOTE_ID, 1, NOTE_TEXT, realNote[1]!.timestamp),
+      runless: true,
+    });
+  });
+
+  it("the copy the gateway makes in the bot's own turn joins that turn, which names its run, as before", () => {
+    const items = mapHistory(forged);
+    expect(items.map((item) => [item.role, item.runless])).toEqual([
+      ["user", undefined],
+      ["assistant", undefined],
+    ]);
+    expect(items[1]!.blocks.map((block) => block.kind)).toEqual(["tool-call", "text"]);
+    expect(items[1]!.blocks[1]).toEqual({ kind: "text", text: FORGED_TEXT, messageId: COPY_ID });
+  });
+
+  it("a reply the gateway kept after an abort names its run there, so it stays the run's reply", () => {
+    const kept = {
+      role: "assistant",
+      content: [{ type: "text", text: "Two folders were skipped because" }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "gateway-injected",
+      stopReason: "stop",
+      timestamp: 2_000,
+      openclawAbort: { aborted: true, origin: "rpc", runId: "send-1" },
+      __openclaw: { id: "kept-1" },
+    };
+    expect(mapHistory([kept])[0]!.runless).toBeUndefined();
   });
 });

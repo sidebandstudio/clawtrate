@@ -1,13 +1,11 @@
 // The gateway's skill-change note against a real development gateway: this
 // file's skill-review instance (`e2e-<id>-skills`, started with
-// `--with-skill-review` and `--with-message-tool`), where a `#learn` turn makes
-// the gateway review the task in the background, save a skill and append its
-// note ("Learned: …") to the task about 30 seconds later. With "Show commands"
-// off, the default, the note shows as any message does, in the conversation and
-// as the bot's preview; so does a bot's own message sent with a key of the
-// note's shape (`#send-keyed`), which the gateway writes with every field the
-// note has (docs/parity.md F-560). The unread mark is the gateway's own, which
-// the note does not raise.
+// `--with-skill-review`), where a `#learn` turn makes the gateway review the
+// task in the background, save a skill and append its note ("Learned: …") to
+// the task about 30 seconds later. With "Show commands" off, the default, the
+// note shows as any message does, in the conversation and as the bot's preview
+// (docs/parity.md F-560). The unread mark is the gateway's own, which the note
+// does not raise.
 //
 // The instance is this file's own (`INSTANCE`), started and removed here, so a
 // shard that does not run this file starts none.
@@ -23,7 +21,6 @@ import { join } from "node:path";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { scriptedFinalText } from "../tools/dev-gateway/src/scenario-check.ts";
-import { SEND_KEYED_KEY, SEND_KEYED_TEXT } from "../tools/dev-gateway/src/scenarios.ts";
 import { newRunId, ownIdentity, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import {
   devGateway,
@@ -189,16 +186,7 @@ test.beforeAll(async ({ browser }) => {
   const runId = newRunId();
   record.instances.push({ name: INSTANCE, runId });
   saveRecord(RECORDS, record);
-  cli(
-    "start",
-    "--run-id",
-    runId,
-    "--instance",
-    INSTANCE,
-    "--with-skill-review",
-    "--with-message-tool",
-    "--no-seed",
-  );
+  cli("start", "--run-id", runId, "--instance", INSTANCE, "--with-skill-review", "--no-seed");
   const mine = listInstances().find((each) => each.name === INSTANCE);
   expect(mine?.gatewayRunning, "this file's skill-review instance runs").toBe(true);
   for (const port of [mine!.gatewayPort, mine!.providerPort]) {
@@ -294,41 +282,4 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
     "Learned: created trail-check",
   );
   await shots("note-shown");
-});
-
-test("F-560: a bot's message sent with a key of the note's shape shows with Show commands off", async () => {
-  test.setTimeout(120_000);
-  const key = `agent:main:keyed-${Date.now()}`;
-  await gatewayCall("chat.send", { sessionKey: key, message: "#send-keyed", idempotencyKey: key });
-
-  // The gateway copies the bot's message into the task with every field its own note has.
-  let row: Json | undefined;
-  await expect
-    .poll(
-      async () => {
-        const history = await gatewayCall<{ messages: Json[] }>("chat.history", {
-          sessionKey: key,
-        });
-        row = history.messages.find((each) => keyOf(each) === SEND_KEYED_KEY);
-        return row !== undefined;
-      },
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-  expect([row!.role, row!.api, row!.provider, row!.model, row!.idempotencyKey]).toEqual([
-    "assistant",
-    "openclaw-transcript",
-    "openclaw",
-    "delivery-mirror",
-    SEND_KEYED_KEY,
-  ]);
-  expect(row!.content).toEqual([{ type: "text", text: SEND_KEYED_TEXT }]);
-
-  // With Show commands off, it is in the conversation and is the bot's preview.
-  await setCommandsShown(false);
-  await page.locator('[data-testid="bot"]:not([data-bot="main"])').first().click();
-  await botRow("main").click();
-  await expect(transcript()).toContainText(SEND_KEYED_TEXT, { timeout: 60_000 });
-  await expect(botRow("main").locator(".bot-preview")).toHaveText(SEND_KEYED_TEXT);
-  await shots("keyed-message-shown");
 });

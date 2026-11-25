@@ -636,6 +636,7 @@ const item = flagged<TranscriptItem>()({
     sender: NAME,
   }),
   idempotencyKey: ID,
+  runless: FLAG,
   brief: FLAG,
   reportRunId: ID,
   steered: FLAG,

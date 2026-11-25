@@ -3,11 +3,13 @@
 // F-560): with "Show commands" off it is drawn, it is new activity for "Jump to
 // latest", the view at the end follows it, and the bot's preview is the one the
 // gateway lists. A bot can write such a row, so it is shown as any message.
-// Every name and text is invented.
+// After a stopped or failed run, a row with no run is not that run's reply: it
+// takes neither its "Incomplete" nor its error. Every name and text is invented.
 import { test, type Page } from "@playwright/test";
 import {
   mapHistory,
   type ClawtrateState,
+  type Run,
   type Task,
   type TranscriptItem,
 } from "../packages/core/src/index.ts";
@@ -49,10 +51,16 @@ const preview = (page: Page) => page.locator('[data-testid="bot"][data-bot="otto
 const open = (page: Page, commands = false) =>
   openFixture(page, `scene=main&${OTTO_DISK}&panel=closed${commands ? "&commands=show" : ""}`);
 
-/** Otto's task's history, and its row in the list, as the host's next snapshot would have them. */
-async function update(page: Page, data: { items?: TranscriptItem[]; row?: Partial<Task> }) {
+/**
+ * Otto's task's history, and its row in the list, as the host's next snapshot would have them.
+ * With `run`, the task keeps one finished run: the scene's own, changed by it.
+ */
+async function update(
+  page: Page,
+  data: { items?: TranscriptItem[]; row?: Partial<Task>; run?: Partial<Run> },
+) {
   await page.evaluate(
-    ({ items, row, key }) => {
+    ({ items, row, run, key }) => {
       const fixture = (
         window as unknown as {
           clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
@@ -64,7 +72,17 @@ async function update(page: Page, data: { items?: TranscriptItem[]; row?: Partia
           ...state,
           transcripts: {
             ...state.transcripts,
-            [key]: { ...held, ...(items ? { items, live: null, runs: [], outbox: [] } : {}) },
+            [key]: {
+              ...held,
+              ...(items
+                ? {
+                    items,
+                    live: null,
+                    runs: run ? [{ ...held.runs.at(-1)!, ...run }] : [],
+                    outbox: [],
+                  }
+                : {}),
+            },
           },
           ...(row
             ? {
@@ -143,5 +161,61 @@ test.describe("rows of the gateway's skill-note shape", () => {
     const history = mapHistory([said("assistant", "prior", "Old reply.", 800), note("note-1")]);
     await update(page, { items: history, row: { updatedAt: EPOCH + 1_005, preview: NOTE_TEXT } });
     await expect(preview(page)).toHaveText(NOTE_TEXT);
+  });
+
+  // A row the gateway appends after a turn names no run: whatever its fields, it is not the
+  // stopped or failed run's reply, so it neither takes the run's "Incomplete" nor hides its error.
+  const ASK = said("user", "ask", "How much space is left?", 100);
+  const askItem = () => mapHistory([ASK])[0]!.id;
+  const stoppedRun = (state: "stopped" | "failed", error?: string): Partial<Run> => ({
+    id: "run-x",
+    state,
+    anchorItemId: askItem(),
+    messageId: null,
+    textComplete: false,
+    ...(error ? { error: { message: error, kind: "provider" } } : {}),
+  });
+
+  test("F-433 F-560: after a stopped run, the cut reply keeps Incomplete and a row with no run after it has none", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=run-stopped&${OTTO_DISK}&panel=closed`);
+    const cut = said("assistant", "cut", "Two folders were skipped because", 200, "run-x");
+    await update(page, {
+      items: mapHistory([ASK, cut, note("note-1")]),
+      run: stoppedRun("stopped"),
+    });
+    const turn = (text: string) => page.getByTestId("transcript-turn").filter({ hasText: text });
+    await expect(turn(NOTE_TEXT)).toHaveCount(1);
+    await expect(page.getByTestId("incomplete")).toHaveCount(1);
+    await expect(turn("Two folders were skipped").getByTestId("incomplete")).toHaveCount(1);
+    await expect(turn(NOTE_TEXT).getByTestId("incomplete")).toHaveCount(0);
+  });
+
+  test("F-532 F-560: after a failed run, its error shows once though a row with no run follows it", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=run-stopped&${OTTO_DISK}&panel=closed`);
+    const ERROR = "The provider went away.";
+    const failure = said("assistant", "failure", ERROR, 200, "run-x");
+    await update(page, {
+      items: mapHistory([ASK, failure, note("note-1")]),
+      run: stoppedRun("failed", ERROR),
+    });
+    await expect(page.getByTestId("turn-error")).toBeVisible();
+    await expect(transcript(page).getByText(ERROR)).toHaveCount(1);
+    await expect(transcript(page).getByText(NOTE_TEXT)).toHaveCount(1);
+    await expect(page.getByTestId("incomplete")).toHaveCount(0);
+  });
+
+  test("F-433: a bot's message with the note's fields that names the stopped run is its cut reply, as before", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=run-stopped&${OTTO_DISK}&panel=closed`);
+    // The copy the gateway makes of a message the bot sent in this run: the note's fields and key.
+    const copied = { ...note("copy-1"), __openclaw: { id: "copy-1", runId: "run-x" } };
+    await update(page, { items: mapHistory([ASK, copied]), run: stoppedRun("stopped") });
+    const turn = page.getByTestId("transcript-turn").filter({ hasText: NOTE_TEXT });
+    await expect(turn.getByTestId("incomplete")).toHaveText("Incomplete");
   });
 });
