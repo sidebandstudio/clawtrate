@@ -3,6 +3,7 @@ import {
   listedTasks as listedTasksOf,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
+  tasksWithFilePreviews,
   tasksWithoutSkillNotes,
   type BridgeCommand,
   type ClawtrateState,
@@ -318,10 +319,15 @@ export function Shell({
 
   // With commands hidden, the rail's preview of a task whose loaded, current history ends with the
   // gateway's skill notes is the last thing before them; its time, order and unread are unchanged (F-560).
+  // One whose history ends with a bot's message that is only files reads as their names (F-115).
   const [commandsShown] = useShowCommands();
   const { tasksByBot, transcripts } = state;
   const listedTasks = useMemo(
-    () => (commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts)),
+    () =>
+      tasksWithFilePreviews(
+        commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts),
+        transcripts,
+      ),
     [commandsShown, tasksByBot, transcripts],
   );
 

@@ -154,9 +154,11 @@ import {
   MAX_PICTURE_BYTES,
   ownPictureRead,
   readChatPicture,
+  type ChatPictureContext,
   type ChatPictureRead,
   type SentPictureRead,
 } from "./pictures.ts";
+import { readChatFile, type ChatFileRead } from "./chat-files.ts";
 import type {
   ApprovalInstructions,
   ClawtrateHost,
@@ -413,6 +415,9 @@ const IDENTITY_RETRY_MS = 500;
 /** Why a write stamped on an earlier connection target is not sent (`requireSameGateway`). */
 export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
+/** Why a file a bot handed over isn't read: its row came from another gateway (`readChatFile`). */
+export const FILE_FROM_ANOTHER_GATEWAY =
+  "This file was listed by another gateway, so it wasn't read. Look again, then try again.";
 /** Why a write that had already sent part of itself stopped: what the gateway did is not known. */
 export { CONNECTION_CHANGED_AFTER_SEND };
 
@@ -7156,6 +7161,49 @@ export class ClawtrateClient {
     artifactId: string,
     options: FileReadOptions = {},
   ): Promise<ChatPictureRead> {
+    return this.readHandedOver("picture", options, (ctx) => readChatPicture(ctx, key, artifactId));
+  }
+
+  /**
+   * A file the bot handed over in the task that isn't a picture (`chat-files.ts`), the same way.
+   * It is read when the person asks, which can be long after its row was drawn: with `stamp`
+   * (the gateway that drew the row), nothing is asked unless the host still has that gateway.
+   */
+  async readChatFile(
+    key: string,
+    artifactId: string,
+    options: FileReadOptions = {},
+    stamp?: GatewayStamp,
+  ): Promise<ChatFileRead> {
+    // Checked before the read waits for a place and again after: the connection can move meanwhile.
+    const refusal = async (): Promise<string | null> => {
+      if (stamp === undefined) return null;
+      try {
+        await this.requireSameGateway(stamp);
+        return null;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return /another gateway/.test(message) ? FILE_FROM_ANOTHER_GATEWAY : message;
+      }
+    };
+    const before = await refusal();
+    if (before !== null) return { status: "failed", message: before };
+    return this.readHandedOver(
+      "file",
+      options,
+      (ctx) => readChatFile(ctx, key, artifactId),
+      refusal,
+    );
+  }
+
+  /** A picture or file a bot handed over, read through the download the gateway issues. */
+  private async readHandedOver<R extends { status: string }>(
+    noun: string,
+    options: FileReadOptions,
+    read: (ctx: ChatPictureContext) => Promise<R>,
+    /** Checked once the read has its place, just before anything is asked: why not, or null. */
+    refusal?: () => Promise<string | null>,
+  ): Promise<R | { status: "failed"; message: string }> {
     // A turn hands over up to four pictures and a task can hold several such turns, all drawn
     // at once: a picture waits up to 30 s for one of the file reads' places, and of the
     // transfers' that carry a picture to its viewer, instead of failing.
@@ -7168,22 +7216,29 @@ export class ClawtrateClient {
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
     // The task and picture are the connection's it was asked on: never read on a later one.
     if (generation !== this.generation)
-      return { status: "failed", message: "The connection changed while this picture waited." };
+      return { status: "failed", message: `The connection changed while this ${noun} waited.` };
     // A viewer that left while the picture waited asks for nothing.
     this.checkNotWithdrawn(options.owner);
+    const refused = refusal ? await refusal() : null;
+    if (refused !== null) return { status: "failed", message: refused };
+    // The refusal can wait for the gateway's identity: the viewer is checked again, last.
+    this.checkNotWithdrawn(options.owner);
+    // The socket the read is asked on: one that answers after a reconnect is another's.
+    const epoch = this.epoch;
     const gatewayUrl = this.state.connection.gatewayUrl ?? "";
-    const read = await this.fileRead(
-      (ctx) =>
-        readChatPicture({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }, key, artifactId),
+    const answer = await this.fileRead(
+      (ctx) => read({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }),
       options,
     );
-    // Bytes that arrive after a switch to another gateway are the old one's: none reach a viewer.
-    if (generation !== this.generation) {
-      if (read.status === "content" && read.transfer.id)
-        this.fileTransfers.release(options.owner ?? DIRECT_CALLER, read.transfer.id);
-      return { status: "failed", message: "The connection changed while this picture was read." };
+    // Bytes that arrive after a switch to another gateway, or a reconnect, are the old
+    // connection's: none reach a viewer.
+    if (generation !== this.generation || epoch !== this.epoch) {
+      const transfer = (answer as { transfer?: { id: string | null } }).transfer;
+      if (answer.status === "content" && transfer?.id)
+        this.fileTransfers.release(options.owner ?? DIRECT_CALLER, transfer.id);
+      return { status: "failed", message: `The connection changed while this ${noun} was read.` };
     }
-    return read;
+    return answer;
   }
 
   /**
