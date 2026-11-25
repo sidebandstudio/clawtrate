@@ -397,6 +397,8 @@ function fakedInstance(
     spawn: fakeSpawn,
     runner: new OpenclawRunner({
       instance: name,
+      // A stand-in path: the fake spawn below runs it, never an OpenClaw.
+      bin: "/test/openclaw",
       stateDir,
       runFile: base.runFile,
       checkout: CHECKOUT,

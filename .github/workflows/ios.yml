@@ -45,6 +45,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: npm install --global openclaw@2026.10.6
+      # The development gateway runs this runner's copy, which is the pinned version.
+      - run: echo "OPENCLAW_BIN=$(npm prefix --global)/bin/openclaw" >> "$GITHUB_ENV"
       - name: Install Maestro
         working-directory: ${{ runner.temp }}
         run: |

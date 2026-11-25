@@ -430,6 +430,8 @@ const IDENTITY_RETRY_MS = 500;
 /** Why a write stamped on an earlier connection target is not sent (`requireSameGateway`). */
 export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
+/** Why a write stamped with one gateway's identity is not sent to another (`requireSameGateway`). */
+const ANOTHER_GATEWAY = "This change was made for another gateway, so nothing was sent.";
 /** Why a file a bot handed over isn't read: its row came from another gateway (`readChatFile`). */
 export const FILE_FROM_ANOTHER_GATEWAY =
   "This file was listed by another gateway, so it wasn't read. Look again, then try again.";
@@ -1473,13 +1475,14 @@ export class ClawtrateClient {
    * and show the older. Each rename starts from the names the one before it left.
    */
   private readonly preferenceWork: Record<
-    "channelChats" | "gatewayBot" | "gatewayNames" | "otherTools",
+    "channelChats" | "gatewayBot" | "gatewayNames" | "otherTools" | "turnLimit",
     Promise<unknown>
   > = {
     channelChats: Promise.resolve(),
     gatewayBot: Promise.resolve(),
     gatewayNames: Promise.resolve(),
     otherTools: Promise.resolve(),
+    turnLimit: Promise.resolve(),
   };
   private inOrder<T>(
     preference: keyof ClawtrateClient["preferenceWork"],
@@ -6730,8 +6733,7 @@ export class ClawtrateClient {
     this.confirmGatewayIdentity(here, alive);
     if (!alive()) throw new Error(CONNECTION_CHANGED);
     // `gatewayId` is known here, so a gateway that names none (null) never matches it.
-    if (here !== gatewayId)
-      throw new Error("This change was made for another gateway, so nothing was sent.");
+    if (here !== gatewayId) throw new Error(ANOTHER_GATEWAY);
     return { gatewayId, target: stamp.target };
   }
 
@@ -8042,16 +8044,19 @@ export class ClawtrateClient {
       throw new Error(
         `A turn limit is a whole number of minutes from ${MIN_TURN_LIMIT_MINUTES} to ${MAX_TURN_LIMIT_MINUTES}.`,
       );
-    // Kept first: a limit the host could not keep is not taken, and the old one and its timers stay.
-    await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
-    this.preferenceSets.turnLimit += 1;
-    this.turnLimitMs = minutes * 60_000;
-    this.store.update((state) => ({ ...state, turnLimitMinutes: minutes }));
-    for (const [timerKey, timer] of this.turnTimers) {
-      clearTimeout(timer);
-      this.turnTimers.delete(timerKey);
-    }
-    for (const key of Object.keys(this.state.transcripts)) this.afterActivity(key);
+    return this.inOrder("turnLimit", async () => {
+      // Kept first: a limit the host could not keep is not taken, and the old one and its timers
+      // stay.
+      await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
+      this.preferenceSets.turnLimit += 1;
+      this.turnLimitMs = minutes * 60_000;
+      this.store.update((state) => ({ ...state, turnLimitMinutes: minutes }));
+      for (const [timerKey, timer] of this.turnTimers) {
+        clearTimeout(timer);
+        this.turnTimers.delete(timerKey);
+      }
+      for (const key of Object.keys(this.state.transcripts)) this.afterActivity(key);
+    });
   }
 
   /**
@@ -10605,12 +10610,16 @@ export class ClawtrateClient {
   /**
    * The context the rail's actions run in: the gateway, and the write tier,
    * asked for through the same request as sending (`ensureScope`) only when an
-   * action needs it, by the viewer that started it.
+   * action needs it, by the viewer that started it. `bound` is the connection a guard read: the
+   * action then sends only on it.
    */
-  private actionContext(owner: object | null): TaskActionContext & SidebarContext {
+  private actionContext(
+    owner: object | null,
+    bound: number | null = null,
+  ): TaskActionContext & SidebarContext {
     const generation = this.generation;
     // The connection the action's first request went on, and whether it has sent a write yet.
-    let epoch: number | null = null;
+    let epoch = bound;
     let wrote = false;
     return {
       request: async (method, params) => {
@@ -10699,19 +10708,34 @@ export class ClawtrateClient {
   }
 
   /**
-   * A stamped task action's write access, then its guard. Access first: asking for it can
-   * reconnect, and the guard reads the connection it ends on. The action's own context is made
-   * only after both, so the grant's reconnect doesn't end it.
+   * The context of a task action: with `stamp`, its write access, then its guard, and bound to
+   * the connection that guard read. Access first: asking for it can reconnect, and the guard reads
+   * the connection it ends on, so the grant's reconnect doesn't end the action. A drop after the
+   * guard does, since another gateway can answer that reconnect at the same address.
    */
   private async settleTaskWrite(
     owner: object | null,
     stamp: GatewayStamp | undefined,
-  ): Promise<void> {
+  ): Promise<TaskActionContext> {
     // Unstamped, nothing names the gateway the action was for, so the grant's reconnect still ends
     // it rather than send it to whichever gateway answered.
-    if (!stamp) return;
+    if (!stamp) return this.actionContext(owner);
+    // What the guard would refuse anyway is refused before access is asked, so a gateway the
+    // screen wasn't read on is never asked for it. Only a connected host's identity is its own
+    // connection's: each hello clears the last one's.
+    this.requireSameTarget(stamp);
+    const connection = this.state.connection;
+    if (
+      connection.status === "connected" &&
+      connection.gatewayId !== null &&
+      stamp.gatewayId !== null &&
+      connection.gatewayId !== stamp.gatewayId
+    )
+      throw new Error(ANOTHER_GATEWAY);
     await this.actionContext(owner).ensureWrite();
+    const epoch = this.epoch;
     await this.requireSameGateway(stamp);
+    return this.actionContext(owner, epoch);
   }
 
   /** With `stamp`, as for `archiveTask`. */
@@ -10720,8 +10744,7 @@ export class ClawtrateClient {
     label: string,
     options: { owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<void> {
-    await this.settleTaskWrite(options.owner ?? null, options.stamp);
-    await renameTask(this.actionContext(options.owner ?? null), key, label);
+    await renameTask(await this.settleTaskWrite(options.owner ?? null, options.stamp), key, label);
   }
 
   /** With `stamp`, as for `archiveTask`. */
@@ -10730,8 +10753,7 @@ export class ClawtrateClient {
     pinned: boolean,
     options: { owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<void> {
-    await this.settleTaskWrite(options.owner ?? null, options.stamp);
-    await pinTask(this.actionContext(options.owner ?? null), key, pinned);
+    await pinTask(await this.settleTaskWrite(options.owner ?? null, options.stamp), key, pinned);
   }
 
   /**
@@ -10759,8 +10781,7 @@ export class ClawtrateClient {
       }
       return;
     }
-    await this.settleTaskWrite(options.owner ?? null, options.stamp);
-    await markTask(this.actionContext(options.owner ?? null), key, unread);
+    await markTask(await this.settleTaskWrite(options.owner ?? null, options.stamp), key, unread);
   }
 
   /**
@@ -10771,8 +10792,7 @@ export class ClawtrateClient {
     key: string,
     options: { stop?: boolean; owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<ArchiveResult> {
-    await this.settleTaskWrite(options.owner ?? null, options.stamp);
-    return archiveTask(this.actionContext(options.owner ?? null), key, {
+    return archiveTask(await this.settleTaskWrite(options.owner ?? null, options.stamp), key, {
       stop: options.stop === true,
     });
   }
@@ -10786,8 +10806,7 @@ export class ClawtrateClient {
     key: string,
     options: { owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<void> {
-    await this.settleTaskWrite(options.owner ?? null, options.stamp);
-    await deleteTask(this.actionContext(options.owner ?? null), key);
+    await deleteTask(await this.settleTaskWrite(options.owner ?? null, options.stamp), key);
     // Its conversation is gone from the gateway: so are the pictures you sent in it.
     this.dropDeletedPictures(({ task }) => task === key);
   }
