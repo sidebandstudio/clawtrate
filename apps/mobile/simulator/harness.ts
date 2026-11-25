@@ -105,7 +105,9 @@ export async function steps(
       const { stdout = "", stderr = "" } = error as { stdout?: string; stderr?: string };
       const output = `${stdout}${stderr}`;
       if (attempt === 1 && DRIVER_DID_NOT_START.test(output)) continue;
-      throw new Error(`Steps "${name}" failed:\n${output}`, { cause: error });
+      throw new Error(`Steps "${name}" failed:\n${output}${await mistyped(commands, output)}`, {
+        cause: error,
+      });
     }
   }
 }
@@ -141,6 +143,61 @@ export const waitGone = (selector: Selector | string, ms = 60_000): Step => ({
 export const scrollTo = (selector: Selector, direction: "UP" | "DOWN", ms = 30_000): Step => ({
   scrollUntilVisible: { element: selector, direction, timeout: ms },
 });
+
+/** What a `typeInto` step meant to type, for the failure's message. */
+type Typing = { field: string; text: string; secret: boolean; label: string };
+const typings = new WeakMap<object, Typing>();
+/** What a secure field shows of each character, in Maestro's view of the screen. */
+const SECURE_DOT = "•";
+
+/**
+ * Type a text into a field and confirm the field holds it. On a slow Simulator
+ * Maestro can lose characters as it types and still report the text typed
+ * (#580), so the field is read back and, while it holds anything else, erased
+ * and typed again: three times at most. A secure field shows one dot for each
+ * character, so there the count is confirmed, and the text never appears in
+ * Maestro's output. If the field never holds it, `steps` fails with what the
+ * field holds.
+ */
+export function typeInto(field: string, text: string, { secret = false } = {}): Step {
+  const label = secret
+    ? `Type ${text.length} secret characters into ${field}`
+    : `Type "${text}" into ${field}`;
+  const step = {
+    retry: {
+      maxRetries: 2,
+      label,
+      commands: [
+        tap({ id: field }),
+        { eraseText: 80 },
+        { inputText: secret ? { text, label: `Input ${text.length} secret characters` } : text },
+        see({ id: field, text: secret ? `${SECURE_DOT}{${text.length}}` : lit(text) }),
+      ],
+    },
+  };
+  typings.set(step, { field, text, secret, label });
+  return step;
+}
+
+/** For each `typeInto` step of a flow that failed, what it meant to type and what the field holds. */
+async function mistyped(commands: Step[], output: string): Promise<string> {
+  const failed = commands.flatMap((command) => {
+    const typing = typeof command === "object" ? typings.get(command) : undefined;
+    return typing && output.includes(`${typing.label}... FAILED`) ? [typing] : [];
+  });
+  if (failed.length === 0) return "";
+  // A driver that has stopped cannot read the screen; the failure above still stands.
+  const held = await fieldTexts().catch(() => null);
+  return failed
+    .map(({ field, text, secret }) => {
+      const meant = secret ? `${text.length} characters` : `"${text}"`;
+      const now = held?.get(field);
+      if (now === undefined)
+        return `\n${field} should hold ${meant}; ${held ? "it is not on screen" : "the screen could not be read"}.`;
+      return `\n${field} should hold ${meant} and holds ${secret ? `${now.length} characters` : `"${now}"`}.`;
+    })
+    .join("");
+}
 
 type Node = { attributes?: Record<string, string>; children?: Node[] };
 const BOUNDS = /\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/;
@@ -196,6 +253,20 @@ export async function layout(): Promise<
       });
       found.set(a["resource-id"], list);
     }
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(tree);
+  return found;
+}
+
+/** The text each element with an id holds now: a field's value, as Maestro reads it. */
+async function fieldTexts(): Promise<Map<string, string>> {
+  const stdout = await hierarchy();
+  const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
+  const found = new Map<string, string>();
+  const walk = (node: Node) => {
+    const a = node.attributes ?? {};
+    if (a["resource-id"] && !found.has(a["resource-id"])) found.set(a["resource-id"], a.text ?? "");
     for (const child of node.children ?? []) walk(child);
   };
   walk(tree);
