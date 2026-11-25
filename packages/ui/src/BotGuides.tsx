@@ -281,7 +281,11 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                       disabled={guides.busy}
                       onClick={() =>
                         void guides
-                          .change({ action: "replace", bot: folder.bots[0]! })
+                          .change({
+                            action: "replace",
+                            bot: folder.bots[0]!,
+                            shown: folder.changedText ?? "",
+                          })
                           .then(
                             (read) =>
                               read &&

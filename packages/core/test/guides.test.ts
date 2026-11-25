@@ -16,13 +16,14 @@ import {
   GUIDES_SIZE,
   GUIDES_TEXT,
   guidesKey,
+  MAX_CHANGED_SECTION_CHARS,
   parseGuidesRecord,
   readGuideFolders,
   withoutSection,
   withSection,
 } from "../src/guides.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import type { BotGuidesAnswer, GuidesChange } from "../src/guides.ts";
 import { grantingGateway, openTask } from "./client-harness.ts";
 import { memoryStorage, tokenKey, until } from "./fake-gateway.ts";
@@ -112,7 +113,10 @@ describe("the section", () => {
       // Adding again changes nothing.
       expect(withSection(added)).toBe(added);
     }
-    expect(withSection("")).toBe(GUIDES_SECTION);
+    // An empty file gets the blank line after the section too, so a line the person adds below
+    // it later is theirs, and stays when the section is taken out.
+    expect(withSection("")).toBe(`${GUIDES_SECTION}\n`);
+    expect(withoutSection(`${withSection("")}\n# Theirs\n`)).toBe("\n# Theirs\n");
     expect(withoutSection(BOT_FILE)).toBe(BOT_FILE);
   });
 
@@ -205,8 +209,38 @@ describe("the changes the person asks for", () => {
     await applyGuidesChange(files.request, null, { action: "update" });
     await applyGuidesChange(files.request, null, { action: "remove" });
     expect(files.sets).toEqual([]);
-    await applyGuidesChange(files.request, null, { action: "replace", bot: "pip" });
+    const shown = (findSection(changed) as { text: string }).text;
+    await applyGuidesChange(files.request, null, { action: "replace", bot: "pip", shown });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+  });
+
+  it("replaces only the section the person was shown: one changed again since is left", async () => {
+    const changed = withSection(BOT_FILE).replace("Be warm", "Be cold");
+    const shown = (findSection(changed) as { text: string }).text;
+    const files = fakeFiles({ pip: changed.replace("Be cold", "Be colder") });
+    const result = await applyGuidesChange(files.request, null, {
+      action: "replace",
+      bot: "pip",
+      shown,
+    });
+    expect(files.sets).toEqual([]);
+    expect(result.errors).toEqual([
+      "pip: AGENTS.md changed again after Settings read it, so nothing was replaced. Look at its section again before you replace it.",
+    ]);
+    expect(result.record).toEqual({ bots: [], newBots: false });
+  });
+
+  it("takes Replace from a viewer only with the section it was shown, at most what Show shows", () => {
+    const command = {
+      type: "changeBotGuides",
+      change: { action: "replace", bot: "pip", shown: "<!-- clawtrate:guides begin -->" },
+      stamp: { gatewayId: "gw-a", target: 1 },
+    };
+    expect(parseBridgeCommand(command)).toEqual(command);
+    for (const shown of [undefined, 7, "x".repeat(MAX_CHANGED_SECTION_CHARS + 1)])
+      expect(() =>
+        parseBridgeCommand({ ...command, change: { action: "replace", bot: "pip", shown } }),
+      ).toThrow("invalid guides change");
   });
 
   it("brings an older version up to date after a connect, and leaves the rest", async () => {
@@ -476,7 +510,10 @@ describe("files Clawtrate leaves alone", () => {
       [text, { action: "add", bots: ["otto"], newBots: false }],
       [withSection(text), { action: "remove" }],
       [olderSection() + text, { action: "update" }],
-      [withSection(text).replace("Be warm", "Be cold"), { action: "replace", bot: "otto" }],
+      [
+        withSection(text).replace("Be warm", "Be cold"),
+        { action: "replace", bot: "otto", shown: "" },
+      ],
     ] as [string, GuidesChange][]) {
       const files = fakeFiles({ otto: content }, {}, { otto: sha256Hex(bytes) });
       const result = await applyGuidesChange(files.request, null, change);
@@ -498,7 +535,7 @@ describe("files Clawtrate leaves alone", () => {
       { action: "add", bots: ["otto"], newBots: true },
       { action: "remove" },
       { action: "update" },
-      { action: "replace", bot: "otto" },
+      { action: "replace", bot: "otto", shown: "" },
     ] as GuidesChange[]) {
       await applyGuidesChange(files.request, { bots: ["otto"], newBots: true }, change);
       expect(files.sets, change.action).toEqual([]);
@@ -528,7 +565,7 @@ describe("files Clawtrate leaves alone", () => {
     for (const [name, file] of Object.entries(shapes)) {
       expect(findSection(file), name).toMatchObject({ kind: "changed", replaceable: false });
       for (const change of [
-        { action: "replace", bot: "pip" },
+        { action: "replace", bot: "pip", shown: "" },
         { action: "add", bots: ["pip"], newBots: true },
         { action: "remove" },
         { action: "update" },
@@ -541,7 +578,8 @@ describe("files Clawtrate leaves alone", () => {
       expect(folder).toMatchObject({ state: "changed", replaceable: false });
     }
     const files = fakeFiles({ pip: edited });
-    await applyGuidesChange(files.request, null, { action: "replace", bot: "pip" });
+    const shown = (findSection(edited) as { text: string }).text;
+    await applyGuidesChange(files.request, null, { action: "replace", bot: "pip", shown });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
   });
 
@@ -609,6 +647,7 @@ describe("files Clawtrate leaves alone", () => {
     const replaced = await applyGuidesChange(files.request, null, {
       action: "replace",
       bot: "otto",
+      shown: "",
     });
     expect(files.sets).toEqual([]);
     expect(replaced.record?.bots ?? []).toEqual([]);

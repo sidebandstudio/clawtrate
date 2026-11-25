@@ -119,14 +119,15 @@ export function findSection(file: string): FoundSection {
 
 /**
  * The file with this version's section: in place of the one there, or at the top, with a blank
- * line before what was there. Nothing else in the file changes.
+ * line before what was there, an empty file's included, so a line added below it later is never
+ * taken for Clawtrate's. Nothing else in the file changes.
  */
 export function withSection(file: string): string {
   const found = findSection(file);
   if (found.kind === "changed" && !found.replaceable) return file;
   if (found.kind !== "none")
     return file.slice(0, found.start) + GUIDES_SECTION + file.slice(found.end);
-  return file === "" ? GUIDES_SECTION : `${GUIDES_SECTION}\n${file}`;
+  return `${GUIDES_SECTION}\n${file}`;
 }
 
 /**
@@ -358,7 +359,8 @@ export function parseGuidesRecord(value: string | null): GuidesRecord | null {
 export type GuidesChange =
   /** `background`: a new bot's, not the person's own Add: it never makes a file too long. */
   | { action: "add"; bots: string[]; newBots: boolean; background?: boolean }
-  | { action: "replace"; bot: string }
+  /** `shown`: the changed section as Settings read it (`changedText`); nothing else is replaced. */
+  | { action: "replace"; bot: string; shown: string }
   | { action: "remove" }
   | { action: "decline" }
   | { action: "update" };
@@ -408,9 +410,15 @@ export async function applyGuidesChange(
     const bots = folders.find((group) => group.includes(change.bot));
     if (!bots) return { record, errors: [`${change.bot} isn't on the gateway's list of bots.`] };
     if (
-      await each(bots, (file, found) =>
-        found.kind === "changed" && found.replaceable ? withSection(file) : null,
-      )
+      await each(bots, (file, found) => {
+        if (found.kind !== "changed" || !found.replaceable) return null;
+        // Changed again since the person was shown it: what they'd replace isn't what they saw.
+        if (found.text !== change.shown)
+          throw new Error(
+            `${GUIDES_FILE} changed again after Settings read it, so nothing was replaced. Look at its section again before you replace it.`,
+          );
+        return withSection(file);
+      })
     )
       for (const bot of bots) kept.add(bot);
     return { record: { bots: [...kept], newBots: record?.newBots ?? false }, errors };

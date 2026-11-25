@@ -6,7 +6,7 @@ import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import { utf8Length } from "./encoding.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
 import type { BotVoiceAnswer } from "./voice.ts";
-import type { BotGuidesAnswer, GuidesChange } from "./guides.ts";
+import { MAX_CHANGED_SECTION_CHARS, type BotGuidesAnswer, type GuidesChange } from "./guides.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -870,7 +870,9 @@ function guidesChange(value: unknown): GuidesChange {
         throw new Error("invalid guides change");
       return { action: "add", bots: change.bots.map(botId), newBots: change.newBots };
     case "replace":
-      return { action: "replace", bot: botId(change.bot) };
+      if (typeof change.shown !== "string" || change.shown.length > MAX_CHANGED_SECTION_CHARS)
+        throw new Error("invalid guides change");
+      return { action: "replace", bot: botId(change.bot), shown: change.shown };
     case "remove":
     case "decline":
       return { action: change.action };

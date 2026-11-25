@@ -1543,6 +1543,8 @@ export class ClawtrateClient {
   private readonly foreignReads = new Map<string, Set<{ cancelled: boolean }>>();
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
+  /** The last guide change in line (`oneGuidesChangeAtATime`). */
+  private guidesChanges: Promise<unknown> = Promise.resolve();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private discoveryRead: { sessionsChanged: boolean; botsChanged: boolean } | null = null;
   /** The pairing request this client last saw pending, and when. */
@@ -7152,15 +7154,30 @@ export class ClawtrateClient {
       protocol && this.protocol === protocol && this.epoch === epoch && this.target === stamp.target
         ? this.request(method, params)
         : Promise.reject(new Error(CONNECTION_CHANGED));
-    const before = await this.guidesRecord(gatewayId);
-    const { record, errors } = await applyGuidesChange(request, before, change);
-    if (record) await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(record));
+    const { errors } = await this.oneGuidesChangeAtATime(async () => {
+      const before = await this.guidesRecord(gatewayId);
+      const result = await applyGuidesChange(request, before, change);
+      if (result.record)
+        await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(result.record));
+      return result;
+    });
     const read = await this.readBotGuides();
     return { ...read, errors };
   }
 
   private async guidesRecord(gatewayId: string): Promise<GuidesRecord | null> {
     return parseGuidesRecord(await this.host.storage.get(guidesKey(gatewayId)).catch(() => null));
+  }
+
+  /**
+   * The guide changes (the person's, a new bot's, the update after a connect) run one at a
+   * time, each from reading the record to saving it, so none acts on a record another changed
+   * meanwhile: a Remove that finished is never undone by a change that read the record before it.
+   */
+  private oneGuidesChangeAtATime<T>(run: () => Promise<T>): Promise<T> {
+    const turn = this.guidesChanges.then(run, run);
+    this.guidesChanges = turn.catch(() => undefined);
+    return turn;
   }
 
   /**
@@ -7179,13 +7196,17 @@ export class ClawtrateClient {
     if (!current()) return;
     // Only where the person said yes from this device: nothing is read on any other gateway.
     const gatewayId = await this.readGatewayIdentity();
-    const record = gatewayId === null ? null : await this.guidesRecord(gatewayId);
-    if (!current() || !record || record.bots.length === 0) return;
+    if (gatewayId === null) return;
     const request = (method: string, params: unknown) =>
       current() ? this.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED));
-    const { errors } = await applyGuidesChange(request, record, { action: "update" }).catch(
-      (error: unknown) => ({ errors: [error instanceof Error ? error.message : String(error)] }),
-    );
+    const errors = await this.oneGuidesChangeAtATime(async () => {
+      const record = await this.guidesRecord(gatewayId);
+      if (!current() || !record || record.bots.length === 0) return [];
+      const result = await applyGuidesChange(request, record, { action: "update" }).catch(
+        (error: unknown) => ({ errors: [error instanceof Error ? error.message : String(error)] }),
+      );
+      return result.errors;
+    });
     for (const error of errors) this.logFailure("warn", "guides update", error);
   }
 
@@ -7200,20 +7221,22 @@ export class ClawtrateClient {
     request: (method: string, params: unknown) => Promise<unknown>,
   ): Promise<void> {
     if (this.options.readOnly || !this.state.connection.canAdmin) return;
-    const record = await this.guidesRecord(gatewayId);
-    if (!record?.newBots) return;
-    const result = await applyGuidesChange(request, record, {
-      action: "add",
-      bots: [botId],
-      newBots: true,
-      background: true,
-    }).catch((error: unknown) => ({
-      record,
-      errors: [error instanceof Error ? error.message : String(error)],
-    }));
-    for (const error of result.errors) this.logFailure("warn", "guides for a new bot", error);
-    if (result.record)
-      await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(result.record));
+    await this.oneGuidesChangeAtATime(async () => {
+      const record = await this.guidesRecord(gatewayId);
+      if (!record?.newBots) return;
+      const result = await applyGuidesChange(request, record, {
+        action: "add",
+        bots: [botId],
+        newBots: true,
+        background: true,
+      }).catch((error: unknown) => ({
+        record,
+        errors: [error instanceof Error ? error.message : String(error)],
+      }));
+      for (const error of result.errors) this.logFailure("warn", "guides for a new bot", error);
+      if (result.record)
+        await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(result.record));
+    });
   }
 
   /** Settings reads the voice setting again (`state.voiceChanges`). */

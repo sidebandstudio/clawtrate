@@ -1169,6 +1169,37 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     client.stop();
   });
 
+  it("never keeps its guides, or New bots too, once the person removed them while it was made", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: ["pip"], newBots: true }));
+    const { stamp } = await client.readBotGuides();
+    // Right after the new bot's guides read the record (New bots too), the person presses
+    // Remove from all bots.
+    let removal: Promise<unknown> | null = null;
+    const get = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (
+        removal ||
+        key !== guidesKey("gw-guides") ||
+        fake.gateway.calls("agents.create").length === 0
+      )
+        return get(key);
+      const read = await get(key);
+      removal = client.changeBotGuides({ action: "remove" }, stamp);
+      // Left to finish first if it may: the bot's guides must not undo it.
+      await Promise.race([removal, new Promise<void>((resolve) => setTimeout(resolve, 200))]);
+      return read;
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(removal).not.toBeNull();
+    await removal;
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    expect(JSON.parse((await get(guidesKey("gw-guides")))!)).toEqual({ bots: [], newBots: false });
+    client.stop();
+  });
+
   it("gets no guides when its AGENTS.md is already long enough to be cut from a prompt", async () => {
     const fake = new AccountsGateway();
     fake.identity = "gw-guides";

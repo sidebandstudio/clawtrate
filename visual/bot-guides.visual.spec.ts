@@ -96,7 +96,9 @@ test.describe("how bots work in Clawtrate", () => {
     expect(await changes(page)).toEqual([]);
     await otto.getByRole("button", { name: "Replace" }).click();
     await expect(otto).toHaveAttribute("data-state", "current");
-    expect(await changes(page)).toEqual([{ action: "replace", bot: "otto" }]);
+    expect(await changes(page)).toEqual([
+      { action: "replace", bot: "otto", shown: expect.stringContaining("Lead with a short joke") },
+    ]);
   });
 
   test("F-566: what another device sees: an older section to tick, markers out of shape, a long file", async ({
