@@ -78,6 +78,12 @@ export function mapAgents(result: unknown): Bot[] {
   return bots.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
 }
 
+/**
+ * The run id the gateway gives a bot's turn that reports on a task it started, or on a follow-up
+ * it sent there: `announce:v1:<task key>:<that task's run id>` (OpenClaw 2026.10.6).
+ */
+export const REPORT_RUN_PREFIX = "announce:v1:";
+
 /** `agent:<id>:<rest>` keys carry their agent; other keys fall back to the row's agentId. */
 export function botIdFromSessionKey(key: string): string | null {
   const match = /^agent:([^:]+):/.exec(key);
@@ -738,6 +744,7 @@ export function mapHistory(
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           // It names no run, so it is a turn of its own.
           if (isSkillChangeNote(message)) item.skillNote = true;
+          if (runId?.startsWith(REPORT_RUN_PREFIX)) item.reportRunId = runId;
           items.push(item);
         }
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.

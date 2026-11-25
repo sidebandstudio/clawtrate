@@ -11,6 +11,7 @@ export * from "./runs.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";
 export * from "./cards.ts";
+export * from "./started-task-card.ts";
 export * from "./actions.ts";
 export * from "./action-feed.ts";
 export * as actionWords from "./action-words.ts";
@@ -117,3 +118,6 @@ export {
   type MemoryList,
 } from "./memory.ts";
 export { type BotVoice, type BotVoiceAnswer, type VoiceHook } from "./voice.ts";
+export * from "./start-tasks.ts";
+export * from "./guides.ts";
+export * from "./guide-text.ts";

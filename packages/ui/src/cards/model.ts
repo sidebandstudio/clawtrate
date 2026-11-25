@@ -14,7 +14,10 @@ import type {
   QuestionItem,
   Run,
   RunState,
+  StartedTaskState,
+  Task,
 } from "@clawtrate/core";
+import { cleanLine, MAX_TITLE_CHARS, startedTaskOf } from "@clawtrate/core";
 
 // Names ---------------------------------------------------------------------------
 
@@ -741,6 +744,45 @@ export function recipientName(
   const id = card.recipient.agentId;
   if (id) return { id, name: nameOf(bots, id, id) };
   return { id: null, name: card.recipient.label ?? "another bot" };
+}
+
+/**
+ * A "Started a task" card's state: its mark, its word and its tone. A listed task's state reads
+ * as its row in the task list says it (F-587).
+ */
+export const STARTED_STATES: Record<
+  StartedTaskState,
+  [string, string, "accent" | "warn" | "danger" | null]
+> = {
+  starting: ["sending", "Starting", null],
+  started: ["check", "Started", null],
+  idle: ["check", "Started", null],
+  queued: ["queued", "Queued", null],
+  working: ["working", "Working", "accent"],
+  waiting: ["waiting", "Waiting for you", "warn"],
+  blocked: ["blocked", "Blocked", "warn"],
+  done: ["done", "Done", null],
+  "done-with-failures": ["failed", "Done with failures", "danger"],
+  failed: ["failed", "Failed", "danger"],
+  stopped: ["stopped", "Stopped", null],
+  "couldnt-start": ["failed", "Couldn't start", "danger"],
+  unknown: ["queued", "Unknown", null],
+};
+
+/**
+ * The task a bot's message went to, when it is a task this conversation started (F-587): only by
+ * the key the send's own result names, and only a task the list holds as started from here. Its
+ * title cleaned as the "Started a task" card cleans it; null when that leaves nothing.
+ */
+export function sentToTask(
+  card: BotMessageCard,
+  listed: Record<string, Task[]>,
+  taskKey: string,
+): Task | null {
+  const key = card.recipient.source === "result" ? card.recipient.sessionKey : null;
+  const task = startedTaskOf(listed, key, taskKey);
+  const title = task ? cleanLine(task.title, MAX_TITLE_CHARS) : "";
+  return task && title ? { ...task, title } : null;
 }
 
 /** The first line of a message, for the folded card. */

@@ -71,7 +71,7 @@ import {
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
 import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
-import { cleanGatewayName } from "./gateway-names.ts";
+import { cleanLine } from "./gateway-names.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import { sameStamp, type GatewayStamp, type ReadStamp } from "./types.ts";
 
@@ -425,7 +425,7 @@ export class AccountsEngine {
         error instanceof GatewayProtocolRequestTimeoutError
           ? "The gateway didn't answer in time."
           : this.scrub(errorText(error));
-      return { status: "error", error: cleanGatewayName(words, MAX_REFRESH_ERROR_CHARS) };
+      return { status: "error", error: cleanLine(words, MAX_REFRESH_ERROR_CHARS) };
     } finally {
       this.pickerRead = null;
     }

@@ -9,6 +9,7 @@
 // The instance has the scripted provider accounts and the development
 // sign-in plugin, so the account checks (account-checks.ts) run after the
 // scenario checks, with an admin client and a read-only one of their own.
+// The guide checks (guide-checks.ts) follow with the same admin client.
 // Then the computer checks (computer-checks.ts) run on a second instance,
 // `e2e-<run>-computer`, started with `--with-plugin clawtrate-computer`,
 // whose bots Marlow and Pip have browsers of their own; and the rules checks
@@ -28,6 +29,7 @@ import {
   openOperator,
 } from "../tools/dev-gateway/src/cli.ts";
 import { ACCOUNT_CLIENTS, runAccountChecks } from "../tools/dev-gateway/src/account-checks.ts";
+import { runGuideChecks } from "../tools/dev-gateway/src/guide-checks.ts";
 import {
   COMPUTER_CLIENTS,
   runComputerChecks,
@@ -164,6 +166,7 @@ async function main(): Promise<number> {
       [...ACCOUNT_CLIENTS.reader.caps],
     );
     let accountsFailed = 0;
+    let guidesFailed = 0;
     try {
       const accounts = await runAccountChecks({
         admin,
@@ -178,6 +181,10 @@ async function main(): Promise<number> {
         `${accounts.passed} of ${accounts.passed + accounts.failed} account checks passed`,
       );
       accountsFailed = accounts.failed;
+      // Clawtrate's guides in a bot's AGENTS.md (guide-checks.ts), with the same admin client.
+      const guides = await runGuideChecks({ admin, providerUrl });
+      console.log(`${guides.passed} of ${guides.passed + guides.failed} guide checks passed`);
+      guidesFailed = guides.failed;
     } finally {
       await admin.close();
       await reader.close();
@@ -185,7 +192,11 @@ async function main(): Promise<number> {
     const computer = await computerChecks(computerName, computerRunId, startInstance);
     const rules = await rulesChecks(rulesName, rulesRunId, startInstance);
     const images = await imageChecks(imagesName, imagesRunId, startInstance);
-    return [scenariosFailed, accountsFailed, computer, rules, images].every((n) => n === 0) ? 0 : 1;
+    return [scenariosFailed, accountsFailed, guidesFailed, computer, rules, images].every(
+      (n) => n === 0,
+    )
+      ? 0
+      : 1;
   } finally {
     const problems = cleanUpOnce();
     if (problems.length > 0) {

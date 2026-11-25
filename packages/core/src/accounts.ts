@@ -9,7 +9,7 @@
 // one request each; no field of the state, no collection and no error message
 // holds them (`withoutSecret`).
 
-import { cleanGatewayName } from "./gateway-names.ts";
+import { cleanLine } from "./gateway-names.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import type { ReadStamp } from "./types.ts";
 
@@ -821,7 +821,7 @@ function outcomeOf(answer: unknown, provider: string): RefreshOutcome {
 
 /** Up to `MAX_REFRESH_NAMES` ids, each cleaned to one short line. */
 const named = (ids: string[]) =>
-  ids.slice(0, MAX_REFRESH_NAMES).map((id) => cleanGatewayName(id, MAX_REFRESH_NAME_CHARS));
+  ids.slice(0, MAX_REFRESH_NAMES).map((id) => cleanLine(id, MAX_REFRESH_NAME_CHARS));
 
 /**
  * One refresh's answer for a provider, against the ids the menu listed before: the rows it lists

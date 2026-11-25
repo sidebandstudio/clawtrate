@@ -1,6 +1,6 @@
 name: iOS
 
-# A run holds a macOS runner for an hour or more, so pull requests run it only
+# A run holds four macOS runners for about an hour and a half, so pull requests run it only
 # when they change the iPhone app or this workflow. Most desktop pull requests
 # change the shared code the app builds from, so that is checked once a day on
 # main. Use workflow_dispatch to run it on a branch sooner.
@@ -21,10 +21,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The checks are split across four jobs by apps/mobile/simulator/jobs.ts, which lists each
+  # job's checks; the last job also runs every check no list names. Each job builds, boots and
+  # seeds on its own (about 30 minutes here) and then runs about an hour of checks. One job's
+  # failure doesn't stop the others, so a run reports every job's result.
   simulator:
     runs-on: xcode-27
-    # A slow hosted Simulator can need more than three hours for the full suite.
-    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [1, 2, 3, 4]
+    # About 1.6 times the longest job's expected time on GitHub's runner.
+    timeout-minutes: 150
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       CLAWTRATE_IOS_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-27-0
@@ -49,13 +57,27 @@ jobs:
           echo "MAESTRO=$RUNNER_TEMP/maestro/bin/maestro" >> "$GITHUB_ENV"
           echo "JAVA_HOME=$JAVA_HOME_21_arm64" >> "$GITHUB_ENV"
       - run: pnpm mobile:build
-      - run: pnpm mobile:check --bail=1 --reporter=verbose
+      - run: |
+          pattern=$(node apps/mobile/simulator/jobs.ts ${{ matrix.job }})
+          pnpm mobile:check --bail=1 --reporter=verbose --testNamePattern="$pattern"
+      # What a failed check saw: Maestro's screenshots and screen hierarchies, kept for a few
+      # days. Only those: each step's flow, command list and log hold the token it typed.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-maestro-${{ matrix.job }}
+          path: |
+            apps/mobile/build/maestro/**/screenshots/*.png
+            apps/mobile/build/maestro/**/screen-hierarchy/*.json
+          include-hidden-files: true
+          retention-days: 3
 
   # A scheduled run's failure shows only in the Actions tab, so it is kept in one open issue,
   # found by its label, until a later scheduled run passes. This is its own job so that the
   # Simulator job keeps contents: read, and so that a failure here cannot mask the Simulator's.
   # cancelled() is the whole run, replaced by a newer one; a Simulator job past its
-  # timeout-minutes is cancelled alone, and is reported like a failure.
+  # timeout-minutes is cancelled alone, and is reported like a failure. The result is the
+  # matrix's: success only when every Simulator job passed.
   report:
     needs: simulator
     if: ${{ !cancelled() && github.event_name == 'schedule' }}
