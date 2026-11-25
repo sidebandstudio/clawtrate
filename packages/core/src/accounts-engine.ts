@@ -64,6 +64,9 @@ import { asRecord, type RawRecord } from "./mapping.ts";
 import type { ReadStamp } from "./types.ts";
 
 /** What the engine needs from the client. */
+/** Why the accounts read shows no answer: its connection ended before it finished. */
+export const ACCOUNTS_READ_CUT_OFF = "The connection ended before the accounts were read.";
+
 export type AccountsContext = {
   request(
     method: string,
@@ -309,7 +312,17 @@ export class AccountsEngine {
       const modelsCut = readPickerCuts(answer);
       ctx.update((a) => ({ ...a, models, modelsCut }));
     } catch (error) {
+      // A failure of a read for another gateway is not this one's to show.
       if (resets !== this.resets) return;
+      // Its connection ended: the gateway's words from it are not published (they may echo what
+      // was typed, and the sign-in's typed values are already forgotten). The screen says the
+      // read didn't finish instead of waiting on it.
+      if (!current()) {
+        ctx.update((a) =>
+          a.status === "loading" ? { ...a, status: "error", error: ACCOUNTS_READ_CUT_OFF } : a,
+        );
+        return;
+      }
       // While a sign-in lasts, its typed values are taken out of whatever comes back.
       const message = this.scrub(errorText(error));
       ctx.update((a) => ({ ...a, status: "error", error: message }));

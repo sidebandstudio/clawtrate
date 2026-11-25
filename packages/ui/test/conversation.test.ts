@@ -8,7 +8,15 @@ import {
 import { describe, expect, it } from "vitest";
 import { rowTime, stampTime } from "../src/format.ts";
 import { reloadCommand } from "../src/Shell.tsx";
-import { stripFor, taskInSync } from "../src/StatusStrip.tsx";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  DETAIL_SHOWN_CHARS,
+  detailText,
+  StatusStrip,
+  stripFor,
+  taskInSync,
+} from "../src/StatusStrip.tsx";
 
 function state(
   status: ConnectionStatus,
@@ -104,24 +112,68 @@ describe("the status strip (visual-language.md, section 11)", () => {
     });
   });
 
-  it("#592: bots and tasks the gateway wasn't ready for say so plainly, its own words kept aside", () => {
+  it("#592: bots and tasks that couldn't be loaded: the gateway's words are behind the disclosure, never the headline", () => {
     const detail =
       "Could not load tasks: AgentDatabaseRegistryChangedError: Agent database registry ownership is changing during discovery";
     const failed = state("connected", "error");
-    const strip = stripFor(
-      {
-        ...failed,
-        discovery: { ...failed.discovery, error: "The gateway wasn't ready.", detail },
-      },
-      "dropped",
-      null,
-    );
-    expect(strip).toMatchObject({
+    const strip = (error: string | null) =>
+      stripFor({ ...failed, discovery: { ...failed.discovery, error, detail } }, "dropped", null);
+    // The gateway gave no reason: only that they couldn't be loaded.
+    expect(strip(null)).toMatchObject({
       text: "Couldn't load bots and tasks",
-      more: "The gateway wasn't ready.",
+      more: null,
       detail,
       action: "retry",
     });
+    // The gateway marked its answer as passing: it says so.
+    expect(strip("The gateway wasn't ready.")).toMatchObject({
+      more: "The gateway wasn't ready.",
+      detail,
+    });
+  });
+
+  it("#592: the gateway's message is a disclosure outside the live region, named for what it shows", () => {
+    const strip = {
+      tone: "danger" as const,
+      text: "Couldn't load bots and tasks",
+      more: null,
+      detail: "Could not load tasks:\u0007 busy\n\n\n\nTry later",
+      action: "retry" as const,
+      countdown: false,
+    };
+    const render = (detailOpen: boolean) =>
+      renderToStaticMarkup(
+        createElement(StatusStrip, {
+          strip,
+          retryAt: null,
+          onRetry: () => {},
+          onReload: () => {},
+          detailOpen,
+        }),
+      );
+    const closed = render(false);
+    expect(closed).toMatch(
+      /<button type="button" aria-expanded="false" aria-controls="[^"]+">Gateway&#x27;s message<\/button>/,
+    );
+    expect(closed).not.toContain("status-strip-detail");
+    // The strip's own text, which its live region announces, holds none of the gateway's words.
+    expect(closed).not.toContain("busy");
+    const open = render(true);
+    const id = /aria-controls="([^"]+)"/.exec(open)![1]!;
+    expect(open).toContain('aria-expanded="true"');
+    // The panel follows the strip, outside its live region, as text.
+    const [inStrip, after] = open.split("</div><div");
+    expect(inStrip).not.toContain("busy");
+    expect(after).toContain(`id="${id}"`);
+    expect(after).toContain('role="region" aria-label="Gateway&#x27;s message"');
+    expect(after).toContain("<p>Could not load tasks: busy\n\nTry later</p>");
+  });
+
+  it("#592: the gateway's message is cleaned and bounded", () => {
+    expect(detailText("  a\u0000b\tc  ")).toBe("a b c");
+    const long = detailText("x".repeat(5_000));
+    expect(long).toHaveLength(DETAIL_SHOWN_CHARS);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
 

@@ -37,7 +37,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
-import { passingAnswer, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
+import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
 import { fromBase64, toBase64 } from "./bytes.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
@@ -423,8 +423,13 @@ export const MAX_DEFERRED_STOPS = 32;
 /** Why a deferred Stop was given up: every place for its check is held by a Stop still waiting. */
 const TOO_MANY_STOPS =
   "Too many Stops are waiting for their runs to start, so nothing was sent for this one. Try again in a moment.";
-/** What the strip says when bots and tasks failed only because the gateway wasn't ready yet. */
+/**
+ * What the strip adds when bots and tasks couldn't be loaded and the gateway's last answer to
+ * every read that failed was one it marks as passing (`answerKind`): only then is it true.
+ */
 export const DISCOVERY_NOT_READY = "The gateway wasn't ready.";
+/** What an open task says when its live updates couldn't be started, after the tries again. */
+export const LIVE_UPDATES_NOT_STARTED = "Live updates for this task couldn't be started.";
 
 /** A failed read of the gateway's identity is asked again this many times, each 4 times later. */
 const IDENTITY_RETRIES = 4;
@@ -1563,10 +1568,17 @@ export class ClawtrateClient {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private discoveryRead: { sessionsChanged: boolean; botsChanged: boolean } | null = null;
   /**
-   * The connection whose bots and tasks failed to load, every failure a passing one, after the
-   * tries again were used up: the next event from its gateway reads them once more.
+   * Bots and tasks failed to load, every failure one asked again (`askedAgain`), and the tries
+   * were used up: the gateway's next event reads them once more. Set or cleared when each read
+   * of bots and tasks ends, so it is always the latest one's; a new connection's own read is out
+   * or has ended by the time its gateway sends an event.
    */
-  private discoveryAgain: { generation: number; epoch: number } | null = null;
+  private discoveryAgain = false;
+  /**
+   * Settles when the current connection ends (another hello, a drop, a close): a read waiting
+   * to be asked again (`readAgain`) stops waiting then, and makes no try on the next connection.
+   */
+  private connectionEnded = endable();
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
   private readonly writes: ConnectionWrites;
@@ -2761,9 +2773,12 @@ export class ClawtrateClient {
       });
       return;
     }
+    // A task that failed may have failed to subscribe: Try again subscribes again (a read).
+    const subscribe = current?.status === "error";
     if (current?.status === "error")
       this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
-    if (this.state.connection.status === "connected") void this.loadTranscript(key, false, null);
+    if (this.state.connection.status === "connected")
+      void this.loadTranscript(key, subscribe, null);
   }
 
   /** Keep only Raw entries that still belong to this task's retained state. */
@@ -8935,6 +8950,7 @@ export class ClawtrateClient {
       onHello: (hello) => {
         if (generation !== this.generation) return;
         this.epoch += 1;
+        this.endConnection();
         this.attemptGreeted = true;
         if (hello.protocol !== PROTOCOL_VERSION) {
           // Outside this client's range: nothing else is asked of this gateway.
@@ -8983,6 +8999,7 @@ export class ClawtrateClient {
       onClose: () => {
         if (generation !== this.generation) return;
         this.epoch += 1;
+        this.endConnection();
         this.discoveryRead = null;
         // The next socket's first roster is its own, as after an explicit close.
         this.lastRosterIds.clear();
@@ -9121,6 +9138,7 @@ export class ClawtrateClient {
 
   private close(options?: { keepPendingAnswer: boolean }): void {
     this.generation += 1;
+    this.endConnection();
     if (this.reopenTimer !== null) clearTimeout(this.reopenTimer);
     this.reopenTimer = null;
     this.discoveryRead = null;
@@ -9542,7 +9560,6 @@ export class ClawtrateClient {
     const epoch = this.epoch;
     const read = { sessionsChanged: false, botsChanged: false };
     this.discoveryRead = read;
-    this.discoveryAgain = null;
     const sameSocket = () => generation === this.generation && epoch === this.epoch;
     const current = () =>
       this.discoveryRead === read && selection === this.selectionApplied && sameSocket();
@@ -9646,20 +9663,24 @@ export class ClawtrateClient {
       this.setupCheck = null;
     if (failures.length > 0 && setup) {
       this.log("error", "discovery failed on the setup connection");
+      this.discoveryAgain = false;
       this.setDiscovery({ status: "error", error: "Could not load your bots." });
     } else if (failures.length > 0) {
       this.log("error", `discovery failed: ${failures.join("; ")}`);
       // The gateway's own words stay with the strip, but a passing answer is said plainly.
       const detail = this.scrub(`Could not load ${failures.join("; ")}`);
-      const passing = reasons.every(passingAnswer);
+      const kinds = reasons.map(answerKind);
       this.setDiscovery({
         status: "error",
-        error: passing ? DISCOVERY_NOT_READY : detail,
+        // Said only when it is true: every failed read's last answer was marked passing.
+        error: kinds.every((kind) => kind === "passing") ? DISCOVERY_NOT_READY : null,
         detail,
       });
-      // Once more when the gateway next speaks; a read that event started does not arm another.
-      if (passing && tries > 0) this.discoveryAgain = { generation, epoch };
+      // Once more when the gateway next speaks, if every failure was one asked again; a read
+      // that event started does not arm another.
+      this.discoveryAgain = tries > 0 && kinds.every((kind) => kind !== "lasting");
     } else {
+      this.discoveryAgain = false;
       this.selectionReady = selection;
       this.setDiscovery({
         status: "ready",
@@ -10089,8 +10110,11 @@ export class ClawtrateClient {
     const generation = this.generation;
     const epoch = this.epoch;
     const incarnation = this.incarnations.get(key);
+    // The read belongs to its connection: after a drop and a new hello it publishes nothing,
+    // a failure included, and the new connection's own read reloads the task.
     const stale = () =>
       generation !== this.generation ||
+      epoch !== this.epoch ||
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation;
     // Runs active when the read starts; one the gateway then no longer has has ended.
@@ -10099,16 +10123,26 @@ export class ClawtrateClient {
         .filter((run) => run.bound && !isTerminal(run.state) && run.state !== "queued")
         .map((run) => run.id),
     );
+    // The task's live events come only through its subscription: asked again like the reads.
+    let live = true;
     try {
       if (subscribe) {
-        await this.request("sessions.messages.subscribe", { key }).catch((error: unknown) => {
-          this.logFailure("warn", "sessions.messages.subscribe", error);
-        });
+        live = await this.readAgain(
+          () => this.request("sessions.messages.subscribe", { key }),
+          () => !stale(),
+        ).then(
+          () => true,
+          (error: unknown) => {
+            this.logFailure("warn", "sessions.messages.subscribe", error);
+            return false;
+          },
+        );
+        if (stale()) return;
       }
       const history = asRecord(
         await this.readAgain(
           () => this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
-          () => !stale() && epoch === this.epoch,
+          () => !stale(),
         ),
       );
       if (stale()) return;
@@ -10217,6 +10251,14 @@ export class ClawtrateClient {
       void this.readToolMap(key, generation);
       void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
+      // History shows, but nothing live will reach the task: it says so, and Try again
+      // subscribes again (`reloadSession`).
+      if (!live && !stale())
+        this.setTranscript(key, (now) => ({
+          ...(now ?? this.emptyTranscript(key)),
+          status: "error",
+          error: LIVE_UPDATES_NOT_STARTED,
+        }));
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({
@@ -10306,9 +10348,9 @@ export class ClawtrateClient {
   }
 
   private handleEvent(event: EventFrame, generation: number): void {
-    const again = this.discoveryAgain;
-    if (again?.generation === generation && again.epoch === this.epoch && !this.discoveryRead) {
-      this.discoveryAgain = null;
+    // Not while a read of bots and tasks is out: it decides again when it ends.
+    if (this.discoveryAgain && !this.discoveryRead) {
+      this.discoveryAgain = false;
       void this.bootstrap(generation, null, 0);
     }
     switch (event.event) {
@@ -11025,7 +11067,17 @@ export class ClawtrateClient {
 
   /** `readAgain` with this client's first wait: `READ_AGAIN_MS` unless a test shortens it. */
   private readAgain<T>(read: () => Promise<T>, current: () => boolean, tries?: number): Promise<T> {
-    return readAgain(read, current, { tries, firstMs: this.options.readAgainMs });
+    return readAgain(read, current, {
+      tries,
+      firstMs: this.options.readAgainMs,
+      ended: this.connectionEnded.ended,
+    });
+  }
+
+  /** The current connection has ended: reads waiting to be asked again stop waiting. */
+  private endConnection(): void {
+    this.connectionEnded.end();
+    this.connectionEnded = endable();
   }
 
   private request(
@@ -11643,6 +11695,13 @@ export function hostLimit(value: number | undefined, max: number, name: string):
   if (!Number.isInteger(value) || value < 1 || value > max)
     throw new RangeError(`${name} must be a whole number from 1 to ${max}.`);
   return value;
+}
+
+/** A promise that settles when `end` is called. */
+function endable(): { ended: Promise<void>; end: () => void } {
+  let end!: () => void;
+  const ended = new Promise<void>((resolve) => (end = resolve));
+  return { ended, end };
 }
 
 function errorMessage(error: unknown): string {

@@ -245,6 +245,7 @@ The last thing in a running turn: the bot's avatar at 28 px and one short phrase
 | Stop pressed                                                    | Stopping…                                                             |
 | The machine is unreachable                                      | Can't reach <machine>                                                 |
 | The connection is lost                                          | Reconnecting. Last seen <last phrase, lower case>                     |
+| Back on the connection, the open task not loaded again yet      | Catching up. Last seen <last phrase, lower case>                      |
 
 Phrases are in the user's language, have no bot name in front and no trailing ellipsis except "Stopping…". A tool the app has no kind for gets the general card's words, built from its name (8.3), so the phrase is never the gateway's English title. (F-082, F-083)
 
@@ -1289,9 +1290,9 @@ The status strip reports the connection from inside the conversation, in the ban
 | Moment                | Strip                                                                                                                 | Status line                                                                                                                                   | Composer                |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
 | The connection drops  | **Reconnecting in 4s** · showing saved messages, with "Retry now"                                                     | Stays, and stops moving: the avatar is blocked, the phrase reads "Reconnecting. Last seen reading the backup log", the elapsed time is hidden | The offline form        |
-| Reconnected, fetching | **Connected** · catching up                                                                                           | Unchanged                                                                                                                                     | Unchanged               |
+| Reconnected, fetching | **Connected** · catching up                                                                                           | Still last seen, without a word about the connection: "Catching up. Last seen reading the backup log"                                         | Sends: the run's state  |
 | Caught up             | **Synced**, for 4 seconds. A count ("· 3 new in this task") is added only if the core reports one; today it does not. | Shows the run's real state again                                                                                                              | Back to the run's state |
-| The fetch failed      | **Couldn't sync this task**, with "Try again"                                                                         | Unchanged                                                                                                                                     | Unchanged               |
+| The fetch failed      | **Couldn't sync this task**, with "Try again"                                                                         | The run as last loaded, nothing about the connection                                                                                          | Sends: the run's state  |
 
 **A lost connection never looks like live work.** One flag for the whole window, not one per component, turns off everything that stands for work on the gateway, and marks what is left as last seen. The flag is `data-connection="lost"` on `.app`, set whenever the connection's status is anything but connected:
 

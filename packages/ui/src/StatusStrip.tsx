@@ -1,5 +1,5 @@
 import type { ClawtrateState, Transcript } from "@clawtrate/core";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { gatewayTitle } from "./format.ts";
 
 /**
@@ -31,20 +31,23 @@ export function taskInSync(state: ClawtrateState, taskKey: string | null): boole
 }
 
 /**
- * What is on screen is current: the connection is up and nothing is still loading again after
- * a drop. A load that failed on the live connection ends the catching up too: it says that it
- * failed (the strip), and nothing reads as offline. Only a connection that is down, or back and
- * still loading, makes the composer say "Offline" and the run line "Reconnecting".
+ * What the conversation may say about the connection and about the open task's live work.
+ * `connected` is the connection alone: only it makes the composer say "Offline", an outgoing
+ * message "Sends when reconnected" and the window read as lost. Loads being tried again, or
+ * failed, never do (#592). `current` is that the open task's live work is this connection's:
+ * the connection is up, and after a drop the open task has loaded again since it came back, or
+ * that load failed (the strip says so). Until then the run line and the action cards say what
+ * was last seen. Bots and tasks don't hold it: they don't change what the open task shows.
  */
-export function caughtUpFor(
+export function liveFlags(
   state: ClawtrateState,
   phase: SyncPhase,
   taskKey: string | null,
-): boolean {
-  if (state.connection.status !== "connected") return false;
-  if (phase !== "dropped") return true;
+): { connected: boolean; current: boolean } {
+  const connected = state.connection.status === "connected";
+  if (!connected || phase !== "dropped") return { connected, current: connected };
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
-  return state.discovery.status === "error" || transcript?.status === "error";
+  return { connected, current: transcript?.status === "error" || taskInSync(state, taskKey) };
 }
 
 export function useSyncPhase(state: ClawtrateState, taskKey: string | null): SyncPhase {
@@ -77,7 +80,10 @@ export type Strip = {
   short?: string;
   /** The explanation after the middle dot; it shortens first. */
   more: string | null;
-  /** The gateway's own words, when `more` says them plainly: in the strip's title, not its text. */
+  /**
+   * The gateway's own words for the failure, behind the strip's "Gateway's message" disclosure:
+   * never the headline, and reachable by keyboard, touch and screen reader.
+   */
   detail?: string | null;
   action: "retry" | "reload" | "reconnect" | null;
   /** Show the host's retry countdown in the text. */
@@ -163,18 +169,40 @@ export function stripFor(
  * conversation. It overlays the transcript, so nothing moves when it comes or
  * goes, and it mounts only when needed, so its countdown starts then.
  */
+/** The most of the gateway's message the strip shows. */
+export const DETAIL_SHOWN_CHARS = 600;
+
+/** The gateway's message as plain text: no control characters, spaces collapsed, bounded. */
+export function detailText(detail: string): string {
+  const plain = detail
+    // eslint-disable-next-line no-control-regex -- control characters are what is removed
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return plain.length > DETAIL_SHOWN_CHARS
+    ? `${plain.slice(0, DETAIL_SHOWN_CHARS - 1).trimEnd()}…`
+    : plain;
+}
+
 export function StatusStrip({
   strip,
   retryAt,
   onRetry,
   onReload,
+  detailOpen = false,
 }: {
   strip: Strip;
   retryAt: number | null;
   onRetry: () => void;
   onReload: () => void;
+  /** Whether the gateway's message starts open. */
+  detailOpen?: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const [open, setOpen] = useState(detailOpen);
+  const detailId = useId();
+  const detail = strip.detail ? detailText(strip.detail) : null;
   useEffect(() => {
     if (!strip.countdown) return;
     const timer = setInterval(() => setNow(Date.now()), 500);
@@ -188,36 +216,58 @@ export function StatusStrip({
       : "Reconnecting…"
     : strip.text;
   return (
-    <div
-      className="status-strip"
-      role="status"
-      data-tone={strip.tone}
-      data-testid="status-strip"
-      title={[text, strip.more, strip.detail !== strip.more && strip.detail]
-        .filter(Boolean)
-        .join(" · ")}
-    >
-      <span className="status-dot" aria-hidden="true" />
-      <span className="status-strip-text">
-        {strip.short ? (
-          <strong>
-            <span className="strip-long">{text}</span>
-            <span className="strip-short">{strip.short}</span>
-          </strong>
-        ) : (
-          <strong>{text}</strong>
+    <>
+      <div
+        className="status-strip"
+        role="status"
+        data-tone={strip.tone}
+        data-testid="status-strip"
+        title={strip.more ? `${text} · ${strip.more}` : text}
+      >
+        <span className="status-dot" aria-hidden="true" />
+        <span className="status-strip-text">
+          {strip.short ? (
+            <strong>
+              <span className="strip-long">{text}</span>
+              <span className="strip-short">{strip.short}</span>
+            </strong>
+          ) : (
+            <strong>{text}</strong>
+          )}
+          {strip.more && <span>· {strip.more}</span>}
+        </span>
+        {detail && (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={detailId}
+            onClick={() => setOpen((was) => !was)}
+          >
+            Gateway's message
+          </button>
         )}
-        {strip.more && <span>· {strip.more}</span>}
-      </span>
-      {strip.action && (
-        <button type="button" onClick={strip.action === "reload" ? onReload : onRetry}>
-          {strip.action === "retry"
-            ? "Retry now"
-            : strip.action === "reconnect"
-              ? "Reconnect"
-              : "Try again"}
-        </button>
+        {strip.action && (
+          <button type="button" onClick={strip.action === "reload" ? onReload : onRetry}>
+            {strip.action === "retry"
+              ? "Retry now"
+              : strip.action === "reconnect"
+                ? "Reconnect"
+                : "Try again"}
+          </button>
+        )}
+      </div>
+      {/* Outside the live region: opened on request, never announced by itself. */}
+      {detail && open && (
+        <div
+          id={detailId}
+          className="status-strip-detail"
+          role="region"
+          aria-label="Gateway's message"
+          data-testid="status-strip-detail"
+        >
+          <p>{detail}</p>
+        </div>
       )}
-    </div>
+    </>
   );
 }

@@ -1434,6 +1434,32 @@ textarea {
   display: none;
 }
 
+/* The gateway's own message, opened from the strip: under it, centred like it, in text. */
+.status-strip-detail {
+  position: absolute;
+  top: calc(var(--header-height) + 38px);
+  left: 50%;
+  z-index: 4;
+  width: max-content;
+  max-width: min(560px, calc(100% - 24px));
+  max-height: 40vh;
+  overflow: auto;
+  padding: 10px 13px;
+  border-radius: 14px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transform: translateX(-50%);
+}
+
+.status-strip-detail p {
+  margin: 0;
+}
+
 /* Your own bubble keeps its links and code readable on the accent. */
 .msg[data-role="user"] .md a {
   color: inherit;

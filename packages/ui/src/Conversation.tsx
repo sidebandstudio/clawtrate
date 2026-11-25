@@ -477,7 +477,7 @@ function TranscriptView({
               taskKey={task.key}
               transcript={transcript}
               engineRuns={live.engineRuns}
-              lost={!liveOptions.connected}
+              lost={!liveOptions.current}
               readOnly={!liveOptions.interactive}
               effort={task.effort ?? null}
               ctx={reading}
@@ -624,6 +624,8 @@ type LiveOptions = {
   /** "Show thinking" is on (7.11). */
   thinking?: boolean;
   connected: boolean;
+  /** What the task shows is this connection's (`statusLineFor`): otherwise live work is last seen. */
+  current: boolean;
   interactive: boolean;
   /** What this connection may act on: "Needs you" points only at a card it can answer. */
   may: { canApprove: boolean; canAnswer: boolean };
@@ -858,7 +860,7 @@ export function Conversation({
   connection,
   info,
   online,
-  caughtUp,
+  current,
   inert = false,
   granted,
   onShowComputer,
@@ -887,8 +889,11 @@ export function Conversation({
   info: HostInfo;
   /** The gateway is connected, so a task without a transcript can load. */
   online: boolean;
-  /** Connected and caught up since the latest connect: until then live work is last seen. */
-  caughtUp: boolean;
+  /**
+   * The open task's live work is this connection's: false from a reconnect until the task has
+   * reloaded (or failed to), and while the connection is down. Until then it is last seen.
+   */
+  current: boolean;
   /** Set while the Work drawer covers the conversation, so focus cannot land behind it. */
   inert?: boolean;
   /** Access arrived a moment ago. */
@@ -1158,7 +1163,10 @@ export function Conversation({
         bot={bot}
         transcript={transcript}
         liveOptions={{
-          connected: caughtUp,
+          // Only the connection says "Offline": a load still being tried, or one that failed,
+          // never does (#592).
+          connected: online,
+          current,
           interactive,
           may: { canApprove, canAnswer },
           onRequestAccess:
@@ -1261,7 +1269,7 @@ export function Conversation({
           gateway={connection.gatewayUrl}
           taskKey={task.key}
           transcript={transcript}
-          connected={caughtUp}
+          connected={online}
           limits={connection.sendLimits}
           notices={[
             ...stopNotices.map((notice) => ({

@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
-import {
-  ClawtrateClient,
-  DISCOVERY_NOT_READY,
-  MAX_SESSION_PAGES,
-  REQUESTED_SCOPES,
-} from "../src/client.ts";
+import { ClawtrateClient, MAX_SESSION_PAGES, REQUESTED_SCOPES } from "../src/client.ts";
 import {
   deferred,
   FakeGateway,
@@ -273,8 +268,8 @@ describe("discovery failures (B3)", () => {
     await client.connect({ url: URL_A, token: "t" });
     await until(() => client.state.discovery.status === "error");
     expect(client.state.connection.status).toBe("connected");
-    // The gateway said it wasn't ready, every try: plain words, its own text beside them.
-    expect(client.state.discovery.error).toBe(DISCOVERY_NOT_READY);
+    // The gateway gave no reason, every try: nothing is claimed, its own text kept aside.
+    expect(client.state.discovery.error).toBeNull();
     expect(client.state.discovery.detail).toMatch(/synthetic list failure/);
     expect(client.state.tasksByBot.main?.map((task) => task.title)).toEqual(["A"]);
 

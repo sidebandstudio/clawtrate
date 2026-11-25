@@ -122,13 +122,20 @@ export function liveThought(run: Run): string | null {
 /**
  * The status line of a run that is running, waiting or stopping: one phrase
  * and the avatar's state, by the table in section 5. While the connection is
- * lost it stops and says what was last seen.
+ * lost it stops and says what was last seen; back on the connection, until the
+ * open task has reloaded, it stays last seen without saying anything about the
+ * connection.
  */
 export function statusLineFor(
   run: Run,
   transcript: Transcript,
   options: {
     connected: boolean;
+    /**
+     * What this task shows is this connection's: false from a reconnect until the open task
+     * has reloaded (or failed to). Defaults to true.
+     */
+    current?: boolean;
     interactive: boolean;
     reading?: ReadingContext | undefined;
     /** "Show commands" is off: the phrase says the kind of work (7.11). */
@@ -208,12 +215,13 @@ export function statusLineFor(
   // "Show thinking" decides the thinking under the line, with commands shown or hidden (7.11).
   view.thought =
     options.thinking && view.state === "thinking" && view.tone === "live" ? liveThought(run) : null;
-  if (!options.connected) {
+  if (!options.connected || options.current === false) {
     const last = view.phrase.replace(/…$/, "");
+    const seen = `Last seen ${last.charAt(0).toLowerCase()}${last.slice(1)}`;
     return {
       state: "blocked",
       badge: "blocked",
-      phrase: `Reconnecting. Last seen ${last.charAt(0).toLowerCase()}${last.slice(1)}`,
+      phrase: options.connected ? `Catching up. ${seen}` : `Reconnecting. ${seen}`,
       tone: "muted",
       startedAt: null,
       callId: view.callId,
