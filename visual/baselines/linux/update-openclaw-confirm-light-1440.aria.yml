@@ -11,32 +11,27 @@
     - button "Check-ins"
     - button "Updates"
     - button "Advanced"
-  - region "Gateway":
+  - region "Updates":
     - button "Close settings"
-    - heading "Gateway" [level=3]
-    - term: Address
-    - definition: ws://127.0.0.1:18789
-    - term: State
-    - definition: Connected
-    - term: This device
-    - definition: Clawtrate Web · a41c9e02
-    - term: Granted scopes
-    - definition: operator.read, operator.write, operator.approvals, operator.questions, operator.admin
-    - term: Gateway
-    - definition: OpenClaw 2026.10.6 · protocol 4
-    - paragraph: OpenClaw 2026.11.6 is out.
-    - button "Update OpenClaw to 2026.11.6"
-    - alertdialog "Update OpenClaw?":
-      - heading "Update OpenClaw?" [level=2]
-      - paragraph: Your gateway goes from OpenClaw 2026.10.6 to 2026.11.6.
-      - paragraph: An update usually takes 5 to 10 minutes, and some installs take longer. The gateway restarts during it, so your bots can't be reached for part of that time. Clawtrate reconnects by itself.
-      - paragraph: 1 task is working now, and will be stopped when the gateway restarts. Stopped work may not be picked up again.
-      - button "Not now"
-      - button "Update"
-    - button "Disconnect"
-    - button "Use another gateway"
-    - paragraph: 127.0.0.1:18789 keeps this device's pairing while it is disconnected. This device holds admin access, which it asked for to change bots and accounts.
-  - status
+    - heading "Updates" [level=3]
+    - heading "Clawtrate on this device" [level=4]
+    - paragraph: Applies on this device.
+    - group "Update status":
+      - term: Updates
+      - definition: "This copy can't check for updates: no update source is set up for it."
+    - status: "This copy can't check for updates: no update source is set up for it."
+    - region "OpenClaw on 127.0.0.1:18789":
+      - heading "OpenClaw on 127.0.0.1:18789" [level=4]
+      - paragraph: Applies to the gateway, for every device connected to it.
+      - paragraph: OpenClaw 2026.11.6 is out. The gateway runs 2026.10.6.
+      - button "Update OpenClaw to 2026.11.6"
+      - alertdialog "Update OpenClaw?":
+        - heading "Update OpenClaw?" [level=2]
+        - paragraph: Your gateway goes from OpenClaw 2026.10.6 to 2026.11.6.
+        - paragraph: An update usually takes 5 to 15 minutes, and some installs take longer. The gateway restarts during it, so your bots can't be reached for part of that time. Clawtrate reconnects by itself.
+        - paragraph: 1 task is working now, and will be stopped when the gateway restarts. Stopped work may not be picked up again.
+        - button "Not now"
+        - button "Update"
 - navigation "Bots":
   - button "Routines"
   - 'button "Sort bots: Recent activity"'

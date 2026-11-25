@@ -9,7 +9,7 @@ import type {
   Transcript,
   TranscriptItem,
 } from "@clawtrate/core";
-import { browserUse } from "@clawtrate/core";
+import { browserUse, updateNoticeLine, updateNoticeScope } from "@clawtrate/core";
 import {
   useCallback,
   useContext,
@@ -49,6 +49,7 @@ import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
+import { UpdateLine } from "./UpdateLine.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { SentFiles } from "./SentFiles.tsx";
@@ -270,8 +271,19 @@ function TranscriptView({
   onAnnounce: (text: string) => void;
 }) {
   const reading = useReading();
-  const { bots, tasksByBot } = useClawtrateState();
+  const { bots, tasksByBot, connection, openclawUpdating } = useClawtrateState();
   const starter = useMemo(() => starterOf(task, bots, tasksByBot), [task, bots, tasksByBot]);
+  // The gateway's update notice is drawn as a line only in the main bot's main conversation (F-590).
+  const noticeScope = useMemo(
+    () =>
+      updateNoticeScope({
+        bots,
+        tasksByBot,
+        connection,
+        ...(openclawUpdating ? { openclawUpdating } : {}),
+      }),
+    [bots, tasksByBot, connection, openclawUpdating],
+  );
   const openTask = useContext(OpenTaskContext);
   // The thread open over the transcript, and what opened it, for focus to go back to.
   const [thread, setThread] = useState<{ messageId: string; from: HTMLElement | null } | null>(
@@ -439,9 +451,15 @@ function TranscriptView({
       );
     }
     if (at !== null) previous = at;
+    const updateLine = updateNoticeLine(item, task.key, noticeScope);
     rows.push(
       <CardSlot key={item.id} item={item}>
-        {item.role === "system" ? (
+        {updateLine ? (
+          <UpdateLine
+            line={updateLine}
+            {...(item.messageId ? { messageId: item.messageId } : {})}
+          />
+        ) : item.role === "system" ? (
           <p className="event-line" data-side="center">
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
@@ -862,6 +880,7 @@ export function Conversation({
   inert = false,
   granted,
   onShowComputer,
+  updatingWords = null,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -895,6 +914,8 @@ export function Conversation({
   granted: boolean;
   /** Open the Work pane on Computer, focusing its tab (work-pane.md, section 15). */
   onShowComputer?: () => void;
+  /** While OpenClaw updates on the gateway, what the strip says: said instead of "Reconnecting". */
+  updatingWords?: string | null;
 }) {
   const itemCount = transcript?.items.length ?? 0;
   const send = useCommand();
@@ -974,7 +995,7 @@ export function Conversation({
   const heard = [
     bot ? lifecycleWords(bot, active, lastRun) : null,
     connection.status === "reconnecting"
-      ? "Reconnecting"
+      ? (updatingWords ?? "Reconnecting")
       : connection.status === "connected"
         ? "Connected"
         : null,
@@ -989,7 +1010,9 @@ export function Conversation({
     setSpoken(heard);
     const changed = heard.filter((words, index) => words && words !== spoken[index]);
     // A first hello is not news; a return after a drop is.
-    const news = changed.filter((words) => words !== "Connected" || spoken[1] === "Reconnecting");
+    const news = changed.filter(
+      (words) => words !== "Connected" || (spoken[1] !== null && spoken[1] !== "Connected"),
+    );
     if (news.length > 0) setAnnouncement(news.at(-1)!);
   }
 

@@ -17,7 +17,7 @@
 // broadcasts its changes to admin connections. Nothing here starts a run but
 // `start`, which only a person's press reaches.
 //
-// `update.status` is asked only for a reason: when Settings › Gateway or the
+// `update.status` is asked only for a reason: when Settings › Updates or the
 // confirmation opens, when a run is followed or kept, and when a press whose
 // answer was lost must be settled. It is not a pure read (it reads the
 // restart sentinel and run history through the gateway's state database, and
@@ -27,6 +27,13 @@ import { isOpenClawVersion } from "./gateway-update.ts";
 import type { KeyValueStore } from "./host.ts";
 import { asRecord } from "./mapping.ts";
 import type { ConnectionState, GatewayStamp } from "./types.ts";
+import {
+  isGatewayTime,
+  MAX_UPDATED_RUNS,
+  UPDATE_RUN_ID,
+  UPDATED_RUN_MAX_AGE_MS,
+  type UpdatedRun,
+} from "./update-notice.ts";
 
 /** The gateway's phases, in its order (`UPDATE_RUN_PHASES`). */
 export const UPDATE_PHASES = [
@@ -43,9 +50,7 @@ export type UpdatePhase = (typeof UPDATE_PHASES)[number];
 const RUN_STATUSES = ["running", "succeeded", "failed", "rolled-back", "skipped"] as const;
 export type UpdateRunStatus = (typeof RUN_STATUSES)[number];
 
-/** A run id as the gateway writes one: a UUID, or `ocm:` and a job id. */
-const RUN_ID =
-  /^(ocm:[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+const RUN_ID = UPDATE_RUN_ID;
 /** The longest reason code kept, and the longest of the gateway's own sentences. */
 export const MAX_UPDATE_REASON_CHARS = 128;
 export const MAX_UPDATE_NOTE_CHARS = 400;
@@ -61,12 +66,15 @@ export const MAX_UPDATE_NOTE_CHARS = 400;
  */
 export const UPDATE_AWAY_MS = 40 * 60_000;
 /**
- * How long a followed run's gateway may be away before Clawtrate says it has been away longer
- * than an update usually takes. Real updates of global npm installs on Linux were gone 71 to
- * 150 s (`docs/research/model-catalog.md` section 7); 5 minutes is twice the longest of those.
- * A gateway started by hand can be left stopped by an update, so past this the line says so.
+ * How long a followed run's gateway may be away before Clawtrate says the update is taking longer
+ * than usual. Measured on real updates: global npm installs on Linux waited up to 20 s for running
+ * work, were gone 71 to 150 s and took 3.5 to 11 minutes from the press to done
+ * (`docs/research/model-catalog.md` section 7); a gateway under launchd on macOS waited 5 s, was
+ * gone about 6 minutes (a migration and check step) and took 11.4 minutes. 10 minutes is past the
+ * longest absence of both. A gateway started by hand can be left stopped by an update, so past
+ * this the line says so.
  */
-export const UPDATE_LATE_MS = 5 * 60_000;
+export const UPDATE_LATE_MS = 10 * 60_000;
 /** Asking the gateway about a press whose answer was lost: at once, then after these waits. */
 export const UPDATE_ASK_WAITS_MS = [5_000, 15_000, 30_000, 60_000] as const;
 /** While a run moves with no event, its record is read again this often, and this long at most. */
@@ -83,6 +91,27 @@ export const UPDATE_RUN_KEY = "clawtrate.openclaw-update";
 export const MAX_KEPT_GATEWAYS = 4;
 /** A kept value longer than this isn't read. */
 const MAX_KEPT_CHARS = 8_192;
+/**
+ * The updates this device saw succeed (`UpdatedRun`), kept so the gateway's notice of each is
+ * drawn as Clawtrate's line after the app is opened again: at most `MAX_UPDATED_RUNS`, none older
+ * than `UPDATED_RUN_MAX_AGE_MS`. A value longer than `MAX_UPDATED_CHARS` isn't read.
+ */
+export const UPDATED_RUNS_KEY = "clawtrate.openclaw-updated";
+const MAX_UPDATED_CHARS = 32_768;
+/**
+ * How long after an update this app followed to "Updated" it reads the main bot's main
+ * conversation again, once: the gateway marks the run succeeded as it starts and writes its
+ * notice in a startup task after that, and sends no event when it does (OpenClaw 2026.10.6,
+ * `server-restart-sentinel`).
+ */
+export const UPDATE_NOTICE_READ_AFTER_MS = 5_000;
+/**
+ * When that read finds no notice yet, it is read once more this long after it (30 s after
+ * "Updated"), and then not again. The gateway writes it in the same startup task that marks the
+ * run succeeded, about 4 s later in a real update; a pending managed handoff retries every 2 s,
+ * and a loaded host starts slower. A later notice shows the next time the conversation is read.
+ */
+export const UPDATE_NOTICE_READ_LAST_MS = 25_000;
 
 /**
  * Reasons a gateway gives for not updating itself (`update.run` 2026.10.6): no button is
@@ -114,6 +143,8 @@ export type GatewayUpdateRun = {
   target: string | null;
   /** The tag the press that started it sent (`origin.requester.senderId`), or null. */
   tag: string | null;
+  /** When the gateway finished the run (`finishedAtMs`, its own clock), or null while it runs. */
+  finishedAtMs: number | null;
 };
 
 export type UpdateOutcome =
@@ -149,6 +180,13 @@ export type UpdateRunView = {
 
 export type OpenClawUpdateState = {
   run: UpdateRunView | null;
+  /** The updates this device's own press started and saw succeed, the latest last; absent when none. */
+  updated?: UpdatedRun[];
+  /**
+   * Connected, and what this device keeps for the gateway on screen (a run of its press, or a
+   * press whose answer was lost) hasn't been read yet: Update is held until it is. Absent otherwise.
+   */
+  checkingKept?: true;
   /** The press being sent, until the gateway answers. */
   starting: boolean;
   /** Why this gateway can't update itself, in its words: no button while it runs. */
@@ -162,6 +200,8 @@ export type OpenClawUpdateState = {
   looking: boolean;
   /** Asking the gateway about that press failed: Check again and Stop waiting are offered. */
   lookFailed: boolean;
+  /** The gateway (its identity) and the version of what `looking` waits on; gone when it ends. */
+  held?: { gatewayId: string; to: string | null };
 };
 
 export const initialOpenClawUpdate: OpenClawUpdateState = {
@@ -172,6 +212,23 @@ export const initialOpenClawUpdate: OpenClawUpdateState = {
   looking: false,
   lookFailed: false,
 };
+
+/**
+ * Whether the state holds Update: a press now would send nothing, so none is offered. Until what
+ * this device keeps for the gateway is read, while a press goes out or its answer is sought, and
+ * while a run is under way.
+ */
+export function holdsUpdate(state: OpenClawUpdateState): boolean {
+  const outcome = state.run?.outcome;
+  return (
+    state.checkingKept === true ||
+    state.starting ||
+    state.looking ||
+    outcome === "running" ||
+    outcome === "late" ||
+    outcome === "away"
+  );
+}
 
 /** Text the gateway wrote, as Clawtrate shows it: one line, no control characters, bounded. */
 export function updateText(value: unknown, max: number): string | null {
@@ -231,6 +288,7 @@ export function readUpdateRun(value: unknown): GatewayUpdateRun | null {
         ? tag
         : null;
     })(),
+    finishedAtMs: isGatewayTime(run?.finishedAtMs) ? run.finishedAtMs : null,
   };
 }
 
@@ -281,6 +339,50 @@ function readKeptEntry(value: unknown): Kept | null {
   return { gatewayId, runId, tag, from: version(kept?.from), to: version(kept?.to) };
 }
 
+/** The updates kept as seen to succeed, read field by field: the latest last, none too old. */
+function readUpdated(raw: string | null, now: number): UpdatedRun[] {
+  if (raw === null || raw.length > MAX_UPDATED_CHARS) return [];
+  try {
+    const list = asRecord(JSON.parse(raw))?.runs;
+    if (!Array.isArray(list)) return [];
+    const runs: UpdatedRun[] = [];
+    for (const each of list.slice(-MAX_UPDATED_RUNS)) {
+      const { gatewayId, runId, to, at, succeededAt } = asRecord(each) ?? {};
+      if (
+        typeof gatewayId === "string" &&
+        gatewayId &&
+        gatewayId.length <= 1_024 &&
+        typeof runId === "string" &&
+        RUN_ID.test(runId) &&
+        typeof to === "string" &&
+        isOpenClawVersion(to) &&
+        typeof at === "number" &&
+        Number.isSafeInteger(at) &&
+        now - at <= UPDATED_RUN_MAX_AGE_MS &&
+        isGatewayTime(succeededAt)
+      )
+        runs.push({ gatewayId, runId, to, at, succeededAt });
+    }
+    return runs;
+  } catch {
+    return [];
+  }
+}
+
+/** `lists` as one, the later of each pair kept, none too old, the latest `MAX_UPDATED_RUNS`. */
+function mergeUpdated(now: number, ...lists: readonly UpdatedRun[][]): UpdatedRun[] {
+  const merged: UpdatedRun[] = [];
+  for (const each of lists.flat()) {
+    if (now - each.at > UPDATED_RUN_MAX_AGE_MS) continue;
+    const at = merged.findIndex(
+      (other) => other.gatewayId === each.gatewayId && other.runId === each.runId,
+    );
+    if (at >= 0) merged.splice(at, 1);
+    merged.push(each);
+  }
+  return merged.slice(-MAX_UPDATED_RUNS);
+}
+
 /** What is kept, one entry per gateway (its identity), the latest last, at most `MAX_KEPT_GATEWAYS`. */
 function readKept(raw: string | null): Kept[] {
   if (raw === null || raw.length > MAX_KEPT_CHARS) return [];
@@ -318,6 +420,12 @@ export type OpenClawUpdatesContext = {
   missingScope: (error: unknown) => boolean;
   /** The model list, read again the way the app reads it on connect. */
   refreshModels: () => Promise<void>;
+  /**
+   * Read the main bot's main conversation on gateway `gatewayId` again, if it is open: true when
+   * the gateway's notice of run `runId` is in it then, false when it isn't, null when nothing was
+   * read.
+   */
+  readMainAgain: (gatewayId: string, runId: string) => Promise<boolean | null>;
   /** A new tag for one press. */
   newTag: () => string;
   now: () => number;
@@ -394,7 +502,10 @@ export class OpenClawUpdates {
   }
 
   private patch(patch: Partial<OpenClawUpdateState>): void {
-    this.ctx.set({ ...this.state, ...patch });
+    const next = { ...this.state, ...patch };
+    // A hold that ends takes its gateway and version with it.
+    if (patch.looking === false) delete next.held;
+    this.ctx.set(next);
   }
 
   private patchRun(runId: string, patch: Partial<UpdateRunView>): void {
@@ -409,6 +520,7 @@ export class OpenClawUpdates {
     const kept = look.runId !== null;
     this.patch({
       looking: true,
+      held: { gatewayId: look.gatewayId, to: look.to },
       lookFailed: failed,
       error: kept
         ? failed
@@ -642,9 +754,24 @@ export class OpenClawUpdates {
   }
 
   /**
-   * Connected (a reconnect after the restart, or reopening the app). Anything kept for this
-   * gateway holds Update from the first moment, before any answer; the gateway is asked only
-   * when there is something to settle.
+   * The hello has come: until `onHello` has read what this device keeps for the gateway on
+   * screen, Update is held, so the connection, its offer and admin access never show it offered
+   * before that is known. Called as the connection is published, before any answer.
+   */
+  onConnected(): void {
+    if (this.state.checkingKept !== true) this.patch({ checkingKept: true });
+  }
+
+  /** What is kept is known: the hold `onConnected` set ends, and what is kept holds instead. */
+  private keptKnown(): void {
+    const { checkingKept, ...rest } = this.state;
+    if (checkingKept) this.ctx.set(rest);
+  }
+
+  /**
+   * Connected (a reconnect after the restart, or reopening the app). Update is held from the
+   * hello (`onConnected`) until what is kept for this gateway has been read, and then by what is
+   * kept, before any answer; the gateway is asked only when there is something to settle.
    */
   async onHello(): Promise<void> {
     const epoch = ++this.epoch;
@@ -652,13 +779,33 @@ export class OpenClawUpdates {
     this.cancelAway = null;
     this.cancelLate?.();
     this.cancelLate = null;
-    if (!this.ctx.admin()) return;
+    // The updates seen to succeed, on every hello: the client starts from a fresh state for
+    // another gateway or none, and the oldest age out.
+    const raw = await this.ctx.storage.get(UPDATED_RUNS_KEY).catch(() => null);
+    if (epoch !== this.epoch) return;
+    const updated = mergeUpdated(
+      this.ctx.now(),
+      readUpdated(raw, this.ctx.now()),
+      this.state.updated ?? [],
+    );
+    if (updated.length > 0 || this.state.updated) {
+      if (updated.length > 0) this.patch({ updated });
+      else {
+        const { updated: _gone, ...rest } = this.state;
+        this.ctx.set(rest);
+      }
+    }
+    if (!this.ctx.admin()) {
+      this.keptKnown();
+      return;
+    }
     const kept = readKept(await this.ctx.storage.get(UPDATE_RUN_KEY).catch(() => null));
     if (epoch !== this.epoch) return;
-    // Held at once for the gateway the connection already names, before its identity is read.
+    // Held for the gateway the connection already names, before its identity is read.
     const named = this.ctx.connection().gatewayId;
     const early = kept.find((each) => each.gatewayId === named) ?? null;
     if (early && !this.lookFor && !this.following(early)) this.hold(lookOf(early));
+    this.keptKnown();
     const id = await this.ctx.identity();
     if (epoch !== this.epoch || id === null) return;
     const run = this.state.run;
@@ -697,7 +844,7 @@ export class OpenClawUpdates {
   /**
    * Ask the gateway (`update.status`) on the connection that is there: whether it can update
    * itself, the run under way, and how what holds Update has ended. Asked when Settings ›
-   * Gateway or the confirmation opens, on Check again, and when something waits to be settled.
+   * Updates or the confirmation opens, on Check again, and when something waits to be settled.
    * Asks under way on this connection are joined.
    */
   look(): Promise<void> {
@@ -958,7 +1105,9 @@ export class OpenClawUpdates {
     this.released = null;
     this.refused = null;
     this.reading = null;
-    if (this.ctx.get()) this.ctx.set(initialOpenClawUpdate);
+    // The updates seen to succeed are each tied to their gateway, so they stay.
+    const updated = this.ctx.get()?.updated;
+    if (this.ctx.get()) this.ctx.set({ ...initialOpenClawUpdate, ...(updated ? { updated } : {}) });
   }
 
   /** A press went out and its answer was lost: held, kept, and asked about at once. */
@@ -1055,6 +1204,23 @@ export class OpenClawUpdates {
         reason: null,
         note: null,
       });
+      // Only this device's own press is vouched for: a run started elsewhere, a bot's included,
+      // leaves the gateway's notice as the message it is.
+      // Kept with the time the gateway finished it, as this record says now and never again: the
+      // notice is written after it. Without that time, nothing is vouched for.
+      const succeededAt = record.finishedAtMs;
+      if (run.mine === true && succeededAt !== null) {
+        await this.remember({
+          gatewayId: run.gatewayId,
+          runId,
+          to: expected,
+          at: this.ctx.now(),
+          succeededAt,
+        });
+        // The gateway's notice of it comes with no event: the main conversation is read again.
+        // Only for the connection that saw it: a drop during the write above reads nothing.
+        if (epoch === this.epoch) this.readForNotice(run.gatewayId, runId, epoch, "first");
+      }
       await this.forget(run.gatewayId, runId);
       // The newer OpenClaw's models: read again the way the app reads them, once.
       await this.ctx.refreshModels().catch((error: unknown) => {
@@ -1073,6 +1239,58 @@ export class OpenClawUpdates {
     });
     // The record has ended: what it says is shown here, and nothing more holds Update.
     await this.forget(run.gatewayId, runId);
+  }
+
+  /**
+   * Keep `run` among the updates seen to succeed, in the state and in storage, from what storage
+   * holds (one write after another): the latest last, the oldest gone past the bounds.
+   */
+  private remember(run: UpdatedRun): Promise<void> {
+    const write = this.keeping.then(async () => {
+      const now = this.ctx.now();
+      const stored = readUpdated(
+        await this.ctx.storage.get(UPDATED_RUNS_KEY).catch(() => null),
+        now,
+      );
+      const updated = mergeUpdated(now, stored, this.state.updated ?? [], [run]);
+      this.patch({ updated });
+      try {
+        await this.ctx.storage.set(UPDATED_RUNS_KEY, JSON.stringify({ runs: updated }));
+      } catch (error) {
+        this.ctx.log(`could not keep the finished update: ${errorText(error)}`);
+      }
+    });
+    this.keeping = write;
+    return write;
+  }
+
+  /**
+   * Read the main conversation again for the gateway's notice of `runId`: once after
+   * `UPDATE_NOTICE_READ_AFTER_MS`, and once more `UPDATE_NOTICE_READ_LAST_MS` later only when that
+   * read found no notice; then no more. Both belong to this connection: after another hello, a
+   * drop or a reset, nothing is read.
+   */
+  private readForNotice(
+    gatewayId: string,
+    runId: string,
+    epoch: number,
+    read: "first" | "last",
+  ): void {
+    this.ctx.later(
+      () => {
+        if (epoch !== this.epoch) return;
+        this.ctx.readMainAgain(gatewayId, runId).then(
+          (found) => {
+            if (found === false && read === "first" && epoch === this.epoch)
+              this.readForNotice(gatewayId, runId, epoch, "last");
+          },
+          (error: unknown) => {
+            this.ctx.log(`could not read the main conversation again: ${errorText(error)}`);
+          },
+        );
+      },
+      read === "first" ? UPDATE_NOTICE_READ_AFTER_MS : UPDATE_NOTICE_READ_LAST_MS,
+    );
   }
 
   private async keep(run: UpdateRunView): Promise<void> {

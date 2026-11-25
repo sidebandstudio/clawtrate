@@ -91,6 +91,7 @@ export function updateRunScene(scene: UpdateRunScene, state: ClawtrateState): Cl
     blocked: { blocked: { reason: "unmanaged-package-install", note: null } },
     held: {
       looking: true,
+      held: { gatewayId, to: NEW },
       lookFailed: true,
       error:
         "Clawtrate didn't get the gateway's answer to the last Update press, and couldn't ask it whether the update started.",

@@ -1,8 +1,10 @@
-// Update OpenClaw from Clawtrate (#565): the button where Clawtrate says a
-// newer OpenClaw is out, and in Settings › Gateway; one confirmation before it
-// starts; then the gateway's steps as a quiet line, and how it ended. Only the
-// person's press on Update sends anything (`startOpenClawUpdate`), stamped
-// with the gateway the confirmation was opened for.
+// Update OpenClaw from Clawtrate (#565): its own section of Settings › Updates
+// holds the offer and its button, one confirmation before it starts, the
+// gateway's steps as a bar, and how it ended (#590). A bot's Settings tab, the
+// note near the Model menu and Settings › Gateway keep one line, with a link
+// that opens that section. Only the person's press on Update sends anything
+// (`startOpenClawUpdate`), stamped with the gateway the confirmation was
+// opened for.
 
 import {
   gatewayStamp,
@@ -13,7 +15,9 @@ import {
   type UpdateRunView,
 } from "@clawtrate/core";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useRef,
@@ -23,18 +27,29 @@ import {
   type RefObject,
 } from "react";
 import { useBridge, useClawtrateState, useCommand } from "../bridge.tsx";
-import { ExternalIcon } from "../icons.tsx";
+import { gatewayTitle } from "../format.ts";
+import { ArrowUpIcon, ExternalIcon } from "../icons.tsx";
 import { Dialog } from "./Dialog.tsx";
-import { AdminBar } from "./parts.tsx";
+import { AdminBar, Note } from "./parts.tsx";
 import {
   blockedWords,
   gatewayWords,
   nextStep,
   OPENCLAW_UPDATE_DOCS,
+  runHeading,
   runLine,
+  stepNumber,
+  UPDATE_STEPS,
   UPDATE_TIME_WORDS,
+  updateLinkLine,
   workWords,
 } from "./update-words.ts";
+
+/** Opens Settings › Updates at its OpenClaw section; absent where nothing can open it. */
+export const OpenOpenClawUpdates = createContext<(() => void) | null>(null);
+
+/** The id of the OpenClaw section's heading in Settings › Updates, where its link puts focus. */
+export const OPENCLAW_UPDATES_HEADING = "settings-openclaw-updates";
 
 /** Tasks the person sees working now: what the confirmation counts. */
 export function workingTasks(state: ClawtrateState): number {
@@ -63,46 +78,64 @@ function runHere(state: ClawtrateState): UpdateRunView | null {
 }
 
 /**
- * The update's part of a notice or of Settings › Gateway: the line of the run followed, or the
- * button, or why the gateway can't update itself. `where` names the place for test ids.
+ * Settings › Updates' part for OpenClaw: the app's own updates (`app`), and below them a section
+ * for OpenClaw on the gateway connected now when there is anything to say of it. Opening it asks
+ * the gateway where updating stands (reads only), as opening Settings › Gateway did before. Never
+ * on each connect: `update.status` reads the gateway's state database.
  */
-export function UpdateOpenClaw({ where }: { where: "notice" | "settings" }) {
+export function UpdatesWithOpenClaw({ app }: { app: ReactNode }) {
   const state = useClawtrateState();
   const send = useCommand();
   const { connection } = state;
-  const asks = where === "settings" && connection.status === "connected" && connection.canAdmin;
-  // Settings › Gateway opened: the gateway is asked where updating stands (reads only). Never on
-  // each connect: `update.status` reads the gateway's state database.
+  const asks = connection.status === "connected" && connection.canAdmin;
   useEffect(() => {
     if (asks) void send({ type: "checkOpenClawUpdate" }).catch(() => {});
   }, [asks, send, connection.gatewayId, connection.connectedAt]);
-  return <UpdateOpenClawView state={state} where={where} />;
+  return <UpdatesWithOpenClawView state={state} app={app} />;
 }
 
-/** `UpdateOpenClaw` for the state given. */
-export function UpdateOpenClawView({
+/**
+ * `UpdatesWithOpenClaw` for the state given. With nothing to say of OpenClaw, the app's updates
+ * alone, as before; otherwise each under a heading that names what it updates and where.
+ */
+export function UpdatesWithOpenClawView({
   state,
-  where,
+  app = null,
 }: {
   state: ClawtrateState;
-  where: "notice" | "settings";
+  app?: ReactNode;
 }) {
   // Where focus goes when the button it came from gives way to the run's line.
   const place = useRef<HTMLDivElement>(null);
-  const content = useUpdatePart(state, where, place);
-  return content === null ? null : (
-    <div className="b-update-place" ref={place} tabIndex={-1}>
-      {content}
-    </div>
+  const content = useUpdatePart(state, place);
+  if (content === null) return app;
+  return (
+    <>
+      {app !== null && (
+        <>
+          <h4 className="b-group">Clawtrate on this device</h4>
+          {app}
+        </>
+      )}
+      <section
+        className="b-update-section"
+        aria-labelledby={OPENCLAW_UPDATES_HEADING}
+        data-testid="openclaw-updates"
+      >
+        <h4 className="b-group" id={OPENCLAW_UPDATES_HEADING} tabIndex={-1}>
+          OpenClaw on {gatewayTitle(state.connection)}
+        </h4>
+        <p className="b-hint">Applies to the gateway, for every device connected to it.</p>
+        <div className="b-update-place" ref={place} tabIndex={-1}>
+          {content}
+        </div>
+      </section>
+    </>
   );
 }
 
-/** What the update's part shows for this state, or null when it shows nothing. */
-function useUpdatePart(
-  state: ClawtrateState,
-  where: "notice" | "settings",
-  place: RefObject<HTMLDivElement | null>,
-): ReactNode {
+/** What the OpenClaw section shows for this state, or null when it shows nothing. */
+function useUpdatePart(state: ClawtrateState, place: RefObject<HTMLDivElement | null>): ReactNode {
   const { info } = useBridge();
   const send = useCommand();
   const connection = state.connection;
@@ -110,11 +143,12 @@ function useUpdatePart(
   const run = runHere(state);
   const [confirming, setConfirming] = useState<GatewayStamp | null>(null);
   const update = connection.openclawUpdate;
-  if (run) return <UpdateLine run={run} where={where} />;
+  const connected = connection.status === "connected";
+  if (run) return <UpdateLine run={run} waiting={!connected} />;
   // A press whose answer was lost: no second one until the gateway's record settles it.
   if (updating.looking && updating.error)
     return (
-      <div className="b-update" data-testid={`update-looking-${where}`}>
+      <div className="b-update" data-testid="update-looking-settings">
         <p role="status">{updating.error}</p>
         {updating.lookFailed && !info.readOnly && (
           <>
@@ -127,7 +161,7 @@ function useUpdatePart(
                 type="button"
                 className="button"
                 data-size="sm"
-                disabled={connection.status !== "connected"}
+                disabled={!connected}
                 onClick={() => void send({ type: "checkOpenClawUpdate" }).catch(() => {})}
               >
                 Check again
@@ -146,11 +180,13 @@ function useUpdatePart(
         )}
       </div>
     );
-  if (!update || info.readOnly || connection.status !== "connected") return null;
-  if (updating.blocked) {
+  if (!update) return null;
+  // What this device keeps for the gateway isn't read yet: no Update until it is (F-589).
+  if (updating.checkingKept) return null;
+  if (updating.blocked && connected && !info.readOnly) {
     const words = blockedWords(updating.blocked);
     return (
-      <div className="b-update" data-testid={`update-blocked-${where}`}>
+      <div className="b-update" data-testid="update-blocked-settings">
         <p>
           <b>This gateway can't update OpenClaw itself.</b> {words.why}
           {words.gateway ? (
@@ -170,25 +206,35 @@ function useUpdatePart(
     );
   }
   return (
-    <div className="b-update" data-testid={`update-offer-${where}`}>
-      {where === "settings" && (
+    <div className="b-update" data-testid="update-offer-settings">
+      <p>
+        OpenClaw {update.latest} is out
+        {update.channel && update.channel !== "latest"
+          ? ` on the gateway's ${update.channel} channel${update.channel === "beta" || update.channel === "dev" ? ", not as a stable release" : ""}`
+          : ""}
+        . The gateway runs {update.current}.
+      </p>
+      {info.readOnly ? (
         <p>
-          OpenClaw {update.latest} is out
-          {update.channel && update.channel !== "latest"
-            ? ` on the gateway's ${update.channel} channel${update.channel === "beta" || update.channel === "dev" ? ", not as a stable release" : ""}`
-            : ""}
-          .
+          This device only reads, so it doesn't offer the update. Update OpenClaw on the gateway's
+          machine:{" "}
+          <a href={OPENCLAW_UPDATE_DOCS} target="_blank" rel="noreferrer noopener">
+            OpenClaw's update instructions <ExternalIcon />
+          </a>
         </p>
+      ) : (
+        connected && (
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            disabled={updating.starting}
+            onClick={() => setConfirming(gatewayStamp(connection))}
+          >
+            Update OpenClaw to {update.latest}
+          </button>
+        )
       )}
-      <button
-        type="button"
-        className="button"
-        data-size="sm"
-        disabled={updating.starting}
-        onClick={() => setConfirming(gatewayStamp(connection))}
-      >
-        Update OpenClaw to {update.latest}
-      </button>
       {updating.error && (
         <p className="b-hint" role="alert" data-testid="update-error">
           {updating.error}
@@ -204,6 +250,49 @@ function useUpdatePart(
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The one line a bot's Settings tab, the note near the Model menu and Settings › Gateway keep
+ * (`updateLinkLine`), with a link named for where it goes, which opens Settings › Updates at its
+ * OpenClaw section. Subscribed to that line alone.
+ */
+export function useUpdateLinkLine(): string | null {
+  const bridge = useBridge();
+  return useSyncExternalStore(
+    useCallback((listener) => bridge.subscribe(listener), [bridge]),
+    () => {
+      const state = bridge.getState();
+      return updateLinkLine(state, runHere(state));
+    },
+  );
+}
+
+export function UpdateOpenClawLink({ line, where }: { line: string; where: "notice" | "gateway" }) {
+  const open = useContext(OpenOpenClawUpdates);
+  return (
+    <p className="b-update-link" data-testid={`update-link-${where}`}>
+      {line}
+      {open && (
+        <>
+          {" "}
+          <button type="button" className="link-button" onClick={open}>
+            Settings › Updates
+          </button>
+        </>
+      )}
+    </p>
+  );
+}
+
+/** The note near the Model menu: the one line and its link, or nothing. */
+export function UpdateOpenClawNote() {
+  const line = useUpdateLinkLine();
+  return line === null ? null : (
+    <Note icon={<ArrowUpIcon />} testId="openclaw-update">
+      <UpdateOpenClawLink line={line} where="notice" />
+    </Note>
   );
 }
 
@@ -306,19 +395,20 @@ export function UpdateConfirm({
 }
 
 /**
- * The run as a quiet line: the gateway's step while it runs, then how it ended. Progress is
- * announced politely once per step, the outcome once.
+ * The run: its line, the gateway's steps as a bar with its words beside it while it runs, then
+ * how it ended. Progress is announced politely once per step, the outcome once.
  */
-function UpdateLine({ run, where }: { run: UpdateRunView; where: "notice" | "settings" }) {
+function UpdateLine({ run, waiting }: { run: UpdateRunView; waiting: boolean }) {
   const send = useCommand();
   const line = runLine(run);
+  const heading = runHeading(run);
   const words = gatewayWords(run);
   const next = nextStep(run);
   const finished = run.outcome !== "running" && run.outcome !== "late" && run.outcome !== "away";
   return (
-    <div className="b-update" data-testid={`update-run-${where}`} data-outcome={run.outcome}>
+    <div className="b-update" data-testid="update-run-settings" data-outcome={run.outcome}>
       <p className="b-update-line">
-        {run.outcome === "updated" ? <b>{line}</b> : line}
+        {run.outcome === "updated" ? <b>{heading}</b> : heading}
         {words ? (
           <>
             {" "}
@@ -326,6 +416,7 @@ function UpdateLine({ run, where }: { run: UpdateRunView; where: "notice" | "set
           </>
         ) : null}
       </p>
+      {!finished && <UpdateSteps run={run} waiting={waiting} />}
       {next && <p className="b-hint">{next}</p>}
       {(run.outcome === "failed" || run.outcome === "rolled-back" || run.outcome === "skipped") && (
         <p>
@@ -349,6 +440,37 @@ function UpdateLine({ run, where }: { run: UpdateRunView; where: "notice" | "set
       <p className="visually-hidden" role="status" aria-live="polite">
         {line}
       </p>
+    </div>
+  );
+}
+
+/**
+ * The gateway's steps as a bar: one segment per step it counts, those before its step filled,
+ * its step marked, and its words beside it. Nothing finer than the gateway's step is shown, and
+ * nothing moves: while the gateway is away its step is marked as waiting, and the bar stays.
+ */
+function UpdateSteps({ run, waiting }: { run: UpdateRunView; waiting: boolean }) {
+  const step = stepNumber(run.phase);
+  const words = `Step ${step} of ${UPDATE_STEPS}, ${run.phase}${waiting ? ": waiting for the gateway to come back" : ""}`;
+  return (
+    <div className="b-update-steps" data-waiting={waiting || undefined}>
+      <div
+        className="b-update-bar"
+        role="progressbar"
+        aria-label="OpenClaw update"
+        aria-valuemin={0}
+        aria-valuemax={UPDATE_STEPS}
+        aria-valuenow={step}
+        aria-valuetext={words}
+      >
+        {Array.from({ length: UPDATE_STEPS }, (_, index) => (
+          <span
+            key={index}
+            data-step={index + 1 < step ? "done" : index + 1 === step ? "now" : undefined}
+          />
+        ))}
+      </div>
+      <span className="b-update-step">{words}</span>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
   type UpdateRunView,
 } from "./openclaw-update.ts";
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
+import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
 import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
@@ -639,6 +640,9 @@ const item = flagged<TranscriptItem>()({
   runless: FLAG,
   brief: FLAG,
   reportRunId: ID,
+  updateRunId: ID,
+  updateNoticeAfter: NUMBER,
+  updateNoticeWrittenAt: NUMBER,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
@@ -795,6 +799,11 @@ const updateRun = object<UpdateRunView>()({
 });
 const openclawUpdating = object<OpenClawUpdateState>()({
   run: updateRun,
+  updated: list(
+    MAX_UPDATED_RUNS,
+    object<UpdatedRun>()({ gatewayId: ID, runId: ID, to: NAME, at: NUMBER, succeededAt: NUMBER }),
+  ),
+  checkingKept: FLAG,
   starting: FLAG,
   blocked: object<NonNullable<OpenClawUpdateState["blocked"]>>()({
     reason: text(MAX_UPDATE_REASON_CHARS),
@@ -803,6 +812,7 @@ const openclawUpdating = object<OpenClawUpdateState>()({
   error: text(MAX_UPDATE_NOTE_CHARS),
   looking: FLAG,
   lookFailed: FLAG,
+  held: object<NonNullable<OpenClawUpdateState["held"]>>()({ gatewayId: ID, to: NAME }),
 });
 const task = flagged<Task>()({
   key: ID,
