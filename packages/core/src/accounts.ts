@@ -10,6 +10,7 @@
 // holds them (`withoutSecret`).
 
 import { asRecord, type RawRecord } from "./mapping.ts";
+import type { ReadStamp } from "./types.ts";
 
 // Bounds --------------------------------------------------------------------------
 
@@ -408,6 +409,8 @@ export type AccountsState = {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
   readAt: number | null;
+  /** Where the accounts shown were read (`ReadStamp`): a change made from them carries it. */
+  readOn: ReadStamp | null;
   /** The read was made with admin access, so labels were sent. */
   labels: boolean;
   /** `agents.defaults.model.primary`. */
@@ -430,6 +433,7 @@ export const initialAccountsState: AccountsState = {
   status: "idle",
   error: null,
   readAt: null,
+  readOn: null,
   labels: false,
   defaultModel: null,
   mainShared: false,
