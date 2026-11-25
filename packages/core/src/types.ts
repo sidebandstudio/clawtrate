@@ -265,8 +265,20 @@ export type Task = {
    * gateway names it; absent for Clawtrate's own tasks and a bot's main task (`channels.ts`).
    */
   channel?: string;
+  /**
+   * A bot started this task with the gateway's `sessions_spawn` (`createdVia: "spawn"`): the task
+   * it was started from (`spawnedBy`) and that task's bot. Absent for every other task.
+   */
+  startedBy?: TaskStarter;
   /** Paths of fields cut to their bound. */
   cut?: string[];
+};
+
+/** Who started a task, as the gateway recorded it (`Task.startedBy`). */
+export type TaskStarter = {
+  botId: string;
+  /** The session key of the task it was started from. */
+  fromKey: string;
 };
 
 export type TaskContext = {
@@ -389,6 +401,12 @@ export type TranscriptItem = {
    * With commands hidden it is not drawn and is not the task's preview.
    */
   skillNote?: true;
+  /**
+   * In a task a bot started, the brief it wrote: the first user row stored in that task, which the
+   * gateway attributes to the person but the bot wrote (`mapHistory`'s `startedAt`). Present and
+   * true only then; a message the person sends there later is theirs as always.
+   */
+  brief?: true;
   /**
    * History places this user row inside a run that began before it: the gateway took it into
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
