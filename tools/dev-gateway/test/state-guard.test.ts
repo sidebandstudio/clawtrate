@@ -57,6 +57,8 @@ function countingRunner(home: string) {
   }) as unknown as typeof spawnSync;
   const runner = new OpenclawRunner({
     instance: null,
+    // A stand-in path: the fake spawn below runs it, never an OpenClaw.
+    bin: "/test/openclaw",
     stateDir: devStateDir(home),
     runFile: join(home, "run", "state.json"),
     checkout: CHECKOUT,

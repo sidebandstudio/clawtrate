@@ -102,6 +102,13 @@ import {
 } from "./instance.ts";
 import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
 import {
+  OPENCLAW_VERSION,
+  openclawProgram,
+  openclawReady,
+  PINNED_DIR,
+  setupOpenclaw,
+} from "./pinned.ts";
+import {
   choosePorts,
   listInstances,
   NOT_CHECKED,
@@ -2366,7 +2373,8 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
+  "usage: pnpm dev-gateway setup   (OpenClaw 2026.10.6 for this tool; start does it when needed)\n" +
+  "       pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2397,6 +2405,15 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   // The selector is validated before any command runs or any path is built.
   const selected = selectInstance(values.instance, env);
   const [command, ...rest] = positionals;
+  if (command === "setup") {
+    if (selected !== null)
+      throw new Error("setup is for this checkout; it does not take --instance");
+    if (env.OPENCLAW_BIN) {
+      openclawProgram(env);
+      console.log(`OPENCLAW_BIN is OpenClaw ${OPENCLAW_VERSION}; nothing to set up.`);
+    } else await setupOpenclaw(PINNED_DIR, env);
+    return;
+  }
   if (command === "list" || command === "prune") {
     if (selected !== null) {
       throw new Error(
@@ -2444,6 +2461,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   switch (command) {
     case "start":
     case "up":
+      // The pinned OpenClaw, set up on first use; an OPENCLAW_BIN of another version is refused.
+      if (!env.OPENCLAW_BIN && !openclawReady(env)) await setupOpenclaw(PINNED_DIR, env);
+      openclawProgram(env);
       return start(inst, {
         seed: !values["no-seed"],
         ...(runId ? { runId } : {}),

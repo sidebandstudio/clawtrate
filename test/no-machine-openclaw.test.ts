@@ -19,7 +19,7 @@ export const PATTERNS: Record<string, { regex: RegExp; only?: RegExp }> = {
   "a PATH lookup of openclaw": { regex: /\b(?:which|command -v|type -p)\s+openclaw\b/ },
   "openclaw from PATH": {
     regex:
-      /(?:\b(?:spawn|spawnSync|execFile|execFileSync|exec|execSync)\(|\?\?)\s*["'`]openclaw["'`]/,
+      /(?:\b(?:spawn|spawnSync|execFile|execFileSync|exec|execSync)\(|\?\?|\bbin\s*[:=])\s*["'`]openclaw["'`]/,
   },
   "a system install of openclaw": {
     regex: /(?:\/opt\/homebrew|\/usr\/local)\/(?:bin\/openclaw\b|lib\/node_modules\/openclaw\b)/,
@@ -52,6 +52,12 @@ const ALLOWED: { file: string; pattern: string; reason: string }[] = [
       "a GitHub-hosted runner is thrown away after the job, so its global copy is the pinned one",
   },
   {
+    file: ".github/workflows/ios.yml",
+    pattern: "the global npm folder",
+    reason:
+      "a GitHub-hosted runner is thrown away after the job, so its global copy is the pinned one",
+  },
+  {
     file: ".github/workflows/openclaw-update.yml",
     pattern: "the global npm folder",
     reason:
@@ -62,12 +68,6 @@ const ALLOWED: { file: string; pattern: string; reason: string }[] = [
     pattern: "the default state folder",
     reason:
       "a stand-in openclaw run in the test sshd's session, whose HOME assertSessionHome proves is the test's own",
-  },
-  {
-    file: "tools/dev-gateway/src/env.ts",
-    pattern: "openclaw from PATH",
-    reason:
-      "the development gateway runs OpenClaw only with --dev or --profile clawtrate-dev-<name> (guardArgs), never the default profile or its state",
   },
   {
     file: "tools/openclaw-update-check/src/check.ts",
@@ -181,6 +181,9 @@ describe("no test or tool reaches a machine-wide OpenClaw (#597)", () => {
     expect(flags(`const bin = process.env.OPENCLAW_BIN ?? "openclaw";`)).toEqual([
       "openclaw from PATH",
     ]);
+    expect(flags(`new OpenclawRunner({ bin: "openclaw", stateDir })`)).toEqual([
+      "openclaw from PATH",
+    ]);
     expect(flags("/opt/homebrew/bin/openclaw gateway status")).toEqual([
       "a system install of openclaw",
     ]);
@@ -203,6 +206,7 @@ describe("no test or tool reaches a machine-wide OpenClaw (#597)", () => {
       "ls ~/.openclaw-dev",
       'rm -rf "$HOME/.openclaw-clawtrate-dev-alpha"',
       `["--profile", "clawtrate-dev-alpha", "devices", "list"]`,
+      `bin: "/test/openclaw",`,
       "npm install --global openclaw@2026.10.6",
     ])
       expect(flags(safe), safe).toEqual([]);
