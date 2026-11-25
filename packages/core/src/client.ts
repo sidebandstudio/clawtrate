@@ -7619,7 +7619,10 @@ export class ClawtrateClient {
         requestedScopes: this.scopesToAsk(settings.url, stored),
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
-        openclawUpdate: sameGateway ? state.connection.openclawUpdate : null,
+        // A setup connection publishes none of the gateway's versions, so an earlier connection's
+        // report isn't carried into one, even to the same address (the setup contract).
+        openclawUpdate:
+          sameGateway && !this.isSetup(settings.url) ? state.connection.openclawUpdate : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
       },
       transcripts: sameGateway

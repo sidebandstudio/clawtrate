@@ -1042,6 +1042,34 @@ describe("what a setup connection publishes", () => {
     client.stop();
   });
 
+  it("F-494: setup on the address already connected doesn't carry that connection's update report", async () => {
+    const gateway = new FakeGateway();
+    const reply = helloOk(["operator.read"], NEW_TOKEN);
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: { ...reply, snapshot: { ...reply.snapshot, updateAvailable: UPDATE } },
+    });
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "t" });
+    await until(() => client.state.connection.openclawUpdate !== null);
+    // Setup lasts while its first read of bots is held.
+    gateway.handlers["agents.list"] = () => new Promise<never>(() => {});
+    const published: Array<{ status: string; report: unknown }> = [];
+    client.store.subscribe((state) =>
+      published.push({ status: state.connection.status, report: state.connection.openclawUpdate }),
+    );
+    // Setup again on the same address, with this device's saved pairing.
+    await client.connectForSetup(URL);
+    await until(() => client.state.connection.status === "connected");
+    await sleep(30);
+    // From the setup connection's first socket on: the old connection's last state may come first.
+    const during = published.slice(published.findIndex((each) => each.status !== "connected"));
+    expect(during.length).toBeGreaterThan(1);
+    expect(during.map((each) => each.report)).toEqual(during.map(() => null));
+    client.stop();
+  });
+
   it("F-494: the first read of bots after a setup hello, failing with the code or the new token in its text, publishes fixed words", async () => {
     const { published, storage, client } = await echoed(
       (gateway) => {
