@@ -1,4 +1,4 @@
-# CI's third e2e shard: see 1.txt.
+# CI's third e2e shard: see 1.txt. It also runs every spec file that no list names.
 bot-delete.spec.ts
 work-computer.spec.ts
 bot-voice.spec.ts

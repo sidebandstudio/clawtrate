@@ -100,7 +100,9 @@ jobs:
       - run: openclaw --version
       - run: pnpm exec playwright install --with-deps chromium
       # e2e/setup.spec.ts drives the desktop app's development build, which needs a display.
-      - run: xvfb-run --auto-servernum pnpm e2e --test-list e2e/shards/${{ matrix.shard }}.txt
+      # This runner's list; the last one also runs every spec file that no list names.
+      - run: node e2e/shards.ts ${{ matrix.shard }} | tee "$RUNNER_TEMP/e2e-shard.txt"
+      - run: xvfb-run --auto-servernum pnpm e2e --test-list "$RUNNER_TEMP/e2e-shard.txt"
       # What a failed check saw: traces and error contexts, kept for a few days.
       - if: failure()
         uses: actions/upload-artifact@v7
