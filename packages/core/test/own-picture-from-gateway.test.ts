@@ -18,6 +18,7 @@ import {
   type OutgoingAttachment,
 } from "../src/client.ts";
 import type { HttpFetch, HttpResponseLike, KeyValueStore } from "../src/host.ts";
+import { reviewOf } from "../src/bot-delete.ts";
 import { inboundRef, MAX_SENT_SOURCES, sentSources } from "../src/mapping.ts";
 import {
   fetchInboundPicture,
@@ -26,7 +27,7 @@ import {
   type InboundPictureContext,
   type SentPictureRead,
 } from "../src/pictures.ts";
-import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, KEY, URL_B } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import { FIRST, SECOND, SHOT, sentRow, solidPng } from "./sent-attachments-rows.ts";
@@ -718,6 +719,73 @@ describe("F-557: a read's token", () => {
 });
 
 describe("F-557: a task deleted during a read", () => {
+  it("F-557: a deleted bot's pictures read back go with it, by the bot each task is listed under, not its key", async () => {
+    const { fetch } = live();
+    const UNPREFIXED = "webchat:direct:u1";
+    const gateway = grantingGateway();
+    let agents = [
+      { id: "main", identity: { name: "Juniper" } },
+      { id: "otto", identity: { name: "Otto" } },
+    ];
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents,
+    });
+    gateway.handlers["agents.delete"] = (params) => {
+      agents = agents.filter((agent) => agent.id !== (params as { agentId: string }).agentId);
+      return { ok: true, agentId: "otto", removedBindings: 0, removed: [], failed: [] };
+    };
+    const listed = [{ key: UNPREFIXED, agentId: "otto", updatedAt: 5 }];
+    gateway.handlers["sessions.list"] = () => ({ sessions: listed, hasMore: false });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: listed, hasMore: false },
+    });
+    const history: Record<string, unknown[]> = {
+      [KEY]: [sentRow("m1", "look", [SHOT])],
+      [UNPREFIXED]: [sentRow("m2", "look", [SHOT])],
+    };
+    gateway.handlers["chat.history"] = (params) => ({
+      messages: history[(params as { sessionKey: string }).sessionKey] ?? [],
+    });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: PROTECTED, token: null }),
+      [tokenKey(PROTECTED)]: JSON.stringify({
+        token: TOKEN,
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: ADMIN_SCOPES.filter((scope) => scope !== "operator.admin"),
+        adminHeld: true,
+      }),
+    });
+    const client = new ClawtrateClient({ ...testHost(gateway, storage), fetch }, FAST);
+    await client.start();
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    await until(() => (client.state.tasksByBot.otto ?? []).some((task) => task.key === UNPREFIXED));
+    for (const [key, id] of [
+      [KEY, "m1:user"],
+      [UNPREFIXED, "m2:user"],
+    ] as const) {
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      expect(bytesOf(client, await client.readSentPicture(key, id, 0))).toEqual(RED);
+    }
+    expect(client.readBackPictureBytes).toBe(2 * RED.length);
+    const read = await client.readBotDelete("otto");
+    const outcome = await client.deleteBot({
+      botId: "otto",
+      stamp: read.stamp,
+      deleteFiles: false,
+      reviewed: reviewOf(read),
+      typed: "Otto",
+    });
+    expect(outcome.kind).toBe("answered");
+    expect(client.readBackPictureBytes).toBe(0);
+    client.stop();
+  });
+
   it("F-557: another task deleted while a picture is read leaves that read to finish", async () => {
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
