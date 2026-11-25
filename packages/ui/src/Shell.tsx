@@ -6,6 +6,7 @@ import {
   tasksWithFilePreviews,
   tasksWithoutSkillNotes,
   tasksWithoutUpdateNotices,
+  updateNoticeScope,
   type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
@@ -325,7 +326,7 @@ export function Shell({
   // One whose history ends with the gateway's update line shows what came before it (F-590).
   const [commandsShown] = useShowCommands();
   const { tasksByBot, transcripts } = state;
-  const updated = state.openclawUpdating?.updated;
+  const { updated, mainKey } = updateNoticeScope(state);
   const gatewayId = state.connection.gatewayId;
   const listedTasks = useMemo(
     () =>
@@ -333,12 +334,11 @@ export function Shell({
         tasksWithoutUpdateNotices(
           commandsShown ? tasksByBot : tasksWithoutSkillNotes(tasksByBot, transcripts),
           transcripts,
-          updated,
-          gatewayId,
+          { updated, gatewayId, mainKey },
         ),
         transcripts,
       ),
-    [commandsShown, tasksByBot, transcripts, updated, gatewayId],
+    [commandsShown, tasksByBot, transcripts, updated, gatewayId, mainKey],
   );
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.

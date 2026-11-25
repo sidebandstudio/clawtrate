@@ -147,6 +147,8 @@ function useUpdatePart(
       </div>
     );
   if (!update || info.readOnly || connection.status !== "connected") return null;
+  // What this device keeps for the gateway isn't read yet: no Update until it is (F-589).
+  if (updating.checkingKept) return null;
   if (updating.blocked) {
     const words = blockedWords(updating.blocked);
     return (

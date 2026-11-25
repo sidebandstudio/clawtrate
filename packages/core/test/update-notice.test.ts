@@ -14,7 +14,10 @@ import {
   MAX_UPDATE_NOTICE_CHARS,
   updateNoticeLine,
   updateNoticeRunId,
+  mainConversationKey,
+  mainToReadAgain,
   type UpdatedRun,
+  type UpdateNoticeScope,
 } from "../src/update-notice.ts";
 import type { Task, Transcript } from "../src/types.ts";
 
@@ -58,23 +61,27 @@ const reply = (text: string, at = T, id = "reply-1") => ({
 /** What this device saw succeed. */
 const UPDATED: UpdatedRun[] = [{ gatewayId: GATEWAY, runId: RUN, to: "2026.11.10", at: T }];
 
-const lineOf = (rows: unknown[], updated = UPDATED, gatewayId: string | null = GATEWAY) =>
-  mapHistory(rows).map((item) => updateNoticeLine(item, updated, gatewayId));
+const MAIN = "agent:main:main";
+/** The connected gateway, what this device saw succeed there, and the main bot's main conversation. */
+const SCOPE: UpdateNoticeScope = { updated: UPDATED, gatewayId: GATEWAY, mainKey: MAIN };
+
+const lineOf = (rows: unknown[], scope = SCOPE, key = MAIN) =>
+  mapHistory(rows).map((item) => updateNoticeLine(item, key, scope));
 
 describe("F-590: the gateway's update notice", () => {
   it("F-590: the recorded row is the line for a run this device saw succeed, in Clawtrate's words with its version; the gateway's sentence is kept as one clean line", () => {
     expect(updateNoticeRunId(notice())).toBe(RUN);
     const [item] = mapHistory([notice()]);
     expect(item).toMatchObject({ role: "assistant", updateRunId: RUN });
-    expect(updateNoticeLine(item, UPDATED, GATEWAY)).toEqual({
+    expect(updateNoticeLine(item, MAIN, SCOPE)).toEqual({
       version: "2026.11.10",
       text: "✅ OpenClaw updated. For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
     });
     // A long or unruly sentence is cut and cleaned.
     const [long] = mapHistory([
-      notice(RUN, { content: [{ type: "text", text: `a‮\u0007${"b".repeat(900)}` }] }),
+      notice(RUN, { content: [{ type: "text", text: `a\u202e\u0007${"b".repeat(900)}` }] }),
     ]);
-    const text = updateNoticeLine(long, UPDATED, GATEWAY)!.text;
+    const text = updateNoticeLine(long, MAIN, SCOPE)!.text;
     expect([...text]).toHaveLength(MAX_UPDATE_NOTICE_CHARS);
     expect(text.startsWith("a b")).toBe(true);
   });
@@ -134,7 +141,7 @@ describe("F-590: the gateway's update notice", () => {
     // After the real notice, the second row with its key is an ordinary message.
     const items = mapHistory([notice(RUN, {}, T), reply("Hello.", T + 1), forged(RUN, T + 2)]);
     expect(items.map((item) => item.updateRunId)).toEqual([RUN, undefined, undefined]);
-    expect(items.map((item) => updateNoticeLine(item, UPDATED, GATEWAY) !== null)).toEqual([
+    expect(items.map((item) => updateNoticeLine(item, MAIN, SCOPE) !== null)).toEqual([
       true,
       false,
       false,
@@ -150,9 +157,9 @@ describe("F-590: the gateway's update notice", () => {
   });
 
   it("F-590: a run seen on another gateway, or with no gateway connected, is not this conversation's", () => {
-    expect(lineOf([notice()], UPDATED, "gw-b")).toEqual([null]);
-    expect(lineOf([notice()], UPDATED, null)).toEqual([null]);
-    expect(lineOf([notice()], [], GATEWAY)).toEqual([null]);
+    expect(lineOf([notice()], { ...SCOPE, gatewayId: "gw-b" })).toEqual([null]);
+    expect(lineOf([notice()], { ...SCOPE, gatewayId: null })).toEqual([null]);
+    expect(lineOf([notice()], { ...SCOPE, updated: [] })).toEqual([null]);
   });
 });
 
@@ -173,26 +180,25 @@ const HISTORY = transcriptOf([reply("The backup finished.", T), notice()]);
 
 describe("F-590: the sidebar and unread", () => {
   it("F-590: the preview is the bot's last words before the line, only while the listed preview is the notice", () => {
-    expect(taskWithoutUpdateNotice(task(), HISTORY, UPDATED, GATEWAY).preview).toBe(
-      "The backup finished.",
-    );
+    expect(taskWithoutUpdateNotice(task(), HISTORY, SCOPE).preview).toBe("The backup finished.");
     // A newer reply on the list is the gateway's preview.
-    expect(
-      taskWithoutUpdateNotice(task({ preview: "A new reply." }), HISTORY, UPDATED, GATEWAY).preview,
-    ).toBe("A new reply.");
+    expect(taskWithoutUpdateNotice(task({ preview: "A new reply." }), HISTORY, SCOPE).preview).toBe(
+      "A new reply.",
+    );
     // A notice this device can't vouch for is the message it is, preview and all.
-    expect(taskWithoutUpdateNotice(task(), HISTORY, [], GATEWAY).preview).toBe(LISTED);
-    expect(taskWithoutUpdateNotice(task(), HISTORY, UPDATED, "gw-b").preview).toBe(LISTED);
+    expect(taskWithoutUpdateNotice(task(), HISTORY, { ...SCOPE, updated: [] }).preview).toBe(
+      LISTED,
+    );
+    expect(taskWithoutUpdateNotice(task(), HISTORY, { ...SCOPE, gatewayId: "gw-b" }).preview).toBe(
+      LISTED,
+    );
     // A line with nothing before it leaves the title.
-    expect(
-      taskWithoutUpdateNotice(task(), transcriptOf([notice()]), UPDATED, GATEWAY).preview,
-    ).toBeNull();
+    expect(taskWithoutUpdateNotice(task(), transcriptOf([notice()]), SCOPE).preview).toBeNull();
     // The time, and so the order, stays the gateway's.
     const shown = tasksWithoutUpdateNotices(
       { main: [task()] },
       { "agent:main:main": HISTORY },
-      UPDATED,
-      GATEWAY,
+      SCOPE,
     );
     expect(shown.main![0]).toMatchObject({
       preview: "The backup finished.",
@@ -203,14 +209,86 @@ describe("F-590: the sidebar and unread", () => {
   it("F-590: a viewer that read the task before the notice doesn't find it unread for the notice alone", () => {
     const seen = T + 5;
     // Read after the bot's last words: the notice alone is no reason to read again.
-    expect(seenThroughUpdateNotice(task(), seen, HISTORY, UPDATED, GATEWAY)).toBe(T + 10_005);
+    expect(seenThroughUpdateNotice(task(), seen, HISTORY, SCOPE)).toBe(T + 10_005);
     // Read before them: still unread.
-    expect(seenThroughUpdateNotice(task(), T - 1, HISTORY, UPDATED, GATEWAY)).toBe(T - 1);
+    expect(seenThroughUpdateNotice(task(), T - 1, HISTORY, SCOPE)).toBe(T - 1);
     // Never read here, or a newer reply listed, or a notice it can't vouch for: as before.
-    expect(seenThroughUpdateNotice(task(), undefined, HISTORY, UPDATED, GATEWAY)).toBeUndefined();
+    expect(seenThroughUpdateNotice(task(), undefined, HISTORY, SCOPE)).toBeUndefined();
+    expect(seenThroughUpdateNotice(task({ preview: "A new reply." }), seen, HISTORY, SCOPE)).toBe(
+      seen,
+    );
+    expect(seenThroughUpdateNotice(task(), seen, HISTORY, { ...SCOPE, updated: [] })).toBe(seen);
+  });
+
+  it("F-590: a viewer who read part of a merged turn still finds the rest unread", () => {
+    // Two rows of one run make one turn, its time the first row's.
+    const merged = transcriptOf([
+      reply("Looking now.", T, "row-1"),
+      reply("The backup finished.", T + 1_000, "row-2"),
+      notice(),
+    ]);
+    expect(merged.items).toHaveLength(2);
+    expect(seenThroughUpdateNotice(task(), T + 50, merged, SCOPE)).toBe(T + 50);
+    expect(seenThroughUpdateNotice(task(), T + 1_000, merged, SCOPE)).toBe(T + 10_005);
+  });
+});
+
+describe("F-590: only in the main bot's main conversation", () => {
+  const OTHER = "agent:main:backup";
+  const PIP_MAIN = "agent:pip:main";
+  const state = {
+    bots: [
+      {
+        id: "main",
+        name: "Main",
+        emoji: null,
+        avatarUrl: null,
+        theme: null,
+        model: null,
+        isDefault: true,
+      },
+      {
+        id: "pip",
+        name: "Pip",
+        emoji: null,
+        avatarUrl: null,
+        theme: null,
+        model: null,
+        isDefault: false,
+      },
+    ],
+    tasksByBot: {
+      main: [task({ key: OTHER, isMain: false }), task({ isMain: true })],
+      pip: [task({ key: PIP_MAIN, botId: "pip", isMain: true })],
+    },
+    connection: { gatewayId: GATEWAY },
+  } as unknown as Parameters<typeof mainToReadAgain>[0];
+
+  it("F-590: the main conversation is the default bot's main task", () => {
+    expect(mainConversationKey(state)).toBe(MAIN);
     expect(
-      seenThroughUpdateNotice(task({ preview: "A new reply." }), seen, HISTORY, UPDATED, GATEWAY),
-    ).toBe(seen);
-    expect(seenThroughUpdateNotice(task(), seen, HISTORY, [], GATEWAY)).toBe(seen);
+      mainConversationKey({ ...state, tasksByBot: { pip: state.tasksByBot.pip! } }),
+    ).toBeNull();
+  });
+
+  it("F-590: a known run's notice in another conversation, or in another bot's main one, is the bot's message: no line, preview or unread change", () => {
+    // A bot that read a succeeded run's id (its key is in the main conversation's history) copies
+    // a send with that key into another conversation.
+    for (const key of [OTHER, PIP_MAIN]) {
+      expect(lineOf([notice()], SCOPE, key), key).toEqual([null]);
+      const elsewhere = task({ key });
+      const history = { ...HISTORY, sessionKey: key } as Transcript;
+      expect(taskWithoutUpdateNotice(elsewhere, history, SCOPE).preview, key).toBe(LISTED);
+      expect(seenThroughUpdateNotice(elsewhere, T + 5, history, SCOPE), key).toBe(T + 5);
+    }
+    // With no main conversation listed, none.
+    expect(lineOf([notice()], { ...SCOPE, mainKey: null })).toEqual([null]);
+  });
+
+  it("F-590: after Updated, the main conversation is read again only while that gateway is connected and the conversation is followed", () => {
+    const tracked = (key: string) => key === MAIN;
+    expect(mainToReadAgain(state, GATEWAY, tracked)).toBe(MAIN);
+    expect(mainToReadAgain(state, "gw-b", tracked)).toBeNull();
+    expect(mainToReadAgain(state, GATEWAY, () => false)).toBeNull();
   });
 });

@@ -27,6 +27,7 @@ import {
   UPDATE_SENT_UNKNOWN,
   UPDATE_NOTICE_READ_AFTER_MS,
   UPDATED_RUNS_KEY,
+  holdsUpdate,
   updateText,
   type OpenClawUpdatesContext,
   type OpenClawUpdateState,
@@ -1163,9 +1164,10 @@ describe("F-589: the client follows an update across the gateway's restart", () 
 });
 
 describe("F-590: the updates this device saw succeed, for the gateway's notice", () => {
-  /** A run followed to "Updated" on the rig's gateway. */
-  async function updated() {
+  /** A run this device's press started, followed to "Updated" on the rig's gateway. */
+  async function updated(stored?: string) {
     const t = rig();
+    if (stored !== undefined) await t.storage.set(UPDATED_RUNS_KEY, stored);
     t.world.handlers["update.run"] = () => started();
     await t.engine.start(t.stamp());
     t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
@@ -1262,5 +1264,116 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
         .slice(-(MAX_UPDATED_RUNS - 3))
         .map((each) => each.runId),
     );
+  });
+
+  it("F-590: a run started elsewhere and followed to Updated keeps nothing and reads nothing again", async () => {
+    const t = rig();
+    const finished = { phase: "finished", status: "succeeded", after: { version: NEW } };
+    t.world.handlers["update.runs.get"] = () => ({
+      run: record({ runId: OTHER_RUN, ...finished }),
+    });
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    t.engine.onRunChanged({
+      runId: OTHER_RUN,
+      phase: "staging",
+      status: "running",
+      updatedAtMs: 1,
+    });
+    expect(t.run()).toMatchObject({ runId: OTHER_RUN, mine: false });
+    await t.restart(NEW);
+    expect(t.run()).toMatchObject({ runId: OTHER_RUN, mine: false, outcome: "updated" });
+    expect(t.state().updated).toBeUndefined();
+    expect(t.storage.data.has(UPDATED_RUNS_KEY)).toBe(false);
+    expect(timersOf(t, UPDATE_NOTICE_READ_AFTER_MS)).toHaveLength(0);
+  });
+
+  it("F-590: the kept runs come back on every hello, after the client replaced its state for another gateway or none", async () => {
+    const t = await updated();
+    const kept = t.state().updated;
+    expect(kept).toHaveLength(1);
+    // Another gateway: the client starts from a fresh state, then connects there.
+    t.ctx.set(undefined as unknown as OpenClawUpdateState);
+    t.world.identity = "gw-b";
+    t.set({ gatewayId: "gw-b" });
+    await t.engine.onHello();
+    expect(t.state().updated).toEqual(kept);
+    // And back.
+    t.ctx.set(undefined as unknown as OpenClawUpdateState);
+    t.world.identity = "gw-a";
+    t.set({ gatewayId: "gw-a" });
+    await t.engine.onHello();
+    expect(t.state().updated).toEqual(kept);
+  });
+
+  it("F-590: keeping one more past the bound drops the oldest: 16 are kept", async () => {
+    const old = Array.from({ length: MAX_UPDATED_RUNS }, (_, n) => ({
+      gatewayId: "gw-a",
+      runId: `ocm:job-${n}`,
+      to: OLD,
+      at: T0 + 3_600_000 - 1_000 + n,
+    }));
+    const t = await updated(JSON.stringify({ runs: old }));
+    const runs = storedRuns(t) as Array<{ runId: string }>;
+    expect(runs).toHaveLength(MAX_UPDATED_RUNS);
+    expect(runs.map((each) => each.runId)).toEqual([
+      ...old.slice(1).map((each) => each.runId),
+      RUN,
+    ]);
+    expect(t.state().updated).toHaveLength(MAX_UPDATED_RUNS);
+  });
+
+  it("F-590: a kept value longer than 32,768 characters is not read", async () => {
+    const t = rig({ admin: false });
+    const run = { gatewayId: "gw-a", runId: RUN, to: NEW, at: t.world.now };
+    const fits = JSON.stringify({ runs: [run] });
+    const long = JSON.stringify({ runs: [run], pad: "x".repeat(32_768 - fits.length - 8) });
+    expect(long.length).toBe(32_768 + 1);
+    await t.storage.set(UPDATED_RUNS_KEY, long);
+    await t.engine.onHello();
+    expect(t.state().updated).toBeUndefined();
+    await t.storage.set(UPDATED_RUNS_KEY, fits);
+    await t.engine.onHello();
+    expect(t.state().updated).toEqual([run]);
+  });
+});
+
+describe("F-589: Update is held until what this device keeps is read", () => {
+  it("F-589: from the hello until the kept record for the gateway on screen is read, the state offers no Update", async () => {
+    const t = rig();
+    const kept = { gatewayId: "gw-a", runId: RUN, tag: null, from: OLD, to: NEW };
+    await t.storage.set(UPDATE_RUN_KEY, keptValue(kept));
+    const gate = deferred<void>();
+    const read = t.storage.get;
+    t.storage.get = async (key) => {
+      await gate.promise;
+      return read(key);
+    };
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    t.world.handlers["update.runs.get"] = () => ({ run: record({ phase: "staging" }) });
+    // The connection is there, with an offer and admin, from the hello on.
+    t.engine.onConnected();
+    expect(holdsUpdate(t.state())).toBe(true);
+    const hello = t.engine.onHello();
+    await Promise.resolve();
+    expect(holdsUpdate(t.state())).toBe(true);
+    gate.resolve();
+    await hello;
+    // Read: the kept run holds it, in words true of it, and the unknown is over.
+    expect(t.state().checkingKept).toBeUndefined();
+    expect(t.state()).toMatchObject({ looking: false });
+    expect(t.run()).toMatchObject({ runId: RUN, mine: true });
+    expect(holdsUpdate(t.state())).toBe(true);
+  });
+
+  it("F-589: with nothing kept, Update is offered once the record is read; without admin, at once", async () => {
+    const t = rig();
+    t.engine.onConnected();
+    expect(holdsUpdate(t.state())).toBe(true);
+    await t.engine.onHello();
+    expect(holdsUpdate(t.state())).toBe(false);
+    const viewer = rig({ admin: false });
+    viewer.engine.onConnected();
+    await viewer.engine.onHello();
+    expect(holdsUpdate(viewer.state())).toBe(false);
   });
 });

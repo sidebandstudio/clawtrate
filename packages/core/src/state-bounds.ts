@@ -641,6 +641,7 @@ const item = flagged<TranscriptItem>()({
   brief: FLAG,
   reportRunId: ID,
   updateRunId: ID,
+  updateNoticeAfter: NUMBER,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
@@ -809,6 +810,7 @@ const openclawUpdating = object<OpenClawUpdateState>()({
     MAX_UPDATED_RUNS,
     object<UpdatedRun>()({ gatewayId: ID, runId: ID, to: NAME, at: NUMBER }),
   ),
+  checkingKept: FLAG,
 });
 const task = flagged<Task>()({
   key: ID,

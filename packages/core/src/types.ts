@@ -452,6 +452,11 @@ export type TranscriptItem = {
    */
   updateRunId?: string;
   /**
+   * On an item with `updateRunId`: the latest time of any row stored before it, every row of a
+   * merged turn included. Absent when no earlier row has a time.
+   */
+  updateNoticeAfter?: number;
+  /**
    * History places this user row inside a run that began before it: the gateway took it into
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
    */

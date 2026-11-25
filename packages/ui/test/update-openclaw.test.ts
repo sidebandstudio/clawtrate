@@ -95,6 +95,14 @@ describe("F-589: the Update OpenClaw button", () => {
     expect(part("notice", away)).toBe("");
   });
 
+  it("F-589: is not offered until what this device keeps for the gateway has been read", () => {
+    expect(part("notice", { openclawUpdating: updating({ checkingKept: true }) })).toBe("");
+    expect(part("settings", { openclawUpdating: updating({ checkingKept: true }) })).toBe("");
+    expect(part("notice", { openclawUpdating: updating({}) })).toContain(
+      ">Update OpenClaw to 2026.11.6</button>",
+    );
+  });
+
   it("F-589: is not offered where the gateway can't update itself: the notice says why, in its words, and what to do", () => {
     const html = part("notice", {
       openclawUpdating: updating({

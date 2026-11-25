@@ -8,7 +8,7 @@
 // notice", records why.
 
 import { cleanLine } from "./gateway-names.ts";
-import type { TranscriptItem } from "./types.ts";
+import type { ClawtrateState, TranscriptItem } from "./types.ts";
 
 const record = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -58,8 +58,9 @@ export function updateNoticeRunId(row: unknown): string | null {
 }
 
 /**
- * An update this device followed until the gateway's record said it succeeded and the same
- * gateway, reconnected, reported the new version (`OpenClawUpdates`, outcome "updated").
+ * An update this device's own press started, followed until the gateway's record said it
+ * succeeded and the same gateway, reconnected, reported the new version (`OpenClawUpdates`,
+ * outcome "updated", `mine`).
  */
 export type UpdatedRun = {
   /** The gateway's identity. */
@@ -88,19 +89,69 @@ export const updateNoticeText = (item: TranscriptItem) =>
   item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join("\n");
 
 /**
- * The line an item is drawn as, or null for every other item: it is the first row of its
- * conversation with the notice's key and fields (`TranscriptItem.updateRunId`), the conversation
- * is on the gateway connected now (`gatewayId`), and this device saw that run on that gateway
- * succeed (`updated`). The version is this device's, never the row's.
+ * The main bot's main conversation, where the gateway writes its notice: the task of the default
+ * bot that is its main session (`isMain`). Null while none is listed.
+ */
+export function mainConversationKey(
+  state: Pick<ClawtrateState, "bots" | "tasksByBot">,
+): string | null {
+  const main = state.bots.find((bot) => bot.isDefault);
+  return (main && state.tasksByBot[main.id]?.find((task) => task.isMain === true)?.key) ?? null;
+}
+
+/** What decides whether a notice is drawn as the line, from the state once per render. */
+export type UpdateNoticeScope = {
+  /** The updates this device's own press started and saw succeed. */
+  updated: readonly UpdatedRun[] | undefined;
+  /** The gateway connected now. */
+  gatewayId: string | null;
+  /** The only conversation the line is drawn in (`mainConversationKey`). */
+  mainKey: string | null;
+};
+
+export function updateNoticeScope(
+  state: Pick<ClawtrateState, "bots" | "tasksByBot" | "connection" | "openclawUpdating">,
+): UpdateNoticeScope {
+  return {
+    updated: state.openclawUpdating?.updated,
+    gatewayId: state.connection.gatewayId,
+    mainKey: mainConversationKey(state),
+  };
+}
+
+/**
+ * The line an item of conversation `taskKey` is drawn as, or null for every other item: it is
+ * the first row of its conversation with the notice's key and fields (`TranscriptItem.updateRunId`),
+ * the conversation is the main bot's main one on the gateway connected now, where the gateway
+ * writes its notice and keeps a key once, and this device's own press started that run and saw it
+ * succeed on that gateway. In any other conversation the same row is a bot's message. The version
+ * is this device's, never the row's.
  */
 export function updateNoticeLine(
   item: TranscriptItem | undefined,
-  updated: readonly UpdatedRun[] | undefined,
-  gatewayId: string | null,
+  taskKey: string,
+  scope: UpdateNoticeScope,
 ): UpdateNoticeLine | null {
   const runId = item?.updateRunId;
-  if (!runId || gatewayId === null) return null;
+  const { updated, gatewayId, mainKey } = scope;
+  if (!runId || gatewayId === null || mainKey === null || taskKey !== mainKey) return null;
   const run = updated?.find((each) => each.gatewayId === gatewayId && each.runId === runId);
   if (!run) return null;
   return { version: run.to, text: cleanLine(updateNoticeText(item), MAX_UPDATE_NOTICE_CHARS) };
+}
+
+/**
+ * After an update of gateway `gatewayId` this app followed to "Updated", the conversation to read
+ * again for the gateway's notice: the main bot's main one, while that gateway is the one connected
+ * and the conversation is followed (`tracked`). Null otherwise: one not followed is read whole when
+ * it is opened.
+ */
+export function mainToReadAgain(
+  state: Pick<ClawtrateState, "bots" | "tasksByBot" | "connection">,
+  gatewayId: string,
+  tracked: (key: string) => boolean,
+): string | null {
+  if (state.connection.gatewayId !== gatewayId) return null;
+  const key = mainConversationKey(state);
+  return key !== null && tracked(key) ? key : null;
 }

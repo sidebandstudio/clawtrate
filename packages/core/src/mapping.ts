@@ -12,7 +12,7 @@ import {
   updateNoticeLine,
   updateNoticeRunId,
   updateNoticeText,
-  type UpdatedRun,
+  type UpdateNoticeScope,
 } from "./update-notice.ts";
 import type {
   Bot,
@@ -650,6 +650,8 @@ export function mapHistory(
   const callItems = new Map<string, TranscriptItem>();
   /** The update notice keys rows were stored under so far: only the first can be the notice. */
   const noticeKeys = new Set<string>();
+  /** The latest time of any row so far, for what a notice comes after. */
+  let latestAt: number | null = null;
 
   arr(messages).forEach((entry, index) => {
     const message = asRecord(entry);
@@ -657,6 +659,8 @@ export function mapHistory(
     const info = meta(message);
     const id = `${str(info.id) ?? `row-${index}`}:${index}`;
     const timestamp = num(message.timestamp) ?? num(info.recordTimestampMs);
+    const before = latestAt;
+    if (timestamp !== null && (latestAt === null || timestamp > latestAt)) latestAt = timestamp;
     const kind = str(info.kind);
     const storedKey = rowIdempotencyKey(message);
     const firstOfKey =
@@ -761,7 +765,10 @@ export function mapHistory(
           if (runId?.startsWith(REPORT_RUN_PREFIX)) item.reportRunId = runId;
           // Perhaps the gateway's update notice: the first row with its key, never a later one.
           const updateRunId = firstOfKey ? updateNoticeRunId(message) : null;
-          if (updateRunId) item.updateRunId = updateRunId;
+          if (updateRunId) {
+            item.updateRunId = updateRunId;
+            if (before !== null) item.updateNoticeAfter = before;
+          }
           items.push(item);
         }
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
@@ -981,13 +988,12 @@ export function tasksWithoutSkillNotes(
 function beforeUpdateNotice(
   task: Task,
   transcript: Transcript | undefined,
-  updated: readonly UpdatedRun[] | undefined,
-  gatewayId: string | null,
+  scope: UpdateNoticeScope,
 ): TranscriptItem | null | undefined {
   const items = transcript?.items ?? [];
   const last = items.at(-1);
   if (!last || last.truncated === true || task.preview === null) return undefined;
-  if (!updateNoticeLine(last, updated, gatewayId)) return undefined;
+  if (!updateNoticeLine(last, task.key, scope)) return undefined;
   const listed = gatewayPreviewOfNote(updateNoticeText(last));
   if (listed === null || plainPreview(listed) !== task.preview) return undefined;
   return items.at(-2) ?? null;
@@ -1002,10 +1008,9 @@ function beforeUpdateNotice(
 export function taskWithoutUpdateNotice(
   task: Task,
   transcript: Transcript | undefined,
-  updated: readonly UpdatedRun[] | undefined,
-  gatewayId: string | null,
+  scope: UpdateNoticeScope,
 ): Task {
-  if (beforeUpdateNotice(task, transcript, updated, gatewayId) === undefined) return task;
+  if (beforeUpdateNotice(task, transcript, scope) === undefined) return task;
   const items = transcript!.items;
   let preview: string | null = null;
   for (let index = items.length - 2; index >= 0 && preview === null; index -= 1) {
@@ -1021,15 +1026,14 @@ export function taskWithoutUpdateNotice(
 export function tasksWithoutUpdateNotices(
   tasksByBot: Record<string, Task[]>,
   transcripts: Record<string, Transcript>,
-  updated: readonly UpdatedRun[] | undefined,
-  gatewayId: string | null,
+  scope: UpdateNoticeScope,
 ): Record<string, Task[]> {
-  if (!updated?.length) return tasksByBot;
+  if (!scope.updated?.length || scope.mainKey === null) return tasksByBot;
   let changed = false;
   const shown: Record<string, Task[]> = {};
   for (const [botId, tasks] of Object.entries(tasksByBot)) {
     shown[botId] = tasks.map((task) => {
-      const quiet = taskWithoutUpdateNotice(task, transcripts[task.key], updated, gatewayId);
+      const quiet = taskWithoutUpdateNotice(task, transcripts[task.key], scope);
       if (quiet !== task) changed = true;
       return quiet;
     });
@@ -1040,8 +1044,9 @@ export function tasksWithoutUpdateNotices(
 /**
  * For a viewer that keeps its own memory of what it read (a read-only connection), when it read a
  * task through, past an update notice that is all that came since: when the task's listed preview
- * is the notice its loaded history ends with, and the viewer read the task at or after the item
- * before it (both are the gateway's times), the task's own time. Otherwise `seenAt`. On a
+ * is the notice its loaded history ends with, and the viewer read the task at or after the latest
+ * row before it (`updateNoticeAfter`, so every row of a merged turn; both are the gateway's times),
+ * the task's own time. Otherwise `seenAt`. On a
  * connection that writes, the gateway keeps unread, and the notice doesn't raise it: writing it
  * moves only the row's `updatedAt` (OpenClaw 2026.10.6, `deriveSessionUnread`).
  */
@@ -1049,12 +1054,12 @@ export function seenThroughUpdateNotice(
   task: Task,
   seenAt: number | undefined,
   transcript: Transcript | undefined,
-  updated: readonly UpdatedRun[] | undefined,
-  gatewayId: string | null,
+  scope: UpdateNoticeScope,
 ): number | undefined {
   if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
-  const before = beforeUpdateNotice(task, transcript, updated, gatewayId);
+  const before = beforeUpdateNotice(task, transcript, scope);
   if (before === undefined) return seenAt;
-  if (before !== null && (before.timestamp === null || seenAt < before.timestamp)) return seenAt;
+  const after = transcript!.items.at(-1)!.updateNoticeAfter;
+  if (before !== null && (after === undefined || seenAt < after)) return seenAt;
   return task.updatedAt;
 }

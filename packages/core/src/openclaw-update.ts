@@ -180,8 +180,13 @@ export type OpenClawUpdateState = {
   looking: boolean;
   /** Asking the gateway about that press failed: Check again and Stop waiting are offered. */
   lookFailed: boolean;
-  /** The updates this device saw succeed, the latest last; absent when none. */
+  /** The updates this device's own press started and saw succeed, the latest last; absent when none. */
   updated?: UpdatedRun[];
+  /**
+   * Connected, and what this device keeps for the gateway on screen (a run of its press, or a
+   * press whose answer was lost) hasn't been read yet: Update is held until it is. Absent otherwise.
+   */
+  checkingKept?: true;
 };
 
 export const initialOpenClawUpdate: OpenClawUpdateState = {
@@ -192,6 +197,23 @@ export const initialOpenClawUpdate: OpenClawUpdateState = {
   looking: false,
   lookFailed: false,
 };
+
+/**
+ * Whether the state holds Update: a press now would send nothing, so none is offered. Until what
+ * this device keeps for the gateway is read, while a press goes out or its answer is sought, and
+ * while a run is under way.
+ */
+export function holdsUpdate(state: OpenClawUpdateState): boolean {
+  const outcome = state.run?.outcome;
+  return (
+    state.checkingKept === true ||
+    state.starting ||
+    state.looking ||
+    outcome === "running" ||
+    outcome === "late" ||
+    outcome === "away"
+  );
+}
 
 /** Text the gateway wrote, as Clawtrate shows it: one line, no control characters, bounded. */
 export function updateText(value: unknown, max: number): string | null {
@@ -330,6 +352,20 @@ function readUpdated(raw: string | null, now: number): UpdatedRun[] {
   }
 }
 
+/** `lists` as one, the later of each pair kept, none too old, the latest `MAX_UPDATED_RUNS`. */
+function mergeUpdated(now: number, ...lists: readonly UpdatedRun[][]): UpdatedRun[] {
+  const merged: UpdatedRun[] = [];
+  for (const each of lists.flat()) {
+    if (now - each.at > UPDATED_RUN_MAX_AGE_MS) continue;
+    const at = merged.findIndex(
+      (other) => other.gatewayId === each.gatewayId && other.runId === each.runId,
+    );
+    if (at >= 0) merged.splice(at, 1);
+    merged.push(each);
+  }
+  return merged.slice(-MAX_UPDATED_RUNS);
+}
+
 /** What is kept, one entry per gateway (its identity), the latest last, at most `MAX_KEPT_GATEWAYS`. */
 function readKept(raw: string | null): Kept[] {
   if (raw === null || raw.length > MAX_KEPT_CHARS) return [];
@@ -434,8 +470,6 @@ export class OpenClawUpdates {
   private reading: string | null = null;
   /** When the followed run last moved (an event or a record that changed it). */
   private movedAt = 0;
-  /** The updates seen to succeed have been read from storage. */
-  private updatedRead = false;
   private readonly ctx: OpenClawUpdatesContext;
 
   constructor(ctx: OpenClawUpdatesContext) {
@@ -695,9 +729,24 @@ export class OpenClawUpdates {
   }
 
   /**
-   * Connected (a reconnect after the restart, or reopening the app). Anything kept for this
-   * gateway holds Update from the first moment, before any answer; the gateway is asked only
-   * when there is something to settle.
+   * The hello has come: until `onHello` has read what this device keeps for the gateway on
+   * screen, Update is held, so the connection, its offer and admin access never show it offered
+   * before that is known. Called as the connection is published, before any answer.
+   */
+  onConnected(): void {
+    if (this.state.checkingKept !== true) this.patch({ checkingKept: true });
+  }
+
+  /** What is kept is known: the hold `onConnected` set ends, and what is kept holds instead. */
+  private keptKnown(): void {
+    const { checkingKept, ...rest } = this.state;
+    if (checkingKept) this.ctx.set(rest);
+  }
+
+  /**
+   * Connected (a reconnect after the restart, or reopening the app). Update is held from the
+   * hello (`onConnected`) until what is kept for this gateway has been read, and then by what is
+   * kept, before any answer; the gateway is asked only when there is something to settle.
    */
   async onHello(): Promise<void> {
     const epoch = ++this.epoch;
@@ -705,19 +754,33 @@ export class OpenClawUpdates {
     this.cancelAway = null;
     this.cancelLate?.();
     this.cancelLate = null;
-    if (!this.updatedRead) {
-      this.updatedRead = true;
-      const raw = await this.ctx.storage.get(UPDATED_RUNS_KEY).catch(() => null);
-      const updated = readUpdated(raw, this.ctx.now());
+    // The updates seen to succeed, on every hello: the client starts from a fresh state for
+    // another gateway or none, and the oldest age out.
+    const raw = await this.ctx.storage.get(UPDATED_RUNS_KEY).catch(() => null);
+    if (epoch !== this.epoch) return;
+    const updated = mergeUpdated(
+      this.ctx.now(),
+      readUpdated(raw, this.ctx.now()),
+      this.state.updated ?? [],
+    );
+    if (updated.length > 0 || this.state.updated) {
       if (updated.length > 0) this.patch({ updated });
+      else {
+        const { updated: _gone, ...rest } = this.state;
+        this.ctx.set(rest);
+      }
     }
-    if (!this.ctx.admin()) return;
+    if (!this.ctx.admin()) {
+      this.keptKnown();
+      return;
+    }
     const kept = readKept(await this.ctx.storage.get(UPDATE_RUN_KEY).catch(() => null));
     if (epoch !== this.epoch) return;
-    // Held at once for the gateway the connection already names, before its identity is read.
+    // Held for the gateway the connection already names, before its identity is read.
     const named = this.ctx.connection().gatewayId;
     const early = kept.find((each) => each.gatewayId === named) ?? null;
     if (early && !this.lookFor && !this.following(early)) this.hold(lookOf(early));
+    this.keptKnown();
     const id = await this.ctx.identity();
     if (epoch !== this.epoch || id === null) return;
     const run = this.state.run;
@@ -1116,10 +1179,14 @@ export class OpenClawUpdates {
         reason: null,
         note: null,
       });
-      await this.remember({ gatewayId: run.gatewayId, runId, to: expected, at: this.ctx.now() });
-      // The gateway's notice of it comes with no event: the main conversation is read again.
-      const gatewayId = run.gatewayId;
-      this.ctx.later(() => this.ctx.readMainAgain(gatewayId), UPDATE_NOTICE_READ_AFTER_MS);
+      // Only this device's own press is vouched for: a run started elsewhere, a bot's included,
+      // leaves the gateway's notice as the message it is.
+      if (run.mine === true) {
+        await this.remember({ gatewayId: run.gatewayId, runId, to: expected, at: this.ctx.now() });
+        // The gateway's notice of it comes with no event: the main conversation is read again.
+        const gatewayId = run.gatewayId;
+        this.ctx.later(() => this.ctx.readMainAgain(gatewayId), UPDATE_NOTICE_READ_AFTER_MS);
+      }
       await this.forget(run.gatewayId, runId);
       // The newer OpenClaw's models: read again the way the app reads them, once.
       await this.ctx.refreshModels().catch((error: unknown) => {
@@ -1151,15 +1218,7 @@ export class OpenClawUpdates {
         await this.ctx.storage.get(UPDATED_RUNS_KEY).catch(() => null),
         now,
       );
-      const same = (a: UpdatedRun, b: UpdatedRun) =>
-        a.gatewayId === b.gatewayId && a.runId === b.runId;
-      const others = [...stored, ...(this.state.updated ?? [])].filter(
-        (each, index, all) =>
-          !same(each, run) &&
-          now - each.at <= UPDATED_RUN_MAX_AGE_MS &&
-          all.findIndex((other) => same(other, each)) === index,
-      );
-      const updated = [...others, run].slice(-MAX_UPDATED_RUNS);
+      const updated = mergeUpdated(now, stored, this.state.updated ?? [], [run]);
       this.patch({ updated });
       try {
         await this.ctx.storage.set(UPDATED_RUNS_KEY, JSON.stringify({ runs: updated }));

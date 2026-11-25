@@ -199,6 +199,7 @@ import {
   sessionRowsFromList,
   type RawRecord,
 } from "./mapping.ts";
+import { mainToReadAgain } from "./update-notice.ts";
 import {
   MAX_SEARCHES_IN_FLIGHT,
   searchFiles,
@@ -1853,11 +1854,9 @@ export class ClawtrateClient {
     },
     refreshModels: () => this.accounts.load(),
     readMainAgain: (gatewayId) => {
-      if (this.state.connection.gatewayId !== gatewayId) return;
       // The main bot's main conversation, where the gateway writes its notice (F-590).
-      const main = this.state.bots.find((bot) => bot.isDefault);
-      const task = main && this.state.tasksByBot[main.id]?.find((each) => each.isMain === true);
-      if (task && this.tracked(task.key)) this.scheduleHistory(task.key);
+      const key = mainToReadAgain(this.state, gatewayId, (each) => this.tracked(each));
+      if (key) this.scheduleHistory(key);
     },
     newTag: () => this.randomId(),
     now: () => this.now(),
@@ -9373,6 +9372,8 @@ export class ClawtrateClient {
       maxImageBytes: number(asRecord(policy?.attachments)?.maxImageBytes),
       maxFileBytes: number(asRecord(policy?.attachments)?.maxBytes),
     };
+    // Update is held from this moment until what this device keeps for the gateway is read.
+    if (!this.isSetup(this.settings?.url)) this.openclawUpdates.onConnected();
     this.setConnection({
       status: "connected",
       serverVersion: this.isSetup(this.settings?.url)
