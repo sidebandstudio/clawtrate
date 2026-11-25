@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chunkText } from "../src/fake-provider.ts";
-import { normalizePrompt, planReply, type ChatMessage } from "../src/scripts.ts";
+import { effectivePrompt, normalizePrompt, planReply, type ChatMessage } from "../src/scripts.ts";
 import { SEED_BOTS } from "../src/seed-data.ts";
 import { LEARNED_REASON, LEARNED_SKILL, SKILL_REVIEW_PROMPT } from "../src/scenarios.ts";
 
@@ -245,5 +245,38 @@ describe("tasks a bot starts", () => {
         tools,
       ),
     ).toEqual([{ kind: "text", text: "Check the forecast finished." }]);
+  });
+});
+
+// OpenClaw 2026.11.10 keeps a task's system prompt and sends what changed in it as a user message
+// of its own after the prompt (#609).
+describe("the system prompt as the model has it now", () => {
+  const update = (body: string): ChatMessage => ({
+    role: "user",
+    content: `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${body}`,
+  });
+  const system: ChatMessage = {
+    role: "system",
+    content: "Intro.\n\n## Runtime\nModel one.\n\n## How you talk to your person\nPlainly.\n",
+  };
+
+  it("is the system prompt alone when nothing changed", () => {
+    expect(effectivePrompt([system, { role: "user", content: "#text" }])).toBe(
+      "Intro.\n\n## Runtime\nModel one.\n\n## How you talk to your person\nPlainly.\n",
+    );
+  });
+
+  it("takes out a removed section, replaces a changed one and adds a new one, in order", () => {
+    const now = effectivePrompt([
+      system,
+      { role: "user", content: "#text" },
+      update("## How you talk to your person\n(removed)\n<!-- /openclaw:attempt:DYNAMIC -->"),
+      update("## Runtime\nModel two.\n\n## MEMORY.md\nTuesday."),
+    ]);
+    expect(now).not.toContain("How you talk to your person");
+    expect(now).not.toContain("Model one.");
+    expect(now).toContain("## Runtime\nModel two.");
+    expect(now).toContain("## MEMORY.md\nTuesday.");
+    expect(now.startsWith("Intro.")).toBe(true);
   });
 });

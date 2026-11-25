@@ -99,12 +99,70 @@ const isRuntimeContext = (message: ChatMessage) =>
   message.role === "user" &&
   messageText(message).trimStart().startsWith("OpenClaw runtime context:");
 
+/**
+ * 2026.11.10's note of what changed in the system prompt since the last turn, which it sends as a
+ * user message of its own after the prompt (SYSTEM_PROMPT_UPDATE_HEADER); not the user's words.
+ */
+const isPromptUpdate = (message: ChatMessage) =>
+  message.role === "user" &&
+  messageText(message)
+    .trimStart()
+    .startsWith("System prompt update. The sections below replace their earlier versions;");
+
+const PROMPT_UPDATE_HEADER =
+  "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.";
+
+/**
+ * The system prompt a request gives the model, with 2026.11.10's updates to it applied in order:
+ * each `## ` section of an update replaces the section of that heading, is added when there is
+ * none, and is taken out when its body is `(removed)`. With no update, the system prompt as sent.
+ */
+export function effectivePrompt(messages: ChatMessage[]): string {
+  let prompt = messages
+    .filter((m) => m.role === "system" || m.role === "developer")
+    .map(messageText)
+    .join("\n\n");
+  for (const update of messages.filter(isPromptUpdate)) {
+    const body = messageText(update).trimStart().slice(PROMPT_UPDATE_HEADER.length);
+    for (const section of body.split(/^(?=## )/m).filter((part) => part.startsWith("## "))) {
+      const heading = section.slice(
+        0,
+        section.indexOf("\n") === -1 ? undefined : section.indexOf("\n"),
+      );
+      // The body as sent, from the line after the heading, without the attempt marker after it.
+      const content = section
+        .slice(heading.length)
+        .replace(/\n<!-- \/?openclaw:attempt:[A-Z]+ -->[\s\S]*$/, "")
+        .trimEnd();
+      const at = prompt.search(
+        new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m"),
+      );
+      const next = at === -1 ? -1 : prompt.slice(at + heading.length).search(/^(## |<!-- )/m);
+      const end = at === -1 ? -1 : next === -1 ? prompt.length : at + heading.length + next;
+      const replacement = content.trim() === "(removed)" ? "" : `${heading}${content}\n\n`;
+      prompt =
+        at === -1
+          ? `${prompt}\n\n${replacement}`
+          : prompt.slice(0, at) + replacement + prompt.slice(end);
+    }
+  }
+  return prompt;
+}
+
+/** A user message the gateway wrote itself beside the prompt. */
+const isGatewayAside = (message: ChatMessage) =>
+  isRuntimeContext(message) || isPromptUpdate(message);
+
 /** The gateway's own follow-up after a reply that had reasoning but no visible text. */
-export const VISIBLE_ANSWER_REPROMPT =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer";
+export const VISIBLE_ANSWER_REPROMPTS = [
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer",
+  // 2026.11.10's wording.
+  "Your turn ended without a final reply. Continue from the current conversation and answer",
+] as const;
+
 const isReprompt = (message: ChatMessage) =>
   message.role === "user" &&
-  normalizePrompt(messageText(message)).startsWith(VISIBLE_ANSWER_REPROMPT);
+  VISIBLE_ANSWER_REPROMPTS.some((start) => normalizePrompt(messageText(message)).startsWith(start));
 
 /** The reply the gateway treats as "nothing to say" (OpenClaw's SILENT_REPLY_TOKEN). */
 export const SILENT_REPLY = "NO_REPLY";
@@ -214,7 +272,7 @@ export const isGatewayTurn = (prompt: string) =>
 
 /** Which of GATEWAY_TURN_PROMPTS a request's prompt is, or null for any other prompt. */
 export function gatewayTurnPrompt(messages: ChatMessage[]): string | null {
-  const last = messages.findLast((m) => m.role === "user" && !isRuntimeContext(m));
+  const last = messages.findLast((m) => m.role === "user" && !isGatewayAside(m));
   const prompt = last ? normalizePrompt(messageText(last)) : "";
   return GATEWAY_TURN_PROMPTS.find((start) => prompt.startsWith(start)) ?? null;
 }
@@ -243,7 +301,7 @@ export function planReply(
 ): ReplyStep[] {
   let lastUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]!.role === "user" && !isRuntimeContext(messages[i]!)) {
+    if (messages[i]!.role === "user" && !isGatewayAside(messages[i]!)) {
       lastUserIndex = i;
       break;
     }
@@ -253,7 +311,7 @@ export function planReply(
     // Asked again for a visible answer: a reasoning-only scenario stays reasoning-only.
     const earlier = messages
       .slice(0, lastUserIndex)
-      .findLast((m) => m.role === "user" && !isRuntimeContext(m) && !isReprompt(m));
+      .findLast((m) => m.role === "user" && !isGatewayAside(m) && !isReprompt(m));
     const selected = earlier ? selectScenarios(messageText(earlier)) : [];
     if (selected.at(-1)?.scenario.name === "think-only") {
       return [
@@ -265,11 +323,13 @@ export function planReply(
   const raw = messageText(messages[lastUserIndex]!);
   const prompt = normalizePrompt(raw);
   if (prompt === "What do you remember about me?") {
+    // The system prompt, then each of 2026.11.10's updates to it in order: the last one that
+    // has the memory section is the memory the bot has now.
     const memory = messages
-      .filter((message) => message.role === "system")
+      .filter((message) => message.role === "system" || isPromptUpdate(message))
       .map(messageText)
       .map((prompt) => prompt.split("\n<!-- /openclaw:attempt:STABLE -->", 1)[0]!)
-      .find((prompt) => /^## .*\/MEMORY\.md\s*$/m.test(prompt))
+      .findLast((prompt) => /^## .*\/MEMORY\.md\s*$/m.test(prompt))
       // A heading stops the extract only when it names another workspace file, as the
       // gateway's injected-file headings do; a `##` inside the memory itself does not.
       ?.match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|(?![\s\S]))/m)?.[1]
@@ -336,7 +396,7 @@ export function planReply(
     const reply = skillReviewReply(
       messages
         .slice(0, lastUserIndex)
-        .filter((m) => m.role === "user" && !isRuntimeContext(m))
+        .filter((m) => m.role === "user" && !isGatewayAside(m))
         .map((m) => ({ role: m.role, text: normalizePrompt(messageText(m)) })),
       toolResults(after),
       tools,
