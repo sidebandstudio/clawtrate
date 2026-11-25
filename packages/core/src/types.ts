@@ -446,6 +446,24 @@ export type TranscriptItem = {
    */
   reportRunId?: string;
   /**
+   * The update run a bot's row names as the gateway's finished notice (`updateNoticeRunId`): the
+   * first row of the conversation with that key and the gateway's fields. It is drawn as the
+   * line "OpenClaw updated to <version>" only when this device saw that run succeed
+   * (`updateNoticeLine`); otherwise it is the message it is.
+   */
+  updateRunId?: string;
+  /**
+   * On an item with `updateRunId`: the latest time of any row stored before it, every row of a
+   * merged turn included. Absent when no earlier row has a time.
+   */
+  updateNoticeAfter?: number;
+  /**
+   * On an item with `updateRunId`: the row's own `timestamp`, as the gateway stamped it when it
+   * wrote the row, without the store's record time `timestamp` may fall back on. Absent when the
+   * row has none; then it is never the line.
+   */
+  updateNoticeWrittenAt?: number;
+  /**
    * History places this user row inside a run that began before it: the gateway took it into
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
    */

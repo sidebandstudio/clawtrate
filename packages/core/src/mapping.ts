@@ -5,6 +5,15 @@
 import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
+import {
+  gatewayPreviewOf,
+  rowIdempotencyKey,
+  UPDATE_NOTICE_KEY_PREFIX,
+  updateNoticeLine,
+  updateNoticeRunId,
+  updateNoticeText,
+  type UpdateNoticeScope,
+} from "./update-notice.ts";
 import type {
   Bot,
   Task,
@@ -639,6 +648,12 @@ export function mapHistory(
   const pendingCalls = new Map<string, Extract<TranscriptBlock, { kind: "tool-call" }>>();
   /** The item each pending call is in, so a cut result marks it. */
   const callItems = new Map<string, TranscriptItem>();
+  /** The update notice keys rows were stored under so far: only the first can be the notice. */
+  const noticeKeys = new Set<string>();
+  /** The latest time of any row so far, for what a notice comes after. */
+  let latestAt: number | null = null;
+  /** A row so far had no time: what a later notice comes after is not known. */
+  let timeUnknown = false;
 
   arr(messages).forEach((entry, index) => {
     const message = asRecord(entry);
@@ -646,7 +661,14 @@ export function mapHistory(
     const info = meta(message);
     const id = `${str(info.id) ?? `row-${index}`}:${index}`;
     const timestamp = num(message.timestamp) ?? num(info.recordTimestampMs);
+    const before = timeUnknown ? null : latestAt;
+    if (timestamp === null) timeUnknown = true;
+    else if (latestAt === null || timestamp > latestAt) latestAt = timestamp;
     const kind = str(info.kind);
+    const storedKey = rowIdempotencyKey(message);
+    const firstOfKey =
+      storedKey?.startsWith(UPDATE_NOTICE_KEY_PREFIX) === true && !noticeKeys.has(storedKey);
+    if (firstOfKey) noticeKeys.add(storedKey!);
     // The gateway cut this row to its display length.
     const cutByGateway = info.truncated === true;
     // The first row the task stored itself, of any role (a reset's row too), ends the search for
@@ -745,6 +767,16 @@ export function mapHistory(
           // A row that names no run, not even as a reply kept after an abort, is no run's reply.
           if (runId === null && str(asRecord(message.openclawAbort)?.runId) === null) {
             item.runless = true;
+          }
+          // Perhaps the gateway's update notice: the first row with its key, never a later one.
+          const updateRunId = firstOfKey ? updateNoticeRunId(message) : null;
+          if (updateRunId) {
+            item.updateRunId = updateRunId;
+            // Unknown when an earlier row had no time: then no read is proof of reading it.
+            if (before !== null) item.updateNoticeAfter = before;
+            // The row's own time, never the store's: what the line's rule compares.
+            const written = num(message.timestamp);
+            if (written !== null) item.updateNoticeWrittenAt = written;
           }
           items.push(item);
         }
@@ -909,4 +941,102 @@ export function tasksWithFilePreviews(
     });
   }
   return changed ? shown : tasksByBot;
+}
+
+/**
+ * When a task's loaded history ends with an update line (`updateNoticeLine`) and its listed
+ * preview is the one the gateway makes of that notice (`gatewayPreviewOf`): the item before the line, or null when there is none. Undefined otherwise:
+ * the listed row then has something newer, or the line is not this device's to draw.
+ */
+function beforeUpdateNotice(
+  task: Task,
+  transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
+): TranscriptItem | null | undefined {
+  const items = transcript?.items ?? [];
+  const last = items.at(-1);
+  if (!last || last.truncated === true || task.preview === null) return undefined;
+  if (!updateNoticeLine(last, task.key, scope)) return undefined;
+  const listed = gatewayPreviewOf(updateNoticeText(last));
+  if (listed === null || plainPreview(listed) !== task.preview) return undefined;
+  return items.at(-2) ?? null;
+}
+
+/**
+ * A task's preview in the sidebar when its listed preview is the update notice its loaded history
+ * ends with (F-590): the text of the last item before it (null when none has text, so the title
+ * shows). The notice is not what the bot last said.
+ * No time is changed, so the order is the gateway's.
+ */
+export function taskWithoutUpdateNotice(
+  task: Task,
+  transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
+): Task {
+  if (beforeUpdateNotice(task, transcript, scope) === undefined) return task;
+  const items = transcript!.items;
+  let preview: string | null = null;
+  for (let index = items.length - 2; index >= 0 && preview === null; index -= 1) {
+    const item = items[index]!;
+    // An earlier update line is not what the bot said either.
+    if (item.role === "system" || updateNoticeLine(item, task.key, scope)) continue;
+    // A bot's message that is only files reads as their names, as the rail shows it (F-115).
+    if (item.role === "assistant" && item.filesPreview) {
+      preview = item.filesPreview;
+      continue;
+    }
+    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
+    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
+  }
+  return preview === task.preview ? task : { ...task, preview };
+}
+
+/** Every listed task as `taskWithoutUpdateNotice` shows it, by bot. */
+export function tasksWithoutUpdateNotices(
+  tasksByBot: Record<string, Task[]>,
+  transcripts: Record<string, Transcript>,
+  scope: UpdateNoticeScope,
+): Record<string, Task[]> {
+  if (!scope.updated?.length || scope.mainKey === null) return tasksByBot;
+  let changed = false;
+  const shown: Record<string, Task[]> = {};
+  for (const [botId, tasks] of Object.entries(tasksByBot)) {
+    shown[botId] = tasks.map((task) => {
+      const quiet = taskWithoutUpdateNotice(task, transcripts[task.key], scope);
+      if (quiet !== task) changed = true;
+      return quiet;
+    });
+  }
+  return changed ? shown : tasksByBot;
+}
+
+/**
+ * For a viewer that keeps its own memory of what it read (a read-only connection), when it read a
+ * task through, past an update notice that is all that came since: when the task's listed preview
+ * is the notice its loaded history ends with, and the viewer read the task at or after the latest
+ * row before it (`updateNoticeAfter`, so every row of a merged turn; both are the gateway's times),
+ * the task's own time. Otherwise `seenAt`. On a
+ * connection that writes, the gateway keeps unread, and the notice doesn't raise it: writing it
+ * moves only the row's `updatedAt` (OpenClaw 2026.10.6, `deriveSessionUnread`).
+ */
+export function seenThroughUpdateNotice(
+  task: Task,
+  seenAt: number | undefined,
+  transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
+): number | undefined {
+  if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
+  if (beforeUpdateNotice(task, transcript, scope) === undefined) return seenAt;
+  // Back through earlier update lines (two updates with nothing between them) to the first: what
+  // came before it is what the viewer must have read.
+  const items = transcript!.items;
+  let first = items.length - 1;
+  while (first > 0 && updateNoticeLine(items[first - 1], task.key, scope)) first -= 1;
+  if (first === 0) {
+    // Nothing loaded before the line: the conversation had nothing else only if it is all loaded.
+    return transcript!.hasMore ? seenAt : task.updatedAt;
+  }
+  const after = items[first]!.updateNoticeAfter;
+  if (after === undefined || seenAt < after) return seenAt;
+  return task.updatedAt;
 }

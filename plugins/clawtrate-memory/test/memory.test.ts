@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -35,9 +35,13 @@ let fs: Pick<Parameters<typeof registerMemory>[1], "root" | "canonicalPathFromEx
 let agents: Pick<Parameters<typeof registerMemory>[1], "listAgentIds" | "resolveAgentConfig">;
 
 beforeAll(async () => {
-  const packageDir =
-    process.env.OPENCLAW_PACKAGE_DIR ??
-    join(execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(), "openclaw");
+  // The OpenClaw package set aside for the tests. Never a global one: on a computer that runs its
+  // own gateway, that is the person's own OpenClaw (#597).
+  const packageDir = process.env.OPENCLAW_PACKAGE_DIR ?? "";
+  if (!packageDir || !existsSync(join(packageDir, "package.json")))
+    throw new Error(
+      `OpenClaw is not installed at ${packageDir || "OPENCLAW_PACKAGE_DIR"}; the memory plugin's tests need it. Set OPENCLAW_PACKAGE_DIR.`,
+    );
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
   expect(manifest.version).toBe("2026.10.6");
   fs = await import(pathToFileURL(join(packageDir, "dist/plugin-sdk/file-access-runtime.js")).href);

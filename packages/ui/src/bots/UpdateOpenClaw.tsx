@@ -181,6 +181,8 @@ function useUpdatePart(state: ClawtrateState, place: RefObject<HTMLDivElement | 
       </div>
     );
   if (!update) return null;
+  // What this device keeps for the gateway isn't read yet: no Update until it is (F-589).
+  if (updating.checkingKept) return null;
   if (updating.blocked && connected && !info.readOnly) {
     const words = blockedWords(updating.blocked);
     return (
