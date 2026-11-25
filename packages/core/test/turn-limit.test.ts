@@ -1,11 +1,19 @@
 // The "Turn time limit" (F-100): chosen by the person, kept by the host, and the limit at which
 // this client stops a run it started, as any Stop: "Stopping…" until the gateway confirms.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
-import { GatewayError, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  GatewayError,
+  memoryStorage,
+  sleep,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 function started(turnLimit: string | null) {
   const gateway = grantingGateway();
@@ -51,6 +59,49 @@ describe("the turn time limit (F-100)", () => {
         : set(key, value);
     await expect(client.setTurnLimit(1)).rejects.toThrow("The disk is full.");
     expect(client.state.turnLimitMinutes).toBe(50);
+    client.stop();
+  });
+
+  it("F-100: two quick changes keep the last one asked, in storage, in the state and in the timer, when the first write finishes last", async () => {
+    const { client, storage } = started(null);
+    await client.start();
+    await until(() => client.state.discovery.status === "ready");
+    client.openSession(KEY);
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    client.sendMessage(KEY, "Take your time");
+    const run = () => client.state.transcripts[KEY]!.runs[0];
+    await until(() => run()?.bound === true && run()?.state === "running");
+    const set = storage.set.bind(storage);
+    const first = deferred<void>();
+    let writes = 0;
+    storage.set = async (key, value) => {
+      if (key === "turn-limit-minutes" && (writes += 1) === 1) await first.promise;
+      return set(key, value);
+    };
+    // Each new limit arms the running turn's timer again, for what is left of the limit.
+    const real = globalThis.setTimeout;
+    const armed: number[] = [];
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: () => void,
+      ms?: number,
+    ) => {
+      armed.push(ms ?? 0);
+      return real(handler, ms);
+    }) as typeof setTimeout);
+    try {
+      const two = client.setTurnLimit(2);
+      const one = client.setTurnLimit(1);
+      await sleep(20);
+      first.resolve();
+      await Promise.all([two, one]);
+    } finally {
+      timers.mockRestore();
+    }
+    expect(storage.data.get("turn-limit-minutes")).toBe("1");
+    expect(client.state.turnLimitMinutes).toBe(1);
+    // The turn's timer armed last is for the one-minute limit.
+    expect(armed.filter((ms) => ms > 10_000).at(-1)).toBeLessThanOrEqual(60_000);
+    expect(run()!.state).toBe("running");
     client.stop();
   });
 
