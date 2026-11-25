@@ -314,6 +314,9 @@ function assistantPictures(content: unknown): ChatPicture[] {
   });
 }
 
+/** The longest preview of a file-only message kept (`TranscriptItem.filesPreview`): two sidebar lines. */
+const MAX_FILES_PREVIEW_CHARS = 200;
+
 /** The longest file name shown or offered for saving, in UTF-8 bytes: what macOS, Linux and Windows file systems all take. */
 export const MAX_FILE_NAME_BYTES = 255;
 
@@ -636,10 +639,14 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           return true;
         });
         if (more.length > 0) item.files = [...(item.files ?? []), ...more];
-        // Whether the item's last row with text or files had files only (the sidebar names them).
+        // When the item's last row with text or files had files only: their names, for the sidebar.
         if (blocks.some((block) => block.kind === "text" && block.text.trim()))
-          delete item.filesLast;
-        else if (files.length > 0) item.filesLast = true;
+          delete item.filesPreview;
+        else if (files.length > 0)
+          item.filesPreview = files
+            .map((file) => file.name)
+            .join(", ")
+            .slice(0, MAX_FILES_PREVIEW_CHARS);
         if (cutByGateway) item.truncated = true;
         if (rowId) {
           for (const block of blocks)
@@ -773,8 +780,8 @@ export function taskWithoutSkillNotes(task: Task, transcript: Transcript | undef
 export function taskWithFilePreview(task: Task, transcript: Transcript | undefined): Task {
   const items = transcript?.items ?? [];
   const last = items.at(-1);
-  const files = last?.files;
-  if (last?.role !== "assistant" || last.filesLast !== true || !files?.length) return task;
+  const preview = last?.role === "assistant" ? last.filesPreview : undefined;
+  if (!preview) return task;
   let before: string | null = null;
   for (let index = items.length - 1; index >= 0 && before === null; index -= 1) {
     const text = items[index]!.blocks.findLast(
@@ -783,11 +790,6 @@ export function taskWithFilePreview(task: Task, transcript: Transcript | undefin
     if (text?.kind === "text") before = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
   }
   if (task.preview !== null && task.preview !== before) return task;
-  const row = files.at(-1)!.messageId;
-  const preview = files
-    .filter((file) => file.messageId === row)
-    .map((file) => file.name)
-    .join(", ");
   return preview === task.preview ? task : { ...task, preview };
 }
 

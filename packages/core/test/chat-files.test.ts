@@ -376,6 +376,28 @@ describe("F-115: the preview of a task whose last message is only a file", () =>
     expect(taskWithFilePreview(task("Send the route"), merged).preview).toBe("Send the route");
   });
 
+  it("F-115: the last file-only message's files are named even when one was shown earlier in the run", () => {
+    const row = (id: string, seq: number, file: unknown) => ({
+      role: "assistant",
+      content: [file],
+      model: "dev-1",
+      __openclaw: { runId: "probe-attach", id, seq },
+    });
+    const x = attachment(PDF, "x.pdf", "application/pdf", 861);
+    const y = attachment(NOTES, "y.txt", "text/plain", 55);
+    const repeated = {
+      items: mapHistory([
+        ...run([{ type: "text", text: "Here they come." }], "Send both"),
+        row("row-a", 5, x),
+        row("row-b", 6, y),
+        row("row-c", 7, x),
+      ]),
+    } as unknown as Transcript;
+    // The turn lists each file once; its last message carried x.pdf again.
+    expect(repeated.items.at(-1)!.files!.map((file) => file.name)).toEqual(["x.pdf", "y.txt"]);
+    expect(taskWithFilePreview(task("Here they come."), repeated).preview).toBe("x.pdf");
+  });
+
   it("F-115: any other preview, a message with text, or no loaded history keeps the gateway's", () => {
     expect(taskWithFilePreview(task("Something newer"), only).preview).toBe("Something newer");
     expect(taskWithFilePreview(task("Send the route"), transcript(ATTACHED)).preview).toBe(
@@ -507,6 +529,27 @@ describe("F-115: a file a bot attaches, read", () => {
     });
     expect(() => parseBridgeCommand({ type: "readChatFile", key: KEY, stamp })).toThrow();
     expect(() => parseBridgeCommand({ type: "readChatFile", key: KEY, artifactId: PDF })).toThrow();
+  });
+
+  it("F-115: a file read that waited for a place checks its gateway again before asking", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { client, gateway } = await open(async () => {
+      await held;
+      return response(200, {}, BYTES);
+    });
+    // Four reads hold the file reads' places, so the stamped one waits.
+    const busy = Array.from({ length: 4 }, () => client.readChatFile(KEY, PDF));
+    const stamp = { gatewayId: "gateway-a", target: client.state.connection.target };
+    const waiting = client.readChatFile(KEY, PDF, {}, stamp);
+    await until(() => gateway.calls("artifacts.download").length === 4);
+    // The host moves to another target while it waits, on the same connection.
+    (client as unknown as { target: number }).target += 1;
+    release();
+    await Promise.all(busy);
+    expect(await waiting).toEqual({ status: "failed", message: CONNECTION_CHANGED });
+    expect(gateway.calls("artifacts.download")).toHaveLength(4);
+    client.stop();
   });
 
   it("F-115: a file is read only while the host still has the gateway whose history drew its row", async () => {

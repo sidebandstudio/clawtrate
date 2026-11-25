@@ -6948,18 +6948,25 @@ export class ClawtrateClient {
     options: FileReadOptions = {},
     stamp?: GatewayStamp,
   ): Promise<ChatFileRead> {
-    if (stamp !== undefined) {
+    // Checked before the read waits for a place and again after: the connection can move meanwhile.
+    const refusal = async (): Promise<string | null> => {
+      if (stamp === undefined) return null;
       try {
         await this.requireSameGateway(stamp);
+        return null;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return {
-          status: "failed",
-          message: /another gateway/.test(message) ? FILE_FROM_ANOTHER_GATEWAY : message,
-        };
+        return /another gateway/.test(message) ? FILE_FROM_ANOTHER_GATEWAY : message;
       }
-    }
-    return this.readHandedOver("file", options, (ctx) => readChatFile(ctx, key, artifactId));
+    };
+    const before = await refusal();
+    if (before !== null) return { status: "failed", message: before };
+    return this.readHandedOver(
+      "file",
+      options,
+      (ctx) => readChatFile(ctx, key, artifactId),
+      refusal,
+    );
   }
 
   /** A picture or file a bot handed over, read through the download the gateway issues. */
@@ -6967,6 +6974,8 @@ export class ClawtrateClient {
     noun: string,
     options: FileReadOptions,
     read: (ctx: ChatPictureContext) => Promise<R>,
+    /** Checked once the read has its place, just before anything is asked: why not, or null. */
+    refusal?: () => Promise<string | null>,
   ): Promise<R | { status: "failed"; message: string }> {
     // A turn hands over up to four pictures and a task can hold several such turns, all drawn
     // at once: a picture waits up to 30 s for one of the file reads' places, and of the
@@ -6983,6 +6992,8 @@ export class ClawtrateClient {
       return { status: "failed", message: `The connection changed while this ${noun} waited.` };
     // A viewer that left while the picture waited asks for nothing.
     this.checkNotWithdrawn(options.owner);
+    const refused = refusal ? await refusal() : null;
+    if (refused !== null) return { status: "failed", message: refused };
     const gatewayUrl = this.state.connection.gatewayUrl ?? "";
     const answer = await this.fileRead(
       (ctx) => read({ ...ctx, fetch: this.host.fetch ?? null, gatewayUrl }),
