@@ -9,7 +9,7 @@ import type {
   Transcript,
   TranscriptItem,
 } from "@clawtrate/core";
-import { browserUse } from "@clawtrate/core";
+import { browserUse, updateNoticeLine, updateNoticeScope } from "@clawtrate/core";
 import {
   useCallback,
   useContext,
@@ -49,6 +49,7 @@ import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
+import { UpdateLine } from "./UpdateLine.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { SentFiles } from "./SentFiles.tsx";
@@ -270,8 +271,19 @@ function TranscriptView({
   onAnnounce: (text: string) => void;
 }) {
   const reading = useReading();
-  const { bots, tasksByBot } = useClawtrateState();
+  const { bots, tasksByBot, connection, openclawUpdating } = useClawtrateState();
   const starter = useMemo(() => starterOf(task, bots, tasksByBot), [task, bots, tasksByBot]);
+  // The gateway's update notice is drawn as a line only in the main bot's main conversation (F-590).
+  const noticeScope = useMemo(
+    () =>
+      updateNoticeScope({
+        bots,
+        tasksByBot,
+        connection,
+        ...(openclawUpdating ? { openclawUpdating } : {}),
+      }),
+    [bots, tasksByBot, connection, openclawUpdating],
+  );
   const openTask = useContext(OpenTaskContext);
   // The thread open over the transcript, and what opened it, for focus to go back to.
   const [thread, setThread] = useState<{ messageId: string; from: HTMLElement | null } | null>(
@@ -439,9 +451,15 @@ function TranscriptView({
       );
     }
     if (at !== null) previous = at;
+    const updateLine = updateNoticeLine(item, task.key, noticeScope);
     rows.push(
       <CardSlot key={item.id} item={item}>
-        {item.role === "system" ? (
+        {updateLine ? (
+          <UpdateLine
+            line={updateLine}
+            {...(item.messageId ? { messageId: item.messageId } : {})}
+          />
+        ) : item.role === "system" ? (
           <p className="event-line" data-side="center">
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
