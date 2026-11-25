@@ -20,7 +20,7 @@ import {
   plainPreview,
   type AvatarChoice,
 } from "@clawtrate/core";
-import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import {
   CLEARTEXT_WORDS,
   CONNECT_WORDS,
@@ -89,6 +89,7 @@ import {
   workspaceFor,
   type Step,
 } from "./harness.ts";
+import { startsOnItsOwn } from "./jobs.ts";
 
 type SessionRow = {
   key: string;
@@ -312,6 +313,11 @@ afterAll(async () => {
   browser.closeAllConnections();
   await new Promise<void>((resolve) => browser.close(() => resolve()));
 });
+
+// A run without the pairing check (one of CI's jobs, jobs.ts) pairs first, as that check does.
+beforeEach(async ({ task }) => {
+  if (!deviceId && !startsOnItsOwn(task.name)) await pairedSession();
+}, 15 * 60_000);
 
 describe("the iOS app", () => {
   it("F-001 F-009 F-263: on iPhone, the first screen is the welcome with the mark, the tagline and Connect a gateway; an empty address, a gateway nobody answers and one on another protocol each get the desktop's words and a way on, and Retry repeats only the handshake", async () => {
@@ -1904,6 +1910,34 @@ function anotherGateway(): Step[] {
       },
     },
   ];
+}
+
+/**
+ * Pair the app read-only through the check's proxy and open Home, where the pairing check leaves
+ * it, for a run that leaves that check out. The gateway's owner approves with the dev tool.
+ */
+async function pairedSession(): Promise<void> {
+  launch({
+    fresh: true,
+    devGateway: gateway,
+    switcherProbePort: Number(new URL(browserUrl).port),
+  });
+  await steps("session-connect", [
+    waitFor({ id: "welcome" }),
+    tap({ id: "connect-a-gateway" }),
+    ...typeAddress(gateway, env.token),
+    waitFor({ id: "pairing" }, 90_000),
+  ]);
+  const request = await until("the app's pairing request", async () =>
+    (await devices()).pending.find((r) => r.displayName === "Clawtrate iPhone"),
+  );
+  expect(request.scopes).toEqual(["operator.read"]);
+  devGateway("approve");
+  await steps("session-home", [
+    waitFor({ id: "home" }, 120_000),
+    waitFor({ id: "bot-pip" }, 60_000),
+  ]);
+  deviceId = request.deviceId!;
 }
 
 /**
