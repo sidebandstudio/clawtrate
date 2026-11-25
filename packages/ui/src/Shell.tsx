@@ -1,5 +1,6 @@
 import {
   isActive,
+  listedTasks as listedTasksOf,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
   tasksWithoutSkillNotes,
@@ -326,8 +327,9 @@ export function Shell({
   );
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
+  // Only tasks of the bots the sidebar lists (F-562): a count always has something to open.
   const unread = unreadCount(
-    state.tasksByBot,
+    listedTasksOf(state, selection.kept),
     selection.unreadSeen,
     conversationVisible ? (task?.key ?? null) : null,
   );
@@ -838,7 +840,7 @@ export function Shell({
         inert={inert}
       >
         <Rail
-          bots={state.bots}
+          bots={selection.listed}
           tasksByBot={listedTasks}
           discovery={state.discovery}
           connection={state.connection}
@@ -985,6 +987,7 @@ export function Shell({
         {searchOpen && (
           <SearchPalette
             state={state}
+            kept={selection.kept}
             mac={mac}
             onOpen={openFromSearch}
             onClose={() => closePalette(true)}
@@ -1015,8 +1018,13 @@ export function Shell({
             onClose={(deleted) => {
               setDeleting(null);
               // The rail already follows the gateway's list; the app lands on the Main Bot's latest
-              // task, or the Main Bot alone when it has none.
-              const main = state.bots.find((each) => each.isDefault) ?? state.bots[0];
+              // task, or the Main Bot alone when it has none. While the gateway's own bot is out of
+              // view (F-562), on the first other bot the rail lists, or on it once it is the only one.
+              const kept = selection.listed.filter((each) => each.id !== deleting.id);
+              const main =
+                kept.find((each) => each.isDefault) ??
+                kept[0] ??
+                state.bots.find((each) => each.isDefault);
               if (deleted && main) {
                 // The Work drawer closes first, so the conversation behind it can take focus.
                 if (drawerOpen) setPanel(false);

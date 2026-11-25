@@ -18,7 +18,7 @@
 
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, writeSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
@@ -36,6 +36,7 @@ const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 /** Run records of this checkout's end-to-end runs. Git-ignored. */
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
+import { STATE_FILE } from "../packages/core/src/node/secure.ts";
 import { FORBIDDEN_PORTS } from "./ports.ts";
 export { FORBIDDEN_PORTS } from "./ports.ts";
 
@@ -138,17 +139,34 @@ export async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promis
   }
 }
 
+/** The host's kept "Show the gateway's own bot", turned on unless it already holds a choice. */
+function showGatewayBot(dataDir: string): void {
+  const file = join(dataDir, STATE_FILE);
+  const kept = existsSync(file)
+    ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, string>)
+    : {};
+  if ("show-gateway-bot" in kept) return;
+  writeFileSync(file, `${JSON.stringify({ ...kept, "show-gateway-bot": "true" }, null, 2)}\n`, {
+    mode: 0o600,
+  });
+}
+
 /**
  * The preview host, spawned behind a gate so it cannot run before it is
  * recorded. A test that quits and restarts a client starts its own with this,
  * on its own copy of the host's data, and stops it by its process.
+ *
+ * Unless `gatewayBot: "default"`, a host with no choice of its own starts with "Show the
+ * gateway's own bot" on (F-562): the checks of other flows work on Juniper, the development
+ * gateway's own bot. `e2e/gateway-bot.spec.ts` checks the default.
  */
 export function startHost(
   instance: string,
   staticDir: string,
   dataDir: string,
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; gatewayBot?: "shown" | "default" } = {},
 ) {
+  if (options.gatewayBot !== "default") showGatewayBot(dataDir);
   const gated: Gated = gatedSpawn(
     spawn,
     process.execPath,

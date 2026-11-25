@@ -53,6 +53,8 @@ export function mapAgents(result: unknown): Bot[] {
   const record = asRecord(result);
   if (!record) return [];
   const defaultId = str(record.defaultId);
+  // With no owner the gateway still names a `defaultId`: only its first bot (F-562).
+  const ownerless = record.selectionRequired === true;
   const bots: Bot[] = [];
   for (const entry of arr(record.agents)) {
     const agent = asRecord(entry);
@@ -68,6 +70,7 @@ export function mapAgents(result: unknown): Bot[] {
       theme: str(identity.theme),
       model: str(model?.primary) ?? (typeof agent.model === "string" ? agent.model : null),
       isDefault: id === defaultId,
+      ...(ownerless && id === defaultId ? { ownerless: true } : {}),
     });
   }
   return bots.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));

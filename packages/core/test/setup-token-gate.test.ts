@@ -1070,6 +1070,35 @@ describe("what a setup connection publishes", () => {
     client.stop();
   });
 
+  it("F-494: setup on the address already connected doesn't carry that connection's gateway version", async () => {
+    const gateway = new FakeGateway();
+    let hellos = 0;
+    gateway.connectReply = () => {
+      hellos += 1;
+      const reply = helloOk(["operator.read"], NEW_TOKEN);
+      const version = hellos === 1 ? "2026.9.1" : "2026.10.6";
+      return { ok: true, payload: { ...reply, server: { ...reply.server, version } } };
+    };
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "t" });
+    await until(() => client.state.connection.serverVersion === "2026.9.1");
+    gateway.handlers["agents.list"] = () => new Promise<never>(() => {});
+    const published: Array<{ status: string; version: string | null }> = [];
+    client.store.subscribe((state) =>
+      published.push({ status: state.connection.status, version: state.connection.serverVersion }),
+    );
+    await client.connectForSetup(URL);
+    await until(() => client.state.connection.status === "connected");
+    await sleep(30);
+    const during = published.slice(published.findIndex((each) => each.status !== "connected"));
+    expect(during.length).toBeGreaterThan(1);
+    expect(during.map((each) => each.version)).not.toContain("2026.9.1");
+    // The setup hello's own version, a date version, still shows.
+    expect(client.state.connection.serverVersion).toBe("2026.10.6");
+    client.stop();
+  });
+
   it("F-494: the first read of bots after a setup hello, failing with the code or the new token in its text, publishes fixed words", async () => {
     const { published, storage, client } = await echoed(
       (gateway) => {
