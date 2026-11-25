@@ -11,6 +11,7 @@ export * from "./runs.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";
 export * from "./cards.ts";
+export * from "./started-task-card.ts";
 export * from "./actions.ts";
 export * from "./action-feed.ts";
 export * as actionWords from "./action-words.ts";

@@ -437,6 +437,12 @@ export type TranscriptItem = {
    */
   brief?: true;
   /**
+   * The gateway's run id of a bot's turn that reports on a task it started, or on a follow-up it
+   * sent there (`announce:v1:<task key>:<that task's run id>`, `REPORT_RUN_PREFIX`). Present only
+   * on such a turn: the "Started a task" card ties its report to it by the exact id.
+   */
+  reportRunId?: string;
+  /**
    * History places this user row inside a run that began before it: the gateway took it into
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
    */

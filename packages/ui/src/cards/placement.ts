@@ -15,6 +15,7 @@ import type {
   InterSessionMessage,
   McpCallCard,
   SelectedCards,
+  StartedTaskCard,
   TaskActivity,
   TranscriptItem,
 } from "@clawtrate/core";
@@ -23,7 +24,8 @@ export type CardRef =
   | { kind: "approval"; id: string }
   | { kind: "question"; id: string }
   | { kind: "bot-message"; id: string }
-  | { kind: "t3-code"; id: string };
+  | { kind: "t3-code"; id: string }
+  | { kind: "started-task"; id: string };
 
 export type CardPlacement = {
   /** Every card of a run, in order, by run id: for a transcript that draws runs itself. */
@@ -46,7 +48,11 @@ export function codingCalls(selected: SelectedCards): McpCallCard[] {
   return selected.mcpCalls.filter((card) => card.codingAgent);
 }
 
-export function placeCards(input: PlacementInput, selected: SelectedCards): CardPlacement {
+export function placeCards(
+  input: PlacementInput,
+  selected: SelectedCards,
+  startedTasks: StartedTaskCard[] = [],
+): CardPlacement {
   const items = new Set(input.items.map((item) => item.id));
   const afterItem = new Map<string, CardRef[]>();
   const trailing: CardRef[] = [];
@@ -70,7 +76,10 @@ export function placeCards(input: PlacementInput, selected: SelectedCards): Card
     run.steps.forEach((step, s) => stepOrder.set(step.id, r * 10_000 + s)),
   );
   const timeOf = (at: number | null) => at ?? Number.POSITIVE_INFINITY;
-  const pushCall = (card: BotMessageCard | McpCallCard, kind: "bot-message" | "t3-code") =>
+  const pushCall = (
+    card: BotMessageCard | McpCallCard | StartedTaskCard,
+    kind: "bot-message" | "t3-code" | "started-task",
+  ) =>
     arrivals.push({
       at: timeOf(card.requestedAt),
       kind: 0,
@@ -80,6 +89,7 @@ export function placeCards(input: PlacementInput, selected: SelectedCards): Card
     });
   for (const card of selected.botMessages) pushCall(card, "bot-message");
   for (const card of codingCalls(selected)) pushCall(card, "t3-code");
+  for (const card of startedTasks) pushCall(card, "started-task");
   input.approvals.forEach((card, order) =>
     arrivals.push({
       at: timeOf(card.createdAt),

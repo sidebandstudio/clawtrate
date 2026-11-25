@@ -11,6 +11,7 @@ import {
   lineOf,
   phraseCall,
   readingContextOf,
+  START_TASK_TOOL,
   type ActionCall,
   type ReadingContext,
   activeRun,
@@ -62,10 +63,17 @@ export function actionPhrase(call: ActionCall, ctx: ReadingContext = {}): string
   return line.outcome === "review" ? actionWords.PHRASES.reviewing : line.running;
 }
 
-/** A call drawn as a Messaged or T3 Code card, which stays in view with commands hidden (7.11). */
+/**
+ * A call drawn as a Messaged, T3 Code or "Started a task" card, which stays in view with commands
+ * hidden (7.11). A start is a card only when it asked for a task the person sees.
+ */
 function hasCardInView(call: ActionCall, ctx: ReadingContext): boolean {
   const { kind } = kindOf(call, ctx);
-  return kind === "message" || kind === "t3";
+  return (
+    kind === "message" ||
+    kind === "t3" ||
+    (call.name === START_TASK_TOOL && call.args.visible === true)
+  );
 }
 
 /** Status phases the gateway reports while no step runs (section 5). */
