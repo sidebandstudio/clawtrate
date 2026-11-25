@@ -72,6 +72,15 @@ describe("the iOS job lists", () => {
     expect(selected(jobPattern(1, [["a (b)?"], []]), ["a (b)? c", "a b c"])).toEqual(["a (b)? c"]);
   });
 
+  it("report an empty list, and still run each check in exactly one job", () => {
+    const titles = ["A: one", "new check"];
+    const jobs = [[], ["A:"]];
+    expect(jobProblems(titles, jobs, [], {})).toEqual(["job 1 names no checks"]);
+    const runs = jobs.flatMap((_, i) => selected(jobPattern(i + 1, jobs), titles));
+    expect(runs.sort()).toEqual([...titles].sort());
+    expect(selected(jobPattern(1, jobs), titles)).toEqual([]);
+  });
+
   it("find a check in two lists, an entry that starts no check or several, and a pair kept apart", () => {
     const titles = ["A: one", "B: two", "on iPhone, x", "on iPhone, y"];
     expect(jobProblems(titles, [["A:"], ["A: o", "B:"]], [], {})).toEqual([

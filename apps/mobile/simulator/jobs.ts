@@ -68,8 +68,9 @@ export function startsOnItsOwn(title: string, ownStart = OWN_START): boolean {
   return ownStart.some((entry) => names(entry, title));
 }
 
-/** What is wrong with the lists, given the titles of the checks: an entry that names no check,
- * or more than one, a check in two lists, or a pair FOLLOWS keeps together that is apart. */
+/** What is wrong with the lists, given the titles of the checks: an empty list, an entry that
+ * names no check, or more than one, a check in two lists, or a pair FOLLOWS keeps together that is
+ * apart. */
 export function jobProblems(
   titles: readonly string[],
   jobs = JOBS,
@@ -86,6 +87,7 @@ export function jobProblems(
   };
   const jobOf = new Map<string, number>();
   jobs.forEach((entries, i) => {
+    if (entries.length === 0) problems.push(`job ${i + 1} names no checks`);
     for (const entry of entries)
       for (const title of named(entry, `job ${i + 1}`)) {
         const first = jobOf.get(title);
@@ -116,7 +118,9 @@ export function unlisted(titles: readonly string[], jobs = JOBS): string[] {
 export function jobPattern(job: number, jobs = JOBS): string {
   if (!Number.isInteger(job) || job < 1 || job > jobs.length)
     throw new Error(`there are ${jobs.length} iOS jobs; ${job} is not one of them`);
-  const any = (entries: readonly string[]) => `(?:${entries.map(escape).join("|")})`;
+  // An empty list selects nothing: an empty group would select every check.
+  const any = (entries: readonly string[]) =>
+    entries.length === 0 ? "(?!)" : `(?:${entries.map(escape).join("|")})`;
   const start = `^${escape(SUITE)} > `;
   if (job < jobs.length) return `${start}${any(jobs[job - 1]!)}`;
   const others = jobs.slice(0, -1).flat();
