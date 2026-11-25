@@ -114,6 +114,7 @@ function transcriptOf(rows: unknown[], inFlight: string | null = null): Transcri
     linkedRuns: {},
     interSession: [],
     mcpTools: {},
+    loadedAt: null,
   };
 }
 
