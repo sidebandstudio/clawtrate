@@ -82,9 +82,8 @@ private final class Reads: NSObject, URLSessionDataDelegate {
   }
 
   func start(id: String, url: String, authorization: String?, promise: Promise) {
-    guard let address = URL(string: url), address.scheme == "https" || address.scheme == "http"
-    else {
-      return promise.reject("ERR_ADDRESS", "Only an http or https address is fetched.")
+    guard let address = URL(string: url), address.scheme == "https" else {
+      return promise.reject("ERR_ADDRESS", "Only an https address is fetched.")
     }
     guard byId[id] == nil else {
       return promise.reject("ERR_ID", "This request id is already in use.")
