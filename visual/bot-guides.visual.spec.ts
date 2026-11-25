@@ -234,12 +234,33 @@ test.describe("how bots work in Clawtrate", () => {
     expect(await changes(page)).toEqual([]);
   });
 
+  test("F-566: without admin access New bots too can be turned off, and not on again", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&guides=added");
+    const box = pane.getByRole("checkbox", { name: /^New bots too/ });
+    await expect(box).toBeChecked();
+    await expect(box).toBeEnabled();
+    await expect(pane.getByTestId("bot-guides-new-admin")).toHaveText(
+      "Turning it on again needs admin access.",
+    );
+    await box.uncheck();
+    await expect(box).not.toBeChecked();
+    await expect(box).toBeDisabled();
+    await expect(pane.getByTestId("bot-guides-new-admin")).toHaveText(
+      "Turning it on needs admin access.",
+    );
+    expect(await changes(page)).toEqual([{ action: "newBots", on: false }]);
+  });
+
   test("F-566: without admin access the states are shown and nothing can be sent", async ({
     page,
   }) => {
     const pane = await guidesPane(page, "&guides=mixed");
     await expect(pane.getByText("Adding or removing it needs admin access.")).toBeVisible();
-    await expect(pane.getByRole("checkbox")).toHaveCount(0);
+    // No bot's checkbox: only New bots too, saved on here, which can be turned off.
+    await expect(pane.getByRole("checkbox")).toHaveCount(1);
+    await expect(pane.getByRole("checkbox", { name: /^New bots too/ })).toBeChecked();
     for (const name of ["Replace", /^Add to/, "Remove from all bots"])
       await expect(pane.getByRole("button", { name })).toHaveCount(0);
     // Show is reading, so it stays.

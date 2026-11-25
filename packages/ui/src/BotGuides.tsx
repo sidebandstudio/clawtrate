@@ -73,6 +73,26 @@ export const afterChange = (
 ): { show: BotGuidesAnswer } | { readAgain: true } =>
   forConnection(read.stamp, connection) ? { show: read } : { readAgain: true };
 
+/**
+ * Whether "New bots too" is shown, whether it can be changed, and what it adds in words. With
+ * admin access it is the full control. Without it, a yes can always be taken back: the switch is
+ * shown while the saved value is on (and after this view turned it off), and can only turn it off.
+ * Null when it isn't shown.
+ */
+export function newBotsControl(o: {
+  admin: boolean;
+  savesAtOnce: boolean;
+  addable: boolean;
+  saved: boolean;
+  turnedOffHere: boolean;
+}): { canChange: boolean; note: string | null } | null {
+  if (o.admin) return o.savesAtOnce || o.addable ? { canChange: true, note: null } : null;
+  if (!o.savesAtOnce || !(o.saved || o.turnedOffHere)) return null;
+  return o.saved
+    ? { canChange: true, note: "Turning it on again needs admin access." }
+    : { canChange: false, note: "Turning it on needs admin access." };
+}
+
 /** The guides as the connected gateway reads them now, and a way to change them. */
 function useGuides(active: boolean) {
   const bridge = useBridge();
@@ -156,6 +176,9 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
   const admin = connection.canAdmin;
   const [chosen, setChosen] = useState<Set<string> | null>(null);
   const [newBots, setNewBots] = useState(true);
+  // This view turned New bots too off: without admin access the switch stays, saying why it
+  // can't be turned on again here.
+  const [turnedOffHere, setTurnedOffHere] = useState(false);
   const [showing, setShowing] = useState<string | null>(null);
   const { shown } = guides;
   if (!shown)
@@ -213,15 +236,18 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
     folders.some((f) => f.state === "current" || f.state === "older" || f.state === "changed");
   const newBotsOn = savesAtOnce ? (shown.record?.newBots ?? false) : newBots;
   const saveNewBots = (on: boolean) =>
-    void guides
-      .change({ action: "newBots", on })
-      .then(
-        (read) =>
-          read &&
-          read.errors.length === 0 &&
-          read.record?.newBots === on &&
-          announce(on ? "New bots get this section" : "New bots don't get this section"),
-      );
+    void guides.change({ action: "newBots", on }).then((read) => {
+      if (!read || read.errors.length > 0 || read.record?.newBots !== on) return;
+      if (!on) setTurnedOffHere(true);
+      announce(on ? "New bots get this section" : "New bots don't get this section");
+    });
+  const newBotsBox = newBotsControl({
+    admin,
+    savesAtOnce,
+    addable: addable.length > 0,
+    saved: newBotsOn,
+    turnedOffHere,
+  });
   const add = () => {
     const asked = tickedFolders.flatMap((f) => f.bots);
     void guides.change({ action: "add", bots: asked, newBots: newBotsOn }).then((read) => {
@@ -366,28 +392,29 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
             without this section then get no voice guide.
           </p>
         )}
+      {newBotsBox && (
+        <label className="b-delete-check bot-guides-check">
+          <input
+            type="checkbox"
+            checked={newBotsOn}
+            disabled={guides.busy || !newBotsBox.canChange}
+            onChange={(event) =>
+              savesAtOnce ? saveNewBots(event.target.checked) : setNewBots(event.target.checked)
+            }
+          />
+          <span>
+            New bots too, when they're made in Clawtrate
+            {admin && savesAtOnce && shown.record === null && (
+              <small data-testid="bot-guides-new-here">
+                For bots made from this device. Turning it on adds or updates nothing else.
+              </small>
+            )}
+            {newBotsBox.note && <small data-testid="bot-guides-new-admin">{newBotsBox.note}</small>}
+          </span>
+        </label>
+      )}
       {admin ? (
         <>
-          {(savesAtOnce || addable.length > 0) && (
-            <label className="b-delete-check bot-guides-check">
-              <input
-                type="checkbox"
-                checked={newBotsOn}
-                disabled={guides.busy}
-                onChange={(event) =>
-                  savesAtOnce ? saveNewBots(event.target.checked) : setNewBots(event.target.checked)
-                }
-              />
-              <span>
-                New bots too, when they're made in Clawtrate
-                {savesAtOnce && shown.record === null && (
-                  <small data-testid="bot-guides-new-here">
-                    For bots made from this device. Turning it on adds or updates nothing else.
-                  </small>
-                )}
-              </span>
-            </label>
-          )}
           {addable.length > 0 && (
             <div className="b-actions">
               <button

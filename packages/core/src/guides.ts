@@ -466,7 +466,13 @@ export async function applyGuidesChange(
     const background = change.background === true;
     for (const bots of folders.filter((group) => group.some((bot) => change.bots.includes(bot))))
       if (await each(bots, addOrUpdate(background))) for (const bot of bots) kept.add(bot);
-    return { record: { bots: [...kept], newBots: change.newBots }, errors };
+    // New bots too is changed only by its own switch: once this device has a record, Add keeps
+    // the value the record has now. Only the first Add, where the offer's tick is part of the
+    // yes, sets it from the press.
+    return {
+      record: { bots: [...kept], newBots: record ? record.newBots : change.newBots },
+      errors,
+    };
   }
   if (change.action === "replace") {
     const bots = folders.find((group) => group.includes(change.bot));

@@ -1253,6 +1253,36 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     client.stop();
   });
 
+  it("keeps New bots too as this device saved it when an Add carries a stale tick", async () => {
+    // Another window turned New bots too off; this one still showed it ticked and pressed Add.
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: false }));
+    const shown = await client.readBotGuides();
+    await client.changeBotGuides({ action: "add", bots: [], newBots: true }, shown.stamp);
+    expect(JSON.parse(storage.data.get(guidesKey("gw-guides"))!)).toMatchObject({
+      newBots: false,
+    });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    client.stop();
+  });
+
+  it("takes New bots too from the press on the first Add, when this device has no record yet", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    const shown = await client.readBotGuides();
+    await client.changeBotGuides({ action: "add", bots: [], newBots: true }, shown.stamp);
+    expect(JSON.parse(storage.data.get(guidesKey("gw-guides"))!)).toMatchObject({
+      newBots: true,
+    });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+    client.stop();
+  });
+
   it("follows the record really saved after a Remove that couldn't be saved", async () => {
     const fake = new AccountsGateway();
     fake.identity = "gw-guides";
