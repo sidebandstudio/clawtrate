@@ -6973,9 +6973,10 @@ export class ClawtrateClient {
   }
 
   /**
-   * After a connect with admin access: each section of an older version that Clawtrate wrote is
-   * brought up to date, held to the hash read. A section changed or removed outside Clawtrate is
-   * left. Nothing is done from a read-only viewer or below admin.
+   * After a connect with admin access, on a gateway where this device added the section: each
+   * section of an older version that is still as Clawtrate wrote it is brought up to date, held
+   * to the hash read. A section changed or removed outside Clawtrate is left. Nothing is done
+   * from a read-only viewer, below admin, or on a gateway this device has no yes for.
    */
   private async keepGuidesCurrent(generation: number, epoch: number): Promise<void> {
     const current = () =>
@@ -6985,9 +6986,13 @@ export class ClawtrateClient {
       this.state.connection.canAdmin &&
       !this.options.readOnly;
     if (!current()) return;
+    // Only where the person said yes from this device: nothing is read on any other gateway.
+    const gatewayId = await this.readGatewayIdentity();
+    const record = gatewayId === null ? null : await this.guidesRecord(gatewayId);
+    if (!current() || !record || record.bots.length === 0) return;
     const request = (method: string, params: unknown) =>
       current() ? this.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED));
-    const { errors } = await applyGuidesChange(request, null, { action: "update" }).catch(
+    const { errors } = await applyGuidesChange(request, record, { action: "update" }).catch(
       (error: unknown) => ({ errors: [error instanceof Error ? error.message : String(error)] }),
     );
     for (const error of errors) this.logFailure("warn", "guides update", error);

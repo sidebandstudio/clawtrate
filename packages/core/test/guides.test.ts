@@ -326,17 +326,29 @@ describe("the guides in the client", () => {
     }
   });
 
-  it("brings an older section up to date after a connect with admin, and only then", async () => {
-    for (const admin of [true, false]) {
+  it("brings an older section up to date after a connect with admin, where this device said yes, and only then", async () => {
+    for (const [admin, said] of [
+      [true, true],
+      [false, true],
+      [true, false],
+    ] as const) {
       const files = fakeFiles({ otto: olderSection() + BOT_FILE });
-      const { client, gateway } = await openTask(admin ? { storage: adminStorage() } : {});
+      const storage = admin ? adminStorage() : undefined;
+      if (said)
+        await (storage ?? memoryStorage({})).set(
+          guidesKey("gw-a"),
+          JSON.stringify({ bots: ["otto"], newBots: false }),
+        );
+      const { client, gateway } = await openTask({
+        ...(storage ? { storage } : {}),
+      });
       withFiles(gateway, files);
       try {
         gateway.dropAll();
         await until(() => client.state.connection.status === "connected");
-        if (admin) await until(() => files.sets.length === 1);
+        if (admin && said) await until(() => files.sets.length === 1);
         else await new Promise<void>((resolve) => setTimeout(resolve, 100));
-        expect(files.sets.length).toBe(admin ? 1 : 0);
+        expect(files.sets.length).toBe(admin && said ? 1 : 0);
       } finally {
         client.stop();
       }

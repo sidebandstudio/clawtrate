@@ -5,6 +5,7 @@
 // leaving no trace.
 
 import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
+import { guidesKey, withSection } from "../src/guides.ts";
 import { describe, expect, it, vi } from "vitest";
 import {
   ACCOUNTS,
@@ -1108,6 +1109,28 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     (fake.gateway as unknown as { requests: Array<{ method: string }> }).requests.map(
       (each) => each.method,
     );
+
+  it("gets Clawtrate's guides at the top of its AGENTS.md when this device said yes to New bots too, and not otherwise", async () => {
+    for (const newBots of [true, false]) {
+      const fake = new AccountsGateway();
+      fake.identity = "gw-guides";
+      const { client, storage } = await accountsClient({ gateway: fake });
+      await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots }));
+      expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+      expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(
+        newBots ? withSection("# AGENTS.md\n") : "# AGENTS.md\n",
+      );
+      // Nothing else of the bot's, or of another bot's, was written for it.
+      expect(
+        fake.gateway
+          .calls("agents.files.set")
+          .map(
+            (call) => `${(call as { agentId: string }).agentId}/${(call as { name: string }).name}`,
+          ),
+      ).toEqual(newBots ? ["viral/IDENTITY.md", "viral/AGENTS.md"] : ["viral/IDENTITY.md"]);
+      client.stop();
+    }
+  });
 
   it("right after agents.create, writes its name into IDENTITY.md, held to the template it read, and keeps the other starting files", async () => {
     const { client, fake, accounts } = await accountsClient();
