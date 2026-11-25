@@ -998,8 +998,9 @@ export async function waitForStart(watch: StartWatch, timeoutMs: number): Promis
         healthy: false,
         seen: `the health check failed: ${error instanceof Error ? error.message : String(error)}`,
       }));
-      if (health.healthy) return;
-      lastSeen = cut(health.seen);
+      // A process that exited while its probe answered has not started.
+      if (health.healthy && !watch.exited()) return;
+      lastSeen = health.healthy ? "it answered as it exited" : cut(health.seen);
     }
     // Read again after the probe, which can end after the process exited.
     const exited = watch.exited();

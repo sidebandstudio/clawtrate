@@ -733,6 +733,47 @@ describe("a start whose gateway never answers says what the gateway was doing (#
     await reset(inst);
   }, 60_000);
 
+  it("is done once a probe answers while the process runs", async () => {
+    let probes = 0;
+    await waitForStart(
+      {
+        what: "the scripted provider",
+        exited: () => false,
+        health: async () => {
+          probes += 1;
+          return probes < 2
+            ? { healthy: false, seen: "its port is not open" }
+            : { healthy: true, seen: "" };
+        },
+        log: join(tempDir("clawtrate-log-"), "provider.log"),
+      },
+      60_000,
+    );
+    expect(probes).toBe(2);
+  });
+
+  it("says the process exited when it exits as its probe answers", async () => {
+    let alive = true;
+    const failure = await waitForStart(
+      {
+        what: "the scripted provider",
+        exited: () => !alive,
+        health: async () => {
+          alive = false;
+          return { healthy: true, seen: "" };
+        },
+        log: join(tempDir("clawtrate-log-"), "provider.log"),
+      },
+      60_000,
+    ).then(
+      () => new Error("the wait succeeded"),
+      (error: unknown) => error as Error,
+    );
+    expect(failure.message).toMatch(
+      /^the scripted provider exited after \d+ s, before it answered\n {2}last health check: it answered as it exited\n/,
+    );
+  });
+
   it("waits for the scripted provider's port, and says when it never opens", async () => {
     const log = join(tempDir("clawtrate-log-"), "provider.log");
     writeFileSync(log, "starting\n");
