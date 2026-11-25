@@ -1559,7 +1559,13 @@ export class ClawtrateClient {
   /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size and the characters it holds. */
   private readonly attachmentContent = new Map<
     string,
-    { task: string; files: OutgoingAttachment[]; bytes: number }
+    {
+      task: string;
+      files: OutgoingAttachment[];
+      bytes: number;
+      /** Its task was deleted on this connection: history that holds it keeps none of its pictures. */
+      taskDeleted?: true;
+    }
   >();
   private attachmentBytes = 0;
   /** Pictures of messages history confirmed, by message id, oldest first (`MAX_SENT_PICTURE_MESSAGES`). */
@@ -3412,7 +3418,8 @@ export class ClawtrateClient {
   private keepSentPictures(message: OutgoingMessage): void {
     const kept = this.attachmentContent.get(message.id);
     this.dropAttachments(message.id);
-    if (!kept) return;
+    // A history read asked before its task was deleted can still be answered after.
+    if (!kept || kept.taskDeleted) return;
     const named = kept.files.flatMap((file, index) =>
       isShownPictureType(file.mimeType) && decodedBytes(file.content) <= MAX_PICTURE_BYTES
         ? [{ index, mimeType: file.mimeType, content: file.content }]
@@ -3442,9 +3449,11 @@ export class ClawtrateClient {
     this.sentPictureBytes += bytes;
   }
 
-  /** Let go of every picture kept for one task, when the task itself is gone. */
-  private dropTaskPictures(key: string): void {
-    for (const [id, kept] of this.sentPictures) if (kept.task === key) this.dropSentPictures(id);
+  /** Let go of every picture kept for the tasks `deleted` names, and of those still to be kept. */
+  private dropDeletedPictures(deleted: (task: string) => boolean): void {
+    for (const [id, kept] of this.sentPictures) if (deleted(kept.task)) this.dropSentPictures(id);
+    for (const sending of this.attachmentContent.values())
+      if (deleted(sending.task)) sending.taskDeleted = true;
   }
 
   private dropSentPictures(messageId: string): void {
@@ -6622,13 +6631,7 @@ export class ClawtrateClient {
         return notSent(errorMessage(error));
       }
       if (!link.alive()) return notSent("The connection changed before the delete was sent.");
-      const outcome = await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
-      // The gateway deleted the bot with its tasks and reports no removal for each task: the
-      // pictures you sent in them go now. Only its `ok` proves the delete.
-      if (outcome.kind === "answered")
-        for (const [id, kept] of this.sentPictures)
-          if (botIdFromSessionKey(kept.task) === request.botId) this.dropSentPictures(id);
-      return outcome;
+      return await deleteBot(this.botDeleteContext(link, bound, options.owner), request);
     } finally {
       this.botDeletes.delete(key);
     }
@@ -6680,7 +6683,15 @@ export class ClawtrateClient {
         return { result, current: () => shown && link.alive() && this.botsShown === issued };
       },
       // The one evidence that the bot is gone, acted on as it arrives, whatever follows.
-      deleted: (botId) => this.dropQueuedFor(botId),
+      deleted: (botId) => {
+        this.dropQueuedFor(botId);
+        // The gateway deleted the bot with its tasks and reports no removal for each task: the
+        // pictures you sent in them go now. Each task is placed as the rail places it, before
+        // the list read after the delete prunes its row; a task not listed goes by its key.
+        this.dropDeletedPictures(
+          (task) => rowBotOf(task, this.rows.get(capId(task, MAX_ID_CHARS)) ?? {}) === botId,
+        );
+      },
       admin: () =>
         this.options.readOnly !== true &&
         this.holds(ADMIN_SCOPE) &&
@@ -9249,7 +9260,7 @@ export class ClawtrateClient {
       this.cancelAllQueued(key);
       this.retireForeign(key);
       // Deleted elsewhere: the pictures you sent in it go too. An archived task keeps them.
-      this.dropTaskPictures(key);
+      this.dropDeletedPictures((task) => task === key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
@@ -10130,7 +10141,7 @@ export class ClawtrateClient {
     }
     await deleteTask(this.actionContext(options.owner ?? null), key);
     // Its conversation is gone from the gateway: so are the pictures you sent in it.
-    this.dropTaskPictures(key);
+    this.dropDeletedPictures((task) => task === key);
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */
