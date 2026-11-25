@@ -168,6 +168,16 @@ describe("F-535: a picture in history", () => {
 });
 
 describe("F-535: reading a picture", () => {
+  it("F-535: a download that ends before its first byte sent no picture, a read to try again", async () => {
+    const { ctx } = context({ url: ISSUED, expiresAt: LATER }, () =>
+      response(200, { "content-type": "image/png" }, []),
+    );
+    expect(await readChatPicture(ctx, KEY, ARTIFACT)).toEqual({
+      status: "failed",
+      message: "The gateway sent no picture.",
+    });
+  });
+
   it("F-535: only the download the gateway issued for this task is fetched, from its origin, without cookies or redirects, and its bytes reach the viewer whole", async () => {
     const { ctx, fetched, asked } = context({ url: ISSUED, expiresAt: LATER }, png);
     const read = await readChatPicture(ctx, KEY, ARTIFACT);
