@@ -5,6 +5,7 @@
 //   guides=added   every bot has this version
 //   guides=mixed   Juniper current, Marlow older, Otto changed outside Clawtrate, Pip removed
 //                  outside Clawtrate, Quartermaster not added
+//   guides=moved   as mixed, but Otto's intact section isn't at the top of its file
 //   guides=odd     as another device sees it: Marlow older, which this device didn't add;
 //                  Otto's markers out of shape; Quartermaster's instructions long
 //   guides=voice   Juniper added, the rest not, and the voice plugin adds its own guide
@@ -55,7 +56,7 @@ export function guidesCommands(
       bot,
       param === "added"
         ? "current"
-        : param === "mixed" || param === "odd"
+        : param === "mixed" || param === "odd" || param === "moved"
           ? mixed[bot]!
           : (param === "voice" && bot === "main") || (param === "utf8" && bot === "otto")
             ? "current"
@@ -69,7 +70,7 @@ export function guidesCommands(
       ? null
       : param === "added"
         ? { bots: BOTS, newBots: true }
-        : param === "mixed"
+        : param === "mixed" || param === "moved"
           ? { bots: ["main", "marlow", "otto", "pip"], newBots: true }
           : param === "odd"
             ? { bots: ["main"], newBots: false }
@@ -80,7 +81,8 @@ export function guidesCommands(
     BOTS.map((bot) => ({
       bots: [bot],
       state: states.get(bot)!,
-      replaceable: states.get(bot) === "changed" && param !== "odd",
+      replaceable: states.get(bot) === "changed" && param !== "odd" && param !== "moved",
+      moved: states.get(bot) === "changed" && param === "moved",
       long: param === "odd" && bot === "quartermaster",
       utf8: !notUtf8(bot),
       changedText:

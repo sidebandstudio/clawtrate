@@ -42,9 +42,11 @@ function stateWords(folder: GuideFolder, mine: boolean): string {
             ? "An older version. Its instructions are long, so Clawtrate doesn't update it by itself."
             : "An older version. Clawtrate updates it when it connects with admin access.";
     case "changed":
-      return folder.replaceable
-        ? "Changed outside Clawtrate, so Clawtrate leaves it as it is."
-        : "Its markers aren't as Clawtrate wrote them, so Clawtrate can't tell where its section ends. Edit the file, or remove the section's text yourself.";
+      return folder.moved
+        ? "Its section isn't at the top, where Clawtrate put it, so Clawtrate leaves it as it is. Move it back to the top, or remove it yourself."
+        : folder.replaceable
+          ? "Changed outside Clawtrate, so Clawtrate leaves it as it is."
+          : "Its markers aren't as Clawtrate wrote them, so Clawtrate can't tell where its section ends. Edit the file, or remove the section's text yourself.";
     case "removed":
       return "Removed outside Clawtrate. Clawtrate won't add it again unless you ask.";
     case "none":
@@ -81,12 +83,13 @@ function useGuides(active: boolean) {
   const [busy, setBusy] = useState(false);
   const [reads, setReads] = useState(0);
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Set again on each setup: development builds run an effect's cleanup and setup twice.
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
   // The connection as it is when a change finishes, not as it was when it was sent.
   const now = useRef(connection);
   useEffect(() => {

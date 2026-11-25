@@ -7,6 +7,8 @@ import { VOICE_GUIDE, WHERE_GUIDE } from "../src/guide-text.ts";
 import { VOICE_GET } from "../src/voice.ts";
 import {
   applyGuidesChange,
+  GUIDES_NOT_RECORDED,
+  GUIDES_NOT_SAVED,
   findSection,
   GUIDES_LONG_CHARS,
   GUIDES_PINNED_SHA256,
@@ -48,7 +50,7 @@ function fakeFiles(
   const store = new Map(Object.entries(files));
   const hashOf = (key: string, content: string) => bytesHash[key] ?? hash(content);
   const sets: { agentId: string; content: string }[] = [];
-  const faults = { conflicts: 0 };
+  const faults = { conflicts: 0, refuse: new Set<string>() };
   const folder = (agentId: string) => workspaces[agentId] ?? agentId;
   const request = async (method: string, params: unknown) => {
     const p = params as Record<string, unknown>;
@@ -66,6 +68,7 @@ function fakeFiles(
     if (method === "agents.files.set") {
       const held =
         content === null ? p.expectedMissing === true : p.expectedHash === hashOf(key, content);
+      if (faults.refuse.has(key)) throw new Error("Workspace document exceeds its write bound");
       if (!held || faults.conflicts > 0) {
         faults.conflicts = Math.max(0, faults.conflicts - 1);
         throw Object.assign(new Error("file changed"), {
@@ -127,10 +130,16 @@ describe("the section", () => {
     expect(withoutSection(BOT_FILE)).toBe(BOT_FILE);
   });
 
-  it("replaces an older version in place, wherever it is, and nothing else", () => {
-    const file = `# Top\n\n${olderSection()}\nBelow.\n`;
-    expect(findSection(file)).toMatchObject({ kind: "ours", current: false });
-    expect(withSection(file)).toBe(`# Top\n\n${GUIDES_SECTION}\nBelow.\n`);
+  it("replaces an older version in place at the top, and leaves one anywhere else alone", () => {
+    const top = `${olderSection()}\nBelow.\n`;
+    expect(findSection(top)).toMatchObject({ kind: "ours", current: false });
+    expect(withSection(top)).toBe(`${GUIDES_SECTION}\nBelow.\n`);
+    // Changed on purpose: a section below other text isn't where Clawtrate put it, so it is
+    // shown and never written, whether it is older or current.
+    const lower = `# Top\n\n${olderSection()}\nBelow.\n`;
+    expect(findSection(lower)).toMatchObject({ kind: "changed", replaceable: false, moved: true });
+    expect(withSection(lower)).toBe(lower);
+    expect(withoutSection(lower)).toBe(lower);
   });
 
   it("calls a section changed when its text, its hash or its markers aren't as Clawtrate wrote them", () => {
@@ -186,6 +195,7 @@ describe("the bots' states", () => {
         bots: ["pip"],
         state: null,
         replaceable: false,
+        moved: false,
         long: false,
         utf8: true,
         changedText: null,
@@ -346,6 +356,90 @@ describe("the guides in the client", () => {
     gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
     return gateway;
   };
+
+  /** Admin storage whose saves of this gateway's guides record fail ("disk full"). */
+  const diskFull = (record: Record<string, unknown>) => {
+    const storage = adminStorage();
+    void storage.set(guidesKey("gw-a"), JSON.stringify(record));
+    const set = storage.set.bind(storage);
+    storage.set = (key: string, value: string) =>
+      key === guidesKey("gw-a") ? Promise.reject(new Error("disk full")) : set(key, value);
+    return storage;
+  };
+
+  it("takes a yes back only once it is saved: when it can't be, nothing is removed and it says so", async () => {
+    const files = fakeFiles({ pip: withSection(BOT_FILE) });
+    const saved = { bots: ["pip"], newBots: true };
+    const storage = diskFull(saved);
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const shown = await client.readBotGuides();
+      for (const change of [
+        { action: "remove" },
+        { action: "newBots", on: false },
+      ] as GuidesChange[]) {
+        const after = await client.changeBotGuides(change, shown.stamp);
+        expect(after.errors, change.action).toEqual([GUIDES_NOT_SAVED]);
+        expect(files.sets).toEqual([]);
+        // The rows say what the files and this device hold: the section is still Pip's.
+        expect(after.folders[0]?.state).toBe("current");
+        expect(after.record).toEqual(saved);
+      }
+      expect(parseGuidesRecord(storage.data.get(guidesKey("gw-a")) ?? null)).toEqual(saved);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("after a Remove that was saved, a file that refused keeps its section, offered again, and new bots get nothing", async () => {
+    const files = fakeFiles({ pip: withSection(BOT_FILE), otto: withSection(BOT_FILE) });
+    files.faults.refuse.add("otto");
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ bots: ["pip", "otto"], newBots: true }));
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const shown = await client.readBotGuides();
+      const after = await client.changeBotGuides({ action: "remove" }, shown.stamp);
+      expect(after.errors).toEqual([expect.stringMatching(/^otto: .*exceeds its write bound$/)]);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+      expect(after.folders.map((f) => [f.bots[0], f.state])).toEqual([
+        ["pip", "none"],
+        ["otto", "current"],
+      ]);
+      expect(parseGuidesRecord(storage.data.get(guidesKey("gw-a")) ?? null)).toEqual({
+        bots: [],
+        newBots: false,
+      });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("gives a yes on the files first and records it last, and says so truly when it can't record it", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const storage = diskFull({ bots: [], newBots: false });
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const shown = await client.readBotGuides();
+      const after = await client.changeBotGuides(
+        { action: "add", bots: ["pip"], newBots: true },
+        shown.stamp,
+      );
+      expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+      expect(after.errors).toEqual([GUIDES_NOT_RECORDED]);
+      expect(after.folders[0]?.state).toBe("current");
+      // Not recorded: this device keeps nothing current and adds nothing to new bots.
+      expect(after.record).toEqual({ bots: [], newBots: false });
+      const on = await client.changeBotGuides({ action: "newBots", on: true }, after.stamp);
+      expect(on.errors).toEqual([GUIDES_NOT_SAVED]);
+      expect(on.record?.newBots).toBe(false);
+    } finally {
+      client.stop();
+    }
+  });
 
   it("adds, reads back and records, on the gateway the screen was read from", async () => {
     const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
@@ -695,5 +789,43 @@ describe("files Clawtrate leaves alone", () => {
     });
     expect(current.sets).toEqual([]);
     expect(kept.record?.bots).toEqual(["otto"]);
+  });
+
+  it("treats a section as its own only at the top of the file: a moved or quoted copy is never written", async () => {
+    const fenced = `# Mine\n\nHere is what Clawtrate adds:\n\n\`\`\`\n${GUIDES_SECTION}\`\`\`\nMore.\n`;
+    const fencedOlder = `# Mine\n\nHere is what Clawtrate adds:\n\n\`\`\`\n${olderSection()}\`\`\`\nMore.\n`;
+    const below = `# Mine\nmy rules\n\n${GUIDES_SECTION}\nMore.\n`;
+    for (const [name, file] of Object.entries({ fenced, fencedOlder, below })) {
+      expect(findSection(file), name).toMatchObject({
+        kind: "changed",
+        replaceable: false,
+        moved: true,
+      });
+      for (const change of [
+        { action: "add", bots: ["pip"], newBots: true },
+        { action: "update" },
+        { action: "replace", bot: "pip", shown: file },
+        { action: "remove" },
+      ] as GuidesChange[]) {
+        const files = fakeFiles({ pip: file });
+        await applyGuidesChange(files.request, { bots: ["pip"], newBots: true }, change);
+        expect(files.sets, `${name}: ${change.action}`).toEqual([]);
+      }
+      const [folder] = await readGuideFolders(fakeFiles({ pip: file }).request, null);
+      expect(folder, name).toMatchObject({ state: "changed", replaceable: false, moved: true });
+    }
+    // At the top, and right after a byte-order mark, it is Clawtrate's as before.
+    for (const file of [withSection(BOT_FILE), withSection(`\uFEFF${BOT_FILE}`)]) {
+      expect(findSection(file)).toMatchObject({ kind: "ours", current: true });
+      const files = fakeFiles({ pip: file });
+      await applyGuidesChange(
+        files.request,
+        { bots: ["pip"], newBots: true },
+        { action: "remove" },
+      );
+      expect(files.store.get("pip")).toBe(
+        file.startsWith("\uFEFF") ? `\uFEFF${BOT_FILE}` : BOT_FILE,
+      );
+    }
   });
 });

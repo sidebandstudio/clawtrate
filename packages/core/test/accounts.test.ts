@@ -5,7 +5,7 @@
 // leaving no trace.
 
 import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
-import { guidesKey, withSection } from "../src/guides.ts";
+import { GUIDES_NOT_SAVED, guidesKey, withSection } from "../src/guides.ts";
 import { describe, expect, it, vi } from "vitest";
 import {
   ACCOUNTS,
@@ -1250,6 +1250,24 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
     expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
     expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(long);
+    client.stop();
+  });
+
+  it("follows the record really saved after a Remove that couldn't be saved", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    const set = storage.set.bind(storage);
+    storage.set = (key: string, value: string) =>
+      key === guidesKey("gw-guides") ? Promise.reject(new Error("disk full")) : set(key, value);
+    const shown = await client.readBotGuides();
+    const removed = await client.changeBotGuides({ action: "remove" }, shown.stamp);
+    expect(removed.errors).toEqual([GUIDES_NOT_SAVED]);
+    // Nothing was taken back, so New bots too is still what this device holds, and it acts.
+    expect(removed.record).toEqual({ bots: [], newBots: true });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
     client.stop();
   });
 

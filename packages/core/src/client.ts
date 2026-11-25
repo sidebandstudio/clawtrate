@@ -6,9 +6,12 @@ import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
   applyGuidesChange,
+  GUIDES_NOT_RECORDED,
+  GUIDES_NOT_SAVED,
   guidesKey,
   parseGuidesRecord,
   readGuideFolders,
+  withdrawnRecord,
   type BotGuidesAnswer,
   type GuidesChange,
   type GuidesRecord,
@@ -7161,11 +7164,30 @@ export class ClawtrateClient {
       protocol && this.protocol === protocol && this.epoch === epoch && this.target === stamp.target
         ? this.request(method, params)
         : Promise.reject(new Error(CONNECTION_CHANGED));
+    const save = (record: GuidesRecord) =>
+      this.host.storage.set(guidesKey(gatewayId), JSON.stringify(record)).then(
+        () => true,
+        () => false,
+      );
     const { errors } = await this.oneGuidesChangeAtATime(async () => {
       const before = await this.guidesRecord(gatewayId);
+      // A yes taken back is saved first: if it can't be, nothing is changed, so the files and
+      // this device's record never disagree about what the person last asked for.
+      const withdrawn = withdrawnRecord(before, change);
+      if (withdrawn) {
+        if (!(await save(withdrawn))) return { record: before, errors: [GUIDES_NOT_SAVED] };
+        return applyGuidesChange(request, withdrawn, change);
+      }
+      // A yes given is saved last, once the files hold it.
       const result = await applyGuidesChange(request, before, change);
-      if (result.record)
-        await this.host.storage.set(guidesKey(gatewayId), JSON.stringify(result.record));
+      if (result.record && !(await save(result.record)))
+        return {
+          ...result,
+          errors: [
+            ...result.errors,
+            change.action === "newBots" ? GUIDES_NOT_SAVED : GUIDES_NOT_RECORDED,
+          ],
+        };
       return result;
     });
     const read = await this.readBotGuides();

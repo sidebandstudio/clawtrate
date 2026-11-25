@@ -66,8 +66,17 @@ export type FoundSection =
    * Changed outside Clawtrate. `replaceable` only for one well-formed pair at the top of the
    * file (offset 0, or 1 after a leading byte-order mark) whose hash fails: anything else with a
    * marker in it can't be told apart from the person's own text, so nothing writes to it.
+   * `moved`: an intact section (its hash holds) that isn't at the top, where Clawtrate writes it:
+   * a bot moved it or a person quoted it, so it is shown and nothing writes to the file.
    */
-  | { kind: "changed"; replaceable: boolean; start: number; end: number; text: string };
+  | {
+      kind: "changed";
+      replaceable: boolean;
+      moved: boolean;
+      start: number;
+      end: number;
+      text: string;
+    };
 
 /**
  * Find Clawtrate's section. It is ours when exactly one well-formed pair of markers is there and
@@ -91,7 +100,14 @@ export function findSection(file: string): FoundSection {
     const last = markers.at(-1)!;
     const start = first.index;
     const stop = last.index + last[0].length;
-    return { kind: "changed", replaceable: false, start, end: stop, text: file.slice(start, stop) };
+    return {
+      kind: "changed",
+      replaceable: false,
+      moved: false,
+      start,
+      end: stop,
+      text: file.slice(start, stop),
+    };
   }
   const inner = file.slice(innerStart, innerStart + end.index);
   const stop = innerStart + end.index + end[0].length;
@@ -105,6 +121,18 @@ export function findSection(file: string): FoundSection {
         begin.index === 0 &&
         stop - begin.index <= MAX_CHANGED_SECTION_CHARS &&
         !/^\s*(```|~~~)/m.test(inner),
+      moved: false,
+      start: begin.index,
+      end: stop,
+      text: file.slice(begin.index, stop),
+    };
+  // Intact, but not at the top, where Clawtrate writes it: moved by a bot or quoted by a person.
+  // Clawtrate's only where it put it, so this one is shown and never written.
+  if (begin.index !== 0)
+    return {
+      kind: "changed",
+      replaceable: false,
+      moved: true,
       start: begin.index,
       end: stop,
       text: file.slice(begin.index, stop),
@@ -159,7 +187,8 @@ const isHash = (value: unknown): value is string =>
  * - `none`: not there, and not added from this device before;
  * - `current`: this version, as Clawtrate wrote it;
  * - `older`: an earlier version, as Clawtrate wrote it; it is brought up to date by itself;
- * - `changed`: edited outside Clawtrate, by the bot or a person; it is left as it is;
+ * - `changed`: edited outside Clawtrate, by the bot or a person, or moved from the top of the
+ *   file (`moved`); it is left as it is;
  * - `removed`: added from this device before, and taken out outside Clawtrate since; it is not
  *   added again without asking.
  */
@@ -172,6 +201,8 @@ export type GuideFolder = {
   state: GuideState | null;
   /** A changed section Replace may write over: one well-formed pair at the top (`FoundSection`). */
   replaceable: boolean;
+  /** An intact section that isn't at the top, where Clawtrate put it: nothing writes to it. */
+  moved: boolean;
   /**
    * The file with this version's section in it (added, or put in place of an older one) may be
    * cut from a prompt (`guidesWouldBeCut`); false when it couldn't be read.
@@ -313,6 +344,7 @@ export async function readGuideFolders(
           bots,
           state,
           replaceable: found.kind === "changed" && found.replaceable,
+          moved: found.kind === "changed" && found.moved,
           long: guidesWouldBeCut(withSection(content)),
           utf8,
           changedText:
@@ -324,6 +356,7 @@ export async function readGuideFolders(
           bots,
           state: null,
           replaceable: false,
+          moved: false,
           long: false,
           utf8: true,
           changedText: null,
@@ -369,6 +402,28 @@ export type GuidesChange =
   | { action: "decline" }
   | { action: "newBots"; on: boolean }
   | { action: "update" };
+
+/**
+ * What a change that takes a yes back leaves as this device's record, or null for a change that
+ * grants one. A yes taken back is saved before anything else, so nothing is done when it can't
+ * be saved; a yes given is saved last, once the files hold it.
+ */
+export function withdrawnRecord(
+  record: GuidesRecord | null,
+  change: GuidesChange,
+): GuidesRecord | null {
+  if (change.action === "remove") return { bots: [], newBots: false };
+  if (change.action === "newBots" && !change.on)
+    return { bots: record?.bots ?? [], newBots: false };
+  if (change.action === "decline") return record ?? { bots: [], newBots: false };
+  return null;
+}
+
+/** Said when a yes can't be taken back because this device couldn't save it: nothing was done. */
+export const GUIDES_NOT_SAVED = "Couldn't save this on this device, so nothing was changed.";
+/** Said when a yes was carried out on the gateway but this device couldn't record it. */
+export const GUIDES_NOT_RECORDED =
+  "The bots' files were changed, but this device couldn't record it, so it won't keep these sections up to date or add them to new bots.";
 
 /**
  * Apply `change` to the gateway's files, each read now and held to its hash, and answer the
