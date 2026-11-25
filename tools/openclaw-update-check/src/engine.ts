@@ -347,10 +347,13 @@ try {
     ({ client, bridge, unsubscribe } = makeClient(dataDir));
     // Press the moment the new client shows this gateway with admin, before anything else lands.
     let pressed: Promise<void> | null = null;
+    // Set before the press: the press publishes a state at once, which calls this listener again.
+    let pressing = false;
     const replacement = { client, bridge };
     const stopWatching = client.store.subscribe((s: ClawtrateState) => {
       const c = s.connection;
-      if (pressed || c.status !== "connected" || !c.canAdmin || c.gatewayId === null) return;
+      if (pressing || c.status !== "connected" || !c.canAdmin || c.gatewayId === null) return;
+      pressing = true;
       mark("press-sent");
       pressed = replacement.bridge
         .apply({ type: "startOpenClawUpdate", stamp: gatewayStamp(c) })

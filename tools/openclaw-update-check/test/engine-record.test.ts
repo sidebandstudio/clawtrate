@@ -395,6 +395,19 @@ describe("the engine's verdict, against what the gateway answered", () => {
         plan,
       ).failures,
     ).toEqual(["the press after the reopen came after the status answered, so it shows no hold"]);
+    // One press only.
+    expect(
+      judgeEngine(
+        reopened(
+          sent(6, "s6", "update.status"),
+          mark("press-sent"),
+          mark("press-sent"),
+          answer(6, "s6"),
+          mark("press-refused"),
+        ),
+        plan,
+      ).failures,
+    ).toEqual(["the reopened client was pressed 2 times, not once"]);
     // A press sent before the answer counts, even when its refusal lands after it.
     expect(
       judgeEngine(

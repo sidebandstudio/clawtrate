@@ -312,6 +312,11 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
       // The press must have gone out before the status answered: the refusal may land after it.
       const refusedAt = markAt(entries, "press-refused");
       const sentAt = markAt(entries, "press-sent");
+      const pressesAfter = entries.filter(
+        (e) => e.kind === "mark" && e.name === "press-sent",
+      ).length;
+      if (pressesAfter > 1)
+        failures.push(`the reopened client was pressed ${pressesAfter} times, not once`);
       const pressedAt = sentAt === -1 ? refusedAt : sentAt;
       if (refusedAt === -1) {
         failures.push("a press right after the reopen was not refused");
