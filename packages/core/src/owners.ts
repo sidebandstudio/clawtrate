@@ -271,7 +271,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
-    each: 2 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
+    each: 3 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },
   "attachmentContent.*.files": {
@@ -283,7 +283,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
   sentPictures: {
     max: MAX_SENT_PICTURE_MESSAGES,
-    each: 3 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
+    each: 4 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
     row: "outboxFiles",
   },
   "sentPictures.*.files": {
@@ -295,12 +295,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Pictures read back from the gateway, kept to show: their content is in `outboxFiles`'s budget.
   readBackPictures: {
     max: MAX_READ_BACK_PICTURES,
-    each: 3 * ID + 2 * N + SHORT,
+    each: 4 * ID + 2 * N + SHORT,
     row: "outboxFiles",
     opaque: "picture content, counted in `outboxFiles`",
   },
-  // Pictures being read back, under way or waiting their turn: each its task's key and a flag.
-  pictureReadsInFlight: { max: MAX_PICTURE_READS, each: ID + SHORT, row: "bookkeeping" },
+  // Pictures being read back, under way or waiting their turn: each its task's key, its bot and a flag.
+  pictureReadsInFlight: { max: MAX_PICTURE_READS, each: 2 * ID + SHORT, row: "bookkeeping" },
   // Each followed task's references to its person's newest files, by row key and place.
   sentSources: {
     max: T,

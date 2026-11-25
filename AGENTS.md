@@ -68,7 +68,7 @@ The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixe
 - `packages/relay-protocol` (`@clawtrate/relay-protocol`) holds the wire protocol for reaching a gateway through Clawtrate's relay: frames, relay messages, the connector's register proof and the Noise IK channel. Like shared core, it uses no Node or DOM APIs.
 - `plugins/` holds OpenClaw plugins that fill gateway gaps.
 - `tools/dev-gateway` starts, seeds and resets development gateways and runs the scripted model. `tools/brand` makes the icons from the logo.
-- `e2e/` holds the end-to-end tests, `e2e-packaged/` the launch check for a packaged app, `visual/` the visual tests and their macOS baselines, and `test/` the repository-wide unit tests, such as the parity check.
+- `e2e/` holds the end-to-end tests, `e2e-packaged/` the launch check for a packaged app, `visual/` the visual tests and their Linux and macOS baselines, and `test/` the repository-wide unit tests, such as the parity check.
 - `docs/` holds the plan, the definition of done, the design, the research and the decisions. [docs/README.md](docs/README.md) lists them.
 - `site/` is the website at clawtrate.dev: static files with no build step, and `site/install.sh`, the optional Terminal install for the Mac beta.
 
@@ -78,7 +78,7 @@ A builder may change this layout when it has a reason. Record the reason in `doc
 
 ## Verifying
 
-TypeScript is strict. `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm e2e` and `pnpm visual` must pass before work is handed over. The visual baselines are macOS ones, so on another system say that in the pull request and let CI's macOS job check it. Run `pnpm scenarios` when you change the development gateway or its scenarios, and `pnpm check:packaged` when you change packaging or the main process. [docs/development/testing.md](docs/development/testing.md) says what each check covers.
+TypeScript is strict. `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm e2e` and `pnpm visual:linux` must pass before work is handed over. The screenshot baselines that gate a change are Linux ones, drawn in a pinned image that `pnpm visual:linux` runs through Docker on any system. A small macOS set keeps macOS baselines too; on a Mac, `pnpm visual` runs it, and elsewhere CI's `macos` job checks it. Record a changed baseline fresh: delete the picture and its `.aria.yml`, then record with `--update-snapshots=missing`. Run `pnpm scenarios` when you change the development gateway or its scenarios, and `pnpm check:packaged` when you change packaging or the main process. [docs/development/testing.md](docs/development/testing.md) says what each check covers.
 
 A check that fails only sometimes is a defect. Find out whether the app or the check is wrong before you touch the check. CI runs each visual test once more after a failure, and the run's summary lists by name each test that passed only on the retry. Those still need fixing.
 

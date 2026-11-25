@@ -908,6 +908,81 @@ describe("deleting a bot: one gateway, one connection", () => {
     client.stop();
   });
 
+  for (const early of [false, true])
+    it(`F-557: a deleted bot's pictures go by the bot each task is listed under, not its key${early ? ", even when the bot list read after the delete lands before its answer" : ""}`, async () => {
+      const { client, fake } = await adminClient();
+      // Listed under Pip with no bot in its key, and under Marlow with Pip's name in its key.
+      const UNPREFIXED = "webchat:direct:u1";
+      const MISNAMED = "agent:pip:for-marlow";
+      const listed = [
+        { key: UNPREFIXED, agentId: "pip", updatedAt: 5 },
+        { key: MISNAMED, agentId: "marlow", updatedAt: 4 },
+      ];
+      fake.handlers["sessions.list"] = () => ({ sessions: listed, hasMore: false });
+      fake.handlers["sessions.subscribe"] = () => ({
+        subscribed: true,
+        list: { sessions: listed, hasMore: false },
+      });
+      fake.dropAll();
+      await until(() =>
+        (client.state.tasksByBot.marlow ?? []).some((each) => each.key === MISNAMED),
+      );
+      const listedUnderPip = () =>
+        (client.state.tasksByBot.pip ?? []).some((each) => each.key === UNPREFIXED);
+      expect(listedUnderPip()).toBe(true);
+      const rows = new Map<string, unknown[]>();
+      const ids = new Map<string, string>();
+      fake.handlers["chat.history"] = (params) => ({
+        messages: rows.get((params as Json).sessionKey as string) ?? [],
+      });
+      const png = solidPng(8, 8, [10, 120, 200]);
+      const picture = {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "shot.png",
+        content: toBase64(png),
+      };
+      for (const task of [UNPREFIXED, MISNAMED]) {
+        client.openSession(task);
+        await until(() => client.state.transcripts[task]?.status === "ready");
+        const id = client.sendMessage(task, "look", { attachments: [picture] });
+        ids.set(task, id);
+        await until(() => client.state.transcripts[task]!.outbox[0]?.status === "sent");
+        rows.set(task, [sentRow(id, "look", [SHOT])]);
+        fake.emit("sessions.changed", { sessionKey: task, phase: "message", updatedAt: 6 });
+        await until(() => client.state.transcripts[task]!.outbox.length === 0);
+      }
+      expect(client.keptPictureBytes).toBe(2 * png.length);
+      if (early) {
+        const answer = fake.handlers["agents.delete"]!;
+        fake.handlers["agents.delete"] = async (params) => {
+          const result = await answer(params);
+          // OpenClaw 2026.10.6 commits the delete, which broadcasts config.changed, and answers
+          // only after its cleanup: the bot list read that event brings drops Pip's rows first.
+          fake.emit("config.changed", { path: "openclaw.json", hash: "h1", ts: 1 });
+          await until(() => !listedUnderPip());
+          return result;
+        };
+      }
+      const read = await client.readBotDelete("pip");
+      const outcome = await client.deleteBot({
+        botId: "pip",
+        stamp: read.stamp,
+        deleteFiles: false,
+        reviewed: reviewOf(read),
+        typed: "Pip",
+      });
+      expect(outcome.kind).toBe("answered");
+      expect(client.keptPictureBytes).toBe(png.length);
+      expect(await client.readSentPicture(UNPREFIXED, `${ids.get(UNPREFIXED)}:user`, 0)).toEqual({
+        status: "cannot-load",
+      });
+      expect((await client.readSentPicture(MISNAMED, `${ids.get(MISNAMED)}:user`, 0)).status).toBe(
+        "content",
+      );
+      client.stop();
+    });
+
   it("F-050: a dialog read on one gateway sends nothing once the host reaches another", async () => {
     const { client, fake, switchTo } = await adminClient();
     const read = await client.readBotDelete("pip");

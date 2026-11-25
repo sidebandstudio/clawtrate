@@ -757,7 +757,11 @@ export function Rail({
         ? menu.task.botId
         : null;
   if (menuBotId && !bots.some((each) => each.id === menuBotId)) setMenu(null);
-  const [renaming, setRenaming] = useState<string | null>(null);
+  /**
+   * The task being renamed in place, and where its row was listed when the rename began: Enter
+   * sends that, since the field stays open while the list is read again, even on another gateway.
+   */
+  const [renaming, setRenaming] = useState<{ key: string; shown: ShownStamp } | null>(null);
   /** Bots whose Archived group is open. */
   const [archivedOpen, setArchivedOpen] = useState<Set<string>>(() => new Set());
   /** Bots whose New task is on its way; held across renders, read and written by events only. */
@@ -931,13 +935,18 @@ export function Rail({
 
   const taskActions: TaskActions | null = interactive
     ? {
-        renaming,
+        renaming: renaming?.key ?? null,
         onRename: (task) => {
           setTip(null);
-          setRenaming(task.key);
+          setRenaming({ key: task.key, shown: listedOn() });
         },
         commitRename: async (task, label) => {
-          await bridge.invoke({ type: "renameTask", key: task.key, label });
+          await bridge.invoke({
+            type: "renameTask",
+            key: task.key,
+            label,
+            stamp: await screenStamp(bridge, renaming?.shown ?? listedOn()),
+          });
           setAnnouncement(`Renamed to ${label}.`);
         },
         endRename: (task) => {
@@ -953,7 +962,13 @@ export function Rail({
   // failed one leaves the rail and the badge as the gateway reports them.
   const mark = (task: Task, unread: boolean) =>
     void runner.run(unread ? "mark it unread" : "mark it read", async () => {
-      await bridge.invoke({ type: "markTask", key: task.key, unread, opened: false });
+      await bridge.invoke({
+        type: "markTask",
+        key: task.key,
+        unread,
+        opened: false,
+        stamp: await screenStamp(bridge, listedOn()),
+      });
       if (unread) selection.markUnreadHere(task.key);
       else selection.markReadHere(task);
     });
@@ -1294,7 +1309,7 @@ export function Rail({
     ) {
       event.preventDefault();
       setTip(null);
-      setRenaming(row.dataset.key);
+      setRenaming({ key: row.dataset.key, shown: listedOn() });
     }
   };
 
@@ -1564,7 +1579,12 @@ export function Rail({
                   confirm: { label: "Rename" },
                   field: { label: "Name", placeholder: only.title, maxLength: 512 },
                   onConfirm: async (label) => {
-                    await bridge.invoke({ type: "renameTask", key: only.key, label });
+                    await bridge.invoke({
+                      type: "renameTask",
+                      key: only.key,
+                      label,
+                      stamp: await screenStamp(bridge, listedOn()),
+                    });
                     setAnnouncement(`Renamed to ${label.trim()}.`);
                   },
                   returnTo: trigger,
@@ -1733,7 +1753,7 @@ export function Rail({
               hint: "F2",
               onSelect: () => {
                 close();
-                setRenaming(task.key);
+                setRenaming({ key: task.key, shown: listedOn() });
               },
             },
             {
@@ -1743,7 +1763,12 @@ export function Rail({
               onSelect: () => {
                 close();
                 void runner.run(task.pinned ? "unpin it" : "pin it", async () => {
-                  await bridge.invoke({ type: "pinTask", key: task.key, pinned: !task.pinned });
+                  await bridge.invoke({
+                    type: "pinTask",
+                    key: task.key,
+                    pinned: !task.pinned,
+                    stamp: await screenStamp(bridge, listedOn()),
+                  });
                   setAnnouncement(`${task.pinned ? "Unpinned" : "Pinned"} ${task.title}.`);
                   setFocusTask({ key: task.key, bot: bot.id });
                 });

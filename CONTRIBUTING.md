@@ -50,10 +50,10 @@ pnpm lint        # ESLint and Prettier
 pnpm typecheck
 pnpm test        # unit tests
 pnpm e2e         # end-to-end tests against a development gateway of their own
-pnpm visual      # screenshots and behavior of the fixture mode; the baselines are macOS ones
+pnpm visual:linux  # screenshots and behavior of the fixture mode, in the pinned Linux image (needs Docker)
 ```
 
-Run `pnpm scenarios` too when you change the development gateway or its scenarios. The visual baselines are only valid on macOS. If you are on another system, say so in the pull request, and CI's macOS job is the check. [Testing](docs/development/testing.md) explains what each check covers and what CI runs.
+Run `pnpm scenarios` too when you change the development gateway or its scenarios. The screenshot baselines that gate a change are Linux ones, and `pnpm visual:linux` draws them the same way on any system. A small macOS set also has macOS baselines: on a Mac, `pnpm visual` runs it, and elsewhere CI's `macos` job checks it. [Testing](docs/development/testing.md) explains what each check covers and what CI runs.
 
 ## Signing and releases
 

@@ -3,8 +3,9 @@
 # (#485). A spec file goes in one list, in the one whose shard finishes first; one in no list
 # runs in the last shard (e2e/shards.ts). test/e2e-shards.test.ts checks the lists.
 preview.spec.ts
-rail-tasks.spec.ts
-routines.spec.ts
+bot-voice.spec.ts
+gateway-bot.spec.ts
+other-tools.spec.ts
 ui-pictures.spec.ts
+memory.spec.ts
 search.spec.ts
-channel-chats.spec.ts
