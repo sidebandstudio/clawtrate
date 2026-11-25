@@ -10,6 +10,7 @@ import type {
   Bot,
   Task,
   TaskContext,
+  TaskStarter,
   TaskStatus,
   ToolResult,
   TranscriptBlock,
@@ -54,6 +55,8 @@ export function mapAgents(result: unknown): Bot[] {
   const record = asRecord(result);
   if (!record) return [];
   const defaultId = str(record.defaultId);
+  // With no owner the gateway still names a `defaultId`: only its first bot (F-562).
+  const ownerless = record.selectionRequired === true;
   const bots: Bot[] = [];
   for (const entry of arr(record.agents)) {
     const agent = asRecord(entry);
@@ -69,6 +72,7 @@ export function mapAgents(result: unknown): Bot[] {
       theme: str(identity.theme),
       model: str(model?.primary) ?? (typeof agent.model === "string" ? agent.model : null),
       isDefault: id === defaultId,
+      ...(ownerless && id === defaultId ? { ownerless: true } : {}),
     });
   }
   return bots.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
@@ -213,7 +217,33 @@ export function mapSessionRow(row: RawRecord): Task | null {
     ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
     ...(isOtherToolSession(row) ? { otherTool: true as const } : {}),
     ...(channel ? { channel } : {}),
+    ...startedByOf(row),
   };
+}
+
+/**
+ * Who started a task a bot started with `sessions_spawn`, only from the gateway's own fields:
+ * `createdVia: "spawn"`, and `spawnedBy`, the task it was started from, whose bot started it
+ * (the gateway's `createdActor` names the same bot). Nothing the bot wrote, its label or brief,
+ * counts.
+ */
+function startedByOf(row: RawRecord): { startedBy: TaskStarter } | Record<string, never> {
+  if (row.createdVia !== "spawn") return {};
+  const fromKey = str(row.spawnedBy);
+  const botId = fromKey ? botIdFromSessionKey(fromKey) : null;
+  return fromKey && botId ? { startedBy: { botId, fromKey } } : {};
+}
+
+/**
+ * When a bot started the task in `chat.history`'s `sessionInfo`, the time the gateway created it
+ * (`createdAt`), so `mapHistory` can find the brief; null for any other task, and when the
+ * history read does not reach the task's first row (`hasMore`).
+ */
+export function startedTaskSince(history: unknown): number | null {
+  const record = asRecord(history);
+  const info = asRecord(record?.sessionInfo);
+  if (!info || info.createdVia !== "spawn" || record?.hasMore === true) return null;
+  return num(info.createdAt);
 }
 
 /**
@@ -406,31 +436,80 @@ function assistantFiles(content: unknown): ChatFile[] {
 const MAX_SENT_ATTACHMENTS = 20;
 const MAX_SENT_NAME_CHARS = 255;
 
-/**
- * The files a person's row carried: the gateway's `__openclaw.media` entries, in
- * their order, by name, type and size. The `media://inbound` reference an entry
- * names is the gateway's own and is never kept, so never used.
- */
-function sentAttachments(info: RawRecord): SentAttachment[] {
-  return arr(info.media)
+/** A person's row's `__openclaw.media` entries, in order: the same list for its files and their references. */
+const sentFacts = (info: RawRecord): RawRecord[] =>
+  arr(info.media)
     .slice(0, MAX_SENT_ATTACHMENTS)
     .flatMap((entry) => {
       const fact = asRecord(entry);
-      if (!fact) return [];
-      // An entry with no name is still a file the message carried.
-      const name = str(fact.fileName) ?? (fact.kind === "image" ? "Picture" : "File");
-      const size = num(fact.sizeBytes);
-      const type = str(fact.contentType);
-      return [
-        {
-          fileName:
-            name.length > MAX_SENT_NAME_CHARS ? `${name.slice(0, MAX_SENT_NAME_CHARS - 1)}…` : name,
-          mimeType:
-            type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null,
-          sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
-        },
-      ];
+      return fact ? [fact] : [];
     });
+
+/**
+ * The files a person's row carried: the gateway's `__openclaw.media` entries, in
+ * their order, by name, type and size. The `media://inbound` reference an entry
+ * names stays in the host (`sentSources`), never in the view.
+ */
+function sentAttachments(info: RawRecord): SentAttachment[] {
+  return sentFacts(info).flatMap((fact) => {
+    // An entry with no name is still a file the message carried.
+    const name = str(fact.fileName) ?? (fact.kind === "image" ? "Picture" : "File");
+    const size = num(fact.sizeBytes);
+    const type = str(fact.contentType);
+    return [
+      {
+        fileName:
+          name.length > MAX_SENT_NAME_CHARS ? `${name.slice(0, MAX_SENT_NAME_CHARS - 1)}…` : name,
+        mimeType: type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null,
+        sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
+      },
+    ];
+  });
+}
+
+/** The longest reference kept, and the most kept for one task: as many as its history shows files. */
+export const MAX_INBOUND_REF_CHARS = 512;
+export const MAX_SENT_SOURCES = 40;
+
+/**
+ * A person's attachment as their row names it (`__openclaw.media[].url`), exactly
+ * `media://inbound/<id>`: one segment that isn't `.` or `..`, with no `/`, `\`, `?`, `#`, `%`,
+ * space or control character, so nothing is decoded and nothing else is named. Null otherwise;
+ * an entry's `path`, or any other address, is never one.
+ */
+export function inboundRef(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > MAX_INBOUND_REF_CHARS) return null;
+  // eslint-disable-next-line no-control-regex
+  const match = /^media:\/\/inbound\/([^/\\?#%\s\u0000-\u001f\u007f]+)$/.exec(value);
+  return match && match[1] !== "." && match[1] !== ".." ? value : null;
+}
+
+/**
+ * Each file's reference on a person's own rows (`inboundRef`), by the key a row is asked for
+ * under (its idempotency key, or else its id) and the file's place among the row's files:
+ * `${rowKey}\u0000${index}`. Never a bot's or the gateway's row, and never an entry without a
+ * reference in that exact form. The newest `MAX_SENT_SOURCES` are kept, as the state keeps the
+ * newest files. The host keeps these (`readSentPicture`); the view never has them.
+ */
+export function sentSources(messages: unknown): Map<string, string> {
+  const sources = new Map<string, string>();
+  const rows = new Set<string>();
+  for (const entry of [...arr(messages)].reverse()) {
+    const message = asRecord(entry);
+    if (message?.role !== "user" || gatewayTurnText(message)) continue;
+    const info = meta(message);
+    const rowKey = str(info.idempotencyKey) ?? str(message.idempotencyKey) ?? str(info.id);
+    // The first row of a key, newest first, is the one its message shows.
+    if (!rowKey || rowKey.length > MAX_INBOUND_REF_CHARS || rows.has(rowKey)) continue;
+    rows.add(rowKey);
+    const facts = sentFacts(info);
+    for (let index = facts.length - 1; index >= 0; index -= 1) {
+      if (sources.size >= MAX_SENT_SOURCES) return sources;
+      const ref = inboundRef(facts[index]!.url);
+      if (ref) sources.set(`${rowKey}\u0000${index}`, ref);
+    }
+  }
+  return sources;
 }
 
 function assistantBlocks(content: unknown): TranscriptBlock[] {
@@ -512,13 +591,42 @@ function gatewayTurnText(message: RawRecord): string | null {
     : "The gateway started a turn by itself";
 }
 
+/** The row's own time (`timestamp`, kept as written when a row is copied) is at or after `since`. */
+function isWrittenSince(message: RawRecord, since: number | null): boolean {
+  const written = num(message.timestamp);
+  return since !== null && written !== null && written >= since;
+}
+
+/**
+ * How soon after the gateway created a task its brief is stored: it writes the brief as it
+ * creates the task (30 to 332 ms on OpenClaw 2026.10.6). A first row stored later is not the
+ * brief: a transcript the gateway started over by itself (a daily or idle reset) keeps the task's
+ * creation time, and its first row is the person's.
+ */
+export const BRIEF_WINDOW_MS = 30_000;
+
 /**
  * `chat.history` messages to display items. Consecutive assistant messages of
  * one run (tool rounds) become a single assistant turn, and each tool result is
  * attached to the call that produced it.
  */
-export function mapHistory(messages: unknown): TranscriptItem[] {
+export function mapHistory(
+  messages: unknown,
+  options: {
+    /**
+     * In a task a bot started, when the gateway created it (`startedTaskSince`). The first row
+     * it stored from then on, of any role, is the bot's brief when it is a user row, a turn's own
+     * input (`<run>:user`), stored within `BRIEF_WINDOW_MS` of then: the gateway writes the brief
+     * as the task's first turn, and a forked task's copied rows keep the earlier times they were
+     * written. A reset's row, stored after the task was made, or a row with no time ends the
+     * search: nothing after it is the brief.
+     */
+    startedAt?: number | null;
+  } = {},
+): TranscriptItem[] {
   const items: TranscriptItem[] = [];
+  const startedAt = options.startedAt ?? null;
+  let briefSought = startedAt !== null;
   let currentRun: string | null = null;
   // The user rows between two assistant rows can all join at the same tool boundary.
   let precedingRun: string | null = null;
@@ -536,6 +644,14 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
     const kind = str(info.kind);
     // The gateway cut this row to its display length.
     const cutByGateway = info.truncated === true;
+    // The first row the task stored itself, of any role (a reset's row too), ends the search for
+    // the brief; so does a row with no time, which could be the task's own or a copied one.
+    let first = false;
+    if (briefSought && num(message.timestamp) === null) briefSought = false;
+    else if (briefSought && isWrittenSince(message, startedAt)) {
+      briefSought = false;
+      first = message.role === "user";
+    }
 
     if (kind && SYSTEM_ROW_TEXT[kind]) {
       precedingRun = null;
@@ -574,6 +690,10 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
+        const brief =
+          first &&
+          idempotencyKey?.endsWith(":user") === true &&
+          num(message.timestamp)! - startedAt! <= BRIEF_WINDOW_MS;
         const user: TranscriptItem = {
           id,
           role: "user",
@@ -585,6 +705,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(brief ? { brief: true as const } : {}),
         };
         items.push(user);
         if (precedingRun !== null) pendingUsers.push(user);

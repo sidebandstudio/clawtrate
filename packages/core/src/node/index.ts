@@ -184,8 +184,17 @@ export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
     client: options.client,
     ...(options.log ? { log: options.log } : {}),
     ...(options.approvalInstructions ? { approvalInstructions: options.approvalInstructions } : {}),
-    // Only the downloads the gateway issues for pictures (`pictures.ts` checks the path first).
+    // Only the pictures the gateway serves (`pictures.ts` checks the address first). Exactly the
+    // fields core sets are passed on: GET, no redirect, no cookies, the time limit, and the
+    // device's token only where core put it (`fetchInboundPicture`'s ticket request).
     // Node's Response has more than `HttpResponseLike`; its overloaded `getReader` defeats inference.
-    fetch: (url, init) => globalThis.fetch(url, init) as unknown as Promise<HttpResponseLike>,
+    fetch: (url, init) =>
+      globalThis.fetch(url, {
+        method: init.method,
+        redirect: init.redirect,
+        credentials: init.credentials,
+        signal: init.signal,
+        ...(init.headers ? { headers: { authorization: init.headers.authorization } } : {}),
+      }) as unknown as Promise<HttpResponseLike>,
   };
 }

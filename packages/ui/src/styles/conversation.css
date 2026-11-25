@@ -1737,8 +1737,26 @@ button.reaction {
 }
 
 .sent-file-note {
+  display: flex;
   flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
   color: var(--text-muted);
+}
+
+/* A picture on its way from the gateway: its place, quietly, with nothing to read (#469). */
+.sent-picture-loading {
+  aspect-ratio: 4 / 3;
+}
+
+/* Try again keeps its edge on the file row's inset background. */
+.sent-file-retry {
+  background: var(--bg);
+}
+
+.sent-file-retry:hover {
+  background: color-mix(in srgb, var(--bg) 92%, var(--text));
 }
 
 /* A picture opened larger, over the whole app. */

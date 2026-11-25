@@ -28,6 +28,8 @@ export type PlanContext = {
   sessionKey: string | null;
   /** Tool results since the user's message, in order. */
   results: { name: string; text: string }[];
+  /** Tool results of the whole conversation the model was sent, this turn's included, in order. */
+  history?: { name: string; text: string }[];
   /** The user's message, as the scripted model matched it. */
   prompt?: string;
   /**
@@ -311,6 +313,59 @@ function message(recipientDirective: string, request: string, timeoutSeconds: nu
       return [say(`The message to ${who} did not get through (${status}).`)];
     },
   ];
+}
+
+/** What `#hand-off` and its siblings ask the gateway to start: a label and a brief, as a bot writes them. */
+export const HAND_OFF = {
+  label: "Compare trail maps",
+  task: "Compare the lake loop and the ridge trail on the trail map, and say which suits a relaxed Saturday. Reply in plain text.",
+} as const;
+export const HAND_OFF_HIDDEN = {
+  label: "Check the forecast",
+  task: "Check the forecast for Saturday on the ridge. Reply in plain text.",
+} as const;
+export const HAND_OFF_PARTNER = {
+  label: "Review the route",
+  task: "Read over the Saturday route and say what you would change. Reply in plain text.",
+} as const;
+/** What `#follow-up` sends to the task the bot started last. */
+export const FOLLOW_UP_MESSAGE = "Also say which route has more shade. Reply in plain text.";
+
+/** A sessions_spawn call: visible when the person can open the task, under a partner when named. */
+function spawn(
+  brief: { label: string; task: string },
+  options: { visible?: boolean; partner?: boolean } = {},
+): Step {
+  return {
+    kind: "tool-from",
+    build: (ctx) =>
+      tool("sessions_spawn", {
+        task: brief.task,
+        label: brief.label,
+        ...(options.visible ? { visible: true } : {}),
+        ...(options.partner ? { agentId: partnerOf(ctx) } : {}),
+      }),
+  };
+}
+
+/** The reply after sessions_spawn: what started, or the gateway's reason it did not. */
+const afterSpawn =
+  (started: (ctx: PlanContext) => string): Step =>
+  (ctx) => {
+    const result = lastResult(ctx, "sessions_spawn");
+    if (result?.status === "accepted") return [say(started(ctx))];
+    const reason = typeof result?.error === "string" ? `: ${result.error}` : "";
+    return [say(`The task did not start (${String(result?.status ?? "unknown")})${reason}`)];
+  };
+
+/** The task the bot started last in this conversation, from its sessions_spawn results. */
+export function lastStartedTask(ctx: PlanContext): string | null {
+  for (const found of [...(ctx.history ?? [])].reverse()) {
+    if (found.name !== "sessions_spawn") continue;
+    const key = lastResult({ ...ctx, results: [found] }, "sessions_spawn")?.childSessionKey;
+    if (typeof key === "string") return key;
+  }
+  return null;
 }
 
 const QUESTION_ROUTE = {
@@ -848,6 +903,64 @@ export const SCENARIOS: Scenario[] = [
     summary:
       "A message to the other bot, which reads its own instructions file before replying: a tool call in a run another bot's message started.",
     steps: () => message("#read", "Could you check your instructions?", 30),
+  },
+  {
+    name: "hand-off",
+    phrase: "put this in a task",
+    summary: `Starts a task of the bot's own with the gateway's \`sessions_spawn\` (\`visible: true\`), labelled "${HAND_OFF.label}", whose first message is the bot's brief. It runs at once, and the person can open it and write in it. Its end starts a turn in the task it came from.`,
+    steps: () => [
+      think("This is worth a task of its own. I will start one with a brief."),
+      spawn(HAND_OFF, { visible: true }),
+      afterSpawn(() => `I started a task for it: ${HAND_OFF.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-hidden",
+    phrase: "work on this in the background",
+    summary: `Starts a hidden helper with \`sessions_spawn\` (no \`visible\`), labelled "${HAND_OFF_HIDDEN.label}": a session the task list leaves out. Its end starts a turn in the task it came from.`,
+    steps: () => [
+      spawn(HAND_OFF_HIDDEN),
+      afterSpawn(() => "I started a helper on it in the background."),
+    ],
+  },
+  {
+    name: "follow-up",
+    phrase: "add to that task",
+    summary: `Sends a follow-up with \`sessions_send\` to the task this conversation started last ("${FOLLOW_UP_MESSAGE}"). Its answer starts a turn in this conversation again.`,
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const key = lastStartedTask(ctx);
+          if (!key) return say("I have started no task here to add to.");
+          return tool("sessions_send", {
+            sessionKey: key,
+            message: FOLLOW_UP_MESSAGE,
+            timeoutSeconds: 0,
+          });
+        },
+      },
+      (ctx) => {
+        const result = lastResult(ctx, "sessions_send");
+        if (!result) return [];
+        if (result.status === "accepted") return [say("I added that to the task.")];
+        return [say(`The task did not take it (${String(result.status ?? "unknown")}).`)];
+      },
+    ],
+  },
+  {
+    name: "hand-off-to-partner",
+    phrase: "put this in a task for your partner",
+    bots: "Marlow or Pip",
+    summary: `Starts a task under the other bot of the pair with \`sessions_spawn\` (\`visible: true\`, \`agentId\`), labelled "${HAND_OFF_PARTNER.label}". It is listed under that bot, and its end starts a turn in the task it came from.`,
+    steps: () => [
+      spawn(HAND_OFF_PARTNER, { visible: true, partner: true }),
+      afterSpawn((ctx) => {
+        const id = partnerOf(ctx);
+        const who = SEED_BOTS.find((bot) => bot.id === id)?.name ?? id;
+        return `I started a task for it under ${who}: ${HAND_OFF_PARTNER.label}.`;
+      }),
+    ],
   },
   {
     name: "mcp",

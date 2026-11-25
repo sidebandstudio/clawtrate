@@ -218,7 +218,7 @@ export function Home({
   // No bots: loading, a failed read (never "No bots" then), or a gateway that has none.
   const note = listNote(state.bots.length, state.discovery);
   return (
-    <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: c.bg }}>
+    <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.bg }}>
       <Top
         state={state}
         taskKey={null}

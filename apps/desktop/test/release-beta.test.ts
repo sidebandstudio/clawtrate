@@ -1654,6 +1654,11 @@ describe("publishing", () => {
         },
         // Signed by the same team, as publishing requires of every earlier beta.
         { id: 7, name: "latest-mac.json", state: "uploaded", browser_download_url: "unused" },
+        // Both zips: the site takes a pin only with its four files (#535).
+        ...ZIPS.map((zip) => ({
+          name: zip.replaceAll(VERSION, pin),
+          browser_download_url: `${releaseFolder(`v${pin}`)}${zip.replaceAll(VERSION, pin)}`,
+        })),
       ],
     };
     const serve = (legacy: string) =>
@@ -1688,17 +1693,21 @@ describe("publishing", () => {
     expect(refused.calls.some((call) => call[1] === "release")).toBe(false);
     // The pinned beta's files are checked before anything is created on GitHub: a feed
     // of the right version is not enough without GitHub's digest of the pinned one.
+    const unusable = `The legacy Beta feed is pinned to ${pin}, which GitHub doesn't list as a published beta with its four files and a digest of its feed.json, as the site requires. Nothing was published.`;
     for (const [row, legacy, message] of [
       [
-        { ...pinnedRow, assets: pinnedRow.assets.slice(1) },
+        {
+          ...pinnedRow,
+          assets: pinnedRow.assets.map(({ digest: _digest, ...asset }) => asset),
+        },
         pinnedFeed,
-        `The legacy Beta feed is pinned to ${pin}, but GitHub lists no published feed.json with a digest for it. Nothing was published.`,
+        unusable,
       ],
-      [
-        { ...pinnedRow, draft: true },
-        pinnedFeed,
-        `The legacy Beta feed is pinned to ${pin}, but GitHub lists no published feed.json with a digest for it. Nothing was published.`,
-      ],
+      [{ ...pinnedRow, draft: true }, pinnedFeed, unusable],
+      // #535: the site's rule, so the preflight never passes a pin the deploy then refuses:
+      // a pin changed to a full release, and one missing a file.
+      [{ ...pinnedRow, prerelease: false }, pinnedFeed, unusable],
+      [{ ...pinnedRow, assets: pinnedRow.assets.slice(0, -1) }, pinnedFeed, unusable],
       [
         pinnedRow,
         // The pinned version, but not the pinned release's bytes: a stale or edited copy.

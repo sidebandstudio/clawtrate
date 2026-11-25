@@ -120,6 +120,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   voice: voiceParams(params),
   fullPairing: params.get("full") === "1",
   gatewayName: params.get("gatewayName"),
+  showGatewayBot: params.get("gatewaybot") !== "off",
 });
 if (params.has("hold")) bridge.hold();
 // "Show sessions from other tools" on, for checks of what it lists (F-563, F-193).

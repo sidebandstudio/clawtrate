@@ -1033,41 +1033,110 @@ describe("F-559: the two Beta feed folders", () => {
     expect(existsSync(output)).toBe(false);
   });
 
-  it("finds a pinned beta older than the newest 1,000 releases, and reads no further", async () => {
-    // 1,150 withdrawn releases newer than the pin, and 300 older, so the pin sits on the
-    // twelfth of fifteen pages of 100.
-    const draft = (day: number, index: number) =>
-      row(`0.1.1-beta.202611${day}.${index + 1}`, { draft: true });
-    const newer = Array.from({ length: 1150 }, (_, index) => draft(29, index));
-    const older = Array.from({ length: 300 }, (_, index) => draft(10, index));
-    const pinnedRow = row(PINNED, {}, { feed: files(PINNED, BETA_FEED_URL).feed });
-    let listed = [row(NEWEST), ...newer, pinnedRow, ...older, row(OLD)];
-    const pages: number[] = [];
+  /**
+   * GitHub listing `listed` 100 a page, newest first, and the files of the betas
+   * in `github()`; `pages` records each page asked for.
+   */
+  const paged = (listed: () => ReleaseRow[], pages: number[]): Get => {
     const base = github();
-    const get: Get = async (url, headers) => {
+    return async (url, headers) => {
       const page = /[?&]page=(\d+)/.exec(url);
       if (!url.startsWith("https://api.github.com/") || !page) return base(url, headers);
       pages.push(Number(page[1]));
       const start = (Number(page[1]) - 1) * 100;
-      return new Response(JSON.stringify(listed.slice(start, start + 100)));
+      return new Response(JSON.stringify(listed().slice(start, start + 100)));
     };
+  };
+  const withdrawn = (day: number, count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      row(`0.1.1-beta.202611${day}.${index + 1}`, { draft: true }),
+    );
+  /** Published betas older than the pin, each listing what it adds. */
+  const listing = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      row(`0.1.1-beta.20261115.${index + 1}`, { body: `What's new:\n\n- Older ${index + 1}\n` }),
+    );
+  const pinnedRow = row(
+    PINNED,
+    { body: "What's new:\n\n- The pin\n" },
+    { feed: files(PINNED, BETA_FEED_URL).feed },
+  );
+  const pages = (count: number) => Array.from({ length: count }, (_, index) => index + 1);
+
+  it("finds a pinned beta older than the newest 1,000 releases, and reads no further", async () => {
+    // 1,150 withdrawn releases newer than the pin, then the pin and four older betas with
+    // lists on page 12, then 300 more, so the pin and its five lists sit on page 12 of 15.
+    let listed = [
+      row(NEWEST),
+      ...withdrawn(29, 1150),
+      pinnedRow,
+      ...listing(4),
+      ...withdrawn(10, 300),
+      row(OLD),
+    ];
+    const asked: number[] = [];
+    const get = paged(() => listed, asked);
     await assembleSite(source, output, get, "t", PINNED);
     expect(read(LEGACY_BETA_FOLDER, "feed.json")).toBe(files(PINNED, BETA_FEED_URL).feed);
-    // Pages 13 to 15 are never asked for once the pin is found.
-    expect(pages).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    // Pages 13 to 15 are never asked for once the pin and its lists are found.
+    expect(asked).toEqual(pages(12));
     // A pin the whole list doesn't name fails plainly once the list ends.
-    pages.length = 0;
+    asked.length = 0;
     listed = listed.filter((each) => each !== pinnedRow);
     rmSync(output, { recursive: true, force: true });
     await expect(assembleSite(source, output, get, "t", PINNED)).rejects.toThrow(
       `The legacy Beta feed is pinned to ${PINNED}, but GitHub lists no release v${PINNED}, so nothing deploys.`,
     );
-    expect(pages).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-    // Unpinned, the newest 1,000 are enough, as before.
-    pages.length = 0;
+    expect(asked).toEqual(pages(15));
+    // Unpinned, the newest 1,000 are enough, as before, and the site assembles.
+    asked.length = 0;
     rmSync(output, { recursive: true, force: true });
-    await assembleSite(source, output, get, "t", null).catch(() => undefined);
-    expect(pages).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(await assembleSite(source, output, get, "t", null)).toBe(`v${NEWEST}`);
+    expect(asked).toEqual(pages(10));
+  });
+
+  it("#535: reads past the pin's page for the lists below it, up to the five the legacy feed serves", async () => {
+    // The pin is the last release on page 12; the betas below it, with their lists, on page 13.
+    const listed = [
+      row(NEWEST),
+      ...withdrawn(29, 1198),
+      pinnedRow,
+      ...listing(6),
+      ...withdrawn(10, 300),
+    ];
+    expect(listed.indexOf(pinnedRow)).toBe(1199);
+    const asked: number[] = [];
+    await assembleSite(
+      source,
+      output,
+      paged(() => listed, asked),
+      "t",
+      PINNED,
+    );
+    expect(
+      parseWhatsNew(read(LEGACY_BETA_FOLDER, "whats-new.json"))!.map((b) => b.version),
+    ).toEqual([PINNED, ...[6, 5, 4, 3].map((run) => `0.1.1-beta.20261115.${run}`)]);
+    expect(asked).toEqual(pages(13));
+  });
+
+  it("#535: checks the zips once when the pinned beta is also the newest", async () => {
+    const asked: string[] = [];
+    // The pinned beta is the newest one published.
+    const base = github((each) => (each.tag_name === `v${NEWEST}` ? null : each));
+    await assembleSite(
+      source,
+      output,
+      (url, headers) => (asked.push(url), base(url, headers)),
+      "t",
+      PINNED,
+    );
+    expect(read(LEGACY_BETA_FOLDER, "feed.json")).toBe(read(BETA_FOLDER, "feed.json"));
+    const zips = asked.filter((url) => url.endsWith(".zip"));
+    expect(zips.sort()).toEqual(
+      ["mac-arm64", "mac-x64"].map(
+        (key) => `${releaseFolder(`v${PINNED}`)}Clawtrate-${PINNED}-${key}.zip`,
+      ),
+    );
   });
 
   it.each([

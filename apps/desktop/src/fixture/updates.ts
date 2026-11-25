@@ -276,6 +276,11 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
     download: async (id) => {
       if (snapshot.pendingTrack) return reply("busy");
       if (snapshot.state.kind !== "offered" || snapshot.state.offerId !== id) return reply("stale");
+      // `download=hold`: the transfer runs and its request stays unanswered, as a long one does.
+      if (params.get("download") === "hold") {
+        publish({ state: { ...states.downloading, version: snapshot.state.version } });
+        return new Promise(() => {});
+      }
       publish({ state: { ...states.verified, version: snapshot.state.version, offerId: id } });
       return reply("accepted");
     },

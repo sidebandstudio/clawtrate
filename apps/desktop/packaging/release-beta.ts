@@ -70,7 +70,7 @@ import { OUTPUT_VARIABLE } from "./output.ts";
 import { RESERVATION_FILE, reserve, reservedBy } from "./reservation.ts";
 import { APP_ID, PRODUCT_NAME } from "./config.ts";
 import { artifactName, makeFeed } from "./feed.ts";
-import { newestBeta, type ReleaseRow } from "./site-feed.ts";
+import { newestBeta, pinnedBeta, type ReleaseRow } from "./site-feed.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
 const APP_DIR = join(ROOT, "apps/desktop");
@@ -1709,7 +1709,7 @@ async function requireSiteReady(
   const digest = pin === null ? null : pinnedFeedDigest(releases, pin);
   if (pin !== null && !digest)
     stop(
-      `The legacy Beta feed is pinned to ${pin}, but GitHub lists no published ${FEED_NAME} with a digest for it. Nothing was published.`,
+      `The legacy Beta feed is pinned to ${pin}, which GitHub doesn't list as a published beta with its four files and a digest of its ${FEED_NAME}, as the site requires. Nothing was published.`,
     );
   const legacy = await readSite(net, net.requestMs, LEGACY_BETA_FEED_URL);
   const wanted = pin ?? (current.kind === "feed" ? current.version : null);
@@ -1727,9 +1727,9 @@ async function requireSiteReady(
 
 /** GitHub's digest of the pinned beta's feed.json, when that beta is published and has one. */
 function pinnedFeedDigest(releases: readonly ReleaseRow[], pin: string): string | null {
-  const row = releases.find((each) => each.tag_name === `v${pin}`);
-  if (!row || row.draft) return null;
-  return row.assets.find((asset) => asset.name === FEED_NAME)?.digest ?? null;
+  // The site's own rule (pinnedBeta): a published prerelease with its four files.
+  const row = pinnedBeta(releases, pin);
+  return row?.assets.find((asset) => asset.name === FEED_NAME)?.digest ?? null;
 }
 
 /**
@@ -1751,7 +1751,7 @@ async function watchLegacy(
     const digest = pinnedFeedDigest(githubReleases(runner), pin);
     if (!digest)
       stop(
-        `The legacy Beta feed is pinned to ${pin}, but GitHub lists no published ${FEED_NAME} with a digest for it. Check ${LEGACY_BETA_FEED_URL} yourself.`,
+        `The legacy Beta feed is pinned to ${pin}, which GitHub doesn't list as a published beta with its four files and a digest of its ${FEED_NAME}, as the site requires. Check ${LEGACY_BETA_FEED_URL} yourself.`,
       );
     accept = (reading) =>
       reading.kind === "feed" && `sha256:${sha("sha256", reading.body, "hex")}` === digest;

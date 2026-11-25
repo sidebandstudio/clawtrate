@@ -268,7 +268,10 @@ export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts"
  * the messaging pair may message each other.
  */
 function botEntries(stateDir: string, browserBots: readonly string[] | null) {
-  const entries: Record<string, { workspace: string; tools: Record<string, unknown> }> = {};
+  const entries: Record<
+    string,
+    { workspace: string; tools: Record<string, unknown>; subagents?: { allowAgents: string[] } }
+  > = {};
   for (const bot of SEED_BOTS) {
     const partner = messagingPartner(bot.id);
     entries[bot.id] = {
@@ -281,6 +284,8 @@ function botEntries(stateDir: string, browserBots: readonly string[] | null) {
         // With browsers of their own, only those bots get the browser tool.
         ...(browserBots && !browserBots.includes(bot.id) ? { deny: ["browser"] } : {}),
       },
+      // A task it starts may go under its partner too (`#hand-off-to-partner`).
+      ...(partner ? { subagents: { allowAgents: [partner] } } : {}),
     };
   }
   return entries;
@@ -651,6 +656,12 @@ export const ALLOWED_TOOLS = [
   "ask_user",
   "sessions_send",
   "sessions_list",
+  // A bot starts a task of its own, reads it and waits on it; it never gets
+  // more tools than the bot that started it.
+  "sessions_spawn",
+  "sessions_history",
+  "subagents",
+  "sessions_yield",
   "progress_card",
   "automations",
   `${CODING_AGENT_SERVER}__*`,

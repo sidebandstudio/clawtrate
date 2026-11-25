@@ -154,6 +154,40 @@ test.describe("message actions", () => {
     await expect(actions.getByRole("button", { name: "More" })).toBeFocused();
   });
 
+  test("F-066: in a message's menu, focus stays on the item the person moved to, through the toolbar's and the conversation's re-renders", async ({
+    page,
+  }) => {
+    await open(page);
+    const actions = answer(page).getByTestId("message-actions");
+    await actions.getByRole("button", { name: "More" }).focus();
+    await page.keyboard.press("Enter");
+    const menu = page.getByRole("menu", { name: "More" });
+    await expect(menu.getByRole("menuitem", { name: "Copy text" })).toBeFocused();
+    // Focus moving inside the menu re-measures the toolbar, which re-renders the menu's parent.
+    await page.keyboard.press("ArrowDown");
+    const later = menu.getByRole("menuitem", { name: "Copy message ID" });
+    await expect(later).toBeFocused();
+    // A new state from the host re-renders the conversation, and the menu's parent hands it a new
+    // `onClose`.
+    await page.evaluate(async () => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: Record<string, unknown>) => Record<string, unknown>) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        connection: { ...(state.connection as object) },
+      }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    expect(await page.evaluate(() => document.activeElement?.textContent)).toContain(
+      "Copy message ID",
+    );
+  });
+
   test("F-066: when write access goes while Reply holds the tab stop, More takes it", async ({
     page,
   }) => {

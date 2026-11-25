@@ -1,9 +1,11 @@
 // Your files on your own message (#451), and a picture opened larger (F-117's
 // first slice): your message with a picture this app holds, with a text file,
-// and with a picture sent from another device, then the picture opened over the
-// app, at 1440 and phone width in both themes. The scene is written in the
-// gateway's own shapes (apps/desktop/src/fixture/pictures.ts); the live check is
-// e2e/ui-pictures.spec.ts.
+// and with a picture sent from another device that this loopback connection
+// can't load back, then the picture opened over the app; and, on another device
+// of yours, pictures read back from the gateway (#469): shown, no longer kept,
+// failed with Try again, and loading. At 1440 and phone width in both themes.
+// The scenes are written in the gateway's own shapes
+// (apps/desktop/src/fixture/pictures.ts); the live check is e2e/ui-pictures.spec.ts.
 import { test, type Page } from "@playwright/test";
 import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
@@ -14,12 +16,24 @@ const BOTS = "Picture made from the description: A sun over a green hill, in fla
 
 const open = (page: Page, scene: string, theme: "light" | "dark") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed`, theme);
-const sent = (page: Page) =>
-  page.evaluate(() =>
+/** The picture commands the page sent, each with the stamp it carried set apart. */
+const sent = async (page: Page) => {
+  const commands = await page.evaluate(() =>
     (
-      window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+      window as unknown as {
+        clawtrateFixture: {
+          sent: Array<{ type: string; messageKey?: string; stamp?: { gatewayId: string } }>;
+        };
+      }
     ).clawtrateFixture.sent.filter((command) => command.type.endsWith("Picture")),
   );
+  // Each read of your picture names the gateway its conversation was drawn for.
+  for (const command of commands)
+    if (command.type === "readSentPicture")
+      // The fixture gateway's identity (apps/desktop/src/fixture/bridge-fixture.ts).
+      expect(command.stamp?.gatewayId).toMatch(/^6f3b0d2e[0-9a-f]{56}$/);
+  return commands.map(({ stamp: _stamp, ...command }) => command);
+};
 const preview = (page: Page) => page.getByRole("button", { name: MINE });
 const viewer = (page: Page) => page.getByRole("dialog", { name: MINE });
 
@@ -66,6 +80,20 @@ for (const size of [WIDE, PHONE]) {
         await settle(page);
         await expect(page).toHaveScreenshot(`sent-pictures-viewer-${theme}-${size.name}.png`);
       });
+
+      test("F-557: on another device, pictures read back, no longer kept, failed and loading match their baseline", async ({
+        page,
+      }) => {
+        await open(page, "pictures-sent-back", theme);
+        await drawn(page, MINE);
+        await expect(page.getByTestId("sent-picture")).toHaveCount(4);
+        await expect(page.locator('[data-testid="sent-picture"][data-state="failed"]')).toHaveCount(
+          1,
+        );
+        await page.getByTestId("sent-files").last().scrollIntoViewIfNeeded();
+        await settle(page);
+        await expect(page).toHaveScreenshot(`sent-pictures-back-${theme}-${size.name}.png`);
+      });
     });
   }
 }
@@ -73,7 +101,7 @@ for (const size of [WIDE, PHONE]) {
 test.describe("sent pictures behaviour", () => {
   test.use(contextFor(WIDE, "dark"));
 
-  test("F-557: your picture is drawn from the app's own copy, a file is its name and size, and a picture this app doesn't hold says so; your words stay as written", async ({
+  test("F-557: your picture is drawn from the app's own copy, a file is its name and size, and a picture this connection can't load back says so; your words stay as written", async ({
     page,
   }) => {
     const media: string[] = [];
@@ -98,9 +126,12 @@ test.describe("sent pictures behaviour", () => {
     ]);
     await expect(notes.getByRole("img")).toHaveCount(0);
     const elsewhere = page.getByTestId("transcript-turn").filter({ hasText: "from my phone" });
-    await expect(elsewhere.getByTestId("sent-picture")).toHaveAttribute("data-state", "not-kept");
+    await expect(elsewhere.getByTestId("sent-picture")).toHaveAttribute(
+      "data-state",
+      "cannot-load",
+    );
     await expect(elsewhere.getByTestId("sent-picture")).toContainText(
-      "receipt.jpg47 KBPicture sent with this message. It shows on the device that sent it, until Clawtrate disconnects or is closed.",
+      "receipt.jpg47 KBThis connection can't load the picture back from the gateway.",
     );
     expect(await sent(page)).toEqual([
       {
@@ -123,6 +154,43 @@ test.describe("sent pictures behaviour", () => {
       },
     ]);
     expect(media).toEqual([]);
+  });
+
+  test("F-557: on another device, a picture read back shows and opens larger; one the gateway no longer keeps says so; a failed read shows after Try again; one on its way is a quiet placeholder", async ({
+    page,
+  }) => {
+    await open(page, "pictures-sent-back", "dark");
+    const turn = (text: string) =>
+      page.getByTestId("transcript-turn").filter({ hasText: text }).getByTestId("sent-picture");
+    await expect(turn("the calendar from this morning")).toHaveAttribute("data-state", "shown");
+    await expect(turn("the flyer from last month")).toHaveAttribute("data-state", "gone");
+    await expect(turn("the flyer from last month")).toContainText(
+      "flyer.png1 KBThe gateway no longer keeps this picture.",
+    );
+    await expect(turn("the flyer from last month").getByRole("button")).toHaveCount(0);
+    const failed = turn("my boarding pass");
+    await expect(failed).toHaveAttribute("data-state", "failed");
+    await expect(failed).toContainText("pass.png1 KBThe picture didn't load.Try again");
+    const late = turn("and the map");
+    await expect(late).toHaveAttribute("data-state", "loading");
+    await expect(late).toHaveAttribute("aria-busy", "true");
+    await expect(late).toHaveText("Loading Your picture: map.png");
+    await expect(late.locator(".sent-file-note")).toHaveCount(0);
+    await failed.getByRole("button", { name: "Try again" }).click();
+    await expect(turn("my boarding pass")).toHaveAttribute("data-state", "shown");
+    await expect(page.getByRole("img", { name: "Your picture: pass.png" })).toBeVisible();
+    // A picture read back opens larger the same way.
+    await page.getByRole("button", { name: MINE }).click();
+    await expect(viewer(page).getByRole("img", { name: MINE })).toBeVisible();
+    await page.keyboard.press("Escape");
+    // Each read once it came on screen, in whatever order; the boarding pass twice: Try again.
+    expect((await sent(page)).map((command) => command.messageKey).sort()).toEqual([
+      "back-1:user",
+      "failed-1:user",
+      "failed-1:user",
+      "gone-1:user",
+      "late-1:user",
+    ]);
   });
 
   test("F-117: Tab reaches the preview, Enter opens it over the app with its text, focus stays inside, and Escape closes it back to the preview", async ({
