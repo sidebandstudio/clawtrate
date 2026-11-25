@@ -455,7 +455,10 @@ function TranscriptView({
     rows.push(
       <CardSlot key={item.id} item={item}>
         {updateLine ? (
-          <UpdateLine line={updateLine} />
+          <UpdateLine
+            line={updateLine}
+            {...(item.messageId ? { messageId: item.messageId } : {})}
+          />
         ) : item.role === "system" ? (
           <p className="event-line" data-side="center">
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}

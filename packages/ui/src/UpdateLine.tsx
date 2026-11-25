@@ -7,9 +7,10 @@ import { ChevronIcon } from "./icons.tsx";
  * as text. The disclosure doesn't name its author: in the one case a bot can still write first
  * (docs/decisions.md, "The gateway's update notice"), the text is the bot's.
  */
-export function UpdateLine({ line }: { line: UpdateNoticeLine }) {
+export function UpdateLine({ line, messageId }: { line: UpdateNoticeLine; messageId?: string }) {
   return (
-    <div className="update-line" data-testid="update-line">
+    // The row's gateway id, so a search hit on it is brought into view as a message's is.
+    <div className="update-line" data-testid="update-line" data-message={messageId}>
       <p className="event-line" data-side="center">
         OpenClaw updated to {line.version}
       </p>

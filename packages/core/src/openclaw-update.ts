@@ -1209,7 +1209,8 @@ export class OpenClawUpdates {
           succeededAt,
         });
         // The gateway's notice of it comes with no event: the main conversation is read again.
-        this.readForNotice(run.gatewayId, runId, this.epoch, "first");
+        // Only for the connection that saw it: a drop during the write above reads nothing.
+        if (epoch === this.epoch) this.readForNotice(run.gatewayId, runId, epoch, "first");
       }
       await this.forget(run.gatewayId, runId);
       // The newer OpenClaw's models: read again the way the app reads them, once.

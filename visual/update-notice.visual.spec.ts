@@ -210,6 +210,8 @@ test.describe("update notice behaviour", () => {
     // The row is not drawn as a message of the bot's.
     await expect(asMessage(page)).toHaveCount(0);
     await expect(line(page).locator(".avatar, .bubble, .msg-actions, button")).toHaveCount(0);
+    // The row's gateway id, for a search hit to bring it into view.
+    await expect(line(page)).toHaveAttribute("data-message", "notice-1");
     // Its text is one step away, by keyboard.
     const summary = line(page).locator("summary");
     await summary.focus();

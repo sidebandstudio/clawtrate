@@ -256,6 +256,46 @@ describe("F-590: the sidebar and unread", () => {
     expect(seenThroughUpdateNotice(task(), seen, HISTORY, { ...SCOPE, updated: [] })).toBe(seen);
   });
 
+  it("F-590: a row with no time before the notice leaves what the viewer read unknown, so the task stays unread", () => {
+    const untimed = { role: "user", content: "One more thing.", __openclaw: { id: "u-untimed" } };
+    const history = transcriptOf([reply("The backup finished.", T), untimed, notice()]);
+    expect(history.items.at(-1)!.updateNoticeAfter).toBeUndefined();
+    expect(seenThroughUpdateNotice(task(), T + 5, history, SCOPE)).toBe(T + 5);
+  });
+
+  it("F-590: a window with nothing loaded before the line is not an empty conversation", () => {
+    const only = transcriptOf([notice()]);
+    expect(seenThroughUpdateNotice(task(), T + 5, only, SCOPE)).toBe(T + 10_005);
+    const partial = { ...only, hasMore: true } as Transcript;
+    expect(seenThroughUpdateNotice(task(), T + 5, partial, SCOPE)).toBe(T + 5);
+  });
+
+  it("F-590: after two updates with nothing between them, the preview and unread go back past both lines", () => {
+    const SECOND = "5c4b3a29-1807-4f6e-9d5c-4b3a29180716";
+    const both: UpdateNoticeScope = {
+      ...SCOPE,
+      updated: [
+        ...UPDATED,
+        { gatewayId: GATEWAY, runId: SECOND, to: "2026.12.1", at: T, succeededAt: T + 19_000 },
+      ],
+    };
+    const history = transcriptOf([
+      reply("The backup finished.", T),
+      notice(),
+      notice(SECOND, {}, T + 20_000),
+    ]);
+    expect(history.items.map((item) => updateNoticeLine(item, MAIN, both) !== null)).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    const listed = task({ updatedAt: T + 20_005 });
+    expect(taskWithoutUpdateNotice(listed, history, both).preview).toBe("The backup finished.");
+    // Read after the reply, before either notice: neither makes it unread.
+    expect(seenThroughUpdateNotice(listed, T + 5, history, both)).toBe(T + 20_005);
+    expect(seenThroughUpdateNotice(listed, T - 1, history, both)).toBe(T - 1);
+  });
+
   it("F-590: a viewer who read part of a merged turn still finds the rest unread", () => {
     // Two rows of one run make one turn, its time the first row's.
     const merged = transcriptOf([

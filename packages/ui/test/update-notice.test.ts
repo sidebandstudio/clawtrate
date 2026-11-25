@@ -80,7 +80,10 @@ const listed: Task = {
 const markupOf = (text = TEXT) => {
   const [item] = mapHistory([notice(text)]);
   return renderToStaticMarkup(
-    createElement(UpdateLine, { line: updateNoticeLine(item, KEY, SCOPE)! }),
+    createElement(UpdateLine, {
+      line: updateNoticeLine(item, KEY, SCOPE)!,
+      ...(item!.messageId ? { messageId: item!.messageId } : {}),
+    }),
   );
 };
 
@@ -93,6 +96,14 @@ describe("F-590: the update line", () => {
     );
     expect(markup).toContain(
       '<p class="update-line-text">✅ OpenClaw updated. For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.</p>',
+    );
+  });
+
+  it("F-590: carries the row's gateway id, so a search hit on it is brought into view", () => {
+    const [item] = mapHistory([notice()]);
+    expect(item!.messageId).toBe("n1");
+    expect(markupOf()).toMatch(
+      /^<div class="update-line" data-testid="update-line" data-message="n1">/,
     );
   });
 

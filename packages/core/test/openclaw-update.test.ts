@@ -1302,6 +1302,30 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
     }
   });
 
+  it("F-590: a drop while the run is being kept schedules no read for the next connection", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => started();
+    await t.engine.start(t.stamp());
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    t.world.handlers["update.runs.get"] = () => ({ run: finished() });
+    // Keeping the run waits on storage; the connection drops meanwhile.
+    const gate = deferred<void>();
+    const write = t.storage.set;
+    t.storage.set = async (key, value) => {
+      if (key === UPDATED_RUNS_KEY) {
+        t.engine.onDisconnect();
+        await gate.promise;
+      }
+      return write(key, value);
+    };
+    const hello = t.restart(NEW);
+    await until(() => t.state().updated !== undefined);
+    gate.resolve();
+    await hello;
+    expect(t.state().updated).toHaveLength(1);
+    expect(timersOf(t, UPDATE_NOTICE_READ_AFTER_MS)).toHaveLength(0);
+  });
+
   it("F-590: a run started elsewhere and followed to Updated keeps nothing and reads nothing again", async () => {
     const t = rig();
     const finished = { phase: "finished", status: "succeeded", after: { version: NEW } };

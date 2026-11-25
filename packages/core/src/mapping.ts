@@ -652,6 +652,8 @@ export function mapHistory(
   const noticeKeys = new Set<string>();
   /** The latest time of any row so far, for what a notice comes after. */
   let latestAt: number | null = null;
+  /** A row so far had no time: what a later notice comes after is not known. */
+  let timeUnknown = false;
 
   arr(messages).forEach((entry, index) => {
     const message = asRecord(entry);
@@ -659,8 +661,9 @@ export function mapHistory(
     const info = meta(message);
     const id = `${str(info.id) ?? `row-${index}`}:${index}`;
     const timestamp = num(message.timestamp) ?? num(info.recordTimestampMs);
-    const before = latestAt;
-    if (timestamp !== null && (latestAt === null || timestamp > latestAt)) latestAt = timestamp;
+    const before = timeUnknown ? null : latestAt;
+    if (timestamp === null) timeUnknown = true;
+    else if (latestAt === null || timestamp > latestAt) latestAt = timestamp;
     const kind = str(info.kind);
     const storedKey = rowIdempotencyKey(message);
     const firstOfKey =
@@ -769,6 +772,7 @@ export function mapHistory(
           const updateRunId = firstOfKey ? updateNoticeRunId(message) : null;
           if (updateRunId) {
             item.updateRunId = updateRunId;
+            // Unknown when an earlier row had no time: then no read is proof of reading it.
             if (before !== null) item.updateNoticeAfter = before;
           }
           items.push(item);
@@ -971,7 +975,8 @@ export function taskWithoutUpdateNotice(
   let preview: string | null = null;
   for (let index = items.length - 2; index >= 0 && preview === null; index -= 1) {
     const item = items[index]!;
-    if (item.role === "system") continue;
+    // An earlier update line is not what the bot said either.
+    if (item.role === "system" || updateNoticeLine(item, task.key, scope)) continue;
     const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
     if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
   }
@@ -1013,9 +1018,17 @@ export function seenThroughUpdateNotice(
   scope: UpdateNoticeScope,
 ): number | undefined {
   if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
-  const before = beforeUpdateNotice(task, transcript, scope);
-  if (before === undefined) return seenAt;
-  const after = transcript!.items.at(-1)!.updateNoticeAfter;
-  if (before !== null && (after === undefined || seenAt < after)) return seenAt;
+  if (beforeUpdateNotice(task, transcript, scope) === undefined) return seenAt;
+  // Back through earlier update lines (two updates with nothing between them) to the first: what
+  // came before it is what the viewer must have read.
+  const items = transcript!.items;
+  let first = items.length - 1;
+  while (first > 0 && updateNoticeLine(items[first - 1], task.key, scope)) first -= 1;
+  if (first === 0) {
+    // Nothing loaded before the line: the conversation had nothing else only if it is all loaded.
+    return transcript!.hasMore ? seenAt : task.updatedAt;
+  }
+  const after = items[first]!.updateNoticeAfter;
+  if (after === undefined || seenAt < after) return seenAt;
   return task.updatedAt;
 }
