@@ -458,6 +458,12 @@ export type TranscriptItem = {
    */
   updateNoticeAfter?: number;
   /**
+   * On an item with `updateRunId`: the row's own `timestamp`, as the gateway stamped it when it
+   * wrote the row, without the store's record time `timestamp` may fall back on. Absent when the
+   * row has none; then it is never the line.
+   */
+  updateNoticeWrittenAt?: number;
+  /**
    * History places this user row inside a run that began before it: the gateway took it into
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
    */

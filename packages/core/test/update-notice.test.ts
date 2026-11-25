@@ -179,6 +179,24 @@ describe("F-590: the gateway's update notice", () => {
     expect(lineOf([notice(RUN, {}, SUCCEEDED + 30 * 86_400_000)])).toEqual([null]);
   });
 
+  it("F-590: a row with no time of its own is not the line, whatever the store's record time", () => {
+    const row = {
+      ...notice(),
+      timestamp: undefined,
+      __openclaw: {
+        id: "row-untimed",
+        idempotencyKey: `update-run-finished:${RUN}`,
+        seq: 3,
+        recordTimestampMs: SUCCEEDED + 1_000,
+      },
+    };
+    const [item] = mapHistory([row]);
+    // Placed by the record time, never vouched for by it.
+    expect(item!.timestamp).toBe(SUCCEEDED + 1_000);
+    expect(item!.updateNoticeWrittenAt).toBeUndefined();
+    expect(lineOf([row])).toEqual([null]);
+  });
+
   it("F-590: a missing or malformed time on either side draws no line", () => {
     // The row's own time.
     for (const timestamp of [undefined, null, "1789999999000", 1.5, -1, 1e20]) {
@@ -268,6 +286,16 @@ describe("F-590: the sidebar and unread", () => {
     expect(seenThroughUpdateNotice(task(), T + 5, only, SCOPE)).toBe(T + 10_005);
     const partial = { ...only, hasMore: true } as Transcript;
     expect(seenThroughUpdateNotice(task(), T + 5, partial, SCOPE)).toBe(T + 5);
+  });
+
+  it("F-590: a bot's message of files only before the line is the preview by their names", () => {
+    const files = {
+      ...reply("", T + 1, "files-1"),
+      content: [{ type: "attachment", attachment: { artifactId: "art-1", label: "report.pdf" } }],
+    };
+    const history = transcriptOf([reply("The backup finished.", T), files, notice()]);
+    expect(history.items.at(-2)!.filesPreview).toBe("report.pdf");
+    expect(taskWithoutUpdateNotice(task(), history, SCOPE).preview).toBe("report.pdf");
   });
 
   it("F-590: after two updates with nothing between them, the preview and unread go back past both lines", () => {

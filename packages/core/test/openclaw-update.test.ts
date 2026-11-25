@@ -1328,7 +1328,13 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
 
   it("F-590: a run started elsewhere and followed to Updated keeps nothing and reads nothing again", async () => {
     const t = rig();
-    const finished = { phase: "finished", status: "succeeded", after: { version: NEW } };
+    // A finish time that would be kept: only that the run isn't this device's press keeps it out.
+    const finished = {
+      phase: "finished",
+      status: "succeeded",
+      after: { version: NEW },
+      finishedAtMs: FINISHED,
+    };
     t.world.handlers["update.runs.get"] = () => ({
       run: record({ runId: OTHER_RUN, ...finished }),
     });

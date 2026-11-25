@@ -774,6 +774,9 @@ export function mapHistory(
             item.updateRunId = updateRunId;
             // Unknown when an earlier row had no time: then no read is proof of reading it.
             if (before !== null) item.updateNoticeAfter = before;
+            // The row's own time, never the store's: what the line's rule compares.
+            const written = num(message.timestamp);
+            if (written !== null) item.updateNoticeWrittenAt = written;
           }
           items.push(item);
         }
@@ -977,6 +980,11 @@ export function taskWithoutUpdateNotice(
     const item = items[index]!;
     // An earlier update line is not what the bot said either.
     if (item.role === "system" || updateNoticeLine(item, task.key, scope)) continue;
+    // A bot's message that is only files reads as their names, as the rail shows it (F-115).
+    if (item.role === "assistant" && item.filesPreview) {
+      preview = item.filesPreview;
+      continue;
+    }
     const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
     if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
   }

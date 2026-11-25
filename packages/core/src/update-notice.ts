@@ -169,7 +169,7 @@ export function updateNoticeLine(
   // row written before, during the install (a bot that read the run's id from the gateway's own
   // "Updating" row), or long after (in a reset conversation where the key is free again), is the
   // message it is.
-  const written = item!.timestamp;
+  const written = item!.updateNoticeWrittenAt;
   if (
     !isGatewayTime(run.succeededAt) ||
     !isGatewayTime(written) ||

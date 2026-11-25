@@ -642,6 +642,7 @@ const item = flagged<TranscriptItem>()({
   reportRunId: ID,
   updateRunId: ID,
   updateNoticeAfter: NUMBER,
+  updateNoticeWrittenAt: NUMBER,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
