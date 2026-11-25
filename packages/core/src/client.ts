@@ -1439,10 +1439,11 @@ export class ClawtrateClient {
    * and show the older. Each rename starts from the names the one before it left.
    */
   private readonly preferenceWork: Record<
-    "channelChats" | "gatewayNames" | "otherTools",
+    "channelChats" | "gatewayBot" | "gatewayNames" | "otherTools",
     Promise<unknown>
   > = {
     channelChats: Promise.resolve(),
+    gatewayBot: Promise.resolve(),
     gatewayNames: Promise.resolve(),
     otherTools: Promise.resolve(),
   };
@@ -7521,11 +7522,13 @@ export class ClawtrateClient {
    * changes; nothing is sent to the gateway.
    */
   async setShowGatewayBot(on: boolean): Promise<void> {
-    // Kept first: a choice the host could not keep is not taken.
-    await this.host.storage.set(GATEWAY_BOT_KEY, String(on));
-    this.preferenceSets.gatewayBot += 1;
-    this.showGatewayBot = on;
-    this.store.update((state) => ({ ...state, showGatewayBot: on }));
+    return this.inOrder("gatewayBot", async () => {
+      // Kept first: a choice the host could not keep is not taken.
+      await this.host.storage.set(GATEWAY_BOT_KEY, String(on));
+      this.preferenceSets.gatewayBot += 1;
+      this.showGatewayBot = on;
+      this.store.update((state) => ({ ...state, showGatewayBot: on }));
+    });
   }
 
   private turnLimitReached(key: string, runId: string): void {
