@@ -937,7 +937,12 @@ export function Rail({
           setRenaming(task.key);
         },
         commitRename: async (task, label) => {
-          await bridge.invoke({ type: "renameTask", key: task.key, label });
+          await bridge.invoke({
+            type: "renameTask",
+            key: task.key,
+            label,
+            stamp: await screenStamp(bridge, listedOn()),
+          });
           setAnnouncement(`Renamed to ${label}.`);
         },
         endRename: (task) => {
@@ -953,7 +958,13 @@ export function Rail({
   // failed one leaves the rail and the badge as the gateway reports them.
   const mark = (task: Task, unread: boolean) =>
     void runner.run(unread ? "mark it unread" : "mark it read", async () => {
-      await bridge.invoke({ type: "markTask", key: task.key, unread, opened: false });
+      await bridge.invoke({
+        type: "markTask",
+        key: task.key,
+        unread,
+        opened: false,
+        stamp: await screenStamp(bridge, listedOn()),
+      });
       if (unread) selection.markUnreadHere(task.key);
       else selection.markReadHere(task);
     });
@@ -1564,7 +1575,12 @@ export function Rail({
                   confirm: { label: "Rename" },
                   field: { label: "Name", placeholder: only.title, maxLength: 512 },
                   onConfirm: async (label) => {
-                    await bridge.invoke({ type: "renameTask", key: only.key, label });
+                    await bridge.invoke({
+                      type: "renameTask",
+                      key: only.key,
+                      label,
+                      stamp: await screenStamp(bridge, listedOn()),
+                    });
                     setAnnouncement(`Renamed to ${label.trim()}.`);
                   },
                   returnTo: trigger,
@@ -1743,7 +1759,12 @@ export function Rail({
               onSelect: () => {
                 close();
                 void runner.run(task.pinned ? "unpin it" : "pin it", async () => {
-                  await bridge.invoke({ type: "pinTask", key: task.key, pinned: !task.pinned });
+                  await bridge.invoke({
+                    type: "pinTask",
+                    key: task.key,
+                    pinned: !task.pinned,
+                    stamp: await screenStamp(bridge, listedOn()),
+                  });
                   setAnnouncement(`${task.pinned ? "Unpinned" : "Pinned"} ${task.title}.`);
                   setFocusTask({ key: task.key, bot: bot.id });
                 });

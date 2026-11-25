@@ -552,7 +552,12 @@ test("F-056: double-click or F2 renames in place; Enter renames, Escape keeps th
   await expect(taskRow(page, "Router update")).toBeFocused();
   await expect(page.getByRole("heading", { level: 1, name: "Router update" })).toBeVisible();
   expect(await sent(page, "renameTask")).toEqual([
-    { type: "renameTask", key: "agent:otto:router-firmware", label: "Router update" },
+    {
+      type: "renameTask",
+      key: "agent:otto:router-firmware",
+      label: "Router update",
+      stamp: expect.any(Object),
+    },
   ]);
 
   // The menu's Rename; a taken name stays in the field with the gateway's reason.
@@ -714,8 +719,20 @@ test("F-022: Mark as unread and Mark as read in a task's menu, sent to the host;
   );
   expect(await sent(page, "markTask")).toEqual(
     expect.arrayContaining([
-      { type: "markTask", key: "agent:otto:cert-renewal", unread: true, opened: false },
-      { type: "markTask", key: "agent:otto:cert-renewal", unread: false, opened: false },
+      {
+        type: "markTask",
+        key: "agent:otto:cert-renewal",
+        unread: true,
+        opened: false,
+        stamp: expect.any(Object),
+      },
+      {
+        type: "markTask",
+        key: "agent:otto:cert-renewal",
+        unread: false,
+        opened: false,
+        stamp: expect.any(Object),
+      },
     ]),
   );
   // Opening an unread task reads it on the gateway too.

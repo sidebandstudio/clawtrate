@@ -374,12 +374,13 @@ describe("the rail's actions through the client", () => {
       change: { op: "move", botId: "pip", before: "main", shown: ["main", "pip"] },
       base: { pins: ["pip"], sections: [], hidden: [], order: [] },
     });
-    expect(parseBridgeCommand({ type: "markTask", key: "agent:pip:main", unread: true })).toEqual({
-      type: "markTask",
-      key: "agent:pip:main",
-      unread: true,
-      opened: false,
-    });
+    const stamp = { gatewayId: "gateway-a", target: 4 };
+    expect(
+      parseBridgeCommand({ type: "markTask", key: "agent:pip:main", unread: true, stamp }),
+    ).toEqual({ type: "markTask", key: "agent:pip:main", unread: true, opened: false, stamp });
+    expect(
+      parseBridgeCommand({ type: "markTask", key: "agent:pip:main", unread: false, opened: true }),
+    ).toEqual({ type: "markTask", key: "agent:pip:main", unread: false, opened: true });
 
     const { client } = await connected(INTERACTIVE_SCOPES);
     const viewer = createBridgeSession(client);
