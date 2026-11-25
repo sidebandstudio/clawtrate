@@ -65,7 +65,7 @@ export function useAccountsSection({
   const [labelError, setLabelError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<GatewayAccount | null>(null);
   // Where Disconnect… was asked: another gateway can have the same profile id.
-  const confirmedOn = useRef(shownStamp(connection));
+  const confirmedOn = useRef(accounts.readOn ?? shownStamp(connection));
   const [busy, setBusy] = useState(false);
   const [now] = useState(() => Date.now());
   const granted = useGranted(connection);
@@ -338,7 +338,7 @@ export function useAccountsSection({
                 data-size="sm"
                 data-tone="danger"
                 onClick={() => {
-                  confirmedOn.current = shownStamp(connection);
+                  confirmedOn.current = accounts.readOn ?? shownStamp(connection);
                   setConfirm(account);
                 }}
               >

@@ -171,12 +171,27 @@ export function BotSettings({
   const focusIn = useCallback((selector: string) => {
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
   }, []);
-  // The host's target when Change account opened: the choice made there goes only to that gateway.
-  const changeOpenedOn = useRef(shownStamp(connection));
+  // Where the accounts Change account offers were read (`AccountsState.readOn`): its choices come
+  // from that read and go with its stamp. After a reconnect the accounts stay until read again, and
+  // the identity that answered can be known first. When they are read on another connection, a
+  // choice made from the earlier read is let go, and the new read's stamp goes with the next one.
+  const [choicesRead, setChoicesRead] = useState(() => accounts.readOn ?? shownStamp(connection));
+  const readKey = accounts.readOn
+    ? `${accounts.readOn.gatewayId}\n${accounts.readOn.target}\n${accounts.readOn.connectedAt}`
+    : null;
+  const [choicesFrom, setChoicesFrom] = useState(readKey);
+  if (choicesFrom !== readKey) {
+    setChoicesFrom(readKey);
+    setPick(null);
+    setPickModel(null);
+    setPickEffort(null);
+    setChoicesRead(accounts.readOn ?? shownStamp(connection));
+  }
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
-    if (next === "change" && view !== "change") changeOpenedOn.current = shownStamp(connection);
+    if (next === "change" && view !== "change")
+      setChoicesRead(accounts.readOn ?? shownStamp(connection));
     if (next !== "change") setPick(null);
     focusIn(focus);
   };
@@ -368,7 +383,7 @@ export function BotSettings({
     const wordText = bindingWord(binding, age);
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
     // Where the page shown was read: a restored copy has the same bot ids.
-    const shownOn = shownStamp(connection);
+    const shownOn = accounts.readOn ?? shownStamp(connection);
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
       try {
@@ -557,7 +572,7 @@ export function BotSettings({
           provider: targetProvider,
           model,
           effort,
-          stamp: await screenStamp(bridge, changeOpenedOn.current),
+          stamp: await screenStamp(bridge, choicesRead),
         });
         announce(
           toGateway
@@ -697,7 +712,7 @@ export function BotSettings({
   // --- The Account page --------------------------------------------------------------------
   const page: ReactNode[] = [];
   // Where the page shown was read; a refusal is said under the page.
-  const shownOn = shownStamp(connection);
+  const shownOn = accounts.readOn ?? shownStamp(connection);
   const removeFallbacks = async () => {
     setError(null);
     try {

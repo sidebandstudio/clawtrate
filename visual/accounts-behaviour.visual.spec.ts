@@ -588,6 +588,165 @@ test("F-490: a read-only connection shows a bot's settings with every value, and
   );
 });
 
+test("#505: Change account sends the stamp of the accounts it shows, not the identity now connected", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  type Stamped = {
+    clawtrateFixture: {
+      setState(change: (state: ClawtrateState) => ClawtrateState): void;
+    };
+  };
+  // The accounts shown were read on this connection; then another gateway answers a reconnect
+  // at the same address and names itself before they are read again.
+  const read = await page.evaluate(() => {
+    let read = { gatewayId: null as string | null, target: 0 };
+    (window as unknown as Stamped).clawtrateFixture.setState((state) => {
+      read = { gatewayId: state.connection.gatewayId, target: state.connection.target };
+      return {
+        ...state,
+        accounts: {
+          ...state.accounts,
+          readOn: { ...read, connectedAt: state.connection.connectedAt },
+        },
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+      };
+    });
+    return read;
+  });
+  expect(read.gatewayId).not.toBeNull();
+  // The model, on the tab's first page.
+  await page.getByTestId("model-select").click();
+  await page.getByRole("menu", { name: "Model" }).getByRole("menuitemradio").nth(1).click();
+  await expect.poll(() => sentStamp(page, "setBotModel")).toEqual(read);
+  // Change account.
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => sentStamp(page, "changeBotAccount")).toEqual(read);
+  // Disconnect… on Settings, Accounts.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
+  await settings.getByRole("button", { name: "Disconnect…" }).click();
+  await page
+    .getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" })
+    .getByRole("button", { name: "Disconnect" })
+    .click();
+  await expect.poll(() => sentStamp(page, "disconnectAccount")).toEqual(read);
+});
+
+test("#505: a choice on Change account made before the accounts were read on another connection doesn't go with the new read", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  const home = page.getByRole("radio", { name: /^OpenAI · Home/ });
+  await home.click();
+  await expect(home).toBeChecked();
+  // The accounts are read again on another connection, answered by another gateway.
+  const read = await page.evaluate(() => {
+    let read = { gatewayId: "another-gateway", target: 0 };
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      read = { gatewayId: "another-gateway", target: state.connection.target };
+      return {
+        ...state,
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+        accounts: {
+          ...state.accounts,
+          readOn: { ...read, connectedAt: (state.connection.connectedAt ?? 0) + 1 },
+        },
+      };
+    });
+    return read;
+  });
+  // The choice made from the earlier read is let go: nothing is ready to save.
+  await expect(home).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  // Made again from the new read, it goes with that read's stamp.
+  await home.click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => sentStamp(page, "changeBotAccount")).toEqual(read);
+});
+
+test("#505: Remove fallbacks sends the stamp of the accounts it shows, not the identity now connected", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=differs`,
+    "light",
+  );
+  const read = await page.evaluate(() => {
+    let read = { gatewayId: null as string | null, target: 0 };
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      read = { gatewayId: state.connection.gatewayId, target: state.connection.target };
+      return {
+        ...state,
+        accounts: {
+          ...state.accounts,
+          readOn: { ...read, connectedAt: state.connection.connectedAt },
+        },
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+      };
+    });
+    return read;
+  });
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Remove fallbacks" }).click();
+  await expect.poll(() => sentStamp(page, "removeBotFallbacks")).toEqual(read);
+});
+
+test("#505: a key typed in Connect sends the stamp of the accounts it shows, not the identity now connected", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  const read = await page.evaluate(() => {
+    let read = { gatewayId: null as string | null, target: 0 };
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      read = { gatewayId: state.connection.gatewayId, target: state.connection.target };
+      return {
+        ...state,
+        accounts: {
+          ...state.accounts,
+          readOn: { ...read, connectedAt: state.connection.connectedAt },
+        },
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+      };
+    });
+    return read;
+  });
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  await newBot(page).getByRole("combobox", { name: "Provider" }).selectOption("xai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect.poll(() => sentStamp(page, "saveApiKey")).toEqual(read);
+});
+
 test("#450: Change account, a Disconnect confirmation and a typed key send the target they opened with", async ({
   page,
 }) => {
