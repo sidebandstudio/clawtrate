@@ -1,11 +1,11 @@
 - status
 - region "Conversation":
   - button "Back to bots"
-  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Juniper, Main. Show details.": Juniper
   - button "Show work panel"
   - region "Transcript":
-    - heading "Disk almost full on the media box" [level=1]
-    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - heading "Main" [level=1]
+    - paragraph: "Context: 5,425 of 128,000 tokens"
     - text: Today 5:38 PM
     - paragraph: How much space is left on the disk?
     - toolbar "Message actions":
@@ -14,10 +14,10 @@
     - toolbar "Message actions":
       - button "More"
     - paragraph: OpenClaw updated to 2026.11.10
-    - group: The gateway's message
+    - group: Message text
     - status
   - region "Access":
-    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - text: Read-only. You can follow Juniper's work here. Approvals and questions aren't shown on this connection.
     - button "Request access"
   - status
 - status
