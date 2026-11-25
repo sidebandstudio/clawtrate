@@ -23,7 +23,7 @@ import { instancePorts, openInstance, openOperator } from "../tools/dev-gateway/
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { SYSTEM_PROMPT_PATH } from "../tools/dev-gateway/src/fake-provider.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
-import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -133,9 +133,8 @@ test.describe.configure({ mode: "serial" });
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(480_000);
   // Recorded before anything starts: the instance, then the host's folder, then the host.
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this worker's start time");
-  record.runner.identity = self.identity;
+  const self = ownIdentity();
+  record.runner.identity = self;
   const runId = newRunId();
   record.instances.push({ name: INSTANCE, runId });
   saveRecord(RECORDS, record);
