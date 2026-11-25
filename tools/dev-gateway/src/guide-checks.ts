@@ -36,7 +36,7 @@ export type GuideHarness = {
 /** The bot whose file the checks change. */
 const BOT = "pip";
 /** The bot that starts a task of its own in the check that needs one. */
-const PARTNER = "marlow";
+const PARTNER = "otto";
 
 const count = (text: string, part: string) => text.split(part).length - 1;
 
@@ -144,8 +144,8 @@ export const GUIDE_CHECKS: GuideCheck[] = [
     },
   },
   {
-    // Marlow, not Pip: the scenario checks already gave Pip a task with `#hand-off`'s label, and a
-    // bot's labels are its own and unique. Marlow's file is put back as it was at the end.
+    // Otto: the scenario checks already gave Pip and Marlow a task with `#hand-off`'s label, and a
+    // bot's labels are its own and unique. Otto's file is put back as it was at the end.
     name: "a task a bot starts carries the guide in its own first turn, and is the task the person opens",
     async run(h) {
       const request = (method: string, params: unknown) => h.admin.request(method, params);
@@ -174,7 +174,7 @@ export const GUIDE_CHECKS: GuideCheck[] = [
         const row = rows.find((each) => each.spawnedBy === key && each.label === HAND_OFF.label);
         expect(row, "the started task is not in the task list");
         const child = String(row.key);
-        // The task the sidebar shows for it is this one: under Marlow, titled by its label.
+        // The task the sidebar shows for it is this one: under Otto, titled by its label.
         const task = mapSessionRow(row);
         expect(
           task?.key === child && task.botId === PARTNER && task.title === HAND_OFF.label,
