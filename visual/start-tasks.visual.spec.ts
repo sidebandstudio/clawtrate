@@ -1,6 +1,6 @@
 // #532 in the fixture mode: a bot's settings say when the gateway doesn't give it the tool for
 // starting a task (`sessions_spawn`), with the gateway's reason, and nothing else changes (F-566).
-import { test, type Page } from "@playwright/test";
+import { test } from "@playwright/test";
 import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
