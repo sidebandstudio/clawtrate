@@ -224,7 +224,9 @@ test.describe("update openclaw behaviour", () => {
     await openFixture(page, `${ADMIN}&openclawRun=running`, "dark");
     await dropConnection(page);
     const strip = page.getByTestId("status-strip");
-    await expect(strip).toHaveText("Updating OpenClaw to 2026.11.6· showing saved messages");
+    await expect(strip.locator(".strip-long")).toHaveText("Updating OpenClaw to 2026.11.6");
+    await expect(strip).toContainText("· showing saved messages");
+    await expect(strip).not.toContainText("Reconnecting");
     await expect(strip.getByRole("button")).toHaveCount(0);
     await expect(page.locator(".rail-footer")).toContainText("Updating OpenClaw…");
     await expect(page.getByTestId("announcer")).toHaveText("Updating OpenClaw to 2026.11.6");
