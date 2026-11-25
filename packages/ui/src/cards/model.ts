@@ -15,7 +15,9 @@ import type {
   Run,
   RunState,
   StartedTaskState,
+  Task,
 } from "@clawtrate/core";
+import { cleanLine, MAX_TITLE_CHARS, startedTaskOf } from "@clawtrate/core";
 
 // Names ---------------------------------------------------------------------------
 
@@ -754,6 +756,7 @@ export const STARTED_STATES: Record<
 > = {
   starting: ["sending", "Starting", null],
   started: ["check", "Started", null],
+  idle: ["check", "Started", null],
   queued: ["queued", "Queued", null],
   working: ["working", "Working", "accent"],
   waiting: ["waiting", "Waiting for you", "warn"],
@@ -765,6 +768,22 @@ export const STARTED_STATES: Record<
   "couldnt-start": ["failed", "Couldn't start", "danger"],
   unknown: ["queued", "Unknown", null],
 };
+
+/**
+ * The task a bot's message went to, when it is a task this conversation started (F-587): only by
+ * the key the send's own result names, and only a task the list holds as started from here. Its
+ * title cleaned as the "Started a task" card cleans it; null when that leaves nothing.
+ */
+export function sentToTask(
+  card: BotMessageCard,
+  listed: Record<string, Task[]>,
+  taskKey: string,
+): Task | null {
+  const key = card.recipient.source === "result" ? card.recipient.sessionKey : null;
+  const task = startedTaskOf(listed, key, taskKey);
+  const title = task ? cleanLine(task.title, MAX_TITLE_CHARS) : "";
+  return task && title ? { ...task, title } : null;
+}
 
 /** The first line of a message, for the folded card. */
 export function firstLineOf(text: string | null): string {

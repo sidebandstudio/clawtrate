@@ -4,14 +4,15 @@
 import {
   emptyActivity,
   initialConnectionState,
+  initialState,
   mapHistory,
   mapSessionRow,
   RawTable,
   runsFromHistory,
-  selectMessageCards,
   selectStartedTasks,
   type Bot,
   type ClawtrateBridge,
+  type ClawtrateState,
   type StartedTaskCard,
   type Task,
   type Transcript,
@@ -20,15 +21,24 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { BridgeProvider } from "../src/bridge.tsx";
-import { CardEnvContext, type CardEnv } from "../src/cards/context.tsx";
-import { BotMessageCardView } from "../src/cards/MessagedCard.tsx";
+import { CardEnvContext, OpenTaskContext, type CardEnv } from "../src/cards/context.tsx";
 import { StartedTaskCardView } from "../src/cards/StartedTaskCard.tsx";
+import { CardScope, RunCardList } from "../src/cards/TranscriptCards.tsx";
+import { isCardCall } from "../src/cards/useCards.ts";
 
 // The "Show commands" switch reads the device's storage, which a markup render has none of: off,
 // as by default, so a card's foot holds only its actions.
 vi.mock("../src/preferences.ts", async (original) => ({
   ...(await original<Record<string, unknown>>()),
   useShowCommands: () => [false, () => {}],
+}));
+
+// The state a card scope reads, set by each test that draws one: a markup render has no store to
+// subscribe to.
+const shown = vi.hoisted(() => ({ state: null as unknown }));
+vi.mock("../src/bridge.tsx", async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  useClawtrateState: () => shown.state,
 }));
 
 const HERE = "agent:pip:main";
@@ -299,46 +309,150 @@ describe("F-587: the Started a task card", () => {
   });
 });
 
+describe("F-587: the bot doing the work, and what the card shows of the bot's words", () => {
+  const refusedFor = (agentId: string) => [
+    user("#hand-off", T, "run-1"),
+    call("run-1", T + 800, "call-1", "sessions_spawn", { ...START, agentId }),
+    result(
+      "run-1",
+      T + 1_000,
+      "call-1",
+      "sessions_spawn",
+      { status: "forbidden", error: "agentId is not allowed for sessions_spawn (allowed: pip)" },
+      true,
+    ),
+  ];
+
+  it("F-587: a bot's agentId is never shown as a name: an unlisted one is another bot", () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const { markup } = drawn(refusedFor(`Done · Open task${rlo}${"z".repeat(3_000)}`), {});
+    expect(words(markup)).toContain("Couldn't start a task another bot Compare trail maps");
+    expect(markup).not.toContain("zzzz");
+    expect(markup).not.toContain("Done · Open task");
+    // Still open: the same, before any result.
+    const open = [
+      user("#hand-off", T, "run-1"),
+      call("run-1", T + 800, "call-1", "sessions_spawn", { ...START, agentId: "Jo Smith" }),
+    ];
+    const starting = drawn(open, {}, { inFlight: "run-1" });
+    expect(words(starting.markup)).toContain(
+      "Started a task another bot Compare trail maps Starting",
+    );
+    expect(starting.markup).not.toContain("Jo Smith");
+  });
+
+  it("F-587: a listed bot's id is that bot's name, and a start for itself is the starter", () => {
+    expect(words(drawn(refusedFor("marlow"), {}).markup)).toContain(
+      "Couldn't start a task Marlow Compare trail maps",
+    );
+    expect(words(drawn(started(), {}).markup)).toContain("Started a task Pip Compare trail maps");
+  });
+
+  it("F-587: invisible formatting never reaches the card's title, its group, Open's name or the announcement", () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const task = listedTask("running", { label: `${rlo}ksat nepO · enoD` });
+    const { markup } = drawn(started(), { pip: [task] });
+    expect(markup).toContain('aria-label="Started a task: ksat nepO · enoD"');
+    expect(markup).toContain('aria-label="Open ksat nepO · enoD"');
+    expect(markup).not.toContain(rlo);
+  });
+
+  it("F-587: a listed task whose row says nothing of a run is Started, with Open, as the sidebar shows no state", () => {
+    const { markup } = drawn(started(), { pip: [listedTask("")] });
+    expect(words(markup)).toContain("Compare trail maps Started");
+    expect(markup).toContain('aria-label="Open Compare trail maps"');
+    expect(markup).not.toContain("not in the task list");
+  });
+});
+
 describe("F-587: a follow-up to the bot's own task on the Messaged card", () => {
-  const rows = [
+  const followUp = (result_: Record<string, unknown>) => [
     user("#follow-up", T, "run-2"),
     call("run-2", T + 500, "call-2", "sessions_send", {
       sessionKey: CHILD,
       message: "Also say which route has more shade.",
       timeoutSeconds: 0,
     }),
-    result("run-2", T + 700, "call-2", "sessions_send", {
-      runId: "34fc6031",
-      status: "accepted",
-      sessionKey: CHILD,
-      targetDisposition: "queued",
-      delivery: { status: "pending" },
-    }),
+    result("run-2", T + 700, "call-2", "sessions_send", result_),
   ];
-  const messaged = (task: Task | null) => {
+  const accepted = {
+    runId: "34fc6031",
+    status: "accepted",
+    sessionKey: CHILD,
+    targetDisposition: "queued",
+    delivery: { status: "pending" },
+  };
+  /** The follow-up's card, drawn by the conversation's own card scope, against this list. */
+  const messaged = (tasks: Task[], rows = followUp(accepted)) => {
     const transcript = transcriptOf(rows);
-    const [card] = selectMessageCards(transcript, {}).botMessages;
-    return html(
-      createElement(BotMessageCardView, { card: card!, task, read, related: [], partial: false }),
-      envOf(transcript, open),
+    shown.state = {
+      ...initialState,
+      bots: [pip, marlow],
+      tasksByBot: { pip: tasks },
+      connection: { ...initialState.connection, status: "connected" },
+    } satisfies ClawtrateState;
+    const bridge = {
+      invoke: () => Promise.reject(new Error("not in this test")),
+      send: () => Promise.reject(new Error("not in this test")),
+    } as unknown as ClawtrateBridge;
+    return renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge,
+        children: createElement(OpenTaskContext.Provider, {
+          value: open,
+          children: createElement(CardScope, {
+            taskKey: HERE,
+            transcript,
+            children: createElement(RunCardList, { runId: "run-2" }),
+          }),
+        }),
+      }),
     );
   };
 
   it('F-587: reads "Sent to <task title>" and opens that task', () => {
-    const markup = messaged(listedTask("running"));
+    const markup = messaged([listedTask("running")]);
     expect(markup).toContain(
       'aria-label="Sent to Compare trail maps: Also say which route has more shade. Sent."',
     );
     expect(words(markup)).toContain("Sent to Compare trail maps");
-    expect(markup).toContain(">Open Compare trail maps</button>");
     expect(markup).toContain('aria-label="Open Compare trail maps"');
+    expect(markup).toContain(">Open Compare trail maps</button>");
   });
 
-  it("F-587: a message to a task the list does not hold as started from here stays Messaged <bot>", () => {
-    const markup = messaged(null);
+  it("F-587: a task started from another conversation stays Messaged <bot>", () => {
+    const markup = messaged([listedTask("running", { spawnedBy: "agent:pip:elsewhere" })]);
     expect(markup).toContain(
       'aria-label="Messaged Pip: Also say which route has more shade. Sent."',
     );
     expect(markup).toContain(">Open in Pip</button>");
+  });
+
+  it("F-587: a key only the call names, not the result, stays Messaged <bot>", () => {
+    const rows = followUp({ runId: "34fc6031", status: "accepted" });
+    const markup = messaged([listedTask("running")], rows);
+    expect(markup).toContain(
+      'aria-label="Messaged Pip: Also say which route has more shade. Sent."',
+    );
+    expect(markup).not.toContain("Sent to");
+  });
+
+  it("F-587: the task's title is cleaned as the card cleans it", () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const markup = messaged([listedTask("running", { label: `${rlo}ksat nepO` })]);
+    expect(markup).toContain('aria-label="Open ksat nepO"');
+    expect(markup).not.toContain(rlo);
+  });
+});
+
+describe("F-587: what the view reads whole", () => {
+  it("F-587: a task start's payload is never read whole: the card draws from what the step keeps", () => {
+    const steps = transcriptOf([
+      ...started(),
+      call("run-1", T + 1_100, "call-h", "sessions_spawn", { task: "Check.", label: "Hidden" }),
+      call("run-1", T + 1_200, "call-s", "sessions_send", { sessionKey: CHILD, message: "Hi" }),
+    ]).runs.flatMap((run) => run.steps);
+    const read = steps.filter(isCardCall).map((step) => step.toolName);
+    expect(read).toEqual(["sessions_send"]);
   });
 });

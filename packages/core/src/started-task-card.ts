@@ -7,6 +7,7 @@
 // conversation (`Task.startedBy.fromKey`).
 
 import { callArgs, resultBody, sendDetails } from "./cards.ts";
+import { cleanLine } from "./gateway-names.ts";
 import { asRecord, botIdFromSessionKey, REPORT_RUN_PREFIX } from "./mapping.ts";
 import { isOpenStep, type Run, type Step, type StepRaw } from "./runs.ts";
 import { MAX_TITLE_CHARS } from "./state-bounds.ts";
@@ -18,11 +19,16 @@ export const START_TASK_TOOL = "sessions_spawn";
 /** The longest first line of a brief a card shows. */
 export const MAX_BRIEF_LINE_CHARS = 280;
 
+/** The longest refusal reason a card shows. */
+export const MAX_REFUSAL_CHARS = 1_120;
+
 export type StartedTaskState =
   /** The call is open: nothing yet says whether the gateway started the task. */
   | "starting"
   /** The gateway started it, and the task list here does not list it as started from here. */
   | "started"
+  /** Listed as started from here, and its row says nothing of a run: the sidebar shows no state. */
+  | "idle"
   // The task's own state, as its row in the task list says it (`Task.status`).
   | "queued"
   | "working"
@@ -44,7 +50,7 @@ const FROM_STATUS: Record<TaskStatus, StartedTaskState> = {
   waiting: "waiting",
   blocked: "blocked",
   done: "done",
-  idle: "done",
+  idle: "idle",
   "done-with-failures": "done-with-failures",
   failed: "failed",
   stopped: "stopped",
@@ -100,17 +106,11 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
-/** Text a bot wrote, as one plain line: control characters and runs of space made one space, cut to `max`. */
-export function plainLine(text: string, max: number): string {
-  const line = text.replace(/[\p{Cc}\s]+/gu, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
-}
-
-/** The first line with text of what a bot wrote, cleaned and cut to `max`; null when it has none. */
+/** The first line with text of what a bot wrote, cleaned (`cleanLine`) and cut to `max`; null when none. */
 function firstLine(value: unknown, max: number): string | null {
   const text = str(value);
-  const line = text?.split(/\r?\n/).find((each) => each.trim() !== "");
-  return line ? plainLine(line, max) || null : null;
+  const line = text?.split(/\r?\n/).find((each) => cleanLine(each, max) !== "");
+  return line ? cleanLine(line, max) : null;
 }
 
 /**
@@ -214,7 +214,7 @@ function startedTaskCard(
   const childRun = accepted ? str(details?.runId) : null;
   const task = startedTaskOf(input.tasks, taskKey, input.taskKey);
   const labelText = str(args?.label);
-  const label = labelText ? plainLine(labelText, MAX_TITLE_CHARS) || null : null;
+  const label = labelText ? cleanLine(labelText, MAX_TITLE_CHARS) || null : null;
   const hasResult = (raw?.result !== null && raw?.result !== undefined) || step.result !== null;
 
   let state: StartedTaskState;
@@ -240,9 +240,10 @@ function startedTaskCard(
     brief: firstLine(args?.task, MAX_BRIEF_LINE_CHARS),
     taskKey,
     task,
-    title: task?.title ?? label,
+    // The listed title is the gateway's copy of a label a bot or person wrote: cleaned the same way.
+    title: (task ? cleanLine(task.title, MAX_TITLE_CHARS) : "") || label,
     state,
-    reason: reason === null ? null : plainLine(reason, MAX_BRIEF_LINE_CHARS * 4),
+    reason: reason === null ? null : cleanLine(reason, MAX_REFUSAL_CHARS) || null,
     resultStatus: status,
     reportedBack: reportOf(input.items, taskKey, childRun),
     requestedAt: step.startedAt,

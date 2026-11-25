@@ -155,3 +155,22 @@ describe("F-551: the thinking under the status line shows only with Show thinkin
     }
   });
 });
+
+describe("F-587: a task start the status line points at", () => {
+  const start = (args: Record<string, unknown>) =>
+    run({ steps: [step("tool", { toolName: "sessions_spawn", args })] });
+
+  it("F-587: a start for a visible task has its card in view, so the line brings it there", () => {
+    const visible = start({
+      task: "Compare the maps.",
+      label: "Compare trail maps",
+      visible: true,
+    });
+    expect(statusLineFor(visible, transcript([visible]), quiet).callId).toBe("call-1");
+  });
+
+  it("F-587: a hidden helper has no card, so the line points nowhere with commands hidden", () => {
+    const hidden = start({ task: "Check the forecast.", label: "Check the forecast" });
+    expect(statusLineFor(hidden, transcript([hidden]), quiet).callId).toBeNull();
+  });
+});

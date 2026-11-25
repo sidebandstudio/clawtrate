@@ -7,7 +7,6 @@
 import {
   MAX_INTER_SESSION,
   selectStartedTasks,
-  startedTaskOf,
   tasksShownHere,
   type Run,
   type StartedTaskCard,
@@ -45,7 +44,7 @@ import {
   takeArrival,
   takeReturnPoint,
 } from "./MessagedCard.tsx";
-import { botMessageKey, mayDispatch, nameOf, sentVerb } from "./model.ts";
+import { botMessageKey, mayDispatch, nameOf, sentToTask, sentVerb } from "./model.ts";
 import { Announcer } from "./parts.tsx";
 import { cardDomId, codingCalls, placeCards, type CardRef } from "./placement.ts";
 import { QuestionCardView } from "./QuestionCard.tsx";
@@ -301,11 +300,7 @@ export function CardFor({ cardRef }: { cardRef: CardRef }) {
       return (
         <BotMessageCardView
           card={card}
-          task={startedTaskOf(
-            listed,
-            card.recipient.source === "result" ? card.recipient.sessionKey : null,
-            env.taskKey,
-          )}
+          task={sentToTask(card, listed, env.taskKey)}
           read={cards.rawState(card.stepId)}
           related={related(env, cards.selected, card.recipient.sessionKey, card.recipient.agentId)}
           partial={partialHistory(env.transcript)}

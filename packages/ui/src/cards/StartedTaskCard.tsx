@@ -9,7 +9,7 @@ import { useContext, useEffect, useRef } from "react";
 import { Avatar } from "../Avatar.tsx";
 import { CardThoughtContext, useCardEnv } from "./context.tsx";
 import { botFor, callRaw } from "./MessagedCard.tsx";
-import { nameOf, STARTED_STATES } from "./model.ts";
+import { STARTED_STATES } from "./model.ts";
 import { CardFoot, Glyph, useAnnounce, useRawDisclosure } from "./parts.tsx";
 import { cardDomId } from "./placement.ts";
 import type { StepRawState } from "./useCards.ts";
@@ -35,8 +35,13 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
   const run = env.runOf(card.runId);
   const step = run?.steps.find((each) => each.id === card.stepId);
   const starter = env.bot ?? botFor(env.bots, null, "The bot");
-  const workerId = card.agentId ?? starter.id;
-  const worker = botFor(env.bots, workerId, nameOf(env.bots, workerId, starter.name));
+  // A listed bot by the id; the starter when the start was its own; else "another bot". The id
+  // itself is never shown: before an accepted result it is only what the bot asked for.
+  const worker =
+    env.bots.find((each) => each.id === card.agentId) ??
+    (card.agentId === null || card.agentId === starter.id
+      ? starter
+      : botFor(env.bots, null, "another bot"));
   const lost = env.connection.status !== "connected";
   const [mark, word, tone] = STARTED_STATES[card.state];
   const shown = lost && LIVE.has(card.state) ? `Last seen ${word.toLowerCase()}` : word;

@@ -9,7 +9,7 @@ import { RawTable, runsFromHistory, type Run } from "../src/runs.ts";
 import {
   isTaskStart,
   MAX_BRIEF_LINE_CHARS,
-  plainLine,
+  MAX_REFUSAL_CHARS,
   selectStartedTasks,
   startedTaskOf,
   tasksShownHere,
@@ -161,7 +161,8 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
       waiting: "waiting",
       blocked: "blocked",
       done: "done",
-      idle: "done",
+      // A row that says nothing of a run: the sidebar shows no state, so neither does the card.
+      idle: "idle",
       "done-with-failures": "done-with-failures",
       failed: "failed",
       stopped: "stopped",
@@ -359,10 +360,83 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
     expect(card!.title).toBe(card!.label);
     expect(card!.label!.startsWith("<b>Trail</b> maps xxx")).toBe(true);
     expect(card!.label!.length).toBe(MAX_TITLE_CHARS);
-    expect(card!.label!.endsWith("…")).toBe(true);
-    expect(plainLine("y".repeat(MAX_BRIEF_LINE_CHARS + 1), MAX_BRIEF_LINE_CHARS)).toHaveLength(
-      MAX_BRIEF_LINE_CHARS,
+    const longBrief = { ...VISIBLE, task: "y".repeat(MAX_BRIEF_LINE_CHARS + 50) };
+    expect(cards(startRows(longBrief, ACCEPTED), {})[0]!.brief).toHaveLength(MAX_BRIEF_LINE_CHARS);
+  });
+
+  it("drops the invisible formatting a bot could use to make its words read like the card's own", () => {
+    const [rlo, lri, pdi, zwsp] = [0x202e, 0x2066, 0x2069, 0x200b].map((c) =>
+      String.fromCodePoint(c),
     );
+    const format = /[\p{Cf}]/u;
+    // Reversed on screen, this label would read "Done · Open task" in the title's place.
+    const tricky = {
+      task: `Check ${lri}the${pdi} drive${zwsp}`,
+      label: `${rlo}ksat nepO · enoD`,
+      visible: true,
+    };
+    const [card] = cards(startRows(tricky, ACCEPTED), {});
+    expect(card!.title).toBe("ksat nepO · enoD");
+    expect(card!.brief).toBe("Check the drive");
+    // The listed task's title, the gateway's copy of a label, is cleaned the same way.
+    const listedTitle = listed("running", { label: `Line one\nDone · Open task${rlo}abc` });
+    const [fromList] = cards(startRows(), listedTitle);
+    expect(fromList!.title).toBe("Line one Done · Open task abc");
+    // So is the gateway's reason for a refusal.
+    const reason = `label already in use: ${rlo}x`;
+    const [refused] = cards(startRows(VISIBLE, { status: "error", error: reason }, true));
+    expect(refused!.reason).toBe("label already in use: x");
+    for (const text of [card!.title, card!.brief, fromList!.title, refused!.reason])
+      expect(format.test(text ?? "")).toBe(false);
+  });
+
+  it("bounds the gateway's reason for a refusal", () => {
+    const error = `<b>no</b> ${"r".repeat(MAX_REFUSAL_CHARS * 2)}`;
+    const [card] = cards(startRows(VISIBLE, { status: "forbidden", error }, true));
+    expect(card!.reason).toHaveLength(MAX_REFUSAL_CHARS);
+    expect(card!.reason!.startsWith("<b>no</b> rrr")).toBe(true);
+  });
+
+  it("opens each of two tasks started in one turn by the key its own result names", () => {
+    const other = "agent:pip:dashboard:9c1e2a44-1c3d-4b55-9e7f-0a1b2c3d4e5f";
+    const rows = [
+      user("#hand-off", T, RUN),
+      call(RUN, T + 800, CALL, VISIBLE),
+      result(RUN, T + 1_000, CALL, ACCEPTED),
+      call(RUN, T + 1_100, "call_second", { ...VISIBLE, label: "Check the forecast" }),
+      result(RUN, T + 1_200, "call_second", {
+        ...ACCEPTED,
+        childSessionKey: other,
+        runId: "child-run-2",
+        label: "Check the forecast",
+      }),
+    ];
+    const sibling = mapSessionRow({
+      key: other,
+      agentId: "pip",
+      createdVia: "spawn",
+      spawnedBy: HERE,
+      label: "Check the forecast",
+      status: "done",
+    })!;
+    // The sibling is listed first, so a match by the conversation alone would find it first.
+    const tasks = { pip: [sibling, listed("running").pip![0]!] };
+    const [first, second] = cards(rows, tasks);
+    expect([first!.task?.key, first!.state]).toEqual([CHILD, "working"]);
+    expect([second!.task?.key, second!.state]).toEqual([other, "done"]);
+  });
+
+  it("reads whether a start was for a visible task from what the step keeps, when the call's arguments are long", () => {
+    // Many long arguments: the step keeps only the keys the reading reads, `visible` among them.
+    const extra = Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [`note${i}`, "n".repeat(900)]),
+    );
+    const rows = [
+      user("#hand-off", T, RUN),
+      call(RUN, T + 800, CALL, { ...VISIBLE, task: "t".repeat(3_000), ...extra }),
+    ];
+    const [card] = cards(rows, {}, RUN, false);
+    expect(card).toMatchObject({ state: "starting", title: LABEL });
   });
 
   it("says the bot reported back only for the reply whose run is that start's own report", () => {
@@ -411,6 +485,9 @@ describe("the task list a card may use", () => {
   });
 
   it("finds a task only by its key and the conversation the list says it was started from", () => {
+    const sibling = { ...task, key: "agent:pip:dashboard:sibling", title: "Another task" };
+    expect(startedTaskOf({ pip: [sibling, task] }, CHILD, HERE)?.key).toBe(CHILD);
+    expect(startedTaskOf({ pip: [sibling] }, CHILD, HERE)).toBeNull();
     expect(startedTaskOf({ pip: [task] }, CHILD, HERE)?.key).toBe(CHILD);
     expect(startedTaskOf({ pip: [task] }, CHILD, "agent:pip:main")).toBeNull();
     expect(startedTaskOf({ pip: [task] }, null, HERE)).toBeNull();
