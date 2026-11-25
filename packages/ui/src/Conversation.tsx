@@ -880,6 +880,7 @@ export function Conversation({
   inert = false,
   granted,
   onShowComputer,
+  updatingWords = null,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -913,6 +914,8 @@ export function Conversation({
   granted: boolean;
   /** Open the Work pane on Computer, focusing its tab (work-pane.md, section 15). */
   onShowComputer?: () => void;
+  /** While OpenClaw updates on the gateway, what the strip says: said instead of "Reconnecting". */
+  updatingWords?: string | null;
 }) {
   const itemCount = transcript?.items.length ?? 0;
   const send = useCommand();
@@ -992,7 +995,7 @@ export function Conversation({
   const heard = [
     bot ? lifecycleWords(bot, active, lastRun) : null,
     connection.status === "reconnecting"
-      ? "Reconnecting"
+      ? (updatingWords ?? "Reconnecting")
       : connection.status === "connected"
         ? "Connected"
         : null,
@@ -1007,7 +1010,9 @@ export function Conversation({
     setSpoken(heard);
     const changed = heard.filter((words, index) => words && words !== spoken[index]);
     // A first hello is not news; a return after a drop is.
-    const news = changed.filter((words) => words !== "Connected" || spoken[1] === "Reconnecting");
+    const news = changed.filter(
+      (words) => words !== "Connected" || (spoken[1] !== null && spoken[1] !== "Connected"),
+    );
     if (news.length > 0) setAnnouncement(news.at(-1)!);
   }
 

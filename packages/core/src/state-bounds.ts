@@ -811,6 +811,7 @@ const openclawUpdating = object<OpenClawUpdateState>()({
   error: text(MAX_UPDATE_NOTE_CHARS),
   looking: FLAG,
   lookFailed: FLAG,
+  held: object<NonNullable<OpenClawUpdateState["held"]>>()({ gatewayId: ID, to: NAME }),
 });
 const task = flagged<Task>()({
   key: ID,

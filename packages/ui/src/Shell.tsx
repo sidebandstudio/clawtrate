@@ -29,6 +29,7 @@ import { summarize, useSelection } from "./selection.ts";
 import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
+import { updatingHere, updatingStripWords } from "./bots/update-words.ts";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
@@ -769,6 +770,9 @@ export function Shell({
   // Access arriving reconnects with the new grant: "Access granted" is the
   // news then, unless something failed.
   const connectionStrip = stripFor(state, phase, taskKey);
+  // OpenClaw updating on this gateway, as the update engine knows it: the strip, the footer and
+  // the conversation's announcement say so (#590).
+  const updating = updatingHere(state);
   const strip =
     granted && connectionStrip?.tone !== "danger"
       ? {
@@ -869,6 +873,7 @@ export function Shell({
             ) : null
           }
           onOpenSettings={onOpenSettings}
+          updating={updating}
           settingsKeys={mac ? "⌘," : "Ctrl+,"}
           onNewBot={interactive ? openNewBot : null}
           routines={state.routines.routines}
@@ -935,6 +940,7 @@ export function Shell({
                   toggleRef={toggleRef}
                   inert={drawerOpen || inert}
                   onShowComputer={showComputer}
+                  updatingWords={updating ? updatingStripWords(updating).text : null}
                 />
               </WorkLinksContext.Provider>
             </OpenTaskContext.Provider>

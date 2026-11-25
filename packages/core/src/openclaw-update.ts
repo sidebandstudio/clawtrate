@@ -17,7 +17,7 @@
 // broadcasts its changes to admin connections. Nothing here starts a run but
 // `start`, which only a person's press reaches.
 //
-// `update.status` is asked only for a reason: when Settings › Gateway or the
+// `update.status` is asked only for a reason: when Settings › Updates or the
 // confirmation opens, when a run is followed or kept, and when a press whose
 // answer was lost must be settled. It is not a pure read (it reads the
 // restart sentinel and run history through the gateway's state database, and
@@ -66,12 +66,15 @@ export const MAX_UPDATE_NOTE_CHARS = 400;
  */
 export const UPDATE_AWAY_MS = 40 * 60_000;
 /**
- * How long a followed run's gateway may be away before Clawtrate says it has been away longer
- * than an update usually takes. Real updates of global npm installs on Linux were gone 71 to
- * 150 s (`docs/research/model-catalog.md` section 7); 5 minutes is twice the longest of those.
- * A gateway started by hand can be left stopped by an update, so past this the line says so.
+ * How long a followed run's gateway may be away before Clawtrate says the update is taking longer
+ * than usual. Measured on real updates: global npm installs on Linux waited up to 20 s for running
+ * work, were gone 71 to 150 s and took 3.5 to 11 minutes from the press to done
+ * (`docs/research/model-catalog.md` section 7); a gateway under launchd on macOS waited 5 s, was
+ * gone about 6 minutes (a migration and check step) and took 11.4 minutes. 10 minutes is past the
+ * longest absence of both. A gateway started by hand can be left stopped by an update, so past
+ * this the line says so.
  */
-export const UPDATE_LATE_MS = 5 * 60_000;
+export const UPDATE_LATE_MS = 10 * 60_000;
 /** Asking the gateway about a press whose answer was lost: at once, then after these waits. */
 export const UPDATE_ASK_WAITS_MS = [5_000, 15_000, 30_000, 60_000] as const;
 /** While a run moves with no event, its record is read again this often, and this long at most. */
@@ -197,6 +200,8 @@ export type OpenClawUpdateState = {
   looking: boolean;
   /** Asking the gateway about that press failed: Check again and Stop waiting are offered. */
   lookFailed: boolean;
+  /** The gateway (its identity) and the version of what `looking` waits on; gone when it ends. */
+  held?: { gatewayId: string; to: string | null };
 };
 
 export const initialOpenClawUpdate: OpenClawUpdateState = {
@@ -497,7 +502,10 @@ export class OpenClawUpdates {
   }
 
   private patch(patch: Partial<OpenClawUpdateState>): void {
-    this.ctx.set({ ...this.state, ...patch });
+    const next = { ...this.state, ...patch };
+    // A hold that ends takes its gateway and version with it.
+    if (patch.looking === false) delete next.held;
+    this.ctx.set(next);
   }
 
   private patchRun(runId: string, patch: Partial<UpdateRunView>): void {
@@ -512,6 +520,7 @@ export class OpenClawUpdates {
     const kept = look.runId !== null;
     this.patch({
       looking: true,
+      held: { gatewayId: look.gatewayId, to: look.to },
       lookFailed: failed,
       error: kept
         ? failed
@@ -835,7 +844,7 @@ export class OpenClawUpdates {
   /**
    * Ask the gateway (`update.status`) on the connection that is there: whether it can update
    * itself, the run under way, and how what holds Update has ended. Asked when Settings ›
-   * Gateway or the confirmation opens, on Check again, and when something waits to be settled.
+   * Updates or the confirmation opens, on Check again, and when something waits to be settled.
    * Asks under way on this connection are joined.
    */
   look(): Promise<void> {
