@@ -6948,6 +6948,12 @@ export class ClawtrateClient {
     stamp: { gatewayId: string; target: number },
     owner?: object,
   ): BotDeleteContext {
+    // The bot each listed task is under as the delete is sent: the read of the bots that drops the
+    // deleted bot's rows can land before the gateway's answer to the delete.
+    const listedUnder = new Map<string, string>();
+    /** A task listed under a bot as the delete was sent goes by it; any other by `unlisted`. */
+    const botOf = (task: string, unlisted: string | null) =>
+      listedUnder.get(capId(task, MAX_ID_CHARS)) ?? unlisted;
     return {
       stamp,
       wanted: () => !(owner && this.withdrawnOwners.has(owner)),
@@ -6960,13 +6966,20 @@ export class ClawtrateClient {
         // Asked again whenever it matters: a newer list shown since, or another connection, ends it.
         return { result, current: () => shown && link.alive() && this.botsShown === issued };
       },
+      sending: () => {
+        listedUnder.clear();
+        for (const key of this.rows.keys()) {
+          const bot = this.taskBot(key);
+          if (bot !== null) listedUnder.set(key, bot);
+        }
+      },
       // The one evidence that the bot is gone, acted on as it arrives, whatever follows.
       deleted: (botId) => {
-        this.dropQueuedFor(botId);
-        // The gateway deleted the bot with its tasks and reports no removal for each task: the
-        // pictures you sent in them go now, by the bot each task was listed under when sent.
         const deleted = capId(botId, MAX_ID_CHARS);
-        this.dropDeletedPictures(({ bot }) => bot === deleted);
+        this.dropQueuedFor((key) => botOf(key, botIdFromSessionKey(key)) === deleted);
+        // The gateway deleted the bot with its tasks and reports no removal for each task: the
+        // pictures you sent in them go now. A task not listed goes by the bot noted when sent.
+        this.dropDeletedPictures(({ task, bot }) => botOf(task, bot) === deleted);
       },
       admin: () =>
         this.options.readOnly !== true &&
@@ -6979,10 +6992,8 @@ export class ClawtrateClient {
    * The gateway answered that it deleted the bot: its tasks' queued and held messages in this
    * host never go. Once, on that answer alone; the bot leaves the rail as any list change does.
    */
-  private dropQueuedFor(botId: string): void {
-    const keys = Object.keys(this.state.transcripts).filter(
-      (key) => botIdFromSessionKey(key) === botId,
-    );
+  private dropQueuedFor(deleted: (key: string) => boolean): void {
+    const keys = Object.keys(this.state.transcripts).filter(deleted);
     for (const key of keys) {
       this.cancelAllQueued(key);
       this.updateActivity(key, (activity) => {
