@@ -1153,3 +1153,47 @@ describe("F-589: the client follows an update across the gateway's restart", () 
     client.stop();
   });
 });
+
+describe("F-591: what the engine tells the strip, the footer and the card while OpenClaw updates", () => {
+  it("F-591: away longer than usual comes after 10 minutes away, past the longest absence measured on Linux and macOS", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => started();
+    await t.engine.start(t.stamp());
+    await t.restart(OLD, false);
+    expect(UPDATE_LATE_MS).toBe(10 * 60_000);
+    // The first macOS gateway under launchd was gone about 6 minutes (357,888 ms).
+    expect(UPDATE_LATE_MS).toBeGreaterThan(357_888);
+    expect(timersOf(t, UPDATE_LATE_MS)).toHaveLength(1);
+    expect(t.run()?.outcome).toBe("running");
+  });
+
+  it("F-591: a held press names its gateway and the version it went to, so nothing is said of it on another", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    t.world.handlers["update.status"] = () => deferred<unknown>().promise;
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    expect(t.state()).toMatchObject({ looking: true, held: { gatewayId: "gw-a", to: NEW } });
+  });
+
+  it("F-591: a succeeded run's next-action note (command-line advice) is not kept as its outcome", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => started();
+    await t.engine.start(t.stamp());
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    t.world.handlers["update.runs.get"] = () => ({
+      run: record({
+        phase: "finished",
+        status: "succeeded",
+        after: { version: NEW },
+        origin: {
+          nextAction:
+            "Stop the gateway, then run openclaw doctor --cleanup --dry-run and openclaw doctor --cleanup.",
+        },
+      }),
+    });
+    await t.restart(NEW);
+    expect(t.run()).toMatchObject({ outcome: "updated", to: NEW, note: null, reason: null });
+  });
+});

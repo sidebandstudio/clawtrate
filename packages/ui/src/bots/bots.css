@@ -1638,6 +1638,76 @@ button.b-open > .icon {
   gap: 8px;
 }
 
+/* The gateway's steps as a bar (#590): one segment per step, those done filled, its step
+   outlined, a step waiting on the gateway dashed. Nothing moves. */
+.b-update-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  width: 100%;
+}
+
+.b-update-bar {
+  display: flex;
+  flex: 0 1 240px;
+  gap: 3px;
+  min-width: 160px;
+}
+
+.b-update-bar > span {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border-strong);
+}
+
+.b-update-bar > span[data-step="done"] {
+  background: var(--accent-line);
+}
+
+.b-update-bar > span[data-step="now"] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent-line);
+}
+
+.b-update-steps[data-waiting] .b-update-bar > span[data-step="now"] {
+  background: transparent;
+  box-shadow: none;
+  border: 2px dashed var(--accent-line);
+}
+
+.b-update-step {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (forced-colors: active) {
+  .b-update-bar > span {
+    border: 1px solid CanvasText;
+  }
+  .b-update-bar > span[data-step="done"] {
+    background: CanvasText;
+  }
+}
+
+/* The one line a bot's settings and Settings › Gateway keep, and its link to Settings › Updates. */
+.b-update-link {
+  margin: 0;
+}
+
+.b-update-link .link-button {
+  display: inline;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.b-update-section {
+  margin-top: var(--space-5);
+}
+
 /* "How bots work in Clawtrate" (BotGuides.tsx): one row per instructions file. */
 .bot-guides-list {
   display: grid;

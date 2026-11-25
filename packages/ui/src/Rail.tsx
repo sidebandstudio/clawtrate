@@ -79,10 +79,19 @@ import {
   type SelectionModel,
 } from "./selection.ts";
 import type { SettingsSection } from "./Settings.tsx";
+import { updatingPresence, type UpdatingHere } from "./bots/update-words.ts";
 import { isUnread } from "./unread.ts";
 
-/** The gateway's state in words, for the footer, its menu and its accessible name. */
-export function presenceWords(connection: ConnectionState, catchingUp: boolean): string {
+/**
+ * The gateway's state in words, for the footer, its menu and its accessible name; while OpenClaw
+ * updates on it, as the update engine knows it, that instead (#590).
+ */
+export function presenceWords(
+  connection: ConnectionState,
+  catchingUp: boolean,
+  updating: UpdatingHere | null = null,
+): string {
+  if (updating) return updatingPresence(updating);
   switch (connection.status) {
     case "connected":
       return catchingUp ? "Catching up" : "Connected";
@@ -550,6 +559,7 @@ export function Rail({
   onOpenRoutineRun,
   onOpenPalette,
   paletteKeys = "⌘K",
+  updating = null,
 }: {
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
@@ -599,6 +609,8 @@ export function Rail({
   onOpenPalette?: () => void;
   /** The palette's keys as this platform names them, for the tooltip. */
   paletteKeys?: string;
+  /** OpenClaw updating on the gateway, as the update engine knows it: the footer says so. */
+  updating?: UpdatingHere | null;
 }) {
   const send = useCommand();
   const bridge = useBridge();
@@ -680,7 +692,7 @@ export function Rail({
   const address = gatewayLabel(connection.gatewayUrl);
   // The name given on this device, or else the address (titlebar.md, section 4).
   const gateway = connection.gatewayName ?? address;
-  const words = presenceWords(connection, catchingUp);
+  const words = presenceWords(connection, catchingUp, updating);
   const dot = presenceDot(connection, catchingUp);
   const onScreenKey = routinesOpen ? null : (selection.task?.key ?? null);
   const manual = roster.prefs.sort === "manual";

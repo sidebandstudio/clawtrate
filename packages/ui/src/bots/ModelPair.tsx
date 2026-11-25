@@ -4,9 +4,9 @@
 // the provider's full list each time it is opened, holds the answer for this
 // screen only, and shows the models the first list lacks in a section of their
 // own, with no verdict on any of them. The last row takes a model id typed in.
-// When the gateway reports a newer OpenClaw, a note says so, with a link to
-// OpenClaw's update instructions and the button that updates it (#565); while
-// an update runs, and once it ends, its line takes the note's place.
+// When the gateway reports a newer OpenClaw, or while an update runs, a note
+// says so in one line, with a link to Settings › Updates, where the update is
+// made and followed (#565, #590).
 
 import {
   gatewayStamp,
@@ -20,10 +20,8 @@ import {
 } from "@clawtrate/core";
 import { useEffect, useRef, useState } from "react";
 import { useBridge } from "../bridge.tsx";
-import { ArrowUpIcon, ExternalIcon } from "../icons.tsx";
-import { Note, Select, type SelectRow, type SelectSection } from "./parts.tsx";
-import { UpdateOpenClaw, useUpdateRun } from "./UpdateOpenClaw.tsx";
-import { OPENCLAW_UPDATE_DOCS } from "./update-words.ts";
+import { Select, type SelectRow, type SelectSection } from "./parts.tsx";
+import { UpdateOpenClawNote, useUpdateRun } from "./UpdateOpenClaw.tsx";
 import { levelWord, modelsOf, providerName } from "./words.ts";
 
 /** One "View more" answer, as this screen holds it for the provider and connection it shows. */
@@ -389,29 +387,7 @@ export function ModelPair({
           </div>
         </div>
       )}
-      {updateRun ? (
-        <Note icon={<ArrowUpIcon />} testId="openclaw-update">
-          <UpdateOpenClaw where="notice" />
-        </Note>
-      ) : (
-        update && (
-          <Note icon={<ArrowUpIcon />} testId="openclaw-update">
-            <p>
-              Your gateway runs OpenClaw {update.current}, and {update.latest} is out
-              {update.channel && update.channel !== "latest"
-                ? ` on its ${update.channel} channel${update.channel === "beta" || update.channel === "dev" ? ", not as a stable release" : ""}`
-                : ""}
-              . Updating the gateway is how newer models get listed.
-            </p>
-            <p>
-              <a href={OPENCLAW_UPDATE_DOCS} target="_blank" rel="noreferrer noopener">
-                OpenClaw's update instructions <ExternalIcon />
-              </a>
-            </p>
-            <UpdateOpenClaw where="notice" />
-          </Note>
-        )
-      )}
+      {(updateRun || update) && <UpdateOpenClawNote />}
       {typedId !== null && typedId === model && menu.row === undefined && !typing && (
         <p className="b-hint" data-testid="model-typed-line">
           {typedId} was typed in.
