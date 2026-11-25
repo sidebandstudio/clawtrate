@@ -31,7 +31,7 @@ CLAWTRATE_TEAM_ID="9X79V37Q89"
 
 BUNDLE_ID="dev.clawtrate.desktop"
 APP="Clawtrate.app"
-FEED_URL="https://clawtrate.dev/updates/beta/latest-mac.json"
+FEED_URL="https://clawtrate.dev/updates/channel/beta/latest-mac.json"
 RELEASES_URL="https://github.com/sidebandstudio/clawtrate/releases/download/"
 ASSETS_ORIGIN="https://release-assets.githubusercontent.com"
 RELEASES_PAGE="https://github.com/sidebandstudio/clawtrate/releases"
