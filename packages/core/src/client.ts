@@ -6946,6 +6946,15 @@ export class ClawtrateClient {
     stamp: { gatewayId: string; target: number },
     owner?: object,
   ): BotDeleteContext {
+    // The bot each listed task is under as the delete starts: the read of the bots that drops the
+    // deleted bot's rows can land before the gateway's answer to the delete.
+    const listedUnder = new Map<string, string | null>();
+    for (const key of this.rows.keys()) listedUnder.set(key, this.taskBot(key));
+    /** A task listed as the delete started goes by that bot; one not listed, by `unlisted`. */
+    const botOf = (task: string, unlisted: string | null) => {
+      const id = capId(task, MAX_ID_CHARS);
+      return listedUnder.has(id) ? (listedUnder.get(id) ?? null) : unlisted;
+    };
     return {
       stamp,
       wanted: () => !(owner && this.withdrawnOwners.has(owner)),
@@ -6960,11 +6969,11 @@ export class ClawtrateClient {
       },
       // The one evidence that the bot is gone, acted on as it arrives, whatever follows.
       deleted: (botId) => {
-        this.dropQueuedFor(botId);
-        // The gateway deleted the bot with its tasks and reports no removal for each task: the
-        // pictures you sent in them go now, by the bot each task was listed under when sent.
         const deleted = capId(botId, MAX_ID_CHARS);
-        this.dropDeletedPictures(({ bot }) => bot === deleted);
+        this.dropQueuedFor((key) => botOf(key, botIdFromSessionKey(key)) === deleted);
+        // The gateway deleted the bot with its tasks and reports no removal for each task: the
+        // pictures you sent in them go now. A task not listed goes by the bot noted when sent.
+        this.dropDeletedPictures(({ task, bot }) => botOf(task, bot) === deleted);
       },
       admin: () =>
         this.options.readOnly !== true &&
@@ -6977,10 +6986,8 @@ export class ClawtrateClient {
    * The gateway answered that it deleted the bot: its tasks' queued and held messages in this
    * host never go. Once, on that answer alone; the bot leaves the rail as any list change does.
    */
-  private dropQueuedFor(botId: string): void {
-    const keys = Object.keys(this.state.transcripts).filter(
-      (key) => botIdFromSessionKey(key) === botId,
-    );
+  private dropQueuedFor(deleted: (key: string) => boolean): void {
+    const keys = Object.keys(this.state.transcripts).filter(deleted);
     for (const key of keys) {
       this.cancelAllQueued(key);
       this.updateActivity(key, (activity) => {
