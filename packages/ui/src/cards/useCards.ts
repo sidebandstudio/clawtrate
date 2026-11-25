@@ -6,6 +6,7 @@
 import {
   BOT_MESSAGE_TOOL,
   selectMessageCards,
+  START_TASK_TOOL,
   T3_CODE_TOOLS,
   type ClawtrateBridge,
   type SelectedCards,
@@ -137,7 +138,11 @@ function statesOf(cards: SelectedCards | undefined): string {
  */
 export function isCardCall(step: Step): boolean {
   if (step.kind !== "tool" || !step.toolName) return false;
-  return step.toolName === BOT_MESSAGE_TOOL || step.toolName.includes("__");
+  return (
+    step.toolName === BOT_MESSAGE_TOOL ||
+    step.toolName === START_TASK_TOOL ||
+    step.toolName.includes("__")
+  );
 }
 
 /** Keep at most `MAX_READS` reads, the newest: every way into the map goes through here. */
@@ -258,5 +263,5 @@ export function useCards(
     [steps, reads],
   );
 
-  return { selected, rawState, settledRaw };
+  return { selected, rawState, settledRaw, rawOf };
 }

@@ -14,6 +14,7 @@ import type {
   QuestionItem,
   Run,
   RunState,
+  StartedTaskState,
 } from "@clawtrate/core";
 
 // Names ---------------------------------------------------------------------------
@@ -742,6 +743,28 @@ export function recipientName(
   if (id) return { id, name: nameOf(bots, id, id) };
   return { id: null, name: card.recipient.label ?? "another bot" };
 }
+
+/**
+ * A "Started a task" card's state: its mark, its word and its tone. A listed task's state reads
+ * as its row in the task list says it (F-587).
+ */
+export const STARTED_STATES: Record<
+  StartedTaskState,
+  [string, string, "accent" | "warn" | "danger" | null]
+> = {
+  starting: ["sending", "Starting", null],
+  started: ["check", "Started", null],
+  queued: ["queued", "Queued", null],
+  working: ["working", "Working", "accent"],
+  waiting: ["waiting", "Waiting for you", "warn"],
+  blocked: ["blocked", "Blocked", "warn"],
+  done: ["done", "Done", null],
+  "done-with-failures": ["failed", "Done with failures", "danger"],
+  failed: ["failed", "Failed", "danger"],
+  stopped: ["stopped", "Stopped", null],
+  "couldnt-start": ["failed", "Couldn't start", "danger"],
+  unknown: ["queued", "Unknown", null],
+};
 
 /** The first line of a message, for the folded card. */
 export function firstLineOf(text: string | null): string {
