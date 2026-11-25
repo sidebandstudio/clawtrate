@@ -1,5 +1,6 @@
 import type { ClawtrateState, Transcript } from "@clawtrate/core";
 import { useEffect, useId, useState } from "react";
+import { updatingHere, updatingStripWords } from "./bots/update-words.ts";
 import { gatewayTitle } from "./format.ts";
 
 /**
@@ -104,7 +105,20 @@ export function stripFor(
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
   switch (connection.status) {
     case "reconnecting":
-    case "connecting":
+    case "connecting": {
+      // OpenClaw updating on this gateway, as the update engine knows it (#590).
+      const updating = updatingHere(state);
+      if (updating) {
+        const words = updatingStripWords(updating);
+        return {
+          tone: updating.stage === "away" ? "danger" : "warn",
+          text: words.text,
+          short: words.short,
+          more: "showing saved messages",
+          action: words.retry ? "retry" : null,
+          countdown: false,
+        };
+      }
       return {
         tone: "warn",
         text: "Reconnecting",
@@ -112,6 +126,7 @@ export function stripFor(
         action: "retry",
         countdown: true,
       };
+    }
     case "error":
       return {
         tone: "danger",

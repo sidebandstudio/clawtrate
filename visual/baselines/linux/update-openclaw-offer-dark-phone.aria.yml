@@ -1,25 +1,20 @@
 - status
 - dialog "Settings":
-  - region "Gateway":
+  - region "Updates":
     - button "Close settings"
     - button "Back to settings"
-    - heading "Gateway" [level=3]
-    - term: Address
-    - definition: ws://127.0.0.1:18789
-    - term: State
-    - definition: Connected
-    - term: This device
-    - definition: Clawtrate Web · a41c9e02
-    - term: Granted scopes
-    - definition: operator.read, operator.write, operator.approvals, operator.questions, operator.admin
-    - term: Gateway
-    - definition: OpenClaw 2026.10.6 · protocol 4
-    - paragraph: OpenClaw 2026.11.6 is out.
-    - button "Update OpenClaw to 2026.11.6"
-    - button "Disconnect"
-    - button "Use another gateway"
-    - paragraph: 127.0.0.1:18789 keeps this device's pairing while it is disconnected. This device holds admin access, which it asked for to change bots and accounts.
-  - status
+    - heading "Updates" [level=3]
+    - heading "Clawtrate on this device" [level=4]
+    - paragraph: Applies on this device.
+    - group "Update status":
+      - term: Updates
+      - definition: "This copy can't check for updates: no update source is set up for it."
+    - status: "This copy can't check for updates: no update source is set up for it."
+    - region "OpenClaw on 127.0.0.1:18789":
+      - heading "OpenClaw on 127.0.0.1:18789" [level=4]
+      - paragraph: Applies to the gateway, for every device connected to it.
+      - paragraph: OpenClaw 2026.11.6 is out. The gateway runs 2026.10.6.
+      - button "Update OpenClaw to 2026.11.6"
 - region "Conversation":
   - button "Back to bots"
   - button "Otto, Disk almost full on the media box. Show details.": Otto

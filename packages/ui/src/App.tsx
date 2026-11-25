@@ -8,6 +8,7 @@ import { restartWaitingMessages } from "./update-restart.ts";
 import { Settings, type SettingsSection } from "./Settings.tsx";
 import { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Shell } from "./Shell.tsx";
+import { OpenOpenClawUpdates } from "./bots/UpdateOpenClaw.tsx";
 import { Brand, TitleBar, UpdateAnnouncer, UpdateButton } from "./TitleBar.tsx";
 
 /**
@@ -58,6 +59,7 @@ export function App({
   const { desktopUpdates } = useBridge();
   const updated = useDesktopUpdateSnapshot(desktopUpdates);
   const [openSection, setOpenSection] = useState<SettingsSection | null>(null);
+  const [atOpenClaw, setAtOpenClaw] = useState(false);
   useInputAndMotion();
   // The theme applies on every screen; the gateway menu in the shell changes it.
   const [theme, setTheme] = useTheme();
@@ -65,8 +67,9 @@ export function App({
   // Settings opens over either screen, with Cmd/Ctrl+, or from the gateway menu.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsOpener = useRef<HTMLElement | null>(null);
-  const openSettings = useCallback((section?: SettingsSection) => {
+  const openSettings = useCallback((section?: SettingsSection, openClaw = false) => {
     setOpenSection(section ?? null);
+    setAtOpenClaw(openClaw);
     const active = document.activeElement as HTMLElement | null;
     settingsOpener.current = active && active !== document.body ? active : null;
     setSettingsOpen(true);
@@ -124,6 +127,8 @@ export function App({
   const lost = status !== "connected";
   const waitingMessages = restartWaitingMessages(state);
   const openUpdates = () => openSettings("updates");
+  // A newer OpenClaw's line, in a bot's settings or near the Model menu, links here (#590).
+  const openOpenClawUpdates = useCallback(() => openSettings("updates", true), [openSettings]);
   return (
     <div className="app" data-connection={lost ? "lost" : undefined}>
       {screen === "shell" && (
@@ -145,32 +150,35 @@ export function App({
           waitingMessages={waitingMessages}
           updateReading={updated}
           initialSection={openSection}
+          atOpenClaw={atOpenClaw}
           onClose={closeSettings}
         />
       )}
       {screen === "shell" ? (
-        <Shell
-          state={state}
-          info={info}
-          theme={theme}
-          onTheme={setTheme}
-          bubbles={bubbles}
-          onBubbles={setBubbles}
-          onUnreadCount={onUnreadCount}
-          railTop={
-            <>
-              <Brand reading={updated} />
-              <UpdateButton
-                reading={updated}
-                waitingMessages={waitingMessages}
-                onOpenUpdates={openUpdates}
-                round
-              />
-            </>
-          }
-          onOpenSettings={openSettings}
-          inert={settingsOpen}
-        />
+        <OpenOpenClawUpdates.Provider value={openOpenClawUpdates}>
+          <Shell
+            state={state}
+            info={info}
+            theme={theme}
+            onTheme={setTheme}
+            bubbles={bubbles}
+            onBubbles={setBubbles}
+            onUnreadCount={onUnreadCount}
+            railTop={
+              <>
+                <Brand reading={updated} />
+                <UpdateButton
+                  reading={updated}
+                  waitingMessages={waitingMessages}
+                  onOpenUpdates={openUpdates}
+                  round
+                />
+              </>
+            }
+            onOpenSettings={openSettings}
+            inert={settingsOpen}
+          />
+        </OpenOpenClawUpdates.Provider>
       ) : (
         <ConnectScreen
           connection={state.connection}
