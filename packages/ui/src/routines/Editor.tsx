@@ -293,7 +293,8 @@ export function Editor({
     newBotMissing && (bots.length === 0 || (target.mode === "new" && target.botId === draft.botId));
   const fallbackBotId =
     newBotMissing && !closeMissingBot
-      ? ((bots.find((each) => each.isDefault) ?? bots[0])?.id ?? null)
+      ? // From the bots the rail lists (F-562), as a new draft picks.
+        ((shown.find((each) => each.isDefault) ?? shown[0])?.id ?? null)
       : null;
   useEffect(() => {
     if (closeMissingBot) onClose();

@@ -236,7 +236,11 @@ export function useSelection(
   const keepIfLeftOut = useCallback(
     (id: string) => {
       const target = state.bots.find((each) => each.id === id);
-      setKeptOpen(target && gatewayBotHidden(target, state.bots, showGatewayBot) ? id : null);
+      // Another task of the bot kept open keeps it, whatever the switch says now; only opening
+      // another bot lets it go.
+      setKeptOpen((kept) =>
+        kept === id || (target && gatewayBotHidden(target, state.bots, showGatewayBot)) ? id : null,
+      );
     },
     [state.bots, showGatewayBot],
   );

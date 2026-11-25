@@ -304,6 +304,55 @@ test.describe("the gateway's own bot", () => {
     await expect(railBot(page, "Otto")).toBeVisible();
   });
 
+  test("F-562: the gateway's own bot opened from a link stays kept through the switch, while the person opens another of its tasks", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_DISK}&panel=closed&gatewaybot=off&search=on`, "light");
+    const heading = page.getByRole("heading", { level: 1 });
+    // Opened from a search result, out of the rail's rule.
+    await page.keyboard.press("ControlOrMeta+K");
+    const palette = page.getByTestId("search-palette");
+    await palette.getByRole("combobox", { name: "Search" }).fill("coffee");
+    await palette.getByTestId("search-group-messages").getByRole("option").first().click();
+    await expect(heading).toHaveText("Caffeine cutoff time");
+    // The switch on, then another task of the same bot.
+    let settings = await advanced(page);
+    await settings.getByRole("switch", { name: "Show the gateway's own bot" }).click();
+    await page.keyboard.press("Escape");
+    const juniper = railBot(page, "Juniper").first();
+    if ((await juniper.getAttribute("aria-expanded")) !== "true") await juniper.click();
+    await page.getByTestId("task").filter({ hasText: "Heat pump" }).first().click();
+    await expect(heading).toHaveText(/Heat pump/);
+    // The switch off again: nobody opened another bot, so it stays.
+    settings = await advanced(page);
+    await settings.getByRole("switch", { name: "Show the gateway's own bot" }).click();
+    await page.keyboard.press("Escape");
+    await expect(heading).toHaveText(/Heat pump/);
+    await expect(railBot(page, "Juniper")).toBeVisible();
+  });
+
+  test("F-562: a new routine whose bot is deleted falls back to a bot the rail lists, never the gateway's own", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&routines=on&access=admin&gatewaybot=off`, "light");
+    const back = page.getByRole("button", { name: "Back to bots" });
+    if (await back.isVisible().catch(() => false)) await back.click();
+    await page.getByRole("button", { name: "Routines", exact: true }).click();
+    const view = page.getByTestId("routines-view");
+    await view.getByTestId("new-routine").click();
+    const editor = page.getByTestId("routine-editor");
+    await expect(editor.getByRole("heading", { name: "New routine" })).toBeVisible();
+    const select = editor.getByLabel("Bot");
+    await select.selectOption({ label: "Pip" });
+    // Pip deleted elsewhere while the draft is for it.
+    await setState(
+      page,
+      `(state) => ({ ...state, bots: state.bots.filter((bot) => bot.id !== "pip") })`,
+    );
+    await expect(select).toHaveValue("marlow");
+    await expect(select.locator("option", { hasText: "Juniper" })).toHaveCount(0);
+  });
+
   test("F-562: the open bot gives way when it leaves the rail, and a link to one of its tasks still opens that task, listed until another bot is opened", async ({
     page,
   }) => {
