@@ -59,8 +59,25 @@ The preview is built from the transcript's last message with text (`findLastMess
 Read from the source, not produced live:
 
 - **The review's run id** is `skill-workshop-review:` followed by `randomUUID()`, a lowercase UUID, so the note's whole key is `skill-workshop-notice:skill-workshop-review:<uuid>`.
-- **Rows the gateway writes into a transcript itself** (`appendAssistantMessageToSessionTranscript`) have `api: "openclaw-transcript"`, `provider: "openclaw"` and `model: "delivery-mirror"`. The note takes this path whether it is written directly or mirrored after a channel send. So does a message a bot sends with its message tool.
+- **Rows the gateway writes into a transcript itself** (`appendAssistantMessageToSessionTranscript`) have `api: "openclaw-transcript"`, `provider: "openclaw"` and `model: "delivery-mirror"`. The note takes this path whether it is written directly or mirrored after a channel send. So does a message a bot sends with its message tool, under the key the bot gives it (below).
 - **A reply cut off by `chat.abort`** is kept (`persistAbortedPartial`) under the key `<the chat.send key>:assistant`, a key the caller chose, with `api: "openai-responses"`, `provider: "openclaw"`, `model: "gateway-injected"` and an `openclawAbort` record.
+
+## A bot's message with the note's key
+
+Observed on the same kind of instance, also started with `--with-message-tool`. The `#send-keyed` directive makes the bot call its message tool with `{action: "send", message: "The Saturday hike moved to Sunday at 9.", idempotencyKey: "skill-workshop-notice:skill-workshop-review:5e1f0c2a-7b3d-4e8f-9a6b-1c2d3e4f5a6b"}`. The tool's schema does not declare `idempotencyKey`, but the tool takes the bot's own key when it gives one and makes one up only when it gives none. With no channel, the send is the bot's reply in its own task, and `chat.history` returns this row for it, next to the note a `#learn` turn's review wrote in another task:
+
+| Field                                | The bot's message                                       | The gateway's note                                      |
+| ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------- |
+| `role`                               | `assistant`                                             | `assistant`                                             |
+| `content`                            | one text block, the bot's words                         | one text block, "💾 Learned: …"                         |
+| `api`, `provider`, `model`           | `openclaw-transcript`, `openclaw`, `delivery-mirror`    | `openclaw-transcript`, `openclaw`, `delivery-mirror`    |
+| `usage`, `stopReason`                | all zero, `stop`                                        | all zero, `stop`                                        |
+| `idempotencyKey`, on the row         | `skill-workshop-notice:skill-workshop-review:<the bot's uuid>` | `skill-workshop-notice:skill-workshop-review:<a uuid>` |
+| `__openclaw.idempotencyKey`          | the same                                                | the same                                                |
+| `__openclaw.runId`                   | the bot's turn                                          | none                                                    |
+| `__openclaw` `id`, `seq`, `recordTimestampMs`, `transcriptPosition` | present                  | present                                                 |
+
+The only difference is the run. It does not mark the note. A send to a channel is mirrored into the task the channel's peer maps to (`mirrorDeliveredPayloads`), with the bot's key and no run, and the note in a channel's task is mirrored by the same code, also with no run (read from the source, not produced here: a development gateway has no channel). So a bot can write a row with every field the note has.
 
 ## Undo
 

@@ -47,17 +47,20 @@ import {
   openCheckClients,
   FAMILY_ROWS,
   IMAGE_CHECK,
+  SEND_KEYED_CHECK,
   SEND_PICTURE_CHECK,
   ownerAgent,
   runScenarioChecks,
   SEQ_GAP_NOTES,
   UNDECLARED_FIELDS,
 } from "../tools/dev-gateway/src/scenario-check.ts";
-import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, devGateway, listInstances } from "./global-setup.ts";
 import { cleanUp, recoverDeadRuns, saveRecord, type RunRecord } from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
+/** The checks that need the image instance, which offers the image and message tools. */
+const MESSAGE_TOOL_CHECKS = [IMAGE_CHECK, SEND_PICTURE_CHECK, SEND_KEYED_CHECK];
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 const reset = (name: string, runId: string) => void devGateway(name, "reset", "--run-id", runId);
@@ -73,11 +76,10 @@ async function main(): Promise<number> {
   const rulesRunId = newRunId();
   const imagesName = `${name}-images`;
   const imagesRunId = newRunId();
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this process's start time");
+  const self = ownIdentity();
   const record: RunRecord = {
     run,
-    runner: { pid: process.pid, identity: self.identity },
+    runner: { pid: process.pid, identity: self },
     instances: [
       { name, runId },
       { name: computerName, runId: computerRunId },
@@ -134,7 +136,7 @@ async function main(): Promise<number> {
       const { passed, failed, notes } = await runScenarioChecks(clients, {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
         providerUrl,
-        only: (check) => check.name !== IMAGE_CHECK && check.name !== SEND_PICTURE_CHECK,
+        only: (check) => !MESSAGE_TOOL_CHECKS.includes(check.name),
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
@@ -274,7 +276,7 @@ async function imageChecks(
   );
   try {
     const { passed, failed } = await runScenarioChecks(clients, {
-      only: (check) => check.name === IMAGE_CHECK || check.name === SEND_PICTURE_CHECK,
+      only: (check) => MESSAGE_TOOL_CHECKS.includes(check.name),
       images: true,
       messageTool: true,
     });

@@ -6,6 +6,12 @@
 // characters (`bounds.ts`).
 
 import type { OpenClawUpdate } from "./gateway-update.ts";
+import {
+  MAX_UPDATE_NOTE_CHARS,
+  MAX_UPDATE_REASON_CHARS,
+  type OpenClawUpdateState,
+  type UpdateRunView,
+} from "./openclaw-update.ts";
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import {
   MAX_ACCOUNTS,
@@ -630,7 +636,7 @@ const item = flagged<TranscriptItem>()({
     sender: NAME,
   }),
   idempotencyKey: ID,
-  skillNote: FLAG,
+  runless: FLAG,
   brief: FLAG,
   reportRunId: ID,
   steered: FLAG,
@@ -774,6 +780,29 @@ const nameProposal = object<NameProposal>()({
   stamp: object<NameProposal["stamp"]>()({ gatewayId: ID, target: NUMBER }),
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
+});
+const updateRun = object<UpdateRunView>()({
+  runId: ID,
+  gatewayId: ID,
+  mine: FLAG,
+  from: NAME,
+  to: NAME,
+  phase: ENUM,
+  outcome: ENUM,
+  reason: text(MAX_UPDATE_REASON_CHARS),
+  note: text(MAX_UPDATE_NOTE_CHARS),
+  reported: NAME,
+});
+const openclawUpdating = object<OpenClawUpdateState>()({
+  run: updateRun,
+  starting: FLAG,
+  blocked: object<NonNullable<OpenClawUpdateState["blocked"]>>()({
+    reason: text(MAX_UPDATE_REASON_CHARS),
+    note: text(MAX_UPDATE_NOTE_CHARS),
+  }),
+  error: text(MAX_UPDATE_NOTE_CHARS),
+  looking: FLAG,
+  lookFailed: FLAG,
 });
 const task = flagged<Task>()({
   key: ID,
@@ -1322,6 +1351,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   showGatewayBot: FLAG,
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
+  openclawUpdating,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

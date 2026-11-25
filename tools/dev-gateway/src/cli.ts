@@ -48,6 +48,7 @@ import {
   inUseRefusal,
   markerProblems,
   newRunId,
+  ownIdentity,
   ownership,
   prepareFreshState,
   processIdentity,
@@ -1305,8 +1306,7 @@ export async function start(
     await stopLocked(inst);
     const blocked = await deletionRefusal(inst);
     if (blocked) throw new StateInUseError(blocked);
-    const self = inst.identify(process.pid);
-    if (self.state !== "alive") throw new Error("could not determine this process's start time");
+    const selfIdentity = ownIdentity(inst.identify);
     // Ports are chosen and recorded in the new marker under one lock, so two
     // starts on this machine never take the same ones.
     const ports = await withLock(
@@ -1338,7 +1338,7 @@ export async function start(
             ...picked,
             checkout: inst.checkout,
             startPid: process.pid,
-            startIdentity: self.identity,
+            startIdentity: selfIdentity,
           },
           inst.identify,
         );
@@ -1879,10 +1879,7 @@ async function existingSessionKeys(inst: DevInstance, botId: string): Promise<Se
   return new Set((parsed.sessions ?? []).flatMap((row) => (row.key ? [row.key] : [])));
 }
 
-/**
- * Create a bot that is missing and write its instructions. `agents add` writes the gateway
- * config, so these run one at a time; the bots' identities follow in one write (`setIdentities`).
- */
+/** Create or restyle a bot. These commands write the gateway config, so they run one at a time. */
 async function configureBot(
   inst: DevInstance,
   bot: SeedBot,
@@ -1905,28 +1902,21 @@ async function configureBot(
   }
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
-}
-
-/**
- * Every seeded bot's name, emoji and theme, in one config write through the gateway. It leaves
- * the config exactly as `agents set-identity` for each bot did, in one round trip instead of four.
- */
-async function setIdentities(inst: DevInstance): Promise<void> {
-  const entries = Object.fromEntries(
-    SEED_BOTS.map((bot) => [
-      bot.id,
-      { identity: { name: bot.name, emoji: bot.emoji, theme: bot.theme } },
-    ]),
-  );
-  const { hash } = await callGateway<{ hash: string }>(inst, "config.get", {});
-  const patched = await callGateway<{ ok?: boolean }>(inst, "config.patch", {
-    raw: JSON.stringify({ agents: { entries } }),
-    baseHash: hash,
-  });
-  if (patched.ok !== true)
-    throw new Error(
-      `the bots' identities were not saved: ${JSON.stringify(patched).slice(0, 300)}`,
-    );
+  // One command per bot, not one `config.patch` for all four: after that patch, two of four
+  // iPhone jobs on GitHub's runner timed out on the next gateway call (#571).
+  await must(inst, [
+    "agents",
+    "set-identity",
+    "--agent",
+    bot.id,
+    "--name",
+    bot.name,
+    "--emoji",
+    bot.emoji,
+    "--theme",
+    bot.theme,
+    "--json",
+  ]);
 }
 
 type AgentRunOutput = {
@@ -2084,7 +2074,6 @@ export async function seed(inst: DevInstance): Promise<void> {
   const agents = new Map(rows.map((row) => [row.id, row]));
   console.log("Seeding sample bots and conversations");
   for (const bot of SEED_BOTS) await configureBot(inst, bot, agents);
-  await setIdentities(inst);
   // Configuring the bots rewrote the config; it must still keep every guarantee.
   assertSandboxed(inst, instancePorts(inst));
   await assertExecDenied(inst);

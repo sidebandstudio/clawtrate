@@ -203,10 +203,17 @@ const LOCAL_IDENTITY =
 const SYSTEM_PS = ["/bin/ps", "/usr/bin/ps"];
 
 /**
+ * How long one `ps` may take. Locally it answers in well under a second, and in up to 2 s at a
+ * load average of 280. On GitHub's Xcode 27 runner, with a Simulator booting beside it, one took
+ * more than the 5 s this used to allow (#582).
+ */
+const PS_TIMEOUT_MS = 15_000;
+
+/**
  * A process lookup that runs the first of `candidates` that exists: the
  * process's start time from `ps`, which together with its PID identifies it.
  */
-export function psIdentity(candidates: readonly string[]): Identify {
+export function psIdentity(candidates: readonly string[], timeoutMs = PS_TIMEOUT_MS): Identify {
   return (pid) => {
     if (!validPid(pid)) return unknown(`${String(pid)} is not a process id this tool checks`);
     const absent = kernelSaysAbsent(pid);
@@ -217,7 +224,7 @@ export function psIdentity(candidates: readonly string[]): Identify {
     if (ps === undefined) return unknown("the system's ps was not found");
     const result = spawnSync(ps, ["-o", "stat=", "-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
-      timeout: 5000,
+      timeout: timeoutMs,
       // A fixed environment, so every caller reads the same start time: English day and month
       // names in the C locale, in UTC whatever the caller's time zone.
       env: { LC_ALL: "C", TZ: "UTC" },
@@ -245,6 +252,30 @@ export function psIdentity(candidates: readonly string[]): Identify {
 
 /** The system's own `ps`, run by its fixed path. */
 export const processIdentity: Identify = psIdentity(SYSTEM_PS);
+
+/** How many times a process looks itself up before it gives up. */
+const OWN_LOOKUPS = 3;
+
+/**
+ * This process's own identity. The process is alive by definition, so a lookup that gives no
+ * answer, such as a slow `ps`, is asked again, a few times. A lookup is never taken for an answer
+ * it did not give: when none answers, this throws with each one's reason.
+ */
+export function ownIdentity(identify: Identify = processIdentity, pauseMs = 2_000): string {
+  const reasons: string[] = [];
+  for (let attempt = 1; attempt <= OWN_LOOKUPS; attempt += 1) {
+    const found = identify(process.pid);
+    if (found.state === "alive") return found.identity;
+    if (found.state === "exited") {
+      reasons.push(`it looked ${found.how === "zombie" ? "like a zombie" : "absent"}`);
+      break;
+    }
+    reasons.push(found.reason);
+    if (attempt < OWN_LOOKUPS)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pauseMs);
+  }
+  throw new Error(`could not determine this process's start time: ${reasons.join("; ")}`);
+}
 
 /** "none": not recorded. "unknown": not determinable, so treated as possibly running. */
 export type ProcessState = "none" | "dead" | "alive" | "unknown";
