@@ -21,11 +21,10 @@ export const GUIDES_FILE = "AGENTS.md";
  */
 export const GUIDES_VERSION = 1;
 /**
- * The SHA-256 of this version's text between the markers. A test holds the text to it, so the
- * text can't change without the version changing with it.
+ * The first 16 hex digits of the SHA-256 of this version's text between the markers. A test
+ * holds the text to it, so the text can't change without the version changing with it.
  */
-export const GUIDES_PINNED_SHA256 =
-  "3b11747ce00c0e535b052b5affbc460bc65e7c5920bf9c0d38d02ac194e48347";
+export const GUIDES_PINNED_SHA256 = "3b11747ce00c0e53";
 /**
  * Where OpenClaw 2026.10.6 starts cutting a long `AGENTS.md` out of a prompt by default
  * (`bootstrapMaxChars`). Clawtrate doesn't read the gateway's own setting, so it says "may".

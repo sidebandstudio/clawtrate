@@ -536,8 +536,10 @@ describe("files Clawtrate leaves alone", () => {
   });
 
   it("pins the text to its version: changing the text means a new version", () => {
-    expect(GUIDES_SECTION.split("\n")[0]).toBe(
-      `<!-- clawtrate:guides begin v${GUIDES_VERSION} sha256=${GUIDES_PINNED_SHA256} -->`,
+    expect(GUIDES_SECTION.split("\n")[0]).toMatch(
+      new RegExp(
+        `^<!-- clawtrate:guides begin v${GUIDES_VERSION} sha256=${GUIDES_PINNED_SHA256}[a-f0-9]{48} -->$`,
+      ),
     );
     expect(GUIDES_VERSION).toBe(1);
   });
