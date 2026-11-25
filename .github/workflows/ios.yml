@@ -60,6 +60,17 @@ jobs:
       - run: |
           pattern=$(node apps/mobile/simulator/jobs.ts ${{ matrix.job }})
           pnpm mobile:check --bail=1 --reporter=verbose --testNamePattern="$pattern"
+      # What a failed check saw: Maestro's screenshots and screen hierarchies, kept for a few
+      # days. Only those: each step's flow, command list and log hold the token it typed.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-maestro-${{ matrix.job }}
+          path: |
+            apps/mobile/build/maestro/**/screenshots/*.png
+            apps/mobile/build/maestro/**/screen-hierarchy/*.json
+          include-hidden-files: true
+          retention-days: 3
 
   # A scheduled run's failure shows only in the Actions tab, so it is kept in one open issue,
   # found by its label, until a later scheduled run passes. This is its own job so that the
