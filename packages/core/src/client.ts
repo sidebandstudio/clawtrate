@@ -1427,13 +1427,24 @@ export class ClawtrateClient {
     otherTools: 0,
   };
   /**
-   * Reads and writes of the gateway names, one at a time and in order: each rename starts from
-   * the list the one before it left, so two quick renames both keep their names.
+   * Each preference's reads and writes, one at a time and in the order they were asked: a
+   * storage write doesn't promise to finish before a later one, so two quick changes could keep
+   * and show the older. Each rename starts from the names the one before it left.
    */
-  private gatewayNameWork: Promise<unknown> = Promise.resolve();
-  private queueGatewayNames<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.gatewayNameWork.then(work);
-    this.gatewayNameWork = run.catch(() => {});
+  private readonly preferenceWork: Record<
+    "channelChats" | "gatewayNames" | "otherTools",
+    Promise<unknown>
+  > = {
+    channelChats: Promise.resolve(),
+    gatewayNames: Promise.resolve(),
+    otherTools: Promise.resolve(),
+  };
+  private inOrder<T>(
+    preference: keyof ClawtrateClient["preferenceWork"],
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const run = this.preferenceWork[preference].then(work);
+    this.preferenceWork[preference] = run.catch(() => {});
     return run;
   }
   /**
@@ -2023,7 +2034,7 @@ export class ClawtrateClient {
         // In the names' queue, so a rename sent meanwhile starts from what was read. A stop ends
         // the wait, so a read that never answers can't hold the queue for later starts and
         // renames. A failed or abandoned read is null: the names already held stay.
-        const names = await this.queueGatewayNames(() =>
+        const names = await this.inOrder("gatewayNames", () =>
           this.raceStop<GatewayNames | null>(
             stops,
             async () => {
@@ -7426,7 +7437,7 @@ export class ClawtrateClient {
    */
   async nameGateway(gatewayUrl: string, name: string): Promise<void> {
     if (this.state.connection.gatewayUrl !== gatewayUrl) throw new GatewayChangedError();
-    return this.queueGatewayNames(async () => {
+    return this.inOrder("gatewayNames", async () => {
       const next = withGatewayName(this.gatewayNames, gatewayUrl, name);
       await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
       this.preferenceSets.gatewayNames += 1;
@@ -7462,12 +7473,14 @@ export class ClawtrateClient {
    * held, so the list changes at once, with nothing read again; a bot's main task always shows.
    */
   async setShowChannelChats(on: boolean): Promise<void> {
-    // Kept first: a choice the host could not keep is not taken.
-    await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
-    this.preferenceSets.channelChats += 1;
-    this.showChannelChats = on;
-    this.store.update((state) => ({ ...state, showChannelChats: on }));
-    this.publishTasks();
+    return this.inOrder("channelChats", async () => {
+      // Kept first: a choice the host could not keep is not taken.
+      await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
+      this.preferenceSets.channelChats += 1;
+      this.showChannelChats = on;
+      this.store.update((state) => ({ ...state, showChannelChats: on }));
+      this.publishTasks();
+    });
   }
 
   /**
@@ -7476,11 +7489,13 @@ export class ClawtrateClient {
    * start, and applied to the rows already held, as `setShowChannelChats` is.
    */
   async setShowOtherToolSessions(on: boolean): Promise<void> {
-    await this.host.storage.set(OTHER_TOOLS_KEY, String(on));
-    this.preferenceSets.otherTools += 1;
-    this.showOtherToolSessions = on;
-    this.store.update((state) => ({ ...state, showOtherToolSessions: on }));
-    this.publishTasks();
+    return this.inOrder("otherTools", async () => {
+      await this.host.storage.set(OTHER_TOOLS_KEY, String(on));
+      this.preferenceSets.otherTools += 1;
+      this.showOtherToolSessions = on;
+      this.store.update((state) => ({ ...state, showOtherToolSessions: on }));
+      this.publishTasks();
+    });
   }
 
   private turnLimitReached(key: string, runId: string): void {

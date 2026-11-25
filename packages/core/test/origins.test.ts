@@ -285,6 +285,26 @@ describe("F-563: Show sessions from other tools", () => {
     client.stop();
   });
 
+  it("F-563: two quick changes keep the last one asked, in storage and in the list, when the first write finishes last", async () => {
+    const { client, storage, keys } = await connected();
+    const set = storage.set.bind(storage);
+    const first = deferred<void>();
+    let writes = 0;
+    storage.set = async (key, value) => {
+      if (key === "show-other-tool-sessions" && (writes += 1) === 1) await first.promise;
+      return set(key, value);
+    };
+    const on = client.setShowOtherToolSessions(true);
+    const off = client.setShowOtherToolSessions(false);
+    await sleep(20);
+    first.resolve();
+    await Promise.all([on, off]);
+    expect(storage.data.get("show-other-tool-sessions")).toBe("false");
+    expect(client.state.showOtherToolSessions).toBe(false);
+    expect(keys()).toEqual([CLAWTRATE, LEGACY, MAIN]);
+    client.stop();
+  });
+
   it("F-563: a sessions.changed event that records another tool moves a task out of the list, and back when shown", async () => {
     const { client, gateway, keys } = await connected();
     gateway.emit("sessions.changed", {
