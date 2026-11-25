@@ -119,9 +119,6 @@ describe("bot voice", () => {
     }, true);
     expect(asked).toEqual([["clawtrate-voice.set", { on: true }]]);
     expect(read).toMatchObject({ status: "read", on: true });
-    // The where-you-live guide's own setting names its section.
-    await setVoice(async (method, params) => (asked.push([method, params]), newer), false, "where");
-    expect(asked.at(-1)).toEqual(["clawtrate-voice.set", { section: "where", on: false }]);
   });
 
   it("asks the gateway to load an older plugin again, and leaves a current one alone", async () => {
@@ -181,12 +178,11 @@ describe("an older voice plugin, after a connect", () => {
     try {
       await until(() => reloads.length === 1);
       expect(reloads).toEqual([{ plugins: [{ pluginId: "clawtrate-voice" }] }]);
-      await until(async () => (await client.readBotVoice()).status === "read");
       expect(await client.readBotVoice()).toMatchObject({ where: { on: true } });
       // A reconnect finds it current: nothing more is asked.
       gateway.dropAll();
       await until(() => client.state.connection.status === "connected");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
       expect(reloads).toHaveLength(1);
     } finally {
       client.stop();
@@ -200,7 +196,7 @@ describe("an older voice plugin, after a connect", () => {
       await until(() => reloads.length === 1);
       gateway.dropAll();
       await until(() => client.state.connection.status === "connected");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
       expect(reloads).toHaveLength(1);
       expect(await client.readBotVoice()).toMatchObject({ version: "0.1.0", where: null });
     } finally {
@@ -216,7 +212,7 @@ describe("an older voice plugin, after a connect", () => {
       const { gateway, reloads } = reloadingGateway(newer);
       const { client } = await openTask({ gateway, ...options });
       try {
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
         expect(reloads).toEqual([]);
       } finally {
         client.stop();

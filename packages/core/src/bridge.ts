@@ -148,11 +148,8 @@ export type BridgeCommand =
   | { type: "setTurnLimit"; minutes: number }
   /** Whether the voice guide is added to the bots' prompts, as the gateway's voice plugin reads it back. */
   | { type: "readBotVoice" }
-  /**
-   * Turn the voice guide, or with `section: "where"` the where-you-live guide, on or off for the
-   * gateway's bots; needs operator.write.
-   */
-  | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp; section?: "voice" | "where" }
+  /** Turn the voice guide on or off for the gateway's bots; needs operator.write. */
+  | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
   /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
@@ -1427,17 +1424,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "readBotVoice" };
     case "setBotVoice":
       if (typeof command.on !== "boolean") throw new Error("invalid voice setting");
-      if (
-        command.section !== undefined &&
-        command.section !== "voice" &&
-        command.section !== "where"
-      )
-        throw new Error("invalid voice setting");
       return {
         type: "setBotVoice",
         on: command.on,
         stamp: gatewayStampOf(command.stamp),
-        ...(command.section === "where" ? { section: "where" as const } : {}),
       };
     case "setShowChannelChats":
       if (typeof command.on !== "boolean") throw new Error("invalid channel chats setting");
@@ -2249,7 +2239,7 @@ class ViewerSession implements BridgeSession {
       case "readBotVoice":
         return client.readBotVoice();
       case "setBotVoice":
-        return client.setBotVoice(command.on, command.stamp, owner, command.section);
+        return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":
         return client.setShowChannelChats(command.on);
       case "setShowOtherToolSessions":

@@ -10,7 +10,6 @@ import {
   VOICE_CHANGED_EVENT,
   VOICE_GET,
   type BotVoiceAnswer,
-  type VoiceSection,
 } from "./voice.ts";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
@@ -6866,7 +6865,6 @@ export class ClawtrateClient {
     on: boolean,
     stamp: GatewayStamp,
     owner: object | null = null,
-    section: VoiceSection = "voice",
   ): Promise<BotVoiceAnswer> {
     if (this.options.readOnly || !this.state.connection.canWrite)
       throw new Error("Changing how the bots talk needs write access.");
@@ -6889,7 +6887,6 @@ export class ClawtrateClient {
           ? protocol.request(method, params)
           : Promise.reject(new Error(CONNECTION_CHANGED)),
       on,
-      section,
     );
     return { ...voice, stamp };
   }

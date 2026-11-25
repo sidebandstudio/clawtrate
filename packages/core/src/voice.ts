@@ -139,18 +139,9 @@ export async function readVoice(request: Request, advertised: boolean | null): P
   }
 }
 
-/** Which guide a change is for: the voice guide, or the where-you-live guide. */
-export type VoiceSection = "voice" | "where";
-
-/** Turn a guide on or off; answers with the setting as the gateway stored it. */
-export async function setVoice(
-  request: Request,
-  on: boolean,
-  section: VoiceSection = "voice",
-): Promise<BotVoice> {
-  return parseVoice(
-    await request("clawtrate-voice.set", section === "voice" ? { on } : { section, on }),
-  );
+/** Turn it on or off; answers with the setting as the gateway stored it. */
+export async function setVoice(request: Request, on: boolean): Promise<BotVoice> {
+  return parseVoice(await request("clawtrate-voice.set", { on }));
 }
 
 /**

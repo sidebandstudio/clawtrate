@@ -562,7 +562,7 @@ function BotVoicePane({
         </div>
       </div>
     );
-  const change = (on: boolean, section: "voice" | "where" = "voice") => {
+  const change = (on: boolean) => {
     // Bound to the gateway whose setting is on screen: the host refuses it for any other.
     const asked = { key: readKey, stamp: voice.stamp };
     setPending(asked);
@@ -571,16 +571,14 @@ function BotVoicePane({
     // Superseded once the pane closes or a newer read is asked for: its answer then neither
     // replaces that read nor is announced.
     const current = () => mounted.current && keyNow.current === asked.key;
-    void bridge.invoke({ type: "setBotVoice", on, stamp: asked.stamp, section }).then(
+    void bridge.invoke({ type: "setBotVoice", on, stamp: asked.stamp }).then(
       (read) => {
         if (!mounted.current) return;
         setPending((now) => (now === asked ? null : now));
         if (!current()) return;
         setVoice(read);
         setReadsDone(asked.key);
-        if (read.status !== "read") return;
-        if (section === "voice") announce(`Bot voice ${read.on ? "on" : "off"}`);
-        else if (read.where) announce(`Task guide ${read.where.on ? "on" : "off"}`);
+        if (read.status === "read") announce(`Bot voice ${read.on ? "on" : "off"}`);
       },
       (failure: unknown) => {
         if (!mounted.current) return;
@@ -603,21 +601,21 @@ function BotVoicePane({
       },
     );
   };
+  const onOff = voice.on ? "On" : "Off";
   const settings = voice.hookSettings;
-  const where = voice.where;
-  const stateLine = (on: boolean, changedAt: number | null) =>
-    confirmed
-      ? `${on ? "On" : "Off"}, as the gateway reads it${changedAt === null ? ", by default" : ""}.`
-      : connected
-        ? `${on ? "On" : "Off"} when last read. Checking with the gateway…`
-        : `${on ? "On" : "Off"} when last read. Not connected, so it isn't confirmed.`;
   return (
     <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
       <div className="facts">
         <div className="b-row">
           <span className="b-row-main">
             <span id="bot-voice-label">Bot voice</span>
-            <small data-testid="bot-voice-state">{stateLine(voice.on, voice.changedAt)}</small>
+            <small data-testid="bot-voice-state">
+              {confirmed
+                ? `${onOff}, as the gateway reads it${voice.changedAt === null ? ", by default" : ""}.`
+                : connected
+                  ? `${onOff} when last read. Checking with the gateway…`
+                  : `${onOff} when last read. Not connected, so it isn't confirmed.`}
+            </small>
           </span>
           <button
             type="button"
@@ -643,38 +641,7 @@ function BotVoicePane({
         and kindly, with no em dashes. Turned off, each bot talks the way its own instructions say.
         {!canWrite && " Changing it needs write access."}
       </p>
-      {where ? (
-        <>
-          <div className="facts">
-            <div className="b-row">
-              <span className="b-row-main">
-                <span id="bot-where-label">Task guide</span>
-                <small data-testid="bot-where-state">{stateLine(where.on, where.changedAt)}</small>
-              </span>
-              <button
-                type="button"
-                className="b-switch"
-                role="switch"
-                aria-checked={where.on}
-                aria-labelledby="bot-where-label"
-                aria-describedby="bot-where-note"
-                aria-busy={saving || undefined}
-                aria-disabled={saving || undefined}
-                disabled={!canWrite || !confirmed}
-                data-testid="bot-where-switch"
-                onClick={() => {
-                  if (!saving) change(!where.on, "where");
-                }}
-              />
-            </div>
-          </div>
-          <p className="b-hint" id="bot-where-note">
-            While it's on, a short guide in the same place tells each bot what Clawtrate's words
-            mean, and that "put this in a task" means starting a task of its own, listed under its
-            name. Turned off, the bots aren't told.
-          </p>
-        </>
-      ) : (
+      {!voice.where && (
         <div className="b-note" data-tone="warn" data-testid="bot-where-old">
           <div>
             <p>
@@ -744,17 +711,6 @@ function BotVoicePane({
           <pre className="bot-voice-guide">{voice.guide}</pre>
         </div>
       </details>
-      {where && (
-        <details className="b-disclosure" data-testid="bot-where-guide">
-          <summary>
-            <ChevronIcon />
-            What the task guide tells the bots
-          </summary>
-          <div className="b-disclosure-body">
-            <pre className="bot-voice-guide">{where.guide}</pre>
-          </div>
-        </details>
-      )}
     </div>
   );
 }

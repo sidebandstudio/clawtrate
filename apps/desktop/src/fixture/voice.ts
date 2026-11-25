@@ -10,7 +10,6 @@
 //   voice=unclear   the gateway asks for admin to read it, and sent no list of methods
 //   voice=fail      the read fails
 //   voice=old       the plugin is 0.1.0, from before the where-you-live guide
-//   where=off       a person turned the where-you-live guide off
 //   voicesave=fail  a change is refused
 //   voicesave=lost  a change is stored, and its answer is lost
 //   voicesave=slow  a change is stored, and its answer waits for `window.voiceSaveRelease`;
@@ -34,11 +33,10 @@ import {
 import guide from "../../../../plugins/clawtrate-voice/voice.md?raw";
 import whereGuide from "../../../../plugins/clawtrate-voice/where.md?raw";
 
-export type VoiceParams = { voice: string | null; save: string | null; where?: string | null };
+export type VoiceParams = { voice: string | null; save: string | null };
 export const voiceParams = (params: URLSearchParams): VoiceParams => ({
   voice: params.get("voice"),
   save: params.get("voicesave"),
-  where: params.get("where"),
 });
 
 export function voiceCommands(
@@ -64,14 +62,7 @@ export function voiceCommands(
     lastRanAt: params.voice === "blocked" || params.voice === "bothoff" ? null : now - 5 * 60_000,
     guide: guide.trim(),
     version: params.voice === "old" ? "0.1.0" : "0.2.0",
-    where:
-      params.voice === "old"
-        ? null
-        : {
-            on: params.where !== "off",
-            changedAt: params.where === "off" ? now - 60 * 60_000 : null,
-            guide: whereGuide.trim(),
-          },
+    where: params.voice === "old" ? null : { on: true, changedAt: null, guide: whereGuide.trim() },
   };
   const seed: BotVoice =
     params.voice === "missing"
@@ -86,12 +77,9 @@ export function voiceCommands(
   // The setting each gateway holds, by its identity.
   const voices = new Map<string | null, BotVoice>();
   const held = (gatewayId: string | null) => voices.get(gatewayId) ?? seed;
-  const store = (gatewayId: string | null, on: boolean, section: "voice" | "where" = "voice") => {
+  const store = (gatewayId: string | null, on: boolean) => {
     const voice = held(gatewayId);
-    if (voice.status !== "read") return;
-    if (section === "voice") voices.set(gatewayId, { ...voice, on, changedAt: Date.now() });
-    else if (voice.where)
-      voices.set(gatewayId, { ...voice, where: { ...voice.where, on, changedAt: Date.now() } });
+    if (voice.status === "read") voices.set(gatewayId, { ...voice, on, changedAt: Date.now() });
   };
   // `window.voiceServerSet(on)`: another device changes the setting on the connected gateway.
   (globalThis as { voiceServerSet?: (on: boolean) => void }).voiceServerSet = (on) =>
@@ -127,7 +115,7 @@ export function voiceCommands(
     if (!sameStamp(command.stamp, stampNow()))
       throw new Error("This change was made for another gateway, so nothing was sent.");
     if (params.save === "fail") throw new Error("missing scope: operator.write");
-    store(command.stamp.gatewayId, command.on, command.section);
+    store(command.stamp.gatewayId, command.on);
     const answer = { ...held(command.stamp.gatewayId), stamp: command.stamp };
     if (params.save === "slow" || params.save === "slowlost") {
       await until(() => window.voiceSaveRelease === true);
