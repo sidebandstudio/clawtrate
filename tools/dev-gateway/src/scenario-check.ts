@@ -1285,13 +1285,17 @@ function spawnCall(
               cleanup: "keep",
               publicRead: false,
               label: args.label,
-              // The person, since a person's turn in their own task started it.
-              owner: (value: unknown, at: string) =>
-                same(
-                  [rec(value).type, rec(value).id, typeof rec(value).label],
-                  ["human", "gateway-owner", "string"],
-                  at,
-                ),
+              // The person, since a person's turn in their own task started it. Its label is the
+              // gateway host account's full name (macOS `id -F`, Linux's passwd comment), left out
+              // when the account has none other than its login, as on CI's Linux runner.
+              owner: (value: unknown, at: string) => {
+                same([rec(value).type, rec(value).id], ["human", "gateway-owner"], at);
+                const label = rec(value).label;
+                expect(
+                  label === undefined || (typeof label === "string" && label.length > 0),
+                  `${at}.label: absent or a name, got ${JSON.stringify(label)}`,
+                );
+              },
             },
       )(d, where);
     },
