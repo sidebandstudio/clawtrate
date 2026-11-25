@@ -11,7 +11,7 @@ pnpm visual:linux  # screenshots and behaviour of the fixture mode, in the pinne
 pnpm mobile:check  # on a Mac, after pnpm mobile:build: the iOS app in the Simulator (see ios.md)
 ```
 
-The memory plugin tests in `pnpm test` require OpenClaw 2026.10.6. Install it globally or set `OPENCLAW_PACKAGE_DIR` to the directory of that installed package.
+The memory plugin's tests and the T3 Code naming test in `pnpm test` read OpenClaw 2026.10.6's own package from `OPENCLAW_PACKAGE_DIR`, and fail without it. Point it at a copy of the tests' own, for example `npm install --prefix <folder> --ignore-scripts openclaw@2026.10.6` and then `OPENCLAW_PACKAGE_DIR=<folder>/node_modules/openclaw`. No test looks for a global OpenClaw: on a computer that runs its own gateway, that is the person's own install. `test/no-machine-openclaw.test.ts` fails if a test or tool starts looking for one. With only `OPENCLAW_PACKAGE_DIR` set, `apps/desktop/test` runs nothing of the computer's own OpenClaw, and its local gateway checks skip. Set `OPENCLAW_BIN` and `CLAWTRATE_LOCAL_GATEWAY=1` for them only when `OPENCLAW_BIN` is the program of that same copy (`<folder>/node_modules/.bin/openclaw`).
 
 The unit tests include the SSH transport's, some against an `sshd` they start themselves ([The SSH transport's tests](ssh.md)).
 

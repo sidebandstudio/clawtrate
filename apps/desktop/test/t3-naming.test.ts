@@ -3,7 +3,6 @@
 // development gateway runs). The effective names a running attempt captured
 // and the ones a later `tools.effective` reports are both made by it, so the
 // cases where they differ are the gateway's own.
-import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,14 +22,15 @@ type BuildSafeToolName = (params: {
   reservedNames: Set<string>;
 }) => string;
 
-/** The installed OpenClaw package: `OPENCLAW_PACKAGE_DIR`, or the global one. */
+/**
+ * The OpenClaw package set aside for the tests, at `OPENCLAW_PACKAGE_DIR`. Never a global one: on a
+ * computer that runs its own gateway, that is the person's own OpenClaw (#597).
+ */
 function openclawPackage(): string {
-  const dir =
-    process.env.OPENCLAW_PACKAGE_DIR ??
-    join(execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(), "openclaw");
-  if (!existsSync(join(dir, "package.json"))) {
+  const dir = process.env.OPENCLAW_PACKAGE_DIR ?? "";
+  if (!dir || !existsSync(join(dir, "package.json"))) {
     throw new Error(
-      `OpenClaw is not installed at ${dir}; the development gateway needs it. Set OPENCLAW_PACKAGE_DIR.`,
+      `OpenClaw is not installed at ${dir || "OPENCLAW_PACKAGE_DIR"}; the development gateway needs it. Set OPENCLAW_PACKAGE_DIR.`,
     );
   }
   return dir;
