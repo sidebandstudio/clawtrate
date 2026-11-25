@@ -12,7 +12,9 @@ import {
   GUIDES_FILE,
   GUIDES_SECTION,
 } from "../../../packages/core/src/guides.ts";
+import { mapSessionRow } from "../../../packages/core/src/mapping.ts";
 import { SYSTEM_PROMPT_PATH } from "./fake-provider.ts";
+import { HAND_OFF } from "./scenarios.ts";
 import type { OperatorSession } from "./operator.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -33,12 +35,17 @@ export type GuideHarness = {
 
 /** The bot whose file the checks change. */
 const BOT = "pip";
+/** The bot that starts a task of its own in the check that needs one. */
+const PARTNER = "marlow";
 
 const count = (text: string, part: string) => text.split(part).length - 1;
 
-async function readFile(h: GuideHarness): Promise<{ content: string; hash: string }> {
+async function readFile(
+  h: GuideHarness,
+  agentId = BOT,
+): Promise<{ content: string; hash: string }> {
   const file = rec(
-    rec(await h.admin.request("agents.files.get", { agentId: BOT, name: GUIDES_FILE })).file,
+    rec(await h.admin.request("agents.files.get", { agentId, name: GUIDES_FILE })).file,
   );
   expect(typeof file.content === "string" && typeof file.hash === "string", "no AGENTS.md");
   return { content: file.content as string, hash: file.hash as string };
@@ -133,6 +140,68 @@ export const GUIDE_CHECKS: GuideCheck[] = [
         once(await promptOf(h, key.replace(/:run:[^:]+$/, "")), "the routine's prompt");
       } finally {
         await h.admin.request("cron.remove", { id });
+      }
+    },
+  },
+  {
+    // Marlow, not Pip: the scenario checks already gave Pip a task with `#hand-off`'s label, and a
+    // bot's labels are its own and unique. Marlow's file is put back as it was at the end.
+    name: "a task a bot starts carries the guide in its own first turn, and is the task the person opens",
+    async run(h) {
+      const request = (method: string, params: unknown) => h.admin.request(method, params);
+      const original = await readFile(h, PARTNER);
+      try {
+        const { errors } = await applyGuidesChange(request, null, {
+          action: "add",
+          bots: [PARTNER],
+          newBots: false,
+        });
+        expect(errors.length === 0, `the write failed: ${errors.join("; ")}`);
+        const key = `agent:${PARTNER}:guides-hand-off-${randomUUID().slice(0, 8)}`;
+        await h.admin.request("sessions.messages.subscribe", { key });
+        const sent = await h.admin.send(key, "#hand-off");
+        await h.admin.terminal(String(sent.runId));
+        // The task it started, as Clawtrate lists a bot's tasks.
+        const listed = rec(
+          await h.admin.request("sessions.list", {
+            excludeCron: true,
+            excludeSubagents: true,
+            includeDerivedTitles: true,
+            includeLastMessage: true,
+          }),
+        );
+        const rows = (Array.isArray(listed.sessions) ? listed.sessions : []).map(rec);
+        const row = rows.find((each) => each.spawnedBy === key && each.label === HAND_OFF.label);
+        expect(row, "the started task is not in the task list");
+        const child = String(row.key);
+        // The task the sidebar shows for it is this one: under Marlow, titled by its label.
+        const task = mapSessionRow(row);
+        expect(
+          task?.key === child && task.botId === PARTNER && task.title === HAND_OFF.label,
+          `the sidebar's task for it is ${JSON.stringify(task && [task.key, task.botId, task.title])}`,
+        );
+        // Its own first turn, the brief, carried each guide exactly once.
+        once(await promptOf(h, child), "the started task's prompt");
+        // Its end reports back in the conversation it came from: wait for that before going on.
+        const deadline = Date.now() + 60_000;
+        for (;;) {
+          const history = rec(
+            await h.admin.request("chat.history", { sessionKey: key, limit: 50 }),
+          );
+          const said = JSON.stringify(history.messages ?? []);
+          if (said.includes(`${HAND_OFF.label} finished.`)) break;
+          expect(Date.now() < deadline, "the started task's end didn't report back in 60 seconds");
+          await sleep(1000);
+        }
+      } finally {
+        const now = await readFile(h, PARTNER).catch(() => null);
+        if (now && now.content !== original.content)
+          await h.admin.request("agents.files.set", {
+            agentId: PARTNER,
+            name: GUIDES_FILE,
+            content: original.content,
+            expectedHash: now.hash,
+          });
       }
     },
   },
