@@ -7,7 +7,7 @@
 import type { SentAttachment } from "@clawtrate/core";
 import { useEffect, useRef, useState } from "react";
 import { Image, Modal, Pressable, StyleSheet, View, type ViewStyle } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRuntime } from "../runtime.ts";
 import {
   drawsAsPicture,
@@ -113,19 +113,51 @@ function PictureViewer({
   onClose: () => void;
 }) {
   const { c } = useTheme();
+  const inset = useSafeAreaInsets();
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <SafeAreaView
-        edges={["top", "bottom", "left", "right"]}
+      <View
         accessibilityViewIsModal
         testID="picture-viewer"
-        style={{ flex: 1 }}
+        style={{
+          flex: 1,
+          paddingTop: inset.top,
+          paddingBottom: inset.bottom,
+          paddingLeft: inset.left,
+          paddingRight: inset.right,
+        }}
       >
         <Pressable
           accessible={false}
           onPress={onClose}
           style={[StyleSheet.absoluteFill, { backgroundColor: c.bg, opacity: 0.96 }]}
         />
+        {/* Close at the top, inside the safe area: the system's bar takes taps above it. */}
+        <View
+          pointerEvents="box-none"
+          style={{ alignItems: "flex-end", paddingTop: 12, paddingHorizontal: 16 }}
+        >
+          <Pressable
+            testID="picture-viewer-close"
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            onPress={onClose}
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 6,
+              paddingVertical: 8,
+              paddingHorizontal: 12,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: c.border,
+              backgroundColor: pressed ? c["bg-selected"] : c.bg,
+            })}
+          >
+            <CloseIcon color={c.text} />
+            <Txt size={S["text-sm"]}>Close</Txt>
+          </Pressable>
+        </View>
         <View
           pointerEvents="box-none"
           style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16 }}
@@ -143,30 +175,7 @@ function PictureViewer({
             }}
           />
         </View>
-        <Pressable
-          testID="picture-viewer-close"
-          accessibilityRole="button"
-          accessibilityLabel="Close"
-          onPress={onClose}
-          style={({ pressed }) => ({
-            position: "absolute",
-            top: 12,
-            right: 16,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 6,
-            paddingVertical: 8,
-            paddingHorizontal: 12,
-            borderRadius: 999,
-            borderWidth: 1,
-            borderColor: c.border,
-            backgroundColor: pressed ? c["bg-selected"] : c.bg,
-          })}
-        >
-          <CloseIcon color={c.text} />
-          <Txt size={S["text-sm"]}>Close</Txt>
-        </Pressable>
-      </SafeAreaView>
+      </View>
     </Modal>
   );
 }
