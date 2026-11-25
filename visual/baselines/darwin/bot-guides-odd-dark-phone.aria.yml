@@ -25,8 +25,8 @@
     - list "How bots work in Clawtrate":
       - listitem: Juniper Added
       - listitem:
-        - checkbox "Marlow An older version. Tick it and press Add to bring it up to date." [checked]
-        - text: Marlow An older version. Tick it and press Add to bring it up to date.
+        - checkbox "Marlow An older version. Add brings it up to date." [checked]
+        - text: Marlow An older version. Add brings it up to date.
       - listitem:
         - text: Otto Its markers aren't as Clawtrate wrote them, so Clawtrate can't tell where its section ends. Edit the file, or remove the section's text yourself.
         - button "Show"
