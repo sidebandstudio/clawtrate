@@ -35,6 +35,7 @@ export const JOBS: readonly (readonly string[])[] = [
     "on iPhone, a paired gateway that repeats", // 15
     "on iPhone, a long bot name", // 23
     "F-017:",
+    "F-557:", // not yet run there; about 6 on an M1 Max, which is four to five times as fast
   ],
 ];
 
@@ -53,6 +54,7 @@ export const OWN_START: readonly string[] = [
   "on iPhone, a bot whose tasks the gateway failed",
   "on iPhone, a long bot name",
   "F-017:",
+  "F-557:", // pairs at a loopback address and at a protected one of its own
 ];
 
 /** A check that starts where another leaves the app, so both run in one job, in this order. */

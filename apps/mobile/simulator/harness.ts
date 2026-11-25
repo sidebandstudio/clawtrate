@@ -1,11 +1,13 @@
 // What the Simulator checks use: the device, the gateway instance and the tools
 // `pnpm mobile:check` gives them (scripts/check.ts), Maestro to drive the app,
 // the dev tool's own guarded runner for OpenClaw commands, a loopback proxy the
-// checks can cut and restore, and a gateway that speaks another protocol.
+// checks can cut and restore, a gateway that speaks another protocol, and a
+// protected address for the gateway.
 
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -13,7 +15,10 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
-import { createServer, Socket, type Server } from "node:net";
+import { request as httpRequest } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { connect, createServer, Socket, type Server } from "node:net";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
@@ -539,6 +544,8 @@ export class Proxy {
   port = 0;
   /** Every connection the app opened through the proxy, since it started. */
   connections = 0;
+  /** What each of those connections asked first: its request line, and whether it opened a WebSocket. */
+  readonly requests: Array<{ line: string; upgrade: boolean }> = [];
   private readonly target: number;
   constructor(target: number) {
     this.target = target;
@@ -552,6 +559,13 @@ export class Proxy {
   private listen(port: number) {
     const server = createServer((client) => {
       this.connections += 1;
+      client.once("data", (chunk: Buffer) => {
+        const head = chunk.toString("latin1");
+        this.requests.push({
+          line: head.split("\r\n", 1)[0]!,
+          upgrade: /\r\nupgrade:[ \t]*websocket\r\n/i.test(head),
+        });
+      });
       const upstream = new Socket();
       upstream.connect(this.target, "127.0.0.1");
       for (const socket of [client, upstream]) {
@@ -589,6 +603,159 @@ export class Proxy {
   async stop() {
     await this.cut();
   }
+}
+
+/** One HTTP request the protected address served, as it arrived. */
+export type FrontRequest = {
+  method: string;
+  url: string;
+  authorization: string | undefined;
+  cookie: string | undefined;
+};
+
+/** This Mac's own address on its network, never loopback: en0's, or the first there is. */
+function ownAddress(): string {
+  const found = Object.entries(networkInterfaces()).flatMap(([name, list]) =>
+    (list ?? [])
+      .filter(
+        (each) => each.family === "IPv4" && !each.internal && !each.address.startsWith("169.254."),
+      )
+      .map((each) => ({ name, address: each.address })),
+  );
+  const chosen = found.find((each) => each.name === "en0") ?? found[0];
+  if (!chosen)
+    throw new Error("This Mac has no network address but loopback for a protected address.");
+  return chosen.address;
+}
+
+/**
+ * A protected address for the checks' gateway (F-557): `wss://<this Mac's network address>:<port>`,
+ * which is `wss://` and not loopback, as the product's rule reads an address. It is a TLS front of
+ * the check's own, listening on that address alone and taking connections from this Mac alone.
+ * Its certificate comes from a throwaway authority that `openssl` makes in a temporary folder, and
+ * only the check's own device trusts it (`simctl keychain add-root-cert`); the device goes with the
+ * run. A WebSocket passes through to the gateway. Each other request is recorded and served by the
+ * gateway, with a cookie added to the answer, unless `answer` gives one of its own.
+ */
+export async function protectedFront(
+  gatewayPort: number,
+  answer: (url: URL) => { status: number; headers: Record<string, string> } | null = () => null,
+): Promise<{ url: string; requests: FrontRequest[]; close: () => Promise<void> }> {
+  const address = ownAddress();
+  const dir = mkdtempSync(join(tmpdir(), "clawtrate-front-"));
+  const file = (name: string) => join(dir, name);
+  const openssl = (args: string[]) => execFileSync("openssl", args, { stdio: "ignore" });
+  openssl([
+    ...["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-sha256"],
+    ...[
+      "-keyout",
+      file("ca-key.pem"),
+      "-out",
+      file("ca.pem"),
+      "-subj",
+      "/CN=Clawtrate check authority",
+    ],
+    ...["-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign"],
+  ]);
+  openssl([
+    ...["req", "-newkey", "rsa:2048", "-nodes", "-sha256", "-subj", `/CN=${address}`],
+    ...["-keyout", file("key.pem"), "-out", file("request.pem")],
+  ]);
+  writeFileSync(
+    file("leaf.cnf"),
+    [
+      `subjectAltName=IP:${address}`,
+      "extendedKeyUsage=serverAuth",
+      "basicConstraints=critical,CA:FALSE",
+      "keyUsage=critical,digitalSignature,keyEncipherment",
+    ].join("\n"),
+  );
+  openssl([
+    ...[
+      "x509",
+      "-req",
+      "-in",
+      file("request.pem"),
+      "-CA",
+      file("ca.pem"),
+      "-CAkey",
+      file("ca-key.pem"),
+    ],
+    ...["-set_serial", String(Date.now()), "-days", "1", "-sha256", "-extfile", file("leaf.cnf")],
+    ...["-out", file("cert.pem")],
+  ]);
+  simctl("keychain", env.device, "add-root-cert", file("ca.pem"));
+
+  const requests: FrontRequest[] = [];
+  const sockets = new Set<Socket>();
+  const server = createHttpsServer(
+    { key: readFileSync(file("key.pem")), cert: readFileSync(file("cert.pem")) },
+    (req, res) => {
+      requests.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        authorization: req.headers.authorization,
+        cookie: req.headers.cookie,
+      });
+      const own = answer(new URL(req.url ?? "/", `https://${address}`));
+      if (own) return void res.writeHead(own.status, own.headers).end();
+      const upstream = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: gatewayPort,
+          method: req.method,
+          path: req.url,
+          headers: req.headers,
+        },
+        (reply) => {
+          res.writeHead(reply.statusCode ?? 502, {
+            ...reply.headers,
+            "set-cookie": "clawtrate-front=1; Path=/; Secure; HttpOnly",
+          });
+          reply.pipe(res);
+        },
+      );
+      upstream.on("error", () => res.destroy());
+      req.pipe(upstream);
+    },
+  );
+  server.on("upgrade", (req, client: Socket, head: Buffer) => {
+    const upstream = connect(gatewayPort, "127.0.0.1", () => {
+      const lines = [`${req.method} ${req.url} HTTP/1.1`];
+      for (let i = 0; i < req.rawHeaders.length; i += 2)
+        lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+      upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
+      upstream.write(head);
+      client.pipe(upstream).pipe(client);
+    });
+    for (const socket of [client, upstream]) {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+      socket.on("error", () => {
+        client.destroy();
+        upstream.destroy();
+      });
+    }
+  });
+  server.on("connection", (socket: Socket) => {
+    if (socket.remoteAddress?.replace(/^::ffff:/, "") !== address) return void socket.destroy();
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, address, () => resolve());
+  });
+  const port = (server.address() as { port: number }).port;
+  return {
+    url: `wss://${address}:${port}`,
+    requests,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 /**
