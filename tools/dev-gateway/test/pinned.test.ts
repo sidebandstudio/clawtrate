@@ -1,8 +1,8 @@
 // The development gateway runs a pinned OpenClaw, never the one on PATH (#597): which program it
 // picks, which Node runs it, and what it refuses.
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   NODE_VERSION,
@@ -11,6 +11,7 @@ import {
   openclawProgram,
   openclawReady,
   programVersion,
+  setupOpenclaw,
   supportsNode,
 } from "../src/pinned.ts";
 
@@ -103,6 +104,30 @@ describe("the development gateway's OpenClaw (#597)", () => {
     expect(() => openclawProgram({}, setUp(false), "26.0.0", process.execPath)).toThrow(
       /not set up/,
     );
+  });
+
+  it("runs a relative OPENCLAW_BIN or OPENCLAW_NODE as the absolute path it was checked as", () => {
+    // OpenClaw runs from the instance's state folder, so a relative path is resolved first.
+    const pinned = installed(OPENCLAW_VERSION);
+    const bin = relative(process.cwd(), pinned);
+    expect(bin.startsWith("/")).toBe(false);
+    expect(openclawProgram({ OPENCLAW_BIN: bin }, temp())).toEqual({ command: pinned, args: [] });
+    const node = relative(process.cwd(), process.execPath);
+    const dir = setUp(false);
+    expect(openclawProgram({ OPENCLAW_NODE: node }, dir, "26.0.0", "/x")).toEqual({
+      command: process.execPath,
+      args: [join(dir, `openclaw-${OPENCLAW_VERSION}`, "node_modules/openclaw/openclaw.mjs")],
+    });
+  });
+
+  it("does not set up a Node of its own when OPENCLAW_NODE names one that is missing", async () => {
+    await expect(
+      setupOpenclaw(
+        join(realpathSync(temp()), "tool"),
+        { OPENCLAW_NODE: "/no/such/node" },
+        () => {},
+      ),
+    ).rejects.toThrow("OPENCLAW_NODE names /no/such/node, which does not exist.");
   });
 
   it("downloads Node only for a computer whose archive it knows", () => {

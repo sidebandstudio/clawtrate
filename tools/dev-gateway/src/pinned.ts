@@ -17,7 +17,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { withLock } from "./lock.ts";
 
 export const OPENCLAW_VERSION = "2026.10.6";
@@ -50,7 +50,10 @@ const nodeIn = (dir: string) => join(dir, `node-${NODE_VERSION}`, "bin", "node")
 
 /** The Node the pinned copy runs on: OPENCLAW_NODE, this one when it is in range, or the tool's. */
 function nodeFor(env: NodeJS.ProcessEnv, dir: string, version: string, execPath: string): string {
-  return env.OPENCLAW_NODE || (supportsNode(version) ? execPath : nodeIn(dir));
+  // An override is resolved here, once: OpenClaw runs from the instance's state folder, where a
+  // relative path would name something else.
+  if (env.OPENCLAW_NODE) return resolve(env.OPENCLAW_NODE);
+  return supportsNode(version) ? execPath : nodeIn(dir);
 }
 
 /** The OpenClaw version of the package a program belongs to, from its package.json; or null. */
@@ -79,12 +82,14 @@ export function openclawProgram(
   execPath = process.execPath,
 ): Program {
   if (env.OPENCLAW_BIN) {
-    const found = programVersion(env.OPENCLAW_BIN);
+    // Resolved once, as OPENCLAW_NODE is: checked and run as the same absolute path.
+    const bin = resolve(env.OPENCLAW_BIN);
+    const found = programVersion(bin);
     if (found !== OPENCLAW_VERSION)
       throw new Error(
         `OPENCLAW_BIN is OpenClaw ${found ?? "of a version this tool cannot read"}; the development gateway runs only ${OPENCLAW_VERSION}. Unset it to use the copy \`pnpm dev-gateway setup\` installs.`,
       );
-    return { command: env.OPENCLAW_BIN, args: [] };
+    return { command: bin, args: [] };
   }
   const node = nodeFor(env, dir, version, execPath);
   if (!existsSync(entryIn(dir)) || !existsSync(node))
@@ -134,6 +139,9 @@ export async function setupOpenclaw(
     join(dir, "setup.lock"),
     async () => {
       const node = nodeFor(env, dir, process.versions.node, process.execPath);
+      // A Node named by OPENCLAW_NODE is the user's to provide; setup never stands in for it.
+      if (env.OPENCLAW_NODE && !existsSync(node))
+        throw new Error(`OPENCLAW_NODE names ${node}, which does not exist.`);
       if (!existsSync(node)) {
         const { name, sha256 } = nodeArchive();
         log(`Downloading Node ${NODE_VERSION} for OpenClaw ${OPENCLAW_VERSION}…`);
