@@ -1561,6 +1561,11 @@ export class ClawtrateClient {
     string,
     {
       task: string;
+      /**
+       * The bot its task was listed under when sent (`rowBotOf`): the read of the bots that drops
+       * a deleted bot's rows can land before the gateway's answer to the delete.
+       */
+      bot: string | null;
       files: OutgoingAttachment[];
       bytes: number;
       /** Its task was deleted on this connection: history that holds it keeps none of its pictures. */
@@ -1573,6 +1578,8 @@ export class ClawtrateClient {
     string,
     {
       task: string;
+      /** As for `attachmentContent`. */
+      bot: string | null;
       mode: OutgoingMessage["mode"];
       runId: string | null;
       files: { index: number; mimeType: string; content: string }[];
@@ -3368,7 +3375,13 @@ export class ClawtrateClient {
       ...(replyToId ? { replyToId } : {}),
     };
     if (attachments.length > 0) {
-      this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
+      const bot = rowBotOf(key, this.rows.get(capId(key, MAX_ID_CHARS)) ?? {});
+      this.attachmentContent.set(message.id, {
+        task: key,
+        bot: bot === null ? null : capId(bot, MAX_ID_CHARS),
+        files: attachments,
+        bytes,
+      });
       this.attachmentBytes += bytes;
       // Pictures kept only to be shown give way to files still to go out.
       for (const id of this.sentPictures.keys()) {
@@ -3440,6 +3453,7 @@ export class ClawtrateClient {
     }
     this.sentPictures.set(message.id, {
       task: kept.task,
+      bot: kept.bot,
       mode: message.mode,
       runId: message.runId,
       files,
@@ -3450,10 +3464,12 @@ export class ClawtrateClient {
   }
 
   /** Let go of every picture kept for the tasks `deleted` names, and of those still to be kept. */
-  private dropDeletedPictures(deleted: (task: string) => boolean): void {
-    for (const [id, kept] of this.sentPictures) if (deleted(kept.task)) this.dropSentPictures(id);
+  private dropDeletedPictures(
+    deleted: (record: { task: string; bot: string | null }) => boolean,
+  ): void {
+    for (const [id, kept] of this.sentPictures) if (deleted(kept)) this.dropSentPictures(id);
     for (const sending of this.attachmentContent.values())
-      if (deleted(sending.task)) sending.taskDeleted = true;
+      if (deleted(sending)) sending.taskDeleted = true;
   }
 
   private dropSentPictures(messageId: string): void {
@@ -6686,11 +6702,9 @@ export class ClawtrateClient {
       deleted: (botId) => {
         this.dropQueuedFor(botId);
         // The gateway deleted the bot with its tasks and reports no removal for each task: the
-        // pictures you sent in them go now. Each task is placed as the rail places it, before
-        // the list read after the delete prunes its row; a task not listed goes by its key.
-        this.dropDeletedPictures(
-          (task) => rowBotOf(task, this.rows.get(capId(task, MAX_ID_CHARS)) ?? {}) === botId,
-        );
+        // pictures you sent in them go now, by the bot each task was listed under when sent.
+        const deleted = capId(botId, MAX_ID_CHARS);
+        this.dropDeletedPictures(({ bot }) => bot === deleted);
       },
       admin: () =>
         this.options.readOnly !== true &&
@@ -9260,7 +9274,7 @@ export class ClawtrateClient {
       this.cancelAllQueued(key);
       this.retireForeign(key);
       // Deleted elsewhere: the pictures you sent in it go too. An archived task keeps them.
-      this.dropDeletedPictures((task) => task === key);
+      this.dropDeletedPictures(({ task }) => task === key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
@@ -10141,7 +10155,7 @@ export class ClawtrateClient {
     }
     await deleteTask(this.actionContext(options.owner ?? null), key);
     // Its conversation is gone from the gateway: so are the pictures you sent in it.
-    this.dropDeletedPictures((task) => task === key);
+    this.dropDeletedPictures(({ task }) => task === key);
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */

@@ -268,7 +268,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
-    each: 2 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
+    each: 3 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },
   "attachmentContent.*.files": {
@@ -280,7 +280,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
   sentPictures: {
     max: MAX_SENT_PICTURE_MESSAGES,
-    each: 3 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
+    each: 4 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
     row: "outboxFiles",
   },
   "sentPictures.*.files": {
