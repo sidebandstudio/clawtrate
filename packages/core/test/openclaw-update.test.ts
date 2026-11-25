@@ -18,7 +18,12 @@ import {
   UPDATE_HELD,
   UPDATE_LOOK_FAILED,
   UPDATE_NOT_STARTED,
+  UPDATE_KEPT_CHECKING,
+  UPDATE_KEPT_LOOK_FAILED,
+  UPDATE_LATE_MS,
+  UPDATE_RECORD_POLL_LIMIT_MS,
   UPDATE_RECORD_POLL_MS,
+  UPDATE_UNTIED,
   UPDATE_SENT_UNKNOWN,
   updateText,
   type OpenClawUpdatesContext,
@@ -198,6 +203,12 @@ const timersOf = (
   ms: number,
 ) => t.timers.filter((each) => each.ms === ms);
 
+/** What the engine keeps, as stored: one entry per gateway. */
+const keptValue = (...entries: object[]) => JSON.stringify({ gateways: entries });
+const keptOf = (t: { storage: { data: Map<string, string> } }) =>
+  (JSON.parse(t.storage.data.get(UPDATE_RUN_KEY) ?? '{"gateways":[]}') as { gateways: object[] })
+    .gateways;
+
 /** Every update request the engine sent: what reaches the gateway. */
 const writes = (world: { sent: Array<{ method: string }> }) =>
   world.sent.filter((each) => each.method === "update.run");
@@ -218,7 +229,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
       outcome: "running",
     });
     // Kept for reopening the app.
-    expect(JSON.parse(t.storage.data.get(UPDATE_RUN_KEY)!)).toMatchObject({ runId: RUN });
+    expect(keptOf(t)).toMatchObject([{ gatewayId: "gw-a", runId: RUN }]);
     for (const phase of UPDATE_PHASES.slice(1, -1)) {
       t.engine.onRunChanged({ runId: RUN, phase, status: "running", updatedAtMs: T0 + 1 });
       expect(t.run()).toMatchObject({ phase, outcome: "running" });
@@ -542,7 +553,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     await until(() => t.run()?.runId === RUN);
     expect(t.run()).toMatchObject({ mine: true, outcome: "running", phase: "staging" });
     expect(t.state()).toMatchObject({ looking: false, error: null });
-    expect(JSON.parse(t.storage.data.get(UPDATE_RUN_KEY)!)).toMatchObject({ runId: RUN });
+    expect(keptOf(t)).toMatchObject([{ gatewayId: "gw-a", runId: RUN }]);
     expect(writes(t.world)).toHaveLength(1);
   });
 
@@ -619,7 +630,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
       const t = rig();
       await t.storage.set(
         UPDATE_RUN_KEY,
-        JSON.stringify({ gatewayId: "gw-a", runId: null, tag: tagOf(9), from: OLD, to: NEW }),
+        keptValue({ gatewayId: "gw-a", runId: null, tag: tagOf(9), from: OLD, to: NEW }),
       );
       t.world.handlers["update.status"] =
         answer === "pending"
@@ -638,7 +649,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
   });
 
   it("F-589: a press kept from before the app closed is settled by the gateway's record: its run, or none, and then Update again", async () => {
-    const keptPress = JSON.stringify({
+    const keptPress = keptValue({
       gatewayId: "gw-a",
       runId: null,
       tag: tagOf(9),
@@ -781,6 +792,213 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     expect(t.run()?.reason).toBe("ocm-update-failed");
   });
 
+  it("F-589: reopening the app while its own run may be running holds Update from the first moment, whether the gateway's answer is slow, fails or never comes", async () => {
+    for (const answer of ["slow", "failing", "never"] as const) {
+      const t = rig();
+      await t.storage.set(
+        UPDATE_RUN_KEY,
+        keptValue({ gatewayId: "gw-a", runId: RUN, tag: null, from: OLD, to: NEW }),
+      );
+      const slow = deferred<unknown>();
+      t.world.handlers["update.status"] =
+        answer === "slow"
+          ? () => slow.promise
+          : answer === "never"
+            ? () => new Promise(() => {})
+            : () => {
+                throw new Refusal("UNAVAILABLE", "update status is temporarily unavailable");
+              };
+      t.world.handlers["update.runs.get"] = () => {
+        throw new Refusal("UNAVAILABLE", "busy");
+      };
+      t.world.handlers["update.run"] = () => started(OTHER_RUN);
+      // Held before the identity is even read.
+      const identity = deferred<string>();
+      t.ctx.identity = () => identity.promise;
+      void t.engine.onHello();
+      await until(() => t.state().looking);
+      expect(t.state().error).toBe(UPDATE_KEPT_CHECKING);
+      identity.resolve("gw-a");
+      t.ctx.identity = async () => t.world.identity;
+      await expect(t.engine.start(t.stamp())).rejects.toThrow(/already under way|may be under way/);
+      expect(writes(t.world)).toEqual([]);
+      // The kept run is never overwritten by a press.
+      expect(keptOf(t)).toMatchObject([{ gatewayId: "gw-a", runId: RUN }]);
+      if (answer === "slow") {
+        slow.resolve({
+          sentinel: null,
+          updateAvailable: null,
+          activeRun: record({ phase: "activating" }),
+        });
+        await until(() => t.run()?.runId === RUN);
+        // Its own run, never "started elsewhere".
+        expect(t.run()).toMatchObject({ mine: true, outcome: "running" });
+        t.engine.onRunChanged({
+          runId: RUN,
+          phase: "restarting",
+          status: "running",
+          updatedAtMs: 3,
+        });
+        expect(t.run()).toMatchObject({ mine: true, phase: "restarting" });
+      }
+      if (answer === "failing") {
+        for (const wait of UPDATE_ASK_WAITS_MS) {
+          await until(() => timersOf(t, wait).some((each) => !each.cancelled));
+          timersOf(t, wait)
+            .find((each) => !each.cancelled)!
+            .run();
+        }
+        await until(() => t.state().lookFailed);
+        expect(t.state().error).toBe(UPDATE_KEPT_LOOK_FAILED);
+        await expect(t.engine.start(t.stamp())).rejects.toThrow("already under way");
+        expect(writes(t.world)).toEqual([]);
+      }
+    }
+  });
+
+  it("F-589: a press before the first connect's read lands, with a run of an earlier press kept, sends nothing", async () => {
+    const t = rig();
+    await t.storage.set(
+      UPDATE_RUN_KEY,
+      keptValue({ gatewayId: "gw-a", runId: RUN, tag: null, from: OLD, to: NEW }),
+    );
+    t.world.handlers["update.status"] = () => new Promise(() => {});
+    t.world.handlers["update.run"] = () => started(OTHER_RUN);
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_HELD);
+    expect(writes(t.world)).toEqual([]);
+    expect(t.state()).toMatchObject({ looking: true, error: UPDATE_KEPT_CHECKING });
+    expect(keptOf(t)).toMatchObject([{ runId: RUN }]);
+  });
+
+  it("F-589: what is held is kept per gateway: a press on another gateway leaves it, and it comes back with its own", async () => {
+    const t = rig();
+    await t.storage.set(
+      UPDATE_RUN_KEY,
+      keptValue({ gatewayId: "gw-a", runId: null, tag: tagOf(9), from: OLD, to: NEW }),
+    );
+    // Connected to gw-b instead: nothing holds Update there, and a press goes.
+    t.world.identity = "gw-b";
+    t.set({ gatewayId: "gw-b", target: 2 });
+    t.world.handlers["update.run"] = () => started();
+    t.world.handlers["update.status"] = () => new Promise(() => {});
+    await t.engine.onHello();
+    expect(t.state().looking).toBe(false);
+    await t.engine.start(t.stamp());
+    expect(keptOf(t)).toMatchObject([
+      { gatewayId: "gw-a", runId: null, tag: tagOf(9) },
+      { gatewayId: "gw-b", runId: RUN },
+    ]);
+    // Back on gw-a: held again, and no update.run goes there.
+    t.engine.reset();
+    t.world.identity = "gw-a";
+    t.set({ gatewayId: "gw-a", target: 3 });
+    void t.engine.onHello();
+    await until(() => t.state().looking);
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(/already under way|may be under way/);
+    expect(writes(t.world)).toHaveLength(1);
+  });
+
+  it("F-589: where the gateway records no tag, a run that may be the press's is not called someone else's, nor the press called not started", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    // An install whose update manager keeps no requester: its run carries no origin.
+    t.world.handlers["update.status"] = () => ({
+      sentinel: null,
+      updateAvailable: null,
+      activeRun: record({ runId: "ocm:job-7", origin: {}, phase: "requested" }),
+    });
+    t.world.handlers["update.runs.list"] = () => ({ runs: [] });
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    await until(() => !t.state().looking);
+    expect(t.run()).toMatchObject({ runId: "ocm:job-7", mine: null, outcome: "running" });
+    expect(t.state().error).toBe(UPDATE_UNTIED);
+  });
+
+  it("F-589: after Stop waiting, a run that carries the press's tag is still the person's", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    let status: () => unknown = () => {
+      throw new Refusal("UNAVAILABLE", "update status is temporarily unavailable");
+    };
+    t.world.handlers["update.status"] = () => status();
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    for (const wait of UPDATE_ASK_WAITS_MS) {
+      await until(() => timersOf(t, wait).some((each) => !each.cancelled));
+      timersOf(t, wait)
+        .find((each) => !each.cancelled)!
+        .run();
+    }
+    await until(() => t.state().lookFailed);
+    await t.engine.release();
+    status = () => ({
+      sentinel: null,
+      updateAvailable: null,
+      activeRun: record({ phase: "staging", ...tagged() }),
+    });
+    t.engine.onRunChanged({ runId: RUN, phase: "staging", status: "running", updatedAtMs: 4 });
+    await until(() => t.run()?.runId === RUN);
+    expect(t.run()).toMatchObject({ mine: true, outcome: "running" });
+  });
+
+  it("F-589: a gateway away longer than an update usually takes is said to be, and the run's end is shown when it's back", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => started();
+    await t.engine.start(t.stamp());
+    await t.restart(OLD, false);
+    const late = timersOf(t, UPDATE_LATE_MS);
+    expect(late).toHaveLength(1);
+    expect(UPDATE_LATE_MS).toBeGreaterThan(150_000);
+    late[0]!.run();
+    expect(t.run()?.outcome).toBe("late");
+    await expect(t.engine.start(t.stamp())).rejects.toThrow("already under way");
+    // Back, with the record's failure in the gateway's words.
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    t.world.handlers["update.runs.get"] = () => ({
+      run: record({
+        phase: "finished",
+        status: "failed",
+        reason: "managed-service-handoff-helper-failed",
+      }),
+    });
+    t.set({ status: "connected", canAdmin: true });
+    await t.engine.onHello();
+    expect(t.run()).toMatchObject({
+      outcome: "failed",
+      reason: "managed-service-handoff-helper-failed",
+    });
+  });
+
+  it("F-589: repeated ends while the record is being read read it once", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => started();
+    await t.engine.start(t.stamp());
+    const slow = deferred<unknown>();
+    t.world.handlers["update.runs.get"] = () => slow.promise;
+    for (let i = 0; i < 3; i++)
+      t.engine.onRunChanged({ runId: RUN, phase: "finished", status: "failed", updatedAtMs: i });
+    expect(t.sentMethods().filter((m) => m === "update.runs.get")).toHaveLength(1);
+    slow.resolve({ run: record({ phase: "finished", status: "failed", reason: "x" }) });
+    await until(() => t.run()?.outcome === "failed");
+  });
+
+  it("F-589: a quiet run's record is read again only up to its limit", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => started();
+    t.world.handlers["update.runs.get"] = () => ({ run: record({ phase: "staging" }) });
+    await t.engine.start(t.stamp());
+    t.world.now += UPDATE_RECORD_POLL_LIMIT_MS + 1;
+    const poll = timersOf(t, UPDATE_RECORD_POLL_MS).find((each) => !each.cancelled)!;
+    const before = t.timers.length;
+    poll.run();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(t.sentMethods().filter((m) => m === "update.runs.get")).toEqual([]);
+    expect(t.timers.length).toBe(before);
+  });
+
   it("F-589: a press while the gateway reports no newer OpenClaw sends nothing", async () => {
     const t = rig();
     t.set({ openclawUpdate: null });
@@ -816,7 +1034,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     const t = rig();
     await t.storage.set(
       UPDATE_RUN_KEY,
-      JSON.stringify({ gatewayId: "gw-a", runId: RUN, from: OLD, to: NEW }),
+      keptValue({ gatewayId: "gw-a", runId: RUN, from: OLD, to: NEW }),
     );
     t.world.handlers["update.status"] = () => ({
       sentinel: null,
@@ -836,7 +1054,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     const other = rig();
     await other.storage.set(
       UPDATE_RUN_KEY,
-      JSON.stringify({ gatewayId: "gw-b", runId: RUN, from: OLD, to: NEW }),
+      keptValue({ gatewayId: "gw-b", runId: RUN, from: OLD, to: NEW }),
     );
     other.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
     await other.engine.onHello();

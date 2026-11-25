@@ -22,6 +22,7 @@ export const UPDATE_RUN_SCENES = [
   "rolled-back",
   "skipped",
   "away",
+  "late",
   "elsewhere",
   "blocked",
   "held",
@@ -78,6 +79,7 @@ export function updateRunScene(scene: UpdateRunScene, state: ClawtrateState): Cl
       }),
     },
     away: { run: run({ phase: "restarting", outcome: "away" }) },
+    late: { run: run({ phase: "restarting", outcome: "late" }) },
     elsewhere: {
       run: finished({
         outcome: "elsewhere",
@@ -133,7 +135,7 @@ export function updateRunCommand(
   if (command.type === "dismissOpenClawUpdate") {
     const state = get();
     const run = state.openclawUpdating?.run;
-    if (run && run.outcome !== "running" && run.outcome !== "away")
+    if (run && run.outcome !== "running" && run.outcome !== "late" && run.outcome !== "away")
       set({ ...state, openclawUpdating: { ...state.openclawUpdating!, run: null } });
     return Promise.resolve();
   }

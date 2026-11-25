@@ -32,6 +32,7 @@ import {
   nextStep,
   OPENCLAW_UPDATE_DOCS,
   runLine,
+  UPDATE_TIME_WORDS,
   workWords,
 } from "./update-words.ts";
 
@@ -264,10 +265,7 @@ export function UpdateConfirm({
             Your gateway goes from OpenClaw {update?.current ?? connection.serverVersion} to{" "}
             {update?.latest ?? "the newer version"}.
           </p>
-          <p>
-            The gateway restarts during the update, and your bots can't take new work until it's
-            back. Clawtrate reconnects by itself.
-          </p>
+          <p>{UPDATE_TIME_WORDS}</p>
           <p data-testid="update-work">{workWords(working)}</p>
         </div>
         {!admin && (
@@ -316,7 +314,7 @@ function UpdateLine({ run, where }: { run: UpdateRunView; where: "notice" | "set
   const line = runLine(run);
   const words = gatewayWords(run);
   const next = nextStep(run);
-  const finished = run.outcome !== "running" && run.outcome !== "away";
+  const finished = run.outcome !== "running" && run.outcome !== "late" && run.outcome !== "away";
   return (
     <div className="b-update" data-testid={`update-run-${where}`} data-outcome={run.outcome}>
       <p className="b-update-line">

@@ -64,7 +64,7 @@ for (const size of [WIDE, PHONE]) {
 
 test.describe("update openclaw outcomes 1440 dark", () => {
   test.use(contextFor(WIDE, "dark"));
-  for (const scene of ["running", "updated", "failed", "away", "blocked", "elsewhere"]) {
+  for (const scene of ["running", "updated", "failed", "late", "away", "blocked", "elsewhere"]) {
     test(`F-589: ${scene} in Settings › Gateway matches its baseline`, async ({ page }) => {
       await openFixture(page, `${ADMIN}&openclawRun=${scene}`, "dark");
       const dialog = await gatewayPane(page, false);

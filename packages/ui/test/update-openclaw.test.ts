@@ -146,16 +146,20 @@ describe("F-589: the confirmation", () => {
     expect(html).toContain(">Update OpenClaw?</h2>");
     expect(text(html)).toContain("Your gateway goes from OpenClaw 2026.10.6 to 2026.11.6.");
     expect(text(html)).toContain(
-      "The gateway restarts during the update, and your bots can't take new work until it's back. Clawtrate reconnects by itself.",
+      "An update usually takes 5 to 10 minutes, and some installs take longer. The gateway restarts during it, so your bots can't be reached for part of that time. Clawtrate reconnects by itself.",
     );
     expect(text(html)).toContain(
-      "2 tasks are working now. Before it restarts, OpenClaw stops taking new work and waits for running work to finish; on some installs that wait can last up to about half an hour. Work still running when it ends can be interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.",
+      "2 tasks are working now, and will be stopped when the gateway restarts. Stopped work may not be picked up again.",
     );
     expect(html).toMatch(
       /<div class="b-actions"><button type="button" class="button" data-variant="quiet" data-b-focus="">Not now<\/button><button type="button" class="button" data-variant="primary">Update<\/button><\/div>/,
     );
-    expect(text(confirm(connection, 0))).toContain("No task is working now.");
-    expect(text(confirm(connection, 1))).toContain("1 task is working now.");
+    expect(text(confirm(connection, 0))).toContain(
+      "No task is working now. Work that is running when the gateway restarts is stopped, and may not be picked up again.",
+    );
+    // Nothing promises that work is resumed, or that nothing runs after the restart.
+    expect(text(confirm(connection, 2))).not.toMatch(/resume|quiet|nothing runs/i);
+    expect(text(confirm(connection, 1))).toContain("1 task is working now, and will be stopped");
   });
 
   it("F-589: without admin access it asks for it the way the other admin steps do, and Update waits", () => {
@@ -305,6 +309,35 @@ describe("F-589: the progress and how it ends", () => {
     expect(text(failed)).toContain(
       "Stop waiting offers Update again. Clawtrate can't tell whether that press started an update; if one is running, the gateway says so instead of starting another.",
     );
+  });
+
+  it("F-589: away longer than an update usually takes says so, and that a gateway started by hand may need starting again", () => {
+    const html = line({ phase: "restarting", outcome: "late" });
+    expect(text(html)).toContain("The gateway has been away longer than an update usually takes.");
+    expect(text(html)).toContain(
+      "If the gateway was started by hand, the update may have left it stopped: start it again the way you normally start it.",
+    );
+    expect(html).not.toContain("Dismiss");
+    expect(html).not.toContain("Updated");
+  });
+
+  it("F-589: an updater that gave up reads as such, with the gateway's reason", () => {
+    const html = line({
+      phase: "finished",
+      outcome: "failed",
+      reason: "managed-service-handoff-helper-failed",
+    });
+    expect(text(html)).toContain(
+      "The update failed. The updater gave up before it finished, and may have left the gateway stopped. The gateway says: “managed-service-handoff-helper-failed”.",
+    );
+  });
+
+  it("F-589: a run nothing ties to the press is not called the person's or someone else's", () => {
+    const html = line({ mine: null, phase: "requested" });
+    expect(text(html)).toContain(
+      "An update of OpenClaw to 2026.11.6 is under way: step 1 of 8, requested. Clawtrate can't tell whether it's the one you started.",
+    );
+    expect(text(html)).not.toContain("started elsewhere");
   });
 
   it("F-589: on another gateway it says nothing of that gateway's version", () => {

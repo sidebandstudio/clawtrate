@@ -21,6 +21,13 @@ const CANNOT_WORDS: Record<string, string> = {
     "OpenClaw is installed read-only, and is updated by its owner on the gateway's machine.",
 };
 
+/** What a reason code the gateway gives for an update that failed means, in plain words. */
+const FAILURE_WORDS: Record<string, string> = {
+  "managed-service-handoff-helper-failed":
+    "The updater gave up before it finished, and may have left the gateway stopped.",
+  "managed-service-handoff-failed": "The gateway couldn't start the updater.",
+};
+
 /** Why this gateway can't update itself: Clawtrate's sentence, then the gateway's words. */
 export function blockedWords(blocked: NonNullable<OpenClawUpdateState["blocked"]>): {
   why: string;
@@ -36,10 +43,14 @@ export function runLine(run: UpdateRunView): string {
   switch (run.outcome) {
     case "running": {
       const step = `step ${phaseNumber(run.phase)} of 8, ${run.phase}`;
-      return run.mine
-        ? `Updating OpenClaw${to}: ${step}.`
-        : `An update of OpenClaw${to}, started elsewhere, is under way: ${step}.`;
+      if (run.mine === true) return `Updating OpenClaw${to}: ${step}.`;
+      if (run.mine === false)
+        return `An update of OpenClaw${to}, started elsewhere, is under way: ${step}.`;
+      // Nothing the gateway records ties this run to the person's press: say only what is known.
+      return `An update of OpenClaw${to} is under way: ${step}. Clawtrate can't tell whether it's the one you started.`;
     }
+    case "late":
+      return "The gateway has been away longer than an update usually takes.";
     case "updated":
       return `Updated to OpenClaw ${run.to}.`;
     case "unconfirmed":
@@ -48,8 +59,10 @@ export function runLine(run: UpdateRunView): string {
         : run.note
           ? `${run.note} Clawtrate can't say whether OpenClaw was updated.`
           : `The gateway's record says the update finished, but the gateway hasn't reported OpenClaw${to} yet.`;
-    case "failed":
-      return "The update failed.";
+    case "failed": {
+      const plain = run.reason ? FAILURE_WORDS[run.reason] : undefined;
+      return plain ? `The update failed. ${plain}` : "The update failed.";
+    }
     case "rolled-back":
       return "The update was rolled back: OpenClaw went back to the version it ran before.";
     case "skipped":
@@ -70,8 +83,10 @@ export function nextStep(run: UpdateRunView): string | null {
       return "You can try again, or update OpenClaw on the gateway's machine with its update instructions.";
     case "unconfirmed":
       return "Check the gateway's version in Settings, then try again if it wasn't updated.";
+    case "late":
+      return "If the gateway was started by hand, the update may have left it stopped: start it again the way you normally start it. Clawtrate keeps waiting, and shows how the update ended when it's back.";
     case "away":
-      return "Check that the gateway's machine is on and that OpenClaw is running there. Clawtrate keeps trying to reconnect.";
+      return "Check that the gateway's machine is on and that OpenClaw is running there. If it was started by hand, start it again the way you normally start it. Clawtrate keeps trying to reconnect.";
     default:
       return null;
   }
@@ -98,13 +113,19 @@ const PHASES = [
 ];
 const phaseNumber = (phase: string) => PHASES.indexOf(phase) + 1;
 
-/** The confirmation's sentence about running work, with how many tasks are working now. */
+/**
+ * The confirmation's sentence about running work, with how many tasks are working now. Real
+ * updates on Linux stopped a turn in flight after a short wait and did not pick it up again
+ * (`docs/research/model-catalog.md` section 7).
+ */
 export function workWords(working: number): string {
-  const now =
-    working === 0
-      ? "No task is working now."
-      : working === 1
-        ? "1 task is working now."
-        : `${working} tasks are working now.`;
-  return `${now} Before it restarts, OpenClaw stops taking new work and waits for running work to finish; on some installs that wait can last up to about half an hour. Work still running when it ends can be interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.`;
+  const stopped =
+    "Work that is running when the gateway restarts is stopped, and may not be picked up again.";
+  if (working === 0) return `No task is working now. ${stopped}`;
+  const count = working === 1 ? "1 task is working now" : `${working} tasks are working now`;
+  return `${count}, and will be stopped when the gateway restarts. Stopped work may not be picked up again.`;
 }
+
+/** How long an update takes, from real updates: usually 5 to 10 minutes, some installs longer. */
+export const UPDATE_TIME_WORDS =
+  "An update usually takes 5 to 10 minutes, and some installs take longer. The gateway restarts during it, so your bots can't be reached for part of that time. Clawtrate reconnects by itself.";
