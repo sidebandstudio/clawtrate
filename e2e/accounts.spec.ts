@@ -470,6 +470,15 @@ test("F-552: a bot made in New bot with no name takes one in the chat, and is re
   await field.fill("can i name u");
   await field.press("Enter");
   await ran(1);
+  // That turn has ended before the next message goes. Sent while the app still has the run as
+  // active, the message would steer it, and the gateway can refuse a steer that reaches the run as
+  // it ends ("Session … placement authority changed"). Steering isn't what this check is about.
+  await expect(
+    page.getByRole("region", { name: "Transcript" }).getByText("It has no reply written for:"),
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("button", { name: "Stop New bot" })).toHaveCount(0, {
+    timeout: 60_000,
+  });
   // The scripted model makes the bot's own edit; what is asserted is the file, the card and the config.
   await field.fill("#take-name Johnny");
   await field.press("Enter");
