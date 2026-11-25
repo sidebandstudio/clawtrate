@@ -92,6 +92,7 @@ import {
   tap,
   textSize,
   transcriptLinkTap,
+  typeInto,
   until,
   waitFor,
   waitGone,
@@ -364,8 +365,7 @@ describe("the iOS app", () => {
     await shoot("address");
     // An unencrypted address off this device is named before connecting, and not refused.
     await steps("cleartext", [
-      tap({ id: "address-field" }),
-      { inputText: "ws://192.0.2.10:18789" },
+      typeInto("address-field", "ws://192.0.2.10:18789"),
       waitFor(
         { id: "cleartext", text: lit(`${CLEARTEXT_WORDS.title}. ${CLEARTEXT_WORDS.body}`) },
         10_000,
@@ -1956,19 +1956,16 @@ async function pairedSession(): Promise<void> {
 }
 
 /**
- * Type a gateway's address and token, and connect with the keyboard's Go key.
- * iOS offers to save what a secure field held; the app gives it nothing to
- * offer, so no sheet comes, and the check would fail rather than dismiss one.
+ * Type a gateway's address and token, each confirmed in its field, and connect
+ * with the keyboard's Go key. iOS offers to save what a secure field held; the
+ * app gives it nothing to offer, so no sheet comes, and the check would fail
+ * rather than dismiss one.
  */
 function typeAddress(url: string, token: string): Step[] {
   return [
     waitFor({ id: "address-field" }, 30_000),
-    tap({ id: "address-field" }),
-    { eraseText: 80 },
-    { inputText: url },
-    tap({ id: "token-field" }),
-    { eraseText: 80 },
-    { inputText: token },
+    typeInto("address-field", url),
+    typeInto("token-field", token, { secret: true }),
     { pressKey: "Enter" },
     { extendedWaitUntil: { visible: "Save Password\\?", timeout: 5_000, optional: true } },
     notSee("Save Password\\?"),
