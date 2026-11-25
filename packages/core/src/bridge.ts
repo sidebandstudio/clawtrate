@@ -407,10 +407,16 @@ export type BridgeCommand =
   | { type: "newTask"; botId: string; label: string | null }
   /** A bot's replacement first task, "Main" (F-424). */
   | { type: "newMainTask"; botId: string }
-  | { type: "renameTask"; key: string; label: string }
-  | { type: "pinTask"; key: string; pinned: boolean }
-  /** Mark unread or read; `opened` is the read of opening a task, made only while the connection writes. */
-  | { type: "markTask"; key: string; unread: boolean; opened: boolean }
+  /** `stamp` as for archiving. */
+  | { type: "renameTask"; key: string; label: string; stamp: GatewayStamp }
+  | { type: "pinTask"; key: string; pinned: boolean; stamp: GatewayStamp }
+  /**
+   * Mark unread or read; `opened` is the read of opening a task, made only while the connection
+   * writes, so it asks for no access and carries no stamp. The person's mark has `stamp` as for
+   * archiving.
+   */
+  | { type: "markTask"; key: string; unread: boolean; opened: true }
+  | { type: "markTask"; key: string; unread: boolean; opened: false; stamp: GatewayStamp }
   /**
    * Archive; `stop` stops an active run first ("Stop and archive"). `stamp` is where the rail
    * listed the task: a restored copy has the same keys, so nothing goes anywhere else.
@@ -1700,16 +1706,26 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "renameTask":
       if (typeof command.label !== "string" || command.label.length > MAX_TASK_LABEL_CHARS)
         throw new Error("invalid label");
-      return { type: "renameTask", key: sessionKey(command.key), label: command.label };
-    case "pinTask":
-      return { type: "pinTask", key: sessionKey(command.key), pinned: flag(command.pinned) };
-    case "markTask":
       return {
-        type: "markTask",
+        type: "renameTask",
         key: sessionKey(command.key),
-        unread: flag(command.unread),
-        opened: command.opened === undefined ? false : flag(command.opened),
+        label: command.label,
+        stamp: gatewayStampOf(command.stamp),
       };
+    case "pinTask":
+      return {
+        type: "pinTask",
+        key: sessionKey(command.key),
+        pinned: flag(command.pinned),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "markTask": {
+      const key = sessionKey(command.key);
+      const unread = flag(command.unread);
+      return command.opened !== undefined && flag(command.opened)
+        ? { type: "markTask", key, unread, opened: true }
+        : { type: "markTask", key, unread, opened: false, stamp: gatewayStampOf(command.stamp) };
+    }
     case "archiveTask":
       return {
         type: "archiveTask",
@@ -2382,11 +2398,15 @@ class ViewerSession implements BridgeSession {
       case "newMainTask":
         return { key: await client.newMainTask(command.botId, { owner }) };
       case "renameTask":
-        return client.renameTask(command.key, command.label, { owner });
+        return client.renameTask(command.key, command.label, { owner, stamp: command.stamp });
       case "pinTask":
-        return client.pinTask(command.key, command.pinned, { owner });
+        return client.pinTask(command.key, command.pinned, { owner, stamp: command.stamp });
       case "markTask":
-        return client.markTask(command.key, command.unread, { owner, opened: command.opened });
+        return client.markTask(
+          command.key,
+          command.unread,
+          command.opened ? { owner, opened: true } : { owner, stamp: command.stamp },
+        );
       case "archiveTask":
         return client.archiveTask(command.key, { stop: command.stop, owner, stamp: command.stamp });
       case "restoreTask":

@@ -215,6 +215,53 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
+  /** A sent picture in `KEY` whose history read is held: `release` answers it with the message. */
+  async function heldConfirm() {
+    const opened = await task();
+    const { client, gateway } = opened;
+    gateway.handlers["sessions.describe"] = () => ({ session: { key: KEY, sessionId: "s-1" } });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    gateway.handlers["sessions.delete"] = () => ({ ok: true, deleted: true });
+    const id = client.sendMessage(KEY, "look", { attachments: [picture(RED, "shot.png")] });
+    await until(() => opened.transcript().outbox[0]?.status === "sent");
+    let answer!: (rows: unknown[]) => void;
+    const held = new Promise<unknown[]>((resolve) => (answer = resolve));
+    gateway.handlers["chat.history"] = async () => ({ messages: await held });
+    const asked = gateway.calls("chat.history").length;
+    gateway.emit("sessions.changed", { sessionKey: KEY, phase: "message", updatedAt: 2 });
+    await until(() => gateway.calls("chat.history").length > asked);
+    const release = async () => {
+      answer([sentRow(id, "look", [SHOT])]);
+      await sleep(50);
+    };
+    return { ...opened, release };
+  }
+
+  it("F-557: a history read asked before the task was deleted here keeps nothing when it answers after", async () => {
+    const { client, release } = await heldConfirm();
+    await client.deleteTask(KEY);
+    await release();
+    expect(client.keptPictureBytes).toBe(0);
+    client.stop();
+  });
+
+  it("F-557: a history read asked before the gateway reported the task deleted keeps nothing when it answers after", async () => {
+    const { client, gateway, release } = await heldConfirm();
+    gateway.emit("sessions.changed", { sessionKey: KEY, reason: "deleted" });
+    await sleep(20);
+    await release();
+    expect(client.keptPictureBytes).toBe(0);
+    client.stop();
+  });
+
+  it("F-557: a history read asked before the task was archived still keeps its pictures", async () => {
+    const { client, release } = await heldConfirm();
+    await client.archiveTask(KEY);
+    await release();
+    expect(client.keptPictureBytes).toBe(RED.length);
+    client.stop();
+  });
+
   it("F-557: two pictures keep their order, and a file that isn't a picture isn't kept", async () => {
     const { client, confirm } = await task();
     const id = client.sendMessage(KEY, "two pictures", {
