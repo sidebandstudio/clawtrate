@@ -1,8 +1,9 @@
-// The gateway's skill-change note in the mounted conversation and rail, fed to
-// the fixture as the host's next snapshot would bring it (docs/parity.md F-560):
-// it is not new activity for "Jump to latest", hidden or shown, and the view at
-// the end keeps up; and the bot's preview leaves it out only when the gateway's
-// listed preview is that note. Every name and text is invented.
+// A row of the gateway's skill-note shape in the mounted conversation and rail,
+// fed to the fixture as the host's next snapshot would bring it (docs/parity.md
+// F-560): with "Show commands" off it is drawn, it is new activity for "Jump to
+// latest", the view at the end follows it, and the bot's preview is the one the
+// gateway lists. A bot can write such a row, so it is shown as any message.
+// Every name and text is invented.
 import { test, type Page } from "@playwright/test";
 import {
   mapHistory,
@@ -29,7 +30,7 @@ const said = (
   content: role === "user" ? text : [{ type: "text", text }],
   __openclaw: { id, ...(runId ? { runId } : {}) },
 });
-/** The note as OpenClaw 2026.10.6 writes it. */
+/** A row of the note's shape, as OpenClaw 2026.10.6 writes the note or a bot's message under its key. */
 const note = (id: string) => ({
   ...said("assistant", id, NOTE_TEXT, 1_000),
   api: "openclaw-transcript",
@@ -105,136 +106,42 @@ async function readBack(page: Page): Promise<number> {
 const atEnd = (page: Page) =>
   expect.poll(async () => (await measured(page)).below).toBeLessThanOrEqual(1);
 
-test.describe("the gateway's skill notes", () => {
+test.describe("rows of the gateway's skill-note shape", () => {
   test.use(contextFor(SIZES[0]!));
 
-  for (const commands of [false, true]) {
-    test(`F-560: a note arriving on a full page while the person reads back is not new activity, with commands ${commands ? "shown" : "hidden"}; a real reply is`, async ({
-      page,
-    }) => {
-      await open(page, commands);
-      await update(page, { items: mapHistory(PAGE) });
-      const top = await readBack(page);
-      // The note takes the last place on the page and the first message leaves it.
-      await update(page, { items: mapHistory([...PAGE.slice(1), note("note-1")]) });
-      await expect(transcript(page).getByText(NOTE_TEXT)).toHaveCount(commands ? 1 : 0);
-      await expect(jump(page)).toHaveCount(0);
-      expect((await measured(page)).top).toBe(top);
-      // A reply the person can see is new.
-      await update(page, {
-        items: mapHistory([
-          ...PAGE.slice(2),
-          note("note-1"),
-          said("assistant", "reply-1", "A new reply.", 5_000, "run-new"),
-        ]),
-      });
-      await expect(jump(page)).toHaveText("Jump to latest");
-      await jump(page).click();
-      await atEnd(page);
-    });
-
-    test(`F-560: at the end, the view keeps up with a note and a reply, with commands ${commands ? "shown" : "hidden"}`, async ({
-      page,
-    }) => {
-      await open(page, commands);
-      const first = PAGE.slice(0, 30);
-      await update(page, { items: mapHistory(first) });
-      await atEnd(page);
-      const before = await measured(page);
-      await update(page, { items: mapHistory([...first, note("note-1")]) });
-      await atEnd(page);
-      const afterNote = await measured(page);
-      // Shown, the note is followed; hidden, nothing moves.
-      if (commands) expect(afterNote.top).toBeGreaterThan(before.top);
-      else expect(afterNote.top).toBe(before.top);
-      await update(page, {
-        items: mapHistory([
-          ...first,
-          note("note-1"),
-          said("assistant", "reply-1", "Another reply.", 5_000, "run-new"),
-        ]),
-      });
-      await expect(transcript(page).getByText("Another reply.")).toBeInViewport();
-      await atEnd(page);
-      await expect(jump(page)).toHaveCount(0);
-    });
-  }
-
-  test("F-560: a hidden note that pushes a merged turn's first row off a full page is not new activity", async ({
+  test("F-560: with Show commands off, a row of the note's shape arriving while the person reads back is drawn and is new activity", async ({
     page,
   }) => {
     await open(page);
-    const run = "run-long";
-    const opening = said("assistant", "opening", "Starting the review.", 300, run);
-    const rounds = Array.from({ length: 33 }, (_, n) => [
-      {
-        ...said("assistant", `batch-${n}`, "", 400 + n, run),
-        content: Array.from({ length: 5 }, (_, t) => ({
-          type: "toolCall",
-          name: "read",
-          id: `call-${n}-${t}`,
-          arguments: { path: "sample.md" },
-        })),
-        stopReason: "toolUse",
-      },
-      ...Array.from({ length: 5 }, (_, t) => ({
-        role: "toolResult",
-        timestamp: EPOCH + 400 + n,
-        content: "Sample text.",
-        toolCallId: `call-${n}-${t}`,
-        __openclaw: { id: `result-${n}-${t}`, runId: run },
-      })),
-    ]).flat();
-    const findings = Array.from({ length: 60 }, (_, n) => `Finding ${n + 1}.`).join("\n\n");
-    const final = said("assistant", "final", findings, 900, run);
-    const before = [opening, ...rounds, final];
-    const after = [...before.slice(1), note("note-1")];
-    expect([before.length, after.length]).toEqual([200, 200]);
-    // The turn's display item changes with its first row; the message it shows does not.
-    const shown = [before, after].map((rows) =>
-      mapHistory(rows).findLast((item) => item.skillNote !== true),
-    );
-    expect(shown.map((item) => item?.messageId)).toEqual(["final", "final"]);
-    expect(shown[0]!.id).not.toBe(shown[1]!.id);
-
-    await update(page, { items: mapHistory(before) });
-    await expect(transcript(page).getByText("Finding 60.")).toHaveCount(1);
-    const top = await readBack(page);
-    await update(page, { items: mapHistory(after) });
-    await expect(transcript(page).getByText(NOTE_TEXT)).toHaveCount(0);
-    await expect(jump(page)).toHaveCount(0);
-    expect((await measured(page)).top).toBe(top);
-  });
-
-  test("F-560: turning Show commands on keeps the place the person reads and is not new activity", async ({
-    page,
-  }) => {
-    await open(page);
+    await update(page, { items: mapHistory(PAGE) });
+    await readBack(page);
     await update(page, { items: mapHistory([...PAGE.slice(1), note("note-1")]) });
-    const top = await readBack(page);
-    await page.keyboard.press("ControlOrMeta+,");
-    const settings = page.getByRole("dialog", { name: "Settings" });
-    await settings.getByRole("button", { name: "Advanced", exact: true }).click();
-    const toggle = settings.getByRole("switch", { name: "Show commands" });
-    await expect(toggle).toHaveAttribute("aria-checked", "false");
-    await toggle.click();
-    await page.keyboard.press("Escape");
-    await settle(page);
     await expect(transcript(page).getByText(NOTE_TEXT)).toHaveCount(1);
-    await expect(jump(page)).toHaveCount(0);
-    expect((await measured(page)).top).toBe(top);
+    await expect(jump(page)).toHaveText("Jump to latest");
+    await jump(page).click();
+    await atEnd(page);
+    await expect(transcript(page).getByText(NOTE_TEXT)).toBeInViewport();
   });
 
-  test("F-560: the bot's preview leaves out the note only when the listed preview is that note, whatever the clocks say", async ({
+  test("F-560: with Show commands off, the view at the end follows the row", async ({ page }) => {
+    await open(page);
+    const first = PAGE.slice(0, 30);
+    await update(page, { items: mapHistory(first) });
+    await atEnd(page);
+    const before = await measured(page);
+    await update(page, { items: mapHistory([...first, note("note-1")]) });
+    await atEnd(page);
+    expect((await measured(page)).top).toBeGreaterThan(before.top);
+    await expect(transcript(page).getByText(NOTE_TEXT)).toBeInViewport();
+    await expect(jump(page)).toHaveCount(0);
+  });
+
+  test("F-560: with Show commands off, the bot's preview is the row the gateway lists", async ({
     page,
   }) => {
     await open(page);
     const history = mapHistory([said("assistant", "prior", "Old reply.", 800), note("note-1")]);
-    // The list's preview is the note: the rail shows the reply before it.
     await update(page, { items: history, row: { updatedAt: EPOCH + 1_005, preview: NOTE_TEXT } });
-    await expect(preview(page)).toHaveText("Old reply.");
-    // A newer reply on the list shows at once, though the history still ends with the note.
-    await update(page, { row: { updatedAt: EPOCH + 5_005, preview: "New reply." } });
-    await expect(preview(page)).toHaveText("New reply.");
+    await expect(preview(page)).toHaveText(NOTE_TEXT);
   });
 });

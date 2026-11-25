@@ -427,12 +427,6 @@ export type TranscriptItem = {
    */
   idempotencyKey?: string;
   /**
-   * The gateway's note that a background skill review saved or changed a skill
-   * (`isSkillChangeNote`), not something the bot said: present and true only then.
-   * With commands hidden it is not drawn and is not the task's preview.
-   */
-  skillNote?: true;
-  /**
    * In a task a bot started, the brief it wrote: the first user row stored in that task, which the
    * gateway attributes to the person but the bot wrote (`mapHistory`'s `startedAt`). Present and
    * true only then; a message the person sends there later is theirs as always.

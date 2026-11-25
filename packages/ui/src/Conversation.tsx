@@ -299,15 +299,14 @@ function TranscriptView({
     quiet: !commandsShown,
     thinking: thinkingShown,
   });
-  const items = conversationItems(transcript, commandsShown);
+  const items = transcript.items;
   const scroller = useRef<HTMLDivElement>(null);
   // The view, while at the end, follows any change to what is drawn: its count or its last item.
-  // "Jump to latest" goes by the last item that is not a skill note, by the gateway's id of the
-  // message it shows, or else its identity, never a count (F-560): a note arriving, hidden or
-  // shown, one pushing a row off the top of a full page, even a merged turn's first row, and the
-  // "Show commands" switch are not new activity.
+  // "Jump to latest" goes by the last item, by the gateway's id of the message it shows, or else
+  // its identity, never a count: a row pushed off the top of a full page, even a merged turn's
+  // first row, and the "Show commands" switch are not new activity.
   const contentSize = `${items.length}:${itemIdentity(items.at(-1)?.id)}:${live.signature}`;
-  const lastSaid = transcript.items.findLast((item) => item.skillNote !== true);
+  const lastSaid = items.at(-1);
   const activity = `${lastSaid?.messageId ?? itemIdentity(lastSaid?.id)}:${live.signature}`;
   const [atEnd, setAtEnd] = useState(true);
   const [seenActivity, setSeenActivity] = useState(activity);
@@ -583,16 +582,6 @@ function EmptyState({
   );
 }
 
-/** The history items the conversation draws: the gateway's skill notes only with commands shown (F-560). */
-export function conversationItems(
-  transcript: Pick<Transcript, "items">,
-  commandsShown: boolean,
-): TranscriptItem[] {
-  return commandsShown
-    ? transcript.items
-    : transcript.items.filter((item) => item.skillNote !== true);
-}
-
 /** A history item's identity across reads: its id without its place on the page the read gave it. */
 function itemIdentity(itemId: string | undefined): string {
   return itemId?.replace(/:\d+$/, "") ?? "";
@@ -693,7 +682,6 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         .find(
           (item) =>
             item.role === "assistant" &&
-            item.skillNote !== true &&
             item.blocks.some((block) => block.kind === "text" && block.text.trim()),
         );
       // The gateway writes a failure as the run's last row, its text the error itself: the

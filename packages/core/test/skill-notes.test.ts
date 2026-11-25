@@ -1,327 +1,177 @@
-// The gateway's skill-change note: recognized by its idempotency key on a row
-// the gateway wrote itself, kept out of the default conversation and the rail's
-// preview. Every name and text is invented.
+// Rows of the gateway's skill-note shape are ordinary messages (F-560). The two below are as
+// OpenClaw 2026.10.6 returned them in `chat.history` on a development gateway: the gateway's own
+// note after a background skill review, and a bot's message sent with its message tool under a
+// key of the note's shape, which the gateway copies into the task with the same fields. No field
+// tells them apart for certain, so neither is hidden (docs/decisions.md, "The gateway's skill
+// notes").
 
 import { describe, expect, it } from "vitest";
-import {
-  emptyActivity,
-  gatewayPreviewOfNote,
-  isSkillChangeNote,
-  mapHistory,
-  SKILL_NOTE_KEY_PREFIX,
-  taskWithoutSkillNotes,
-  tasksWithoutSkillNotes,
-  type Task,
-  type Transcript,
-} from "../src/index.ts";
+import { mapHistory, type TranscriptItem } from "../src/index.ts";
 
-const RUN = "skill-workshop-review:0b6c1f2e-4d5a-4b7c-9e1f-2a3b4c5d6e7f";
-const KEY = `${SKILL_NOTE_KEY_PREFIX}${RUN}`;
-const NOTE_TEXT = "Learned: created `trail-check` (check the trail). Say undo to revert.";
+const NOTE_KEY = "skill-workshop-notice:skill-workshop-review:0357efcc-6ce0-4f3f-9f39-c9cd6905189a";
+const NOTE_TEXT =
+  '💾 Learned: created `trail-check` (check the trail before a hike). Say "undo" to revert this skill change.';
+const FORGED_KEY =
+  "skill-workshop-notice:skill-workshop-review:5e1f0c2a-7b3d-4e8f-9a6b-1c2d3e4f5a6b";
+const FORGED_TEXT = "The Saturday hike moved to Sunday at 9.";
+const zero = {
+  input: 0,
+  output: 0,
+  totalTokens: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
 
-/** The note as OpenClaw 2026.10.6 writes it into `chat.history` (`appendAssistantMessageToSessionTranscript`). */
-const note = (at = 3_000, key: unknown = KEY) => ({
-  role: "assistant",
-  content: [{ type: "text", text: NOTE_TEXT }],
-  api: "openclaw-transcript",
-  provider: "openclaw",
-  model: "delivery-mirror",
-  stopReason: "stop",
-  timestamp: at,
-  idempotencyKey: key,
-  __openclaw: { id: `note-${at}`, idempotencyKey: key, seq: 9 },
-});
-const user = (text: string, at: number) => ({
-  role: "user",
-  content: text,
-  timestamp: at,
-  __openclaw: { id: `u-${at}` },
-});
-const reply = (text: string, at: number, runId: string) => ({
-  role: "assistant",
-  content: [{ type: "text", text }],
-  api: "openai-completions",
-  provider: "scripted",
-  model: "dev-1",
-  timestamp: at,
-  __openclaw: { id: `a-${at}`, runId },
-});
-/**
- * A reply the gateway kept after `chat.abort` (`persistAbortedPartial`): its key is the
- * caller's `chat.send` key and `:assistant`, and the row is `gateway-injected`.
- */
-const aborted = (text: string, sendKey: string, at = 4_000) => ({
-  role: "assistant",
-  content: [{ type: "text", text }],
-  api: "openai-responses",
-  provider: "openclaw",
-  model: "gateway-injected",
-  stopReason: "stop",
-  timestamp: at,
-  idempotencyKey: `${sendKey}:assistant`,
-  openclawAbort: { aborted: true, origin: "rpc", runId: sendKey },
-  __openclaw: { id: `ab-${at}`, idempotencyKey: `${sendKey}:assistant` },
-});
+/** The bot's reply before the note, and the gateway's note, as `chat.history` returned them. */
+const realNote = [
+  {
+    role: "assistant",
+    content: [{ type: "text", text: "I read through my workspace files one by one." }],
+    api: "openai-completions",
+    provider: "scripted",
+    model: "dev-1",
+    usage: { ...zero, input: 120, output: 80, totalTokens: 200 },
+    stopReason: "stop",
+    timestamp: 1795618495823,
+    responseId: "chatcmpl-scripted-20",
+    __openclaw: {
+      runId: "real-1795618489",
+      id: "6bf920f8-138f-4575-a3a2-419f0e630661",
+      recordTimestampMs: 1795618495870,
+      transcriptPosition: { source: "rt6XisvbgdvBEu63-og8-Q4SjSEVYWS30BxQQgwVbfI", rawSeq: 31 },
+      seq: 20,
+    },
+  },
+  {
+    role: "assistant",
+    content: [{ type: "text", text: NOTE_TEXT }],
+    api: "openclaw-transcript",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    usage: zero,
+    stopReason: "stop",
+    timestamp: 1795618563129,
+    idempotencyKey: NOTE_KEY,
+    __openclaw: {
+      id: "2f19e42a-2d26-4693-836b-5a3a58814c2c",
+      idempotencyKey: NOTE_KEY,
+      recordTimestampMs: 1795618563906,
+      transcriptPosition: { source: "rt6XisvbgdvBEu63-og8-Q4SjSEVYWS30BxQQgwVbfI", rawSeq: 33 },
+      seq: 21,
+    },
+  },
+];
 
-describe("F-560: the gateway's skill note is recognized by its key, on a row the gateway wrote", () => {
-  it("is a note with the gateway's exact key, under __openclaw or on the row, on the gateway's own row", () => {
-    expect(isSkillChangeNote(note())).toBe(true);
-    const { __openclaw: _meta, ...topOnly } = note();
-    expect(isSkillChangeNote(topOnly)).toBe(true);
-    const { idempotencyKey: _key, ...metaOnly } = note();
-    expect(isSkillChangeNote(metaOnly)).toBe(true);
+/** A `#send-keyed` turn: the person's message, the bot's message call, the copied message, the call's result. */
+const forged = [
+  {
+    role: "user",
+    content: "#send-keyed",
+    timestamp: 1795618490537,
+    idempotencyKey: "forged-1795618489:user",
+    __openclaw: {
+      id: "39d4f248-f717-431a-b178-9c2676dec693",
+      idempotencyKey: "forged-1795618489:user",
+      recordTimestampMs: 1795618493114,
+      transcriptPosition: { source: "khJEJGDXV3mmxi5VxR3k1p0HkTL0akBhAQEY_MwW6As", rawSeq: 1 },
+      seq: 1,
+    },
+  },
+  {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "call_91b14ea801fa8c19",
+        name: "message",
+        arguments: { action: "send", message: FORGED_TEXT, idempotencyKey: FORGED_KEY },
+      },
+    ],
+    api: "openai-completions",
+    provider: "scripted",
+    model: "dev-1",
+    usage: { ...zero, input: 120, output: 80, totalTokens: 200 },
+    stopReason: "toolUse",
+    timestamp: 1795618494878,
+    responseId: "chatcmpl-scripted-2",
+    __openclaw: {
+      runId: "forged-1795618489",
+      id: "12c41fdc-730c-4cd6-8f26-c306c020057a",
+      recordTimestampMs: 1795618495188,
+      transcriptPosition: { source: "khJEJGDXV3mmxi5VxR3k1p0HkTL0akBhAQEY_MwW6As", rawSeq: 4 },
+      seq: 2,
+    },
+  },
+  {
+    role: "assistant",
+    content: [{ type: "text", text: FORGED_TEXT }],
+    api: "openclaw-transcript",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    usage: zero,
+    stopReason: "stop",
+    timestamp: 1795618495490,
+    idempotencyKey: FORGED_KEY,
+    __openclaw: {
+      runId: "forged-1795618489",
+      id: "e72f5f42-691a-43ce-a98f-36f7993668fd",
+      idempotencyKey: FORGED_KEY,
+      recordTimestampMs: 1795618495519,
+      transcriptPosition: { source: "khJEJGDXV3mmxi5VxR3k1p0HkTL0akBhAQEY_MwW6As", rawSeq: 5 },
+      seq: 3,
+    },
+  },
+  {
+    role: "toolResult",
+    toolCallId: "call_91b14ea801fa8c19",
+    toolName: "message",
+    content: [
+      {
+        type: "text",
+        text: "Sent visible reply to the current source conversation via internal-ui.",
+      },
+    ],
+    isError: false,
+    timestamp: 1795618495534,
+    __openclaw: {
+      runId: "forged-1795618489",
+      id: "b1076986-b766-47a4-819b-bd2a650d73f6",
+      recordTimestampMs: 1795618495542,
+      transcriptPosition: { source: "khJEJGDXV3mmxi5VxR3k1p0HkTL0akBhAQEY_MwW6As", rawSeq: 6 },
+      seq: 4,
+    },
+  },
+];
+
+const said = (items: TranscriptItem[], text: string) =>
+  items.filter((item) => item.blocks.some((block) => block.kind === "text" && block.text === text));
+
+describe("F-560: a row of the skill note's shape is an ordinary message", () => {
+  it("a bot's message the gateway copied under a key of the note's shape is the bot's message, unmarked", () => {
+    const items = mapHistory(forged);
+    const shown = said(items, FORGED_TEXT);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.role).toBe("assistant");
+    expect(shown[0]).not.toHaveProperty("skillNote");
+    expect(items.every((item) => !("skillNote" in item))).toBe(true);
   });
 
-  it("a reply kept after an abort, sent with a key that looks like the gateway's, is not a note", () => {
-    // The caller chose the key: the gateway keeps the aborted reply as `<key>:assistant`.
-    expect(isSkillChangeNote(aborted("Half of my answer", KEY))).toBe(false);
-    // Even if a key of exactly the gateway's shape reached such a row, the row is not the gateway's note.
-    expect(
-      isSkillChangeNote({ ...aborted("Half", KEY), idempotencyKey: KEY, __openclaw: {} }),
-    ).toBe(false);
-    const items = mapHistory([user("Go on", 1_000), aborted("Half of my answer", KEY, 2_000)]);
-    expect(items.map((item) => [item.role, item.skillNote ?? false])).toEqual([
-      ["user", false],
-      ["assistant", false],
-    ]);
-  });
-
-  it("the right key on a model's own row is not a note; nor is any row without the gateway's fields", () => {
-    expect(isSkillChangeNote({ ...reply(NOTE_TEXT, 1, "r1"), idempotencyKey: KEY })).toBe(false);
-    for (const field of ["api", "provider", "model"] as const) {
-      expect(isSkillChangeNote({ ...note(), [field]: undefined }), field).toBe(false);
-    }
-    expect(isSkillChangeNote({ ...note(), model: "gateway-injected" })).toBe(false);
-  });
-
-  it("is not a note without the key: words alone never make one", () => {
-    const { idempotencyKey: _key, __openclaw: _meta, ...bare } = note();
-    expect(isSkillChangeNote(bare)).toBe(false);
-    expect(isSkillChangeNote(reply(NOTE_TEXT, 1, "r1"))).toBe(false);
-    expect(isSkillChangeNote({ ...note(), idempotencyKey: "run-1", __openclaw: {} })).toBe(false);
-  });
-
-  it("is not a note when the key is not exactly the gateway's shape", () => {
-    for (const key of [
-      SKILL_NOTE_KEY_PREFIX,
-      `${SKILL_NOTE_KEY_PREFIX} `,
-      `${SKILL_NOTE_KEY_PREFIX}   `,
-      `${KEY} `,
-      `${KEY}\n`,
-      ` ${KEY}`,
-      `x${KEY}`,
-      `${KEY}:assistant`,
-      KEY.toUpperCase(),
-      `${SKILL_NOTE_KEY_PREFIX}0b6c1f2e-4d5a-4b7c-9e1f-2a3b4c5d6e7f`,
-      `${SKILL_NOTE_KEY_PREFIX}skill-workshop-review:0b6c1f2e`,
-      `${SKILL_NOTE_KEY_PREFIX}other-run:0b6c1f2e-4d5a-4b7c-9e1f-2a3b4c5d6e7f`,
-      42,
-      null,
-      { prefix: SKILL_NOTE_KEY_PREFIX },
-    ]) {
-      expect(isSkillChangeNote(note(1, key)), JSON.stringify(key)).toBe(false);
-    }
-    // The key under __openclaw decides when both are there.
-    expect(isSkillChangeNote({ ...note(), __openclaw: { idempotencyKey: "run-1" } })).toBe(false);
-    // Only an assistant row: a user row with the same key is the person's.
-    expect(isSkillChangeNote({ ...note(), role: "user" })).toBe(false);
-    for (const row of [null, undefined, "note", [note()], 7]) {
-      expect(isSkillChangeNote(row)).toBe(false);
-    }
-  });
-
-  it("mapHistory gives the note an item of its own, marked; an unmarked look-alike stays a reply", () => {
-    const items = mapHistory([
-      user("Check the trail", 1_000),
-      reply("The trail is open.", 2_000, "r1"),
-      note(3_000),
-      reply("Anything else?", 4_000, "r2"),
-      { ...note(5_000), idempotencyKey: undefined, __openclaw: { id: "x" } },
-    ]);
-    expect(items.map((item) => [item.role, item.skillNote ?? false])).toEqual([
-      ["user", false],
-      ["assistant", false],
-      ["assistant", true],
-      ["assistant", false],
-      ["assistant", false],
-    ]);
-    expect(items[2]!.blocks).toEqual([{ kind: "text", text: NOTE_TEXT, messageId: "note-3000" }]);
-  });
-});
-
-/** The note's preview as the gateway lists it: its code marks gone. */
-const LISTED = "Learned: created trail-check (check the trail). Say undo to revert.";
-const task = (over: Partial<Task> = {}): Task => ({
-  key: "agent:pip:trail",
-  botId: "pip",
-  sessionId: "s1",
-  title: "Trail",
-  preview: LISTED,
-  updatedAt: 3_100,
-  status: "done",
-  unread: true,
-  ...over,
-});
-/** History as this client loaded it at `loadedAt`, by this client's clock. */
-const transcript = (rows: unknown[], loadedAt = 3_200): Transcript => ({
-  ...emptyActivity,
-  linkedRuns: {},
-  interSession: [],
-  mcpTools: {},
-  sessionKey: "agent:pip:trail",
-  status: "ready",
-  items: mapHistory(rows),
-  error: null,
-  hasMore: false,
-  live: null,
-  loadedAt,
-});
-/** A note with this text. */
-const noteSaying = (text: string, at = 3_000) => ({
-  ...note(at),
-  content: [{ type: "text", text }],
-});
-
-describe("F-560: the gateway's preview of a note, as it lists it", () => {
-  it("is the note's text, trimmed, with its code marks and runs of space flattened", () => {
-    expect(gatewayPreviewOfNote(`  ${NOTE_TEXT}\n`)).toBe(LISTED);
-    expect(gatewayPreviewOfNote("💾 Learned: created `a`.\n\nSay   undo.")).toBe(
-      "💾 Learned: created a. Say undo.",
-    );
-  });
-
-  it("is cut to 240 characters with three dots, never inside a surrogate pair", () => {
-    const long = `Learned: created \`trail-check\` (${"x".repeat(300)}).`;
-    const listed = gatewayPreviewOfNote(long)!;
-    expect(listed).toHaveLength(240);
-    expect(listed.endsWith("x...")).toBe(true);
-    const flat = `Learned: created trail-check (${"x".repeat(300)}).`;
-    expect(listed).toBe(`${flat.slice(0, 237)}...`);
-    // An emoji across the cut stays whole: the cut moves before it.
-    const emoji = `${"y".repeat(236)}💾${"z".repeat(10)}`;
-    expect(gatewayPreviewOfNote(emoji)).toBe(`${"y".repeat(236)}...`);
-    expect(gatewayPreviewOfNote("y".repeat(240))).toBe("y".repeat(240));
-  });
-
-  it("is not known for Markdown the gateway would flatten another way", () => {
-    for (const text of [
-      "Learned: created **trail-check**.",
-      "Learned: created _trail-check_.",
-      "Learned: ~~old~~ new.",
-      "Learned: [trail-check](https://example.com).",
-      "Learned: <https://example.com>.",
-      "# Learned",
-      "- Learned: created trail-check.",
-      "1. Learned",
-      "Learned:\n> quoted",
-      "Learned: ```code```",
-      "`- item` learned",
-      "Learned: escaped \\` mark",
-      "   ",
-    ]) {
-      expect(gatewayPreviewOfNote(text), text).toBeNull();
+  it("the same row on its own, as a channel's copy writes it (no run) or as a history page starts with it, is the bot's message, unmarked", () => {
+    const copied = forged[2]!;
+    const { runId: _run, ...noRun } = copied.__openclaw;
+    for (const rows of [[forged[0], { ...copied, __openclaw: noRun }], [copied]]) {
+      const shown = said(mapHistory(rows), FORGED_TEXT);
+      expect(shown).toHaveLength(1);
+      expect(shown[0]).not.toHaveProperty("skillNote");
     }
   });
-});
 
-describe("F-560: the rail's preview leaves out a note only when the listed preview is that note", () => {
-  it("takes the preview from the last item before the notes, and changes nothing else", () => {
-    const listed = task();
-    const shown = taskWithoutSkillNotes(
-      listed,
-      transcript([
-        user("Check the trail", 1_000),
-        reply("The **trail** is open.", 2_000, "r1"),
-        note(3_000),
-        note(3_050),
-      ]),
-    );
-    expect(shown).toEqual({ ...listed, preview: "The trail is open." });
-  });
-
-  it("keeps a newer reply's preview, whatever either clock says", () => {
-    const history = [reply("The trail is open.", 2_000, "r1"), note(3_000)];
-    // The host's clock 120 s ahead: its read of the history looks later than the newer row.
-    const newer = task({ preview: "Here is the new route.", updatedAt: 5_005 });
-    expect(taskWithoutSkillNotes(newer, transcript(history, 122_000))).toBe(newer);
-    // And behind: the row looks later than the read, yet its preview is the note.
-    const listed = task({ updatedAt: 9_000 });
-    expect(taskWithoutSkillNotes(listed, transcript(history, 1_000)).preview).toBe(
-      "The trail is open.",
-    );
-  });
-
-  it("matches a long note by the gateway's cut preview, and nothing else", () => {
-    const long = `Learned: created \`trail-check\` (${"x".repeat(300)}).`;
-    const history = [reply("The trail is open.", 2_000, "r1"), noteSaying(long)];
-    const cut = task({ preview: gatewayPreviewOfNote(long) });
-    expect(taskWithoutSkillNotes(cut, transcript(history)).preview).toBe("The trail is open.");
-    // The whole text is not what the gateway lists, so it is not taken for the note.
-    const whole = task({ preview: long.replaceAll("`", "") });
-    expect(taskWithoutSkillNotes(whole, transcript(history))).toBe(whole);
-  });
-
-  it("keeps the gateway's preview for a note it would format another way", () => {
-    const text = "Learned: created **trail-check**. Say undo to revert.";
-    const flattened = task({ preview: "Learned: created trail-check. Say undo to revert." });
+  it("the gateway's own note is an ordinary message too, after the reply it follows", () => {
+    const items = mapHistory(realNote);
     expect(
-      taskWithoutSkillNotes(
-        flattened,
-        transcript([reply("The trail is open.", 2_000, "r1"), noteSaying(text)]),
-      ),
-    ).toBe(flattened);
-  });
-
-  it("is the gateway's row when the history does not end with a note, is not loaded, or was cut", () => {
-    const listed = task();
-    expect(taskWithoutSkillNotes(listed, undefined)).toBe(listed);
-    expect(
-      taskWithoutSkillNotes(
-        listed,
-        transcript([reply("The trail is open.", 2_000, "r1"), note(3_000), user("Thanks", 3_100)]),
-      ),
-    ).toBe(listed);
-    expect(taskWithoutSkillNotes(listed, transcript([]))).toBe(listed);
-    const cutNote = { ...note(3_000), __openclaw: { ...note(3_000).__openclaw, truncated: true } };
-    expect(taskWithoutSkillNotes(listed, transcript([reply("Open.", 2_000, "r1"), cutNote]))).toBe(
-      listed,
-    );
-  });
-
-  it("a merged reply gives the text of its last row and leaves the time as the gateway has it", () => {
-    const listed = task();
-    const shown = taskWithoutSkillNotes(
-      listed,
-      transcript([
-        user("Check the trail", 1_000),
-        reply("Looking now.", 2_000, "r1"),
-        reply("The trail is open.", 2_500, "r1"),
-        note(3_000),
-      ]),
-    );
-    expect(shown.preview).toBe("The trail is open.");
-    expect(shown.updatedAt).toBe(listed.updatedAt);
-    expect(taskWithoutSkillNotes(task(), transcript([note()]))).toEqual(task({ preview: null }));
-  });
-
-  it("loading or unloading a transcript never changes a task's time, so never the order", () => {
-    const pip = task({ updatedAt: 3_100 });
-    const otto = task({ key: "agent:otto:a", botId: "otto", updatedAt: 3_000, preview: "Done." });
-    const byBot = { pip: [pip], otto: [otto] };
-    expect(tasksWithoutSkillNotes(byBot, {})).toBe(byBot);
-    const loaded = tasksWithoutSkillNotes(byBot, {
-      "agent:pip:trail": transcript([reply("Open.", 2_000, "r1"), note()]),
-    });
-    expect(loaded.pip![0]).toEqual({ ...pip, preview: "Open." });
-    expect(loaded.otto![0]).toBe(otto);
-    expect(
-      Object.values(loaded)
-        .flat()
-        .map((each) => [each.key, each.updatedAt]),
-    ).toEqual(
-      Object.values(byBot)
-        .flat()
-        .map((each) => [each.key, each.updatedAt]),
-    );
+      items.map((item) => item.blocks.map((block) => block.kind === "text" && block.text)),
+    ).toEqual([["I read through my workspace files one by one."], [NOTE_TEXT]]);
+    expect(items[1]).not.toHaveProperty("skillNote");
   });
 });
