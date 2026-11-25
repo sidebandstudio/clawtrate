@@ -371,6 +371,7 @@ try {
 } catch (error) {
   note(`stopped: ${error instanceof Error ? error.message : String(error)}`);
 }
+mark("stop");
 client.stop();
 
 const verdict = judgeEngine(entries, plan);

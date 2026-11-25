@@ -209,13 +209,14 @@ describe("the engine's verdict", () => {
     ]);
   });
 
-  it("checks Update stays held after a reopen until the gateway's status answers", () => {
+  it("measures how long Update showed as pressable after a reopen, and needs the press refused", () => {
     const plan: EnginePlan = { ...PLAN, reopen: true };
     const reopened = (held: boolean, refused = true): EngineEntry[] => {
       const entries = trace();
       const validating = entries.findIndex(
         (e) => e.kind === "state" && e.view.run?.phase === "validating",
       );
+      clock = entries[validating]!.at;
       entries.splice(
         validating + 1,
         0,
@@ -229,14 +230,20 @@ describe("the engine's verdict", () => {
       );
       return entries;
     };
-    const verdict = judgeEngine(reopened(true), plan);
-    expect(verdict.failures).toEqual([]);
-    expect(verdict.facts.heldOnReopen).toBe(true);
-    expect(judgeEngine(reopened(false), plan).failures).toEqual([
-      "Update was not held after the reopen before the status answered",
-    ]);
+    const held = judgeEngine(reopened(true), plan);
+    expect(held.failures).toEqual([]);
+    expect(held.facts.unheldMs).toBe(0);
+    // Not held: measured, not failed; the press is what must be refused.
+    const open = judgeEngine(reopened(false), plan);
+    expect(open.failures).toEqual([]);
+    expect(open.facts.unheldMs).toBe(300);
     expect(judgeEngine(reopened(true, false), plan).failures).toEqual([
       "a press right after the reopen was not refused",
     ]);
+  });
+
+  it("judges the engine's last state before the driver stopped it", () => {
+    const entries = [...trace(), mark("stop"), state(view({ status: "idle" }))];
+    expect(judgeEngine(entries, PLAN).failures).toEqual([]);
   });
 });

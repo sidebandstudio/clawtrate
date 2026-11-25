@@ -71,8 +71,11 @@ export type EngineVerdict = {
     outcomes: { atMs: number; outcome: string; phase: string }[];
     /** After a lost answer: what the engine asked on the next connection, in order. */
     afterDrop: string[];
-    /** After the reopen: whether Update was held until the first `update.status` answered. */
-    heldOnReopen: boolean | null;
+    /**
+     * After the reopen, until the first `update.status` answered: how long the engine showed the
+     * gateway, its offer and admin with nothing holding Update (the button would be pressable).
+     */
+    unheldMs: number | null;
   };
 };
 
@@ -158,7 +161,11 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
       outcomes.push({ atMs: s.at - t0, outcome: run.outcome, phase: run.phase });
     }
   }
-  const final = states.at(-1)?.view ?? null;
+  // The engine's last word before the driver stopped it (stopping resets the state).
+  const stopAt = markAt(entries, "stop");
+  const final =
+    (stopAt === -1 ? states : states.filter((s) => entries.indexOf(s) < stopAt)).at(-1)?.view ??
+    null;
   const run = final?.run ?? null;
   if (!run) {
     failures.push("the engine showed no run");
@@ -220,8 +227,9 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
     }
   }
 
-  // A reopen: Update held from the first moment, until the gateway's status answered.
-  let heldOnReopen: boolean | null = null;
+  // A reopen: a press before the gateway's status answers is refused, and how long Update showed
+  // as pressable meanwhile is measured.
+  let unheldMs: number | null = null;
   if (plan.reopen) {
     const reopenAt = markAt(entries, "reopen");
     if (reopenAt === -1) {
@@ -230,30 +238,35 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
       const firstStatus = indexed.find(
         ({ e, i }) => i > reopenAt && e.kind === "sent" && e.method === "update.status",
       );
-      const answeredAt = firstStatus
+      const answered = firstStatus
         ? indexed.find(
             ({ e, i }) =>
               i > firstStatus.i &&
               e.kind === "answer" &&
               e.id === (firstStatus.e as { id: string }).id,
-          )?.i
+          )
         : undefined;
+      // The states between the reopen and that answer, in trace order.
+      const endIndex = answered?.i ?? entries.length;
+      const end = entries[endIndex]?.at ?? entries.at(-1)?.at ?? 0;
       const window = indexed.filter(
-        ({ e, i }) =>
-          i > reopenAt &&
-          (answeredAt === undefined || i < answeredAt) &&
-          e.kind === "state" &&
-          e.view.status === "connected" &&
-          e.view.canAdmin,
-      );
-      heldOnReopen =
-        window.length > 0 &&
-        window.every(({ e }) => {
-          const view = (e as Extract<EngineEntry, { kind: "state" }>).view;
-          return view.looking || view.run?.outcome === "running";
-        });
-      if (!heldOnReopen)
-        failures.push("Update was not held after the reopen before the status answered");
+        ({ e, i }) => i > reopenAt && i < endIndex && e.kind === "state",
+      ) as { e: Extract<EngineEntry, { kind: "state" }>; i: number }[];
+      let unheld = 0;
+      window.forEach(({ e }, k) => {
+        const v = e.view;
+        const pressable =
+          v.status === "connected" &&
+          v.canAdmin &&
+          v.gatewayId !== null &&
+          v.offer !== null &&
+          !v.looking &&
+          !v.starting &&
+          !["running", "late", "away"].includes(v.run?.outcome ?? "");
+        const next = window[k + 1]?.e.at ?? end;
+        if (pressable) unheld += next - e.at;
+      });
+      unheldMs = unheld;
       if (!entries.some((e) => e.kind === "mark" && e.name === "press-refused")) {
         failures.push("a press right after the reopen was not refused");
       }
@@ -273,7 +286,7 @@ export function judgeEngine(entries: readonly EngineEntry[], plan: EnginePlan): 
       updateRequestsAfterUpdated,
       outcomes,
       afterDrop,
-      heldOnReopen,
+      unheldMs,
     },
   };
 }
@@ -292,9 +305,11 @@ export function engineSummary(verdict: EngineVerdict, mode: string): string {
     ...(f.afterDrop.length > 0
       ? [`- After the lost answer the engine asked: ${f.afterDrop.join(", ")}`]
       : []),
-    ...(f.heldOnReopen === null
+    ...(f.unheldMs === null
       ? []
-      : [`- Update held after the reopen until the status answered: ${f.heldOnReopen}`]),
+      : [
+          `- After the reopen, Update showed as pressable for ${f.unheldMs} ms before the status answered`,
+        ]),
     `- Outcomes: ${f.outcomes.map((o) => `${s(o.atMs)} ${o.outcome}/${o.phase}`).join(", ")}`,
   ].join("\n")}\n`;
 }
