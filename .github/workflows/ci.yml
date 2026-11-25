@@ -320,6 +320,21 @@ jobs:
           path: test-results/
           retention-days: 3
 
+  # One check for branch protection to require. A matrix job its `if` skips reports one check
+  # named `visual-linux`, not the three shards' names, so requiring the shards would leave a
+  # pull request that skips them waiting. This passes when every shard passed or all were skipped.
+  visual:
+    needs: visual-linux
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.visual-linux.result }}
+        run: |
+          echo "visual-linux: $RESULT"
+          [ "$RESULT" = "success" ] || [ "$RESULT" = "skipped" ]
+
   windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
