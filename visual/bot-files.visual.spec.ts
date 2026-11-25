@@ -25,10 +25,13 @@ const open = (page: Page, theme: "light" | "dark") =>
   openFixture(page, `scene=bot-files&${OTTO_DISK}&panel=closed`, theme);
 const row = (page: Page, name: string) =>
   page.getByTestId("bot-file").filter({ has: page.getByText(name, { exact: true }) });
+type Connection = { gatewayId: string | null };
 type Fixture = {
   clawtrateFixture: {
-    sent: Array<{ type: string }>;
+    sent: Array<{ type: string; stamp?: { gatewayId: string | null } }>;
     savedFiles: Array<{ name: string; data: string }>;
+    getState(): { connection: Connection };
+    setState(change: (state: { connection: Connection }) => { connection: Connection }): void;
   };
 };
 /** The same place whatever a click scrolled before: the PDF's row in the middle of the view. */
@@ -87,6 +90,36 @@ for (const size of [WIDE, PHONE]) {
 
 test.describe("bot files behaviour", () => {
   test.use(contextFor(WIDE, "dark"));
+
+  test("F-115: Save carries the stamp of the gateway that drew the row, not the one connected now", async ({
+    page,
+  }) => {
+    await open(page, "dark");
+    await expect(row(page, "reviews-draft.pdf")).toBeVisible();
+    const drawn = await page.evaluate(
+      () => (window as unknown as Fixture).clawtrateFixture.getState().connection.gatewayId,
+    );
+    await page.evaluate(() =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+      })),
+    );
+    await row(page, "reviews-draft.pdf")
+      .getByRole("button", { name: "Save reviews-draft.pdf" })
+      .click();
+    await expect
+      .poll(async () =>
+        (
+          await page.evaluate(() =>
+            (window as unknown as Fixture).clawtrateFixture.sent.filter(
+              (command) => command.type === "readChatFile",
+            ),
+          )
+        ).map((command) => command.stamp?.gatewayId),
+      )
+      .toEqual([drawn]);
+  });
 
   test("F-115: each file shows under the message that carried it, in its order, and nothing is read before Save", async ({
     page,

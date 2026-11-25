@@ -404,6 +404,21 @@ describe("F-115: the preview of a task whose last message is only a file", () =>
       "Send the route",
     );
     expect(taskWithFilePreview(task("Send the route"), undefined).preview).toBe("Send the route");
+    // A text message after the file-only one in the same run: the preview is the bot's text.
+    const later = {
+      items: mapHistory([
+        ...run([attachment(NOTES, "route.csv", "text/csv", 1_204)], "Send the route"),
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Done, it's attached." }],
+          model: "dev-1",
+          __openclaw: { runId: "probe-attach", id: "row-later", seq: 5 },
+        },
+      ]),
+    } as unknown as Transcript;
+    expect(taskWithFilePreview(task("Done, it's attached."), later).preview).toBe(
+      "Done, it's attached.",
+    );
   });
 });
 
