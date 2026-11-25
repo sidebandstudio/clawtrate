@@ -300,7 +300,12 @@ describe("no test or tool reaches a machine-wide OpenClaw (#597)", () => {
       "packages/core/src/look.ts": 'spawnSync("openclaw");\n',
       "apps/desktop/src/look.ts": 'spawnSync("openclaw");\n',
     });
-    symlinkSync(outside, join(root, "tools/linked"));
+    // A junction on Windows, which needs no symlink rights; a directory link elsewhere.
+    symlinkSync(
+      outside,
+      join(root, "tools/linked"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     expect(findings(root).sort((a, b) => a.file.localeCompare(b.file))).toEqual([
       { file: "apps/desktop/test/probe.test.jsx", pattern: "openclaw from PATH", line: 1 },
       { file: "apps/desktop/test/probe.test.tsx", pattern: "openclaw from PATH", line: 2 },
