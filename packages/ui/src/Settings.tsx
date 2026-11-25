@@ -31,7 +31,13 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
-import { UpdateOpenClaw } from "./bots/UpdateOpenClaw.tsx";
+import {
+  OPENCLAW_UPDATES_HEADING,
+  OpenOpenClawUpdates,
+  UpdateOpenClawLink,
+  UpdatesWithOpenClaw,
+  useUpdateLinkLine,
+} from "./bots/UpdateOpenClaw.tsx";
 import { FullControlAsk, isFullRequest, notGranted } from "./FullControl.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayTitle } from "./format.ts";
@@ -112,7 +118,7 @@ export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
   ["checkins", "Check-ins", "When each bot checks in on its own"],
-  ["updates", "Updates", "Clawtrate's own updates"],
+  ["updates", "Updates", "Clawtrate's own updates, and OpenClaw's on the gateway"],
   [
     "advanced",
     "Advanced",
@@ -790,6 +796,7 @@ export function Settings({
   bots,
   waitingMessages,
   initialSection,
+  atOpenClaw = false,
   updateReading,
   onClose,
 }: {
@@ -801,6 +808,8 @@ export function Settings({
   waitingMessages: string;
   /** The section to open on; otherwise the one shown last. */
   initialSection: Section | null;
+  /** With `initialSection` "updates": open at its OpenClaw section, with focus on its heading. */
+  atOpenClaw?: boolean;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
 }) {
@@ -824,6 +833,7 @@ export function Settings({
     dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus();
   };
   const { forget, failure: forgetProblem } = useForget();
+  const updateLine = useUpdateLinkLine();
   const gatewayUrl = connection.gatewayUrl;
   const state = gatewayState(connection);
   const problem = gatewayProblem(connection);
@@ -885,12 +895,29 @@ export function Settings({
           ? `Couldn't re-pair. ${upgrade.error ?? ""}`.trim()
           : null;
 
+  /** Settings › Updates' OpenClaw section, brought into view with focus on its heading. */
+  const toOpenClaw = () => {
+    const heading = dialogRef.current?.querySelector<HTMLElement>(`#${OPENCLAW_UPDATES_HEADING}`);
+    if (!heading) return false;
+    heading.focus();
+    heading.scrollIntoView?.({ block: "start" });
+    return true;
+  };
+  // The Gateway pane's link to it: the section changes, and focus lands on the OpenClaw heading.
+  const openOpenClaw = () => {
+    setSection("updates");
+    toOpenClaw();
+  };
+
   useEffect(() => {
     const dialog = dialogRef.current;
+    if (atOpenClaw && toOpenClaw()) return;
     const close = [...(dialog?.querySelectorAll<HTMLElement>(".settings-close") ?? [])].find(
       (each) => each.getClientRects().length > 0,
     );
     close?.focus();
+    // On open only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // An action replaces its own button (Disconnect gives way to Reconnect, and
@@ -1026,8 +1053,8 @@ export function Settings({
           </div>
         )}
       </dl>
-      {/* A newer OpenClaw, its update and how that went (#565). */}
-      <UpdateOpenClaw where="settings" />
+      {/* A newer OpenClaw, or its update under way: the line, and where it is made (#590). */}
+      {updateLine && <UpdateOpenClawLink line={updateLine} where="gateway" />}
       {missing.length > 0 && (
         <p className="settings-note" data-testid="narrower-grant">
           {narrower}
@@ -1151,7 +1178,11 @@ export function Settings({
                       title: "Updates",
                       back: toNav,
                       foot: null,
-                      body: <Updates waitingMessages={waitingMessages} {...updateReading} />,
+                      body: (
+                        <UpdatesWithOpenClaw
+                          app={<Updates waitingMessages={waitingMessages} {...updateReading} />}
+                        />
+                      ),
                     }
                   : section === "advanced"
                     ? {
@@ -1177,31 +1208,33 @@ export function Settings({
 
   return (
     <Dialog kind="settings" labelledBy="settings-title" onClose={onClose} testId="settings">
-      <div className="b-settings" data-pane={pane} ref={dialogRef}>
-        <nav className="b-nav" aria-label="Settings">
-          <div className="b-nav-head">
-            <h2 id="settings-title">Settings</h2>
+      <OpenOpenClawUpdates.Provider value={openOpenClaw}>
+        <div className="b-settings" data-pane={pane} ref={dialogRef}>
+          <nav className="b-nav" aria-label="Settings">
+            <div className="b-nav-head">
+              <h2 id="settings-title">Settings</h2>
+              {closeButton}
+            </div>
+            {SETTINGS_SECTIONS.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className="b-nav-item"
+                aria-current={id === section ? "page" : undefined}
+                onClick={() => setSection(id)}
+              >
+                {label}
+                <ChevronIcon />
+              </button>
+            ))}
+          </nav>
+          <section className="b-section" aria-labelledby="b-section-title">
             {closeButton}
-          </div>
-          {SETTINGS_SECTIONS.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className="b-nav-item"
-              aria-current={id === section ? "page" : undefined}
-              onClick={() => setSection(id)}
-            >
-              {label}
-              <ChevronIcon />
-            </button>
-          ))}
-        </nav>
-        <section className="b-section" aria-labelledby="b-section-title">
-          {closeButton}
-          {content}
-        </section>
-        {section !== "updates" && announcer}
-      </div>
+            {content}
+          </section>
+          {section !== "updates" && announcer}
+        </div>
+      </OpenOpenClawUpdates.Provider>
     </Dialog>
   );
 }
