@@ -1943,6 +1943,117 @@ export async function retryOnTransport<T>(
   }
 }
 
+/**
+ * A scripted turn's call that failed reaching or hearing from the gateway. The `agent` command
+ * reports a gateway it couldn't reach as its own error, not the gateway client's.
+ */
+export function isTurnTransportFailure(error: unknown): boolean {
+  if (isTransportFailure(error)) return true;
+  const text = error instanceof Error ? error.message : String(error);
+  return /Gateway not reachable at |Gateway agent call connection closed/.test(text);
+}
+
+/** A failed call whose request never reached the gateway: it couldn't connect at all. */
+export function neverReachedGateway(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /Gateway not reachable at |connect timeout|Opening handshake has timed out/.test(text);
+}
+
+/** A history message's text, from a plain string or its text blocks. */
+function historyText(message: HistoryMessage): string {
+  if (typeof message.content === "string") return message.content;
+  return (Array.isArray(message.content) ? (message.content as Record<string, unknown>[]) : [])
+    .flatMap((block) => (block.type === "text" ? [String(block.text)] : []))
+    .join("");
+}
+
+/**
+ * How far turn `index` (from 0) of a seeded task got, from the task's history: its message isn't
+ * there, it is there and its reply isn't yet, or both are. The turns before it ended earlier, so
+ * the history holds exactly `index` messages of the person's before it.
+ */
+export function turnLanding(
+  messages: HistoryMessage[],
+  index: number,
+  turn: SeedTurn,
+): { state: "absent" | "running" | "done" } | { problem: string } {
+  const users = messages.flatMap((message, at) => (message.role === "user" ? [at] : []));
+  if (users.length === index) return { state: "absent" };
+  if (users.length !== index + 1)
+    return { problem: `expected ${index + 1} messages of the person's, found ${users.length}` };
+  const at = users.at(-1)!;
+  if (historyText(messages[at]!).trim() !== turn.prompt.trim())
+    return { problem: "the last message in the task isn't this turn's" };
+  const last = messages.at(-1)!;
+  if (last.role !== "assistant" || last.stopReason === "toolUse" || at === messages.length - 1)
+    return { state: "running" };
+  if (last.stopReason !== "stop") return { problem: `the turn ended with ${last.stopReason}` };
+  if (historyText(last).trim() !== expectedFinalText(turn))
+    return { problem: "the turn's reply differs from the script" };
+  return { state: "done" };
+}
+
+/**
+ * Run one scripted turn, and when the gateway doesn't answer, find out from the task's history
+ * what happened before doing anything again (#627). A turn isn't safe to send twice: a slow but
+ * running gateway may still be carrying out the first. So after each wait the history is read:
+ * a turn whose reply is there is done; one whose message is there is waited for; one whose
+ * message isn't there is sent again only when no try so far reached the gateway, since a message
+ * that did may still land. Returns what is wrong with the turn's outcome, or null.
+ */
+export async function runSeedTurn(options: {
+  turn: SeedTurn;
+  index: number;
+  send: () => Promise<AgentRunOutput>;
+  history: () => Promise<HistoryMessage[]>;
+  what: string;
+  delays?: readonly number[];
+  sleep?: (ms: number) => Promise<unknown>;
+  log?: (line: string) => void;
+}): Promise<string | null> {
+  const { turn, index, send, history } = options;
+  const delays = options.delays ?? SEED_RETRY_DELAYS_MS;
+  const wait = options.sleep ?? sleep;
+  const log = options.log ?? console.log;
+  const what = `turn ${index + 1} of ${options.what}`;
+  let failure: unknown;
+  try {
+    return checkTurnOutcome(await send(), turn);
+  } catch (error) {
+    if (!isTurnTransportFailure(error)) throw error;
+    failure = error;
+  }
+  let reached = !neverReachedGateway(failure);
+  for (const delay of delays) {
+    log(`  the gateway didn't answer ${what}; reading its task in ${delay / 1000} s`);
+    await wait(delay);
+    let messages: HistoryMessage[];
+    try {
+      messages = await history();
+    } catch (error) {
+      if (!isTransportFailure(error)) throw error;
+      continue;
+    }
+    const landing = turnLanding(messages, index, turn);
+    if ("problem" in landing) return landing.problem;
+    if (landing.state === "done") return null;
+    if (landing.state === "running") {
+      reached = true;
+      continue;
+    }
+    // Not there: sent again only if no try reached the gateway, which could still carry it out.
+    if (reached) continue;
+    try {
+      return checkTurnOutcome(await send(), turn);
+    } catch (error) {
+      if (!isTurnTransportFailure(error)) throw error;
+      failure = error;
+      reached = !neverReachedGateway(error);
+    }
+  }
+  throw failure;
+}
+
 type AgentRow = { id: string; workspace?: string };
 
 async function existingSessionKeys(inst: DevInstance, botId: string): Promise<Set<string>> {
@@ -1991,7 +2102,7 @@ async function configureBot(
   ]);
 }
 
-type AgentRunOutput = {
+export type AgentRunOutput = {
   status?: string;
   summary?: string;
   result?: {
@@ -2024,7 +2135,12 @@ export function checkTurnOutcome(output: AgentRunOutput, turn: SeedTurn): string
   return null;
 }
 
-type HistoryMessage = { role?: string; stopReason?: string; isError?: boolean; content?: unknown };
+export type HistoryMessage = {
+  role?: string;
+  stopReason?: string;
+  isError?: boolean;
+  content?: unknown;
+};
 
 /** Check a seeded session's durable history against its script. Returns what is wrong. */
 export function checkHistory(messages: HistoryMessage[], task: SeedTask): string[] {
@@ -2100,22 +2216,30 @@ async function seedConversations(
         what: `sessions.create for ${key}`,
       });
     }
-    for (const turn of alreadySeeded ? [] : task.turns) {
-      const output = parseJsonOutput<AgentRunOutput>(
-        await must(inst, [
-          "agent",
-          "--agent",
-          bot.id,
-          "--session-key",
-          key,
-          "--message",
-          turn.prompt,
-          "--thinking",
-          "low",
-          "--json",
-        ]),
-      );
-      const problem = checkTurnOutcome(output, turn);
+    for (const [index, turn] of (alreadySeeded ? [] : task.turns).entries()) {
+      const send = async () =>
+        parseJsonOutput<AgentRunOutput>(
+          await must(inst, [
+            "agent",
+            "--agent",
+            bot.id,
+            "--session-key",
+            key,
+            "--message",
+            turn.prompt,
+            "--thinking",
+            "low",
+            "--json",
+          ]),
+        );
+      const history = async () =>
+        (
+          await callGateway<{ messages?: HistoryMessage[] }>(inst, "chat.history", {
+            sessionKey: key,
+            limit: 200,
+          })
+        ).messages ?? [];
+      const problem = await runSeedTurn({ turn, index, send, history, what: key });
       if (problem) throw new Error(`${bot.name} / ${task.label}: ${problem}`);
     }
     // A read, so safe to try again.
