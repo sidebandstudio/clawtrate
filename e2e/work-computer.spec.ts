@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { browserPorts, instancePorts, openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { PAGES_RECORD_PATH } from "../tools/dev-gateway/src/scripted-pages.ts";
-import { newRunId, processIdentity, readMarker } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity, readMarker } from "../tools/dev-gateway/src/state-guard.ts";
 import { execFileSync } from "node:child_process";
 import {
   devGateway,
@@ -113,9 +113,8 @@ async function hostOn(instance: string): Promise<string> {
 
 test.beforeAll(async () => {
   test.setTimeout(240_000);
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this worker's start time");
-  record.runner.identity = self.identity;
+  const self = ownIdentity();
+  record.runner.identity = self;
   const runId = newRunId();
   record.instances.push({ name: COMPUTER, runId });
   saveRecord(RECORDS, record);

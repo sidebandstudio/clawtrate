@@ -22,7 +22,7 @@ import { isSkillChangeNote } from "../packages/core/src/skill-notes.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { scriptedFinalText } from "../tools/dev-gateway/src/scenario-check.ts";
-import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -179,9 +179,8 @@ async function restartHost(): Promise<void> {
 
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(300_000);
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this process's start time");
-  record.runner.identity = self.identity;
+  const self = ownIdentity();
+  record.runner.identity = self;
   const runId = newRunId();
   record.instances.push({ name: INSTANCE, runId });
   saveRecord(RECORDS, record);

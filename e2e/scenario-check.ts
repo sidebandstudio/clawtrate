@@ -53,7 +53,7 @@ import {
   SEQ_GAP_NOTES,
   UNDECLARED_FIELDS,
 } from "../tools/dev-gateway/src/scenario-check.ts";
-import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, devGateway, listInstances } from "./global-setup.ts";
 import { cleanUp, recoverDeadRuns, saveRecord, type RunRecord } from "./run-record.ts";
 
@@ -73,11 +73,10 @@ async function main(): Promise<number> {
   const rulesRunId = newRunId();
   const imagesName = `${name}-images`;
   const imagesRunId = newRunId();
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this process's start time");
+  const self = ownIdentity();
   const record: RunRecord = {
     run,
-    runner: { pid: process.pid, identity: self.identity },
+    runner: { pid: process.pid, identity: self },
     instances: [
       { name, runId },
       { name: computerName, runId: computerRunId },

@@ -45,6 +45,7 @@
 //                             gateway didn't ask again
 //   allowlist=1               the gateway's config names the models bots may use
 
+import { isUpdateRunScene, type UpdateRunScene } from "./openclaw-update.ts";
 import {
   ADMIN_SCOPES,
   INTERACTIVE_SCOPES,
@@ -102,6 +103,8 @@ export type AccountParams = {
   refresh: string | null;
   /** The gateway's config names the models bots may use (`agents.defaults.models`). */
   allowlist: boolean;
+  /** An update of OpenClaw under way or ended, or a gateway that can't update itself (F-589). */
+  openclawRun: UpdateRunScene | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -145,6 +148,9 @@ export function accountParams(params: URLSearchParams): AccountParams {
         : null,
     refresh: params.get("refresh"),
     allowlist: params.get("allowlist") === "1",
+    openclawRun: isUpdateRunScene(params.get("openclawRun"))
+      ? (params.get("openclawRun") as UpdateRunScene)
+      : null,
   };
 }
 
@@ -170,6 +176,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   openclaw: null,
   refresh: null,
   allowlist: false,
+  openclawRun: null,
 };
 
 const MINUTE = 60_000;
