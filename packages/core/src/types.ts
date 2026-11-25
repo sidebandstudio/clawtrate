@@ -197,6 +197,11 @@ export type Bot = {
   theme: string | null;
   model: string | null;
   isDefault: boolean;
+  /**
+   * The gateway names no owner (`agents.list` `selectionRequired`): `isDefault` marks only its
+   * first bot, which is the person's like any other, not the gateway's own (F-562).
+   */
+  ownerless?: boolean;
   /** Paths of fields cut to their bound (an avatar too large to keep is dropped). */
   cut?: string[];
 };
@@ -556,6 +561,11 @@ export type ClawtrateState = {
    * the host.
    */
   showOtherToolSessions?: boolean;
+  /**
+   * "Show the gateway's own bot": whether the gateway's default bot is listed beside the
+   * others (`gateway-bot.ts`). Off by default, kept by the host.
+   */
+  showGatewayBot?: boolean;
   /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host

@@ -8,6 +8,7 @@
 import {
   changedFields,
   fieldsOf,
+  listedBots,
   type ClawtrateState,
   type HostInfo,
   type Routine,
@@ -200,6 +201,8 @@ export function Editor({
 }) {
   const bridge = useBridge();
   const { connection, bots, routines: store } = state;
+  // The bots a new routine can be for: the ones the rail lists (F-562).
+  const shown = listedBots(state);
   const admin = connection.status === "connected" && connection.canAdmin && !info.readOnly;
   const [now] = useState(() => Date.now());
   const [mode, setMode] = useState(target);
@@ -225,12 +228,14 @@ export function Editor({
       ? draftOf(initial, now)
       : newDraft(
           (target.mode === "new" && target.botId) ||
-            (bots.find((each) => each.isDefault) ?? bots[0])?.id ||
+            (shown.find((each) => each.isDefault) ?? shown[0])?.id ||
             "main",
           store.routines,
           now,
         ),
   );
+  // And always the bot the draft is for, whichever way the editor was opened.
+  const offered = bots.filter((each) => shown.includes(each) || each.id === draft.botId);
   // The gateway treats a second add with the same key as an edit of the first, so a
   // retry after a check that found nothing gets a new key: that save may still land,
   // and its key must not overwrite what it became since.
@@ -288,7 +293,8 @@ export function Editor({
     newBotMissing && (bots.length === 0 || (target.mode === "new" && target.botId === draft.botId));
   const fallbackBotId =
     newBotMissing && !closeMissingBot
-      ? ((bots.find((each) => each.isDefault) ?? bots[0])?.id ?? null)
+      ? // From the bots the rail lists (F-562), as a new draft picks.
+        ((shown.find((each) => each.isDefault) ?? shown[0])?.id ?? null)
       : null;
   useEffect(() => {
     if (closeMissingBot) onClose();
@@ -916,7 +922,7 @@ export function Editor({
                     })
                   }
                 >
-                  {bots.map((each) => (
+                  {offered.map((each) => (
                     <option key={each.id} value={each.id}>
                       {each.name}
                     </option>

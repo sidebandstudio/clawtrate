@@ -749,6 +749,7 @@ const bot = flagged<Bot>()({
   theme: NAME,
   model: NAME,
   isDefault: FLAG,
+  ownerless: FLAG,
 });
 const nameProposal = object<NameProposal>()({
   botId: ID,
@@ -1302,6 +1303,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   showChannelChats: FLAG,
   voiceChanges: NUMBER,
   showOtherToolSessions: FLAG,
+  showGatewayBot: FLAG,
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
 });
