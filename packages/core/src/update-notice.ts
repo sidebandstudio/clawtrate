@@ -70,7 +70,35 @@ export type UpdatedRun = {
   to: string;
   /** When this device saw it, on this device's clock: only its age is read. */
   at: number;
+  /**
+   * When the run became succeeded, on the gateway host's clock: the record's `finishedAtMs` as this
+   * device read it when it saw the run succeed, kept then and never read again. The gateway writes
+   * its notice after this; a row written before it, during the install, is not the notice.
+   */
+  succeededAt: number;
 };
+
+/**
+ * How soon after the run became succeeded the notice row must be written, on the gateway's clock.
+ * The gateway writes it once it sees the run finished: at once in a startup task, or within the
+ * 2-second wait it polls a pending handoff with (OpenClaw 2026.10.6 and 2026.11.10,
+ * `server-restart-sentinel`); about 4 seconds in a real update. A later one shows as the message
+ * it is.
+ */
+export const UPDATE_NOTICE_WRITTEN_WITHIN_MS = 120_000;
+
+/**
+ * A time the gateway wrote, in milliseconds, in a sane range (2001 to 2286): a safe integer, not a
+ * duration or a guess. Anything else vouches for nothing.
+ */
+export function isGatewayTime(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 1_000_000_000_000 &&
+    value <= 9_999_999_999_999
+  );
+}
 
 /** The updates kept, the latest last. */
 export const MAX_UPDATED_RUNS = 16;
@@ -137,6 +165,18 @@ export function updateNoticeLine(
   if (!runId || gatewayId === null || mainKey === null || taskKey !== mainKey) return null;
   const run = updated?.find((each) => each.gatewayId === gatewayId && each.runId === runId);
   if (!run) return null;
+  // Written at or after the run became succeeded, and soon after, both on the gateway's clock: a
+  // row written before, during the install (a bot that read the run's id from the gateway's own
+  // "Updating" row), or long after (in a reset conversation where the key is free again), is the
+  // message it is.
+  const written = item!.timestamp;
+  if (
+    !isGatewayTime(run.succeededAt) ||
+    !isGatewayTime(written) ||
+    written < run.succeededAt ||
+    written > run.succeededAt + UPDATE_NOTICE_WRITTEN_WITHIN_MS
+  )
+    return null;
   return { version: run.to, text: cleanLine(updateNoticeText(item), MAX_UPDATE_NOTICE_CHARS) };
 }
 

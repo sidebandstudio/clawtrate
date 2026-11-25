@@ -1101,19 +1101,27 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
     t.world.handlers["update.run"] = () => started();
     await t.engine.start(t.stamp());
     t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
-    t.world.handlers["update.runs.get"] = () => ({
-      run: record({ phase: "finished", status: "succeeded", after: { version: NEW } }),
-    });
+    t.world.handlers["update.runs.get"] = () => ({ run: finished() });
     await t.restart(NEW);
     expect(t.run()?.outcome).toBe("updated");
     return t;
   }
+  /** The record once the run succeeded: its finish time is the gateway's, and stays put. */
+  const FINISHED = T0 + 600_000;
+  const finished = (patch: Record<string, unknown> = {}) =>
+    record({
+      phase: "finished",
+      status: "succeeded",
+      after: { version: NEW },
+      finishedAtMs: FINISHED,
+      ...patch,
+    });
   const storedRuns = (t: { storage: { data: Map<string, string> } }) =>
     (JSON.parse(t.storage.data.get(UPDATED_RUNS_KEY) ?? '{"runs":[]}') as { runs: object[] }).runs;
 
   it("F-590: after Updated, the run, its gateway and its version are kept, and the main conversation is read again once, after a wait", async () => {
     const t = await updated();
-    const kept = { gatewayId: "gw-a", runId: RUN, to: NEW, at: t.world.now };
+    const kept = { gatewayId: "gw-a", runId: RUN, to: NEW, at: t.world.now, succeededAt: FINISHED };
     expect(t.state().updated).toEqual([kept]);
     expect(storedRuns(t)).toEqual([kept]);
     expect(t.world.rereads).toEqual([]);
@@ -1135,7 +1143,7 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
     await t.storage.set(UPDATED_RUNS_KEY, before.storage.data.get(UPDATED_RUNS_KEY)!);
     await t.engine.onHello();
     expect(t.state().updated).toEqual([
-      { gatewayId: "gw-a", runId: RUN, to: NEW, at: before.world.now },
+      { gatewayId: "gw-a", runId: RUN, to: NEW, at: before.world.now, succeededAt: FINISHED },
     ]);
     expect(t.world.sent).toEqual([]);
   });
@@ -1172,6 +1180,7 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
       runId: `ocm:job-${n}`,
       to: NEW,
       at,
+      succeededAt: FINISHED,
     });
     const many = Array.from({ length: MAX_UPDATED_RUNS + 3 }, (_, n) => old(n, t.world.now - n));
     await t.storage.set(
@@ -1252,6 +1261,47 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
     }
   });
 
+  it("F-590: the gateway's finish time is kept as the record said when it succeeded, and a later read of the record doesn't move it", async () => {
+    const t = await updated();
+    expect(t.state().updated![0]!.succeededAt).toBe(FINISHED);
+    expect(storedRuns(t)).toMatchObject([{ succeededAt: FINISHED }]);
+    // The record is touched again after success (its notice flag flips); a field that moved is
+    // never read back into what is kept.
+    t.world.handlers["update.runs.get"] = () => ({
+      run: finished({ finishedAtMs: FINISHED + 60_000, updatedAtMs: FINISHED + 60_000 }),
+    });
+    t.engine.onRunChanged({ runId: RUN, phase: "finished", status: "succeeded", updatedAtMs: 9 });
+    await new Promise<void>((done) => setTimeout(() => done(), 0));
+    await t.restart(NEW);
+    await new Promise<void>((done) => setTimeout(() => done(), 0));
+    expect(t.state().updated![0]!.succeededAt).toBe(FINISHED);
+    expect(storedRuns(t)).toMatchObject([{ succeededAt: FINISHED }]);
+  });
+
+  it("F-590: a succeeded record without a sane finish time keeps nothing and reads nothing again", async () => {
+    for (const finishedAtMs of [null, undefined, "1780000600000", 1.5, -1, 0, 1e20]) {
+      const t = rig();
+      t.world.handlers["update.run"] = () => started();
+      await t.engine.start(t.stamp());
+      t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+      t.world.handlers["update.runs.get"] = () => ({ run: finished({ finishedAtMs }) });
+      await t.restart(NEW);
+      expect(t.run()?.outcome, String(finishedAtMs)).toBe("updated");
+      expect(t.state().updated, String(finishedAtMs)).toBeUndefined();
+      expect(timersOf(t, UPDATE_NOTICE_READ_AFTER_MS), String(finishedAtMs)).toHaveLength(0);
+    }
+  });
+
+  it("F-590: a kept run whose finish time is missing or malformed is not read", async () => {
+    const t = rig({ admin: false });
+    const run = { gatewayId: "gw-a", runId: RUN, to: NEW, at: t.world.now };
+    for (const succeededAt of [undefined, null, "1780000600000", 1.5, -1, 1e20]) {
+      await t.storage.set(UPDATED_RUNS_KEY, JSON.stringify({ runs: [{ ...run, succeededAt }] }));
+      await t.engine.onHello();
+      expect(t.state().updated, String(succeededAt)).toBeUndefined();
+    }
+  });
+
   it("F-590: a run started elsewhere and followed to Updated keeps nothing and reads nothing again", async () => {
     const t = rig();
     const finished = { phase: "finished", status: "succeeded", after: { version: NEW } };
@@ -1297,6 +1347,7 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
       runId: `ocm:job-${n}`,
       to: OLD,
       at: T0 + 3_600_000 - 1_000 + n,
+      succeededAt: FINISHED - 1_000_000 + n,
     }));
     const t = await updated(JSON.stringify({ runs: old }));
     const runs = storedRuns(t) as Array<{ runId: string }>;
@@ -1310,7 +1361,7 @@ describe("F-590: the updates this device saw succeed, for the gateway's notice",
 
   it("F-590: a kept value longer than 32,768 characters is not read", async () => {
     const t = rig({ admin: false });
-    const run = { gatewayId: "gw-a", runId: RUN, to: NEW, at: t.world.now };
+    const run = { gatewayId: "gw-a", runId: RUN, to: NEW, at: t.world.now, succeededAt: FINISHED };
     const fits = JSON.stringify({ runs: [run] });
     const long = JSON.stringify({ runs: [run], pad: "x".repeat(32_768 - fits.length - 8) });
     expect(long.length).toBe(32_768 + 1);

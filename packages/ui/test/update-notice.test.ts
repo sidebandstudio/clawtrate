@@ -22,10 +22,12 @@ import { summarize, unreadSeenOf } from "../src/selection.ts";
 import { UpdateLine } from "../src/UpdateLine.tsx";
 
 const KEY = "agent:pip:main";
+/** The gateway's clock: rows, the run's finish and the list are its times. */
+const T = 1_790_000_000_000;
 const RUN = "3f2b8c1d-4e5a-4b6c-8d7e-9f0a1b2c3d4e";
 const TEXT =
   "✅ OpenClaw updated.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
-const notice = (text = TEXT, at = 3_000) => ({
+const notice = (text = TEXT, at = T + 3_000) => ({
   role: "assistant",
   content: [{ type: "text", text }],
   api: "openclaw-transcript",
@@ -46,7 +48,9 @@ const reply = (text: string, at: number) => ({
   timestamp: at,
   __openclaw: { id: "a1", runId: "r1" },
 });
-const UPDATED: UpdatedRun[] = [{ gatewayId: "gw-a", runId: RUN, to: "2026.11.10", at: 1 }];
+const UPDATED: UpdatedRun[] = [
+  { gatewayId: "gw-a", runId: RUN, to: "2026.11.10", at: 1, succeededAt: T + 2_900 },
+];
 const SCOPE: UpdateNoticeScope = { updated: UPDATED, gatewayId: "gw-a", mainKey: KEY };
 const history = (rows: unknown[]): Transcript => ({
   ...emptyActivity,
@@ -68,7 +72,7 @@ const listed: Task = {
   title: "Main",
   preview:
     "✅ OpenClaw updated. For details, open Settings → Updates in the OpenClaw app or run openclaw update status in your terminal.",
-  updatedAt: 3_100,
+  updatedAt: T + 3_100,
   status: "done",
   unread: true,
   isMain: true,
@@ -109,11 +113,11 @@ describe("F-590: the update line", () => {
 
 describe("F-590: the rail", () => {
   it("F-590: the bot's preview is its last words before the line, and the notice alone doesn't make the task unread for a viewer who read it", () => {
-    const transcript = history([reply("The trail is open.", 2_000), notice()]);
+    const transcript = history([reply("The trail is open.", T + 2_000), notice()]);
     const quiet = tasksWithoutUpdateNotices({ pip: [listed] }, { [KEY]: transcript }, SCOPE);
     expect(summarize(quiet.pip!, {}, null).latest?.preview).toBe("The trail is open.");
     // Read at 2,050, after the bot's reply and before the notice moved the row's time.
-    const seen = { [KEY]: seenThroughUpdateNotice(listed, 2_050, transcript, SCOPE)! };
+    const seen = { [KEY]: seenThroughUpdateNotice(listed, T + 2_050, transcript, SCOPE)! };
     expect(summarize(quiet.pip!, seen, null, seen).unread).toBe(false);
     // Without this device's record of the run, it is the bot's message, preview and all.
     const plain = tasksWithoutUpdateNotices(
@@ -122,13 +126,13 @@ describe("F-590: the rail", () => {
       { ...SCOPE, updated: [] },
     );
     expect(summarize(plain.pip!, {}, null).latest?.preview).toBe(listed.preview);
-    expect(seenThroughUpdateNotice(listed, 2_050, transcript, { ...SCOPE, updated: [] })).toBe(
-      2_050,
+    expect(seenThroughUpdateNotice(listed, T + 2_050, transcript, { ...SCOPE, updated: [] })).toBe(
+      T + 2_050,
     );
   });
 
   it("F-590: on a read-only connection the viewer's own memory goes past the notice; on one that writes, unread is the gateway's", () => {
-    const transcript = history([reply("The trail is open.", 2_000), notice()]);
+    const transcript = history([reply("The trail is open.", T + 2_000), notice()]);
     const state = {
       bots: [
         {
@@ -146,9 +150,9 @@ describe("F-590: the rail", () => {
       connection: { gatewayId: "gw-a" },
       openclawUpdating: { updated: UPDATED },
     } as unknown as Parameters<typeof unreadSeenOf>[2];
-    const seen = { [KEY]: 2_050 };
+    const seen = { [KEY]: T + 2_050 };
     const readOnly = unreadSeenOf(seen, false, state);
-    expect(readOnly).toEqual({ [KEY]: 3_100 });
+    expect(readOnly).toEqual({ [KEY]: T + 3_100 });
     expect(summarize([listed], readOnly, null, readOnly).unread).toBe(false);
     // Without this device's record of the run, the viewer's memory as it was: unread.
     const plain = unreadSeenOf(seen, false, {

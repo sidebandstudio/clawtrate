@@ -28,6 +28,7 @@ import type { KeyValueStore } from "./host.ts";
 import { asRecord } from "./mapping.ts";
 import type { ConnectionState, GatewayStamp } from "./types.ts";
 import {
+  isGatewayTime,
   MAX_UPDATED_RUNS,
   UPDATE_RUN_ID,
   UPDATED_RUN_MAX_AGE_MS,
@@ -139,6 +140,8 @@ export type GatewayUpdateRun = {
   target: string | null;
   /** The tag the press that started it sent (`origin.requester.senderId`), or null. */
   tag: string | null;
+  /** When the gateway finished the run (`finishedAtMs`, its own clock), or null while it runs. */
+  finishedAtMs: number | null;
 };
 
 export type UpdateOutcome =
@@ -280,6 +283,7 @@ export function readUpdateRun(value: unknown): GatewayUpdateRun | null {
         ? tag
         : null;
     })(),
+    finishedAtMs: isGatewayTime(run?.finishedAtMs) ? run.finishedAtMs : null,
   };
 }
 
@@ -338,7 +342,7 @@ function readUpdated(raw: string | null, now: number): UpdatedRun[] {
     if (!Array.isArray(list)) return [];
     const runs: UpdatedRun[] = [];
     for (const each of list.slice(-MAX_UPDATED_RUNS)) {
-      const { gatewayId, runId, to, at } = asRecord(each) ?? {};
+      const { gatewayId, runId, to, at, succeededAt } = asRecord(each) ?? {};
       if (
         typeof gatewayId === "string" &&
         gatewayId &&
@@ -349,9 +353,10 @@ function readUpdated(raw: string | null, now: number): UpdatedRun[] {
         isOpenClawVersion(to) &&
         typeof at === "number" &&
         Number.isSafeInteger(at) &&
-        now - at <= UPDATED_RUN_MAX_AGE_MS
+        now - at <= UPDATED_RUN_MAX_AGE_MS &&
+        isGatewayTime(succeededAt)
       )
-        runs.push({ gatewayId, runId, to, at });
+        runs.push({ gatewayId, runId, to, at, succeededAt });
     }
     return runs;
   } catch {
@@ -1192,8 +1197,17 @@ export class OpenClawUpdates {
       });
       // Only this device's own press is vouched for: a run started elsewhere, a bot's included,
       // leaves the gateway's notice as the message it is.
-      if (run.mine === true) {
-        await this.remember({ gatewayId: run.gatewayId, runId, to: expected, at: this.ctx.now() });
+      // Kept with the time the gateway finished it, as this record says now and never again: the
+      // notice is written after it. Without that time, nothing is vouched for.
+      const succeededAt = record.finishedAtMs;
+      if (run.mine === true && succeededAt !== null) {
+        await this.remember({
+          gatewayId: run.gatewayId,
+          runId,
+          to: expected,
+          at: this.ctx.now(),
+          succeededAt,
+        });
         // The gateway's notice of it comes with no event: the main conversation is read again.
         this.readForNotice(run.gatewayId, runId, this.epoch, "first");
       }

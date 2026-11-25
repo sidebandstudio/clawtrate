@@ -800,7 +800,7 @@ const openclawUpdating = object<OpenClawUpdateState>()({
   run: updateRun,
   updated: list(
     MAX_UPDATED_RUNS,
-    object<UpdatedRun>()({ gatewayId: ID, runId: ID, to: NAME, at: NUMBER }),
+    object<UpdatedRun>()({ gatewayId: ID, runId: ID, to: NAME, at: NUMBER, succeededAt: NUMBER }),
   ),
   checkingKept: FLAG,
   starting: FLAG,

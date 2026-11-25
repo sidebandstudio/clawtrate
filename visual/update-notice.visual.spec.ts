@@ -82,7 +82,16 @@ async function update(page: Page, seen: boolean, where: Where = "main") {
     ({ items, where, main, other, run, seen, listed, at }) => {
       (window as unknown as Fixture).clawtrateFixture.setState((state) => {
         const updated: UpdatedRun[] = seen
-          ? [{ gatewayId: state.connection.gatewayId!, runId: run, to: "2026.11.10", at }]
+          ? [
+              {
+                gatewayId: state.connection.gatewayId!,
+                runId: run,
+                to: "2026.11.10",
+                at,
+                // The gateway finished the run 4 s before it wrote its notice.
+                succeededAt: at - 4_000,
+              },
+            ]
           : [];
         const botId = where === "main" ? "main" : "otto";
         const key = where === "main" ? main : other;

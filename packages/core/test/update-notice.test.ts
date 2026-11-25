@@ -12,6 +12,7 @@ import {
 } from "../src/mapping.ts";
 import {
   MAX_UPDATE_NOTICE_CHARS,
+  UPDATE_NOTICE_WRITTEN_WITHIN_MS,
   updateNoticeLine,
   updateNoticeRunId,
   holdsUpdateNotice,
@@ -60,7 +61,11 @@ const reply = (text: string, at = T, id = "reply-1") => ({
   __openclaw: { id, runId: "run-1", seq: 2 },
 });
 /** What this device saw succeed. */
-const UPDATED: UpdatedRun[] = [{ gatewayId: GATEWAY, runId: RUN, to: "2026.11.10", at: T }];
+/** When the gateway finished the run, on its clock: every notice row in these tests is written after. */
+const SUCCEEDED = T - 1_000;
+const UPDATED: UpdatedRun[] = [
+  { gatewayId: GATEWAY, runId: RUN, to: "2026.11.10", at: T, succeededAt: SUCCEEDED },
+];
 
 const MAIN = "agent:main:main";
 /** The connected gateway, what this device saw succeed there, and the main bot's main conversation. */
@@ -155,6 +160,36 @@ describe("F-590: the gateway's update notice", () => {
       __openclaw: { idempotencyKey: `update-run-finished:${RUN}` },
     };
     expect(mapHistory([user, notice()]).at(-1)!.updateRunId).toBeUndefined();
+  });
+
+  it("F-590: a row written before the gateway finished the run is the bot's message; one at or after it is the line", () => {
+    // A known, succeeded run of this device's own press, in the main conversation: everything
+    // else holds. A bot that read the run's id from the gateway's own "Updating" row writes during
+    // the install, before the restarted gateway finishes the run.
+    expect(lineOf([notice(RUN, {}, SUCCEEDED - 1)])).toEqual([null]);
+    expect(lineOf([notice(RUN, {}, SUCCEEDED - 120_000)])).toEqual([null]);
+    expect(lineOf([notice(RUN, {}, SUCCEEDED)])[0]).toMatchObject({ version: "2026.11.10" });
+    expect(lineOf([notice(RUN, {}, SUCCEEDED + 4_000)])[0]).toMatchObject({
+      version: "2026.11.10",
+    });
+    // Long after it, as in a reset conversation where the key is free again: the bot's message.
+    const late = SUCCEEDED + UPDATE_NOTICE_WRITTEN_WITHIN_MS;
+    expect(lineOf([notice(RUN, {}, late)])[0]).toMatchObject({ version: "2026.11.10" });
+    expect(lineOf([notice(RUN, {}, late + 1)])).toEqual([null]);
+    expect(lineOf([notice(RUN, {}, SUCCEEDED + 30 * 86_400_000)])).toEqual([null]);
+  });
+
+  it("F-590: a missing or malformed time on either side draws no line", () => {
+    // The row's own time.
+    for (const timestamp of [undefined, null, "1789999999000", 1.5, -1, 1e20]) {
+      const row = { ...notice(), timestamp };
+      expect(lineOf([row]), String(timestamp)).toEqual([null]);
+    }
+    // The kept finish time.
+    for (const succeededAt of [undefined, null, Number.NaN, 1.5, -1, 0, 1e20]) {
+      const kept = [{ ...UPDATED[0]!, succeededAt }] as unknown as UpdatedRun[];
+      expect(lineOf([notice()], { ...SCOPE, updated: kept }), String(succeededAt)).toEqual([null]);
+    }
   });
 
   it("F-590: a run seen on another gateway, or with no gateway connected, is not this conversation's", () => {
