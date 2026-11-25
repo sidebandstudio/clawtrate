@@ -22,6 +22,9 @@ name: OpenClaw update
 #   unmanaged-package-install and no restart.
 # - `-busy`: a slow reply from the repository's scripted model is in flight at the press.
 # - `-session`: the main session exists, from a short turn that ended before the press.
+# - `engine`, `engine-dropped`, `engine-reopen`: Clawtrate's own update engine from
+#   packages/core, in a Node host, pressing Update as the interface does (engine.ts). The
+#   dropped job loses the press's answer; the reopen job quits and reopens the client mid-run.
 # - `campaign`: the beta channel with automatic updates on, so the press adopts the gateway's
 #   own update while it waits for a reply in flight.
 # The busy, session and campaign jobs measure (`--measure`): the driver writes their verdict to the
@@ -66,6 +69,22 @@ jobs:
             start: foreground
             install: folder
             args: "--expect unmanaged"
+          - mode: engine
+            start: systemd
+            install: global
+            driver: engine
+            args: "--warm-session"
+            scripted: true
+          - mode: engine-dropped
+            start: systemd
+            install: global
+            driver: engine
+            args: "--drop-answer"
+          - mode: engine-reopen
+            start: systemd
+            install: global
+            driver: engine
+            args: "--reopen"
           - mode: systemd-busy
             start: systemd
             install: global
@@ -128,7 +147,7 @@ jobs:
           cache: pnpm
       # The scripted model comes from the development gateway tool.
       - run: |
-          pnpm install --frozen-lockfile --filter @clawtrate/openclaw-update-check \
+          pnpm install --frozen-lockfile --filter "@clawtrate/openclaw-update-check..." \
             --filter @clawtrate/dev-gateway
       - run: |
           echo "OUT=$RUNNER_TEMP/openclaw-update" >> "$GITHUB_ENV"
@@ -233,9 +252,16 @@ jobs:
           echo "the gateway did not listen on $PORT within two minutes"
           exit 1
       - name: Update OpenClaw through update.run and follow it
+        if: matrix.driver != 'engine'
         run: |
           # shellcheck disable=SC2086 # ARGS is the matrix's list of flags
           node tools/openclaw-update-check/src/check.ts --url "ws://127.0.0.1:$PORT" \
+            --profile "$PROFILE" --mode "$MODE" --out "$OUT" --deadline-minutes 20 $ARGS
+      - name: Update OpenClaw through Clawtrate's own engine and follow it
+        if: matrix.driver == 'engine'
+        run: |
+          # shellcheck disable=SC2086 # ARGS is the matrix's list of flags
+          node tools/openclaw-update-check/src/engine.ts --url "ws://127.0.0.1:$PORT" \
             --profile "$PROFILE" --mode "$MODE" --out "$OUT" --deadline-minutes 20 $ARGS
       - name: The gateway's update notices
         run: |

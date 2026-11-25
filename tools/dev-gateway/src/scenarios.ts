@@ -54,6 +54,13 @@ export const IMAGE_PROMPT = "A sun over a green hill, in flat solid colours";
 /** The message `#send-picture` sends with the trail map, and the words after it. */
 export const SEND_PICTURE_TEXT = "Here is the trail map.";
 export const SEND_PICTURE_AFTER = "That is the route for Saturday.";
+/**
+ * The message `#send-keyed` sends, and the idempotency key it gives the message tool: the shape of
+ * the key the gateway gives its skill note, with a made-up review id. A bot can pass any key.
+ */
+export const SEND_KEYED_TEXT = "The Saturday hike moved to Sunday at 9.";
+export const SEND_KEYED_KEY =
+  "skill-workshop-notice:skill-workshop-review:5e1f0c2a-7b3d-4e8f-9a6b-1c2d3e4f5a6b";
 /** An address outside loopback, in a documentation range nothing answers. */
 export const OUTSIDE_ADDRESS = "http://192.0.2.1/";
 /** Another loopback port than the scripted pages' (one Chromium does not refuse itself): not theirs, so refused. */
@@ -652,6 +659,16 @@ export const SCENARIOS: Scenario[] = [
           ),
         ];
       },
+    ],
+  },
+  {
+    name: "send-keyed",
+    phrase: "send it with the note key",
+    summary: `Sends one line with the message tool, giving it the idempotency key \`${SEND_KEYED_KEY}\`, the shape of the gateway's skill-note key: the gateway delivers it as a message in the task under that key. The bot then answers \`NO_REPLY\`, so that message is the task's last.`,
+    bots: "any bot, on an instance started with `--with-message-tool`",
+    steps: () => [
+      tool("message", { action: "send", message: SEND_KEYED_TEXT, idempotencyKey: SEND_KEYED_KEY }),
+      say("NO_REPLY"),
     ],
   },
   {

@@ -427,11 +427,12 @@ export type TranscriptItem = {
    */
   idempotencyKey?: string;
   /**
-   * The gateway's note that a background skill review saved or changed a skill
-   * (`isSkillChangeNote`), not something the bot said: present and true only then.
-   * With commands hidden it is not drawn and is not the task's preview.
+   * An assistant item whose first row names no run (neither `__openclaw.runId` nor
+   * `openclawAbort.runId`), such as a row the gateway appends after a turn: not a run's reply,
+   * so never a stopped or failed run's last text. Present and true only then. It goes by the run
+   * alone, never by the row's other fields.
    */
-  skillNote?: true;
+  runless?: true;
   /**
    * In a task a bot started, the brief it wrote: the first user row stored in that task, which the
    * gateway attributes to the person but the bot wrote (`mapHistory`'s `startedAt`). Present and

@@ -276,6 +276,9 @@ function screenshot(file: string): Display | null {
   return active;
 }
 
+/** What `launch` last started the app with. */
+let launchArgs: string[] = [];
+
 /**
  * Start the app, naming the gateway the check runs as the development gateway
  * (so the pairing screen shows the dev tool's approve command). `fresh` first
@@ -288,10 +291,7 @@ export function launch(options: {
 }) {
   quit();
   if (options.fresh) simctl("keychain", env.device, "reset");
-  simctl(
-    "launch",
-    env.device,
-    env.bundle,
+  launchArgs = [
     "-ClawtrateDevGatewayURL",
     options.devGateway,
     "-ClawtrateDevGatewayInstance",
@@ -299,12 +299,17 @@ export function launch(options: {
     ...(options.switcherProbePort === undefined
       ? []
       : ["-ClawtrateSwitcherProbePort", String(options.switcherProbePort)]),
-  );
+  ];
+  simctl("launch", env.device, env.bundle, ...launchArgs);
 }
 
-/** Bring the app, still running, back to the front, as tapping it again would. */
+/**
+ * Bring the app back to the front, as tapping it again would. A running app
+ * only comes forward. One that is no longer running starts with what `launch`
+ * gave it, so it can still reach the Simulator probe.
+ */
 export function activate() {
-  simctl("launch", env.device, env.bundle);
+  simctl("launch", env.device, env.bundle, ...launchArgs);
 }
 
 /** Put the app in the background without starting a Maestro flow. */
