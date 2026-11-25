@@ -395,6 +395,8 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "openclawUpdates.ctx": "the client's own functions, handed to the OpenClaw update engine",
   "openclawUpdates.lookFor":
     "one lost press's gateway identity and time, at most one, read on the next hello",
+  "openclawUpdates.refused":
+    "the gateway's one refusal of a press with no run: a reason code and its bounded sentence",
 };
 
 /** The class of each client property whose own collections are named under it. */

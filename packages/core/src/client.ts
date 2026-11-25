@@ -1793,6 +1793,11 @@ export class ClawtrateClient {
     },
     startedAt: () => this.gatewayStartedAt,
     answered: (error) => error instanceof GatewayProtocolRequestError,
+    refusalReason: (error) => {
+      if (!(error instanceof GatewayProtocolRequestError)) return null;
+      const reason = asRecord(error.details)?.reason;
+      return typeof reason === "string" ? reason : null;
+    },
     missingScope: (error) => {
       this.noteMissingScope(error);
       return isMissingScope(error);

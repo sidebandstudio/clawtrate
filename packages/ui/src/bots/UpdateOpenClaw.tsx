@@ -12,7 +12,7 @@ import {
   type GatewayStamp,
   type UpdateRunView,
 } from "@clawtrate/core";
-import { useId, useState } from "react";
+import { useCallback, useId, useState, useSyncExternalStore } from "react";
 import { useBridge, useClawtrateState, useCommand } from "../bridge.tsx";
 import { ExternalIcon } from "../icons.tsx";
 import { Dialog } from "./Dialog.tsx";
@@ -33,9 +33,16 @@ export function workingTasks(state: ClawtrateState): number {
     .filter((task) => task.status === "running").length;
 }
 
-/** The run followed, when it belongs to the gateway connected now. */
+/**
+ * The run followed, when it belongs to the gateway connected now. Subscribed to that alone: a
+ * screen that shows it doesn't draw again for every other change of the state.
+ */
 export function useUpdateRun(): UpdateRunView | null {
-  return runHere(useClawtrateState());
+  const bridge = useBridge();
+  return useSyncExternalStore(
+    useCallback((listener) => bridge.subscribe(listener), [bridge]),
+    () => runHere(bridge.getState()),
+  );
 }
 
 function runHere(state: ClawtrateState): UpdateRunView | null {

@@ -106,7 +106,7 @@ describe("F-589: the Update OpenClaw button", () => {
     expect(html).toContain('href="https://docs.openclaw.ai/install/updating"');
     const refused = part("notice", {
       openclawUpdating: updating({
-        blocked: { reason: "refused", note: "Managed by <b>Example Host</b>." },
+        blocked: { reason: "host-owned-install", note: "Managed by <b>Example Host</b>." },
       }),
     });
     // The gateway's words are text, never markup.

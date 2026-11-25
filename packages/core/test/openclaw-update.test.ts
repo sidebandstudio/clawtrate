@@ -75,9 +75,11 @@ const started = (runId = RUN) => ({
 
 class Refusal extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  readonly reason: string | null;
+  constructor(code: string, message: string, reason: string | null = null) {
     super(message);
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -124,6 +126,7 @@ function rig(options: { admin?: boolean; startedAt?: number | null } = {}) {
     },
     startedAt: () => world.startedAt,
     answered: (error) => error instanceof Refusal,
+    refusalReason: (error) => (error instanceof Refusal ? error.reason : null),
     missingScope: (error) => error instanceof Refusal && error.code === "MISSING_SCOPE",
     refreshModels: async () => {
       world.refreshes += 1;
@@ -369,20 +372,32 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     expect(writes(t.world)).toHaveLength(1);
   });
 
-  it("F-589: a refusal with no run (a host-owned install) is shown in the gateway's words", async () => {
+  it("F-589: a refusal with no run (a host-owned install) is shown in the gateway's words, and kept across a reconnect; any other refusal blocks nothing", async () => {
     const t = rig();
     t.world.handlers["update.run"] = () => {
       throw new Refusal(
         "UNAVAILABLE",
         "This OpenClaw is managed by\u0007 Example Host. Update it there.",
+        "host-owned-install",
       );
     };
     await expect(t.engine.start(t.stamp())).rejects.toThrow("managed by Example Host");
-    expect(t.state().blocked).toEqual({
-      reason: "refused",
+    const blocked = {
+      reason: "host-owned-install",
       note: "This OpenClaw is managed by Example Host. Update it there.",
-    });
+    };
+    expect(t.state().blocked).toEqual(blocked);
     expect(t.run()).toBeNull();
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    await t.restart(OLD);
+    expect(t.state().blocked).toEqual(blocked);
+    // A refusal for any other reason says so, and the button stays.
+    const other = rig();
+    other.world.handlers["update.run"] = () => {
+      throw new Refusal("INVALID_REQUEST", "invalid update.run params");
+    };
+    await expect(other.engine.start(other.stamp())).rejects.toThrow("invalid update.run params");
+    expect(other.state()).toMatchObject({ blocked: null, error: "invalid update.run params" });
   });
 
   it("F-589: the gateway's last refusal blocks the button only when this gateway process gave it", async () => {

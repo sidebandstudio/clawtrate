@@ -16,6 +16,7 @@ const CANNOT_WORDS: Record<string, string> = {
   "restart-unavailable": "The gateway can't restart itself.",
   "restart-disabled": "Restarting the gateway is turned off in its settings.",
   "not-openclaw-root": "The gateway couldn't find its own install.",
+  "host-owned-install": "Another app on the gateway's machine owns this OpenClaw install.",
   "immutable-native-updater-required":
     "OpenClaw is installed read-only, and is updated by its owner on the gateway's machine.",
 };
@@ -26,7 +27,7 @@ export function blockedWords(blocked: NonNullable<OpenClawUpdateState["blocked"]
   gateway: string | null;
 } {
   const why = CANNOT_WORDS[blocked.reason] ?? "The gateway can't update OpenClaw itself.";
-  return { why, gateway: blocked.note ?? (blocked.reason === "refused" ? null : blocked.reason) };
+  return { why, gateway: blocked.note ?? blocked.reason };
 }
 
 /** Where the run stands, in a line; the phase is the gateway's word for its step. */

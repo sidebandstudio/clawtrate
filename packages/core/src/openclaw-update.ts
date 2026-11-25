@@ -229,6 +229,8 @@ export type OpenClawUpdatesContext = {
   startedAt: () => number | null;
   /** Whether an error is the gateway's answer (sent and refused), not a failure to send. */
   answered: (error: unknown) => boolean;
+  /** The reason code a gateway's refusal carries (`details.reason`), or null. */
+  refusalReason: (error: unknown) => string | null;
   /** Whether an error is the gateway refusing for a missing scope (and note it). */
   missingScope: (error: unknown) => boolean;
   /** The model list, read again the way the app reads it on connect. */
@@ -252,6 +254,8 @@ export class OpenClawUpdates {
   private cancelAway: (() => void) | null = null;
   /** A press whose answer was lost: the gateway and when, looked for on the next hello. */
   private lookFor: { gatewayId: string; since: number } | null = null;
+  /** The gateway refused a press with no run, as an install it can't update: kept until a reset. */
+  private refused: { reason: string; note: string | null } | null = null;
   private readonly ctx: OpenClawUpdatesContext;
 
   constructor(ctx: OpenClawUpdatesContext) {
@@ -316,14 +320,15 @@ export class OpenClawUpdates {
         this.patch({ error: words });
         throw new Error(words, { cause: error });
       }
-      if (sent) {
+      const note = updateText(errorText(error), MAX_UPDATE_NOTE_CHARS);
+      const reason = sent ? this.ctx.refusalReason(error) : null;
+      if (reason !== null && CANNOT_UPDATE.has(reason)) {
         // Refused with no run: a host-owned or immutable install, in the gateway's words.
-        const note = updateText(errorText(error), MAX_UPDATE_NOTE_CHARS);
-        this.patch({ blocked: { reason: "refused", note }, error: null });
+        this.refused = { reason, note };
+        this.patch({ blocked: this.refused, error: null });
         throw new Error(note ?? "The gateway refused the update.", { cause: error });
       }
-      const words = updateText(errorText(error), MAX_UPDATE_NOTE_CHARS);
-      this.patch({ error: words });
+      this.patch({ error: note });
       throw error;
     }
     this.patch({ starting: false });
@@ -459,9 +464,7 @@ export class OpenClawUpdates {
       ? { reason: "immutable-native-updater-required", note: null }
       : last && cannotUpdate(last) && startedAt !== null && last.createdAtMs >= startedAt
         ? { reason: last.reason!, note: last.note }
-        : this.state.blocked?.reason === "refused"
-          ? this.state.blocked
-          : null;
+        : this.refused;
     this.patch({ blocked });
     const followed =
       run?.runId ??
@@ -542,6 +545,7 @@ export class OpenClawUpdates {
     this.cancelAway?.();
     this.cancelAway = null;
     this.lookFor = null;
+    this.refused = null;
     if (this.ctx.get()) this.ctx.set(initialOpenClawUpdate);
   }
 
