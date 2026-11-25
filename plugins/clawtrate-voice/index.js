@@ -1,19 +1,21 @@
 // clawtrate-voice: asks the bots on the gateway to talk to their person in a
-// plain, friendly voice and never use an em dash. The guide is voice.md beside
-// this file; while the setting is on, the plugin adds it to an agent's system
-// prompt when a runner invokes the prompt hook, and a run gets it when that
-// prompt is sent. It is on until a person turns it off. Where the gateway doesn't run the hook, or a CLI backend
-// doesn't send the system prompt, the guide doesn't reach the bot
+// plain, friendly voice and never use an em dash, and tells them where they
+// live: what Clawtrate's words mean and how to move work into a task. The two
+// guides are voice.md and where.md beside this file, each with its own setting;
+// while a setting is on, the plugin adds its guide to an agent's system prompt
+// when a runner invokes the prompt hook, and a run gets it when that prompt is
+// sent. Each is on until a person turns it off. Where the gateway doesn't run the hook, or a CLI backend
+// doesn't send the system prompt, the guides don't reach the bot
 // (docs/research/bot-voice.md, findings 9 and 10).
 //
-//   before_prompt_build  returns voice.md as `appendSystemContext` while on. OpenClaw
+//   before_prompt_build  returns the guides that are on as `appendSystemContext`. OpenClaw
 //                        registers it only when the gateway's config sets
 //                        plugins.entries.clawtrate-voice.hooks.allowConversationAccess
 //                        to true. It reads nothing from the conversation.
 //   gateway methods      clawtrate-voice.get (operator.read); .set (operator.write)
 //   events               plugin.clawtrate-voice.changed (operator.read), empty, after a
 //                        change: other devices read again
-//   records              one row in the gateway's database: { on, changedAt, changedBy }
+//   records              one row per guide in the gateway's database: { on, changedAt, changedBy }
 //
 // Why this hook and this scope: docs/research/bot-voice.md.
 
@@ -22,11 +24,16 @@ import { readFileSync } from "node:fs";
 
 export const PLUGIN_ID = "clawtrate-voice";
 /** The plugin's version, as `get` reports it; package.json says the same. */
-export const PLUGIN_VERSION = "0.1.0";
-/** The guide added to the bots' system prompts while the setting is on. */
-export const GUIDE = readFileSync(new URL("./voice.md", import.meta.url), "utf8").trim();
+export const PLUGIN_VERSION = "0.2.0";
+const guide = (file) => readFileSync(new URL(file, import.meta.url), "utf8").trim();
+/** The voice guide, added to the bots' system prompts while its setting is on. */
+export const GUIDE = guide("./voice.md");
+/** The "where you live" guide: Clawtrate's words, and moving work into a task. */
+export const WHERE_GUIDE = guide("./where.md");
 const NAMESPACE = "voice";
-const SETTING = "setting";
+/** Each guide's row in the store: the voice guide's keeps the name it had before there were two. */
+const SETTINGS = { voice: "setting", where: "where" };
+const GUIDES = { voice: GUIDE, where: WHERE_GUIDE };
 /**
  * The host can load this module more than once (one copy for the hook,
  * another for the gateway methods), so when the hook last ran lives in one
@@ -87,14 +94,15 @@ export function createVoice(api, options = {}) {
   const store =
     options.store ??
     api.runtime.state.openKeyedStore({ namespace: NAMESPACE, retention: "retained" });
-  const read = async () => settingView(await store.lookup(SETTING));
+  const read = async (section = "voice") => settingView(await store.lookup(SETTINGS[section]));
 
-  // Each prompt the hook is asked for: the guide while on, nothing while off. A failed
-  // read throws, and the gateway logs it and leaves the prompt as it was.
+  // Each prompt the hook is asked for: the guides that are on, nothing while both are off. A
+  // failed read throws, and the gateway logs it and leaves the prompt as it was.
   async function onPromptBuild() {
-    const { on } = await read();
+    const [voice, where] = await Promise.all([read("voice"), read("where")]);
     shared.lastRanAt = now();
-    return on ? { appendSystemContext: GUIDE } : undefined;
+    const text = [voice.on && GUIDE, where.on && WHERE_GUIDE].filter(Boolean).join("\n\n");
+    return text ? { appendSystemContext: text } : undefined;
   }
   api.on?.("before_prompt_build", onPromptBuild);
 
@@ -108,6 +116,7 @@ export function createVoice(api, options = {}) {
       lastRanAt: shared.lastRanAt,
     },
     guide: GUIDE,
+    where: { ...(await read("where")), guide: WHERE_GUIDE },
   });
 
   const refuse = (opts, reason, message) =>
@@ -124,10 +133,15 @@ export function createVoice(api, options = {}) {
     async (opts) => {
       if (!isDirectOperator(opts))
         return refuse(opts, "operator-required", "Only a person's own connection can change this.");
-      const on = isPlainObject(opts.params) ? opts.params.on : undefined;
+      const params = isPlainObject(opts.params) ? opts.params : {};
+      const on = params.on;
       if (typeof on !== "boolean") return refuse(opts, "invalid", "on must be true or false.");
+      // Which guide: the voice guide unless `section` names the other.
+      const section = params.section === undefined ? "voice" : params.section;
+      if (!Object.hasOwn(GUIDES, section))
+        return refuse(opts, "invalid", 'section must be "voice" or "where".');
       const device = opts.client?.connect?.device?.id;
-      await store.register(SETTING, {
+      await store.register(SETTINGS[section], {
         on,
         changedAt: now(),
         changedBy:
@@ -162,7 +176,7 @@ export default {
   id: PLUGIN_ID,
   name: "Clawtrate voice",
   description:
-    "Asks the bots to talk in a plain, friendly voice with no em dashes, in the system prompt of each run whose runner invokes its hook, until a person turns it off. Not made by or affiliated with OpenClaw.",
+    "Asks the bots to talk in a plain, friendly voice with no em dashes, and tells them what Clawtrate's words mean and how to move work into a task, in the system prompt of each run whose runner invokes its hook, until a person turns each off. Not made by or affiliated with OpenClaw.",
   register(api) {
     createVoice(api);
   },

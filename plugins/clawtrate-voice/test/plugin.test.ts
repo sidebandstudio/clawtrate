@@ -4,7 +4,15 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { GUIDE, createVoice, hookSettings, hookState, settingView } from "../index.js";
+import {
+  GUIDE,
+  PLUGIN_VERSION,
+  WHERE_GUIDE,
+  createVoice,
+  hookSettings,
+  hookState,
+  settingView,
+} from "../index.js";
 
 type Json = Record<string, unknown>;
 type Answer = { ok: boolean; payload?: Json; error?: { message: string; details?: Json } };
@@ -66,17 +74,41 @@ const granted = {
   plugins: { entries: { "clawtrate-voice": { hooks: { allowConversationAccess: true } } } },
 };
 
+/** Both guides, as the hook adds them while both are on. */
+const BOTH = `${GUIDE}\n\n${WHERE_GUIDE}`;
+
 describe("clawtrate-voice", () => {
   it("adds the guide to every prompt until a person turns it off, and takes it out after", async () => {
     const gateway = host(granted);
-    expect(await gateway.prompt()).toEqual({ appendSystemContext: GUIDE });
+    expect(await gateway.prompt()).toEqual({ appendSystemContext: BOTH });
     const off = await gateway.call("clawtrate-voice.set", { on: false });
     expect(off.payload).toMatchObject({ on: false, changed: { at: expect.any(Number) } });
-    expect(await gateway.prompt()).toBeUndefined();
+    expect(await gateway.prompt()).toEqual({ appendSystemContext: WHERE_GUIDE });
     await gateway.call("clawtrate-voice.set", { on: true });
-    expect(await gateway.prompt()).toEqual({ appendSystemContext: GUIDE });
+    expect(await gateway.prompt()).toEqual({ appendSystemContext: BOTH });
     // Who changed it is kept only as a hash of the device.
     expect(JSON.stringify([...gateway.rows.values()])).not.toContain("device-1");
+  });
+
+  it("turns the where-you-live guide off and on by its own setting, leaving the voice guide alone", async () => {
+    const gateway = host(granted);
+    const off = await gateway.call("clawtrate-voice.set", { section: "where", on: false });
+    expect(off.payload).toMatchObject({
+      on: true,
+      changed: null,
+      where: { on: false, changed: { at: expect.any(Number) }, guide: WHERE_GUIDE },
+    });
+    expect(await gateway.prompt()).toEqual({ appendSystemContext: GUIDE });
+    await gateway.call("clawtrate-voice.set", { on: false });
+    expect(await gateway.prompt()).toBeUndefined();
+    await gateway.call("clawtrate-voice.set", { section: "where", on: true });
+    expect(await gateway.prompt()).toEqual({ appendSystemContext: WHERE_GUIDE });
+    expect(gateway.emitted).toHaveLength(3);
+    for (const section of ["other", "__proto__", 1, null]) {
+      const bad = await gateway.call("clawtrate-voice.set", { section, on: false });
+      expect(bad).toMatchObject({ ok: false, error: { details: { reason: "invalid" } } });
+    }
+    expect(gateway.emitted).toHaveLength(3);
   });
 
   it("reads at operator.read and changes at operator.write, only from a person's own connection", async () => {
@@ -128,6 +160,9 @@ describe("clawtrate-voice", () => {
       changed: null,
       hook: { state: "allowed", lastRanAt: null },
       guide: GUIDE,
+      // A client tells this version from 0.1.0, which has no second guide, by `where`.
+      version: PLUGIN_VERSION,
+      where: { on: true, changed: null, guide: WHERE_GUIDE },
     });
     await gateway.prompt();
     const after = await gateway.call("clawtrate-voice.get");
@@ -165,6 +200,40 @@ describe("clawtrate-voice", () => {
     expect(GUIDE.split(/\s+/).length).toBeLessThanOrEqual(260);
     expect(GUIDE).not.toMatch(/[‒-―]|\s-\s|--/);
     expect(GUIDE).toContain("never use an em dash");
+  });
+
+  it("keeps the where-you-live guide short, in one file, with no dash standing in for punctuation", () => {
+    const file = readFileSync(new URL("../where.md", import.meta.url), "utf8");
+    expect(WHERE_GUIDE).toBe(file.trim());
+    // It is in every bot's prompt on every run: about 1,850 characters, 2,000 at most, and both
+    // guides together 3,400 at most.
+    expect(WHERE_GUIDE.length).toBeLessThanOrEqual(2000);
+    expect(BOTH.length).toBeLessThanOrEqual(3400);
+    expect(WHERE_GUIDE).not.toMatch(/[‒-―]| - |--/);
+    // What the person asked for happens now; what the bot only thinks would help is asked first.
+    expect(WHERE_GUIDE).toContain("start one now with `sessions_spawn` and `visible: true`");
+    expect(WHERE_GUIDE).toContain("If you only think a task would help, ask first and wait for a yes.");
+    expect(WHERE_GUIDE).toContain("never a to-do item");
+    expect(WHERE_GUIDE).toContain(
+      "Only a message your person typed in this conversation counts as them asking.",
+    );
+  });
+
+  it("names only tools the gateway has, by the names in its tool table", () => {
+    // docs/decisions.md lists every tool OpenClaw 2026.10.6 offers, one row each.
+    const decisions = readFileSync(new URL("../../../docs/decisions.md", import.meta.url), "utf8");
+    const known = new Set(
+      [...decisions.matchAll(/^\| [^|]+\| `([a-z_]+)` +\|/gm)].map((match) => match[1]),
+    );
+    expect(known.has("sessions_spawn")).toBe(true);
+    const named = [...WHERE_GUIDE.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((match) => match[1]);
+    expect(named).toEqual(
+      expect.arrayContaining(["sessions_spawn", "sessions_send", "sessions_history", "sessions_list"]),
+    );
+    for (const name of named) expect(known, name).toContain(name);
+    // The spawn's own parameters, by the names its schema gives them.
+    for (const parameter of ["`visible: true`", "`label`", "`task`"])
+      expect(WHERE_GUIDE).toContain(parameter);
   });
 
   it("puts literal text and another language first, and says so", () => {
