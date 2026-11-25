@@ -939,6 +939,10 @@ async function gatewayHealth(inst: DevInstance): Promise<{ healthy: boolean; see
  */
 const GATEWAY_START_MS = 480_000;
 
+/** A line of a process's output, cut to a readable length. */
+const cut = (line: string, width = 300) =>
+  line.length > width ? `${line.slice(0, width)}…` : line;
+
 /** The last lines of a log, each cut to a readable length; "" when there is none. */
 export function logTail(path: string, lines = 40, width = 300): string {
   if (!existsSync(path)) return "";
@@ -946,7 +950,7 @@ export function logTail(path: string, lines = 40, width = 300): string {
     .trimEnd()
     .split("\n")
     .slice(-lines)
-    .map((line) => (line.length > width ? `${line.slice(0, width)}…` : line))
+    .map((line) => cut(line, width))
     .join("\n");
 }
 
@@ -992,7 +996,7 @@ export async function waitForGateway(
         seen: `the health check failed: ${error instanceof Error ? error.message : String(error)}`,
       }));
       if (health.healthy) return;
-      lastSeen = health.seen;
+      lastSeen = cut(health.seen);
     }
     // Read again after the probe, which can end after the gateway exited.
     const exited = watch.exited();

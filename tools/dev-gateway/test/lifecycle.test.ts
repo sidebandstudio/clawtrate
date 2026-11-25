@@ -783,6 +783,25 @@ describe("a start whose gateway never answers says what the gateway was doing (#
     expect(failure.message).not.toContain("still running");
   });
 
+  it("cuts the last health check to the log lines' length", async () => {
+    const log = join(tempDir("clawtrate-log-"), "gateway.log");
+    const said = `health exited 1: ${"x".repeat(400)}`;
+    let alive = true;
+    const failure = await waitForGateway({
+      exited: () => !alive,
+      health: async () => {
+        alive = false;
+        return { healthy: false, seen: said };
+      },
+      log,
+    }).then(
+      () => new Error("the wait succeeded"),
+      (error: unknown) => error as Error,
+    );
+    expect(failure.message).toContain(`  last health check: ${said.slice(0, 300)}…\n`);
+    expect(failure.message).not.toContain(said.slice(0, 301));
+  });
+
   it("reads the last lines of a log, each cut to a readable length", () => {
     const dir = tempDir("clawtrate-log-");
     const log = join(dir, "gateway.log");
