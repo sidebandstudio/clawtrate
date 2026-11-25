@@ -10,6 +10,7 @@ import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:tls";
+import { pathToFileURL } from "node:url";
 import { PROTECTED_HOST } from "./protected-gateway-preload.ts";
 
 export async function protectedGateway(gatewayPort: number) {
@@ -46,7 +47,9 @@ export async function protectedGateway(gatewayPort: number) {
     /** The test's own name resolution and certificate, for the host it is given to alone. */
     env: {
       NODE_EXTRA_CA_CERTS: cert,
-      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${preload}`.trim(),
+      // A file URL, so a checkout path with a space stays one option.
+      NODE_OPTIONS:
+        `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`.trim(),
     },
     close: async () => {
       for (const socket of sockets) socket.destroy();
