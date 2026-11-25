@@ -130,7 +130,17 @@ export function NewBot({
   const setStep = (next: "look" | "account" | "connect") => {
     remember(KEPT, { draft, step: next });
     setStepState(next);
+    // The new step's first field or heading takes focus in the next frame, but only if nothing
+    // else has taken it since the step changed: a person who tabs or clicks in at once keeps
+    // their place. The button that changed the step going away moves no focus, so it doesn't count.
+    let taken = false;
+    const onFocus = () => {
+      taken = true;
+    };
+    document.addEventListener("focusin", onFocus);
     requestAnimationFrame(() => {
+      document.removeEventListener("focusin", onFocus);
+      if (taken) return;
       const dialog = document.querySelector<HTMLElement>('[data-testid="new-bot"]');
       (
         dialog?.querySelector<HTMLElement>("[data-b-focus]") ??

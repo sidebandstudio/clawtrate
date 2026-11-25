@@ -472,6 +472,41 @@ test("F-022 F-023: a reply that comes while the read made on leaving a task is o
   await expect.poll(badge).toBe((before ?? 0) + 1);
 });
 
+test("#505: a task row's Archive and Delete send the stamp of the list it came from, not the identity now connected", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  type Stamped = {
+    clawtrateFixture: {
+      getState(): {
+        discovery: { tasksRead: { gatewayId: string | null; target: number } | null };
+      };
+      setState(change: (state: { connection: object }) => { connection: object }): void;
+    };
+  };
+  const read = await page.evaluate(() => {
+    const { gatewayId, target } = (window as unknown as Stamped).clawtrateFixture.getState()
+      .discovery.tasksRead!;
+    return { gatewayId, target };
+  });
+  expect(read.gatewayId).not.toBeNull();
+  // A reconnect answered by another gateway at the same address: it names itself before its
+  // task list arrives, so the rows shown are still the ones read before.
+  await page.evaluate(() =>
+    (window as unknown as Stamped).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: "another-gateway" },
+    })),
+  );
+  await taskMenu(page, "Certificate renewal");
+  await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
+  await expect.poll(() => sentStamp(page, "archiveTask")).toEqual(read);
+  await taskMenu(page, "Router firmware");
+  await page.getByRole("menuitem", { name: "Delete…" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => sentStamp(page, "deleteTask")).toEqual(read);
+});
+
 test("F-277: a task restored from the Archived group and archived again shows in the group again", async ({
   page,
 }) => {

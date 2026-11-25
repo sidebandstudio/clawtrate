@@ -191,6 +191,40 @@ jobs:
       - run: pnpm test:desktop-updates
       - run: pnpm package:mac
 
+  # The screenshot tests in the pinned Linux image (visual/linux/), against visual/baselines/linux/,
+  # split by test across three runners. Until the Linux baselines replace the macOS ones (#392) it
+  # runs the specs that have Linux baselines and the specs that take no screenshot, and the
+  # macos job's `pnpm visual` stays the required check.
+  visual-linux:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t clawtrate-visual visual/linux
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/pnpm-store
+          key: visual-linux-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: visual-linux-pnpm-
+      - run: bash visual/linux/run.sh --shard=${{ matrix.shard }}/3 $(grep -v '^#' visual/linux/specs.txt)
+        env:
+          CLAWTRATE_VISUAL_IMAGE: clawtrate-visual
+          CLAWTRATE_VISUAL_STORE: ${{ runner.temp }}/pnpm-store
+      # What a failed or flaky check saw, as on the macos job: the actual and difference pictures,
+      # traces and attachments.
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-linux-results-${{ matrix.shard }}
+          path: test-results/
+          retention-days: 3
+
   windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'

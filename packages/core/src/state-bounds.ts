@@ -155,6 +155,7 @@ import type {
   ConnectionError,
   ConnectionState,
   GatewayStamp,
+  ReadStamp,
   DiscoveryState,
   MessageReaction,
   PairingRequest,
@@ -735,6 +736,7 @@ const discovery = object<DiscoveryState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   partial: FLAG,
+  tasksRead: object<ReadStamp>()({ gatewayId: ID, target: NUMBER, connectedAt: NUMBER }),
 });
 const bot = flagged<Bot>()({
   id: ID,
@@ -1148,6 +1150,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   readAt: NUMBER,
+  readOn: object<ReadStamp>()({ gatewayId: ID, target: NUMBER, connectedAt: NUMBER }),
   labels: FLAG,
   defaultModel: ID,
   mainShared: FLAG,
