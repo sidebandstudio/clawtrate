@@ -10,7 +10,9 @@ import {
   applyCronEvent,
   fieldsOf,
   initialRoutinesState,
+  isJobSummary,
   MAX_CALENDAR_RUNS,
+  MAX_ROUTINE_READS,
   MAX_ROUTINE_RUNS,
   MAX_ROUTINES,
   MAX_RUN_MESSAGE_CHARS,
@@ -611,6 +613,359 @@ describe("the cron event", () => {
     expect(
       applyCronEvent(list, { jobId: heartbeat.id, action: "started", job: heartbeat, runAtMs: 1 }),
     ).toBe(list);
+  });
+});
+
+/**
+ * A job as OpenClaw 2026.11.10's `cron` event carries it (`toCronBroadcastEvent` in its
+ * `server-cron`): its identity and run state, nothing of its definition.
+ */
+const summaryOf = (full: Record<string, unknown>) => {
+  const pick = (from: Record<string, unknown>, keys: string[]) =>
+    Object.fromEntries(
+      keys.filter((key) => from[key] !== undefined).map((key) => [key, from[key]]),
+    );
+  return {
+    ...pick(full, ["id", "name", "agentId", "enabled", "updatedAtMs"]),
+    state: pick((full.state ?? {}) as Record<string, unknown>, [
+      "nextRunAtMs",
+      "lastRunAtMs",
+      "lastDurationMs",
+      "lastTriggerEvalAtMs",
+      "lastMeaningfulResult",
+      "lastRunStatus",
+      "lastStatus",
+      "runningAtMs",
+      "autoDisabled",
+    ]),
+  };
+};
+
+describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary of the job", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const loaded = (...jobs: Array<Record<string, unknown>>): RoutinesState => ({
+    ...initialRoutinesState,
+    status: "loaded",
+    routines: jobs.map((each) => parseRoutine(each)!),
+  });
+  /** `cron.get` answers held until the test lets each go, in order. */
+  const heldGets = () => {
+    const answers: Array<{
+      id: string;
+      answer: (value: unknown) => void;
+      fail: (e: unknown) => void;
+    }> = [];
+    return {
+      answers,
+      handler: (params: Record<string, unknown>) =>
+        new Promise((answer, fail) => answers.push({ id: params.id as string, answer, fail })),
+    };
+  };
+  /** Long enough for any read the engine would start to have been asked and answered. */
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
+  const gets = (requests: Array<{ method: string }>) =>
+    requests.filter((each) => each.method === "cron.get").length;
+
+  it("added: the routine is read with cron.get and shown only once it is, never as unknown", async () => {
+    const get = heldGets();
+    const { routines, requests, state } = engine({ "cron.get": get.handler }, loaded());
+    // The frame `cron.add` makes 2026.11.10 send, as the issue recorded it.
+    routines.onEvent({
+      jobId: JOB,
+      action: "added",
+      nextRunAtMs: 1_795_093_200_000,
+      job: {
+        id: JOB,
+        name: "Morning digest",
+        agentId: "marlow",
+        enabled: true,
+        updatedAtMs: 1_795_045_912_086,
+        state: { nextRunAtMs: 1_795_093_200_000 },
+      },
+    });
+    expect(state().routines).toEqual([]);
+    await until(() => get.answers.length === 1);
+    expect(requests.at(-1)).toEqual({ method: "cron.get", params: { id: JOB } });
+    get.answers[0]!.answer(job());
+    await until(() => state().routines.length === 1);
+    expect(state().routines[0]).toEqual(parseRoutine(job()));
+    expect(state().routines[0]).toMatchObject({
+      schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York" },
+      payload: "agentTurn",
+      target: "isolated",
+      delivery: "none",
+    });
+  });
+
+  it("updated: the summary is merged at once, never replacing the schedule or instruction, and the job is read", async () => {
+    const get = heldGets();
+    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    const renamed = job({
+      name: "Weekday digest",
+      updatedAtMs: 1_795_046_000_000,
+      schedule: { kind: "cron", expr: "0 9 * * 1-5", tz: "America/New_York" },
+    });
+    routines.onEvent({
+      jobId: JOB,
+      action: "updated",
+      nextRunAtMs: 1_795_096_800_000,
+      job: summaryOf({ ...renamed, state: { nextRunAtMs: 1_795_096_800_000 } }),
+    });
+    expect(state().routines[0]).toMatchObject({
+      name: "Weekday digest",
+      updatedAt: 1_795_046_000_000,
+      nextRunAt: 1_795_096_800_000,
+      schedule: { kind: "cron", expr: "0 8 * * 1-5" },
+      payload: "agentTurn",
+      text: "Summarise yesterday's notes.",
+    });
+    await until(() => get.answers.length === 1);
+    get.answers[0]!.answer({ ...renamed, state: { nextRunAtMs: 1_795_096_800_000 } });
+    await until(() => state().routines[0]!.schedule.expr === "0 9 * * 1-5");
+    expect(state().routines[0]).toMatchObject({ name: "Weekday digest", payload: "agentTurn" });
+  });
+
+  it("paused and resumed: on, next run and the copy offer follow the summary, the rest stays", async () => {
+    const get = heldGets();
+    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    expect(state().routines[0]!.canRecreate).toBe(true);
+    const paused = job({ enabled: false }, { nextRunAtMs: undefined });
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(paused) });
+    expect(state().routines[0]).toMatchObject({
+      enabled: false,
+      nextRunAt: null,
+      canRecreate: false,
+      schedule: { kind: "cron", expr: "0 8 * * 1-5" },
+      payload: "agentTurn",
+    });
+    await until(() => get.answers.length === 1);
+    get.answers.shift()!.answer(paused);
+    await until(() => get.answers.length === 0 && state().revision >= 2);
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job()) });
+    // Turned back on: no copy is offered until the job itself says it can be made again.
+    expect(state().routines[0]).toMatchObject({ enabled: true, canRecreate: false });
+    await until(() => get.answers.length === 1);
+    get.answers.shift()!.answer(job());
+    await until(() => state().routines[0]!.canRecreate === true);
+    expect(state().routines[0]).toEqual(parseRoutine(job()));
+  });
+
+  it("removed: the routine goes whatever the event carries, and a read out for it is dropped", async () => {
+    const get = heldGets();
+    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => get.answers.length === 1);
+    routines.onEvent({ jobId: JOB, action: "removed", job: summaryOf(job({ name: "Renamed" })) });
+    expect(state().routines).toEqual([]);
+    get.answers[0]!.answer(job({ name: "Renamed" }));
+    await settle();
+    expect(state().routines).toEqual([]);
+  });
+
+  it("a run's started and finished are merged without a read; a summary never adds a routine", async () => {
+    const { routines, requests, state } = engine({}, loaded(job()));
+    routines.onEvent({
+      jobId: JOB,
+      action: "started",
+      runAtMs: 1_795_093_200_010,
+      job: summaryOf(job({}, { runningAtMs: 1_795_093_200_010 })),
+    });
+    expect(state().routines[0]).toMatchObject({
+      runningAt: 1_795_093_200_010,
+      schedule: { kind: "cron", expr: "0 8 * * 1-5" },
+    });
+    routines.onEvent({
+      jobId: JOB,
+      action: "finished",
+      runAtMs: 1_795_093_200_010,
+      durationMs: 1_815,
+      status: "error",
+      error: "The job failed.",
+      nextRunAtMs: 1_795_179_600_000,
+      job: summaryOf(
+        job(
+          {},
+          {
+            nextRunAtMs: 1_795_179_600_000,
+            lastRunAtMs: 1_795_093_200_010,
+            lastDurationMs: 1_815,
+            lastRunStatus: "error",
+            lastStatus: "error",
+          },
+        ),
+      ),
+    });
+    expect(state().routines[0]).toMatchObject({
+      runningAt: null,
+      lastRunAt: 1_795_093_200_010,
+      lastEndedAt: 1_795_093_201_825,
+      lastStatus: "error",
+      lastError: "The job failed.",
+      nextRunAt: 1_795_179_600_000,
+      schedule: { kind: "cron", expr: "0 8 * * 1-5" },
+      payload: "agentTurn",
+      text: "Summarise yesterday's notes.",
+    });
+    // A run of a job not held (a check-in's, here) adds nothing and reads nothing.
+    routines.onEvent({
+      jobId: heartbeat.id,
+      action: "started",
+      runAtMs: 5,
+      job: summaryOf({ ...heartbeat, state: { runningAtMs: 5 } }),
+    });
+    expect(state().routines.map((each) => each.id)).toEqual([JOB]);
+    await settle();
+    expect(gets(requests)).toBe(0);
+  });
+
+  it("a one-shot that removed itself is told from the routine held, as the summary leaves deleteAfterRun out", () => {
+    const oneShot = job({
+      deleteAfterRun: true,
+      schedule: { kind: "at", at: "2026-11-20T09:00:00-05:00" },
+    });
+    const self = engine({}, loaded(oneShot));
+    self.routines.onEvent({
+      jobId: JOB,
+      action: "finished",
+      status: "ok",
+      completionStatus: "succeeded",
+      runAtMs: 7,
+      job: summaryOf({ ...oneShot, state: { lastRunAtMs: 7, lastRunStatus: "ok" } }),
+    });
+    self.routines.onEvent({ jobId: JOB, action: "removed", job: summaryOf(oneShot) });
+    expect(self.state().removed).toEqual({ id: JOB, ranOnce: true, runAt: 7 });
+  });
+
+  it("a second event while the read is out: one read at a time, and the answer after the latest event is kept", async () => {
+    const get = heldGets();
+    const { routines, requests, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "First" })) });
+    await until(() => get.answers.length === 1);
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Second" })) });
+    await settle();
+    expect(gets(requests)).toBe(1);
+    expect(state().routines[0]!.name).toBe("Second");
+    // The first answer may predate the second change: it is not shown, and the job is read again.
+    get.answers[0]!.answer(job({ name: "First", schedule: { kind: "every", everyMs: 60_000 } }));
+    await until(() => get.answers.length === 2);
+    expect(state().routines[0]).toMatchObject({ name: "Second", schedule: { kind: "cron" } });
+    get.answers[1]!.answer(job({ name: "Second", schedule: { kind: "every", everyMs: 120_000 } }));
+    await until(() => state().routines[0]!.schedule.everyMs === 120_000);
+    expect(gets(requests)).toBe(2);
+  });
+
+  it("a failed read leaves the routine as the events left it and says nothing of it", async () => {
+    vi.useFakeTimers();
+    const get = heldGets();
+    const { routines, requests, state } = engine(
+      {
+        "cron.get": get.handler,
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => ({ jobs: [job({ name: "Renamed" })], hasMore: false }),
+      },
+      loaded(job()),
+    );
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await vi.waitFor(() => expect(get.answers).toHaveLength(1));
+    const before = state().routines;
+    get.answers[0]!.fail(new Error("request timed out"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state().routines).toBe(before);
+    expect(state()).toMatchObject({ status: "loaded", error: null });
+    expect(state().routines[0]).toMatchObject({ name: "Renamed", schedule: { kind: "cron" } });
+    // The list is read again later, as after any failed read.
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(requests.some((each) => each.method === "cron.list")).toBe(true);
+    routines.onClose();
+  });
+
+  it("an added job whose read fails is not shown", async () => {
+    const get = heldGets();
+    const { routines, state } = engine({ "cron.get": get.handler }, loaded());
+    routines.onEvent({ jobId: JOB, action: "added", job: summaryOf(job()) });
+    await until(() => get.answers.length === 1);
+    get.answers[0]!.fail(
+      new GatewayProtocolRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: cron.get",
+      }),
+    );
+    await settle();
+    expect(state().routines).toEqual([]);
+    routines.onClose();
+  });
+
+  it("a reconnect or a switch while the read is out: its answer does nothing", async () => {
+    let target = 0;
+    const get = heldGets();
+    const { routines, state } = engine({ "cron.get": get.handler }, loaded(), {
+      admin: false,
+      connected: true,
+      target: () => target,
+    });
+    routines.onEvent({ jobId: JOB, action: "added", job: summaryOf(job()) });
+    await until(() => get.answers.length === 1);
+    routines.onClose();
+    get.answers[0]!.answer(job());
+    routines.onEvent({ jobId: "j2", action: "added", job: summaryOf(job({ id: "j2" })) });
+    await until(() => get.answers.length === 2);
+    target = 1;
+    get.answers[1]!.answer(job({ id: "j2" }));
+    await settle();
+    expect(state().routines).toEqual([]);
+  });
+
+  it(`at most ${MAX_ROUTINE_READS} jobs are read at once; past it the list is read instead`, async () => {
+    const get = heldGets();
+    let lists = 0;
+    const { routines } = engine(
+      {
+        "cron.get": get.handler,
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => {
+          lists += 1;
+          return { jobs: [], hasMore: false };
+        },
+      },
+      loaded(),
+    );
+    for (let index = 0; index <= MAX_ROUTINE_READS; index += 1)
+      routines.onEvent({
+        jobId: `j${index}`,
+        action: "added",
+        job: summaryOf(job({ id: `j${index}` })),
+      });
+    await until(() => lists === 1);
+    expect(get.answers).toHaveLength(MAX_ROUTINE_READS);
+    routines.onClose();
+  });
+
+  it("2026.10.6's whole job is applied as before, with no read", async () => {
+    const { routines, requests, state } = engine({}, loaded(job()));
+    routines.onEvent({
+      jobId: JOB,
+      action: "updated",
+      job: job({ schedule: { kind: "every", everyMs: 3_600_000 } }),
+    });
+    routines.onEvent({
+      jobId: "j2",
+      action: "added",
+      job: job({ id: "j2", name: "Plan the week" }),
+    });
+    expect(state().routines).toEqual([
+      parseRoutine(job({ schedule: { kind: "every", everyMs: 3_600_000 } })),
+      parseRoutine(job({ id: "j2", name: "Plan the week" })),
+    ]);
+    await settle();
+    expect(requests).toEqual([]);
+    // A summary is never mistaken for a job of another kind or an unknown schedule.
+    expect(isJobSummary(job())).toBe(false);
+    expect(isJobSummary(summaryOf(job()))).toBe(true);
+    expect(applyCronEvent([], { jobId: JOB, action: "updated", job: summaryOf(job()) })).toEqual(
+      [],
+    );
   });
 });
 

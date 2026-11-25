@@ -23,6 +23,11 @@ import type { GatewayStamp, TranscriptItem } from "./types.ts";
 /** Routines kept from `cron.list`; past it they are counted in `omitted`. */
 export const MAX_ROUTINES = 200;
 export const MAX_ROUTINE_UPDATES = 128;
+/**
+ * Routines read again at once (`cron.get`) because a `cron` event carried only a summary of the
+ * job; past it the whole list is read instead.
+ */
+export const MAX_ROUTINE_READS = 32;
 /** A routine's instruction or reminder text as kept and shown. */
 export const MAX_ROUTINE_TEXT_CHARS = 4_096;
 /** Runs read for a routine's page, newest first: older runs drop out of the list (F-355). */
@@ -391,13 +396,52 @@ export function parseRunConversation(
 }
 
 /**
+ * A `cron` event's job that is a summary, not the job: OpenClaw 2026.11.10 sends only its
+ * identity and run state (`id`, `name`, `agentId`, `enabled`, `updatedAtMs`, `state`), with no
+ * schedule or instruction; 2026.10.6 sends the whole job. Told by what the job carries.
+ */
+export function isJobSummary(value: unknown): boolean {
+  const job = asRecord(value);
+  return job !== null && (asRecord(job.schedule) === null || asRecord(job.payload) === null);
+}
+
+/**
+ * What a summary carries, put on the routine already held: its name, whether it is on, when it
+ * was changed and its run state. Its schedule, instruction, target and delivery stay as held.
+ */
+function withSummary(held: Routine, value: unknown): Routine {
+  const job = asRecord(value) ?? {};
+  const state = asRecord(job.state);
+  const enabled = typeof job.enabled === "boolean" ? job.enabled : held.enabled;
+  const runs = state ? parseRoutine({ id: held.id, state }) : null;
+  return {
+    ...held,
+    name: str(job.name) ?? held.name,
+    enabled,
+    // A paused routine is offered no copy; one turned back on waits for its job to be read.
+    canRecreate: held.canRecreate === true && enabled,
+    updatedAt: num(job.updatedAtMs) ?? held.updatedAt,
+    ...(runs
+      ? {
+          nextRunAt: runs.nextRunAt,
+          lastRunAt: runs.lastRunAt,
+          lastEndedAt: runs.lastEndedAt,
+          lastStatus: runs.lastStatus,
+          runningAt: runs.runningAt,
+        }
+      : {}),
+  };
+}
+
+/**
  * One `cron` event applied to the list; the same list when it changes nothing.
  * `started` and `finished` carry their run's `runAtMs`, so one that arrives
  * after a newer run's is told apart: an older finish never clears a newer
  * start or replaces a newer finish, and an older start never replaces the
  * last finished run or a newer start. A `finished` only updates a routine
  * already listed: the gateway also finishes a run whose job was removed while
- * it ran, with the removed job's snapshot.
+ * it ran, with the removed job's snapshot. A summary of the job (`isJobSummary`) never replaces
+ * a routine and never adds one: it is merged into the routine held, if any.
  */
 export function applyCronEvent(routines: Routine[], payload: RawRecord): Routine[] {
   const jobId = str(payload.jobId);
@@ -406,9 +450,10 @@ export function applyCronEvent(routines: Routine[], payload: RawRecord): Routine
   if (action === "removed") return routines.filter((each) => each.id !== jobId);
   const at = routines.findIndex((each) => each.id === jobId);
   const current = at >= 0 ? routines[at]! : null;
-  const fromJob = parseRoutine(payload.job);
-  if (asRecord(payload.job) && !fromJob) return routines;
-  let next = fromJob ?? current;
+  const summary = isJobSummary(payload.job);
+  const fromJob = summary ? null : parseRoutine(payload.job);
+  if (asRecord(payload.job) && !summary && !fromJob) return routines;
+  let next = fromJob ?? (current && summary ? withSummary(current, payload.job) : current);
   if (!next) return routines;
   const runAt = num(payload.runAtMs);
   if (action === "started") {
@@ -676,13 +721,14 @@ const permanent = (error: unknown) =>
 /**
  * A `finished` whose snapshot is a one-shot the gateway deletes: run to a
  * success with `deleteAfterRun` and no next run left (OpenClaw 2026.10.6,
- * `applyJobResult`). A forced run before its time keeps its next run.
+ * `applyJobResult`). A forced run before its time keeps its next run. A summary of the job
+ * (2026.11.10) leaves `deleteAfterRun` out: the routine held says it.
  */
-function consumedOneShot(record: RawRecord): boolean {
+function consumedOneShot(record: RawRecord, held: Routine): boolean {
   const job = asRecord(record.job);
   const state = asRecord(job?.state);
   return (
-    job?.deleteAfterRun === true &&
+    (isJobSummary(job) ? held.deleteAfterRun : job?.deleteAfterRun === true) &&
     str(record.completionStatus) === "succeeded" &&
     num(state?.nextRunAtMs) === null &&
     num(record.nextRunAtMs) === null
@@ -713,6 +759,11 @@ export class RoutinesEngine {
    */
   private listedEpoch = 0;
   private readonly updates = new Set<{ id: string; removed: boolean }>();
+  /**
+   * Jobs read again (`cron.get`) after an event carried only their summary, one read each:
+   * `again` when another event came while it was out, so its answer may be older than that.
+   */
+  private readonly reads = new Map<string, { again: boolean }>();
 
   private readonly ctx: RoutinesContext;
 
@@ -849,8 +900,11 @@ export class RoutinesEngine {
     this.invalidated = true;
     const jobId = str(record.jobId);
     const action = str(record.action);
-    if (action === "removed")
+    const summary = isJobSummary(record.job);
+    if (action === "removed") {
       for (const update of this.updates) if (update.id === jobId) update.removed = true;
+      if (jobId) this.reads.delete(jobId);
+    }
     const before = this.ctx.get();
     const kept = before.routines.find((each) => each.id === jobId);
     if (action !== "added" && jobId && before.removed?.id === jobId && !kept) return;
@@ -858,7 +912,7 @@ export class RoutinesEngine {
     const finished = this.lastFinished;
     this.lastFinished =
       action === "finished" && kept
-        ? { jobId: kept.id, consumed: consumedOneShot(record), runAt: num(record.runAtMs) }
+        ? { jobId: kept.id, consumed: consumedOneShot(record, kept), runAt: num(record.runAtMs) }
         : null;
     const removed =
       action === "removed" && jobId
@@ -874,7 +928,7 @@ export class RoutinesEngine {
       (action === "added" &&
         !kept &&
         before.routines.length >= MAX_ROUTINES &&
-        parseRoutine(record.job) !== null) ||
+        (summary || parseRoutine(record.job) !== null)) ||
       (action === "finished" &&
         kept &&
         routines !== before.routines &&
@@ -885,6 +939,7 @@ export class RoutinesEngine {
       (action === "finished" &&
         kept === undefined &&
         before.omitted === 0 &&
+        !summary &&
         parseRoutine(record.job) !== null);
     this.ctx.update((state) => ({
       ...state,
@@ -893,7 +948,73 @@ export class RoutinesEngine {
       revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
     }));
     if (refill) void this.load();
-    else this.scheduleIfRunning();
+    else {
+      // A summary of an added or changed job says nothing of its schedule or instruction: the job
+      // is read, and a new one is shown only once it is. A run's own events change neither.
+      if (summary && jobId && (action === "added" || action === "updated")) this.readJob(jobId);
+      this.scheduleIfRunning();
+    }
+  }
+
+  /** Read one job again after a summary; at most one read each, the latest event's answer kept. */
+  private readJob(id: string): void {
+    const pending = this.reads.get(id);
+    if (pending) {
+      pending.again = true;
+      return;
+    }
+    if (this.reads.size >= MAX_ROUTINE_READS) {
+      void this.load();
+      return;
+    }
+    const entry = { again: false };
+    this.reads.set(id, entry);
+    void this.readJobOnce(id, entry);
+  }
+
+  private async readJobOnce(id: string, entry: { again: boolean }): Promise<void> {
+    const epoch = this.epoch;
+    const target = this.ctx.target();
+    // After a reconnect, a switch or the job's removal, the answer is about nothing shown.
+    const current = () =>
+      this.reads.get(id) === entry && epoch === this.epoch && target === this.ctx.target();
+    for (let attempt = 1; ; attempt += 1) {
+      entry.again = false;
+      let job: unknown;
+      try {
+        job = await this.ctx.request("cron.get", { id });
+      } catch (error) {
+        if (!current()) return;
+        // The routine stays as the events left it; the list is read again later.
+        this.reads.delete(id);
+        if (!notFound(error) && !permanent(error)) this.schedule(RETRY_MS);
+        return;
+      }
+      if (!current()) return;
+      if (entry.again && attempt < MAX_REREADS) continue;
+      this.reads.delete(id);
+      if (entry.again) {
+        this.schedule(RETRY_MS);
+        return;
+      }
+      const routine = isJobSummary(job) ? null : parseRoutine(job);
+      if (!routine || routine.id !== id) return;
+      if (this.loading) this.invalidated = true;
+      this.ctx.update((state) => {
+        const at = state.routines.findIndex((each) => each.id === id);
+        if (at < 0 && state.routines.length >= MAX_ROUTINES) return state;
+        return {
+          ...state,
+          routines:
+            at < 0
+              ? [...state.routines, routine]
+              : state.routines.map((each, index) => (index === at ? routine : each)),
+          revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
+        };
+      });
+      this.scheduleIfRunning();
+      return;
+    }
   }
 
   /** A dropped connection's answers no longer count. */
@@ -902,6 +1023,7 @@ export class RoutinesEngine {
     this.loading = null;
     this.clearRecheck();
     this.lastFinished = null;
+    this.reads.clear();
     this.epoch += 1;
   }
 
