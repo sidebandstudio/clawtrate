@@ -140,6 +140,8 @@ const taskParts: Row[] = [
       size(T, "items.item.blocks.item"),
       pool(T, "items", "pictures"),
       size(T, "items.item.pictures.item"),
+      pool(T, "items", "files"),
+      size(T, "items.item.files.item"),
       pool(T, "items", "attachments"),
       size(T, "items.item.attachments.item"),
     ],
