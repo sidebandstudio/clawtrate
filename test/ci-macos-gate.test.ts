@@ -5,7 +5,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { MACOS_SPECS } from "../playwright.visual.config.ts";
@@ -109,7 +109,8 @@ function resolveImport(from: string, specifier: string): string | undefined {
 function reached(entries: string[]): Set<string> {
   const seen = new Set<string>();
   const visit = (file: string) => {
-    const path = relative(ROOT, file);
+    // Git's paths use forward slashes on every system.
+    const path = relative(ROOT, file).split(sep).join("/");
     if (seen.has(path) || path.startsWith("packages/")) return;
     seen.add(path);
     if (!/\.(ts|tsx|mts)$/.test(file)) return;
