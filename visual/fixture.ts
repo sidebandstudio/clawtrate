@@ -21,15 +21,26 @@ export const expect = baseExpect.extend({
     options?: PageAssertionsToHaveScreenshotOptions,
   ) {
     const failures: string[] = [];
+    let pictureFailed = false;
     try {
       await baseExpect(target).toHaveScreenshot(name, options);
     } catch (error) {
+      pictureFailed = true;
       failures.push(error instanceof Error ? error.message : String(error));
     }
     try {
       await matchText("goto" in target ? target.locator("body") : target, name);
     } catch (error) {
       failures.push(error instanceof Error ? error.message : String(error));
+      // A picture inside the tolerance writes no actual one, yet a baseline whose text changed
+      // is recorded fresh, so the test's output (CI's results artifact) gets the picture too.
+      if (!pictureFailed) {
+        const path = test.info().outputPath(name.replace(/\.png$/, "-actual.png"));
+        const shot = { path, animations: "disabled", caret: "hide", scale: "css" } as const;
+        await ("goto" in target
+          ? target.screenshot({ ...shot, fullPage: options?.fullPage ?? false })
+          : target.screenshot(shot));
+      }
     }
     return {
       pass: failures.length === 0,
@@ -53,7 +64,7 @@ async function matchText(region: Locator, name: string): Promise<void> {
       return;
     }
     // Only an update writes a baseline: one written here would let CI's retry pass.
-    await info.attach(basename(path), { body: actual, contentType: "text/plain" });
+    await keepActual(path, actual);
     throw new Error(`No text snapshot at ${path}. \`pnpm visual:update\` writes it.`);
   }
   const expected = readFileSync(path, "utf8");
@@ -63,11 +74,24 @@ async function matchText(region: Locator, name: string): Promise<void> {
     return;
   }
   // Polled, in case the text lags the frame the screenshot settled on.
-  await baseExpect
-    .poll(async () => `${await region.ariaSnapshot()}\n`, {
-      message: `the scene's text matches ${path}`,
-    })
-    .toBe(expected);
+  let last = actual;
+  try {
+    await baseExpect
+      .poll(async () => (last = `${await region.ariaSnapshot()}\n`), {
+        message: `the scene's text matches ${path}`,
+      })
+      .toBe(expected);
+  } catch (error) {
+    await keepActual(path, last);
+    throw error;
+  }
+}
+
+/** The text a failed comparison saw, in the test's output beside Playwright's actual picture. */
+async function keepActual(path: string, actual: string): Promise<void> {
+  const file = test.info().outputPath(basename(path).replace(/\.aria\.yml$/, "-actual.aria.yml"));
+  writeFileSync(file, actual);
+  await test.info().attach(basename(file), { path: file, contentType: "text/plain" });
 }
 
 /** Where the fixture is served: 5341 unless `CLAWTRATE_FIXTURE_PORT` names another. */
