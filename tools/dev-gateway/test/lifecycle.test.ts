@@ -105,8 +105,9 @@ describe("a process whose identity cannot be read is unknown, never exited (B2)"
     const live = liveProcess();
     expect(processIdentity(live.pid)).toEqual({ state: "alive", identity: live.identity });
     expect(processIdentity(deadProcess().pid)).toEqual({ state: "exited", how: "absent" });
-    // A shell that starts a child and replaces itself with a process that never reaps it.
-    const parent = spawn("/bin/sh", ["-c", "sleep 0 & exec sleep 30"], { stdio: "ignore" });
+    // A shell that starts a child and replaces itself with a process that never reaps it. The
+    // child outlives the `exec`, so the shell can't reap it first.
+    const parent = spawn("/bin/sh", ["-c", "sleep 0.2 & exec sleep 30"], { stdio: "ignore" });
     children.push(parent);
     let zombie = 0;
     await waitUntil(() => {
@@ -117,7 +118,8 @@ describe("a process whose identity cannot be read is unknown, never exited (B2)"
         .map((line) => line.trim().split(/\s+/).map(Number))
         .find(([, ppid]) => ppid === parent.pid);
       zombie = row?.[0] ?? 0;
-      return zombie > 1 && processIdentity(zombie).state === "exited";
+      const seen = zombie > 1 ? processIdentity(zombie) : null;
+      return seen?.state === "exited" && seen.how === "zombie";
     });
     expect(processIdentity(zombie)).toEqual({ state: "exited", how: "zombie" });
   });
