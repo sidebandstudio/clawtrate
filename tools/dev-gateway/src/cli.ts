@@ -1849,7 +1849,10 @@ async function existingSessionKeys(inst: DevInstance, botId: string): Promise<Se
   return new Set((parsed.sessions ?? []).flatMap((row) => (row.key ? [row.key] : [])));
 }
 
-/** Create or restyle a bot. These commands write the gateway config, so they run one at a time. */
+/**
+ * Create a bot that is missing and write its instructions. `agents add` writes the gateway
+ * config, so these run one at a time; the bots' identities follow in one write (`setIdentities`).
+ */
 async function configureBot(
   inst: DevInstance,
   bot: SeedBot,
@@ -1872,19 +1875,28 @@ async function configureBot(
   }
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
-  await must(inst, [
-    "agents",
-    "set-identity",
-    "--agent",
-    bot.id,
-    "--name",
-    bot.name,
-    "--emoji",
-    bot.emoji,
-    "--theme",
-    bot.theme,
-    "--json",
-  ]);
+}
+
+/**
+ * Every seeded bot's name, emoji and theme, in one config write through the gateway. It leaves
+ * the config exactly as `agents set-identity` for each bot did, in one round trip instead of four.
+ */
+async function setIdentities(inst: DevInstance): Promise<void> {
+  const entries = Object.fromEntries(
+    SEED_BOTS.map((bot) => [
+      bot.id,
+      { identity: { name: bot.name, emoji: bot.emoji, theme: bot.theme } },
+    ]),
+  );
+  const { hash } = await callGateway<{ hash: string }>(inst, "config.get", {});
+  const patched = await callGateway<{ ok?: boolean }>(inst, "config.patch", {
+    raw: JSON.stringify({ agents: { entries } }),
+    baseHash: hash,
+  });
+  if (patched.ok !== true)
+    throw new Error(
+      `the bots' identities were not saved: ${JSON.stringify(patched).slice(0, 300)}`,
+    );
 }
 
 type AgentRunOutput = {
@@ -1975,9 +1987,15 @@ export function checkHistory(messages: HistoryMessage[], task: SeedTask): string
   return problems;
 }
 
-/** Run a bot's scripted conversations. Sessions are independent, so bots run in parallel. */
-async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void> {
-  const existing = await existingSessionKeys(inst, bot.id);
+/**
+ * Run a bot's scripted conversations. Sessions are independent, so bots run in parallel.
+ * `existing` is the bot's task keys as the seed found them.
+ */
+async function seedConversations(
+  inst: DevInstance,
+  bot: SeedBot,
+  existing: Set<string>,
+): Promise<void> {
   for (const task of bot.tasks) {
     const key = sessionKeyFor(bot.id, task.slug);
     const alreadySeeded = existing.has(key);
@@ -2036,11 +2054,19 @@ export async function seed(inst: DevInstance): Promise<void> {
   const agents = new Map(rows.map((row) => [row.id, row]));
   console.log("Seeding sample bots and conversations");
   for (const bot of SEED_BOTS) await configureBot(inst, bot, agents);
+  await setIdentities(inst);
   // Configuring the bots rewrote the config; it must still keep every guarantee.
   assertSandboxed(inst, instancePorts(inst));
   await assertExecDenied(inst);
-  await Promise.all(SEED_BOTS.map((bot) => seedConversations(inst, bot)));
-  await seedScenarioExamples(inst);
+  // Each bot's tasks, read once: the examples are seeded only where their own task isn't there
+  // yet, and nothing the conversations make has an example's key.
+  const existing = new Map(
+    await Promise.all(
+      SEED_BOTS.map(async (bot) => [bot.id, await existingSessionKeys(inst, bot.id)] as const),
+    ),
+  );
+  await Promise.all(SEED_BOTS.map((bot) => seedConversations(inst, bot, existing.get(bot.id)!)));
+  await seedScenarioExamples(inst, existing);
   console.log("Seed complete");
 }
 
@@ -2083,11 +2109,10 @@ export async function openOperator(
  * it sends each prompt, answers the question and resolves the approval. Runs
  * one example at a time, after the scripted tasks, then unpairs itself.
  */
-async function seedScenarioExamples(inst: DevInstance): Promise<void> {
-  const keys = new Map<string, Set<string>>();
-  for (const botId of new Set(SCENARIO_EXAMPLES.map((example) => example.botId))) {
-    keys.set(botId, await existingSessionKeys(inst, botId));
-  }
+async function seedScenarioExamples(
+  inst: DevInstance,
+  keys: ReadonlyMap<string, Set<string>>,
+): Promise<void> {
   console.log(
     `Seeding live examples as the user, through a paired client "${SEED_CLIENT}" (scopes ${SEED_SCOPES.join(", ")})`,
   );
