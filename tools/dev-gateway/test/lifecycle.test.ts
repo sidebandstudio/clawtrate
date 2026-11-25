@@ -670,12 +670,18 @@ describe("a start whose gateway never answers says what the gateway was doing (#
   it("stops as soon as the gateway exits, with the end of its log", async () => {
     const home = tempDir("clawtrate-home-");
     const runRoot = tempDir("clawtrate-run-");
-    const inst = fakedInstance(
+    const faked = fakedInstance(
       home,
       runRoot,
       "alpha",
       "echo '[gateway] startup phase: config.auth starting'; echo 'config is invalid' >&2; exit 3",
     );
+    // This gateway never opens its port, so no health check can answer before it exits.
+    const inst = {
+      ...faked,
+      listening: async (port: number) =>
+        port !== readMarker(faked.stateDir)?.gatewayPort && faked.listening(port),
+    };
     const began = Date.now();
     const failure = await start(inst, { seed: false }).then(
       () => new Error("the start succeeded"),
