@@ -264,6 +264,31 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
     expect(accepted!.task?.botId).toBe("marlow");
   });
 
+  it("keeps what the step holds of an accepted start when its whole payload is not here", () => {
+    const raw = new RawTable();
+    const rows = startRows();
+    const runs = runsFromHistory(rows, null, { sessionKey: HERE, now: T + 60_000, raw });
+    // The whole payload could not be read, or was let go.
+    const [card] = selectStartedTasks(
+      { runs, items: mapHistory(rows), taskKey: HERE, tasks: listed("running") },
+      () => null,
+    );
+    expect(card).toMatchObject({ state: "working", taskKey: CHILD, title: LABEL, brief: BRIEF });
+    expect(card!.task?.key).toBe(CHILD);
+    // A result the step kept only part of says nothing.
+    const cut = runs.map((run) => ({
+      ...run,
+      steps: run.steps.map((step) =>
+        step.result ? { ...step, result: { ...step.result, totalChars: 99_999 } } : step,
+      ),
+    }));
+    const [partial] = selectStartedTasks(
+      { runs: cut, items: mapHistory(rows), taskKey: HERE, tasks: listed("running") },
+      () => null,
+    );
+    expect(partial).toMatchObject({ state: "unknown", taskKey: null, task: null });
+  });
+
   it("is Unknown for a call that closed with no result, or a result that says nothing", () => {
     const noResult = [
       user("#hand-off", T, RUN),

@@ -318,8 +318,10 @@ export function CardFor({ cardRef }: { cardRef: CardRef }) {
       return <T3CodeCardView card={card} read={cards.rawState(card.stepId)} />;
     }
     case "started-task": {
+      // Drawn from what the step keeps of the call and its result, so it never waits on a read of
+      // the whole payload, which only its Raw view needs.
       const card = startedTasks.find((each) => each.id === cardRef.id);
-      if (!card || !cards.settledRaw(card.stepId)) return null;
+      if (!card) return null;
       return <StartedTaskCardView card={card} read={cards.rawState(card.stepId)} />;
     }
   }

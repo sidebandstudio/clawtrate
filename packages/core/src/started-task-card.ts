@@ -7,7 +7,7 @@
 // conversation (`Task.startedBy.fromKey`).
 
 import { callArgs, resultBody, sendDetails } from "./cards.ts";
-import { botIdFromSessionKey, REPORT_RUN_PREFIX } from "./mapping.ts";
+import { asRecord, botIdFromSessionKey, REPORT_RUN_PREFIX } from "./mapping.ts";
 import { isOpenStep, type Run, type Step, type StepRaw } from "./runs.ts";
 import { MAX_TITLE_CHARS } from "./state-bounds.ts";
 import type { ClawtrateState, Task, TaskStatus, TranscriptItem } from "./types.ts";
@@ -121,6 +121,22 @@ function argsOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null
   return callArgs(raw) ?? step.args ?? null;
 }
 
+/**
+ * What the call's result says: the whole payload's, else the tool's JSON object as the step keeps
+ * its result text, when it keeps all of it. A start's result is a short object, so the step holds
+ * it whole; a payload that could not be read, or was let go, then leaves the card what it knew.
+ */
+function resultOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null {
+  const details = sendDetails(resultBody(raw));
+  if (details || !step.result || step.result.text.length < step.result.totalChars) return details;
+  try {
+    const kept = asRecord(JSON.parse(step.result.text));
+    return kept && !Array.isArray(kept) && str(kept.status) ? kept : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A hidden helper's key (`agent:<bot>:subagent:<id>`): the task list leaves it out. */
 const HIDDEN_KEY = /^agent:[^:]+:subagent:/;
 
@@ -131,7 +147,7 @@ const HIDDEN_KEY = /^agent:[^:]+:subagent:/;
  */
 export function isTaskStart(step: Step, raw: StepRaw | null): boolean {
   if (step.kind !== "tool" || step.toolName !== START_TASK_TOOL) return false;
-  const details = sendDetails(resultBody(raw));
+  const details = resultOf(step, raw);
   const key = details?.status === "accepted" ? str(details.childSessionKey) : null;
   if (key) return !HIDDEN_KEY.test(key);
   return argsOf(step, raw)?.visible === true;
@@ -191,7 +207,7 @@ function startedTaskCard(
   input: StartedTaskInput,
 ): StartedTaskCard {
   const args = argsOf(step, raw);
-  const details = sendDetails(resultBody(raw));
+  const details = resultOf(step, raw);
   const status = str(details?.status);
   const accepted = status === "accepted";
   const taskKey = accepted ? str(details?.childSessionKey) : null;
@@ -199,7 +215,7 @@ function startedTaskCard(
   const task = startedTaskOf(input.tasks, taskKey, input.taskKey);
   const labelText = str(args?.label);
   const label = labelText ? plainLine(labelText, MAX_TITLE_CHARS) || null : null;
-  const hasResult = raw?.result !== null && raw?.result !== undefined;
+  const hasResult = (raw?.result !== null && raw?.result !== undefined) || step.result !== null;
 
   let state: StartedTaskState;
   let reason: string | null = null;
