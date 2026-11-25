@@ -153,8 +153,8 @@ describe("F-590: the rail", () => {
     // Without this device's record of the run, the viewer's memory as it was: unread.
     const plain = unreadSeenOf(seen, false, {
       ...state,
-      openclawUpdating: { updated: [] },
-    } as typeof state);
+      openclawUpdating: { ...state.openclawUpdating!, updated: [] },
+    });
     expect(plain).toBe(seen);
     expect(summarize([listed], plain, null, plain).unread).toBe(true);
     // A connection that writes reads none of it.
