@@ -1,8 +1,10 @@
 // The OpenClaw the development gateway runs (#597): the version this project tests against
 // (docs/decisions.md), installed into this tool's own git-ignored folder, on a Node it supports.
 // Never the `openclaw` on PATH: on a computer that runs its own gateway, that one is the person's
-// own, at whatever version they last installed. OPENCLAW_BIN may name another copy of the same
-// version, as CI's throwaway runners do; any other version is refused, not run.
+// own, at whatever version they last installed. OPENCLAW_BIN may name another copy of a version
+// in versions.ts, as CI's throwaway runners do: the pinned one, or npm's newest that the OpenClaw
+// latest workflow tests (#609). Any other version is refused, not run. OPENCLAW_NODE names the
+// Node that runs a copy whose own Node is out of its range.
 //
 //   pnpm dev-gateway setup   installs it; `pnpm dev-gateway start` does so too when it is missing
 
@@ -19,8 +21,14 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { withLock } from "./lock.ts";
+import {
+  isOpenclawVersion,
+  OPENCLAW_VERSIONS,
+  PINNED_VERSION,
+  type OpenclawVersion,
+} from "./versions.ts";
 
-export const OPENCLAW_VERSION = "2026.10.6";
+export const OPENCLAW_VERSION = PINNED_VERSION;
 /** The Node the pinned OpenClaw runs on when the one running this tool is outside its range. */
 export const NODE_VERSION = "24.22.1";
 /** Node's own published SHA-256 of each archive (nodejs.org/dist/v24.22.1/SHASUMS256.txt). */
@@ -79,12 +87,10 @@ export function openclawProgram(
   execPath = process.execPath,
 ): Program {
   if (env.OPENCLAW_BIN) {
-    const found = programVersion(env.OPENCLAW_BIN);
-    if (found !== OPENCLAW_VERSION)
-      throw new Error(
-        `OPENCLAW_BIN is OpenClaw ${found ?? "of a version this tool cannot read"}; the development gateway runs only ${OPENCLAW_VERSION}. Unset it to use the copy \`pnpm dev-gateway setup\` installs.`,
-      );
-    return { command: env.OPENCLAW_BIN, args: [] };
+    binVersion(env.OPENCLAW_BIN);
+    return env.OPENCLAW_NODE
+      ? { command: env.OPENCLAW_NODE, args: [realpathSync(env.OPENCLAW_BIN)] }
+      : { command: env.OPENCLAW_BIN, args: [] };
   }
   const node = nodeFor(env, dir, version, execPath);
   if (!existsSync(entryIn(dir)) || !existsSync(node))
@@ -92,6 +98,21 @@ export function openclawProgram(
       `OpenClaw ${OPENCLAW_VERSION} is not set up for the development gateway. Run \`pnpm dev-gateway setup\`.`,
     );
   return { command: node, args: [entryIn(dir)] };
+}
+
+/** The version of an OPENCLAW_BIN copy; throws, running nothing, for one this tool doesn't run. */
+function binVersion(bin: string): OpenclawVersion {
+  const found = programVersion(bin);
+  if (!isOpenclawVersion(found))
+    throw new Error(
+      `OPENCLAW_BIN is OpenClaw ${found ?? "of a version this tool cannot read"}; the development gateway runs only ${OPENCLAW_VERSIONS.join(" or ")}. Unset it to use the copy \`pnpm dev-gateway setup\` installs.`,
+    );
+  return found;
+}
+
+/** The version of the OpenClaw `openclawProgram` gives: OPENCLAW_BIN's, or the pinned one. */
+export function openclawVersion(env: NodeJS.ProcessEnv = process.env): OpenclawVersion {
+  return env.OPENCLAW_BIN ? binVersion(env.OPENCLAW_BIN) : OPENCLAW_VERSION;
 }
 
 /** Whether `openclawProgram` has a program to give, without setting anything up. */

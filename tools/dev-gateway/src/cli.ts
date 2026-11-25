@@ -101,10 +101,11 @@ import {
   selectInstance,
 } from "./instance.ts";
 import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
+import { factsFor, type OpenclawVersion } from "./versions.ts";
 import {
-  OPENCLAW_VERSION,
   openclawProgram,
   openclawReady,
+  openclawVersion,
   PINNED_DIR,
   setupOpenclaw,
 } from "./pinned.ts";
@@ -403,6 +404,8 @@ export function browserConfig(
 
 /** What a start adds to the base config, beyond plugins. */
 export type StartOptions = {
+  /** The OpenClaw version the config is for; otherwise the version this tool runs (pinned.ts). */
+  version?: OpenclawVersion;
   /** The scripted provider accounts (accounts.ts); named instances only. */
   accounts?: boolean;
   /**
@@ -448,6 +451,7 @@ export function devConfig(
   options: StartOptions = {},
   chromium?: string,
 ) {
+  const facts = factsFor(options.version ?? openclawVersion());
   const accounts = options.accounts ? accountsConfig(ports.providerPort, stateDir) : null;
   const owner = plugins.find((plugin) => plugin.botBrowsers);
   const browsers = owner?.botBrowsers
@@ -524,7 +528,7 @@ export function devConfig(
         model: { primary: MODEL_REF },
         thinkingDefault: "low",
         systemAgent: { agentId: "main" },
-        heartbeat: { agentId: "main" },
+        ...(facts.heartbeatConfig ? { heartbeat: { agentId: "main" } } : {}),
         ...(options.images ? { mediaModels: { image: { primary: IMAGE_MODEL_REF } } } : {}),
       },
       // The bots are declared here so their tool policy is part of the checked
@@ -567,13 +571,16 @@ export function devConfig(
       // bot browsers the browser tool is denied per bot instead (botEntries).
       // With the stand-in image provider, image_generate is offered instead, and
       // with the message tool, message, and with skill reviews, skill_workshop.
-      deny: DENIED_TOOLS.filter(
-        (tool) =>
-          !(browsers && tool === "browser") &&
-          !(options.images && tool === "image_generate") &&
-          !(options.messageTool && tool === "message") &&
-          !(options.skillReview && tool === "skill_workshop"),
-      ),
+      deny: [
+        ...DENIED_TOOLS.filter(
+          (tool) =>
+            !(browsers && tool === "browser") &&
+            !(options.images && tool === "image_generate") &&
+            !(options.messageTool && tool === "message") &&
+            !(options.skillReview && tool === "skill_workshop"),
+        ),
+        ...facts.deniedTools,
+      ],
     },
     // The stand-in coding agent: a local command server, no network, run in
     // the instance's own folder.
@@ -709,7 +716,7 @@ export const DENIED_TOOLS = [
 
 /** What a plugin's contract addition is checked against. */
 export const PLUGIN_RULE: PluginRule = {
-  gatewayTools: [...GATEWAY_TOOLS, ...DENIED_TOOLS],
+  gatewayTools: [...GATEWAY_TOOLS, ...DENIED_TOOLS, ...factsFor("2026.11.10").deniedTools],
   reserved: RESERVED_PLUGIN_IDS,
   seedBots: SEED_BOTS.map((bot) => bot.id),
   scriptedProviders: ACCOUNT_PROVIDERS,
@@ -758,13 +765,13 @@ export function devConfigContract(
   }
   // The CLI stamps the version that last wrote the config, and the migrations
   // it considers applied, whenever it writes it.
+  const facts = factsFor(options.version ?? openclawVersion());
   (contract as Record<string, unknown>).meta = optional({
-    lastTouchedVersion: optional("2026.10.6"),
+    lastTouchedVersion: optional(facts.version),
     lastTouchedAt: optional(matching("a time stamp", (value) => typeof value === "string")),
-    migrations: optional({
-      modelPolicyAllowlist: optional(true),
-      utilityModelSeparation: optional(true),
-    }),
+    migrations: optional(
+      Object.fromEntries(facts.migrations.map((name) => [name, optional(true)])),
+    ),
   });
   return contract as unknown as Contract;
 }
@@ -2410,7 +2417,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       throw new Error("setup is for this checkout; it does not take --instance");
     if (env.OPENCLAW_BIN) {
       openclawProgram(env);
-      console.log(`OPENCLAW_BIN is OpenClaw ${OPENCLAW_VERSION}; nothing to set up.`);
+      console.log(`OPENCLAW_BIN is OpenClaw ${openclawVersion(env)}; nothing to set up.`);
     } else await setupOpenclaw(PINNED_DIR, env);
     return;
   }

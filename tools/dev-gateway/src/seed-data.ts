@@ -1,7 +1,9 @@
 // Sample bots, tasks and scripted conversations for the development gateway.
 // Everything here is invented. Tool calls only touch each bot's own dev workspace.
 
+import { openclawVersion } from "./pinned.ts";
 import type { ReplyStep } from "./scripts.ts";
+import { factsFor, toolJson } from "./versions.ts";
 
 /** One model call. A turn with tool calls spans several rounds. */
 export type Round = ReplyStep[];
@@ -548,12 +550,25 @@ export type ExampleResult = {
   details?: Record<string, unknown>;
 };
 
+/** What the running OpenClaw writes (versions.ts): each version's results are matched exactly. */
+const FACTS = factsFor(openclawVersion());
+
 const quoted = (names: string[]) => names.map((name) => JSON.stringify(name)).join("\n");
 const answered = (header: string, id: string, value: string) =>
-  `${header}: ${value}\n\n${JSON.stringify({ status: "answered", answers: { answers: { [id]: [value] } } }, null, 2)}`;
+  `${header}: ${value}\n\n${toolJson(FACTS, { status: "answered", answers: { answers: { [id]: [value] } } })}`;
 
 const JUNIPER_INSTRUCTIONS = SEED_BOTS.find((bot) => bot.id === "main")!.instructions;
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The whole text: `before`, then a value as the running OpenClaw writes it as JSON. Each `holes`
+ * key, written into the value, stands for its pattern there.
+ */
+const jsonText = (value: unknown, holes: Record<string, string> = {}, before = "") => {
+  let pattern = escape(before + toolJson(FACTS, value));
+  for (const [hole, part] of Object.entries(holes)) pattern = pattern.replace(hole, part);
+  return new RegExp(`^${pattern}$`);
+};
 
 export const SCENARIO_EXAMPLES: ScenarioExample[] = [
   {
@@ -583,20 +598,15 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
         toolName: "sessions_send",
         isError: false,
         content: [
-          new RegExp(
-            `^${escape(
-              JSON.stringify(
-                {
-                  runId: "RUNID",
-                  sessionKey: "agent:marlow:main",
-                  status: "ok",
-                  delivery: { status: "skipped" },
-                  reply: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
-                },
-                null,
-                2,
-              ),
-            ).replace("RUNID", "[0-9a-f-]{36}")}$`,
+          jsonText(
+            {
+              runId: "RUN_ID",
+              sessionKey: "agent:marlow:main",
+              status: "ok",
+              delivery: { status: "skipped" },
+              reply: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
+            },
+            { RUN_ID: "[0-9a-f-]{36}" },
           ),
         ],
         details: { sessionKey: "agent:marlow:main" },
@@ -636,7 +646,14 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
         toolName: "read",
         isError: true,
         content: [
-          /^\{\n {2}"status": "error",\n {2}"tool": "read",\n {2}"error": "File not found: \S+\/workspace\/missing\/old-notes\.md\."\n\}$/,
+          jsonText(
+            {
+              status: "error",
+              tool: "read",
+              error: "File not found: STATE/workspace/missing/old-notes.md.",
+            },
+            { STATE: "\\S+" },
+          ),
         ],
       },
     ],
@@ -654,7 +671,16 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
         toolName: "coder__send_message",
         isError: false,
         content: [
-          /^structuredContent:\n\{\n {2}"reply": "Opened a branch and drafted the change for: Add a dark mode toggle to the settings page\.",\n {2}"threadId": "(thread-\d+)",\n {2}"url": "https:\/\/coding-agent\.example\/threads\/\1"\n\}$/,
+          jsonText(
+            {
+              reply:
+                "Opened a branch and drafted the change for: Add a dark mode toggle to the settings page.",
+              threadId: "THREAD_ID",
+              url: "https://coding-agent.example/threads/THREAD_REF",
+            },
+            { THREAD_ID: "(thread-\\d+)", THREAD_REF: "\\1" },
+            "structuredContent:\n",
+          ),
           "Opened a branch and drafted the change.",
         ],
       },

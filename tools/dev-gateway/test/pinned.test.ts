@@ -1,6 +1,6 @@
 // The development gateway runs a pinned OpenClaw, never the one on PATH (#597): which program it
 // picks, which Node runs it, and what it refuses.
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import {
   nodeArchive,
   openclawProgram,
   openclawReady,
+  openclawVersion,
   programVersion,
   supportsNode,
 } from "../src/pinned.ts";
@@ -57,15 +58,24 @@ describe("the development gateway's OpenClaw (#597)", () => {
       expect(supportsNode(no), no).toBe(false);
   });
 
-  it("runs OPENCLAW_BIN only when it is the pinned version, and says why it refuses another", () => {
+  it("runs OPENCLAW_BIN only at a version it knows (#609), and says why it refuses another", () => {
     const pinned = installed(OPENCLAW_VERSION);
     expect(programVersion(pinned)).toBe(OPENCLAW_VERSION);
     expect(openclawProgram({ OPENCLAW_BIN: pinned }, temp())).toEqual({
       command: pinned,
       args: [],
     });
-    expect(() => openclawProgram({ OPENCLAW_BIN: installed("2026.11.10") }, temp())).toThrow(
-      `OPENCLAW_BIN is OpenClaw 2026.11.10; the development gateway runs only ${OPENCLAW_VERSION}.`,
+    expect(openclawVersion({ OPENCLAW_BIN: pinned })).toBe(OPENCLAW_VERSION);
+    expect(openclawVersion({})).toBe(OPENCLAW_VERSION);
+    // npm's newest, which the OpenClaw latest workflow tests; OPENCLAW_NODE runs it.
+    const newest = installed("2026.11.10");
+    expect(openclawVersion({ OPENCLAW_BIN: newest })).toBe("2026.11.10");
+    expect(openclawProgram({ OPENCLAW_BIN: newest, OPENCLAW_NODE: "/node" }, temp())).toEqual({
+      command: "/node",
+      args: [realpathSync(newest)],
+    });
+    expect(() => openclawProgram({ OPENCLAW_BIN: installed("2026.11.9") }, temp())).toThrow(
+      `OPENCLAW_BIN is OpenClaw 2026.11.9; the development gateway runs only 2026.10.6 or 2026.11.10.`,
     );
     expect(() => openclawProgram({ OPENCLAW_BIN: installed("1.0.0", "other") }, temp())).toThrow(
       /OPENCLAW_BIN is OpenClaw of a version this tool cannot read/,
