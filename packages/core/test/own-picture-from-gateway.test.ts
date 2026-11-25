@@ -634,3 +634,34 @@ describe("F-557: your picture on another device, and after a restart", () => {
     client.stop();
   });
 });
+
+describe("F-557: a read's token", () => {
+  it("F-557: a read whose socket closes while its token loads sends nothing", async () => {
+    const { fetch, fetched } = live();
+    const { client, gateway } = await elsewhere(fetch, [sentRow("m1", "look", [SHOT])]);
+    const storage = (
+      client as unknown as { host: { storage: { get: (key: string) => Promise<string | null> } } }
+    ).host.storage;
+    const get = storage.get.bind(storage);
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let loading = false;
+    storage.get = async (key) => {
+      if (key === tokenKey(PROTECTED) && !loading) {
+        loading = true;
+        await held;
+      }
+      return get(key);
+    };
+    const reading = client.readSentPicture(KEY, "m1:user", 0);
+    await until(() => loading);
+    gateway.dropAll();
+    release();
+    expect(await reading).toEqual({
+      status: "failed",
+      message: "The connection changed while this picture was read.",
+    });
+    expect(fetched).toEqual([]);
+    client.stop();
+  });
+});
