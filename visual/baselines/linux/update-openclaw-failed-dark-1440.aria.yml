@@ -24,13 +24,13 @@
     - definition: operator.read, operator.write, operator.approvals, operator.questions, operator.admin
     - term: Gateway
     - definition: OpenClaw 2026.10.6 · protocol 4
-    - paragraph: "The update failed. The gateway says: “The updater could not start: spawn EAGAIN. (managed-service-handoff-failed)”."
+    - paragraph: "The update failed. The gateway couldn't start the updater. The gateway says: “The updater could not start: spawn EAGAIN. (managed-service-handoff-failed)”."
     - paragraph: You can try again, or update OpenClaw on the gateway's machine with its update instructions.
     - paragraph:
       - link "OpenClaw's update instructions":
         - /url: https://docs.openclaw.ai/install/updating
     - button "Dismiss"
-    - status: The update failed.
+    - status: The update failed. The gateway couldn't start the updater.
     - button "Disconnect"
     - button "Use another gateway"
     - paragraph: 127.0.0.1:18789 keeps this device's pairing while it is disconnected. This device holds admin access, which it asked for to change bots and accounts.

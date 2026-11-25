@@ -25,7 +25,7 @@
     - term: Gateway
     - definition: OpenClaw 2026.10.6 · protocol 4
     - paragraph: The gateway hasn't come back since the update restarted it.
-    - paragraph: Check that the gateway's machine is on and that OpenClaw is running there. Clawtrate keeps trying to reconnect.
+    - paragraph: Check that the gateway's machine is on and that OpenClaw is running there. If it was started by hand, start it again the way you normally start it. Clawtrate keeps trying to reconnect.
     - status: The gateway hasn't come back since the update restarted it.
     - button "Disconnect"
     - button "Use another gateway"

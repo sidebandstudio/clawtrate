@@ -19,8 +19,8 @@
     - alertdialog "Update OpenClaw?":
       - heading "Update OpenClaw?" [level=2]
       - paragraph: Your gateway goes from OpenClaw 2026.10.6 to 2026.11.6.
-      - paragraph: The gateway restarts during the update, and your bots can't take new work until it's back. Clawtrate reconnects by itself.
-      - paragraph: 1 task is working now. Before it restarts, OpenClaw stops taking new work and waits for running work to finish; on some installs that wait can last up to about half an hour. Work still running when it ends can be interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.
+      - paragraph: An update usually takes 5 to 10 minutes, and some installs take longer. The gateway restarts during it, so your bots can't be reached for part of that time. Clawtrate reconnects by itself.
+      - paragraph: 1 task is working now, and will be stopped when the gateway restarts. Stopped work may not be picked up again.
       - button "Not now"
       - button "Update"
     - button "Disconnect"
