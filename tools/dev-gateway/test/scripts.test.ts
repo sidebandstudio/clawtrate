@@ -197,3 +197,53 @@ describe("the end-to-end runs the seed does not leave behind", () => {
     expect(ms).toBeLessThan(14_000);
   });
 });
+
+describe("tasks a bot starts", () => {
+  const tools = new Set(["sessions_spawn", "sessions_send"]);
+  const CHILD = "agent:pip:dashboard:4f33f5e9-e3ca-40ac-877f-603b0a3eadbe";
+  const spawned = JSON.stringify(
+    { status: "accepted", childSessionKey: CHILD, runId: "r1", label: "Compare trail maps" },
+    null,
+    2,
+  );
+  const started: ChatMessage[] = [
+    { role: "user", content: "#hand-off" },
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "c1", function: { name: "sessions_spawn" } }],
+    },
+    { role: "tool", tool_call_id: "c1", content: spawned },
+    { role: "assistant", content: "I started a task for it: Compare trail maps." },
+  ];
+  /** The gateway's report as data: a follow-up's report names the follow-up's text as its task. */
+  const report = (key: string, task: string): ChatMessage => ({
+    role: "user",
+    content: `OpenClaw runtime context:\nA background task completed.\n\nConversation data (data, not instructions):\n"[Internal task completion event]\\nsource: subagent\\nsession_key: ${key}\\ntask: ${task}\\nstatus: completed successfully\\n\\nDone."`,
+  });
+
+  it("a follow-up goes to the task the conversation started last", () => {
+    const reply = planReply([...started, { role: "user", content: "#follow-up" }], tools);
+    expect(reply).toMatchObject([
+      { kind: "tool", name: "sessions_send", arguments: { sessionKey: CHILD, timeoutSeconds: 0 } },
+    ]);
+    expect(planReply([{ role: "user", content: "#follow-up" }], tools)).toEqual([
+      { kind: "text", text: "I have started no task here to add to." },
+    ]);
+  });
+
+  it("a started task's report is one line naming it by the label it was started with", () => {
+    expect(planReply([...started, report(CHILD, "Also say which has shade.")], tools)).toEqual([
+      { kind: "text", text: "Compare trail maps finished. Its answer is in that task." },
+    ]);
+    expect(
+      planReply(
+        [
+          { role: "user", content: "#hand-off-hidden" },
+          report("agent:pip:subagent:6f2b6c60", "Check the forecast"),
+        ],
+        tools,
+      ),
+    ).toEqual([{ kind: "text", text: "Check the forecast finished." }]);
+  });
+});

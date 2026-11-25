@@ -170,9 +170,29 @@ async function text(get: Get, url: string, headers: Record<string, string>): Pro
 }
 
 /**
+ * The pinned beta's release, by the rule the site takes any beta with: a
+ * published prerelease of that tag carrying both Mac zips, feed.json and
+ * latest-mac.json. Null when there is none. The publisher checks it with the
+ * same rule before anything is created.
+ */
+export function pinnedBeta(rows: readonly ReleaseRow[], pin: string): ReleaseRow | null {
+  return newestBeta(rows.filter((row) => row.tag_name === `v${pin}`));
+}
+
+/** The releases at or below the pinned version: what the legacy feed's lists are made from. */
+function atOrBelow(rows: readonly ReleaseRow[], pin: string): ReleaseRow[] {
+  const ceiling = parseVersion(pin)!;
+  return rows.filter((row) => {
+    const version = parseVersion(row.tag_name.slice(1));
+    return version !== null && !isNewer(version, ceiling);
+  });
+}
+
+/**
  * The repository's releases, as GitHub's API lists them, newest first: the
  * newest 1,000, and, while `pin` names a beta, on until its release is listed
- * or the list ends, so an old pinned beta is never missed.
+ * and the betas at or below it give the legacy feed's lists their full five, or
+ * the list ends, so neither an old pinned beta nor its lists are missed.
  */
 async function releaseRows(
   get: Get,
@@ -185,7 +205,10 @@ async function releaseRows(
     ...(token ? { authorization: `Bearer ${token}` } : {}),
   };
   const rows: ReleaseRow[] = [];
-  const found = () => pin === null || rows.some((row) => row.tag_name === `v${pin}`);
+  const found = () =>
+    pin === null ||
+    (rows.some((row) => row.tag_name === `v${pin}`) &&
+      betaNotes(atOrBelow(rows, pin)).length >= WHATS_NEW_BETAS);
   for (let page = 1; page <= 10 || !found(); page++) {
     const url = `https://api.github.com/repos/${REPOSITORY}/releases?per_page=100&page=${page}`;
     const batch = JSON.parse(await text(get, url, api)) as ReleaseRow[];
@@ -237,9 +260,12 @@ export function whatsNewFile(rows: readonly ReleaseRow[]): string {
 }
 
 /** The newest published betas whose pages list what they add, newest first. */
+/** How many betas' lists the site serves and shows. */
+const WHATS_NEW_BETAS = 5;
+
 export function betaNotes(
   rows: readonly ReleaseRow[],
-  limit = 5,
+  limit = WHATS_NEW_BETAS,
 ): Array<{ version: string; items: string[] }> {
   const betas = rows.flatMap((row) => {
     if (row.draft || !row.prerelease || !row.tag_name.startsWith("v")) return [];
@@ -388,23 +414,20 @@ export async function writeSiteFeed(
     throw new Error(
       `The legacy Beta feed is pinned to ${pin}, but GitHub lists no release v${pin}, so nothing deploys.`,
     );
-  const pinned = newestBeta(all.filter((row) => row.tag_name === `v${pin}`));
+  const pinned = pinnedBeta(all, pin);
   if (!pinned)
     throw new Error(
       `The legacy Beta feed is pinned to ${pin}, which is not a published beta with its files, so nothing deploys.`,
     );
-  const ceiling = parseVersion(pin)!;
-  const upToPin = all.filter((row) => {
-    const version = parseVersion(row.tag_name.slice(1));
-    return version !== null && !isNewer(version, ceiling);
-  });
-  const pinnedFiles = await checkedFiles(get, pinned);
+  // The newest beta's files are already checked when it is the pinned one.
+  const pinnedFiles =
+    pinned.tag_name === release.tag_name ? files : await checkedFiles(get, pinned);
   // The beta old copies update to must read the new folder, or they would stay here.
   if ((JSON.parse(pinnedFiles.feed) as { buildFeed?: unknown }).buildFeed !== BETA_FEED_URL)
     throw new Error(
       `The legacy Beta feed is pinned to ${pin}, whose release does not record that its build reads ${BETA_FEED_URL}, so nothing deploys.`,
     );
-  writeFeedFolder(join(site, LEGACY_BETA_FOLDER), pinnedFiles, whatsNewFile(upToPin));
+  writeFeedFolder(join(site, LEGACY_BETA_FOLDER), pinnedFiles, whatsNewFile(atOrBelow(all, pin)));
   return release.tag_name;
 }
 

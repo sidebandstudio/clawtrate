@@ -1,6 +1,7 @@
 // The gateway connection and the state it projects. Built on the official
 // browser-safe protocol client, with transport, storage and signing injected.
 
+import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
   readVoice,
@@ -171,6 +172,7 @@ import {
   isTaskSession,
   mapAgents,
   mapHistory,
+  startedTaskSince,
   mergeSessionRow,
   sessionChangeRow,
   sessionRowKey,
@@ -1299,6 +1301,8 @@ export class ClawtrateClient {
     /** A rejected code can recheck for a saved pairing. A changed pairing needs fresh consent. */
     refusal?: "invalid-code" | "pairing-changed";
   } | null = null;
+  /** A setup connection's update report, held until its setup succeeds (`holdSetupUpdate`). */
+  private setupUpdate: { generation: number; update: OpenClawUpdate } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
@@ -2173,6 +2177,7 @@ export class ClawtrateClient {
       this.setupCode = null;
       this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = null;
+      this.setupUpdate = null;
       this.pairingSeen = null;
       if (stops === this.stops) await this.open({ newTarget: true });
     });
@@ -2325,6 +2330,7 @@ export class ClawtrateClient {
       this.setupCode = null;
       this.setupCheck = null;
       this.setupIntent = null;
+      this.setupUpdate = null;
       this.settings = null;
       this.pairingSeen = null;
       this.rows = new Map();
@@ -6093,7 +6099,11 @@ export class ClawtrateClient {
     if (!this.state.transcripts[key]) return null;
     // The length needed is not known here: the most the gateway gives. An item it still cut says so.
     const history = await this.readHistoryWhole(key, MAX_HISTORY_READ_CHARS);
-    return mapHistory(history?.messages).find((item) => item.id === itemId) ?? null;
+    return (
+      mapHistory(history?.messages, { startedAt: startedTaskSince(history) }).find(
+        (item) => item.id === itemId,
+      ) ?? null
+    );
   }
 
   /**
@@ -7715,6 +7725,10 @@ export class ClawtrateClient {
         requestedScopes: this.scopesToAsk(settings.url, stored),
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
+        // A setup connection publishes none of the gateway's versions, so an earlier connection's
+        // report isn't carried into one, even to the same address (the setup contract).
+        openclawUpdate:
+          sameGateway && !this.isSetup(settings.url) ? state.connection.openclawUpdate : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
       },
       transcripts: sameGateway
@@ -8740,6 +8754,10 @@ export class ClawtrateClient {
   }
 
   private handleHello(hello: HelloOk, generation: number): void {
+    this.holdSetupUpdate(
+      generation,
+      this.isSetup(this.settings?.url) ? asRecord(hello.snapshot)?.updateAvailable : null,
+    );
     const wasConnected = this.everConnected;
     this.everConnected = true;
     this.pairingSeen = null;
@@ -8770,6 +8788,11 @@ export class ClawtrateClient {
       serverVersion: this.isSetup(this.settings?.url)
         ? setupVersion(hello.server.version)
         : hello.server.version,
+      // A setup connection publishes none of the gateway's versions (the setup contract above):
+      // its report is held, below, until setup succeeds on this connection.
+      openclawUpdate: this.isSetup(this.settings?.url)
+        ? null
+        : readOpenClawUpdate(asRecord(hello.snapshot)?.updateAvailable),
       protocol: hello.protocol,
       scopes,
       canWrite,
@@ -8998,7 +9021,14 @@ export class ClawtrateClient {
     // also when the first bot read failed: the change it missed is read now.
     if (read.botsChanged) void this.refreshBotsOnChange(generation);
     const setup = this.isSetup(this.settings?.url);
-    if (setup && failures.length === 0) this.setupIntent = null;
+    if (setup && failures.length === 0) {
+      this.setupIntent = null;
+      // The connection is the saved gateway's own now, with no new hello: the report held while
+      // it was setup's is published, if it was this connection's.
+      const held = this.setupUpdate;
+      if (held?.generation === generation) this.setConnection({ openclawUpdate: held.update });
+    }
+    if (setup) this.setupUpdate = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
     // from then on the connection and its retries are the saved gateway's own.
     if (failures.length === 0 && this.setupCheck?.url === this.settings?.url)
@@ -9530,7 +9560,7 @@ export class ClawtrateClient {
           this.keepSentPictures(message);
       }
       const activity = markUnconfirmed(reconciled);
-      const items = mapHistory(messages);
+      const items = mapHistory(messages, { startedAt: startedTaskSince(history) });
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
@@ -9654,6 +9684,16 @@ export class ClawtrateClient {
 
   private handleEvent(event: EventFrame, generation: number): void {
     switch (event.event) {
+      case "update.available":
+        // While a setup connection is open, the report is held, never published.
+        if (this.isSetup(this.settings?.url)) {
+          this.holdSetupUpdate(generation, asRecord(event.payload)?.updateAvailable);
+          return;
+        }
+        this.setConnection({
+          openclawUpdate: readOpenClawUpdate(asRecord(event.payload)?.updateAvailable),
+        });
+        return;
       case "sessions.changed":
         this.handleSessionsChanged(event.payload, generation);
         return;
@@ -10414,6 +10454,15 @@ export class ClawtrateClient {
           hint: null,
         },
       });
+  }
+
+  /**
+   * A setup connection's report of a newer OpenClaw, validated and held, never published: it is
+   * published only if this connection's setup succeeds (`bootstrap`), and dropped otherwise.
+   */
+  private holdSetupUpdate(generation: number, value: unknown): void {
+    const update = readOpenClawUpdate(value);
+    this.setupUpdate = update ? { generation, update } : null;
   }
 
   /** Whether the connection to `url` is the host's setup connection. */

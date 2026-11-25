@@ -5,6 +5,7 @@
 // `docs/decisions.md` states the same numbers. All lengths are JSON
 // characters (`bounds.ts`).
 
+import type { OpenClawUpdate } from "./gateway-update.ts";
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import {
   MAX_ACCOUNTS,
@@ -163,6 +164,7 @@ import type {
   SendLimits,
   Task,
   TaskContext,
+  TaskStarter,
   TaskCreation,
   ToolResult,
   Transcript,
@@ -615,6 +617,7 @@ const item = flagged<TranscriptItem>()({
   }),
   idempotencyKey: ID,
   skillNote: FLAG,
+  brief: FLAG,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
@@ -706,6 +709,7 @@ const connection = object<ConnectionState>()({
   gatewayId: ID,
   gatewayName: NAME,
   serverVersion: NAME,
+  openclawUpdate: object<OpenClawUpdate>()({ current: NAME, latest: NAME, channel: NAME }),
   protocol: NUMBER,
   scopes: list(MAX_SCOPES, NAME),
   requestedScopes: list(MAX_SCOPES, NAME),
@@ -772,6 +776,7 @@ const task = flagged<Task>()({
   effort: NAME,
   otherTool: FLAG,
   channel: NAME,
+  startedBy: object<TaskStarter>()({ botId: ID, fromKey: ID }),
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
 const sidebarId = id(MAX_SIDEBAR_ID_CHARS);
