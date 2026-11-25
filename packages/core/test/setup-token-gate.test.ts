@@ -938,6 +938,110 @@ describe("what a setup connection publishes", () => {
     });
   }
 
+  const UPDATE = { currentVersion: "2026.10.6", latestVersion: "2026.11.6", channel: "latest" };
+
+  it("F-494: an update report that arrives while a setup connection is open is not kept", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], NEW_TOKEN) });
+    // Setup lasts until its first read of bots completes: held, the connection stays setup's.
+    const held = new Promise<never>(() => {});
+    gateway.handlers["agents.list"] = () => held;
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: BOOT, expiresAtMs: LATER() });
+    await until(() => client.state.connection.status === "connected");
+    gateway.emit("update.available", { updateAvailable: UPDATE });
+    await sleep(30);
+    expect(client.state.connection.openclawUpdate).toBeNull();
+    client.stop();
+  });
+
+  /** A setup connection whose first read of bots waits for `release`, and how many hellos it got. */
+  async function heldSetup(hello: (gateway: FakeGateway) => void, bots: "succeed" | "fail") {
+    const gateway = new FakeGateway();
+    let hellos = 0;
+    const reply = helloOk(["operator.read"], NEW_TOKEN);
+    gateway.connectReply = () => {
+      hellos += 1;
+      return { ok: true, payload: reply };
+    };
+    hello(gateway);
+    const list = gateway.handlers["agents.list"]!;
+    const gate = deferred<void>();
+    let reads = 0;
+    gateway.handlers["agents.list"] = async (params) => {
+      await gate.promise;
+      // "fail": the first read fails, and a retry's read succeeds.
+      if (bots === "fail" && reads++ === 0)
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      return list(params);
+    };
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: BOOT, expiresAtMs: LATER() });
+    await until(() => client.state.connection.status === "connected");
+    return { gateway, client, release: () => gate.resolve(), hellos: () => hellos };
+  }
+  const withUpdate = (gateway: FakeGateway) => {
+    const reply = helloOk(["operator.read"], NEW_TOKEN);
+    const counted = gateway.connectReply!;
+    gateway.connectReply = (...args: Parameters<typeof counted>) => {
+      counted(...args);
+      return {
+        ok: true,
+        payload: { ...reply, snapshot: { ...reply.snapshot, updateAvailable: UPDATE } },
+      };
+    };
+  };
+
+  it("F-494: a setup that succeeds ends on the same connection, with no new hello", async () => {
+    const { client, release, hellos } = await heldSetup(() => {}, "succeed");
+    expect(hellos()).toBe(1);
+    release();
+    await until(() => client.state.discovery.status === "ready");
+    await sleep(30);
+    expect(hellos()).toBe(1);
+    client.stop();
+  });
+
+  it("F-494: the setup hello's update report is held, then shown once setup succeeds", async () => {
+    const { client, release, hellos } = await heldSetup(withUpdate, "succeed");
+    expect(client.state.connection.openclawUpdate).toBeNull();
+    release();
+    await until(() => client.state.connection.openclawUpdate !== null);
+    expect(client.state.connection.openclawUpdate).toEqual({
+      current: "2026.10.6",
+      latest: "2026.11.6",
+      channel: "latest",
+    });
+    expect(hellos()).toBe(1);
+    client.stop();
+  });
+
+  it("F-494: an update report during setup is held, then shown once setup succeeds", async () => {
+    const { gateway, client, release } = await heldSetup(() => {}, "succeed");
+    gateway.emit("update.available", { updateAvailable: UPDATE });
+    await sleep(30);
+    expect(client.state.connection.openclawUpdate).toBeNull();
+    release();
+    await until(() => client.state.connection.openclawUpdate !== null);
+    expect(client.state.connection.openclawUpdate).toMatchObject({ latest: "2026.11.6" });
+    client.stop();
+  });
+
+  it("F-494: a setup that fails drops its update report, even if Try again then succeeds with no new hello", async () => {
+    const { client, release, hellos } = await heldSetup(withUpdate, "fail");
+    release();
+    await until(() => client.state.discovery.status === "error");
+    expect(client.state.connection.openclawUpdate).toBeNull();
+    await client.retryNow();
+    await until(() => client.state.discovery.status === "ready");
+    await sleep(30);
+    expect(hellos()).toBe(1);
+    expect(client.state.connection.openclawUpdate).toBeNull();
+    client.stop();
+  });
+
   it("F-494: the first read of bots after a setup hello, failing with the code or the new token in its text, publishes fixed words", async () => {
     const { published, storage, client } = await echoed(
       (gateway) => {
