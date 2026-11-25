@@ -7749,9 +7749,11 @@ export class ClawtrateClient {
         // Not paired yet: only a hello says so, since a saved token may be one the gateway refuses.
         requestedScopes: this.scopesToAsk(settings.url, stored),
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
-        serverVersion: sameGateway ? state.connection.serverVersion : null,
-        // A setup connection publishes none of the gateway's versions, so an earlier connection's
-        // report isn't carried into one, even to the same address (the setup contract).
+        // A setup connection publishes only what its own hello reports (`setupVersion`), so an
+        // earlier connection's version or update report isn't carried into one, even to the same
+        // address (the setup contract).
+        serverVersion:
+          sameGateway && !this.isSetup(settings.url) ? state.connection.serverVersion : null,
         openclawUpdate:
           sameGateway && !this.isSetup(settings.url) ? state.connection.openclawUpdate : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
