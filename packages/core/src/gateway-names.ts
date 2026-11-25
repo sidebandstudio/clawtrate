@@ -27,10 +27,14 @@ export function gatewayAddress(url: string): string | null {
   }
 }
 
-/** One line, trimmed, at most `MAX_GATEWAY_NAME_CHARS` characters. Empty means no name. */
+/**
+ * One line, trimmed, at most `MAX_GATEWAY_NAME_CHARS` characters. Empty means no name. A lone
+ * surrogate goes with the control characters: it would escape to six JSON characters, past the
+ * two per character the host's worst case allows (`owners.ts`).
+ */
 export function cleanGatewayName(raw: string): string {
   const line = raw
-    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, " ")
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
   return [...line].slice(0, MAX_GATEWAY_NAME_CHARS).join("").trim();

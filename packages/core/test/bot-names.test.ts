@@ -16,10 +16,10 @@ import {
   MAX_NAME_CARDS,
   NAME_DECLINES_KEY,
   plainName,
-  UNCONFIRMED_AFTER_SWITCH,
 } from "../src/bot-names.ts";
 import { MAX_BOTS } from "../src/state-bounds.ts";
 import {
+  CONNECTION_CHANGED_AFTER_SEND,
   gatewayStamp,
   type Bot,
   type ConnectionState,
@@ -1330,7 +1330,7 @@ describe("F-552: a bot that takes a name", () => {
     // The update goes out, then the host moves to another gateway before the list is read back.
     names.onUpdate = () => names.engine.reset();
     await expect(names.engine.accept("new-bot", "Johnny", STAMP)).rejects.toThrow(
-      UNCONFIRMED_AFTER_SWITCH,
+      CONNECTION_CHANGED_AFTER_SEND,
     );
     expect(requests.filter((each) => each === "agents.update")).toHaveLength(1);
     // The next gateway's cards are left as they are: none here.

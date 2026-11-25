@@ -80,10 +80,12 @@ export function UpdateButton({
         data-shape={round ? "round" : undefined}
         aria-label={entry.name}
         title={round ? entry.text : undefined}
-        aria-disabled={entry.press === "none" || reading.working || undefined}
+        aria-disabled={entry.press === "none" || undefined}
         onClick={() => {
-          if (entry.press === "none" || reading.working) return;
-          if (entry.press === "confirm" && capability) setConfirmId(capability.offerId);
+          if (entry.press === "none") return;
+          // While a download or another update action runs, Updates shows its progress.
+          if (entry.press === "confirm" && capability && !reading.working)
+            setConfirmId(capability.offerId);
           else onOpenUpdates();
         }}
       >
