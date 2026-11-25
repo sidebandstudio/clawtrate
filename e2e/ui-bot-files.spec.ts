@@ -6,6 +6,7 @@
 // PDF's bytes under its name, and the rows are still there when the task is
 // opened again.
 import { expect, test, type Page } from "@playwright/test";
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
@@ -57,7 +58,7 @@ async function openTask(page: Page, bot: string, task: string) {
 }
 
 // A task of each run's own, so a repeated or retried run never meets an earlier one's messages.
-const RUN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+const RUN = `${Date.now().toString(36)}-${randomBytes(2).toString("hex")}`;
 const TASK = `Files from the end-to-end run ${RUN}`;
 const KEY = `agent:pip:e2e-attach-${RUN}`;
 
