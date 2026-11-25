@@ -40,6 +40,17 @@ describe("F-526: gateway names", () => {
     expect([...cleanGatewayName("x".repeat(60))]).toHaveLength(40);
   });
 
+  it("a name keeps the zero-width joiner and non-joiner an emoji or a word needs, and a name of joiners alone is none", () => {
+    const [zwj, zwnj] = [0x200d, 0x200c].map((c) => String.fromCodePoint(c));
+    const coder = `${String.fromCodePoint(0x1f469)}${zwj}${String.fromCodePoint(0x1f4bb)}`;
+    // Changed on purpose: these joiners used to become a space, splitting the emoji and the word.
+    expect(cleanGatewayName(`${coder} Lab`)).toBe(`${coder} Lab`);
+    expect(cleanGatewayName(`ﻣﯽ${zwnj}خواهم`)).toBe(`ﻣﯽ${zwnj}خواهم`);
+    expect(cleanGatewayName(` ${zwj}${zwnj} `)).toBe("");
+    expect(cleanGatewayName(`${zwj} Lab ${zwnj}`)).toBe("Lab");
+    expect(withGatewayName([], URL, zwj)).toEqual([]);
+  });
+
   it("a name stays within two JSON characters per character, lone surrogates and all", () => {
     for (const raw of [
       "\ud800".repeat(60),

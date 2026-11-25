@@ -128,11 +128,16 @@ function transcriptOf(rows: unknown[], inFlight: string | null = null): Transcri
   };
 }
 
-function envOf(transcript: Transcript, openTask: CardEnv["openTask"], connected = true): CardEnv {
+function envOf(
+  transcript: Transcript,
+  openTask: CardEnv["openTask"],
+  connected = true,
+  bots: Bot[] = [pip, marlow],
+): CardEnv {
   return {
     taskKey: HERE,
     bot: pip,
-    bots: [pip, marlow],
+    bots,
     transcript,
     connection: { ...initialConnectionState, status: connected ? "connected" : "reconnecting" },
     connected,
@@ -167,7 +172,13 @@ const read = { state: "available" as const, raw: null, load: () => {} };
 function drawn(
   rows: unknown[],
   tasks: Record<string, Task[]>,
-  options: { inFlight?: string | null; openTask?: CardEnv["openTask"]; connected?: boolean } = {},
+  options: {
+    inFlight?: string | null;
+    openTask?: CardEnv["openTask"];
+    connected?: boolean;
+    /** The bots this connection lists; the conversation's own is Pip whatever it holds. */
+    bots?: Bot[];
+  } = {},
 ): { card: StartedTaskCard; markup: string } {
   const transcript = transcriptOf(rows, options.inFlight ?? null);
   const [card] = selectStartedTasks({
@@ -180,6 +191,7 @@ function drawn(
     transcript,
     options.openTask === undefined ? open : options.openTask,
     options.connected,
+    options.bots,
   );
   return {
     card: card!,
@@ -346,6 +358,17 @@ describe("F-587: the bot doing the work, and what the card shows of the bot's wo
       "Couldn't start a task Marlow Compare trail maps",
     );
     expect(words(drawn(started(), {}).markup)).toContain("Started a task Pip Compare trail maps");
+  });
+
+  it("F-587: a start for itself names the starter even when the list doesn't hold the starter", () => {
+    // The conversation's bot is Pip; this connection lists only Marlow.
+    const only = { bots: [marlow] };
+    expect(words(drawn(refusedFor("pip"), {}, only).markup)).toContain(
+      "Couldn't start a task Pip Compare trail maps",
+    );
+    expect(words(drawn(started(), {}, only).markup)).toContain(
+      "Started a task Pip Compare trail maps",
+    );
   });
 
   it("F-587: invisible formatting never reaches the card's title, its group, Open's name or the announcement", () => {

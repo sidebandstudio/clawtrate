@@ -390,6 +390,20 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
       expect(format.test(text ?? "")).toBe(false);
   });
 
+  it("keeps the joiners an emoji or a word needs, as the sidebar shows them", () => {
+    const [zwj, zwnj] = [0x200d, 0x200c].map((c) => String.fromCodePoint(c));
+    const coder = `${String.fromCodePoint(0x1f469)}${zwj}${String.fromCodePoint(0x1f4bb)}`;
+    const word = `می${zwnj}خواهم`;
+    const [card] = cards(
+      startRows({ ...VISIBLE, label: `${coder} Review`, task: `${word} it` }, ACCEPTED),
+      {},
+    );
+    expect(card!.title).toBe(`${coder} Review`);
+    expect(card!.brief).toBe(`${word} it`);
+    const [fromList] = cards(startRows(), listed("running", { label: `${coder} Review the PR` }));
+    expect(fromList!.title).toBe(`${coder} Review the PR`);
+  });
+
   it("bounds the gateway's reason for a refusal", () => {
     const error = `<b>no</b> ${"r".repeat(MAX_REFUSAL_CHARS * 2)}`;
     const [card] = cards(startRows(VISIBLE, { status: "forbidden", error }, true));

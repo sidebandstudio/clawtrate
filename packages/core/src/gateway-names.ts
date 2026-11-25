@@ -29,18 +29,24 @@ export function gatewayAddress(url: string): string | null {
 
 /**
  * Text from elsewhere, a gateway or a bot, as one plain line of at most `max` characters: control
- * and format characters (bidirectional overrides and isolates, zero-width characters) and lone
- * surrogates become a space, runs of space one space, trimmed. Empty means none. A lone surrogate
- * goes with the control characters: it would escape to six JSON characters, past the two per
- * character the host's worst case allows (`owners.ts`).
+ * and format characters (bidirectional overrides and isolates, the zero-width space) and lone
+ * surrogates become a space, runs of space one space, trimmed. Empty means none. The zero-width
+ * joiner and non-joiner stay, as `bot-names.ts` keeps them: emoji sequences and some scripts need
+ * them, and they can't reorder text. At either end of the line they join nothing, so they go. A
+ * lone surrogate goes with the control characters: it would escape to six JSON characters, past
+ * the two per character the host's worst case allows (`owners.ts`).
  */
 export function cleanLine(raw: string, max: number): string {
-  const line = raw
-    .replace(/[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return [...line].slice(0, max).join("").trim();
+  const line = edges(
+    raw
+      .replace(/(?:[\p{Cc}\p{Cs}\u2028\u2029]|(?!\p{Join_Control})\p{Cf})+/gu, " ")
+      .replace(/\s+/g, " "),
+  );
+  return edges([...line].slice(0, max).join(""));
 }
+
+/** Without space or joiners at either end: a joiner there joins nothing. */
+const edges = (text: string) => text.replace(/^[\s\p{Join_Control}]+|[\s\p{Join_Control}]+$/gu, "");
 
 /** A gateway's name: one line, trimmed, at most `MAX_GATEWAY_NAME_CHARS` characters. Empty means no name. */
 export function cleanGatewayName(raw: string): string {

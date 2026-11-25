@@ -52,13 +52,14 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
   const task = card.task;
   const open = task !== null && env.openTask !== null ? env.openTask : null;
 
-  // The state's change is said once, politely; the first drawing is not a change.
-  const said = useRef(card.state);
+  // A change of state is said once, politely, in words: the first drawing is not a change, and
+  // neither is a state that reads the same ("Started" not listed, then "Started" listed).
+  const said = useRef(word);
   useEffect(() => {
-    if (said.current === card.state) return;
-    said.current = card.state;
+    if (said.current === word) return;
+    said.current = word;
     announce(`${title}: ${word}`);
-  }, [card.state, title, word, announce]);
+  }, [title, word, announce]);
 
   // Nothing at all when there is nothing to do: an empty row would still take its height.
   const actions =

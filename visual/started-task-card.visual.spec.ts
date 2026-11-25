@@ -111,6 +111,7 @@ function history() {
   return rows;
 }
 
+/** The started tasks as listed: by index, a row status, or "unlisted" for one the list doesn't hold. */
 function startedTasks(statuses: string[]): Task[] {
   return STARTS.map((each, i) =>
     mapSessionRow({
@@ -122,9 +123,11 @@ function startedTasks(statuses: string[]): Task[] {
       status: statuses[i] ?? each.status,
       updatedAt: T + 2_000 + i,
     })!,
-  ).map((task, i) =>
-    i === 1 ? { ...task, status: "waiting" as const, waitingFor: "approval" as const } : task,
-  );
+  )
+    .map((task, i) =>
+      i === 1 ? { ...task, status: "waiting" as const, waitingFor: "approval" as const } : task,
+    )
+    .filter((_, i) => statuses[i] !== "unlisted");
 }
 
 type Fixture = { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
@@ -246,6 +249,20 @@ test.describe("a started task's card", () => {
     const announcer = page.getByTestId("card-announcer");
     await expect(announcer).toHaveAttribute("aria-live", "polite");
     await expect(announcer).toHaveText("Check the backup drive: Done");
+  });
+
+  test("F-587: a state that reads the same is not said again", async ({ page }) => {
+    await open(page);
+    // Not listed yet: "Started"; then listed with a row that says nothing of a run: "Started".
+    await scene(page, ["unlisted"]);
+    const backup = card(page, "Check the backup drive");
+    await expect(backup.locator(".state")).toHaveText("Started");
+    await expect(backup.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+    await scene(page, [""]);
+    await expect(backup.getByRole("button", { name: "Open Check the backup drive" })).toBeVisible();
+    await expect(backup.locator(".state")).toHaveText("Started");
+    await settle(page);
+    await expect(page.getByTestId("card-announcer")).toHaveText("");
   });
 
   test("F-587: after a switch to another gateway, a card shows no task's state and opens nothing", async ({
