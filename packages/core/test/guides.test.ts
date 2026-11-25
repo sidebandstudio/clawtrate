@@ -175,7 +175,8 @@ describe("the bots' states", () => {
         bots: ["pip"],
         state: null,
         replaceable: false,
-        length: null,
+        long: false,
+        utf8: true,
         changedText: null,
         error: "missing scope: operator.read",
       },
@@ -481,10 +482,26 @@ describe("files Clawtrate leaves alone", () => {
       const result = await applyGuidesChange(files.request, null, change);
       expect(files.sets).toEqual([]);
       expect(result.errors).toEqual([
-        "otto: otto's AGENTS.md isn't plain UTF-8 text, so Clawtrate leaves it as it is.",
+        "otto: otto's AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it.",
       ]);
-      const [folder] = await readGuideFolders(files.request, null);
-      expect(folder).toMatchObject({ state: null, error: expect.stringMatching(/plain UTF-8/) });
+    }
+  });
+
+  it("still shows the section a file that isn't plain UTF-8 holds, and offers nothing that writes", async () => {
+    // A section, then a person's Latin-1 "café" further down.
+    const bytesHash = sha256Hex(utf8Bytes("not the bytes of the text"));
+    const text = `${withSection("# Otto\ncaf\uFFFD\n")}`;
+    const files = fakeFiles({ otto: text }, {}, { otto: bytesHash });
+    const [folder] = await readGuideFolders(files.request, { bots: ["otto"], newBots: true });
+    expect(folder).toMatchObject({ state: "current", utf8: false, error: null });
+    for (const change of [
+      { action: "add", bots: ["otto"], newBots: true },
+      { action: "remove" },
+      { action: "update" },
+      { action: "replace", bot: "otto" },
+    ] as GuidesChange[]) {
+      await applyGuidesChange(files.request, { bots: ["otto"], newBots: true }, change);
+      expect(files.sets, change.action).toEqual([]);
     }
   });
 
@@ -499,6 +516,14 @@ describe("files Clawtrate leaves alone", () => {
       "a quoted end marker below": `${edited}\nTo turn it off:\n\n\`\`\`\n${END_LINE}\`\`\`\n`,
       "a marker in a code block only": `# Mine\n\n\`\`\`\n${END_LINE}\`\`\`\nMore.\n`,
       "a pair lower down": `# Mine\n\n${edited}`,
+      // The bot deleted its end marker, and the person quotes one in a code block lower down:
+      // two markers again, the begin at the top.
+      "the end marker deleted, and one quoted below": `${edited.replace(END_LINE, "")}# Mine\nmy rules\nTo remove it, delete down to\n\`\`\`\n${END_LINE}\`\`\`\nmy closing rules\n`,
+      // Longer than Show shows: Replace would take out text the person never saw.
+      "a section longer than Show shows": withSection(BOT_FILE).replace(
+        "Be warm",
+        `Be warm${"!".repeat(20_000)}`,
+      ),
     };
     for (const [name, file] of Object.entries(shapes)) {
       expect(findSection(file), name).toMatchObject({ kind: "changed", replaceable: false });
@@ -546,12 +571,18 @@ describe("files Clawtrate leaves alone", () => {
 
   it("says a long file would be cut, and never makes one longer than the limit in the background", async () => {
     const long = `# Pip\n${"x".repeat(GUIDES_LONG_CHARS - GUIDES_SIZE)}\n`;
+    // Exactly at the limit once added, measured without trailing whitespace, as the gateway does.
+    const edge = `# Pip\n${"x".repeat(GUIDES_LONG_CHARS - GUIDES_SIZE - 6)}\n\n\n\n`;
     const short = BOT_FILE;
-    const files = fakeFiles({ pip: long, otto: short });
+    // An older section is measured with its own span replaced, not with a second section.
+    const olderNearLimit = `${olderSection("## Old\n")}${"y".repeat(GUIDES_LONG_CHARS - GUIDES_SIZE - 10)}\n`;
+    const files = fakeFiles({ pip: long, otto: short, juniper: edge, marlow: olderNearLimit });
     const folders = await readGuideFolders(files.request, null);
-    expect(folders.map((f) => [f.bots[0], f.length])).toEqual([
-      ["pip", long.length],
-      ["otto", short.length],
+    expect(folders.map((f) => [f.bots[0], f.long])).toEqual([
+      ["pip", true],
+      ["otto", false],
+      ["juniper", false],
+      ["marlow", false],
     ]);
     // The background update and New bots too leave a file the section would push past the limit.
     const older = fakeFiles({ pip: olderSection("## Old\n") + long });
@@ -569,5 +600,34 @@ describe("files Clawtrate leaves alone", () => {
     const asked = fakeFiles({ pip: long });
     await applyGuidesChange(asked.request, null, { action: "add", bots: ["pip"], newBots: true });
     expect(asked.sets).toHaveLength(1);
+  });
+
+  it("records a bot, and lets Settings report it, only when its file was written or already current", async () => {
+    // The bot changes its own file between Settings' read and the press: Replace finds it out
+    // of shape, Add finds it changed. Nothing is written, so nothing is recorded.
+    const files = fakeFiles({ otto: `# Otto\n\`\`\`\n${END_LINE}\`\`\`\n` });
+    const replaced = await applyGuidesChange(files.request, null, {
+      action: "replace",
+      bot: "otto",
+    });
+    expect(files.sets).toEqual([]);
+    expect(replaced.record?.bots ?? []).toEqual([]);
+    const changed = fakeFiles({ otto: withSection(BOT_FILE).replace("Be warm", "Be cold") });
+    const added = await applyGuidesChange(changed.request, null, {
+      action: "add",
+      bots: ["otto"],
+      newBots: false,
+    });
+    expect(changed.sets).toEqual([]);
+    expect(added.record?.bots).toEqual([]);
+    // Already current: recorded, with nothing written.
+    const current = fakeFiles({ otto: withSection(BOT_FILE) });
+    const kept = await applyGuidesChange(current.request, null, {
+      action: "add",
+      bots: ["otto"],
+      newBots: false,
+    });
+    expect(current.sets).toEqual([]);
+    expect(kept.record?.bots).toEqual(["otto"]);
   });
 });

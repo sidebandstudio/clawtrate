@@ -30,8 +30,11 @@ export const GUIDES_PINNED_SHA256 = "3b11747ce00c0e53";
  * (`bootstrapMaxChars`). Clawtrate doesn't read the gateway's own setting, so it says "may".
  */
 export const GUIDES_LONG_CHARS = 20_000;
-/** Whether a file of this many characters, with the section added, may be cut from a prompt. */
-export const guidesWouldBeCut = (length: number) => length + GUIDES_SIZE > GUIDES_LONG_CHARS;
+/**
+ * Whether a file may be cut from a prompt: its length without trailing whitespace, as the gateway
+ * measures it, past `GUIDES_LONG_CHARS`.
+ */
+export const guidesWouldBeCut = (file: string) => file.trimEnd().length > GUIDES_LONG_CHARS;
 /** The second line of the section: whose it is, and where it is turned off. */
 export const GUIDES_NOTICE =
   "<!-- Added by Clawtrate, which keeps it current. Turn it off in Clawtrate: Settings, Conversation. -->";
@@ -95,7 +98,13 @@ export function findSection(file: string): FoundSection {
   if (hash(inner) !== begin[2])
     return {
       kind: "changed",
-      replaceable: begin.index === 0,
+      // Replace takes out exactly what Show shows: a span at the top, no longer than Show's bound,
+      // with no code-fence line in it (Clawtrate's own text has none: a fence means a marker
+      // was quoted, and the span would run into the person's text).
+      replaceable:
+        begin.index === 0 &&
+        stop - begin.index <= MAX_CHANGED_SECTION_CHARS &&
+        !/^\s*(```|~~~)/m.test(inner),
       start: begin.index,
       end: stop,
       text: file.slice(begin.index, stop),
@@ -160,8 +169,13 @@ export type GuideFolder = {
   state: GuideState | null;
   /** A changed section Replace may write over: one well-formed pair at the top (`FoundSection`). */
   replaceable: boolean;
-  /** The file's length in characters, null when it couldn't be read: see `guidesWouldBeCut`. */
-  length: number | null;
+  /**
+   * The file with this version's section in it (added, or put in place of an older one) may be
+   * cut from a prompt (`guidesWouldBeCut`); false when it couldn't be read.
+   */
+  long: boolean;
+  /** The file is plain UTF-8 text. When it isn't, its state is still read, and nothing writes. */
+  utf8: boolean;
   /** The text between the markers of a changed section, for Show, cut to its bound. */
   changedText: string | null;
   error: string | null;
@@ -196,18 +210,19 @@ export class GuideConflictError extends Error {}
 async function readFile(
   request: Request,
   agentId: string,
-): Promise<{ content: string; held: Raw }> {
+): Promise<{ content: string; held: Raw; utf8: boolean }> {
   const file = rec(rec(await request("agents.files.get", { agentId, name: GUIDES_FILE })).file);
-  if (file.missing === true) return { content: "", held: { expectedMissing: true } };
+  if (file.missing === true) return { content: "", held: { expectedMissing: true }, utf8: true };
   if (typeof file.content !== "string" || !isHash(file.hash))
     throw new Error(`The gateway did not return ${agentId}'s ${GUIDES_FILE} and its revision.`);
   // The gateway hashes the bytes and decodes them as UTF-8: bytes that aren't come back as
-  // U+FFFD under the bytes' hash. Written back, they would be changed for good.
-  if (hash(file.content) !== file.hash.toLowerCase())
-    throw new Error(
-      `${agentId}'s ${GUIDES_FILE} isn't plain UTF-8 text, so Clawtrate leaves it as it is.`,
-    );
-  return { content: file.content, held: { expectedHash: file.hash } };
+  // U+FFFD under the bytes' hash. Written back, they would be changed for good, so such a file
+  // is read (its markers are ASCII) and never written.
+  return {
+    content: file.content,
+    held: { expectedHash: file.hash },
+    utf8: hash(file.content) === file.hash.toLowerCase(),
+  };
 }
 
 /** The gateway's refusal of a write held to a hash the file no longer has. */
@@ -224,11 +239,16 @@ export async function changeGuideFile(
   request: Request,
   agentId: string,
   next: (file: string, found: FoundSection) => string | null,
-): Promise<boolean> {
+): Promise<{ written: boolean; found: FoundSection }> {
   for (let attempt = 0; ; attempt += 1) {
-    const { content, held } = await readFile(request, agentId);
-    const wanted = next(content, findSection(content));
-    if (wanted === null || wanted === content) return false;
+    const { content, held, utf8 } = await readFile(request, agentId);
+    if (!utf8)
+      throw new Error(
+        `${agentId}'s ${GUIDES_FILE} isn't plain UTF-8 text, so Clawtrate can't change it.`,
+      );
+    const found = findSection(content);
+    const wanted = next(content, found);
+    if (wanted === null || wanted === content) return { written: false, found };
     try {
       const result = rec(
         await request("agents.files.set", {
@@ -240,7 +260,7 @@ export async function changeGuideFile(
       );
       if (result.ok !== true)
         throw new Error(`The gateway did not confirm ${agentId}'s ${GUIDES_FILE} was saved.`);
-      return true;
+      return { written: true, found };
     } catch (error) {
       if (attempt === 0 && conflict(error)) continue;
       if (conflict(error))
@@ -274,7 +294,7 @@ export async function readGuideFolders(
   return Promise.all(
     folders.map(async (bots): Promise<GuideFolder> => {
       try {
-        const { content } = await readFile(request, bots[0]!);
+        const { content, utf8 } = await readFile(request, bots[0]!);
         const found = findSection(content);
         const state: GuideState =
           found.kind === "ours"
@@ -290,7 +310,8 @@ export async function readGuideFolders(
           bots,
           state,
           replaceable: found.kind === "changed" && found.replaceable,
-          length: content.length,
+          long: guidesWouldBeCut(withSection(content)),
+          utf8,
           changedText:
             found.kind === "changed" ? found.text.slice(0, MAX_CHANGED_SECTION_CHARS) : null,
           error: null,
@@ -300,7 +321,8 @@ export async function readGuideFolders(
           bots,
           state: null,
           replaceable: false,
-          length: null,
+          long: false,
+          utf8: true,
           changedText: null,
           error: error instanceof Error ? error.message : String(error),
         };
@@ -356,13 +378,14 @@ export async function applyGuidesChange(
   const folders = guideFolders(await request("agents.list", {}));
   const errors: string[] = [];
   const kept = new Set(record?.bots ?? []);
+  /** Whether the file was written, or already held this version: only then is it recorded. */
   const each = async (
     bots: string[],
     next: (file: string, found: FoundSection) => string | null,
   ): Promise<boolean> => {
     try {
-      await changeGuideFile(request, bots[0]!, next);
-      return true;
+      const { written, found } = await changeGuideFile(request, bots[0]!, next);
+      return written || (found.kind === "ours" && found.current);
     } catch (error) {
       errors.push(`${bots.join(", ")}: ${error instanceof Error ? error.message : String(error)}`);
       return false;
@@ -370,7 +393,7 @@ export async function applyGuidesChange(
   };
   /** What Clawtrate writes by itself never takes a file past the length the gateway keeps whole. */
   const fits = (next: string, background: boolean) =>
-    !background || next.length <= GUIDES_LONG_CHARS ? next : null;
+    !background || !guidesWouldBeCut(next) ? next : null;
   const addOrUpdate = (background: boolean) => (file: string, found: FoundSection) =>
     found.kind === "none" || (found.kind === "ours" && !found.current)
       ? fits(withSection(file), background)

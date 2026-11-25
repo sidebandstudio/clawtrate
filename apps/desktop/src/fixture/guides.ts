@@ -8,14 +8,17 @@
 //   guides=odd     as another device sees it: Marlow older, which this device didn't add;
 //                  Otto's markers out of shape; Quartermaster's instructions long
 //   guides=voice   Juniper added, the rest not, and the voice plugin adds its own guide
+//   guides=voicenone  none added, no answer yet, and the voice plugin adds its own guide
+//   guides=utf8    Otto has the section in a file that isn't plain UTF-8; Marlow's file isn't
+//                  either, with no section
 //   guides=fail    the read fails
 //   guidesave=fail a change writes nothing: every file kept changing while it was written
+//   guidesave=race a change writes nothing and reports nothing: the files changed meanwhile
 //
 // A change applies to the fixture's files as the client applies it to a gateway's, and answers
 // with what they hold afterwards.
 
 import {
-  GUIDES_LONG_CHARS,
   GUIDES_SECTION,
   type BotGuidesAnswer,
   type BridgeCommand,
@@ -28,8 +31,8 @@ import {
 const BOTS = ["main", "marlow", "otto", "pip", "quartermaster"];
 
 export const guidesParam = (params: URLSearchParams) =>
-  params.get("guidesave") === "fail"
-    ? `${params.get("guides") ?? ""}+savefail`
+  params.get("guidesave") === "fail" || params.get("guidesave") === "race"
+    ? `${params.get("guides") ?? ""}+save${params.get("guidesave")}`
     : params.get("guides");
 
 export function guidesCommands(
@@ -37,8 +40,9 @@ export function guidesCommands(
   canAdmin: () => boolean,
   stampNow: () => GatewayStamp,
 ) {
-  const saveFails = given?.endsWith("+savefail") === true;
-  const param = saveFails ? given!.slice(0, -"+savefail".length) || null : given;
+  const save = /\+save(fail|race)$/.exec(given ?? "")?.[1] ?? null;
+  const saveFails = save === "fail";
+  const param = save ? given!.slice(0, -`+save${save}`.length) || null : given;
   const mixed: Record<string, GuideState> = {
     main: "current",
     marlow: "older",
@@ -53,7 +57,7 @@ export function guidesCommands(
         ? "current"
         : param === "mixed" || param === "odd"
           ? mixed[bot]!
-          : param === "voice" && bot === "main"
+          : (param === "voice" && bot === "main") || (param === "utf8" && bot === "otto")
             ? "current"
             : "none",
     ]),
@@ -61,7 +65,7 @@ export function guidesCommands(
   // Another device's view: Pip's section isn't on this device's record, so it reads not added.
   if (param === "odd") states.set("pip", "none");
   let record: GuidesRecord | null =
-    param === "offer" || param === "voice"
+    param === "offer" || param === "voice" || param === "voicenone"
       ? null
       : param === "added"
         ? { bots: BOTS, newBots: true }
@@ -70,13 +74,15 @@ export function guidesCommands(
           : param === "odd"
             ? { bots: ["main"], newBots: false }
             : { bots: [], newBots: false };
-  const voicePlugin = param === "voice";
+  const voicePlugin = param === "voice" || param === "voicenone";
+  const notUtf8 = (bot: string) => param === "utf8" && (bot === "otto" || bot === "marlow");
   const folders = (): GuideFolder[] =>
     BOTS.map((bot) => ({
       bots: [bot],
       state: states.get(bot)!,
       replaceable: states.get(bot) === "changed" && param !== "odd",
-      length: param === "odd" && bot === "quartermaster" ? GUIDES_LONG_CHARS - 1_000 : 1_200,
+      long: param === "odd" && bot === "quartermaster",
+      utf8: !notUtf8(bot),
       changedText:
         states.get(bot) === "changed"
           ? GUIDES_SECTION.replace("Lead with the answer", "Lead with a short joke")
@@ -105,9 +111,12 @@ export function guidesCommands(
       return answer([
         "otto: AGENTS.md kept changing while Clawtrate wrote it, so it was left as it is.",
       ]);
+    // The files changed between the read and the press: nothing to write, nothing to report.
+    if (save === "race") return answer();
     if (change.action === "add") {
       for (const bot of change.bots)
-        if (["none", "removed", "older"].includes(states.get(bot)!)) states.set(bot, "current");
+        if (!notUtf8(bot) && ["none", "removed", "older"].includes(states.get(bot)!))
+          states.set(bot, "current");
       record = {
         bots: [...new Set([...(record?.bots ?? []), ...change.bots])],
         newBots: change.newBots,

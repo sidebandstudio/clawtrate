@@ -104,9 +104,7 @@ test.describe("how bots work in Clawtrate", () => {
   }) => {
     const pane = await guidesPane(page, "&access=admin&guides=odd");
     const marlow = pane.getByTestId("bot-guide-marlow");
-    await expect(marlow).toContainText(
-      "An older version. Tick it and press Add to bring it up to date.",
-    );
+    await expect(marlow).toContainText("An older version. Add brings it up to date.");
     await expect(pane.getByRole("checkbox", { name: /^Marlow/ })).toBeChecked();
     // Markers out of shape: Show only, and a plain sentence on what to do.
     const otto = pane.getByTestId("bot-guide-otto");
@@ -138,6 +136,46 @@ test.describe("how bots work in Clawtrate", () => {
     await expect(otto).toHaveAttribute("data-state", "changed");
     // Nothing that wasn't read back is announced.
     await expect(page.getByText(/Guides replaced/)).toHaveCount(0);
+  });
+
+  test("F-566: a file that isn't plain UTF-8 still shows its section, says what to do, and offers nothing that writes", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=utf8");
+    const otto = pane.getByTestId("bot-guide-otto");
+    await expect(otto).toHaveAttribute("data-state", "current");
+    await expect(otto).toContainText("Added");
+    await expect(otto.getByTestId("bot-guide-utf8")).toHaveText(
+      "Otto's AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it. Save it as UTF-8 and Clawtrate can add, update or remove its section again.",
+    );
+    await expect(pane.getByTestId("bot-guide-marlow").getByTestId("bot-guide-utf8")).toBeVisible();
+    for (const name of [/^Otto/, /^Marlow/])
+      await expect(pane.getByRole("checkbox", { name })).toHaveCount(0);
+    // Otto's section is the only one, and Clawtrate can't take it out: no Remove is offered.
+    await expect(pane.getByRole("button", { name: "Remove from all bots" })).toHaveCount(0);
+    // Otto has the section, so it isn't among the bots not told.
+    await expect(pane.getByTestId("bot-guides-summary")).not.toContainText("Otto");
+  });
+
+  test("F-566: nothing is announced when the files, read back, don't hold what was asked", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=mixed&guidesave=race");
+    await pane.getByTestId("bot-guide-otto").getByRole("button", { name: "Replace" }).click();
+    await pane.getByRole("button", { name: /^Add to/ }).click();
+    await expect.poll(() => changes(page)).toHaveLength(2);
+    await expect(pane.getByTestId("bot-guide-otto")).toHaveAttribute("data-state", "changed");
+    await expect(page.getByText(/Guides replaced|Guides added/)).toHaveCount(0);
+  });
+
+  test("F-566: no voice-plugin sentence while no bot has the section and none is ticked", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=voicenone");
+    await expect(pane.getByTestId("bot-guides-voice")).toBeVisible();
+    for (const name of [/^Juniper/, /^Marlow/, /^Otto/, /^Pip/, /^Quartermaster/])
+      await pane.getByRole("checkbox", { name }).uncheck();
+    await expect(pane.getByTestId("bot-guides-voice")).toHaveCount(0);
   });
 
   test("F-566: without admin access the states are shown and nothing can be sent", async ({

@@ -1132,6 +1132,51 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     }
   });
 
+  it("gets no guides on a connection other than the one it was made on", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    // Right after the bot is made, the connection drops and comes back as a new one.
+    const get = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (key !== guidesKey("gw-guides")) return get(key);
+      const before = client.state.connection.connectedAt;
+      fake.gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== before,
+      );
+      return get(key);
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    expect(
+      fake.gateway
+        .calls("agents.files.set")
+        .filter((call) => (call as { name: string }).name === "AGENTS.md"),
+    ).toEqual([]);
+    client.stop();
+  });
+
+  it("gets no guides when its AGENTS.md is already long enough to be cut from a prompt", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const long = `# AGENTS.md\n${"x".repeat(19_000)}\n`;
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = (params) => {
+      const made = create(params) as { agentId: string };
+      fake.files.get(made.agentId)!.set("AGENTS.md", long);
+      return made;
+    };
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(long);
+    client.stop();
+  });
+
   it("is made even when this device can't save its record of the guides afterwards", async () => {
     const fake = new AccountsGateway();
     fake.identity = "gw-guides";

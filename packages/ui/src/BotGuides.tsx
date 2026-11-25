@@ -5,7 +5,6 @@
 // announced that wasn't read back.
 
 import {
-  guidesWouldBeCut,
   GUIDES_SECTION,
   GUIDES_SIZE,
   type Bot,
@@ -28,16 +27,20 @@ const list = (items: string[]) =>
 
 /**
  * What a folder's state says, in a few words. `mine`: this device added it, so this device
- * brings an older version up to date by itself.
+ * brings an older version up to date by itself, when that fits and the file can be written.
  */
 function stateWords(folder: GuideFolder, mine: boolean): string {
   switch (folder.state) {
     case "current":
       return "Added";
     case "older":
-      return mine
-        ? "An older version. Clawtrate updates it when it connects with admin access."
-        : "An older version. Tick it and press Add to bring it up to date.";
+      return !folder.utf8
+        ? "An older version."
+        : !mine
+          ? "An older version. Add brings it up to date."
+          : folder.long
+            ? "An older version. Its instructions are long, so Clawtrate doesn't update it by itself."
+            : "An older version. Clawtrate updates it when it connects with admin access.";
     case "changed":
       return folder.replaceable
         ? "Changed outside Clawtrate, so Clawtrate leaves it as it is."
@@ -152,12 +155,17 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
       </div>
     );
   const folders = shown.folders;
+  // A file that isn't plain UTF-8 is never written: it offers nothing that writes.
   const addable = folders.filter(
-    (f) => f.state === "none" || f.state === "removed" || f.state === "older",
+    (f) => f.utf8 && (f.state === "none" || f.state === "removed" || f.state === "older"),
   );
   /** A file the section would make longer than the gateway keeps whole in a prompt. */
-  const long = (f: GuideFolder) => f.length !== null && guidesWouldBeCut(f.length);
-  const anyOurs = folders.some((f) => f.state === "current" || f.state === "older");
+  const long = (f: GuideFolder) => f.long;
+  const anyOurs = folders.some((f) => f.utf8 && (f.state === "current" || f.state === "older"));
+  /** Whether each of these bots' folders reads this version now, as read back. */
+  const allCurrent = (read: BotGuidesAnswer, ids: string[]) =>
+    ids.length > 0 &&
+    ids.every((id) => read.folders.find((f) => f.bots.includes(id))?.state === "current");
   // Bots with no section at all: an older or a changed one may still say what a task is.
   const untaught = folders
     .filter((f) => f.state === "none" || f.state === "removed" || f.state === null)
@@ -169,13 +177,14 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
     new Set(addable.filter((f) => f.state !== "removed" && !long(f)).flatMap((f) => f.bots));
   const tickedFolders = addable.filter((f) => f.bots.some((bot) => ticked.has(bot)));
   const count = tickedFolders.reduce((n, f) => n + f.bots.length, 0);
-  const add = () =>
-    void guides
-      .change({ action: "add", bots: tickedFolders.flatMap((f) => f.bots), newBots })
-      .then((read) => {
-        setChosen(null);
-        if (read && read.errors.length === 0) announce("Guides added");
-      });
+  const add = () => {
+    const asked = tickedFolders.flatMap((f) => f.bots);
+    void guides.change({ action: "add", bots: asked, newBots }).then((read) => {
+      setChosen(null);
+      // Announced only when the files, read back, hold what was asked.
+      if (read && read.errors.length === 0 && allCurrent(read, asked)) announce("Guides added");
+    });
+  };
   return (
     <div className="bot-guides" data-testid="bot-guides">
       <h4 className="b-group" id="bot-guides-title">
@@ -211,6 +220,9 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
           const canAdd = admin && addable.includes(folder);
           const mine = folder.bots.some((bot) => shown.record?.bots.includes(bot) === true);
           const words = stateWords(folder, mine);
+          const utf8Words = folder.utf8
+            ? null
+            : `${label}'s AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it. Save it as UTF-8 and Clawtrate can add, update or remove its section again.`;
           const longWords =
             canAdd || folder.state === "none" || folder.state === "older"
               ? long(folder)
@@ -238,6 +250,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                     {folder.bots.length > 1 && " (one shared folder)"}
                     <small>{words}</small>
                     {longWords && <small data-testid="bot-guide-long">{longWords}</small>}
+                    {utf8Words && <small data-testid="bot-guide-utf8">{utf8Words}</small>}
                   </span>
                 </label>
               ) : (
@@ -246,6 +259,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                   {folder.bots.length > 1 && " (one shared folder)"}
                   <small>{words}</small>
                   {longWords && <small data-testid="bot-guide-long">{longWords}</small>}
+                  {utf8Words && <small data-testid="bot-guide-utf8">{utf8Words}</small>}
                 </span>
               )}
               {folder.state === "changed" && (
@@ -259,7 +273,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                   >
                     {showing === key ? "Hide" : "Show"}
                   </button>
-                  {admin && folder.replaceable && (
+                  {admin && folder.replaceable && folder.utf8 && (
                     <button
                       type="button"
                       className="button"
@@ -272,6 +286,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                             (read) =>
                               read &&
                               read.errors.length === 0 &&
+                              allCurrent(read, folder.bots) &&
                               announce(`Guides replaced for ${label}`),
                           )
                       }
@@ -291,7 +306,11 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
         })}
       </ul>
       {shown.voicePlugin &&
-        (folders.some((f) => f.state !== "none" && f.state !== null) || count > 0) && (
+        // Only where a bot has a section, or one is about to be added.
+        (folders.some(
+          (f) => f.state === "current" || f.state === "older" || f.state === "changed",
+        ) ||
+          count > 0) && (
           <p className="b-hint" data-testid="bot-guides-voice">
             The voice plugin also adds the voice guide to every bot, so a bot with this section gets
             it twice. You can turn the plugin's guide off with the Bot voice switch above. Bots
