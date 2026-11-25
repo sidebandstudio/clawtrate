@@ -55,6 +55,34 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
     announce(`${title}: ${word}`);
   }, [card.state, title, word, announce]);
 
+  // Nothing at all when there is nothing to do: an empty row would still take its height.
+  const actions =
+    (open && task) || card.reportedBack ? (
+      <>
+        {open && task && (
+          <button
+            type="button"
+            className="link-button"
+            aria-label={`Open ${title}`}
+            data-testid="open-started-task"
+            onClick={() => open(task.botId, task.key)}
+          >
+            Open task
+          </button>
+        )}
+        {card.reportedBack && (
+          <button
+            type="button"
+            className="link-button"
+            aria-label={`Show ${starter.name}'s report on ${title}`}
+            onClick={(event) => showReply(card.reportedBack!, event.currentTarget)}
+          >
+            Show the report
+          </button>
+        )}
+      </>
+    ) : undefined;
+
   let note: string | null = null;
   if (card.state === "starting") note = `${starter.name} is starting this task.`;
   else if (card.state === "started")
@@ -127,27 +155,7 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
             step?.truncated ?? false,
           )}
         >
-          {open && task && (
-            <button
-              type="button"
-              className="link-button"
-              aria-label={`Open ${title}`}
-              data-testid="open-started-task"
-              onClick={() => open(task.botId, task.key)}
-            >
-              Open task
-            </button>
-          )}
-          {card.reportedBack && (
-            <button
-              type="button"
-              className="link-button"
-              aria-label={`Show ${starter.name}'s report on ${title}`}
-              onClick={(event) => showReply(card.reportedBack!, event.currentTarget)}
-            >
-              Show the report
-            </button>
-          )}
+          {actions}
         </CardFoot>
       </div>
     </section>
