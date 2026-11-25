@@ -79,9 +79,11 @@ export function nextStep(run: UpdateRunView): string | null {
 
 /** The gateway's own words about the outcome: its sentence, then its reason code. */
 export function gatewayWords(run: UpdateRunView): string | null {
+  // While it runs, the gateway's own sentence (its update manager's, for one it hands on).
+  if (run.outcome === "running") return run.note;
   if (!["failed", "rolled-back", "skipped"].includes(run.outcome)) return null;
-  const parts = [run.note, run.reason].filter((each): each is string => !!each);
-  return parts.length > 0 ? parts.join(" · ") : null;
+  if (run.note && run.reason) return `${run.note} (${run.reason})`;
+  return run.note ?? run.reason;
 }
 
 const PHASES = [
@@ -104,5 +106,5 @@ export function workWords(working: number): string {
       : working === 1
         ? "1 task is working now."
         : `${working} tasks are working now.`;
-  return `${now} Before it restarts, OpenClaw stops taking new work and waits up to 5 minutes for running work to finish. Work still running then is interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.`;
+  return `${now} Before it restarts, OpenClaw stops taking new work and waits for running work to finish; on some installs that wait can last up to about half an hour. Work still running when it ends can be interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.`;
 }

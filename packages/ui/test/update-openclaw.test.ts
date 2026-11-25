@@ -145,10 +145,10 @@ describe("F-589: the confirmation", () => {
     expect(html).toContain(">Update OpenClaw?</h2>");
     expect(text(html)).toContain("Your gateway goes from OpenClaw 2026.10.6 to 2026.11.6.");
     expect(text(html)).toContain(
-      "The gateway restarts during the update, so your bots can't be reached for a moment. Clawtrate reconnects by itself.",
+      "The gateway restarts during the update, and your bots can't take new work until it's back. Clawtrate reconnects by itself.",
     );
     expect(text(html)).toContain(
-      "2 tasks are working now. Before it restarts, OpenClaw stops taking new work and waits up to 5 minutes for running work to finish. Work still running then is interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.",
+      "2 tasks are working now. Before it restarts, OpenClaw stops taking new work and waits for running work to finish; on some installs that wait can last up to about half an hour. Work still running when it ends can be interrupted. When it's back, OpenClaw resumes a bot's interrupted main conversation; other interrupted work may need to be started again.",
     );
     expect(html).toMatch(
       /<div class="b-actions"><button type="button" class="button" data-variant="quiet" data-b-focus="">Not now<\/button><button type="button" class="button" data-variant="primary">Update<\/button><\/div>/,
@@ -251,7 +251,7 @@ describe("F-589: the progress and how it ends", () => {
         note: "Restored the previous package.",
       });
       expect(text(html)).toContain(
-        `${words} The gateway says: “Restored the previous package. · runtime-verification-failed”.`,
+        `${words} The gateway says: “Restored the previous package. (runtime-verification-failed)”.`,
       );
       expect(text(html)).toContain(
         "You can try again, or update OpenClaw on the gateway's machine",
@@ -267,6 +267,43 @@ describe("F-589: the progress and how it ends", () => {
       "Check that the gateway's machine is on and that OpenClaw is running there.",
     );
     expect(html).not.toContain("Dismiss");
+  });
+
+  it("F-589: while an update manager handles a run, its own words are shown with the step", () => {
+    const html = line({
+      phase: "requested",
+      note: "OCM owns this update. Use the Update status view to follow its progress and result.",
+    });
+    expect(text(html)).toContain(
+      "Updating OpenClaw to 2026.11.6: step 1 of 8, requested. The gateway says: “OCM owns this update.",
+    );
+  });
+
+  it("F-589: a press whose answer was lost holds the button, and once asking fails offers Check again and Stop waiting with what that means", () => {
+    const held = part("settings", {
+      openclawUpdating: updating({
+        looking: true,
+        error:
+          "Clawtrate didn't get the gateway's answer to the last Update press. It's checking whether the update started.",
+      }),
+    });
+    expect(held).not.toContain("Update OpenClaw to");
+    expect(text(held)).toContain("It's checking whether the update started.");
+    expect(held).not.toContain("Stop waiting");
+    const failed = part("settings", {
+      openclawUpdating: updating({
+        looking: true,
+        lookFailed: true,
+        error:
+          "Clawtrate didn't get the gateway's answer to the last Update press, and couldn't ask it whether the update started.",
+      }),
+    });
+    expect(failed).not.toContain("Update OpenClaw to");
+    expect(failed).toContain(">Check again</button>");
+    expect(failed).toContain(">Stop waiting</button>");
+    expect(text(failed)).toContain(
+      "Stop waiting offers Update again. Clawtrate can't tell whether that press started an update; if one is running, the gateway says so instead of starting another.",
+    );
   });
 
   it("F-589: on another gateway it says nothing of that gateway's version", () => {

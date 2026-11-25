@@ -395,6 +395,9 @@ export type BridgeCommand =
    */
   | { type: "startOpenClawUpdate"; stamp: GatewayStamp }
   | { type: "dismissOpenClawUpdate" }
+  /** Ask where updating stands (reads only), and stop waiting on a lost press. */
+  | { type: "checkOpenClawUpdate" }
+  | { type: "releaseOpenClawUpdateHold" }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
   | {
       type: "setBotPicture";
@@ -1294,6 +1297,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "startOpenClawUpdate", stamp: gatewayStampOf(command.stamp) };
     case "dismissOpenClawUpdate":
       return { type: "dismissOpenClawUpdate" };
+    case "checkOpenClawUpdate":
+      return { type: "checkOpenClawUpdate" };
+    case "releaseOpenClawUpdateHold":
+      return { type: "releaseOpenClawUpdateHold" };
     case "declineBotName":
       return {
         type: "declineBotName",
@@ -2222,6 +2229,10 @@ class ViewerSession implements BridgeSession {
         return client.startOpenClawUpdate(command.stamp);
       case "dismissOpenClawUpdate":
         return client.dismissOpenClawUpdate();
+      case "checkOpenClawUpdate":
+        return client.checkOpenClawUpdate();
+      case "releaseOpenClawUpdateHold":
+        return client.releaseOpenClawUpdateHold();
       case "setBotPicture":
         return client.setBotPicture(command.botId, command.avatar, command.stamp);
       case "refreshCheckIns":

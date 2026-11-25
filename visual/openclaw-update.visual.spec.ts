@@ -22,8 +22,11 @@ type Fixture = {
 };
 const sent = (page: Page) =>
   page.evaluate(() =>
-    (window as unknown as Fixture).clawtrateFixture.sent.filter((command) =>
-      command.type.endsWith("OpenClawUpdate"),
+    (window as unknown as Fixture).clawtrateFixture.sent.filter(
+      (command) =>
+        command.type === "startOpenClawUpdate" ||
+        command.type === "dismissOpenClawUpdate" ||
+        command.type === "releaseOpenClawUpdateHold",
     ),
   );
 
@@ -108,6 +111,8 @@ test.describe("update openclaw behaviour", () => {
     );
     // No second update is offered while it runs.
     await expect(dialog.getByRole("button", { name: /^Update OpenClaw/ })).toHaveCount(0);
+    // Focus lands where the button was, on the update's place, never on the page itself.
+    await expect(dialog.locator(".b-update-place")).toBeFocused();
   });
 
   test("F-589: Not now and Escape send nothing", async ({ page }) => {
@@ -133,6 +138,21 @@ test.describe("update openclaw behaviour", () => {
     await expect(confirm).toContainText("Updating OpenClaw needs admin access.");
     await expect(confirm.getByRole("button", { name: "Update", exact: true })).toBeDisabled();
     expect(await sent(page)).toEqual([]);
+  });
+
+  test("F-589: a held press offers Check again and Stop waiting, and Stop waiting is the only thing sent", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&openclawRun=held`, "dark");
+    const dialog = await gatewayPane(page, false);
+    const held = dialog.getByTestId("update-looking-settings");
+    await expect(held).toContainText("couldn't ask it whether the update started");
+    await expect(dialog.getByRole("button", { name: /^Update OpenClaw/ })).toHaveCount(0);
+    await held.getByRole("button", { name: "Stop waiting" }).click();
+    expect(await sent(page)).toEqual([{ type: "releaseOpenClawUpdateHold" }]);
+    await expect(
+      dialog.getByRole("button", { name: "Update OpenClaw to 2026.11.6" }),
+    ).toBeVisible();
   });
 
   test("F-589: under the Model menu, a run's line takes the notice's place", async ({ page }) => {

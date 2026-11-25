@@ -24,6 +24,7 @@ export const UPDATE_RUN_SCENES = [
   "away",
   "elsewhere",
   "blocked",
+  "held",
 ] as const;
 export type UpdateRunScene = (typeof UPDATE_RUN_SCENES)[number];
 
@@ -86,6 +87,12 @@ export function updateRunScene(scene: UpdateRunScene, state: ClawtrateState): Cl
       }),
     },
     blocked: { blocked: { reason: "unmanaged-package-install", note: null } },
+    held: {
+      looking: true,
+      lookFailed: true,
+      error:
+        "Clawtrate didn't get the gateway's answer to the last Update press, and couldn't ask it whether the update started.",
+    },
   };
   return {
     ...state,
@@ -95,6 +102,7 @@ export function updateRunScene(scene: UpdateRunScene, state: ClawtrateState): Cl
       blocked: null,
       error: null,
       looking: false,
+      lookFailed: false,
       ...runs[scene],
     },
   };
@@ -106,6 +114,22 @@ export function updateRunCommand(
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
 ): Promise<unknown> | undefined {
+  // Asking where updating stands reads only: the fixture's state is already its answer.
+  if (command.type === "checkOpenClawUpdate") return Promise.resolve();
+  if (command.type === "releaseOpenClawUpdateHold") {
+    const state = get();
+    if (state.openclawUpdating?.looking && state.openclawUpdating.lookFailed)
+      set({
+        ...state,
+        openclawUpdating: {
+          ...state.openclawUpdating,
+          looking: false,
+          lookFailed: false,
+          error: null,
+        },
+      });
+    return Promise.resolve();
+  }
   if (command.type === "dismissOpenClawUpdate") {
     const state = get();
     const run = state.openclawUpdating?.run;
@@ -141,6 +165,7 @@ export function updateRunCommand(
       blocked: null,
       error: null,
       looking: false,
+      lookFailed: false,
     },
   });
   return Promise.resolve();

@@ -12,7 +12,16 @@ import {
   type GatewayStamp,
   type UpdateRunView,
 } from "@clawtrate/core";
-import { useCallback, useId, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useBridge, useClawtrateState, useCommand } from "../bridge.tsx";
 import { ExternalIcon } from "../icons.tsx";
 import { Dialog } from "./Dialog.tsx";
@@ -57,7 +66,16 @@ function runHere(state: ClawtrateState): UpdateRunView | null {
  * button, or why the gateway can't update itself. `where` names the place for test ids.
  */
 export function UpdateOpenClaw({ where }: { where: "notice" | "settings" }) {
-  return <UpdateOpenClawView state={useClawtrateState()} where={where} />;
+  const state = useClawtrateState();
+  const send = useCommand();
+  const { connection } = state;
+  const asks = where === "settings" && connection.status === "connected" && connection.canAdmin;
+  // Settings › Gateway opened: the gateway is asked where updating stands (reads only). Never on
+  // each connect: `update.status` reads the gateway's state database.
+  useEffect(() => {
+    if (asks) void send({ type: "checkOpenClawUpdate" }).catch(() => {});
+  }, [asks, send, connection.gatewayId, connection.connectedAt]);
+  return <UpdateOpenClawView state={state} where={where} />;
 }
 
 /** `UpdateOpenClaw` for the state given. */
@@ -68,7 +86,24 @@ export function UpdateOpenClawView({
   state: ClawtrateState;
   where: "notice" | "settings";
 }) {
+  // Where focus goes when the button it came from gives way to the run's line.
+  const place = useRef<HTMLDivElement>(null);
+  const content = useUpdatePart(state, where, place);
+  return content === null ? null : (
+    <div className="b-update-place" ref={place} tabIndex={-1}>
+      {content}
+    </div>
+  );
+}
+
+/** What the update's part shows for this state, or null when it shows nothing. */
+function useUpdatePart(
+  state: ClawtrateState,
+  where: "notice" | "settings",
+  place: RefObject<HTMLDivElement | null>,
+): ReactNode {
   const { info } = useBridge();
+  const send = useCommand();
   const connection = state.connection;
   const updating = state.openclawUpdating ?? initialOpenClawUpdate;
   const run = runHere(state);
@@ -80,6 +115,34 @@ export function UpdateOpenClawView({
     return (
       <div className="b-update" data-testid={`update-looking-${where}`}>
         <p role="status">{updating.error}</p>
+        {updating.lookFailed && !info.readOnly && (
+          <>
+            <p className="b-hint">
+              Stop waiting offers Update again. Clawtrate can't tell whether that press started an
+              update; if one is running, the gateway says so instead of starting another.
+            </p>
+            <div className="b-update-actions">
+              <button
+                type="button"
+                className="button"
+                data-size="sm"
+                disabled={connection.status !== "connected"}
+                onClick={() => void send({ type: "checkOpenClawUpdate" }).catch(() => {})}
+              >
+                Check again
+              </button>
+              <button
+                type="button"
+                className="button"
+                data-size="sm"
+                data-variant="quiet"
+                onClick={() => void send({ type: "releaseOpenClawUpdateHold" }).catch(() => {})}
+              >
+                Stop waiting
+              </button>
+            </div>
+          </>
+        )}
       </div>
     );
   if (!update || info.readOnly || connection.status !== "connected") return null;
@@ -136,6 +199,7 @@ export function UpdateOpenClawView({
           connection={connection}
           working={workingTasks(state)}
           onClose={() => setConfirming(null)}
+          fallbackFocus={place}
         />
       )}
     </div>
@@ -152,13 +216,20 @@ export function UpdateConfirm({
   connection,
   working,
   onClose,
+  fallbackFocus,
 }: {
   stamp: GatewayStamp;
   connection: ConnectionState;
   working: number;
   onClose: () => void;
+  fallbackFocus?: RefObject<HTMLElement | null>;
 }) {
   const send = useCommand();
+  // Opened: the gateway is asked where updating stands, so a run started elsewhere or a reason
+  // it can't update itself shows before Update is pressed. Reads only.
+  useEffect(() => {
+    void send({ type: "checkOpenClawUpdate" }).catch(() => {});
+  }, [send]);
   const { info } = useBridge();
   const id = useId();
   const [busy, setBusy] = useState(false);
@@ -184,6 +255,7 @@ export function UpdateConfirm({
       onClose={onClose}
       role="alertdialog"
       testId="update-confirm"
+      fallbackFocus={fallbackFocus}
     >
       <div className="b-confirm">
         <h2 id={`${id}-title`}>Update OpenClaw?</h2>
@@ -193,8 +265,8 @@ export function UpdateConfirm({
             {update?.latest ?? "the newer version"}.
           </p>
           <p>
-            The gateway restarts during the update, so your bots can't be reached for a moment.
-            Clawtrate reconnects by itself.
+            The gateway restarts during the update, and your bots can't take new work until it's
+            back. Clawtrate reconnects by itself.
           </p>
           <p data-testid="update-work">{workWords(working)}</p>
         </div>

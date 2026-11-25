@@ -23,6 +23,9 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
   "packages/core/src/openclaw-update.ts:UPDATE_PHASES": "static, the gateway's eight update phases",
   "packages/core/src/openclaw-update.ts:RUN_STATUSES": "static, the gateway's five run statuses",
+  "packages/core/src/openclaw-update.ts:UPDATE_ASK_WAITS_MS":
+    "static, the four waits between asks about a press whose answer was lost",
+  "packages/core/src/openclaw-update.ts:SETTLED": "static, the five outcomes that are final",
   "packages/core/src/openclaw-update.ts:CANNOT_UPDATE":
     "static, the reason codes a gateway gives for not updating itself",
   "apps/desktop/src/main/mac-install.ts:RESULTS": "static, the helper's eight result lines",

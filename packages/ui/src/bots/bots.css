@@ -1627,3 +1627,13 @@ button.b-open > .icon {
 .b-confirm .b-update-facts p {
   margin: 0;
 }
+
+.b-update-place:focus {
+  outline: none;
+}
+
+.b-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

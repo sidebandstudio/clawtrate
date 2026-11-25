@@ -14,7 +14,11 @@ import {
   UPDATE_NOT_SENT,
   UPDATE_PHASES,
   UPDATE_RUN_KEY,
+  UPDATE_ASK_WAITS_MS,
+  UPDATE_HELD,
+  UPDATE_LOOK_FAILED,
   UPDATE_NOT_STARTED,
+  UPDATE_RECORD_POLL_MS,
   UPDATE_SENT_UNKNOWN,
   updateText,
   type OpenClawUpdatesContext,
@@ -30,7 +34,7 @@ import {
 import { ADMIN_SCOPES } from "../src/scopes.ts";
 import { createBridgeSession } from "../src/bridge.ts";
 import { openTask, URL_A, grantingGateway } from "./client-harness.ts";
-import { helloOk, memoryStorage, until } from "./fake-gateway.ts";
+import { deferred, helloOk, memoryStorage, until } from "./fake-gateway.ts";
 
 const RUN = "3f2b8c1d-4e5a-4b6c-8d7e-9f0a1b2c3d4e";
 const OTHER_RUN = "7a1c9e2b-5d4f-4a3b-9c8d-1e2f3a4b5c6d";
@@ -105,6 +109,8 @@ function rig(options: { admin?: boolean; startedAt?: number | null } = {}) {
     handlers: {} as Record<string, (params: unknown) => unknown>,
     /** A request that goes out and then loses its connection. */
     dropAfterSend: false,
+    tags: 0,
+    now: T0 + 3_600_000,
   };
   let value: OpenClawUpdateState | undefined;
   const timers: Array<{ run: () => void; ms: number; cancelled: boolean }> = [];
@@ -132,6 +138,8 @@ function rig(options: { admin?: boolean; startedAt?: number | null } = {}) {
     refreshModels: async () => {
       world.refreshes += 1;
     },
+    newTag: () => `tag-${String((world.tags += 1)).padStart(4, "0")}`,
+    now: () => world.now,
     storage,
     get: () => value,
     set: (next) => {
@@ -177,16 +185,29 @@ function rig(options: { admin?: boolean; startedAt?: number | null } = {}) {
   };
 }
 
+/** The tag the rig's `n`th press carries, as the gateway records it in the run's origin. */
+const tagOf = (n = 1) => `clawtrate-update:tag-${String(n).padStart(4, "0")}`;
+const tagged = (n = 1) => ({
+  origin: { requester: { channel: "webchat", senderId: tagOf(n) } },
+});
+/** What `update.run` carries: the press's tag on the gateway's internal channel, nothing else. */
+const pressParams = (n = 1) => ({ requester: { channel: "webchat", senderId: tagOf(n) } });
+/** The timers of one kind the engine set. */
+const timersOf = (
+  t: { timers: Array<{ ms: number; cancelled: boolean; run: () => void }> },
+  ms: number,
+) => t.timers.filter((each) => each.ms === ms);
+
 /** Every update request the engine sent: what reaches the gateway. */
 const writes = (world: { sent: Array<{ method: string }> }) =>
   world.sent.filter((each) => each.method === "update.run");
 
 describe("F-589: updating OpenClaw, as a state machine from the gateway's frames", () => {
-  it("F-589: a press sends one update.run with nothing in it, to the gateway the screen showed, and follows each phase in the gateway's words", async () => {
+  it("F-589: a press sends one update.run carrying only its tag, to the gateway the screen showed, and follows each phase in the gateway's words", async () => {
     const t = rig();
     t.world.handlers["update.run"] = () => started();
     await t.engine.start(t.stamp());
-    expect(t.world.sent).toEqual([{ method: "update.run", params: {} }]);
+    expect(t.world.sent).toEqual([{ method: "update.run", params: pressParams() }]);
     expect(t.run()).toMatchObject({
       runId: RUN,
       gatewayId: "gw-a",
@@ -233,10 +254,13 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     await t.restart(OLD);
     expect(t.run()).toMatchObject({ outcome: "unconfirmed", to: NEW, reported: OLD });
     expect(t.world.refreshes).toBe(0);
-    // The terminal event on a later look, with the new version reported then, confirms it.
-    t.set({ serverVersion: NEW });
+    // A repeat of the terminal event reads nothing more; the next connect checks again, and
+    // with the new version reported then, it is confirmed.
+    const reads = t.sentMethods().length;
     t.engine.onRunChanged({ runId: RUN, phase: "finished", status: "succeeded", updatedAtMs: 2 });
-    await until(() => t.run()?.outcome === "updated");
+    expect(t.sentMethods()).toHaveLength(reads);
+    await t.restart(NEW);
+    expect(t.run()?.outcome).toBe("updated");
   });
 
   it("F-589: failed, rolled back and skipped say so, with the gateway's reason and its own words", async () => {
@@ -297,8 +321,8 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
       phase: "verifying",
       outcome: "running",
     });
-    expect(t.timers).toHaveLength(1);
-    expect(t.timers[0]!.cancelled).toBe(true);
+    expect(timersOf(t, UPDATE_AWAY_MS)).toHaveLength(1);
+    expect(timersOf(t, UPDATE_AWAY_MS)[0]!.cancelled).toBe(true);
   });
 
   it("F-589: a gateway that never comes back is said to have not come back, never updated", async () => {
@@ -306,8 +330,9 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     t.world.handlers["update.run"] = () => started();
     await t.engine.start(t.stamp());
     await t.restart(NEW, false);
-    expect(t.timers[0]!.ms).toBe(UPDATE_AWAY_MS);
-    t.timers[0]!.run();
+    const away = timersOf(t, UPDATE_AWAY_MS);
+    expect(away).toHaveLength(1);
+    away[0]!.run();
     expect(t.run()?.outcome).toBe("away");
     // No second update while it is away.
     await expect(t.engine.start(t.stamp())).rejects.toThrow("already under way");
@@ -321,7 +346,10 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
       updateAvailable: { currentVersion: OLD, latestVersion: NEW, channel: "latest" },
       activeRun: record({ runId: OTHER_RUN, trigger: "cli", phase: "staging" }),
     });
+    // A connect asks nothing; opening Settings › Gateway or the confirmation does.
     await t.engine.onHello();
+    expect(t.run()).toBeNull();
+    await t.engine.look();
     expect(t.run()).toMatchObject({
       runId: OTHER_RUN,
       mine: false,
@@ -413,7 +441,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
       updateAvailable: null,
       lastRun: refused,
     });
-    await before.engine.onHello();
+    await before.engine.look();
     expect(before.state().blocked).toBeNull();
     const since = rig({ startedAt: T0 - 1 });
     since.world.handlers["update.status"] = () => ({
@@ -421,7 +449,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
       updateAvailable: null,
       lastRun: refused,
     });
-    await since.engine.onHello();
+    await since.engine.look();
     expect(since.state().blocked).toEqual({ reason: "container-image-install", note: null });
     const immutable = rig();
     immutable.world.handlers["update.status"] = () => ({
@@ -429,7 +457,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
       updateAvailable: null,
       schedule: { channel: "stable", autoEnabled: false, install: { kind: "immutable" } },
     });
-    await immutable.engine.onHello();
+    await immutable.engine.look();
     expect(immutable.state().blocked?.reason).toBe("immutable-native-updater-required");
   });
 
@@ -489,63 +517,284 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     expect(t.world.refreshes).toBe(0);
   });
 
-  it("F-589: a press whose answer is lost holds every other press until the next connection settles it, and is never sent again", async () => {
+  it("F-589: a press whose answer is lost on a live connection is settled by asking at once: its run, by its tag, is this press's, and nothing is sent again", async () => {
     const t = rig();
-    t.world.dropAfterSend = true;
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    const status = deferred<unknown>();
+    t.world.handlers["update.status"] = () => status.promise;
     await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
-    expect(t.state()).toMatchObject({ error: UPDATE_SENT_UNKNOWN, looking: true });
-    t.world.dropAfterSend = false;
+    expect(t.state()).toMatchObject({ looking: true, error: UPDATE_SENT_UNKNOWN });
+    // Asked on the connection that is there, without waiting for a hello.
+    await until(() => t.sentMethods().includes("update.status"));
+    // Its own run's event arrives while the answer is out: never shown as started elsewhere.
+    t.engine.onRunChanged({ runId: RUN, phase: "staging", status: "running", updatedAtMs: 1 });
+    expect(t.run()).toBeNull();
+    // A second press is refused while it is held.
     t.world.handlers["update.run"] = () => started();
-    // The connection is still usable: a second press is still refused.
     await expect(t.engine.start(t.stamp())).rejects.toThrow("already under way");
-    expect(writes(t.world)).toHaveLength(1);
-    t.world.handlers["update.status"] = () => ({
+    status.resolve({
       sentinel: null,
       updateAvailable: null,
-      activeRun: record({ createdAtMs: Date.now(), phase: "staging" }),
+      activeRun: record({ phase: "staging", ...tagged() }),
     });
-    await t.restart(OLD);
-    expect(t.run()).toMatchObject({ runId: RUN, mine: true, outcome: "running" });
-    expect(t.state()).toMatchObject({ error: null, looking: false });
-    // The run it found is kept, so reopening the app follows it.
+    await until(() => t.run()?.runId === RUN);
+    expect(t.run()).toMatchObject({ mine: true, outcome: "running", phase: "staging" });
+    expect(t.state()).toMatchObject({ looking: false, error: null });
     expect(JSON.parse(t.storage.data.get(UPDATE_RUN_KEY)!)).toMatchObject({ runId: RUN });
     expect(writes(t.world)).toHaveLength(1);
   });
 
-  it("F-589: a lost press is kept across reopening the app; a gateway with no run from it lets the person try again", async () => {
+  it("F-589: a lost press is matched by its tag, never by time: another run just before it is not this press's", async () => {
     const t = rig();
-    t.world.dropAfterSend = true;
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    // The gateway's last run is another device's refusal, created a moment before the press.
+    const earlier = record({
+      runId: OTHER_RUN,
+      createdAtMs: t.world.now - 50_000,
+      phase: "finished",
+      status: "failed",
+      reason: "update-ledger-busy",
+    });
+    t.world.handlers["update.status"] = () => ({
+      sentinel: null,
+      updateAvailable: null,
+      lastRun: earlier,
+    });
+    t.world.handlers["update.runs.list"] = () => ({ runs: [earlier] });
     await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
-    expect(JSON.parse(t.storage.data.get(UPDATE_RUN_KEY)!)).toMatchObject({
+    await until(() => !t.state().looking);
+    expect(t.run()).toBeNull();
+    expect(t.state().error).toBe(UPDATE_NOT_STARTED);
+    // With its own run further back in the history, that one is found.
+    const u = rig();
+    u.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    u.world.handlers["update.status"] = () => ({
+      sentinel: null,
+      updateAvailable: null,
+      lastRun: earlier,
+    });
+    u.world.handlers["update.runs.list"] = () => ({
+      runs: [earlier, record({ phase: "finished", status: "skipped", reason: "x", ...tagged() })],
+    });
+    await expect(u.engine.start(u.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    await until(() => u.run()?.outcome === "skipped");
+    expect(u.run()).toMatchObject({ runId: RUN, mine: true });
+  });
+
+  it("F-589: when the gateway can't be asked, it says so, asks again on a bound, then offers Check again and Stop waiting; the hold always ends", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    t.world.handlers["update.status"] = () => {
+      throw new Refusal("UNAVAILABLE", "update status is temporarily unavailable");
+    };
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    for (const wait of UPDATE_ASK_WAITS_MS) {
+      await until(() => timersOf(t, wait).some((each) => !each.cancelled));
+      timersOf(t, wait)
+        .find((each) => !each.cancelled)!
+        .run();
+    }
+    await until(() => t.state().lookFailed);
+    expect(t.state()).toMatchObject({ looking: true, error: UPDATE_LOOK_FAILED });
+    await expect(t.engine.start(t.stamp())).rejects.toThrow("already under way");
+    // Stop waiting: Update is offered again, and the kept press is forgotten.
+    await t.engine.release();
+    expect(t.state()).toMatchObject({ looking: false, lookFailed: false, error: null });
+    expect(t.storage.data.has(UPDATE_RUN_KEY)).toBe(false);
+    t.world.handlers["update.run"] = () => started();
+    await t.engine.start(t.stamp());
+    expect(writes(t.world)).toHaveLength(2);
+  });
+
+  it("F-589: reopening the app restores the hold before anything is asked: with the gateway's answer pending or failing, no second update.run goes", async () => {
+    for (const answer of ["pending", "failing"] as const) {
+      const t = rig();
+      await t.storage.set(
+        UPDATE_RUN_KEY,
+        JSON.stringify({ gatewayId: "gw-a", runId: null, tag: tagOf(9), from: OLD, to: NEW }),
+      );
+      t.world.handlers["update.status"] =
+        answer === "pending"
+          ? () => new Promise(() => {})
+          : () => {
+              throw new Refusal("UNAVAILABLE", "update status is temporarily unavailable");
+            };
+      t.world.handlers["update.run"] = () => started();
+      // Pressed before the first connect's read lands.
+      await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_HELD);
+      void t.engine.onHello();
+      await until(() => t.state().looking);
+      await expect(t.engine.start(t.stamp())).rejects.toThrow("already under way");
+      expect(writes(t.world)).toEqual([]);
+    }
+  });
+
+  it("F-589: a press kept from before the app closed is settled by the gateway's record: its run, or none, and then Update again", async () => {
+    const keptPress = JSON.stringify({
       gatewayId: "gw-a",
       runId: null,
+      tag: tagOf(9),
+      from: OLD,
+      to: NEW,
     });
-    // Reopened: a new engine on the same storage finds the run that press started.
-    const reopened = rig();
-    await reopened.storage.set(UPDATE_RUN_KEY, t.storage.data.get(UPDATE_RUN_KEY)!);
-    reopened.world.handlers["update.status"] = () => ({
+    const t = rig();
+    await t.storage.set(UPDATE_RUN_KEY, keptPress);
+    t.world.handlers["update.status"] = () => ({
       sentinel: null,
       updateAvailable: null,
       lastRun: record({
-        createdAtMs: Date.now(),
         phase: "finished",
         status: "failed",
         reason: "x",
+        origin: { requester: { channel: "webchat", senderId: tagOf(9) } },
       }),
     });
-    reopened.world.handlers["update.runs.get"] = () => ({ run: null });
-    await reopened.engine.onHello();
-    expect(reopened.run()).toMatchObject({ runId: RUN, mine: true, outcome: "failed" });
-    // No run since the press: it didn't start, and another press may go.
+    await t.engine.onHello();
+    expect(t.run()).toMatchObject({ runId: RUN, mine: true, outcome: "failed" });
+    expect(t.state().looking).toBe(false);
     const none = rig();
-    await none.storage.set(UPDATE_RUN_KEY, t.storage.data.get(UPDATE_RUN_KEY)!);
+    await none.storage.set(UPDATE_RUN_KEY, keptPress);
     none.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    none.world.handlers["update.runs.list"] = () => ({ runs: [] });
     await none.engine.onHello();
     expect(none.state()).toMatchObject({ looking: false, error: UPDATE_NOT_STARTED });
     expect(none.storage.data.has(UPDATE_RUN_KEY)).toBe(false);
     none.world.handlers["update.run"] = () => started();
     await none.engine.start(none.stamp());
     expect(writes(none.world)).toHaveLength(1);
+  });
+
+  it("F-589: a held press doesn't follow Clawtrate to another gateway at the same address, and comes back with the gateway it went to", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => {
+      throw new Error("request timed out");
+    };
+    t.world.handlers["update.status"] = () => new Promise(() => {});
+    await expect(t.engine.start(t.stamp())).rejects.toThrow(UPDATE_SENT_UNKNOWN);
+    expect(t.state().looking).toBe(true);
+    t.world.identity = "gw-b";
+    t.set({ gatewayId: "gw-b" });
+    await t.restart(OLD);
+    expect(t.state()).toMatchObject({ looking: false, error: null });
+    t.world.identity = "gw-a";
+    t.set({ gatewayId: "gw-a" });
+    // Back on the gateway it went to: held again, and asked about (that answer never comes here).
+    void t.restart(OLD);
+    await until(() => t.state().looking);
+    await expect(t.engine.start(t.stamp())).rejects.toThrow("already under way");
+  });
+
+  it("F-589: repeated terminal events after Updated read nothing and the model list is read once; a late running event changes nothing", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => started();
+    await t.engine.start(t.stamp());
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    t.world.handlers["update.runs.get"] = () => ({
+      run: record({ phase: "finished", status: "succeeded", after: { version: NEW } }),
+    });
+    await t.restart(NEW);
+    expect(t.run()?.outcome).toBe("updated");
+    const sent = t.sentMethods().length;
+    for (let i = 0; i < 5; i++)
+      t.engine.onRunChanged({
+        runId: RUN,
+        phase: "finished",
+        status: "succeeded",
+        updatedAtMs: 9 + i,
+      });
+    t.engine.onRunChanged({ runId: RUN, phase: "verifying", status: "running", updatedAtMs: 20 });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(t.sentMethods()).toHaveLength(sent);
+    expect(t.world.refreshes).toBe(1);
+    expect(t.run()?.outcome).toBe("updated");
+  });
+
+  it("F-589: a record read before the end that lands after it doesn't take the outcome back", async () => {
+    const t = rig();
+    t.world.handlers["update.run"] = () => started();
+    await t.engine.start(t.stamp());
+    const slow = deferred<unknown>();
+    const reads: Array<() => unknown> = [
+      () => slow.promise,
+      () => ({ run: record({ phase: "finished", status: "failed", reason: "x" }) }),
+    ];
+    t.world.handlers["update.runs.get"] = () => reads.shift()!();
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    // A reconnect reads the run (slowly); meanwhile its end arrives and is read.
+    void t.restart(OLD);
+    await until(() => t.sentMethods().filter((m) => m === "update.runs.get").length === 1);
+    t.engine.onRunChanged({ runId: RUN, phase: "finished", status: "failed", updatedAtMs: 5 });
+    await until(() => t.run()?.outcome === "failed");
+    slow.resolve({ run: record({ phase: "verifying" }) });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(t.run()?.outcome).toBe("failed");
+  });
+
+  it("F-589: an install whose update manager answers with no events is followed from its record, read at once and again while nothing moves", async () => {
+    const t = rig();
+    const ocm = "ocm:job-1";
+    t.world.handlers["update.run"] = () => ({
+      runId: ocm,
+      ok: true,
+      result: { status: "skipped", reason: null },
+      handoff: { status: "started" },
+      message:
+        "OCM owns this update. Use the Update status view to follow its progress and result.",
+    });
+    let state = record({ runId: ocm, phase: "requested", origin: {} });
+    t.world.handlers["update.runs.get"] = () => ({ run: state });
+    // The OCM answer names a started handoff only while running; here, one that already ran.
+    t.world.handlers["update.run"] = () => ({
+      runId: ocm,
+      ok: true,
+      result: { status: "skipped", reason: null },
+      message:
+        "OCM owns this update. Use the Update status view to follow its progress and result.",
+    });
+    await t.engine.start(t.stamp());
+    expect(t.sentMethods()).toEqual(["update.run", "update.runs.get"]);
+    expect(t.run()).toMatchObject({
+      runId: ocm,
+      outcome: "running",
+      note: "OCM owns this update. Use the Update status view to follow its progress and result.",
+    });
+    // Nothing moves for a while: the record is read again.
+    state = record({
+      runId: ocm,
+      phase: "finished",
+      status: "failed",
+      reason: "ocm-update-failed",
+      origin: {},
+    });
+    t.world.now += UPDATE_RECORD_POLL_MS;
+    const poll = timersOf(t, UPDATE_RECORD_POLL_MS).find((each) => !each.cancelled)!;
+    poll.run();
+    await until(() => t.run()?.outcome === "failed");
+    expect(t.run()?.reason).toBe("ocm-update-failed");
+  });
+
+  it("F-589: a press while the gateway reports no newer OpenClaw sends nothing", async () => {
+    const t = rig();
+    t.set({ openclawUpdate: null });
+    t.world.handlers["update.run"] = () => started();
+    await expect(t.engine.start(t.stamp())).rejects.toThrow("doesn't report a newer OpenClaw");
+    expect(t.world.sent).toEqual([]);
+  });
+
+  it("F-589: a connect with nothing to settle asks the gateway nothing", async () => {
+    const t = rig();
+    t.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
+    await t.engine.onHello();
+    await t.restart(OLD);
+    expect(t.world.sent).toEqual([]);
   });
 
   it("F-589: a press still out when Clawtrate moves to another gateway writes nothing there", async () => {
@@ -592,7 +841,7 @@ describe("F-589: updating OpenClaw, as a state machine from the gateway's frames
     other.world.handlers["update.status"] = () => ({ sentinel: null, updateAvailable: null });
     await other.engine.onHello();
     expect(other.run()).toBeNull();
-    expect(other.sentMethods()).toEqual(["update.status"]);
+    expect(other.sentMethods()).toEqual([]);
   });
 
   it("F-589: what the gateway writes is cleaned and bounded, and a version is shown only in the accepted form", () => {
@@ -662,7 +911,10 @@ describe("F-589: the client follows an update across the gateway's restart", () 
       type: "startOpenClawUpdate",
       stamp: gatewayStamp(client.state.connection),
     });
-    expect(gateway.calls("update.run")).toEqual([{}]);
+    // One press, carrying only its tag on the gateway's internal channel.
+    expect(gateway.calls("update.run")).toEqual([
+      { requester: { channel: "webchat", senderId: expect.stringMatching(/^clawtrate-update:/) } },
+    ]);
     gateway.emit("update.run.changed", {
       runId: RUN,
       phase: "staging",

@@ -1837,6 +1837,8 @@ export class ClawtrateClient {
       return isMissingScope(error);
     },
     refreshModels: () => this.accounts.load(),
+    newTag: () => this.randomId(),
+    now: () => this.now(),
     storage: {
       get: (key) => this.host.storage.get(key),
       set: (key, value) => this.host.storage.set(key, value),
@@ -6595,6 +6597,19 @@ export class ClawtrateClient {
   /** Put away a finished update's line. Nothing is sent. */
   dismissOpenClawUpdate(): Promise<void> {
     return this.openclawUpdates.dismiss();
+  }
+
+  /**
+   * Ask the gateway where updating stands (`update.status`): when Settings › Gateway or the
+   * confirmation opens, and on Check again. Only reads.
+   */
+  checkOpenClawUpdate(): Promise<void> {
+    return this.openclawUpdates.look();
+  }
+
+  /** Stop waiting on a press whose answer was lost, once asking the gateway has failed. */
+  releaseOpenClawUpdateHold(): Promise<void> {
+    return this.openclawUpdates.release();
   }
 
   /** Not now on a name card: kept on this device for that bot and that name. */
