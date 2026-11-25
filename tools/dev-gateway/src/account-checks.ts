@@ -199,9 +199,11 @@ type RunEnd = { runId: string; state: string; errorMessage?: string; errorDetail
 async function runOnce(h: AccountHarness, session: string, message: string): Promise<RunEnd> {
   const sent = await h.admin.send(session, message);
   expect(typeof sent.runId === "string", `chat.send returned no run id: ${JSON.stringify(sent)}`);
-  // A run on a rate-limited account retries ten times with growing pauses,
-  // about two minutes and a half in all.
-  const end = await h.admin.terminal(sent.runId as string, 300_000);
+  // A run on a rate-limited account retries with growing pauses: on OpenClaw
+  // 2026.10.6 ten times, about two minutes and a half in all; on 2026.11.10 up
+  // to 16 attempts with pauses capped at 60 seconds, about ten minutes
+  // (its docs/concepts/model-failover.md, "16 total attempts").
+  const end = await h.admin.terminal(sent.runId as string, 900_000);
   await sleep(300);
   return {
     runId: sent.runId as string,

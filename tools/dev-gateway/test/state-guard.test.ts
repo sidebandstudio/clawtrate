@@ -7,18 +7,22 @@ import { afterAll, describe, expect, it } from "vitest";
 import { status } from "../src/cli.ts";
 import { assertDevStateDir, devStateDir, OpenclawRunner, SpawnRefusedError } from "../src/env.ts";
 import {
+  forgetStoppedProcess,
   ForeignStateError,
   MARKER_FILE,
+  markerProblems,
   newRunId,
   ownership,
   prepareFreshState,
   readMarker,
+  recordPending,
   recordProcess,
   spawnRefusal,
   type MarkerOrigin,
 } from "../src/state-guard.ts";
 import {
   CHECKOUT,
+  childFor,
   deadProcess,
   liveProcess,
   seedInstance,
@@ -242,6 +246,42 @@ describe("the OpenClaw spawn boundary", () => {
     recordProcess(stateDir, runId, "gateway", gateway.pid);
     expect(check(null, runFor(runId))).toBeNull();
     expect(check(null, { ...runFor(runId), checkout: "/test/other" })).toMatch(/does not belong/);
+  });
+
+  it("records the gateway again under the same run only once the stopped one is forgotten", async () => {
+    const stateDir = devStateDir(tempHome());
+    const runId = newRunId();
+    prepareFreshState(stateDir, runId, origin());
+    const gateway = liveProcess();
+    recordProcess(stateDir, runId, "gateway", gateway.pid);
+    // One still running is never forgotten.
+    expect(() => forgetStoppedProcess(stateDir, runId, "gateway")).toThrow(/not proven stopped/);
+    expect(readMarker(stateDir)!.gatewayPid).toBe(gateway.pid);
+    const child = childFor(gateway.pid);
+    const exited = new Promise((done) => child.once("exit", done));
+    child.kill("SIGTERM");
+    await exited;
+    forgetStoppedProcess(stateDir, runId, "gateway");
+    const forgotten = readMarker(stateDir)!;
+    expect([forgotten.gatewayPid, forgotten.gatewayIdentity]).toEqual([undefined, undefined]);
+    // Its new spawn is recorded as a start's would be, and OpenClaw may run for it meanwhile.
+    recordPending(stateDir, runId, "gateway");
+    expect(markerProblems(readMarker(stateDir)!, null)).toEqual([]);
+    const again = liveProcess();
+    recordProcess(stateDir, runId, "gateway", again.pid);
+    expect(markerProblems(readMarker(stateDir)!, null)).toEqual([]);
+    expect(readMarker(stateDir)!.gatewayPid).toBe(again.pid);
+  });
+
+  it("calls a pending spawn beside a recorded process inconsistent, so the stopped one must be forgotten first", () => {
+    const stateDir = devStateDir(tempHome());
+    const runId = newRunId();
+    prepareFreshState(stateDir, runId, origin());
+    recordProcess(stateDir, runId, "gateway", liveProcess().pid);
+    recordPending(stateDir, runId, "gateway");
+    expect(markerProblems(readMarker(stateDir)!, null)).toContain(
+      "its gateway process record is inconsistent",
+    );
   });
 
   it("refuses to record a process on state another start created", () => {

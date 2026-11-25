@@ -45,6 +45,7 @@ import { parseArgs } from "node:util";
 import {
   activityRefusal,
   ForeignStateError,
+  forgetStoppedProcess,
   inUseRefusal,
   markerProblems,
   newRunId,
@@ -2322,6 +2323,27 @@ export async function lockMode(inst: DevInstance): Promise<"live" | "stopped"> {
 }
 
 /**
+ * Wait until a gateway that answers health also admits the methods it holds
+ * back while its startup sidecars finish (`chat.send`, `agent`,
+ * `tools.effective` and others answer "… unavailable during gateway startup",
+ * retryable): asked with `tools.effective`, which reads only.
+ */
+async function gatewayAdmitting(inst: DevInstance): Promise<void> {
+  const deadline = Date.now() + GATEWAY_START_MS;
+  const probe = ["gateway", "call", "tools.effective", "--params", '{"agentId":"main"}'];
+  for (;;) {
+    const result = await inst.runner.run([...probe, "--json", "--timeout", "3000"]);
+    if (!`${result.stdout}${result.stderr}`.includes("unavailable during gateway startup")) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `${label(inst)}: still starting ${GATEWAY_START_MS / 1000} s after it was started again`,
+      );
+    }
+    await sleep(500);
+  }
+}
+
+/**
  * Stop the instance's gateway alone, run `offline` while it is stopped, and
  * start the gateway again on the same state, port and run, as the gateway's
  * owner does for a command OpenClaw runs only while the gateway is stopped.
@@ -2345,6 +2367,7 @@ async function withGatewayStopped<T>(inst: DevInstance, offline: () => Promise<T
     }
     const open = await portReleased(inst, target);
     if (open) throw new StateInUseError(`${label(inst)}: ${open}`);
+    forgetStoppedProcess(inst.stateDir, marker.runId, "gateway", inst.identify);
     const runner = inst.runner;
     let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     // OpenClaw may run on this run's state while its gateway is stopped, as during its start.
@@ -2374,6 +2397,7 @@ async function withGatewayStopped<T>(inst: DevInstance, offline: () => Promise<T
       },
       GATEWAY_START_MS,
     );
+    await gatewayAdmitting(inst);
     await assertExecDenied(inst);
     if (!outcome.ok) throw outcome.error;
     return outcome.value;
