@@ -232,14 +232,17 @@ test.describe("F-557: a picture you attach", () => {
         }),
       { gateway, token },
     );
+    // Approved only while the page asks for it: each approve starts the gateway's own command,
+    // which is slow on a busy machine, and the pairing and the bot list can each take a while.
+    const asking = on.getByRole("heading", { name: "Approve this device" });
     await expect
       .poll(
         async () => {
           if ((await on.getByTestId("bot").count()) === 4) return "ready";
-          devGateway(INSTANCE, "approve");
+          if (await asking.isVisible()) devGateway(INSTANCE, "approve");
           return "waiting";
         },
-        { timeout: 60_000, intervals: [1000] },
+        { timeout: 120_000, intervals: [1000] },
       )
       .toBe("ready");
   }
@@ -267,7 +270,7 @@ test.describe("F-557: a picture you attach", () => {
   test("F-557 F-117: the picture shows on your message at once and after history holds it, opens larger, still after a reload; on another device it is read back from the gateway at a protected address, and at a loopback one says it can't be loaded", async ({
     browser,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(300_000);
     await gatewayCall("sessions.create", { key: OWN_KEY, agentId: "pip", label: OWN_TASK });
     const data = mkdtempSync(join(tmpdir(), "clawtrate-own-picture-"));
     const started = startHost(INSTANCE, process.env.CLAWTRATE_E2E_STATIC!, data);
