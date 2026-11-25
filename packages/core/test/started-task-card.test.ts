@@ -125,12 +125,14 @@ function cards(
   rows: unknown[],
   tasks: Record<string, Task[]> = {},
   inFlight: string | null = null,
+  /** The payload of a call is read: as the view reads a finished call's, never an open one's. */
+  payload = true,
 ): StartedTaskCard[] {
   const raw = new RawTable();
   const runs: Run[] = runsFromHistory(rows, inFlight, { sessionKey: HERE, now: T + 60_000, raw });
   return selectStartedTasks(
     { runs, items: mapHistory(rows), taskKey: HERE, tasks },
-    (step) => step.raw ?? (raw.get(HERE, step.id) as never),
+    (step) => step.raw ?? (payload ? (raw.get(HERE, step.id) as never) : null),
   );
 }
 
@@ -179,6 +181,9 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
     const rows = [user("#hand-off", T, RUN), call(RUN, T + 800, CALL, VISIBLE)];
     const [card] = cards(rows, listed("running"), RUN);
     expect(card).toMatchObject({ state: "starting", taskKey: null, task: null, title: LABEL });
+    // Before its payload is read, from what the step keeps of the call.
+    const [kept] = cards(rows, listed("running"), RUN, false);
+    expect(kept).toMatchObject({ state: "starting", title: LABEL, brief: BRIEF });
   });
 
   it("is Couldn't start with the gateway's own words for each refusal, and opens nothing", () => {

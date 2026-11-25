@@ -113,6 +113,14 @@ function firstLine(value: unknown, max: number): string | null {
   return line ? plainLine(line, max) || null : null;
 }
 
+/**
+ * The call's arguments: the whole payload when it is here, else what the step keeps of them
+ * (`Step.args`), as an open call's payload is not read before it ends.
+ */
+function argsOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null {
+  return callArgs(raw) ?? step.args ?? null;
+}
+
 /** A hidden helper's key (`agent:<bot>:subagent:<id>`): the task list leaves it out. */
 const HIDDEN_KEY = /^agent:[^:]+:subagent:/;
 
@@ -126,7 +134,7 @@ export function isTaskStart(step: Step, raw: StepRaw | null): boolean {
   const details = sendDetails(resultBody(raw));
   const key = details?.status === "accepted" ? str(details.childSessionKey) : null;
   if (key) return !HIDDEN_KEY.test(key);
-  return callArgs(raw)?.visible === true;
+  return argsOf(step, raw)?.visible === true;
 }
 
 /**
@@ -182,7 +190,7 @@ function startedTaskCard(
   raw: StepRaw | null,
   input: StartedTaskInput,
 ): StartedTaskCard {
-  const args = callArgs(raw);
+  const args = argsOf(step, raw);
   const details = sendDetails(resultBody(raw));
   const status = str(details?.status);
   const accepted = status === "accepted";
