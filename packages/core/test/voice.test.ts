@@ -3,14 +3,13 @@ import {
   parseVoice,
   readVoice,
   setVoice,
-  updateVoicePlugin,
   VOICE_CHANGED_EVENT,
   VOICE_GET,
   type BotVoiceAnswer,
 } from "../src/voice.ts";
 import { createBridgeSession } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
-import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, openTask, URL_A, URL_B } from "./client-harness.ts";
 import type { helloOk } from "./fake-gateway.ts";
 import { GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -27,12 +26,6 @@ const answer = {
   },
   guide: "Never use an em dash.",
 };
-/** The same plugin from 0.2.0, with the where-you-live guide. */
-const newer = {
-  ...answer,
-  version: "0.2.0",
-  where: { on: true, changed: null, guide: "## Where you live" },
-};
 
 describe("bot voice", () => {
   it("reads the setting as the voice plugin gives it", async () => {
@@ -44,15 +37,8 @@ describe("bot voice", () => {
       hookSettings: { allowPromptInjection: true, allowConversationAccess: true },
       lastRanAt: 7,
       guide: "Never use an em dash.",
-      version: "0.1.0",
-      // 0.1.0 has no where-you-live guide.
-      where: null,
     });
     expect(parseVoice({ ...answer, changed: null }).changedAt).toBeNull();
-    expect(
-      parseVoice({ ...newer, where: { on: false, changed: { at: 9 }, guide: "## Where you live" } })
-        .where,
-    ).toEqual({ on: false, changedAt: 9, guide: "## Where you live" });
     // A plugin that doesn't report the two settings still reads; the hint names both.
     expect(parseVoice({ ...answer, hook: { state: "allowed" } }).hookSettings).toBeNull();
   });
@@ -103,10 +89,6 @@ describe("bot voice", () => {
       { ...answer, on: "yes" },
       { ...answer, hook: { state: "maybe" } },
       { ...answer, guide: "x".repeat(9000) },
-      { ...newer, where: { on: "yes", guide: "" } },
-      { ...newer, where: { on: true } },
-      { ...newer, where: { on: true, guide: "x".repeat(9000) } },
-      { ...newer, where: null },
     ])
       expect(() => parseVoice(bad)).toThrow(/can't read/);
   });
@@ -119,105 +101,6 @@ describe("bot voice", () => {
     }, true);
     expect(asked).toEqual([["clawtrate-voice.set", { on: true }]]);
     expect(read).toMatchObject({ status: "read", on: true });
-  });
-
-  it("asks the gateway to load an older plugin again, and leaves a current one alone", async () => {
-    const asked: unknown[] = [];
-    const request = async (method: string, params: unknown) => (asked.push([method, params]), {});
-    expect(await updateVoicePlugin(request, parseVoice(newer))).toBe("current");
-    expect(await updateVoicePlugin(request, { status: "missing" })).toBe("current");
-    expect(asked).toEqual([]);
-    expect(await updateVoicePlugin(request, parseVoice(answer))).toBe("reloaded");
-    expect(asked).toEqual([["plugins.reload", { plugins: [{ pluginId: "clawtrate-voice" }] }]]);
-    const refused = () => Promise.reject(new Error("missing scope: operator.admin"));
-    expect(await updateVoicePlugin(refused, parseVoice(answer))).toEqual({
-      failed: "missing scope: operator.admin",
-    });
-  });
-});
-
-describe("an older voice plugin, after a connect", () => {
-  /** A device that holds admin access, as Clawtrate pairs one at first connect. */
-  const adminStorage = () =>
-    memoryStorage({
-      connection: JSON.stringify({ url: URL_A, token: null }),
-      [tokenKey(URL_A)]: JSON.stringify({
-        token: "device-token",
-        grantedScopes: ADMIN_SCOPES,
-        heldScopes: INTERACTIVE_SCOPES,
-        adminHeld: true,
-      }),
-    });
-  /** A gateway whose plugin is `version` until a reload brings `after`. */
-  const reloadingGateway = (after: Record<string, unknown> | null) => {
-    const gateway = grantingGateway();
-    const reply = gateway.connectReply;
-    gateway.connectReply = (params, url) => {
-      const hello = reply(params, url) as { ok: true; payload: ReturnType<typeof helloOk> };
-      return {
-        ...hello,
-        payload: { ...hello.payload, features: { methods: [VOICE_GET], events: [] } },
-      };
-    };
-    const reloads: unknown[] = [];
-    let current: Record<string, unknown> = answer;
-    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
-    gateway.handlers[VOICE_GET] = () => current;
-    gateway.handlers["plugins.reload"] = (params) => {
-      reloads.push(params);
-      if (after) current = after;
-      gateway.emit("plugins.changed", { generation: reloads.length + 1 });
-      return { ok: true, restartRequired: false };
-    };
-    return { gateway, reloads };
-  };
-
-  it("is loaded again once, with admin access, and Settings then reads the newer one", async () => {
-    const { gateway, reloads } = reloadingGateway(newer);
-    const { client } = await openTask({ gateway, storage: adminStorage() });
-    try {
-      await until(() => reloads.length === 1);
-      expect(reloads).toEqual([{ plugins: [{ pluginId: "clawtrate-voice" }] }]);
-      expect(await client.readBotVoice()).toMatchObject({ where: { on: true } });
-      // A reconnect finds it current: nothing more is asked.
-      gateway.dropAll();
-      await until(() => client.state.connection.status === "connected");
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
-      expect(reloads).toHaveLength(1);
-    } finally {
-      client.stop();
-    }
-  });
-
-  it("is loaded again only once per version when its files are still older", async () => {
-    const { gateway, reloads } = reloadingGateway(null);
-    const { client } = await openTask({ gateway, storage: adminStorage() });
-    try {
-      await until(() => reloads.length === 1);
-      gateway.dropAll();
-      await until(() => client.state.connection.status === "connected");
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
-      expect(reloads).toHaveLength(1);
-      expect(await client.readBotVoice()).toMatchObject({ version: "0.1.0", where: null });
-    } finally {
-      client.stop();
-    }
-  });
-
-  it("is left alone below admin, and from a read-only viewer", async () => {
-    for (const options of [
-      { held: INTERACTIVE_SCOPES },
-      { storage: adminStorage(), client: { readOnly: true } },
-    ]) {
-      const { gateway, reloads } = reloadingGateway(newer);
-      const { client } = await openTask({ gateway, ...options });
-      try {
-        await new Promise<void>((resolve) => setTimeout(resolve, 50));
-        expect(reloads).toEqual([]);
-      } finally {
-        client.stop();
-      }
-    }
   });
 });
 

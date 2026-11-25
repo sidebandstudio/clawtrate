@@ -2,8 +2,15 @@
 // `tools.effective` reports it for one of the bot's tasks (OpenClaw 2026.10.6). The bot's
 // settings say so when it can't, and change nothing (#532).
 
-import { asRecord } from "./mapping.ts";
-import { MAX_START_TASKS_REASON_CHARS } from "./state-bounds.ts";
+// It imports nothing: `state-bounds.ts` imports its bound, so an import here could close a cycle.
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+/** The gateway's reason a task's bot can't start tasks (`toolAccess` labels, joined), at most. */
+export const MAX_START_TASKS_REASON_CHARS = 256;
 
 /** The gateway's tool a bot starts a task with. */
 export const START_TASK_TOOL = "sessions_spawn";

@@ -337,7 +337,6 @@ const VOICE_README =
   "https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md";
 const VOICE_SETUP = `${VOICE_README}#turning-it-on-for-a-gateway`;
 const VOICE_LIMITS = `${VOICE_README}#where-the-guide-doesnt-reach`;
-const VOICE_UPDATE = `${VOICE_README}#updating-it`;
 
 function VoiceLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -641,23 +640,6 @@ function BotVoicePane({
         and kindly, with no em dashes. Turned off, each bot talks the way its own instructions say.
         {!canWrite && " Changing it needs write access."}
       </p>
-      {!voice.where && (
-        <div className="b-note" data-tone="warn" data-testid="bot-where-old">
-          <div>
-            <p>
-              The gateway's voice plugin is{" "}
-              {voice.version ? `version ${voice.version}` : "an older version"}, from before the
-              task guide, so the bots aren't told what a task is.{" "}
-              {connection.canAdmin
-                ? "Clawtrate loads a newer copy by itself when the plugin's files on the gateway have one, and these are still that version. Once they are updated, it loads them the next time it connects."
-                : "With admin access, Clawtrate loads a newer copy by itself when the plugin's files on the gateway have one. This connection doesn't have admin access."}
-            </p>
-            <div className="b-actions">
-              <VoiceLink href={VOICE_UPDATE}>How to update it</VoiceLink>
-            </div>
-          </div>
-        </div>
-      )}
       <dl className="facts bot-voice-hook">
         <div>
           <dt>Prompt hook permitted</dt>

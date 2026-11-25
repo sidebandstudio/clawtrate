@@ -1,8 +1,7 @@
 // Whether a bot can start tasks (#532): the gateway's `sessions_spawn`, as `tools.effective`
 // reports it for one of the bot's tasks, kept beside that task's tool map.
 import { describe, expect, it } from "vitest";
-import { botStartTasks, startTasksFrom } from "../src/start-tasks.ts";
-import { MAX_START_TASKS_REASON_CHARS } from "../src/state-bounds.ts";
+import { botStartTasks, MAX_START_TASKS_REASON_CHARS, startTasksFrom } from "../src/start-tasks.ts";
 import { KEY, openTask } from "./client-harness.ts";
 import { until } from "./fake-gateway.ts";
 
@@ -101,6 +100,13 @@ describe("whether a bot can start tasks", () => {
       answer = effective([tool("read"), tool("sessions_spawn")]);
       gateway.emit("plugins.changed", { generation: 2 });
       await until(() => transcript()?.startTasks?.can === true);
+      // The tool is gone again, and then only the gateway's reason changes: each is kept.
+      answer = effective([tool("read")], [excluded("Not included in tools.allow")]);
+      gateway.emit("plugins.changed", { generation: 4 });
+      await until(() => transcript()?.startTasks?.can === false);
+      answer = effective([tool("read")], [excluded("Denied by tools.deny")]);
+      gateway.emit("plugins.changed", { generation: 5 });
+      await until(() => transcript()?.startTasks?.reason === "Denied by tools.deny");
       // An answer that lists no tools takes the line away rather than keep an old one.
       answer = {} as typeof answer;
       gateway.emit("plugins.changed", { generation: 3 });

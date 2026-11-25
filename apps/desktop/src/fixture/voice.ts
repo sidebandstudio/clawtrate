@@ -9,7 +9,6 @@
 //   voice=refused   the hello lists the plugin, and the gateway asks for admin to read it
 //   voice=unclear   the gateway asks for admin to read it, and sent no list of methods
 //   voice=fail      the read fails
-//   voice=old       the plugin is 0.1.0, from before the where-you-live guide
 //   voicesave=fail  a change is refused
 //   voicesave=lost  a change is stored, and its answer is lost
 //   voicesave=slow  a change is stored, and its answer waits for `window.voiceSaveRelease`;
@@ -31,7 +30,6 @@ import {
   type GatewayStamp,
 } from "@clawtrate/core";
 import guide from "../../../../plugins/clawtrate-voice/voice.md?raw";
-import whereGuide from "../../../../plugins/clawtrate-voice/where.md?raw";
 
 export type VoiceParams = { voice: string | null; save: string | null };
 export const voiceParams = (params: URLSearchParams): VoiceParams => ({
@@ -61,8 +59,6 @@ export function voiceCommands(
     },
     lastRanAt: params.voice === "blocked" || params.voice === "bothoff" ? null : now - 5 * 60_000,
     guide: guide.trim(),
-    version: params.voice === "old" ? "0.1.0" : "0.2.0",
-    where: params.voice === "old" ? null : { on: true, changedAt: null, guide: whereGuide.trim() },
   };
   const seed: BotVoice =
     params.voice === "missing"

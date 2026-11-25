@@ -6,7 +6,6 @@ import { startTasksFrom } from "./start-tasks.ts";
 import {
   readVoice,
   setVoice,
-  updateVoicePlugin,
   VOICE_CHANGED_EVENT,
   VOICE_GET,
   type BotVoiceAnswer,
@@ -1790,8 +1789,6 @@ export class ClawtrateClient {
    */
   /** Whether the latest hello's `features.methods` lists the voice plugin's read, or null when it listed none. */
   private voiceAdvertised: boolean | null = null;
-  /** Each gateway and loaded plugin version a reload of the voice plugin was asked for, once each. */
-  private readonly voiceReloads = new Set<string>();
   private readonly computer: ComputerViews = new ComputerViews({
     request: (method, params) => this.request(method, params),
     openStream: (url) => {
@@ -8773,37 +8770,7 @@ export class ClawtrateClient {
       // Every connect reads the list again: runs that started or ended while away are in it.
       if (this.state.connection.status === "connected") void this.routines.load();
       this.usage.onHello();
-      void this.updateVoice(generation, epoch);
     });
-  }
-
-  /**
-   * After a connect with admin access: an older voice plugin, without the where-you-live guide,
-   * is loaded again from its files once per gateway and version (`updateVoicePlugin`), so a
-   * newer copy there reaches the bots with nothing for the person to do. The gateway's
-   * `plugins.changed` then makes Settings read it again. Nothing is asked below admin, from a
-   * read-only viewer, or of a gateway whose hello doesn't list the plugin.
-   */
-  private async updateVoice(generation: number, epoch: number): Promise<void> {
-    const current = () =>
-      generation === this.generation &&
-      epoch === this.epoch &&
-      this.state.connection.status === "connected" &&
-      this.state.connection.canAdmin &&
-      !this.options.readOnly;
-    if (!current() || this.voiceAdvertised === false) return;
-    try {
-      const gatewayId = await this.readGatewayIdentity();
-      const voice = await readVoice((m, p) => this.request(m, p), this.voiceAdvertised);
-      if (!current() || gatewayId === null || voice.status !== "read") return;
-      const key = `${gatewayId}\u0000${voice.version ?? ""}`;
-      if (voice.where !== null || this.voiceReloads.has(key)) return;
-      this.voiceReloads.add(key);
-      const outcome = await updateVoicePlugin((m, p) => this.request(m, p), voice);
-      if (typeof outcome === "object") this.logFailure("warn", "plugins.reload", outcome.failed);
-    } catch (error) {
-      this.logFailure("warn", VOICE_GET, error);
-    }
   }
 
   /** After a connect, read back every approval whose last decision got no answer. */
