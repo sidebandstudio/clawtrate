@@ -22,12 +22,13 @@ export const GUIDES_FILE = "AGENTS.md";
  * The section's version. A section of a lower version is replaced by this one; one of this
  * version or a newer one, written by this or a later build, is left as it is.
  */
-export const GUIDES_VERSION = 1;
+export const GUIDES_VERSION = 2;
 /**
  * The first 16 hex digits of the SHA-256 of this version's text between the markers. A test
- * holds the text to it, so the text can't change without the version changing with it.
+ * holds the text to it, so the text can't change without the version changing with it. Every
+ * earlier version's section is in the tests (`guides-published.ts`), as released builds wrote it.
  */
-export const GUIDES_PINNED_SHA256 = "3b11747ce00c0e53";
+export const GUIDES_PINNED_SHA256 = "d7896beafc7f977a";
 /**
  * Where OpenClaw (2026.10.6 and 2026.11.10) starts cutting a long `AGENTS.md` out of a prompt
  * when its config sets no limit (`bootstrapMaxChars`): what Clawtrate uses when the config can't
