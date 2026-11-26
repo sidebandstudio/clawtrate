@@ -39,7 +39,7 @@ So the tool now writes `proxy.proxyUrl: "http://127.0.0.1:<scripted model port>"
 ```
 refused a request beyond loopback: CONNECT catalog.openclaw.ai:443      (on start, before any client connected)
 refused a request beyond loopback: CONNECT clawhub.ai:443               (seeding; then every catalog read)
-refused a request beyond loopback: CONNECT 192.0.2.10:443               (a tool server at a documentation-range address)
+refused a request beyond loopback: CONNECT <a documentation-range address>:443   (a tool server at that address)
 ```
 
 **The one start before the fence.** The first start of `d11conn` in this work came before the fence, so it reached the network as every instance on `main` does; it left no log of its requests, so this is what the gateway's source and the identical fenced starts show:
@@ -129,7 +129,7 @@ Removing an installed plugin (**docs**, `<openclaw>/docs/plugins/manage-plugins.
 | `url: "ftp://127.0.0.1/mcp"` | "… url: Expected http:// or https:// URL" | nothing written |
 | `{args: ["x"]}`, `{command: ""}` | `ok` | written; after a run, no tools and no notice for it |
 | a closed loopback port | `ok` | after a run: warning `mcp-server-diagnostic:probe-closed`: "MCP server \"probe-closed\": fetch failed \| connect ECONNREFUSED 127.0.0.1:60672 \| ECONNREFUSED; server unavailable; retry after 2026-11-19T13:05:06.558Z. Check server reachability or reload MCP after fixing it." |
-| `https://192.0.2.10/mcp` | `ok` | after a run: the same warning with the fence's 403 |
+| `https://` and a documentation-range address | `ok` | after a run: the same warning with the fence's 403 |
 | `{command: "/nonexistent/example-command"}` | `ok` | after a run: "MCP server \"probe-nocmd\": spawn /nonexistent/example-command ENOENT; server unavailable; …" |
 | `{command: <this Node>, args: [<stand-in script>], cwd}` | `ok` | read back whole, command and arguments in plain text |
 | all of them `null` | `INVALID_REQUEST`: "config.patch would remove entries from array path(s): mcp.servers.probe-cmd.args, …. Pass replacePaths with the exact path(s) when this is intentional, or use config.apply for full-config replacement." | nothing removed |
