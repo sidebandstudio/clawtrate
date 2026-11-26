@@ -56,7 +56,11 @@ export function guidesCommands(
   const states = new Map<string, GuideState | null>(
     BOTS.map((bot) => [
       bot,
-      param !== null && param in start ? (start[param]![bot] ?? "none") : "current",
+      param !== null && param in start
+        ? bot in start[param]!
+          ? (start[param]![bot] ?? null)
+          : "none"
+        : "current",
     ]),
   );
   let record: GuidesRecord =
