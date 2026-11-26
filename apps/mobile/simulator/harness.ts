@@ -218,9 +218,9 @@ const BOUNDS = /\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/;
 /**
  * Maestro's view of the screen, as JSON text. Like `steps`, a driver that did
  * not start is no result of the app's: it is asked once more, with the runner
- * installed afresh.
+ * installed afresh. With `timeoutMs`, a try that takes longer is stopped and fails.
  */
-async function hierarchy(): Promise<string> {
+async function hierarchy(timeoutMs?: number): Promise<string> {
   for (let attempt = 1; ; attempt += 1) {
     try {
       const { stdout } = await run(
@@ -231,7 +231,10 @@ async function hierarchy(): Promise<string> {
           "hierarchy",
           attempt === 1 ? "--no-reinstall-driver" : "--reinstall-driver",
         ],
-        { maxBuffer: 64 * 1024 * 1024 },
+        {
+          maxBuffer: 64 * 1024 * 1024,
+          ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
+        },
       );
       return stdout;
     } catch (error) {
@@ -272,9 +275,13 @@ export async function layout(): Promise<
   return found;
 }
 
-/** The text each element with an id holds now: a field's value, as Maestro reads it. */
+/**
+ * The text each element with an id holds now: a field's value, as Maestro reads it.
+ * Read only to explain a failure, so a read that stalls is stopped after two
+ * minutes rather than hold back the failure it explains.
+ */
 async function fieldTexts(): Promise<Map<string, string>> {
-  const stdout = await hierarchy();
+  const stdout = await hierarchy(2 * 60_000);
   const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
   const found = new Map<string, string>();
   const walk = (node: Node) => {
