@@ -215,6 +215,7 @@ const evidence = (patch: Partial<LockEvidence>): LockEvidence => ({
   checkedAt: null,
   lastMatchAt: null,
   lostAt: null,
+  readSeq: null,
   error: null,
   ...patch,
 });
@@ -1429,7 +1430,8 @@ export function accountCommand(
             status,
             error: CLEAR_WORDS[status] ?? null,
             at: now,
-            sentAt: status === "sending" ? null : now,
+            sentSeq: status === "sending" ? null : 1,
+            checkedSeq: status === "cleared" ? 2 : null,
             checkedAt: status === "cleared" ? now : null,
           },
         }));
@@ -1447,6 +1449,8 @@ export function accountCommand(
                     status: ids ? "other" : "none",
                     checkedAt: Date.now(),
                     lostAt: null,
+                    // The press's own read, as the engine numbers it (`clearShown`).
+                    readSeq: 2,
                   },
                 }
               : b,

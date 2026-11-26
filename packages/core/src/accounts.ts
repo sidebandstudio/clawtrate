@@ -251,6 +251,12 @@ export type LockEvidence = {
   lastMatchAt: number | null;
   /** A read found the order no longer matching after one that did. */
   lostAt: number | null;
+  /**
+   * Where the read that gave this evidence stands among the engine's reads and sends, in the order
+   * they began (`AccountsEngine.nextSeq`); null until a read. Reads are ordered by it, never by the
+   * clock, which can give two of them the same millisecond.
+   */
+  readSeq: number | null;
   error: string | null;
 };
 
@@ -434,9 +440,10 @@ export type OrderClear = {
   /** The gateway's words for a refusal, or why an answer or a read didn't come. */
   error: string | null;
   at: number;
-  /** When the send's answer came or was given up on: a read begun since can settle an unsure ending. */
-  sentAt: number | null;
-  /** When the read that found no stored order began: the time a `cleared` line names. */
+  /** Where the send stands among the engine's reads and sends: a read begun after it can settle an unsure ending. */
+  sentSeq: number | null;
+  /** The read that found no stored order: where it stands, and when it began (the time the line names). */
+  checkedSeq: number | null;
   checkedAt: number | null;
 };
 
@@ -494,6 +501,7 @@ export const unreadEvidence: LockEvidence = {
   checkedAt: null,
   lastMatchAt: null,
   lostAt: null,
+  readSeq: null,
   error: null,
 };
 
@@ -851,6 +859,7 @@ export function evaluateOrder(
   order: StoredOrder | null,
   accountListed: boolean,
   at: number,
+  seq: number | null = null,
 ): LockEvidence {
   let status: LockEvidence["status"];
   const ids = order?.ids ?? [];
@@ -875,6 +884,7 @@ export function evaluateOrder(
     checkedAt: at,
     lastMatchAt: matched ? at : previous.lastMatchAt,
     lostAt: matched ? null : wasMatched ? at : previous.lostAt,
+    readSeq: seq,
     error: null,
   };
 }
@@ -906,27 +916,28 @@ export function retainedOrder(binding: BotBinding): string | null {
 }
 
 /**
- * What an Unlock or Clear is shown as now, from the gateway's reads of the bot (each stamped with
- * when it began): as it ended, with the time of the read that settled it. An unsure ending
- * (`unanswered`, `unread`, `kept`) becomes `cleared` when a read begun after the send finds no
- * stored order for its provider. A `cleared` one is shown no more (null) once a later read finds a
- * stored order there again: the line never says the order is gone above a page that shows it.
+ * What an Unlock or Clear is shown as now, from the gateway's reads of the bot, ordered by when
+ * each began (`readSeq`, never the clock): as it ended, with the time of the read that settled it.
+ * An unsure ending (`unanswered`, `unread`, `kept`) becomes `cleared` when a read begun after the
+ * send finds no stored order for its provider. A `cleared` one is shown no more (null) once a read
+ * begun after its own finds a stored order there again: the line never says the order is gone
+ * above a page that shows it.
  */
 export function clearShown(
   clear: OrderClear,
   binding: BotBinding,
 ): { status: OrderClear["status"]; checkedAt: number | null } | null {
-  const read = binding.evidence.checkedAt;
+  const seq = binding.evidence.readSeq;
   const same = binding.provider === clear.provider;
   const stored = same && binding.order?.stored === true;
   if (clear.status === "cleared")
-    return stored && read !== null && clear.checkedAt !== null && read > clear.checkedAt
+    return stored && seq !== null && clear.checkedSeq !== null && seq > clear.checkedSeq
       ? null
       : { status: "cleared", checkedAt: clear.checkedAt };
   const unsure =
     clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
-  if (unsure && same && !stored && read !== null && clear.sentAt !== null && read >= clear.sentAt)
-    return { status: "cleared", checkedAt: read };
+  if (unsure && same && !stored && seq !== null && clear.sentSeq !== null && seq > clear.sentSeq)
+    return { status: "cleared", checkedAt: binding.evidence.checkedAt };
   return { status: clear.status, checkedAt: null };
 }
 

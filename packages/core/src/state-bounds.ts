@@ -1138,6 +1138,7 @@ const lockEvidence = object<LockEvidence>()({
   checkedAt: NUMBER,
   lastMatchAt: NUMBER,
   lostAt: NUMBER,
+  readSeq: NUMBER,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const binding = object<BotBinding>()({
@@ -1219,7 +1220,8 @@ const orderClear = object<OrderClear>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,
-  sentAt: NUMBER,
+  sentSeq: NUMBER,
+  checkedSeq: NUMBER,
   checkedAt: NUMBER,
 });
 export const ACCOUNTS: Bound = object<AccountsState>()({

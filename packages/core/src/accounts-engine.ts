@@ -209,6 +209,12 @@ export class AccountsEngine {
   /** The partial creation a Finish has claimed while its gateway may still be identifying itself. */
   private finishing: AccountsState["creation"] = null;
   private loading: Promise<void> | null = null;
+  /**
+   * The engine's reads of an order and its sends of a clear, numbered as each begins: what orders
+   * them (`LockEvidence.readSeq`, `OrderClear.sentSeq`), since the clock can give two the same
+   * millisecond. A number, not a collection.
+   */
+  private seq = 0;
   /** The one Unlock or Clear under way: its bot and provider. */
   private clearing: { botId: string; provider: string } | null = null;
   private loadAgain = false;
@@ -266,7 +272,8 @@ export class AccountsEngine {
       );
     };
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
-    // When the reads began: each bot's order is stamped with it (`readOrder`).
+    // Where these reads stand among the engine's reads (`nextSeq`), and when they began.
+    const seq = this.nextSeq();
     const startedAt = ctx.now();
     try {
       const bots = ctx.bots();
@@ -295,7 +302,7 @@ export class AccountsEngine {
         const same =
           read.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === read.gatewayId;
         return {
-          ...this.compose(a, config, views, same ? a.models : [], at, startedAt),
+          ...this.compose(a, config, views, same ? a.models : [], at, startedAt, seq),
           ...(same ? {} : { modelsCut: initialAccountsState.modelsCut }),
           readOn: read,
         };
@@ -421,6 +428,7 @@ export class AccountsEngine {
     catalog: AccountsState["models"],
     at: number,
     startedAt: number = at,
+    seq: number | null = null,
   ): AccountsState {
     const root = asRecord(config?.config) ?? {};
     const agents = asRecord(root.agents) ?? {};
@@ -433,9 +441,9 @@ export class AccountsEngine {
     const bindings = [...views.keys()].map((botId) => {
       const before = previous.bindings.find((each) => each.botId === botId);
       // A bot's order read since these reads began, by Check now or a press, stays as it was read.
-      if (before && before.evidence.checkedAt !== null && before.evidence.checkedAt > startedAt)
+      if (seq !== null && before?.evidence.readSeq != null && before.evidence.readSeq > seq)
         return before;
-      return this.binding(botId, asRecord(entries[botId]), views.get(botId)!, before, startedAt);
+      return this.binding(botId, asRecord(entries[botId]), views.get(botId)!, before, startedAt, seq);
     });
     return {
       ...previous,
@@ -460,6 +468,7 @@ export class AccountsEngine {
     view: BotView,
     before: BotBinding | undefined,
     at: number,
+    seq: number | null = null,
   ): BotBinding {
     // An account counts for a bot only if that bot's own view lists it: one another bot keeps is not its.
     const listed = new Set(view.profiles.map((profile) => profile.id));
@@ -491,6 +500,7 @@ export class AccountsEngine {
         order,
         base.account !== null && listed.has(base.account),
         at,
+        seq,
       ),
       // Clawtrate set this bot's account (its own record says so) and the gateway's model has no
       // explicit fallback list: the empty list it writes did not land, then or since a restart.
@@ -539,6 +549,7 @@ export class AccountsEngine {
     botId: string,
     before: BotBinding,
     ctx: AccountsContext,
+    seq: number = this.nextSeq(),
   ): Promise<BotView | null> {
     const at = ctx.now();
     const [answer, config] = await Promise.all([
@@ -559,8 +570,8 @@ export class AccountsEngine {
     const entry = asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
     ctx.update((a) => {
       const current = a.bindings.find((each) => each.botId === botId) ?? before;
-      if (current.evidence.checkedAt !== null && current.evidence.checkedAt > at) return a;
-      const next = this.binding(botId, entry, view, current, at);
+      if (current.evidence.readSeq !== null && current.evidence.readSeq > seq) return a;
+      const next = this.binding(botId, entry, view, current, at, seq);
       return { ...a, bindings: a.bindings.map((each) => (each.botId === botId ? next : each)) };
     });
     return view;
@@ -612,7 +623,8 @@ export class AccountsEngine {
     const base = this.ctx;
     const live = () => this.resets === resets;
     const gatewayId = base.gatewayNow();
-    let sentAt: number | null = null;
+    let sentSeq: number | null = null;
+    let checkedSeq: number | null = null;
     let checkedAt: number | null = null;
     const publish = (patch: Pick<OrderClear, "status" | "error">) => {
       if (!live()) return;
@@ -629,7 +641,8 @@ export class AccountsEngine {
           ...patch,
           error,
           at: base.now(),
-          sentAt,
+          sentSeq,
+          checkedSeq,
           checkedAt,
         },
       }));
@@ -678,6 +691,7 @@ export class AccountsEngine {
     }
     let refused: string | null = null;
     let lost: string | null = null;
+    sentSeq = this.nextSeq();
     try {
       await ctx.request(
         "models.authOrderSet",
@@ -688,14 +702,14 @@ export class AccountsEngine {
       if (isRefusal(error)) refused = errorText(error);
       else lost = errorText(error);
     }
-    sentAt = base.now();
     // Null when the read after failed, or the gateway said its status is unavailable.
     let after: BotView | null = null;
+    const afterSeq = this.nextSeq();
     const afterAt = base.now();
     try {
       // The connection the press was sent on, still: a read on another says nothing of this one.
       check();
-      after = await this.readOrder(botId, before, ctx);
+      after = await this.readOrder(botId, before, ctx, afterSeq);
     } catch (error) {
       // As Check now says a failed read: the last confirmation stands, with its time.
       ctx.update((a) =>
@@ -707,6 +721,7 @@ export class AccountsEngine {
     }
     // The gateway's read decides before its answer does: a refusal whose order is gone is cleared.
     if (clearedIn(after)) {
+      checkedSeq = afterSeq;
       checkedAt = afterAt;
       // The person's own unlock: not a lock lost, so no "The lock is gone" for it.
       ctx.update((a) =>
@@ -717,6 +732,12 @@ export class AccountsEngine {
     else if (lost !== null) publish({ status: "unanswered", error: lost });
     else if (after === null) publish({ status: "unread", error: null });
     else publish({ status: "kept", error: null });
+  }
+
+  /** The next number in the order reads and sends began (`seq`). */
+  private nextSeq(): number {
+    this.seq += 1;
+    return this.seq;
   }
 
   private patchBinding(

@@ -285,13 +285,13 @@ export function BotSettings({
       !(
         accounts.clear?.botId === bot.id &&
         accounts.clear.status === "cleared" &&
-        accounts.clear.checkedAt !== null &&
-        accounts.clear.checkedAt === binding?.evidence.checkedAt
+        accounts.clear.checkedSeq !== null &&
+        accounts.clear.checkedSeq === binding?.evidence.readSeq
       )
     )
       announce(`${name} is no longer locked`);
     lastWord.current = word;
-  }, [word, announce, name, focusIn, accounts.clear, bot.id, binding?.evidence.checkedAt]);
+  }, [word, announce, name, focusIn, accounts.clear, bot.id, binding?.evidence.readSeq]);
 
   const cli = gatewayCli(info, connection);
   const stopped = orderNeedsStoppedGateway(connection.serverVersion);

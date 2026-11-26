@@ -26,6 +26,7 @@ const locked = (evidence: Partial<LockEvidence>): BotBinding => ({
     checkedAt: NOW - 1_000,
     lastMatchAt: NOW - 1_000,
     lostAt: null,
+    readSeq: null,
     error: null,
     ...evidence,
   },

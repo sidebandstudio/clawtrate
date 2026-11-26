@@ -3,7 +3,7 @@
 // bot and order the screen showed; each outcome, and the state shown only from the gateway's own
 // read after it.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
 import { AccountsEngine, type AccountsContext } from "../src/accounts-engine.ts";
@@ -28,6 +28,12 @@ import {
   tokenKey,
   until,
 } from "./fake-gateway.ts";
+
+/** Every timestamp from now on the same millisecond: reads are told apart by their order alone. */
+function fixedClock(): () => void {
+  const spy = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+  return () => spy.mockRestore();
+}
 
 const otto = (state: AccountsState) => state.bindings.find((each) => each.botId === "otto")!;
 /** What the page's line says now: its status, or null when it shows nothing. */
@@ -207,7 +213,7 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     // Gone at a read begun before the send's answer: never counts.
     const gone = { ...otto(accounts()), order: null };
     expect(
-      shown(kept, { ...gone, evidence: { ...gone.evidence, checkedAt: kept.sentAt! - 1 } }),
+      shown(kept, { ...gone, evidence: { ...gone.evidence, readSeq: kept.sentSeq! - 1 } }),
     ).toBe("kept");
     // Gone at a read since: cleared, at that read's time. A refusal is the gateway's answer.
     expect(clearShown(kept, gone)).toEqual({
@@ -245,18 +251,31 @@ describe("F-592: Unlock and Clear, over the connection", () => {
       status: "cleared",
       checkedAt: clear.checkedAt,
     });
-    expect(clear.checkedAt).toBe(otto(accounts()).evidence.checkedAt);
+    expect(clear.checkedSeq).toBe(otto(accounts()).evidence.readSeq);
     // A later read that still finds none: the line keeps the time of the press's own read.
     await new Promise<void>((resolve) => setTimeout(resolve, 5));
     await client.checkLock("otto");
     expect(otto(accounts()).evidence.checkedAt).toBeGreaterThan(clear.checkedAt!);
     expect(clearShown(clear, otto(accounts()))?.checkedAt).toBe(clear.checkedAt);
-    // Locked again (on 2026.10.6 beside the running gateway, or by another device), then read.
-    await new Promise<void>((resolve) => setTimeout(resolve, 5));
-    fake.orders.otto = { acme: ["acme:work"] };
-    await client.checkLock("otto");
-    expect(accountWord(otto(accounts()))).toBe("locked");
-    expect(clearShown(accounts().clear!, otto(accounts()))).toBeNull();
+    client.stop();
+  });
+
+  it("on one clock tick: a Check now that finds the order back takes the Unlocked line away", async () => {
+    const { client, fake, accounts, press } = await locked();
+    const restore = fixedClock();
+    try {
+      await press();
+      expect(shown(accounts().clear!, otto(accounts()))).toBe("cleared");
+      // Locked again (on 2026.10.6 beside the running gateway, or by another device), then read,
+      // all in the same millisecond as the press's own read.
+      fake.orders.otto = { acme: ["acme:work"] };
+      await client.checkLock("otto");
+      expect(otto(accounts()).evidence.checkedAt).toBe(accounts().clear!.checkedAt);
+      expect(accountWord(otto(accounts()))).toBe("locked");
+      expect(clearShown(accounts().clear!, otto(accounts()))).toBeNull();
+    } finally {
+      restore();
+    }
     client.stop();
   });
 
@@ -326,15 +345,20 @@ describe("F-592: Unlock and Clear, over the connection", () => {
       }
       return answer;
     };
-    const older = client.checkLock("otto");
-    await until(() => !holding);
-    await new Promise<void>((resolve) => setTimeout(resolve, 5));
-    await press();
-    expect(accountWord(otto(accounts()))).toBe("bound");
-    held.resolve();
-    await older;
-    expect(accountWord(otto(accounts()))).toBe("bound");
-    expect(shown(accounts().clear!, otto(accounts()))).toBe("cleared");
+    // On one clock tick: only the order the reads began in tells them apart.
+    const restore = fixedClock();
+    try {
+      const older = client.checkLock("otto");
+      await until(() => !holding);
+      await press();
+      expect(accountWord(otto(accounts()))).toBe("bound");
+      held.resolve();
+      await older;
+      expect(accountWord(otto(accounts()))).toBe("bound");
+      expect(shown(accounts().clear!, otto(accounts()))).toBe("cleared");
+    } finally {
+      restore();
+    }
     client.stop();
   });
 
@@ -351,14 +375,18 @@ describe("F-592: Unlock and Clear, over the connection", () => {
       }
       return answer;
     };
-    const load = client.refreshAccounts();
-    await until(() => !holding && fake.gateway.calls("models.authStatus").length > 0);
-    await new Promise<void>((resolve) => setTimeout(resolve, 5));
-    await press();
-    expect(accountWord(otto(accounts()))).toBe("bound");
-    held.resolve();
-    await load;
-    expect(accountWord(otto(accounts()))).toBe("bound");
+    const restore = fixedClock();
+    try {
+      const load = client.refreshAccounts();
+      await until(() => !holding && fake.gateway.calls("models.authStatus").length > 0);
+      await press();
+      expect(accountWord(otto(accounts()))).toBe("bound");
+      held.resolve();
+      await load;
+      expect(accountWord(otto(accounts()))).toBe("bound");
+    } finally {
+      restore();
+    }
     client.stop();
   });
 
@@ -628,6 +656,7 @@ describe("F-592: the answer's wait", () => {
             checkedAt: 1,
             lastMatchAt: 1,
             lostAt: null,
+            readSeq: null,
             error: null,
           },
           fallbacksUnwritten: false,
