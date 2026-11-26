@@ -1,16 +1,17 @@
 // A picture a bot makes with image_generate, in the conversation (F-535), on
 // this run's own development gateway, started with the stand-in image provider
 // (`--with-images`). The bot's run asks for the picture, the gateway delivers
-// it in a turn of its own, and the page draws the bytes the host fetched
-// through the download the gateway issued. The file runs after
-// preview.spec.ts, whose checks read Otto's task list as the seed left it.
+// it in a turn of its own (on 2026.11.10, a row of its own), and the page
+// draws the bytes the host fetched through the download the gateway issued.
+// The file runs after preview.spec.ts, whose checks read Otto's task list as
+// the seed left it.
 import { expect, test, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { solidPng } from "../packages/core/test/sent-attachments-rows.ts";
-import { openInstance, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
+import { instanceForm, openInstance, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import {
   IMAGE_PROMPT,
@@ -78,7 +79,7 @@ test("F-535: a picture the bot makes with image_generate shows in the conversati
   const key = "agent:otto:e2e-picture";
   await gatewayCall("sessions.create", { key, agentId: "otto", label: TASK });
   await openclaw(["agent", "--agent", "otto", "--session-key", key, "--message", "#image"]);
-  // The picture arrives in the gateway's own turn after the bot's run, a few seconds later.
+  // The picture arrives after the bot's run, a few seconds later.
   await expect
     .poll(
       async () => {
@@ -105,10 +106,20 @@ test("F-535: a picture the bot makes with image_generate shows in the conversati
 
   await openShell(page);
   await openTask(page, "Otto", TASK);
+  // 2026.10.6 delivers the picture in a turn of the gateway's own, with its text, named for the
+  // description it was made from. 2026.11.10 writes it into the task as a row of its own, with no
+  // text and no turn of that run (`pictureTurn`), so it shows as a picture the bot handed over.
+  const { pictureTurn } = instanceForm(openInstance(INSTANCE));
   const turn = page
     .getByTestId("transcript-turn")
-    .filter({ hasText: "Here is the picture you asked for." });
-  const picture = turn.getByRole("img", { name: ALT });
+    .filter(
+      pictureTurn
+        ? { hasText: "Here is the picture you asked for." }
+        : { has: page.getByTestId("picture") },
+    );
+  const picture = turn.getByRole("img", {
+    name: pictureTurn ? ALT : "A picture the bot handed over",
+  });
   await expect(picture).toBeVisible({ timeout: 30_000 });
   const drawn = await picture.evaluate((img: HTMLImageElement) => ({
     src: img.src,
@@ -176,12 +187,15 @@ test("F-535: a picture the bot sends with its message tool shows under that mess
   expect(await picture.getAttribute("src")).toBe(
     `data:image/png;base64,${trailMap().toString("base64")}`,
   );
-  // Under the message's bubble, above what the bot said after sending it.
+  // Under the message's bubble, above what the bot said after sending it. On 2026.11.10 the send
+  // ends the turn without asking the model again (`messageSendEndsTurn`): nothing comes after.
   const shown = (await picture.boundingBox())!;
   const bubble = (await turn.getByText(SEND_PICTURE_TEXT).boundingBox())!;
-  const after = (await turn.getByText(SEND_PICTURE_AFTER).boundingBox())!;
   expect(shown.y).toBeGreaterThan(bubble.y);
-  expect(shown.y + shown.height).toBeLessThan(after.y);
+  if (!instanceForm(openInstance(INSTANCE)).messageSendEndsTurn) {
+    const after = (await turn.getByText(SEND_PICTURE_AFTER).boundingBox())!;
+    expect(shown.y + shown.height).toBeLessThan(after.y);
+  }
   expect(toGateway).toEqual([]);
 });
 
