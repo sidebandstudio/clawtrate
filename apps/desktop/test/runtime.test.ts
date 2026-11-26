@@ -270,7 +270,7 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
     }
   });
 
-  it("without a token, proves the gateway again before every connection", async () => {
+  it("without a token, checks the development instance's record again (recheckDevGateway) before every connection", async () => {
     for (const instance of [null, "alpha"]) {
       const proven = provenCheckout(instance);
       const devGateway = proven.read()!;

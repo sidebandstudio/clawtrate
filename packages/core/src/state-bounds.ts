@@ -13,6 +13,13 @@ import {
   type UpdateRunView,
 } from "./openclaw-update.ts";
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
+import {
+  MAX_DEVICE_REQUESTS,
+  MAX_REPORTED_JSON_CHARS,
+  PAIR_CODE_CHOICES,
+  type DeviceRequest,
+  type DeviceRequestsState,
+} from "./device-approval.ts";
 import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
 import {
   MAX_ACCOUNTS,
@@ -734,6 +741,7 @@ const pairing = object<PairingRequest>()({
   approveCommand: text(MAX_MESSAGE_LINE_CHARS),
   approveNote: text(MAX_MESSAGE_LINE_CHARS),
   requestedScopes: list(MAX_SCOPES, NAME),
+  code: ENUM,
 });
 const connectionError = object<ConnectionError>()({
   code: NAME,
@@ -833,6 +841,35 @@ const openclawUpdating = object<OpenClawUpdateState>()({
   looking: FLAG,
   lookFailed: FLAG,
   held: object<NonNullable<OpenClawUpdateState["held"]>>()({ gatewayId: ID, to: NAME }),
+});
+/** Waiting devices (`device-approval.ts`). */
+const reported = text(MAX_REPORTED_JSON_CHARS);
+export const DEVICE_REQUESTS: Bound = object<DeviceRequestsState>()({
+  access: ENUM,
+  requests: list(
+    MAX_DEVICE_REQUESTS,
+    object<DeviceRequest>()({
+      requestId: ID,
+      deviceId: ID,
+      publicKey: ID,
+      name: reported,
+      platform: reported,
+      app: reported,
+      remoteIp: reported,
+      origin: reported,
+      roles: list(8, reported),
+      scopes: list(16, reported),
+      at: NUMBER,
+      blocked: ENUM,
+      choices: list(PAIR_CODE_CHOICES, ENUM),
+      spent: FLAG,
+    }),
+  ),
+  omitted: NUMBER,
+  noticed: NUMBER,
+  prompt: ID,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  listedOn: NUMBER,
 });
 const task = flagged<Task>()({
   key: ID,
@@ -1410,6 +1447,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
   openclawUpdating,
+  deviceRequests: DEVICE_REQUESTS,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

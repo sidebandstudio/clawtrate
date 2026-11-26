@@ -6,19 +6,20 @@
 
 import JSON5 from "json5";
 import { lexSettings } from "./settings-lexer.ts";
-import { OPENCLAW_DEFAULT_PORT } from "./world.ts";
+import { CLAWTRATE_PROFILE_DEFAULT_PORT, OPENCLAW_DEFAULT_PORT } from "./world.ts";
 
 /** The canonical profiles the reader looks at. */
 export type SettingsProfile = "default" | "clawtrate";
 
 /**
  * Every refusal, by the design's failure rows (§8): `unreadable` too complex
- * or malformed, `address` a remote profile or an unusable port, `credential`
- * no literal token, a password that could win, or an unsupported auth mode.
+ * or malformed, `address` a remote profile, an unusable port, or TLS on (or
+ * not certainly off), `credential` no literal token, a password that could
+ * win, or an unsupported auth mode.
  */
 export const REFUSALS = {
   unreadable: ["complex", "malformed", "duplicate", "prototype", "include", "shape"],
-  address: ["remote", "port"],
+  address: ["remote", "port", "tls"],
   credential: [
     "no-token",
     "auth-mode",
@@ -53,7 +54,7 @@ export const TOKEN_MAX_BYTES = 4096;
  */
 export const DEFAULT_PORTS: Record<SettingsProfile, number> = {
   default: OPENCLAW_DEFAULT_PORT,
-  clawtrate: 22768,
+  clawtrate: CLAWTRATE_PROFILE_DEFAULT_PORT,
 };
 
 /** OpenClaw's display markers, which are never credentials (`isRedactedSecretValue`). */
@@ -82,7 +83,7 @@ const PLACEHOLDERS = new Set([
 const ENV_SHORTHAND = /^\$[A-Z][A-Z0-9_]{0,127}$/;
 
 // eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 type TokenRefusal = "placeholder" | "redacted" | "indirect" | "empty" | "long" | "control";
 
@@ -183,6 +184,18 @@ export function extractSettings(text: string, profile: SettingsProfile): Extract
 
   const mode = own(gateway, "mode");
   if (mode !== undefined && mode !== "local") return refuse("address", "remote");
+  // Local connect dials plain `ws://` only. OpenClaw 2026.10.6 and 2026.11.10 serve TLS exactly
+  // when the loaded settings' `gateway.tls.enabled` is `true` (`loadGatewayTlsServerRuntime`),
+  // and nothing else turns it on: no variable, no gateway flag. So this file says TLS is off
+  // only with no `tls`, or a `tls` whose `enabled` is absent or `false`; anything else (`true`, a
+  // string a variable would fill in, any other value or shape) is TLS here, before any offer.
+  // That is what the file says, not what the running gateway loaded: one started before the file
+  // was changed serves what it read then (docs/decisions.md, "Local connect's proof").
+  if (Object.hasOwn(gateway, "tls")) {
+    const tls = gateway.tls;
+    const enabled = isPlain(tls) ? own(tls, "enabled") : true;
+    if (enabled !== undefined && enabled !== false) return refuse("address", "tls");
+  }
   // The default only when the port is absent: null or any other value is refused, and so is a
   // port the file's own environment could override.
   const port = Object.hasOwn(gateway, "port") ? gateway.port : DEFAULT_PORTS[profile];
