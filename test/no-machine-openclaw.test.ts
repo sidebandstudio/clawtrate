@@ -90,10 +90,22 @@ const ALLOWED: { file: string; pattern: string; reason: string }[] = [
       "a GitHub-hosted runner is thrown away after the job, so its global copy is the pinned one",
   },
   {
+    file: ".github/workflows/openclaw-latest.yml",
+    pattern: "the global npm folder",
+    reason:
+      "a GitHub-hosted runner is thrown away after the job, so its global copy is the one the run installed",
+  },
+  {
     file: ".github/workflows/ci.yml",
     pattern: "openclaw run in a shell",
     reason:
       "`openclaw --version` on a GitHub-hosted runner, whose only OpenClaw is the pinned one it installed",
+  },
+  {
+    file: ".github/workflows/openclaw-latest.yml",
+    pattern: "openclaw run in a shell",
+    reason:
+      "`openclaw --version` on a GitHub-hosted runner, whose only OpenClaw is the one the run installed",
   },
   {
     file: ".github/workflows/openclaw-update.yml",

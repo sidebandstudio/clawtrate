@@ -261,7 +261,7 @@ describe("F-535: a picture sent with the message tool, in history", () => {
 
 describe("F-535: a picture sent with the message tool, read", () => {
   const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
-  const ISSUED = `${outgoing(MAP)}?mediaTicket=v1.eyJzY29wZSI6Im1hbmFnZWQifQ.wvFYVx-PH9Ic`;
+  const ISSUED = `${outgoing(MAP)}?mediaTicket=v1.eyJzY29wZSI6Im1hbmFnZWQifQ.wvFYVx-PH9Ic0Rq3n8dJt2LmWbYk5sAeUoCiGzXhT1v`;
 
   function response(status: number, headers: Record<string, string>, body: Uint8Array) {
     let done = false;

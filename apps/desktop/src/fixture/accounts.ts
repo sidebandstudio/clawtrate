@@ -45,6 +45,8 @@
 //                             releaseRefresh(); without it, nothing new from a provider the
 //                             gateway didn't ask again
 //   allowlist=1               the gateway's config names the models bots may use
+//   version=<version>         the OpenClaw version the gateway runs (default 2026.10.6), such as
+//                             2026.11.10, which changes a bot's account order only while stopped
 
 import { isUpdateRunScene, type UpdateRunScene } from "./openclaw-update.ts";
 import {
@@ -106,6 +108,8 @@ export type AccountParams = {
   allowlist: boolean;
   /** An update of OpenClaw under way or ended, or a gateway that can't update itself (F-589). */
   openclawRun: UpdateRunScene | null;
+  /** The OpenClaw version the gateway runs, when the address names one. */
+  version: string | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -152,6 +156,9 @@ export function accountParams(params: URLSearchParams): AccountParams {
     openclawRun: isUpdateRunScene(params.get("openclawRun"))
       ? (params.get("openclawRun") as UpdateRunScene)
       : null,
+    version: /^\d{4}\.\d{1,2}\.\d{1,3}$/.test(params.get("version") ?? "")
+      ? params.get("version")
+      : null,
   };
 }
 
@@ -178,6 +185,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   refresh: null,
   allowlist: false,
   openclawRun: null,
+  version: null,
 };
 
 const MINUTE = 60_000;

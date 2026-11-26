@@ -1,0 +1,157 @@
+name: Plugins publish
+
+# Publishes Clawtrate's bots plugin (plugins/clawtrate-bots) to npm as
+# @clawtrate/clawtrate-bots with npm's trusted publishing: npm takes this
+# workflow's GitHub OIDC token, so no npm token is stored anywhere. Started by
+# hand on main only. Both jobs pack, check and publish the run's own commit,
+# main's head when it was started, with the script from that same commit.
+#
+# mode: bootstrap packs a placeholder at 0.0.0 with no code and uploads it,
+# publishing nothing; the package's first version is published once by hand
+# from it (docs/design/bots-in-clawtrate.md, section 6.9).
+# mode: publish packs the plugin, publishes it from the `npm` environment
+# unless that version is already on the registry with the same integrity,
+# reads the registry's integrity back, and uploads plugins.lock.json.
+#
+# docs/development/plugins-publish.md has the flow.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "bootstrap: pack the placeholder only. publish: pack and publish the plugin."
+        type: choice
+        options: [publish, bootstrap]
+        default: publish
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugins-publish
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    name: Pack
+    # A dispatch from another ref packs and publishes nothing.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      name: ${{ steps.pack.outputs.name }}
+      version: ${{ steps.pack.outputs.version }}
+      integrity: ${{ steps.pack.outputs.integrity }}
+      file: ${{ steps.pack.outputs.file }}
+      plugin-id: ${{ steps.pack.outputs.plugin-id }}
+    steps:
+      # The job's `if` compares without case, so `refs/heads/Main` would pass it.
+      - name: Check the run is on main
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::This workflow runs only on main, not $GITHUB_REF."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      # Trusted publishing needs Node 22.14.0 or later and npm 11.5.1 or later
+      # (docs.npmjs.com/trusted-publishers). Node 26.13.0 comes with npm 11.20.0,
+      # and the same npm packs the same files into the same tarball.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.13.0
+          package-manager-cache: false
+      - name: Check npm's version
+        run: |
+          version=$(npm --version)
+          if [ "$version" != 11.20.0 ]; then
+            echo "::error::npm is $version, not the pinned 11.20.0."
+            exit 1
+          fi
+      # Node alone: the script loads no package, so nothing is installed.
+      - name: Check the commit is on main
+        run: node apps/desktop/packaging/plugin-npm.ts on-main
+      - name: Pack
+        id: pack
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          if [ "$MODE" = bootstrap ]; then
+            node apps/desktop/packaging/plugin-npm.ts placeholder plugins/clawtrate-bots "$RUNNER_TEMP/packed"
+          else
+            node apps/desktop/packaging/plugin-npm.ts pack plugins/clawtrate-bots "$RUNNER_TEMP/packed"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.mode == 'bootstrap' && 'placeholder' || 'package' }}
+          path: ${{ runner.temp }}/packed/${{ steps.pack.outputs.file }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: pack
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Deployments from main only, with no secret: npm's trusted publisher names
+    # this workflow and this environment.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      commit: ${{ steps.publish.outputs.commit }}
+      name: ${{ steps.publish.outputs.name }}
+      version: ${{ steps.publish.outputs.version }}
+      integrity: ${{ steps.publish.outputs.integrity }}
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      - name: Check the run is on main
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::This workflow runs only on main, not $GITHUB_REF."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.13.0
+          package-manager-cache: false
+      - name: Check npm's version
+        run: |
+          version=$(npm --version)
+          if [ "$version" != 11.20.0 ]; then
+            echo "::error::npm is $version, not the pinned 11.20.0."
+            exit 1
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: ${{ runner.temp }}/packed
+      # The script checks again, just before `npm publish`, that the run's commit
+      # is still on main.
+      - name: Publish, unless the registry has this version
+        id: publish
+        env:
+          FILE: ${{ needs.pack.outputs.file }}
+          NAME: ${{ needs.pack.outputs.name }}
+          VERSION: ${{ needs.pack.outputs.version }}
+          INTEGRITY: ${{ needs.pack.outputs.integrity }}
+          PLUGIN_ID: ${{ needs.pack.outputs.plugin-id }}
+        run: |
+          node apps/desktop/packaging/plugin-npm.ts publish "$RUNNER_TEMP/packed/$FILE" \
+            "$NAME" "$VERSION" "$INTEGRITY" "$PLUGIN_ID" "$RUNNER_TEMP/lock"
+      # What the app's release reads (docs/development/plugins-publish.md).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugins-lock
+          path: ${{ runner.temp }}/lock/plugins.lock.json
+          if-no-files-found: error

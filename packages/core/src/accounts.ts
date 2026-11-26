@@ -10,6 +10,7 @@
 // holds them (`withoutSecret`).
 
 import { cleanLine } from "./gateway-names.ts";
+import { openClawAtLeast } from "./gateway-version.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import type { ReadStamp } from "./types.ts";
 
@@ -1150,6 +1151,24 @@ export function lockCommand(
 
 export function unlockCommand(prefix: string, botId: string, provider: string): string {
   return `${prefix} models auth order clear --provider ${provider} --agent ${botId}`;
+}
+
+/**
+ * Whether the gateway's command line changes a bot's account order only while the gateway is
+ * stopped. From OpenClaw 2026.10.10, `models auth order set`, `clear` and `get` refuse while a
+ * gateway owns the state and change nothing ("This command is offline-only … stop the Gateway
+ * through its service owner, wait for ownership to release, then rerun this exact command");
+ * 2026.10.9 and earlier run them beside the running gateway. The gateway offers no call that
+ * sets a one-account order on either (`models.authOrderSet` takes every account or none), and
+ * sends nothing that says which kind its command line is, so its reported version tells.
+ */
+export function orderNeedsStoppedGateway(serverVersion: string | null): boolean {
+  return openClawAtLeast(serverVersion, 2026, 10, 10);
+}
+
+/** An order command as a gateway that changes orders only while stopped needs it: stop, run, start. */
+export function stoppedGatewaySteps(prefix: string, command: string): [string, string, string] {
+  return [`${prefix} gateway stop`, command, `${prefix} gateway start`];
 }
 
 // Sign-in steps ------------------------------------------------------------------------

@@ -433,6 +433,92 @@ test("F-490: the Account page: the lock command, Check now, and Back to the row 
   await expect(row).toBeFocused();
 });
 
+test("F-490: on OpenClaw 2026.11.10 the lock, the unlock and the clear are the gateway's steps: stop it, run the command, start it", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound&version=2026.11.10`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: OpenAI · Work, Bound\. Open\.$/ }).click();
+  await expect(
+    page.getByText(
+      "This version of OpenClaw changes a bot's account order only while the gateway is stopped. Stopping it gives work under way up to about five minutes to finish, then stops what is left. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway.",
+    ),
+  ).toBeVisible();
+  const steps = page.getByTestId("stopped-steps");
+  await expect(steps.getByRole("listitem")).toHaveText([
+    /^Stop the gateway, and wait until it has stopped; this can take a few minutes:openclaw gateway stop$/,
+    /^Then run:openclaw models auth order set --provider openai --agent otto openai:work$/,
+    /^Start the gateway again, even if the command above failed:openclaw gateway start$/,
+  ]);
+  // The steps act on the gateway's service; one run by hand is stopped and started where it runs.
+  // That is said before the first step, which does nothing to such a gateway.
+  const hint = page.getByTestId("unmanaged-hint");
+  await expect(hint).toHaveText(
+    "These steps stop and start the gateway's service. If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead.",
+  );
+  expect(
+    await hint.evaluate(
+      (node, list) => !!(node.compareDocumentPosition(list!) & Node.DOCUMENT_POSITION_FOLLOWING),
+      await steps.elementHandle(),
+    ),
+  ).toBe(true);
+  await expect(
+    page.getByText("Clawtrate reads the lock from the gateway when it is back."),
+  ).toBeVisible();
+  // Copying the order command starts the watch, as before; copying stop or start doesn't.
+  await steps.getByRole("button", { name: "Copy stop command" }).click();
+  await expect(page.getByText("Checking the gateway for the lock, again in 4s")).toHaveCount(0);
+  await steps.getByRole("button", { name: "Copy lock command" }).click();
+  await expect(page.getByText("Checking the gateway for the lock, again in 4s")).toBeVisible();
+
+  // Locked: the unlock, folded, takes the same steps around the clear command.
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=locked&version=2026.11.10`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: / }).click();
+  const unlock = page.locator("details.b-disclosure", { hasText: "Unlock" });
+  await unlock.locator("summary").click();
+  await expect(unlock.getByTestId("command")).toHaveText([
+    "openclaw gateway stop",
+    "openclaw models auth order clear --provider openai --agent otto",
+    "openclaw gateway start",
+  ]);
+  await expect(unlock).toContainText("Clawtrate sees the change when the gateway is back.");
+
+  // The gateway choosing, with a one-account order still kept: its clear, likewise.
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=retained&version=2026.11.10`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: OpenAI, Gateway chooses\. Open\.$/ }).click();
+  await expect(page.getByTestId("retained-order").getByTestId("command")).toHaveText([
+    "openclaw gateway stop",
+    "openclaw models auth order clear --provider openai --agent otto",
+    "openclaw gateway start",
+  ]);
+  await expect(page.getByTestId("retained-order").getByTestId("unmanaged-hint")).toHaveText(
+    "These steps stop and start the gateway's service. If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead.",
+  );
+
+  // On 2026.10.6 the same page keeps the one command.
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await expect(page.getByTestId("stopped-steps")).toHaveCount(0);
+  await expect(page.getByTestId("command")).toHaveText(
+    "openclaw models auth order set --provider openai --agent otto openai:work",
+  );
+});
+
 test("F-490: what a lock doesn't cover is folded; the read that failed keeps the last confirmation, with its time", async ({
   page,
 }) => {

@@ -80,22 +80,17 @@ describe("the Keychain through safeStorage", () => {
     );
   });
 
-  it("only the packaged Mac app turns full access on, beside its Keychain box", () => {
+  it("full access has no switch: it follows from the Keychain box, on a host that allows writes", () => {
     const shipped = [
       ...sources(join(ROOT, "apps/desktop/src")),
       ...sources(join(ROOT, "packages/ui/src")),
       ...sources(join(ROOT, "packages/core/src")),
     ];
+    // No option turns it on or off (docs/decisions.md, 2026-11-25): only the client's own
+    // state for the current connection, set in one place.
     const allowed = [
-      "packages/core/src/client.ts PropertySignature fullAccess?: boolean;",
       "packages/core/src/client.ts PropertyDeclaration private fullAccess = false;",
       "packages/core/src/client.ts assignment this.fullAccess = routed && secure",
-      "packages/core/src/client.ts read this.options.fullAccess",
-      // The Mac app's main process, with its Keychain box; the runtime passes it on.
-      "apps/desktop/src/main/index.ts PropertyAssignment fullAccess: true",
-      "apps/desktop/src/host/runtime.ts PropertySignature fullAccess?: boolean;",
-      "apps/desktop/src/host/runtime.ts read options.fullAccess",
-      "apps/desktop/src/host/runtime.ts PropertyAssignment fullAccess: true",
     ];
     const found: string[] = [];
     const named = (name: ts.Node | undefined) =>
@@ -150,17 +145,15 @@ describe("the Keychain through safeStorage", () => {
       };
       visit(source);
     }
-    // The option's declaration, its one gated read, and the gated state's declaration and
-    // one assignment; reads of that state decide scopes, and set nothing.
+    // The state's declaration and one assignment; reads of that state decide scopes, and set
+    // nothing.
     const reads = found.filter((line) => line.endsWith("read this.fullAccess"));
     expect(found.filter((line) => !line.endsWith("read this.fullAccess")).sort()).toEqual(
       allowed.sort(),
     );
     expect(reads.every((line) => line.startsWith("packages/core/src/client.ts "))).toBe(true);
     const client = readFileSync(join(ROOT, "packages/core/src/client.ts"), "utf8");
-    expect(client).toContain(
-      "const full = this.options.fullAccess === true && !this.options.readOnly;",
-    );
+    expect(client).toContain("const full = !this.options.readOnly;");
     // A protected address, or this computer's gateway when every socket of the connection is
     // proved, for a plain connect's token; a first pairing there needs the person's consent
     // (setup-effortless.md §3).
@@ -189,15 +182,13 @@ describe("the Keychain through safeStorage", () => {
       ].join("\n"),
     );
     expect(client).toContain("return consent?.() === true;");
-    // The main process sets it only in the branch that gives the host the Keychain box.
+    // The main process gives the host the Keychain box only in the branch that uses it.
     const main = readFileSync(join(ROOT, "apps/desktop/src/main/index.ts"), "utf8");
     expect(main).toMatch(
-      /hasSwitch\(MOCK_KEYCHAIN_SWITCH\),\s*\)\s*\?\s*\{\s*secretBox: safeStorageBox\(safeStorage, process\.platform\),\s*(\/\/[^\n]*\n\s*)?fullAccess: true,\s*\}\s*:\s*\{\}/,
+      /hasSwitch\(MOCK_KEYCHAIN_SWITCH\),\s*\)\s*\?\s*(\/\/[^\n]*\n\s*)?\{\s*secretBox: safeStorageBox\(safeStorage, process\.platform\)\s*\}\s*:\s*\{\}/,
     );
-    // The runtime forwards it only with a box, and never on a read-only host.
+    // The runtime says so to the interface only with a box, and never on a read-only host.
     const runtime = readFileSync(join(ROOT, "apps/desktop/src/host/runtime.ts"), "utf8");
-    expect(runtime).toContain(
-      "const full = options.fullAccess === true && !!options.secretBox && !options.readOnly;",
-    );
+    expect(runtime).toContain("const full = !!options.secretBox && !options.readOnly;");
   });
 });
