@@ -154,28 +154,36 @@ const SECURE_DOT = "•";
  * Type a text into a field and confirm the field holds it. On a slow Simulator
  * Maestro can lose characters as it types and still report the text typed
  * (#580), so the field is read back and, while it holds anything else, erased
- * and typed again: three times at most. A secure field shows one dot for each
- * character, so there the count is confirmed, and the text never appears in
- * Maestro's output. If the field never holds it, `steps` fails with what the
- * field holds.
+ * and typed again: four tries at most. If the field never holds it, `steps`
+ * fails with what the field holds.
+ *
+ * A secure field shows one dot for each character, so there the count is
+ * confirmed, and the text never appears in Maestro's output. Erasing does
+ * nothing in a secure field that has the focus; it clears itself on the first
+ * key after it gains the focus, so each try first taps `from`, another field.
  */
-export function typeInto(field: string, text: string, { secret = false } = {}): Step {
-  const label = secret
+export function typeInto(
+  field: string,
+  text: string,
+  secure?: { secret: true; from: string },
+): Step {
+  const label = secure
     ? `Type ${text.length} secret characters into ${field}`
     : `Type "${text}" into ${field}`;
   const step = {
     retry: {
-      maxRetries: 2,
+      maxRetries: 3,
       label,
       commands: [
+        ...(secure ? [tap({ id: secure.from })] : []),
         tap({ id: field }),
         { eraseText: 80 },
-        { inputText: secret ? { text, label: `Input ${text.length} secret characters` } : text },
-        see({ id: field, text: secret ? `${SECURE_DOT}{${text.length}}` : lit(text) }),
+        { inputText: secure ? { text, label: `Input ${text.length} secret characters` } : text },
+        see({ id: field, text: secure ? `${SECURE_DOT}{${text.length}}` : lit(text) }),
       ],
     },
   };
-  typings.set(step, { field, text, secret, label });
+  typings.set(step, { field, text, secret: secure !== undefined, label });
   return step;
 }
 

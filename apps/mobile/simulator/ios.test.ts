@@ -1965,7 +1965,7 @@ function typeAddress(url: string, token: string): Step[] {
   return [
     waitFor({ id: "address-field" }, 30_000),
     typeInto("address-field", url),
-    typeInto("token-field", token, { secret: true }),
+    typeInto("token-field", token, { secret: true, from: "address-field" }),
     { pressKey: "Enter" },
     { extendedWaitUntil: { visible: "Save Password\\?", timeout: 5_000, optional: true } },
     notSee("Save Password\\?"),
