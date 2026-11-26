@@ -46,7 +46,8 @@ export const SETTINGS_PROFILES = [
   { profile: "default", folder: ".openclaw" },
   { profile: "clawtrate", folder: ".openclaw-clawtrate" },
 ] as const;
-const SETTINGS_FILE = "openclaw.json";
+/** The profile's settings file, in its folder: the one file the reader reads. */
+export const SETTINGS_FILE = "openclaw.json";
 
 const UNSAFE_WHY = [
   "link",

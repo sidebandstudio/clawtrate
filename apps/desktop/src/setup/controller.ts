@@ -6,10 +6,12 @@
 // dialog says yes.
 //
 // With local connect (docs/design/setup-effortless.md §3) the look reads
-// OpenClaw's settings and proves its port instead (local-look.ts), and runs
-// none of OpenClaw's programs. Pressing Connect is the consent: Connect reads
-// the gateway's token afresh, dials and proves each socket itself, and pairs
-// asking for full control where this device may hold it.
+// OpenClaw's settings and checks that what listens at their port is held by
+// this account and matches this account's OpenClaw profile instead
+// (local-look.ts), and runs none of OpenClaw's programs. Pressing Connect is
+// the consent: Connect reads the gateway's token afresh, dials each socket
+// itself and checks it the same way, and pairs asking for full control where
+// this device may hold it.
 
 import {
   GatewayChangedError,
@@ -70,9 +72,9 @@ export type SetupControllerOptions = {
   /**
    * Local connect (docs/design/setup-effortless.md §3), with the settings
    * reader's parse worker: the look reads OpenClaw's settings, and every socket
-   * of a setup connection is dialled by the host and its far end proved, before
-   * its first byte and again before its credential. Only a person's packaged
-   * Mac app turns it on (`localConnectFor`).
+   * of a setup connection is dialled by the host and its far end matched to this
+   * account's OpenClaw profile, before its first byte and again before its credential. Only a
+   * person's packaged Mac app turns it on (`localConnectFor`).
    */
   localConnect?: LocalConnect & { worker: URL };
 };
@@ -271,7 +273,7 @@ export class SetupController implements SetupHost {
 
   /**
    * The look the host starts by itself, before the person chooses anything: with local connect
-   * only, whose look reads files and proves a socket and sends nothing. Its result is shown on
+   * only, whose look reads files, checks one socket against the profile and sends nothing. Its result is shown on
    * the first screen (`SetupState.unasked`).
    */
   async lookAtStart(): Promise<void> {
@@ -280,7 +282,10 @@ export class SetupController implements SetupHost {
     await this.look();
   }
 
-  /** The look with local connect: OpenClaw's settings and one proved socket, nothing sent. */
+  /**
+   * The look with local connect: OpenClaw's settings, and one socket whose far end is checked
+   * against this account's OpenClaw profile, with nothing sent.
+   */
   private async lookLocally(local: LocalConnect & { worker: URL }, attempt: number): Promise<void> {
     const unasked = this.unasked;
     this.unasked = false;
@@ -547,7 +552,7 @@ export class SetupController implements SetupHost {
       // The selection this connect makes: its cleanup and its readiness are that one's only.
       const selection = client.nextSelection();
       this.owned = { attempt, url: found.url, selection };
-      this.watch(attempt, found.url, found.port, selection);
+      this.watch(attempt, found.url, found.port, selection, true);
       await client.connectForSetup(found.url, {
         check: listening,
         verify,
@@ -591,9 +596,9 @@ export class SetupController implements SetupHost {
    * follows, and it holds for this attempt's two minutes. The token is read
    * afresh from the settings of the profile the look found, at the port it
    * found, and handed to the client for this one pairing; this host drops its
-   * copy once the client has it. Every socket is dialled here and proved before
-   * its first byte and again just before its credential; the first that isn't
-   * ends the attempt, with nothing sent. The gateway is saved with its profile's
+   * copy once the client has it. Every socket is dialled here and checked against
+   * the profile before its first byte and again just before its credential; the
+   * first that fails ends the attempt, with nothing sent. The gateway is saved with its profile's
    * folder and that folder's identity as its route (`routeOf`), never as a typed
    * address.
    */
@@ -622,7 +627,7 @@ export class SetupController implements SetupHost {
       if (!token) return this.fail({ kind: "changed" });
       // The earlier gateway isn't let go: the client replaces it only once this device is
       // paired here, and selects it again if this attempt fails or is let go.
-      // The first socket that isn't proved, at its dial or before its credential, ends this
+      // The first socket the check refuses, at its dial or before its credential, ends this
       // attempt: nothing went on it, and setup's connection is closed. Once setup is done, a
       // refused socket is the client's to say (`refusal`): the connection stays the person's.
       let latest: ProveRefusal | null = null;
@@ -645,7 +650,7 @@ export class SetupController implements SetupHost {
       const client = this.options.client;
       const selection = client.nextSelection();
       this.owned = { attempt, url: found.url, selection };
-      this.watch(attempt, found.url, found.port, selection);
+      this.watch(attempt, found.url, found.port, selection, true);
       await client.connect(
         { url: found.url, token: token.reveal() },
         {
@@ -741,7 +746,13 @@ export class SetupController implements SetupHost {
 
   /** Follows the connection Connect started, until it is in or has failed. */
   /** Follows this attempt's connection to `url` only: another route's state says nothing about it. */
-  private watch(attempt: number, url: string, port: number, selection: number): void {
+  private watch(
+    attempt: number,
+    url: string,
+    port: number,
+    selection: number,
+    local = false,
+  ): void {
     this.stopWatching();
     let seen = false;
     const check = (state: ClawtrateState) => {
@@ -779,6 +790,21 @@ export class SetupController implements SetupHost {
         } else if (this.state.step !== 2) this.publish({ ...this.state, step: 2 });
         return;
       }
+      // Local connect's first socket ended before the gateway answered (`UNREACHABLE`): what the
+      // settings file says isn't how the gateway there listens now (it stopped, or runs on
+      // settings changed since it started, TLS for one). Not retried for ever behind
+      // Connecting: the attempt ends with Advanced and a look again.
+      if (
+        local &&
+        connection.status === "connecting" &&
+        connection.error?.code === "UNREACHABLE" &&
+        this.state.phase === "connecting"
+      ) {
+        this.stopWatching();
+        void this.closeOwned();
+        this.fail({ kind: "unanswered", port });
+        return;
+      }
       if (connection.status === "error") {
         this.stopWatching();
         const code = connection.error?.code;
@@ -793,7 +819,9 @@ export class SetupController implements SetupHost {
               : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
                 ? "code-refused"
                 : code === "UNREACHABLE"
-                  ? "unreachable"
+                  ? local
+                    ? "unanswered"
+                    : "unreachable"
                   : code === SETUP_ENDPOINT_CHANGED
                     ? "changed"
                     : code === "LOCAL_UNVERIFIED"

@@ -61,12 +61,19 @@ export type CantTellReason =
  * connection (another account's process, or none yet); matching what is listening to this
  * account's OpenClaw profile (its lock, its state database, the process the lock names); this
  * version's native module, where the app has a pin for it; OpenClaw's profile folder; that
- * folder replaced since its settings were read (another device or inode at its path); or the
+ * folder replaced since its settings were read (another device or inode at its path); a
+ * gateway whose lock names another settings file than the one read (`other-settings`); or the
  * check itself. A refusal says which check failed and no more: it never claims what program
  * holds the port.
  */
 export type ProofRefusalKind =
-  "holder" | "not-gateway" | "not-published" | "folder" | "replaced" | "unchecked";
+  | "holder"
+  | "not-gateway"
+  | "not-published"
+  | "folder"
+  | "replaced"
+  | "other-settings"
+  | "unchecked";
 
 /** Each refusal's words for the person, the same on a card and for a refused reconnect. */
 export const PROOF_REFUSAL_LINES: Record<ProofRefusalKind, (port: number | null) => string> = {
@@ -79,6 +86,8 @@ export const PROOF_REFUSAL_LINES: Record<ProofRefusalKind, (port: number | null)
     `OpenClaw's profile folder on this Mac can be changed by others, or isn't where Clawtrate expects it, so Clawtrate doesn't check what is listening at port ${port}.`,
   replaced: (port) =>
     `OpenClaw's profile folder on this Mac was replaced since Clawtrate read its settings, so Clawtrate doesn't check what is listening at port ${port}.`,
+  "other-settings": (port) =>
+    `What is listening at port ${port} was started with another OpenClaw settings file than the one Clawtrate read, so Clawtrate can't tell how to connect to it.`,
   unchecked: (port) => `Clawtrate couldn't check what is listening at port ${port} on this Mac.`,
 };
 
@@ -127,6 +136,12 @@ export type SetupFailureKind =
   | "cleanup"
   /** Local connect couldn't match a socket to this account's OpenClaw profile: no credential went. */
   | "unverified"
+  /**
+   * Local connect matched the port to the profile, but the gateway there never answered as its
+   * settings file says it would (on `ws://`): it may have stopped, or run on settings changed since
+   * it started (TLS on, for one). Advanced, or a look again.
+   */
+  | "unanswered"
   /** The connection failed in another way; the connection state says how. */
   | "other";
 

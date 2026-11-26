@@ -468,6 +468,7 @@ describe.skipIf(platform !== "darwin")(
       role: "gateway",
       port,
       stateDir: join(path, FOLDER),
+      configPath: join(path, FOLDER, "openclaw.json"),
       startTime: 1795410457,
       ...more,
     });
@@ -495,7 +496,7 @@ describe.skipIf(platform !== "darwin")(
       expect(await prove(at, answer({ lock: padded }))).toEqual({ proved: true });
     });
 
-    it("passes either proved version with its own module, and neither with the other's", async () => {
+    it("passes either pinned version with its own module, and neither with the other's", async () => {
       const at = path();
       const lock = named(at);
       const v1110 = { name: "openclaw", version: "2026.11.10" };
@@ -582,6 +583,51 @@ describe.skipIf(platform !== "darwin")(
         );
       expect(await prove(at, answer({ lock: "not json" }))).toEqual(refused("named"));
       expect(await prove(at, answer({ lock: "[]" }))).toEqual(refused("named"));
+      // Both pinned versions write the settings file the gateway loaded: a lock without one isn't theirs.
+      const { configPath: _, ...noConfig } = named(at);
+      expect(await prove(at, answer({ lock: noConfig }))).toEqual(refused("named"));
+    });
+
+    it("refuses a gateway whose lock names another settings file than the one read, in either version's lock", async () => {
+      const at = path();
+      const canonical = join(at, FOLDER, "openclaw.json");
+      // Each version's lock as OpenClaw writes it (made-up values): 2026.10.6's, and
+      // 2026.11.10's, which adds the machine's identity.
+      const namespace = { host: "example-host", platform: "darwin", identity: "0".repeat(8) };
+      const v106 = (configPath: string) =>
+        named(at, {
+          ownerId: "00000000-0000-4000-8000-000000000000",
+          createdAt: "2026-11-26T00:00:00.000Z",
+          startupPhase: "starting",
+          configPath,
+          processNamespace: { ...namespace, identity: "00000000-0000-4000-8000-000000000001" },
+          cronOwnerProjection: "dynamic-default-v1",
+        });
+      const v1110 = (configPath: string) => ({
+        ...v106(configPath),
+        machineIdentity: "a".repeat(64),
+      });
+      for (const [version, lock] of [
+        ["2026.10.6", v106],
+        ["2026.11.10", v1110],
+      ] as const) {
+        expect(await prove(at, answer({ lock: lock(canonical) })), version).toEqual({
+          proved: true,
+        });
+        // `OPENCLAW_CONFIG_PATH` set to another file: the gateway may listen otherwise than the
+        // file the reader read says, so nothing that file says is known to hold for it.
+        for (const other of [
+          join(at, "elsewhere.json"),
+          join(at, FOLDER, "openclaw.json5"),
+          `${at}/${FOLDER}/state/../openclaw.json`,
+          `${canonical}/`,
+          "openclaw.json",
+          "",
+        ])
+          expect(await prove(at, answer({ lock: lock(other) })), `${version} ${other}`).toEqual(
+            refused("config"),
+          );
+      }
     });
 
     it("takes the helper's own refusals, and nothing else it says", async () => {
