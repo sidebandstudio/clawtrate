@@ -540,19 +540,20 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
     await page.waitForTimeout(7_000);
     expect(await identity()).toBe("New bot");
 
-    // After a step that read a file first: renamed, as the bot's own doing.
-    await field.fill("#read\n#take-name Maple");
+    // After a step that read a file first: renamed, as the bot's own doing. (Not Maple: the
+    // bot an earlier check made has that name, and a name another bot has isn't applied.)
+    await field.fill("#read\n#take-name Thistle");
     await field.press("Enter");
     await expect(line.getByRole("status")).toHaveText(
-      "New bot renamed itself to Maple after reading a file",
+      "New bot renamed itself to Thistle after reading a file",
       { timeout: 60_000 },
     );
-    expect(await identity()).toBe("Maple");
+    expect(await identity()).toBe("Thistle");
     await expect
       .poll(() => second.state.botNameRecord?.changes.length, { timeout: 30_000 })
       .toBe(2);
     await shots("bot-name-own");
-    // Maple stays: deleting it behind the page's back would leave the page listing a bot the
+    // Thistle stays: deleting it behind the page's back would leave the page listing a bot the
     // gateway no longer has, and the accounts checks after this read every listed bot.
   } finally {
     second.stop();
