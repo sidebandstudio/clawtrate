@@ -110,6 +110,7 @@ export function mergeSessionRow(base: RawRecord | undefined, patch: RawRecord): 
   // a last run error it leaves out is unset, not unchanged. The `session` row of a
   // `sessions.changed` (OpenClaw 2026.10.6 and 2026.11.10) leaves `lastRunError` out once a later
   // run succeeded, and `status` out after a message the gateway failed before running it (#664).
+  // So is the mark on a failure not to show (`suppressErrorNotice`, 2026.11.10; #680).
   if ("hasActiveRun" in patch) {
     for (const field of RUN_STATE_FIELDS) if (!(field in patch)) delete merged[field];
   }
@@ -117,7 +118,7 @@ export function mergeSessionRow(base: RawRecord | undefined, patch: RawRecord): 
 }
 
 /** The fields of a session row that say how its latest run went. */
-const RUN_STATE_FIELDS = ["status", "lastRunError"] as const;
+const RUN_STATE_FIELDS = ["status", "lastRunError", "suppressErrorNotice"] as const;
 
 /**
  * The row carried by a `sessions.changed` event. Newer gateways nest the full
