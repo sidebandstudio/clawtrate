@@ -455,6 +455,12 @@ export type Run = {
   /** Which projection the text comes from. The map says a run's text arrives as one or the other. */
   textSource: "chat" | "agent" | null;
   textItemId: string | null;
+  /**
+   * `textItemId` is an earlier message's: the gateway started another message after it (its
+   * `lifecycle` `model` event, sent at each message's start). A preamble item of a later message
+   * (2026.10.6) never takes it.
+   */
+  textEarlier?: true;
   /** True once the gateway reported the reply complete. */
   textComplete: boolean;
   steps: Step[];
@@ -2314,9 +2320,16 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
         startedAt: num(data.startedAt) ?? run.startedAt ?? ts,
         reportedStartAt: num(data.startedAt) ?? ts,
       };
-    case "model":
-      // Each model call starts a new reasoning segment.
-      return closeReasoning({ ...run, model: str(data.model) ?? run.model }, ctx, ts);
+    case "model": {
+      // Each model call starts a new reasoning segment, and a new message: text still streaming
+      // and not placed beside a call is an earlier message's.
+      const earlier = run.textItemId !== null && !textPlaced(run);
+      return closeReasoning(
+        { ...run, model: str(data.model) ?? run.model, ...(earlier ? { textEarlier: true } : {}) },
+        ctx,
+        ts,
+      );
+    }
     case "waiting-approval": {
       if (run.state !== "running" && run.state !== "waiting") return run;
       const id =
@@ -2654,7 +2667,13 @@ function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContex
   // Text cut to its bound is not extended by deltas: they would join non-adjacent text.
   if (cumulative === null && sameItem && closed.cut?.includes("text")) return closed;
   const text = cumulative ?? (sameItem ? closed.text + delta : delta);
-  return { ...closed, textSource: "agent", textItemId: itemId ?? closed.textItemId, text };
+  const { textEarlier: _earlier, ...rest } = closed;
+  return {
+    ...(sameItem ? closed : rest),
+    textSource: "agent",
+    textItemId: itemId ?? closed.textItemId,
+    text,
+  };
 }
 
 function toolStepId(toolCallId: string): string {
@@ -2814,8 +2833,12 @@ function textBesideCall(run: Run): Run {
   if (itemId === null || !run.text.trim() || textPlaced(run)) return run;
   const list = run.preambles ?? [];
   const waiting = list.findLastIndex((p) => p.beforeCall === null);
+  // The waiting item holds its own message's text: it takes the stream's item only when that is
+  // the same message's, never an earlier one's (`textEarlier`), whose text then stays the reply.
   if (waiting !== -1)
-    return { ...run, preambles: list.map((p, i) => (i === waiting ? { ...p, item: itemId } : p)) };
+    return run.textEarlier
+      ? run
+      : { ...run, preambles: list.map((p, i) => (i === waiting ? { ...p, item: itemId } : p)) };
   const next: Preamble = {
     id: itemId,
     item: itemId,
@@ -2835,29 +2858,19 @@ export function textPlaced(run: Pick<Run, "textItemId" | "preambles">): boolean 
   return itemId !== null && (run.preambles ?? []).some((p) => p.item === itemId);
 }
 
-/**
- * Text beside a tool call: its updates replace its text in place; `end` ends it. A new item
- * (2026.10.6) takes the `assistant` stream's item that is streaming, the same join
- * `textBesideCall` makes when the call starts, made as soon as the item arrives: the gateway sends
- * it after that message's text and before its call, and in between the text is not drawn twice.
- */
+/** Text beside a tool call: its updates replace its text in place; `end` ends it. */
 function applyPreamble(run: Run, data: RawRecord): Run {
   const id = str(data.itemId);
   const text = typeof data.progressText === "string" ? data.progressText : null;
   if (!id || (text === null && data.phase !== "end")) return run;
   const list = run.preambles ?? [];
   const existing = list.find((each) => each.id === id);
+  // An item with no text of its own (the gateway sends one only with text) holds nothing.
+  if (!existing && !text?.trim()) return run;
   const ended = data.phase === "end";
-  const streaming = run.textItemId !== null && run.text.trim() !== "" && !textPlaced(run);
   const next: Preamble = existing
     ? { ...existing, text: text ?? existing.text, ended: existing.ended || ended }
-    : {
-        id,
-        ...(streaming ? { item: run.textItemId! } : {}),
-        text: text ?? "",
-        ended,
-        beforeCall: null,
-      };
+    : { id, text: text ?? "", ended, beforeCall: null };
   const preambles = existing
     ? list.map((each) => (each.id === id ? next : each))
     : [...list, next].slice(-MAX_PREAMBLES_PER_RUN);

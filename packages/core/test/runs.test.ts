@@ -1407,41 +1407,70 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
     ]);
   });
 
-  it("F-088: on 2026.10.6, the preamble item takes the stream's item as it arrives, before its call starts", () => {
-    const preamble = (seq: number, phase: string, text = BESIDE): Frame =>
-      A("run-1", seq, "item", {
-        kind: "preamble",
-        title: "Preamble",
-        phase,
-        progressText: text,
-        itemId: `commentary-0-${text.length}`,
-      });
-    const waiting = only(
-      play([start, ...said(2, "s:1", BESIDE), preamble(4, "update"), preamble(5, "end")]).activity,
+  it("F-088: a later message's preamble item never takes an earlier message's text", () => {
+    // `lifecycle` `model` comes at each message's start: an answer before a steer, then the next
+    // message's text only as a preamble item (2026.10.6), or no text at all (2026.11.10).
+    const model = (seq: number): Frame => A("run-1", seq, "lifecycle", { phase: "model" });
+    const note = A("run-1", 5, "item", {
+      kind: "preamble",
+      phase: "end",
+      progressText: "Now the cache.",
+      itemId: "commentary-0-b2",
+    });
+    const commentary = only(
+      play([start, ...said(2, "s:1", ANSWER), model(4), note, ...call(6, "c2")]).activity,
     );
-    expect(waiting.preambles).toEqual([
-      {
-        id: `commentary-0-${BESIDE.length}`,
-        item: "s:1",
-        text: BESIDE,
-        ended: true,
-        beforeCall: null,
-      },
+    expect(commentary.textEarlier).toBe(true);
+    expect(commentary.preambles).toEqual([
+      { id: "commentary-0-b2", text: "Now the cache.", ended: true, beforeCall: "c2" },
     ]);
-    // An item a call already placed is not taken again: the next message's text came only as its item.
-    const next = "Then the second listing.";
+    expect(commentary.text).toBe(ANSWER);
+    // With no preamble item, the earlier text is placed before the later call, as before: kept
+    // where it was read, not left to history.
+    const bare = only(
+      play([start, ...said(2, "s:1", ANSWER), model(4), ...call(6, "c2")]).activity,
+    );
+    expect(bare.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: ANSWER, ended: true, beforeCall: "c2" },
+    ]);
+    // The next message's own text is that message's again, and is placed beside its call.
+    const next = only(
+      play([
+        start,
+        ...said(2, "s:1", ANSWER),
+        model(4),
+        ...said(5, "s:2", BESIDE),
+        ...call(7, "c2"),
+      ]).activity,
+    );
+    expect(next.textEarlier).toBe(undefined);
+    expect(next.preambles).toEqual([
+      { id: "s:2", item: "s:2", text: BESIDE, ended: true, beforeCall: "c2" },
+    ]);
+    // A message start with only placed text before it marks nothing.
     const placed = only(
+      play([start, ...said(2, "s:1", BESIDE), ...call(4, "c1"), model(8)]).activity,
+    );
+    expect(placed.textEarlier).toBe(undefined);
+  });
+
+  it("F-088: a preamble item with no text of its own is not kept, and takes nothing", () => {
+    const run = only(
       play([
         start,
         ...said(2, "s:1", BESIDE),
-        ...call(4, "c1"),
-        preamble(8, "update", next),
-        preamble(9, "end", next),
+        A("run-1", 4, "item", { kind: "preamble", phase: "end", itemId: "commentary-0-c3" }),
+        A("run-1", 5, "item", {
+          kind: "preamble",
+          phase: "update",
+          progressText: "  ",
+          itemId: "commentary-0-c4",
+        }),
+        ...call(6, "c1"),
       ]).activity,
     );
-    expect(placed.preambles).toEqual([
+    expect(run.preambles).toEqual([
       { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
-      { id: `commentary-0-${next.length}`, text: next, ended: true, beforeCall: null },
     ]);
   });
 

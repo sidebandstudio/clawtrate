@@ -321,17 +321,61 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(count(html, "Now the summary.")).toBe(1);
   });
 
-  it("on 2026.10.6, text its preamble item holds before its call has started is drawn once", () => {
+  it("on 2026.10.6, text its preamble item holds is drawn twice until its call starts, then once", () => {
     // The gateway sends the preamble item after the message's text and before the call's start.
+    // Until the call starts, nothing ties the preamble to the stream's item, so the text is also
+    // the reply: drawn twice for that moment, never left out. Pinned so that changing it is deliberate.
     const text = "Checking logs.";
     const preamble = (phase: string): [string, Record<string, unknown>] => [
       "item",
       { itemId: "commentary-0-a1", kind: "preamble", title: "Preamble", phase, progressText: text },
     ];
-    const html = draw(
-      transcriptOf([...start, ...said("m:1", text), preamble("update"), preamble("end")]),
-    );
-    expect(count(html, text)).toBe(1);
-    expect(html).not.toContain('data-testid="live-turn"');
+    const before = [...start, ...said("m:1", text), preamble("update"), preamble("end")];
+    const waiting = draw(transcriptOf(before));
+    expect(count(waiting, text)).toBe(2);
+    expect(waiting).toContain('data-testid="live-turn"');
+    const started = draw(transcriptOf([...before, ...call("c1")]));
+    expect(count(started, text)).toBe(1);
+    expect(started).not.toContain('data-testid="live-turn"');
+  });
+
+  it("on 2026.10.6, an answer the person read stays when a steer's text comes only as a preamble item", () => {
+    // A text-only answer, then a steer: the gateway asks the model again, and its text beside the
+    // next call comes only as a preamble item. That item is not the answer's.
+    const note = "Now checking the cache.";
+    const preamble = (phase: string): [string, Record<string, unknown>] => [
+      "item",
+      { itemId: "commentary-0-b2", kind: "preamble", title: "Preamble", phase, progressText: note },
+    ];
+    const before = [
+      ...start,
+      ...said("m:1", "The logs are clean."),
+      ["lifecycle", { phase: "model" }] as [string, Record<string, unknown>],
+      preamble("update"),
+      preamble("end"),
+    ];
+    for (const html of [
+      draw(transcriptOf(before)),
+      draw(transcriptOf([...before, ...call("c2")])),
+    ]) {
+      expect(count(html, "The logs are clean.")).toBe(1);
+      expect(count(html, note)).toBe(1);
+    }
+  });
+
+  it("a preamble item that ends with no text takes nothing: the reply is drawn, and no empty bubble", () => {
+    const bare: [string, Record<string, unknown>] = [
+      "item",
+      { itemId: "commentary-0-c3", kind: "preamble", title: "Preamble", phase: "end" },
+    ];
+    const before = [...start, ...said("m:1", "All clean."), bare];
+    for (const html of [
+      draw(transcriptOf(before)),
+      draw(transcriptOf([...before, ...call("c1")])),
+    ]) {
+      expect(count(html, "All clean.")).toBe(1);
+      expect(html).not.toMatch(/<div class="bubble"[^>]*>\s*<\/div>/);
+      expect(count(html, 'class="bubble"')).toBe(count(html, "All clean."));
+    }
   });
 });

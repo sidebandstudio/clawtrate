@@ -329,7 +329,7 @@ function itemEntries(
   const seen = new Map<string, number>();
   item.blocks.forEach((block, i) => {
     if (block.kind === "text") {
-      // The engine already shows this text for its run: a preamble, or the streaming reply.
+      // The engine already shows this text for its run, before the call it came with.
       if (fromEngine && run && shownByEngine(run, item.blocks, i)) return;
       const head = block.text.slice(0, 64);
       const n = (seen.get(head) ?? 0) + 1;
@@ -720,7 +720,8 @@ export function ActionScope({
       if (item.role !== "assistant") continue;
       const run = runOf.get(item.id);
       // A run drawn from the engine draws its calls and reasoning there: the rows history already
-      // holds of it keep only their text, so nothing is drawn twice and nothing only history has is lost.
+      // holds of it keep only their text, so no call is drawn twice and nothing only history has is
+      // lost. A text the engine still streams as its reply is drawn here too (`shownByEngine`).
       const fromEngine = run !== undefined && engineRunIds.has(run.id);
       const drawn = run ? (drawnOf.get(run.id) ?? new Set<string>()) : null;
       if (run && drawn) drawnOf.set(run.id, drawn);
