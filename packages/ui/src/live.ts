@@ -4,6 +4,10 @@
 // (docs/design/conversation.md, sections 4, 5, 15, 16 and 17).
 
 import {
+  neverRan,
+  neverStarted,
+  notRunCause,
+  type NotRunCause,
   actionWords,
   callFromStep,
   kindOf,
@@ -404,7 +408,83 @@ export type RunEnding =
   | { kind: "turn-limit"; minutes: number }
   /** The gateway ended the run at a time limit of its own (its run's `timeoutPhase`). */
   | { kind: "gateway-timeout"; reason: string | null }
+  /** The gateway failed the run's message before any run of it started (#663): why, if it said. */
+  | { kind: "not-run"; cause: NotRunCause | null }
+  /** The gateway accepted the message, then ended it with no run and no word (#663). */
+  | { kind: "not-started" }
   | { kind: "failed"; reason: string };
+
+/** The ways forward a not-run line offers before "Try again": the bot's model, its account. */
+export type NotRunWay = "model" | "account";
+
+export type NotRunWords = { title: string; reason: string; ways: NotRunWay[] };
+
+/**
+ * What the line under a message the gateway couldn't run says (#663, F-480): the gateway's reason
+ * in plain words and what to do, or its own words when they are none of the known kinds. Nothing
+ * is said that the gateway did not.
+ */
+export function notRunWords(
+  ending: Extract<RunEnding, { kind: "not-run" | "not-started" }>,
+  bot: string,
+): NotRunWords {
+  if (ending.kind === "not-started")
+    return {
+      title: "The gateway didn't start a run for this message",
+      reason: "It didn't say why.",
+      ways: [],
+    };
+  const title = "The gateway couldn't run this message";
+  const cause = ending.cause;
+  switch (cause?.kind) {
+    case "needs-api-key":
+      return {
+        title,
+        reason: `${bot} is set to a model that needs a provider API key, but the account it uses is a sign-in. Choose a model that works with that sign-in, or add an API key.`,
+        ways: ["model", "account"],
+      };
+    case "needs-sign-in":
+      return {
+        title,
+        reason: `${bot} is set to a model that needs a subscription sign-in, but the account it uses is an API key. Choose a model that works with that key, or sign in.`,
+        ways: ["model", "account"],
+      };
+    case "account-kind":
+      return {
+        title,
+        reason: `${bot}'s model can't be used with the kind of account it uses. Choose another model or another account.`,
+        ways: ["model", "account"],
+      };
+    case "account-missing":
+      return {
+        title,
+        reason: `The account ${bot} is set to isn't on the gateway any more. Choose another account.`,
+        ways: ["account"],
+      };
+    case "account-other-provider":
+      return {
+        title,
+        reason: `The account ${bot} is set to belongs to another provider than its model. Choose an account for the model's provider, or another model.`,
+        ways: ["account", "model"],
+      };
+    case "model-unknown":
+      return {
+        title,
+        reason: `The gateway doesn't know ${bot}'s model. Choose another model.`,
+        ways: ["model"],
+      };
+    case "no-account":
+      return {
+        title,
+        reason: `The provider of ${bot}'s model has no account on the gateway. Add an account, or choose another model.`,
+        ways: ["account", "model"],
+      };
+    case "other":
+      return { title, reason: `The gateway said: ${cause.words ?? ""}`, ways: [] };
+    default:
+      return { title, reason: "The gateway didn't say why.", ways: [] };
+  }
+}
 
 /**
  * How a finished run ended, when the transcript says more than its text. A stop is this
@@ -413,6 +493,7 @@ export type RunEnding =
  */
 export function endingOf(run: Run, _transcript?: Transcript): RunEnding | null {
   if (run.state === "completed" && run.finishedBeforeStop) return { kind: "finished-before-stop" };
+  if (neverStarted(run)) return { kind: "not-started" };
   if (run.state === "stopped") {
     if (!run.outcomeKnown) return run.stopRequestedAt !== null ? { kind: "stop-unknown" } : null;
     if (run.turnLimit !== undefined && run.turnLimit > 0)
@@ -428,6 +509,7 @@ export function endingOf(run: Run, _transcript?: Transcript): RunEnding | null {
   if (run.state === "failed") {
     if (run.ending?.timeoutPhase)
       return { kind: "gateway-timeout", reason: run.error?.message ?? null };
+    if (neverRan(run)) return { kind: "not-run", cause: notRunCause(run.error?.message) };
     return { kind: "failed", reason: run.error?.message ?? "The gateway gave no reason." };
   }
   return null;

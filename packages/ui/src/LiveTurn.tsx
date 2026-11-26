@@ -18,7 +18,8 @@ import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
-import { endingOf } from "./live.ts";
+import { endingOf, notRunWords } from "./live.ts";
+import { requestBotSettings } from "./bots/settings-request.ts";
 import { Markdown } from "./Markdown.tsx";
 import { SentFiles } from "./SentFiles.tsx";
 
@@ -322,19 +323,28 @@ export function RunEnding({
   }
   // A send the gateway refused already says so under your message.
   if (run.error?.kind === "not-started") return null;
+  // A message the gateway couldn't run: why, and the ways forward (#663).
+  const notRun =
+    ending.kind === "not-run" || ending.kind === "not-started"
+      ? notRunWords(ending, bot.name)
+      : null;
   // The app's own limit and the gateway's are worded apart: each says who ended the turn.
-  const title =
-    ending.kind === "turn-limit"
+  const title = notRun
+    ? notRun.title
+    : ending.kind === "turn-limit"
       ? `${bot.name}'s turn reached its ${ending.minutes} minute limit`
       : ending.kind === "gateway-timeout"
         ? `${bot.name}'s turn reached the gateway's time limit`
         : `${bot.name} couldn't finish this turn`;
-  const reason =
-    ending.kind === "turn-limit"
+  const reason = notRun
+    ? notRun.reason
+    : ending.kind === "turn-limit"
       ? "Clawtrate stopped it at the Turn time limit in Settings, and the gateway confirmed. Send a message to pick up where it left off."
       : ending.kind === "gateway-timeout"
         ? "The gateway ended the turn so it would not hang. Send a message to pick up where it left off."
-        : ending.reason;
+        : ending.kind === "failed"
+          ? ending.reason
+          : null;
   if (dismissed) {
     return (
       <button
@@ -376,7 +386,17 @@ export function RunEnding({
     }
   };
   return (
-    <div className="card turn-error" role="alert" data-testid="turn-error" data-run={run.id}>
+    <div
+      className="card turn-error"
+      role="alert"
+      data-testid="turn-error"
+      data-run={run.id}
+      {...(notRun
+        ? {
+            "data-not-run": ending.kind === "not-run" ? (ending.cause?.kind ?? "unsaid") : "silent",
+          }
+        : {})}
+    >
       <WarnIcon />
       <p className="turn-error-title">{title}</p>
       <button
@@ -408,8 +428,19 @@ export function RunEnding({
           Couldn't send it again: {retryError}
         </p>
       )}
-      {(text || requestId || raw) && (
+      {(text || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (
         <div className="turn-error-actions">
+          {notRun?.ways.map((way) => (
+            <button
+              key={way}
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => requestBotSettings(bot.id, way)}
+            >
+              {way === "model" ? "Change model" : "Change account"}
+            </button>
+          ))}
           {text && (
             <button
               type="button"
