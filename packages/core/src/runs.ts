@@ -438,6 +438,14 @@ export type Run = {
   messageId: string | null;
   /** The transcript item (the user's message) the run belongs under, once known. */
   anchorItemId: string | null;
+  /**
+   * `anchorItemId` is the person's message the run is known to have started from: the message
+   * that started it from another task, the row the gateway keyed `<runId>:user`, or this client's
+   * own sent message. Otherwise it is only where the run is drawn (the latest message before its
+   * first row), which never decides what Try again sends, and never survives a history merge
+   * (#686).
+   */
+  anchorKeyed?: true;
   /** Latest preparation phase from `chat` status or `agent` run_status events. */
   phase: string | null;
   model: string | null;
@@ -1620,7 +1628,7 @@ export function registerRunAlias(
  * built from history only): a user row keyed `<send id>:user` (OpenClaw 2026.10.6) followed
  * by rows under a run id the page has not shown before. A steer's user row is followed by
  * the rows of the run it was sent into, which came before it, and an ordinary turn's by
- * rows under the send's own id: neither pairs.
+ * rows under the send's own id: neither pairs. Nor does a failure's row, whose place proves nothing.
  */
 export function historyQueuePairs(
   messages: unknown,
@@ -1640,7 +1648,13 @@ export function historyQueuePairs(
     }
     const runId = str(meta(message).runId);
     if (!runId) continue;
-    if (sendId && runId !== sendId && !seen.has(runId)) pairs.push([runId, sendId]);
+    // A failure's row never pairs by its place: a later message may sit between the send and it,
+    // and the failure, with its Try again, would then belong to that one. Only a key, or a pairing
+    // the gateway names (`sessions.changed` `clientRunId`), gives a failure its message (#686).
+    const failure =
+      (message.role === "custom" && message.customType === RUN_FAILED_BEFORE_REPLY) ||
+      str(message.stopReason) === "error";
+    if (sendId && runId !== sendId && !seen.has(runId) && !failure) pairs.push([runId, sendId]);
     seen.add(runId);
     sendId = null;
   }
@@ -2876,6 +2890,7 @@ export function runsFromHistory(
       );
     }
     const at = rowTime(message);
+    const keyedAnchor = startedBy.get(runId) ?? keyedBy.get(runId);
     let run =
       runs.get(runId) ??
       newRun(
@@ -2884,7 +2899,8 @@ export function runsFromHistory(
           state: "running",
           origin: "history",
           bound: true,
-          anchorItemId: startedBy.get(runId) ?? keyedBy.get(runId) ?? anchor,
+          anchorItemId: keyedAnchor ?? anchor,
+          ...(keyedAnchor ? { anchorKeyed: true as const } : {}),
           reasoningAnchor: runId === cutRunId ? "c" : null,
         },
         at,
@@ -3012,6 +3028,7 @@ export function runsFromHistory(
               origin: "history",
               bound: true,
               anchorItemId: keyedBy.get(inFlightRunId) ?? anchor,
+              ...(keyedBy.has(inFlightRunId) ? { anchorKeyed: true as const } : {}),
               reportedStartAt: num(snapshot?.startedAt),
             },
             num(snapshot?.startedAt),
@@ -3325,12 +3342,22 @@ export function mergeHistoryRuns(
       ...(omittedToolsAtEnd || current.omittedToolsAtEnd !== undefined
         ? { omittedToolsAtEnd }
         : {}),
-      anchorItemId: fromRun.anchorItemId ?? current.anchorItemId,
+      // A keyed anchor wins; else history's own placement, now. A position this client or an earlier
+      // read assigned never survives the merge: it was only where to draw the run (#686).
+      ...(fromRun.anchorKeyed
+        ? { anchorItemId: fromRun.anchorItemId, anchorKeyed: true as const }
+        : current.anchorKeyed
+          ? { anchorItemId: current.anchorItemId, anchorKeyed: true as const }
+          : { anchorItemId: fromRun.anchorItemId }),
       model: current.model ?? fromRun.model,
       ...mergedAnchor(current, fromRun, steps),
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
       // A row of the run in history is the gateway's word that it ran: kept once seen.
       ...(fromRun.ranInHistory || current.ranInHistory ? { ranInHistory: true as const } : {}),
+      // History's word that the gateway failed it before running it stays with the live error.
+      ...(fromRun.error?.beforeReply && current.error && !current.error.beforeReply
+        ? { error: { ...current.error, beforeReply: true as const } }
+        : {}),
     };
     // An end this client only inferred gives way to the end history establishes.
     if (isTerminal(fromRun.state) && fromRun.outcomeKnown) run = reopenInferred(run);
@@ -3694,7 +3721,15 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
   if (outbox.length === activity.outbox.length) return activity;
   const runs = activity.runs.map((run) => {
     const anchor = run.messageId ? anchors.get(run.messageId) : undefined;
-    return anchor ? { ...run, messageId: null, anchorItemId: run.anchorItemId ?? anchor } : run;
+    // This client's own message, matched by its key or the gateway's sequence number: keyed.
+    return anchor
+      ? {
+          ...run,
+          messageId: null,
+          anchorItemId: run.anchorKeyed ? run.anchorItemId : anchor,
+          anchorKeyed: true as const,
+        }
+      : run;
   });
   return { ...activity, outbox, runs };
 }

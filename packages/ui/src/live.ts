@@ -484,15 +484,14 @@ export function notRunWords(
 }
 
 /**
- * A failed run no message is known to have started (#686): history keyed no user row to it
- * (`Run.anchorItemId` null) and this client holds none it sent. Its line is said to be for an
- * earlier message and offers no Try again: the latest message by position may be another one,
- * already answered.
+ * A failed run no message is known to have started (#686): it has no keyed anchor
+ * (`Run.anchorKeyed`) and this client holds none it sent. Its line is said to be for an earlier
+ * message and offers no Try again: the latest message by position may be another one, already
+ * answered.
  */
 export function forEarlierMessage(run: Run, transcript: Pick<Transcript, "outbox">): boolean {
-  return (
-    run.anchorItemId === null && !transcript.outbox.some((message) => message.id === run.messageId)
-  );
+  // Only a keyed anchor says which message it was; a position drawn for it says nothing (#686).
+  return !run.anchorKeyed && !transcript.outbox.some((message) => message.id === run.messageId);
 }
 
 /** The failed-turn card's title: for an earlier turn when no message is known to have started it. */

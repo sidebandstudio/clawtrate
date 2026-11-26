@@ -4,6 +4,7 @@
 import {
   emptyActivity,
   mapHistory,
+  mergeHistoryRuns,
   newRun,
   RawTable,
   runsFromHistory,
@@ -25,7 +26,7 @@ import {
   notRunWords,
   type RunEnding,
 } from "../src/live.ts";
-import { messageTextOf } from "../src/LiveTurn.tsx";
+import { messageTextOf, retryPlan } from "../src/LiveTurn.tsx";
 
 const KEY = "agent:otto:disk-space";
 
@@ -254,6 +255,80 @@ describe("#686: a not-run line sits only under the message its run is known to h
     expect(forEarlierMessage(run, transcript)).toBe(false);
     const ending = endingOf(run) as Extract<RunEnding, { kind: "not-run" }>;
     expect(notRunWords(ending, "Otto", false).title).toBe("The gateway couldn't run this message");
+  });
+
+  it("a position drawn for a run in flight never survives a merge, so Try again never sends B", () => {
+    const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 + 10_000 };
+    // First read: A (unkeyed, a channel's message say) is in flight after B's prompt, so it is
+    // drawn under B, by position.
+    const first = [userRow(null, "Back up the photos.", 1), userRow("run-b", "And the notes.", 2)];
+    const inFlight = runsFromHistory(first, { runId: "run-a" }, ctx);
+    const before = inFlight.find((each) => each.id === "run-a")!;
+    expect(before.anchorKeyed).toBeUndefined();
+    // Later read: A failed, B answered.
+    const second = [...first, failedRow("run-a", 3), replyRow("run-b", 4)];
+    const { runs } = mergeHistoryRuns(inFlight, runsFromHistory(second, null, ctx), ctx);
+    const transcript = {
+      ...emptyActivity,
+      sessionKey: KEY,
+      status: "ready",
+      items: mapHistory(second),
+      runs,
+      error: null,
+      hasMore: false,
+    } as Transcript;
+    const run = runs.find((each) => each.id === "run-a")!;
+    expect(run.state).toBe("failed");
+    expect(run.anchorItemId).not.toBe(itemOf(transcript, "And the notes."));
+    expect(messageTextOf(run, transcript)).toBeNull();
+    expect(forEarlierMessage(run, transcript)).toBe(true);
+  });
+
+  it("Try again never sends a message without its files", () => {
+    const { transcript } = reloaded([
+      userRow("run-a", "Back up the photos.", 1),
+      failedRow("run-a", 2),
+    ]);
+    const failed = transcript.runs.find((each) => each.id === "run-a")!;
+    // Words alone, from history: they go again.
+    expect(retryPlan(failed, transcript)).toMatchObject({
+      kind: "text",
+      text: "Back up the photos.",
+    });
+    // The same message with a file, known only from history: no Try again.
+    const withFile = {
+      ...transcript,
+      items: transcript.items.map((item) =>
+        item.id === failed.anchorItemId
+          ? { ...item, attachments: [{ name: "photo.jpg", mimeType: "image/jpeg" }] }
+          : item,
+      ),
+    } as Transcript;
+    expect(retryPlan(failed, withFile)).toEqual({ kind: "files-gone" });
+    // Still held by this device: its words and files go again together.
+    const held = {
+      ...withFile,
+      outbox: [{ id: "msg-1", text: "Back up the photos.", attachments: [{ id: "f1" }] }],
+    } as unknown as Transcript;
+    expect(retryPlan({ ...failed, messageId: "msg-1" }, held)).toEqual({
+      kind: "again",
+      messageId: "msg-1",
+    });
+  });
+
+  it("only a keyed anchor decides what Try again sends, wherever the card is drawn", () => {
+    const { transcript } = reloaded([
+      userRow("run-a", "Back up the photos.", 1),
+      userRow("run-b", "And the notes.", 2),
+      replyRow("run-b", 3),
+    ]);
+    const drawnUnderB: Run = {
+      ...newRun("run-x", { state: "failed", origin: "history", bound: true }, T0),
+      anchorItemId: itemOf(transcript, "And the notes."),
+    };
+    expect(messageTextOf(drawnUnderB, transcript)).toBeNull();
+    expect(forEarlierMessage(drawnUnderB, transcript)).toBe(true);
+    expect(messageTextOf({ ...drawnUnderB, anchorKeyed: true }, transcript)).toBe("And the notes.");
   });
 
   it("each run that history keys to its own row sits there, answered ones too", () => {

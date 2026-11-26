@@ -198,12 +198,45 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
   return lines;
 }
 
+/**
+ * The person's message a run is known to have started from: its keyed anchor only (#686). A
+ * position decides where a run is drawn, never what Try again sends.
+ */
+function keyedAnchor(run: Run, transcript: Transcript) {
+  return run.anchorKeyed
+    ? transcript.items.find((item) => item.id === run.anchorItemId)
+    : undefined;
+}
+
+/**
+ * What "Try again" sends for a failed run, if anything (#686). Nothing goes out without its files:
+ * - `again`: this device still holds the message, and its words and files go again together;
+ * - `text`: only history has it, and it was words alone;
+ * - `files-gone`: only history has it, and it had files this device no longer holds: no Try
+ *   again, and the line says to send it again with them;
+ * - null: no message is known to have started the run.
+ */
+export type RetryPlan =
+  | { kind: "again"; messageId: string }
+  | { kind: "text"; text: string; replyToId: string | null }
+  | { kind: "files-gone" }
+  | null;
+
+export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
+  if (run.messageId && transcript.outbox.some((message) => message.id === run.messageId))
+    return { kind: "again", messageId: run.messageId };
+  const anchor = keyedAnchor(run, transcript);
+  if (!anchor) return null;
+  if ((anchor.attachments?.length ?? 0) > 0) return { kind: "files-gone" };
+  const text = messageTextOf(run, transcript);
+  return text ? { kind: "text", text, replyToId: messageReplyOf(run, transcript) } : null;
+}
+
 /** The message a run's own message replied to, from the outbox or from history's reference. */
 export function messageReplyOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
   if (outgoing) return outgoing.replyToId ?? null;
-  const anchor = transcript.items.find((item) => item.id === run.anchorItemId);
-  return anchor?.replyTo?.id ?? null;
+  return keyedAnchor(run, transcript)?.replyTo?.id ?? null;
 }
 
 /**
@@ -213,7 +246,7 @@ export function messageReplyOf(run: Run, transcript: Transcript): string | null 
 export function messageTextOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
   if (outgoing) return outgoing.text;
-  const anchor = transcript.items.find((item) => item.id === run.anchorItemId);
+  const anchor = keyedAnchor(run, transcript);
   if (!anchor) return null;
   const text = anchor.blocks
     .map((block) => (block.kind === "text" ? block.text : ""))
@@ -366,7 +399,7 @@ export function RunEnding({
   // A stop at the turn limit stops the other bots' runs it started too, as Stop does (F-296).
   const also =
     ending.kind === "turn-limit" ? stoppedWithLines(run, (key) => botOfSession(bots, key)) : [];
-  const text = messageTextOf(run, transcript);
+  const retry = retryPlan(run, transcript);
   const requestId = run.requestId ?? null;
   const raw = run.error?.raw;
   const showRaw = (open: boolean) => {
@@ -433,7 +466,16 @@ export function RunEnding({
           Couldn't send it again: {retryError}
         </p>
       )}
-      {(text || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (
+      {retry?.kind === "files-gone" && (
+        <p className="turn-error-reason" data-testid="retry-files-gone">
+          This message had files, and this device no longer holds them. To try again, send it again
+          with its files.
+        </p>
+      )}
+      {((retry && retry.kind !== "files-gone") ||
+        requestId ||
+        raw ||
+        (notRun?.ways.length ?? 0) > 0) && (
         <div className="turn-error-actions">
           {notRun?.ways.map((way) => (
             <button
@@ -446,7 +488,7 @@ export function RunEnding({
               {way === "model" ? "Change model" : "Change account"}
             </button>
           ))}
-          {text && (
+          {retry && retry.kind !== "files-gone" && (
             <button
               type="button"
               className="button"
@@ -454,20 +496,19 @@ export function RunEnding({
               onClick={() => {
                 setRetryError(null);
                 // The engine still holds the message: its words and files go again together.
-                // Otherwise only history has it, and history gives the words alone. A reply
+                // Otherwise only history has it, and it was words alone (`retryPlan`). A reply
                 // goes again as a reply to the same message.
-                const held = transcript.outbox.some((message) => message.id === run.messageId);
-                const parent = messageReplyOf(run, transcript);
-                const again = held
-                  ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
-                  : bridge.invoke({
-                      type: "sendMessage",
-                      key: taskKey,
-                      text,
-                      mode: "auto",
-                      attachmentIds: [],
-                      ...(parent ? { replyToId: parent } : {}),
-                    });
+                const again =
+                  retry.kind === "again"
+                    ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: retry.messageId })
+                    : bridge.invoke({
+                        type: "sendMessage",
+                        key: taskKey,
+                        text: retry.text,
+                        mode: "auto",
+                        attachmentIds: [],
+                        ...(retry.replyToId ? { replyToId: retry.replyToId } : {}),
+                      });
                 void again.catch((error: unknown) =>
                   setRetryError(error instanceof Error ? error.message : String(error)),
                 );
