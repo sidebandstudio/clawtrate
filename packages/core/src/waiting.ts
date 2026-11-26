@@ -26,6 +26,7 @@
 
 import { jsonTextLength } from "./bounds.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import { neverRan } from "./not-run.ts";
 import { classifyLifecycleTerminal, type TaskActivity } from "./runs.ts";
 
 export const MAX_WAITING_SESSIONS = 64;
@@ -86,8 +87,10 @@ export function fromActivity(activity: Pick<TaskActivity, "runs">): HeldTask {
   }
   const stoppedAt =
     !active && latest?.state === "stopped" ? (latest.endedAt ?? latest.startedAt ?? 0) : null;
+  // Only a message the gateway couldn't run: any other failure its row says itself, and an end it
+  // marked not to show is not a failure to mark (#680).
   const failedAt =
-    !active && latest?.state === "failed" ? (latest.endedAt ?? latest.startedAt ?? 0) : null;
+    !active && latest && neverRan(latest) ? (latest.endedAt ?? latest.startedAt ?? 0) : null;
   return { waiting, stoppedAt, failedAt };
 }
 
@@ -220,7 +223,8 @@ export class WaitingIndex {
     const state = payload.state;
     if (!key || !runId || (state !== "error" && state !== "final")) return false;
     const latest = this.runs.get(key);
-    const failed = state === "error";
+    // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
+    const failed = state === "error" && payload.suppressErrorNotice !== true;
     if (latest?.runId === runId && latest.failed === failed) return false;
     this.runs.delete(key);
     this.runs.set(key, {

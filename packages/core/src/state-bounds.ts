@@ -377,6 +377,7 @@ const runError = object<RunError>()({
   kind: NAME,
   raw: object<RunErrorRaw>()({ holds: ENUM, chars: NUMBER }),
   beforeReply: FLAG,
+  quiet: FLAG,
 });
 const runEnding = object<RunEnding>()({
   stopReason: NAME,

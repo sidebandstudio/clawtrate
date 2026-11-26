@@ -97,8 +97,10 @@ function kindOf(text: string): NotRunKind {
  * started, no action and no reply text. A run history rebuilt has no start of its own to go by,
  * so only the gateway's row counts for it.
  */
-export function neverRan(run: Run): boolean {
-  if (run.state !== "failed") return false;
+export function neverRan(
+  run: Pick<Run, "state" | "error" | "origin" | "reportedStartAt" | "steps" | "text">,
+): boolean {
+  if (run.state !== "failed" || run.error?.quiet === true) return false;
   if (run.error?.beforeReply === true) return true;
   return (
     run.origin !== "history" &&

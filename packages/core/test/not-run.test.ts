@@ -360,6 +360,73 @@ describe("a task's mark is its latest run's outcome (#664)", () => {
   });
 });
 
+describe("an end the gateway marks not to show is no failure (#680)", () => {
+  // 2026.11.10 ends a turn it started itself, which the bot answered quietly, with this error,
+  // marked `suppressErrorNotice`; 2026.10.6 sends no such mark.
+  const QUIET = "No answer was returned. Ask again if you still need one.";
+
+  it("its chat error neither fails the message as one the gateway couldn't run nor marks the task", async () => {
+    const gateway = gatewayWith([
+      { key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 },
+    ]);
+    const { client, transcript } = await openTask({ gateway });
+    // A turn the gateway started, as 2026.11.10 sends it, then its end marked not to show.
+    gateway.emit("agent", {
+      ...agentEvent("wake-1", 1, "lifecycle", { phase: "start" }),
+      ts: T0 + 1,
+    });
+    gateway.emit("chat", {
+      runId: "wake-1",
+      sessionKey: KEY,
+      seq: 2,
+      state: "error",
+      errorMessage: QUIET,
+      suppressErrorNotice: true,
+    });
+    await until(() =>
+      transcript().runs.some((run) => run.id === "wake-1" && run.state === "failed"),
+    );
+    const run = transcript().runs.find((each) => each.id === "wake-1")!;
+    expect(run.error?.quiet).toBe(true);
+    expect(neverRan(run)).toBe(false);
+    // Even with no start of its own seen, the mark keeps it from being one the gateway couldn't run.
+    expect(neverRan({ ...run, reportedStartAt: null })).toBe(false);
+    await sleep(50);
+    expect(task(client)?.status).not.toBe("failed");
+    client.stop();
+  });
+
+  it("the index: the marked error is a quiet end, the same error unmarked (2026.10.6's form) a failure", () => {
+    const index = new WaitingIndex();
+    const frame = { sessionKey: KEY, runId: "r1", state: "error", errorMessage: QUIET };
+    expect(index.onChat({ ...frame, suppressErrorNotice: true }, 1_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBeNull();
+    index.onChat({ ...frame, runId: "r2" }, 2_000);
+    expect(index.failedAt(KEY)).toBe(2_000);
+  });
+
+  it("history's hidden row for such an end does not fail its run", () => {
+    const rows = [
+      userRow("run-1"),
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: QUIET,
+        display: false,
+        timestamp: T0 + 400,
+        __openclaw: { id: "c-1", seq: 2, runId: "run-1" },
+      },
+    ];
+    const [run] = runsFromHistory(rows, null, {
+      sessionKey: KEY,
+      now: T0 + 500,
+      raw: new RawTable(),
+    });
+    expect(run?.state).not.toBe("failed");
+    expect(run?.error ?? null).toBeNull();
+  });
+});
+
 describe("the rules underneath", () => {
   it("history's row for a message the gateway couldn't run ends its run, even while it is busy", () => {
     const rows = [

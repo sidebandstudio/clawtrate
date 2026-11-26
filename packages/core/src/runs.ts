@@ -397,6 +397,11 @@ export type RunError = {
    * "run-failed-before-reply" row for it (`not-run.ts`).
    */
   beforeReply?: true;
+  /**
+   * The gateway marked the end as one not to show (`suppressErrorNotice`, OpenClaw 2026.11.10),
+   * as it does for a turn it started itself that the bot answered quietly (#680).
+   */
+  quiet?: true;
 };
 
 /** What a failed run's Raw holds (F-301). */
@@ -2134,6 +2139,7 @@ export function applyChatEvent(
           message: str(payload.errorMessage) ?? "The run failed.",
           kind: str(payload.errorKind),
           raw: rawEvent(ctx, run.id, "chat-event", payload),
+          ...(payload.suppressErrorNotice === true ? { quiet: true as const } : {}),
         });
       default:
         return run;
@@ -2399,6 +2405,7 @@ function terminalFromLifecycle(
           message: message ?? "The run failed.",
           kind: reason,
           raw: rawEvent(ctx, run.id, "lifecycle-data", data),
+          ...(data.suppressErrorNotice === true ? { quiet: true as const } : {}),
         },
         at,
       );
@@ -2840,7 +2847,12 @@ export function runsFromHistory(
     const runId = str(meta(message).runId) ?? str(asRecord(message.openclawAbort)?.runId);
     if (!runId) return;
     // The gateway's record of a message it failed before any run of it started, and its words.
-    if (message.role === "custom" && message.customType === RUN_FAILED_BEFORE_REPLY) {
+    // One the gateway keeps hidden (`display: false`, for an end it marks not to show) isn't one.
+    if (
+      message.role === "custom" &&
+      message.customType === RUN_FAILED_BEFORE_REPLY &&
+      message.display !== false
+    ) {
       const summary = str(asRecord(message.openclawRunError)?.summary);
       beforeReply.set(
         runId,
