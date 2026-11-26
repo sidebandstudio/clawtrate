@@ -171,6 +171,20 @@ export function memoryStorage(initial: Record<string, string> = {}): KeyValueSto
   };
 }
 
+/**
+ * `storage` as a device on which "Bots know how Clawtrate works" is off for every gateway it has
+ * no record for, for checks of other features: while it is on, as it is by default, an admin
+ * connection reads and writes each bot's `AGENTS.md` by itself (guides.ts), which those checks
+ * don't count on. The guides' own checks use storage without it.
+ */
+export function guidesOff<T extends KeyValueStore>(storage: T): T {
+  const get = storage.get.bind(storage);
+  storage.get = async (key) =>
+    (await get(key)) ??
+    (key.startsWith("clawtrate.guides.") ? JSON.stringify({ on: false, bots: [] }) : null);
+  return storage;
+}
+
 export function testHost(gateway: FakeGateway, storage = memoryStorage()): ClawtrateHost {
   return {
     createWebSocket: gateway.createWebSocket,
@@ -185,9 +199,9 @@ export function testHost(gateway: FakeGateway, storage = memoryStorage()): Clawt
 
 /** Poll until `check` passes or a few seconds elapse. */
 export async function until(check: () => boolean, timeoutMs = 4000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error("condition not met in time");
+  // Counted in waits, not read from a clock: a test can pin `Date.now` to one millisecond.
+  for (let waits = Math.ceil(timeoutMs / 10); !check(); waits -= 1) {
+    if (waits <= 0) throw new Error("condition not met in time");
     await sleep(10);
   }
 }

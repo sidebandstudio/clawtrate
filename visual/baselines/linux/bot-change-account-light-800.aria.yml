@@ -159,7 +159,7 @@
       - listitem:
         - button "Connect an account A sign-in here is shared with every bot."
     - paragraph: A run in progress finishes on OpenAI · Work. The next run uses OpenAI · Home.
-    - paragraph: Otto is locked to OpenAI · Work. After saving, Otto runs on OpenAI · Home first, and the gateway still tries OpenAI · Work when OpenAI · Home fails, until you lock to OpenAI · Home or unlock. Account then shows both commands.
+    - paragraph: Otto is locked to OpenAI · Work. After saving, Otto runs on OpenAI · Home first, and the gateway still tries OpenAI · Work when OpenAI · Home fails, until you lock to OpenAI · Home or unlock. Account then shows the lock command, and Unlock.
     - button "Save"
     - button "Cancel"
   - status

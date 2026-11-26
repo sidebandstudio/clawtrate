@@ -17,7 +17,7 @@ import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts"
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
 import type { ChatFileRead } from "./chat-files.ts";
-import { modelIdProblem, type ModelList } from "./accounts.ts";
+import { modelIdProblem, type ModelList, type ModelRefresh } from "./accounts.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
@@ -153,7 +153,7 @@ export type BridgeCommand =
   | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** Clawtrate's guides in the bots' `AGENTS.md`, read now (guides.ts). */
   | { type: "readBotGuides" }
-  /** Add, replace or remove them, or answer "Not now", on the gateway `stamp` names (admin). */
+  /** The switch, or a row's Add, Replace or Remove, on the gateway `stamp` names (admin). */
   | { type: "changeBotGuides"; change: GuidesChange; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
@@ -340,6 +340,12 @@ export type BridgeCommand =
    * command's result, kept nowhere.
    */
   | { type: "loadModelCatalog"; provider: string }
+  /**
+   * Refresh in the Model menu (#565): ask the gateway to look for one provider's models again,
+   * for the gateway the screen was read on (`stamp`). What it found is this command's result,
+   * kept nowhere; the rows go into the accounts' `models`.
+   */
+  | { type: "refreshModels"; provider: string; stamp: GatewayStamp }
   /** Read one bot's stored order again: the lock's evidence. */
   | { type: "checkLock"; botId: string }
   /** Start one of the gateway's sign-ins, for the bot the person works on (or null). */
@@ -390,6 +396,21 @@ export type BridgeCommand =
       stamp: GatewayStamp;
     }
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
+  /**
+   * Unlock, or Clear a kept order, after its confirmation (#660): `account` is the one account
+   * the order named on screen, and nothing is sent unless it still does, on the gateway `stamp`
+   * names (`ClawtrateState.accounts.clear`).
+   */
+  | {
+      type: "clearBotOrder";
+      /** The press's id, chosen by the screen: the line it shows as its own. */
+      press: string;
+      botId: string;
+      provider: string;
+      account: string;
+      kind: "unlock" | "clear";
+      stamp: GatewayStamp;
+    }
   /**
    * Undo a name a bot took, for the change `run` names (`ClawtrateState.botNames`,
    * `botNameRecord`), and put a name line away on this device.
@@ -599,136 +620,140 @@ type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage"
                                                     ? { confirmed: boolean }
                                                     : C extends { type: "loadModelCatalog" }
                                                       ? ModelList
-                                                      : C extends { type: "saveApiKey" }
-                                                        ? { profileId: string | null }
-                                                        : C extends {
-                                                              type: "createBot" | "finishBot";
-                                                            }
-                                                          ? {
-                                                              botId: string;
-                                                              missing: MissingStep[];
-                                                            }
+                                                      : C extends { type: "refreshModels" }
+                                                        ? ModelRefresh
+                                                        : C extends { type: "saveApiKey" }
+                                                          ? { profileId: string | null }
                                                           : C extends {
-                                                                type: "newTask" | "newMainTask";
+                                                                type: "createBot" | "finishBot";
                                                               }
-                                                            ? { key: string }
-                                                            : C extends { type: "archiveTask" }
-                                                              ? ArchiveResult
-                                                              : C extends { type: "listArchived" }
-                                                                ? ArchivedList
-                                                                : C extends {
-                                                                      type: "readComposerMenu";
-                                                                    }
-                                                                  ? MenuRow[]
-                                                                  : C extends { type: "readUsage" }
-                                                                    ? UsageReport | UsageBusy
+                                                            ? {
+                                                                botId: string;
+                                                                missing: MissingStep[];
+                                                              }
+                                                            : C extends {
+                                                                  type: "newTask" | "newMainTask";
+                                                                }
+                                                              ? { key: string }
+                                                              : C extends { type: "archiveTask" }
+                                                                ? ArchiveResult
+                                                                : C extends { type: "listArchived" }
+                                                                  ? ArchivedList
+                                                                  : C extends {
+                                                                        type: "readComposerMenu";
+                                                                      }
+                                                                    ? MenuRow[]
                                                                     : C extends {
-                                                                          type: "listRoutines";
+                                                                          type: "readUsage";
                                                                         }
-                                                                      ? BudgetRoutine[]
+                                                                      ? UsageReport | UsageBusy
                                                                       : C extends {
-                                                                            type: "searchMessages";
+                                                                            type: "listRoutines";
                                                                           }
-                                                                        ? MessageSearch
+                                                                        ? BudgetRoutine[]
                                                                         : C extends {
-                                                                              type: "searchRoutines";
+                                                                              type: "searchMessages";
                                                                             }
-                                                                          ? RoutineSearch
+                                                                          ? MessageSearch
                                                                           : C extends {
-                                                                                type: "searchFiles";
+                                                                                type: "searchRoutines";
                                                                               }
-                                                                            ? FileSearch
+                                                                            ? RoutineSearch
                                                                             : C extends {
-                                                                                  type: "readPlacement";
-                                                                                  part: infer P extends
-                                                                                    PlacementPart;
+                                                                                  type: "searchFiles";
                                                                                 }
-                                                                              ? PlacementParts[P]
+                                                                              ? FileSearch
                                                                               : C extends {
-                                                                                    type: "readMachines";
+                                                                                    type: "readPlacement";
+                                                                                    part: infer P extends
+                                                                                      PlacementPart;
                                                                                   }
-                                                                                ? MachinesView
+                                                                                ? PlacementParts[P]
                                                                                 : C extends {
-                                                                                      type: "setCommandMachine";
+                                                                                      type: "readMachines";
                                                                                     }
-                                                                                  ? ConfigSave
+                                                                                  ? MachinesView
                                                                                   : C extends {
-                                                                                        type: "setBotWorkspace";
+                                                                                        type: "setCommandMachine";
                                                                                       }
-                                                                                    ? {
-                                                                                        workspace:
-                                                                                          | string
-                                                                                          | null;
-                                                                                        asTyped: boolean;
-                                                                                      }
+                                                                                    ? ConfigSave
                                                                                     : C extends {
-                                                                                          type: "setMachineDefaults";
+                                                                                          type: "setBotWorkspace";
                                                                                         }
-                                                                                      ? ApprovalsFile
+                                                                                      ? {
+                                                                                          workspace:
+                                                                                            | string
+                                                                                            | null;
+                                                                                          asTyped: boolean;
+                                                                                        }
                                                                                       : C extends {
-                                                                                            type: "computerShow";
+                                                                                            type: "setMachineDefaults";
                                                                                           }
-                                                                                        ? {
-                                                                                            viewer: string;
-                                                                                          }
+                                                                                        ? ApprovalsFile
                                                                                         : C extends {
-                                                                                              type: "computerFrame";
+                                                                                              type: "computerShow";
                                                                                             }
-                                                                                          ? ComputerFrame | null
+                                                                                          ? {
+                                                                                              viewer: string;
+                                                                                            }
                                                                                           : C extends {
-                                                                                                type: "computerInput";
+                                                                                                type: "computerFrame";
                                                                                               }
-                                                                                            ? {
-                                                                                                sent: boolean;
-                                                                                              }
+                                                                                            ? ComputerFrame | null
                                                                                             : C extends {
-                                                                                                  type: "readMachine";
+                                                                                                  type: "computerInput";
                                                                                                 }
-                                                                                              ? MachineFacts
+                                                                                              ? {
+                                                                                                  sent: boolean;
+                                                                                                }
                                                                                               : C extends {
-                                                                                                    type: "refreshCheckIns";
-                                                                                                    botId: string;
+                                                                                                    type: "readMachine";
                                                                                                   }
-                                                                                                ? CheckInRead | null
+                                                                                                ? MachineFacts
                                                                                                 : C extends {
-                                                                                                      type: "listMemory";
+                                                                                                      type: "refreshCheckIns";
+                                                                                                      botId: string;
                                                                                                     }
-                                                                                                  ? MemoryList
+                                                                                                  ? CheckInRead | null
                                                                                                   : C extends {
-                                                                                                        type:
-                                                                                                          | "readBotVoice"
-                                                                                                          | "setBotVoice";
+                                                                                                        type: "listMemory";
                                                                                                       }
-                                                                                                    ? BotVoiceAnswer
+                                                                                                    ? MemoryList
                                                                                                     : C extends {
                                                                                                           type:
-                                                                                                            | "readBotGuides"
-                                                                                                            | "changeBotGuides";
+                                                                                                            | "readBotVoice"
+                                                                                                            | "setBotVoice";
                                                                                                         }
-                                                                                                      ? BotGuidesAnswer
+                                                                                                      ? BotVoiceAnswer
                                                                                                       : C extends {
-                                                                                                            type: "readMemory";
+                                                                                                            type:
+                                                                                                              | "readBotGuides"
+                                                                                                              | "changeBotGuides";
                                                                                                           }
-                                                                                                        ? MemoryDocument
+                                                                                                        ? BotGuidesAnswer
                                                                                                         : C extends {
-                                                                                                              type:
-                                                                                                                | "checkRoutineCreate"
-                                                                                                                | "checkRoutineUpdate";
+                                                                                                              type: "readMemory";
                                                                                                             }
-                                                                                                          ? RoutineSaveCheck
+                                                                                                          ? MemoryDocument
                                                                                                           : C extends {
-                                                                                                                type: "readChatPicture";
+                                                                                                                type:
+                                                                                                                  | "checkRoutineCreate"
+                                                                                                                  | "checkRoutineUpdate";
                                                                                                               }
-                                                                                                            ? ChatPictureRead
+                                                                                                            ? RoutineSaveCheck
                                                                                                             : C extends {
-                                                                                                                  type: "readSentPicture";
+                                                                                                                  type: "readChatPicture";
                                                                                                                 }
-                                                                                                              ? SentPictureRead
+                                                                                                              ? ChatPictureRead
                                                                                                               : C extends {
-                                                                                                                    type: "readChatFile";
+                                                                                                                    type: "readSentPicture";
                                                                                                                   }
-                                                                                                                ? ChatFileRead
-                                                                                                                : void;
+                                                                                                                ? SentPictureRead
+                                                                                                                : C extends {
+                                                                                                                      type: "readChatFile";
+                                                                                                                    }
+                                                                                                                  ? ChatFileRead
+                                                                                                                  : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -883,32 +908,33 @@ function guidesChange(value: unknown): GuidesChange {
   const change =
     value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
   switch (change.action) {
+    case "switch":
+      if (typeof change.on !== "boolean") throw new Error("invalid guides change");
+      return { action: "switch", on: change.on };
     case "add":
-      if (
-        !Array.isArray(change.bots) ||
-        change.bots.length > 512 ||
-        typeof change.newBots !== "boolean"
-      )
+    case "remove":
+      if (!Array.isArray(change.bots) || change.bots.length > 512)
         throw new Error("invalid guides change");
-      return { action: "add", bots: change.bots.map(botId), newBots: change.newBots };
+      return { action: change.action, bots: change.bots.map(botId) };
     case "replace":
       if (typeof change.shown !== "string" || change.shown.length > MAX_CHANGED_SECTION_CHARS)
         throw new Error("invalid guides change");
       return { action: "replace", bot: botId(change.bot), shown: change.shown };
-    case "remove":
-    case "decline":
-      return { action: change.action };
-    case "newBots":
-      if (typeof change.on !== "boolean") throw new Error("invalid guides change");
-      return { action: "newBots", on: change.on };
     default:
-      // "update" is the client's own, after a connect: never a viewer's.
+      // "auto" is the client's own, after a connect and for a bot just made: never a viewer's.
       throw new Error("invalid guides change");
   }
 }
 
 function botId(value: unknown): string {
   if (typeof value !== "string" || !BOT_ID_PATTERN.test(value)) throw new Error("invalid bot id");
+  return value;
+}
+
+/** A press's id, as a screen makes one: short, plain characters. */
+function pressId(value: unknown): string {
+  if (typeof value !== "string" || !/^[\w-]{8,64}$/.test(value))
+    throw new Error("invalid press id");
   return value;
 }
 
@@ -1318,12 +1344,28 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: command.type };
     case "loadModelCatalog":
       return { type: "loadModelCatalog", provider: providerId(command.provider) };
+    case "refreshModels":
+      return {
+        type: "refreshModels",
+        provider: providerId(command.provider),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "checkLock":
       return { type: command.type, botId: botId(command.botId) };
     case "removeBotFallbacks":
       return {
         type: "removeBotFallbacks",
         botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "clearBotOrder":
+      return {
+        type: "clearBotOrder",
+        press: pressId(command.press),
+        botId: botId(command.botId),
+        provider: providerId(command.provider),
+        account: profileId(command.account),
+        kind: oneOf(command.kind, ["unlock", "clear"] as const, "kind"),
         stamp: gatewayStampOf(command.stamp),
       };
     case "undoBotName":
@@ -2215,6 +2257,8 @@ class ViewerSession implements BridgeSession {
         return client.refreshAccounts();
       case "loadModelCatalog":
         return this.fitList(await client.loadModelCatalog(command.provider));
+      case "refreshModels":
+        return client.refreshModels(command.provider, command.stamp);
       case "checkLock":
         return client.checkLock(command.botId);
       case "startSignIn":
@@ -2264,6 +2308,15 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId, command.stamp);
+      case "clearBotOrder":
+        return client.clearBotOrder(
+          command.press,
+          command.botId,
+          command.provider,
+          command.account,
+          command.kind,
+          command.stamp,
+        );
       case "undoBotName":
         return client.undoBotName(command.botId, command.run, command.stamp);
       case "dismissBotName":

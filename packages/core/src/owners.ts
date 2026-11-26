@@ -149,6 +149,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   removedDuringRead: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   // The last whole roster's ids, kept while there are at most `MAX_BOTS`; dropped as the connection closes.
   lastRosterIds: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  // Bots whose AGENTS.md didn't exist at this connection's guide change; each read again once.
+  guidesMissing: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   retained: { max: T, each: ID, row: "bookkeeping" },
   incarnations: { max: T, each: ID + N, row: "bookkeeping" },
   loads: { max: T, each: ID + SHORT, row: "bookkeeping" },

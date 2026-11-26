@@ -9,6 +9,7 @@
 // one request each; no field of the state, no collection and no error message
 // holds them (`withoutSecret`).
 
+import { cleanLine } from "./gateway-names.ts";
 import { openClawAtLeast } from "./gateway-version.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import type { ReadStamp } from "./types.ts";
@@ -193,6 +194,88 @@ export type ModelList =
   /** `unsupported`: the gateway refused `view: "all"`. */
   | { status: "unsupported" | "error"; error: string };
 
+/** The most new, or gone, models a refresh names; the rest are counted. */
+export const MAX_REFRESH_NAMES = 5;
+/** The longest model id a refresh names, cleaned to one line. */
+export const MAX_REFRESH_NAME_CHARS = 64;
+/** The longest reason a refresh gives when the gateway refused it or failed. */
+export const MAX_REFRESH_ERROR_CHARS = 200;
+/** How long Clawtrate waits for the gateway to look again before it says it didn't answer. */
+export const REFRESH_MODELS_MS = 45_000;
+/** The most entries of the config's model list for bots read for `modelAllowlist`. */
+export const MAX_ALLOWLIST_ENTRIES = 1024;
+
+export type RefreshOutcome = "ready" | "auth-rejected" | "unavailable" | null;
+
+/**
+ * What one Refresh of a provider's models found (`models.list {agentId, provider, refresh:
+ * true}`): the picker's rows for the provider before and after, compared, and what the gateway
+ * said of the provider. Given to the screen that asked and kept nowhere; the rows themselves go
+ * into the state's `models`.
+ */
+export type ModelRefresh =
+  | {
+      status: "done";
+      provider: string;
+      /** The first `MAX_REFRESH_NAMES` models the menu lists now and didn't before, cleaned. */
+      added: string[];
+      addedCount: number;
+      /** The first `MAX_REFRESH_NAMES` it listed before and doesn't now, cleaned. */
+      removed: string[];
+      removedCount: number;
+      /**
+       * Every model the menu showed at the press that the gateway no longer lists, as its ids: at
+       * most the menu's bound. Not a model a cut pushed out of the menu while the gateway still
+       * lists it.
+       */
+      removedIds: string[];
+      /**
+       * What the gateway reported for the provider (`providerOutcomes`): asked again and answered
+       * (`ready`), asked and refused the account (`auth-rejected`), asked and failed or timed out
+       * (`unavailable`), or not asked again (null): its list is the one the gateway already had.
+       */
+      outcome: RefreshOutcome;
+      /**
+       * Every model the gateway lists for the provider is one its config declares
+       * (`models.providers`): the config's list is the whole list.
+       */
+      configured: boolean;
+      /**
+       * The gateway checks OpenClaw's model list online every 6 hours (`models.catalogRefresh`);
+       * null when its config couldn't be read.
+       */
+      hostedList: boolean | null;
+      /**
+       * The menu showed the provider cut at its bound before: how many models the gateway listed
+       * then and lists now. Nothing is named new then, since the cut hid some.
+       */
+      counts: { before: number; now: number } | null;
+      /**
+       * The menu showed the provider whole before, and this refresh left some of its models out at
+       * the bound: how many the menu shows of the ones the gateway lists now.
+       */
+      cut: { shown: number; now: number } | null;
+      /** The gateway answered while still finding the provider's models (`pendingProviders`). */
+      partial: boolean;
+      /** The gateway's refresh of its catalogue failed (`refreshFailed`): try again. */
+      failed: boolean;
+    }
+  | { status: "error"; error: string };
+
+/**
+ * The models the gateway's config lets a bot use, as the Model menu needs it: null when nothing
+ * limits them. The bot's own `modelPolicy.allow`, else `agents.defaults.modelPolicy.allow`, else
+ * the old `agents.defaults.models` while the config is unmigrated. The gateway lists, and lets a
+ * task switch to, only what it names; with no wildcard in it, a bot's own model and the default
+ * can still be others, and with one they run on the first model it allows
+ * (docs/research/model-catalog.md, section 8). `whole` is the providers a `<provider>/*` entry
+ * leaves whole, which both versions read alike. Whether any entry is a wildcard depends on the
+ * version: `wildcards` as 2026.10.6 reads them (`<provider>/…/*`), `prefixWildcards` as
+ * 2026.11.10 does, which also reads a prefix (`openai/gpt-*`) and so finds every one 2026.10.6
+ * finds.
+ */
+export type ModelAllowlist = { whole: string[]; wildcards: boolean; prefixWildcards: boolean };
+
 /** The longest model id Clawtrate sends. */
 export const MAX_MODEL_ID_CHARS = 512;
 
@@ -251,6 +334,33 @@ export type LockEvidence = {
   lastMatchAt: number | null;
   /** A read found the order no longer matching after one that did. */
   lostAt: number | null;
+  /**
+   * Where the read that gave this evidence stands among the engine's reads and sends, in the order
+   * they began (`AccountsEngine.nextSeq`); null until a read. Reads are ordered by it, never by the
+   * clock, which can give two of them the same millisecond.
+   */
+  readSeq: number | null;
+  /**
+   * The newest read begun that has been applied here, one that failed included (`readSeq` of a
+   * read shown, or of a failure said): a read begun before it publishes nothing.
+   */
+  attemptSeq: number | null;
+  /**
+   * The newest read of the bot sent, stamped as it is sent, whatever becomes of it (still out,
+   * failed, discarded, or applied): a press sends only when no read began after its own, or the
+   * newest one began is the one applied here as a reading (`readSeq`).
+   */
+  startedSeq: number | null;
+  /**
+   * The gateway the read that gave this evidence was answered by, as its connection named it;
+   * null when that wasn't known. Only a read of the gateway a press was sent to settles it.
+   */
+  readGateway: string | null;
+  /**
+   * The read that gave this evidence listed the binding's provider: only then does its missing
+   * order mean there is none. False until a read, and for a read that didn't list it.
+   */
+  providerRead: boolean;
   error: string | null;
 };
 
@@ -406,6 +516,44 @@ export type AccountWrite = {
   at: number;
 };
 
+/**
+ * A press of Unlock or Clear on a bot's Account page (#660): `models.authOrderSet {provider,
+ * agentId}` with no account ids, which clears the bot's stored order for the provider over the
+ * connection. What it ended as is said only from the gateway's own read after it.
+ */
+export type OrderClear = {
+  /** The press's own id, chosen by the screen that pressed it: what that screen shows as its own. */
+  id: string;
+  /** The gateway the press was confirmed for, by its identity: another gateway shows nothing of it. */
+  gatewayId: string | null;
+  botId: string;
+  provider: string;
+  /** `unlock`: the order of a bot bound to an account; `clear`: one kept for a bot the gateway chooses for. */
+  kind: "unlock" | "clear";
+  /** The one account the order named when the confirmation opened: the order the press acts on. */
+  account: string;
+  /**
+   * `sending`: under way. `cleared`: the read after it finds no stored order. `refused`: the
+   * gateway answered no. `unanswered`: no answer came, and the read after it doesn't show the
+   * order cleared. `kept`: the gateway answered yes, and its read still shows the order. `unread`:
+   * the gateway answered yes, and the read after it failed. `moved`: the order read before
+   * sending wasn't the one the confirmation showed, so nothing was sent. `unsent`: that read
+   * failed, or the connection changed first, so nothing was sent.
+   */
+  status: "sending" | "cleared" | "refused" | "unanswered" | "kept" | "unread" | "moved" | "unsent";
+  /** The gateway's words for a refusal, or why an answer or a read didn't come. */
+  error: string | null;
+  at: number;
+  /** Where the send stands among the engine's reads and sends: a read begun after it can settle an unsure ending. */
+  sentSeq: number | null;
+  /** The read that found no stored order: where it stands, and when it began (the time the line names). */
+  checkedSeq: number | null;
+  checkedAt: number | null;
+};
+
+/** How long a press waits for the gateway's answer before it reads the order to find out. */
+export const ORDER_CLEAR_WAIT_MS = 20_000;
+
 export type AccountsState = {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
@@ -424,10 +572,14 @@ export type AccountsState = {
   models: CatalogModel[];
   /** Providers whose picker rows were cut at `MAX_CATALOG_MODELS`, with how many it listed. */
   modelsCut: PickerCut[];
+  /** The config's model list as every bot's menu can say it (`readModelAllowlist`), or null. */
+  modelAllowlist: ModelAllowlist | null;
   bindings: BotBinding[];
   signIn: SignInState | null;
   creation: BotCreationState | null;
   write: AccountWrite | null;
+  /** The last Unlock or Clear, for the line that says how it went. */
+  clear: OrderClear | null;
 };
 
 export const initialAccountsState: AccountsState = {
@@ -443,10 +595,12 @@ export const initialAccountsState: AccountsState = {
   keyProviders: [],
   models: [],
   modelsCut: [],
+  modelAllowlist: null,
   bindings: [],
   signIn: null,
   creation: null,
   write: null,
+  clear: null,
 };
 
 export const unreadEvidence: LockEvidence = {
@@ -454,6 +608,11 @@ export const unreadEvidence: LockEvidence = {
   checkedAt: null,
   lastMatchAt: null,
   lostAt: null,
+  readSeq: null,
+  attemptSeq: null,
+  startedSeq: null,
+  readGateway: null,
+  providerRead: false,
   error: null,
 };
 
@@ -535,6 +694,11 @@ export type ViewProfile = {
 /** One bot's `models.authStatus` answer, as read. */
 export type BotView = {
   profiles: ViewProfile[];
+  /**
+   * The providers the answer lists, within `MAX_ACCOUNTS`. A provider not here was not read: its
+   * missing order says nothing, so it is never taken as "no order".
+   */
+  providers: string[];
   orders: Record<string, StoredOrder>;
   /** Providers with a key configured or saved: `apiKey` set, or an `api_key` profile. */
   keyed: string[];
@@ -552,16 +716,31 @@ export function unavailableReason(answer: unknown): string | null {
   return (code ?? "unavailable").slice(0, 128);
 }
 
+/**
+ * Said when a `models.authStatus` answer is no record, or a record without its `providers` list:
+ * the gateway always sends that list, an empty one included, so such an answer is no reading.
+ */
+export const NO_ACCOUNT_STATUS = "The gateway's answer carried no account status for the bot.";
+
+/**
+ * One bot's `models.authStatus` answer. An answer that says it is unavailable is read as such;
+ * one with no record or no `providers` list throws `NO_ACCOUNT_STATUS`, so it is never read as a
+ * bot with no accounts and no order.
+ */
 export function readBotView(answer: unknown): BotView {
+  const unavailable = unavailableReason(answer);
   const record = asRecord(answer) ?? {};
+  if (unavailable === null && !Array.isArray(record.providers)) throw new Error(NO_ACCOUNT_STATUS);
   const profiles: ViewProfile[] = [];
   const orders: Record<string, StoredOrder> = {};
   const keyed = new Set<string>();
+  const listed = new Set<string>();
   const providers = Array.isArray(record.providers) ? record.providers : [];
   for (const raw of providers.slice(0, MAX_ACCOUNTS)) {
     const provider = asRecord(raw);
     const id = str(provider?.provider);
     if (!provider || !id) continue;
+    listed.add(id);
     if (asRecord(provider.apiKey)) keyed.add(id);
     const order = strings(provider.profileOrder, MAX_ORDER_IDS);
     if (Array.isArray(provider.profileOrder)) {
@@ -598,10 +777,11 @@ export function readBotView(answer: unknown): BotView {
     .slice(0, MAX_KEY_PROVIDERS);
   return {
     profiles,
+    providers: [...listed],
     orders,
     keyed: [...keyed],
     capabilities,
-    unavailable: unavailableReason(answer),
+    unavailable,
   };
 }
 
@@ -749,6 +929,204 @@ export function readProviderCatalog(
   };
 }
 
+/** What a `models.list` answer's `providerOutcomes` says of one provider (`ModelRefresh`). */
+function outcomeOf(answer: unknown, provider: string): RefreshOutcome {
+  const outcomes = asRecord(answer)?.providerOutcomes;
+  const statuses = (Array.isArray(outcomes) ? outcomes : [])
+    .map(asRecord)
+    .filter((each) => each?.provider === provider)
+    .map((each) => each?.status);
+  // The list was asked again if any account's discovery answered.
+  if (statuses.includes("ready")) return "ready";
+  if (statuses.includes("auth-rejected")) return "auth-rejected";
+  return statuses.length > 0 ? "unavailable" : null;
+}
+
+/** Up to `MAX_REFRESH_NAMES` ids, each cleaned to one short line. */
+const named = (ids: string[]) =>
+  ids.slice(0, MAX_REFRESH_NAMES).map((id) => cleanLine(id, MAX_REFRESH_NAME_CHARS));
+
+/**
+ * One refresh's answer for a provider, against the ids the menu listed before: the rows it lists
+ * now (in the gateway's order) and what changed. `configured` is from the gateway's config.
+ */
+export function readModelRefresh(
+  answer: unknown,
+  provider: string,
+  before: readonly string[],
+  /** The provider's model ids its entry in the gateway's config declares. */
+  declared: ReadonlySet<string>,
+  /** The gateway checks OpenClaw's model list online (`models.catalogRefresh`), or unknown. */
+  hostedList: boolean | null,
+  /** The config's model list for the bot asked for limits the provider, so filters its rows. */
+  limited: boolean,
+): {
+  rows: CatalogModel[];
+  compare: (shown: readonly string[], cutBefore: number | null) => ModelRefresh;
+} {
+  const record = asRecord(answer);
+  const rows = modelRows(answer).filter((row) => row.provider === provider);
+  const pending = Array.isArray(record?.pendingProviders)
+    ? record.pendingProviders.includes(provider)
+    : false;
+  const outcome = outcomeOf(answer, provider);
+  // The config's list is the whole list only when every model the gateway lists is one it
+  // declares: otherwise OpenClaw's own or a plugin's are listed beside them. Rows a model list
+  // for bots filtered say nothing of that.
+  const configured = !limited && rows.length > 0 && rows.every((row) => declared.has(row.id));
+  return {
+    rows,
+    compare: (shown, cutBefore) => {
+      const was = new Set(before);
+      const listed = new Set(rows.map((row) => row.id));
+      // Gone only when the gateway no longer lists it, not when a cut no longer shows it; new only
+      // when the menu showed the provider whole before, so a cut can't make a model look new.
+      const added = cutBefore === null ? shown.filter((id) => !was.has(id)) : [];
+      const removed = [...was].filter((id) => !listed.has(id));
+      return {
+        status: "done",
+        provider,
+        added: named(added),
+        addedCount: added.length,
+        removed: named(removed),
+        removedCount: removed.length,
+        removedIds: removed,
+        counts: cutBefore === null ? null : { before: cutBefore, now: rows.length },
+        cut:
+          cutBefore === null && shown.length < rows.length
+            ? { shown: shown.length, now: rows.length }
+            : null,
+        outcome,
+        configured,
+        hostedList,
+        partial: pending,
+        failed: record?.refreshFailed === true,
+      };
+    },
+  };
+}
+
+/** Whether the gateway's config declares models for a provider (`models.providers.<id>.models`). */
+export function declaredModels(config: RawRecord | null, provider: string): Set<string> {
+  const root = asRecord(config?.config);
+  const entry = asRecord(asRecord(asRecord(root?.models)?.providers)?.[provider]);
+  const models = Array.isArray(entry?.models) ? entry.models.slice(0, MAX_PROVIDER_MODELS) : [];
+  return new Set(models.map((model) => str(asRecord(model)?.id)).filter((id) => id !== null));
+}
+
+/**
+ * The gateway checks OpenClaw's model list online, unless its config turns that off; null when the
+ * config couldn't be read, so nothing is said of it.
+ */
+export function checksHostedList(config: RawRecord | null): boolean | null {
+  if (config === null) return null;
+  const root = asRecord(config.config);
+  return asRecord(asRecord(root?.models)?.catalogRefresh)?.enabled !== false;
+}
+
+/** A wildcard entry: its provider, and whether it allows the provider whole. */
+type Wildcard = { provider: string; whole: boolean };
+
+/** At least one segment, each non-empty, without `*`, white space or a control character. */
+const validSegments = (segments: string[]) =>
+  segments.length >= 1 &&
+  // eslint-disable-next-line no-control-regex
+  segments.every((segment) => segment.length > 0 && !/[*\s\u0000-\u001f\u007f]/.test(segment));
+
+/**
+ * A wildcard as OpenClaw 2026.10.6 reads one (`parseModelPolicyWildcardRef`): segments split on
+ * `/` and trimmed, the last exactly `*`. It matches at a segment's end only.
+ */
+function segmentWildcard(key: string): Wildcard | null {
+  const segments = key
+    .trim()
+    .split("/")
+    .map((segment) => segment.trim());
+  if (segments.at(-1) !== "*" || !validSegments(segments.slice(0, -1))) return null;
+  return { provider: segments[0]!.toLowerCase(), whole: segments.length === 2 };
+}
+
+/**
+ * A wildcard as OpenClaw 2026.11.10 reads one (`parseModelPolicyWildcardRef`): it ends in `*`,
+ * the segments before the last are trimmed and valid, and the last may be a prefix
+ * (`openai/gpt-*`), which matches any model whose reference starts with it.
+ */
+function prefixWildcard(key: string): Wildcard | null {
+  const trimmed = key.trim();
+  if (!trimmed.endsWith("*")) return null;
+  const pieces = trimmed.slice(0, -1).split("/");
+  const last = (pieces.pop() ?? "").trimStart();
+  const before = pieces.map((piece) => piece.trim());
+  if (!validSegments(before) || (last !== "" && !validSegments([last]))) return null;
+  return { provider: before[0]!.toLowerCase(), whole: before.length === 1 && last === "" };
+}
+
+/**
+ * The config's model list for one bot (`ModelAllowlist`), as the gateway resolves it
+ * (`resolveConfiguredModelPolicyAllow`), with `botId` null for a bot with no entry of its own.
+ */
+export function effectiveAllowlist(
+  config: RawRecord | null,
+  botId: string | null,
+): ModelAllowlist | null {
+  const root = asRecord(config?.config);
+  const agents = asRecord(root?.agents);
+  const defaults = asRecord(agents?.defaults);
+  const own =
+    botId === null ? null : asRecord(asRecord(asRecord(agents?.entries)?.[botId])?.modelPolicy);
+  const policy = asRecord(defaults?.modelPolicy);
+  const migrated = asRecord(asRecord(root?.meta)?.migrations)?.modelPolicyAllowlist === true;
+  // The bot's own policy when it has an `allow`, then the default policy's; the old
+  // `agents.defaults.models` only while there is no default policy and the config hasn't been
+  // migrated, which any config write does.
+  let refs: unknown[] = [];
+  if (own && Object.hasOwn(own, "allow")) refs = Array.isArray(own.allow) ? own.allow : [];
+  else if (policy && Object.hasOwn(policy, "allow"))
+    refs = Array.isArray(policy.allow) ? policy.allow : [];
+  else if (!policy && !migrated) refs = Object.keys(asRecord(defaults?.models) ?? {});
+  const keys = refs
+    .slice(0, MAX_ALLOWLIST_ENTRIES)
+    .filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0)
+    .map((ref) => ref.trim());
+  // An empty list limits nothing.
+  if (keys.length === 0) return null;
+  // Only `<provider>/*` leaves a provider whole (both versions read it alike, spaces trimmed); a
+  // longer or prefix wildcard limits within it.
+  const whole = new Set<string>();
+  for (const key of keys) {
+    const wildcard = segmentWildcard(key);
+    if (wildcard?.whole) whole.add(wildcard.provider);
+  }
+  // A whole-provider entry the bounds below would drop would read as a limit the gateway never
+  // set: then nothing is said of the list.
+  const kept = [...whole].filter((provider) => provider.length <= MAX_PREF_ID_CHARS);
+  if (kept.length !== whole.size || kept.length > MAX_KEY_PROVIDERS) return null;
+  return {
+    whole: kept,
+    wildcards: keys.some((key) => segmentWildcard(key) !== null),
+    prefixWildcards: keys.some((key) => prefixWildcard(key) !== null),
+  };
+}
+
+/** Whether a bot's model list (`effectiveAllowlist`) limits a provider's models, so filters its rows. */
+export function limitsProvider(list: ModelAllowlist | null, provider: string): boolean {
+  return list !== null && !list.whole.includes(provider.toLowerCase());
+}
+
+/**
+ * The config's model list as every bot's Model menu can say it: only when no bot has a list of
+ * its own, so the default list is the one for each bot and for a new one; null otherwise, as
+ * which list applies to the menu shown isn't known there.
+ */
+export function readModelAllowlist(config: RawRecord | null): ModelAllowlist | null {
+  const entries = asRecord(asRecord(asRecord(config?.config)?.agents)?.entries);
+  const ownLists = Object.values(entries ?? {}).some((entry) => {
+    const policy = asRecord(asRecord(entry)?.modelPolicy);
+    return policy !== null && Object.hasOwn(policy, "allow");
+  });
+  return ownLists ? null : effectiveAllowlist(config, null);
+}
+
 /** Every model row of a `models.list` answer, in its order. */
 function modelRows(answer: unknown): CatalogModel[] {
   const record = asRecord(answer);
@@ -811,7 +1189,21 @@ export function evaluateOrder(
   order: StoredOrder | null,
   accountListed: boolean,
   at: number,
+  seq: number | null = null,
+  gateway: string | null = null,
+  providerRead = true,
 ): LockEvidence {
+  // A bot bound to an account whose provider the answer doesn't list: no reading of its order.
+  // As a failed read, the last confirmation stands with its time, and nothing is said lost.
+  if (binding.mode === "account" && binding.account && !providerRead)
+    return {
+      ...previous,
+      status: "failed",
+      attemptSeq: seq,
+      readGateway: gateway,
+      providerRead: false,
+      error: providerNotListed(binding.provider ?? ""),
+    };
   let status: LockEvidence["status"];
   const ids = order?.ids ?? [];
   if (binding.mode !== "account" || !binding.account || ids.length === 0) status = "none";
@@ -835,8 +1227,26 @@ export function evaluateOrder(
     checkedAt: at,
     lastMatchAt: matched ? at : previous.lastMatchAt,
     lostAt: matched ? null : wasMatched ? at : previous.lostAt,
+    readSeq: seq,
+    attemptSeq: seq,
+    startedSeq: previous.startedSeq,
+    readGateway: gateway,
+    providerRead,
     error: null,
   };
+}
+
+/**
+ * Said when a read of the bot begun after the press's read before the send failed, and none has
+ * succeeded since: nothing confirms the order the person confirmed, so nothing is sent.
+ */
+export function unconfirmedOrder(kind: "unlock" | "clear"): string {
+  return `Clawtrate couldn't read the order again just now. Check now, then ${kind === "unlock" ? "Unlock" : "Clear order"} again.`;
+}
+
+/** Said when the gateway's answer for a bot doesn't list the provider of its account or order. */
+export function providerNotListed(provider: string): string {
+  return `The gateway's answer didn't list ${provider}, so it says nothing of that provider's order.`;
 }
 
 /** The word a bot's account row carries, from what was read. */
@@ -863,6 +1273,46 @@ export function accountWord(binding: BotBinding): AccountWord {
 export function retainedOrder(binding: BotBinding): string | null {
   if (binding.mode !== "gateway" || !binding.order?.stored) return null;
   return binding.order.ids.length === 1 ? binding.order.ids[0]! : null;
+}
+
+/**
+ * What an Unlock or Clear is shown as now, from the gateway's reads of the bot, ordered by when
+ * each began (`readSeq`, never the clock): as it ended, with the time of the read that settled it.
+ * An unsure ending (`unanswered`, `unread`, `kept`) becomes `cleared` when a read begun after the
+ * send, answered by the gateway the press was sent to, lists its provider and finds no stored order
+ * for it, while no newer attempt has failed. A `cleared` one is shown no more (null) once a read
+ * begun after its own finds a stored order there again: the line never says the order is gone
+ * above a page that shows it.
+ */
+export function clearShown(
+  clear: OrderClear,
+  binding: BotBinding,
+): { status: OrderClear["status"]; checkedAt: number | null } | null {
+  const seq = binding.evidence.readSeq;
+  const same = binding.provider === clear.provider;
+  const stored = same && binding.order?.stored === true;
+  if (clear.status === "cleared")
+    return stored && seq !== null && clear.checkedSeq !== null && seq > clear.checkedSeq
+      ? null
+      : { status: "cleared", checkedAt: clear.checkedAt };
+  const unsure =
+    clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
+  const gateway =
+    clear.gatewayId !== null &&
+    binding.evidence.readGateway === clear.gatewayId &&
+    binding.evidence.providerRead;
+  if (
+    unsure &&
+    gateway &&
+    same &&
+    !stored &&
+    seq !== null &&
+    binding.evidence.attemptSeq === seq &&
+    clear.sentSeq !== null &&
+    seq > clear.sentSeq
+  )
+    return { status: "cleared", checkedAt: binding.evidence.checkedAt };
+  return { status: clear.status, checkedAt: null };
 }
 
 /** The gateway's command line for the lock, in its own form (rows 12 and 14). */

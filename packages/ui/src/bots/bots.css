@@ -572,6 +572,61 @@ button.b-choice:hover {
   white-space: normal;
 }
 
+/* What a row's action found, and the more text under it, use the menu's whole width. The line
+   widens a narrow menu as far as a section line may, never past its dialog; the more text never
+   widens it. On a phone, where the menu is as wide as its select, both fill it. */
+.b-menu .menu-line,
+.b-menu .menu-panel {
+  min-width: 100%;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.b-menu .menu-line {
+  max-width: 260px;
+}
+
+.b-menu .menu-panel {
+  width: 0;
+}
+
+.b-menu .menu-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+}
+
+.b-menu .menu-line > span {
+  flex: 1;
+}
+
+/* The small item on the line: its own size, not a row's. */
+.b-menu .menu-item.menu-more {
+  flex: none;
+  width: auto;
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
+/* On touch it keeps the tap size every menu item has. */
+[data-input="touch"] .b-menu .menu-item.menu-more {
+  min-height: var(--tap-min);
+}
+
+.b-menu .menu-panel {
+  display: grid;
+  gap: 6px;
+  padding: 2px 10px 8px;
+}
+
+.b-menu .menu-panel p {
+  margin: 0;
+}
+
 /* The field for a model id typed in (section 9), under the pair. */
 .b-model-typed {
   display: grid;
@@ -1712,7 +1767,7 @@ button.b-open > .icon {
   margin-top: var(--space-5);
 }
 
-/* "How bots work in Clawtrate" (BotGuides.tsx): one row per instructions file. */
+/* "Bots know how Clawtrate works" (BotGuides.tsx): a row per instructions file that needs a look. */
 .bot-guides-list {
   display: grid;
   gap: 10px;
@@ -1721,28 +1776,14 @@ button.b-open > .icon {
   list-style: none;
 }
 
-.bot-guides-list .bot-guides-check,
-.bot-guides-check {
-  margin: 0;
-}
-
-.bot-guides-check > span,
 .bot-guides-row {
   display: grid;
   gap: 1px;
   min-width: 0;
-}
-
-.bot-guides-row {
   padding-left: 2px;
 }
 
-.bot-guides-check small,
 .bot-guides-row small {
   color: var(--text-muted);
   font-size: var(--text-sm);
-}
-
-.bot-guides > .bot-guides-check {
-  margin-top: 14px;
 }

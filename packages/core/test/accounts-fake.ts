@@ -11,6 +11,7 @@ import { ClawtrateClient } from "../src/client.ts";
 import {
   FakeGateway,
   GatewayError,
+  guidesOff,
   helloOk,
   memoryStorage,
   testHost,
@@ -146,6 +147,17 @@ export class AccountsGateway {
       { id: "dev-2", provider: "acme", thinkingLevels: [], available: true },
     ],
   };
+  /**
+   * A Refresh (`models.list {provider, refresh: true}`): its rows for the provider, then the
+   * picker's from then on; null answers with the picker's rows for the provider.
+   */
+  refreshed: Record<string, Json[]> | null = null;
+  /** More of a Refresh's answer: `providerOutcomes`, `pendingProviders`, `refreshFailed`. */
+  refreshMarkers: Json = {};
+  /** A Refresh is answered once this settles. */
+  holdRefresh: Promise<void> | null = null;
+  /** Refuse a Refresh with this error. */
+  failRefresh: { code: string; message: string } | null = null;
   /** The gateway's picker for the default bot. */
   pickerCatalog: () => Json = () => ({
     models: [
@@ -167,6 +179,17 @@ export class AccountsGateway {
   refuseCancel = false;
   /** Fail `models.authStatus` for this bot. */
   failStatusFor: string | null = null;
+  /**
+   * Answer `models.authStatus` for this bot with `answer` in place of its status: no payload at
+   * all (`undefined`), or a record with no `providers` list.
+   */
+  blankStatus: { agentId: string; answer: unknown } | null = null;
+  /**
+   * `models.authOrderSet` with no account ids, as OpenClaw 2026.10.6 and 2026.11.10 take it: the
+   * bot's stored order for the provider goes. This runs in its place when set: a refusal, an
+   * answer held, or an answer that leaves the order as it was.
+   */
+  orderSet: ((params: { provider: string; agentId: string }) => unknown) | null = null;
   /** Echo what was typed back in a refusal, as a careless gateway might. */
   echoTyped = false;
   /**
@@ -276,7 +299,29 @@ export class AccountsGateway {
       return { status: "ok" };
     };
     g.handlers["models.list"] = (params) => {
-      const { view, provider } = params as { view?: string; provider?: string };
+      const { view, provider, refresh } = params as {
+        view?: string;
+        provider?: string;
+        refresh?: boolean;
+      };
+      if (refresh === true) {
+        const answer = () => {
+          if (this.failRefresh) throw new GatewayError(this.failRefresh);
+          if (this.refreshed) {
+            const now = this.refreshed;
+            const before = this.pickerCatalog();
+            const rest = ((before as { models: Json[] }).models ?? []).filter(
+              (row) => !Object.hasOwn(now, String(row.provider)),
+            );
+            this.pickerCatalog = () => ({ models: [...Object.values(now).flat(), ...rest] });
+          }
+          const rows = ((this.pickerCatalog() as { models: Json[] }).models ?? []).filter(
+            (row) => row.provider === provider,
+          );
+          return { models: rows, ...this.refreshMarkers };
+        };
+        return this.holdRefresh ? this.holdRefresh.then(answer) : answer();
+      }
       if (view !== "all")
         return this.holdPicker
           ? this.holdPicker.then(() => this.pickerCatalog())
@@ -292,6 +337,7 @@ export class AccountsGateway {
       const { agentId } = params as { agentId: string };
       if (agentId === this.failStatusFor)
         throw new GatewayError({ code: "UNAVAILABLE", message: "status unavailable" });
+      if (agentId === this.blankStatus?.agentId) return this.blankStatus.answer;
       if (this.unavailable)
         return { providers: [], unavailable: { code: "PREPARED_MODEL_AUTH_UNAVAILABLE" } };
       return this.status(agentId);
@@ -409,6 +455,23 @@ export class AccountsGateway {
       if (!this.shared.some((p) => p.id === id))
         this.shared.push({ id, provider, type: "api_key" });
       return { provider, profileId: id };
+    };
+    g.handlers["models.authOrderSet"] = (params) => {
+      const order = params as { provider: string; agentId: string; profileIds?: string[] };
+      if (!this.admin)
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: "missing scope: operator.admin",
+        });
+      if (!this.bots.some((bot) => bot.id === order.agentId))
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: `unknown agent id "${order.agentId}"`,
+        });
+      if (order.profileIds) throw new Error("this fake gateway clears orders only");
+      if (this.orderSet) return this.orderSet(order);
+      delete this.orders[order.agentId]?.[order.provider];
+      return { provider: order.provider, profileIds: null };
     };
     g.handlers["models.authLogout"] = (params) => {
       const { profileIds } = params as { profileIds: string[] };
@@ -612,11 +675,13 @@ export async function accountsClient(
     adminHeld?: boolean;
     /** Read the accounts before returning (the default). */
     read?: boolean;
+    /** Leave the bots' guides on, as a new device has them (`guidesOff`). */
+    guides?: boolean;
   } = {},
 ) {
   const fake = options.gateway ?? new AccountsGateway();
   const scopes = options.scopes ?? ADMIN_SCOPES;
-  const storage = memoryStorage({
+  const stored = memoryStorage({
     connection: JSON.stringify({ url: URL_A, token: null }),
     [tokenKey(URL_A)]: JSON.stringify({
       token: "device-token",
@@ -625,6 +690,7 @@ export async function accountsClient(
       ...((options.adminHeld ?? scopes.includes("operator.admin")) ? { adminHeld: true } : {}),
     }),
   });
+  const storage = options.guides ? stored : guidesOff(stored);
   const client = new ClawtrateClient(testHost(fake.gateway, storage), FAST);
   await client.start();
   await until(() => client.state.discovery.status === "ready");

@@ -757,7 +757,7 @@ async function accountPage() {
   return page.getByTestId("bot-settings");
 }
 
-test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one unlocked shows as Bound", async () => {
+test("F-476 F-490 F-592: a bot locked with the tool's command shows as Locked, and Unlock clears it on the running gateway", async () => {
   test.setTimeout(480_000);
   const settings = await accountPage();
   await expect(settings.getByTestId("bound-note")).toContainText(
@@ -784,15 +784,26 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
   await shots("account-page-locked");
   await page.getByRole("button", { name: "Back to settings" }).click();
   await expect(page.getByTestId("account-word")).toHaveText("Locked");
-  // Unlocked on the gateway: Bound again, and the page says the lock is gone.
-  await toolOrder("unlock", "--agent", "second", "--provider", "acme");
+  // Unlock, with admin: one confirmation, then the gateway clears the order while it runs.
   await page.getByRole("button", { name: /^Account: / }).click();
-  await expect(checkNow).toBeEnabled({ timeout: 180_000 });
-  await checkNow.click();
-  await expect(settings.getByTestId("bound-note")).toBeVisible({ timeout: 20_000 });
-  await expect(
-    settings.getByText(/The lock is gone: the gateway's order for Second changed/),
-  ).toBeVisible();
+  await settings.getByRole("button", { name: "Unlock…" }).click();
+  await page
+    .getByRole("alertdialog", { name: "Unlock Second?" })
+    .getByRole("button", {
+      name: "Unlock",
+      exact: true,
+    })
+    .click();
+  await expect(settings.getByTestId("clear-outcome")).toContainText(
+    "Unlocked. The gateway no longer keeps an order for Second that names only Acme · Home",
+    { timeout: 30_000 },
+  );
+  await expect(settings.getByTestId("bound-note")).toBeVisible();
+  await expect(settings.getByText(/The lock is gone/)).toHaveCount(0);
+  await shots("account-page-unlocked");
+  // No restart: "Unlocked." comes only from a read on the connection the press was sent on, and
+  // the gateway's own read keeps no order.
+  expect((await view("second", "acme"))?.profileOrder ?? null).toBeNull();
 });
 
 test("F-473: changing a locked bot to another account of its provider shows the lock out of date", async () => {
@@ -825,7 +836,16 @@ test("F-473: changing a locked bot to another account of its provider shows the 
   });
   // The gateway still keeps the old one-account order: the next run goes to the new account first.
   expect((await view("second", "acme"))?.profileOrder).toEqual(["acme:home"]);
-  await toolOrder("unlock", "--agent", "second", "--provider", "acme");
+  // Unlock clears the old order too, from this page, with the gateway running.
+  await settings.getByRole("button", { name: "Unlock…" }).click();
+  await expect(page.getByRole("alertdialog", { name: "Unlock Second?" })).toContainText(
+    "The gateway's order for Second still lists only Acme · Home.",
+  );
+  await page.getByRole("button", { name: "Unlock", exact: true }).click();
+  await expect(settings.getByTestId("clear-outcome")).toContainText("Unlocked.", {
+    timeout: 30_000,
+  });
+  expect((await view("second", "acme"))?.profileOrder ?? null).toBeNull();
 });
 
 test("F-490: a bot whose model on the gateway lists fallbacks, or lost its account, is reported with the way to correct it", async () => {

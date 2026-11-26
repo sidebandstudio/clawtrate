@@ -55,6 +55,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
   "packages/core/src/mapping.ts:NOT_FILES": "static, six block types that are never a file",
   "packages/core/src/mapping.ts:KNOWN_FILES": "static, three block types that hand a file over",
+  "packages/core/src/mapping.ts:RUN_STATE_FIELDS":
+    "static, the two run-state fields of a session row",
+  "packages/core/src/not-run.ts:PREFIXES":
+    "static, three patterns the gateway puts before a reason",
   "packages/core/src/pictures.ts:SIGNATURES.image/png": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/jpeg": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/gif": "static, two byte signatures",
@@ -98,6 +102,8 @@ const ALLOWED: Record<string, string> = {
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":
     "the words for those steps, one each, gone when it returns",
+  "packages/core/src/accounts-engine.ts:readAll>sent":
+    "one accounts read's number per listed bot, as its request was sent, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/scopes.ts:IMPLIED_BY_WRITE": "static, the scopes write implies",
   "packages/core/src/state-bounds.ts:SESSION_ROW_FIELDS": "static, the twenty-one fields read",
   "packages/core/src/state-bounds.ts:SESSION_ROW_IDS": "static, five field names",
@@ -319,6 +325,22 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/avatar.ts:wornAt>placed": "per call, at most three shapes for one pose",
   "packages/core/src/guides.ts:applyGuidesChange>errors":
     "one call; one sentence per instructions file it changed, returned to the caller",
+  "packages/core/src/guides.ts:applyGuidesChange>onList":
+    "one call; the bot ids of the one agents.list it read, dropped when it returns",
+  "packages/core/src/guides.ts:applyGuidesChange>kept":
+    "one call; the bot ids of the one agents.list it read and the record's, returned in the record",
+  "packages/core/src/guides.ts:applyGuidesChange>refused":
+    "one call; a reason per bot of the one agents.list it read, returned in the record",
+  "packages/core/src/guides.ts:applyGuidesChange>missing":
+    "one call; the folders of the one agents.list it read, returned to the caller",
+  "packages/core/src/guides.ts:applyGuidesChange>elsewhere":
+    "one call; at most MAX_GUIDES_HISTORY_BOTS (512) bot ids of the one gateway history it read, dropped when it returns",
+  "packages/core/src/guides.ts:applyGuidesChange>held":
+    "one call; the bot ids of the one agents.list it read, saved to the gateway's history and dropped when it returns",
+  "packages/core/src/guides.ts:recordRemoval>holding":
+    "one call; the folders of the one agents.list its change read, returned to that change",
+  "packages/core/src/guides.ts:readGuidesLimits>shown":
+    "one call; the bot ids of the one agents.list its caller read, held by the limit function that call returns",
 };
 
 describe("the source keeps no collection outside the registry", () => {
