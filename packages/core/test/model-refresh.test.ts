@@ -19,7 +19,7 @@ import { initialAccountsState, type AccountsState } from "../src/accounts.ts";
 import type { ReadStamp } from "../src/types.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
 import { stampOn } from "./client-harness.ts";
-import { deferred, until } from "./fake-gateway.ts";
+import { deferred, GatewayError, until } from "./fake-gateway.ts";
 
 type Json = Record<string, unknown>;
 const row = (id: string, provider = "acme"): Json => ({
@@ -145,6 +145,34 @@ describe("F-588: Refresh in the Model menu", () => {
     fake.refreshed = { acme: [row("dev-1"), row("dev-2")] };
     fake.revision += 1;
     expect(await ask()).toMatchObject({ outcome: null, configured: true });
+    client.stop();
+  });
+
+  it("F-588: a press the gateway answers UNAVAILABLE asks once and says why; the next press asks again", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    const list = fake.gateway.handlers["models.list"]!;
+    let refreshes = 0;
+    fake.gateway.handlers["models.list"] = (params) => {
+      if ((params as Json).refresh === true && ++refreshes === 1)
+        throw new GatewayError({
+          code: "UNAVAILABLE",
+          message: "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
+          retryable: true,
+          retryAfterMs: 0,
+        });
+      return list(params);
+    };
+    const ask = () => client.refreshModels("acme", stampOn("gateway-a", client));
+    expect(await ask()).toEqual({
+      status: "error",
+      error: "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
+    });
+    // A refresh runs the provider's discovery again: only a person's press asks it, once.
+    await settle();
+    expect(refreshes).toBe(1);
+    expect(await ask()).toMatchObject({ status: "done" });
+    expect(refreshes).toBe(2);
     client.stop();
   });
 
@@ -550,6 +578,7 @@ describe("F-588: Refresh, the engine alone", () => {
       now: () => 0,
       randomId: () => "id",
       log: () => {},
+      readAgain: (read) => read(),
     });
     return {
       engine,
