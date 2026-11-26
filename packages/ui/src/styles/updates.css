@@ -58,20 +58,6 @@
   display: block;
   margin-top: 6px;
 }
-.rail-top .update-entry {
-  display: none;
-}
-@container app (max-width:687px) {
-  .rail-top .update-entry {
-    display: grid;
-    width: var(--tap-min);
-    height: var(--tap-min);
-    margin-right: auto;
-  }
-  .rail-top:has(.update-entry) .rail-status {
-    margin-right: 0;
-  }
-}
 
 /* What a build adds (F-554): plain lines under a disclosure. */
 .whats-new {
@@ -87,4 +73,17 @@
 }
 .whats-new > .whats-new-lines li + li {
   margin-block-start: 4px;
+}
+
+/* The build's date and commit (F-561), for support. */
+.build-details {
+  margin-block: 8px;
+}
+.build-details > .facts {
+  margin-block-start: 4px;
+}
+.build-details code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
 }

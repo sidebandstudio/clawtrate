@@ -21,6 +21,8 @@ import {
   resolveRequest,
   markQuestion,
   PAIRING_ENDED,
+  GATEWAY_CHANGED_MESSAGE,
+  cleanGatewayName,
   type ApprovalCard,
   type BridgeCommand,
   type BridgeResultFor,
@@ -35,6 +37,7 @@ import {
   hasUnsettledWork,
   gatewayStamp,
   NOT_OPEN_IN_VIEW,
+  DISCOVERY_NOT_READY,
 } from "@clawtrate/core";
 import {
   CARD_SCENES,
@@ -71,9 +74,18 @@ import {
   PICTURE_SCENES,
   pictureAnswers,
   pictureScene,
-  sentPictureAnswer,
+  sentPictureAnswers,
 } from "./pictures.ts";
 import { BOT_NAME_SCENES, botNameCommand, botNameScene, isBotNameScene } from "./bot-name.ts";
+import { updateRunCommand, updateRunScene } from "./openclaw-update.ts";
+import {
+  BOT_FILE_SCENES,
+  botFileAnswer,
+  botFileSave,
+  botFileScene,
+  isBotFileScene,
+  type SavedFile,
+} from "./bot-files.ts";
 import {
   computerFixture,
   FIXTURE_VIEWER,
@@ -83,8 +95,16 @@ import {
 import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
+import { voiceCommands, type VoiceParams } from "./voice.ts";
+import { guidesCommands } from "./guides.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
-import { NO_SEARCH_PARAMS, searchCommands, withMessageIds, type SearchParams } from "./search.ts";
+import {
+  NO_SEARCH_PARAMS,
+  searchCommands,
+  searchHistories,
+  withMessageIds,
+  type SearchParams,
+} from "./search.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -136,6 +156,7 @@ export const SCENES = [
   ...ACTION_SCENES,
   ...PICTURE_SCENES,
   ...BOT_NAME_SCENES,
+  ...BOT_FILE_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -166,7 +187,18 @@ function loaded(now: number): ClawtrateState {
   const bots = fixtureBots();
   return {
     connection: { ...connected, connectedAt: now - 1000 },
-    discovery: { status: "ready", error: null, partial: false },
+    discovery: {
+      status: "ready",
+      error: null,
+      detail: null,
+      partial: false,
+      // The task list was read on this connection, as the host stamps it.
+      tasksRead: {
+        gatewayId: connected.gatewayId,
+        target: connected.target,
+        connectedAt: now - 1000,
+      },
+    },
     bots,
     tasksByBot: fixtureTasks(now, bots),
     transcripts: fixtureTranscripts(now, bots),
@@ -242,7 +274,17 @@ const catchingUp = (state: ClawtrateState): ClawtrateState => ({
 /** Bots and tasks have loaded again; open transcripts have not reloaded yet. */
 const discovered = (state: ClawtrateState): ClawtrateState => ({
   ...state,
-  discovery: { status: "ready", error: null, partial: false },
+  discovery: {
+    status: "ready",
+    error: null,
+    detail: null,
+    partial: false,
+    tasksRead: {
+      gatewayId: state.connection.gatewayId,
+      target: state.connection.target,
+      connectedAt: state.connection.connectedAt,
+    },
+  },
 });
 
 /** Every transcript that did not fail has reloaded. */
@@ -393,8 +435,13 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
           ...base,
           discovery: {
             status: "error",
-            error: "agents.list failed: the gateway is restarting.",
+            // As the app writes it when the gateway marked its answers as passing (#592): the plain
+            // words, and the gateway's own behind the strip's disclosure.
+            error: DISCOVERY_NOT_READY,
+            detail:
+              "Could not load bots: agents.list unavailable during gateway startup; tasks: sessions.subscribe unavailable during gateway startup",
             partial: false,
+            tasksRead: base.discovery.tasksRead,
           },
         },
         steps: [],
@@ -465,6 +512,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
     default:
       if (isActionScene(name)) return actionScene(name, base, now);
       if (isPictureScene(name)) return { initial: pictureScene(base, now, name), steps: [] };
+      if (isBotFileScene(name)) return { initial: botFileScene(base, now), steps: [] };
       if (isBotNameScene(name)) return { initial: botNameScene(name, base, now), steps: [] };
       return liveScene(name as LiveScene, base, now);
   }
@@ -537,8 +585,18 @@ export function createFixtureBridge(
     computer?: ComputerParams;
     checkIns?: CheckInParams;
     search?: SearchParams;
+    voice?: VoiceParams;
+    /** The bots' guides (guides.ts): `guides=` in the address. */
+    guides?: string | null;
     /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
     fullPairing?: boolean;
+    /** A name given to the fixture gateway on this device (`?gatewayName=`). */
+    gatewayName?: string | null;
+    /**
+     * "Show the gateway's own bot" (F-562). On unless `gatewaybot=off`, so the scenes keep
+     * Juniper, the gateway's own bot, in the rail; `gatewaybot=off` shows the default.
+     */
+    showGatewayBot?: boolean;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -559,6 +617,11 @@ export function createFixtureBridge(
   badge: number | null;
   /** From now on, refuse the rail's commands of this type, as a gateway refuses a change. */
   refuse(type: string): void;
+  /** Answer the rail's commands of this type again. */
+  allow(type: string): void;
+  /** Hold the answers of the rail's commands of this type until `releaseRail`. */
+  holdRail(type: string): void;
+  releaseRail(): void;
   /** The next plain archive meets a run that had just started, and stops it. */
   raceArchive(): void;
   /**
@@ -576,6 +639,8 @@ export function createFixtureBridge(
   releaseSnapshots(): void;
   /** Takes the Computer pane has shown refused as busy so far (`computerFixture`'s `refusals`). */
   computerRefusals(): number;
+  /** What the host's own save wrote, in the scenes that have one (`bot-files`). */
+  savedFiles: SavedFile[];
 } {
   const now = Date.now();
   const setupName = isSetupState(options.setup ?? null) ? options.setup! : null;
@@ -585,6 +650,7 @@ export function createFixtureBridge(
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
   const pictureAnswer = pictureAnswers(name);
+  const sentPictureAnswer = sentPictureAnswers(name);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
   const routineParams = options.routines ?? { state: "none" };
   let state =
@@ -601,6 +667,18 @@ export function createFixtureBridge(
       },
       accountParams,
     );
+  if (accountParams.openclaw)
+    state = {
+      ...state,
+      connection: {
+        ...state.connection,
+        openclawUpdate:
+          accountParams.openclaw === "beta"
+            ? { current: "2026.10.6", latest: "2026.11.10-beta.1", channel: "beta" }
+            : { current: "2026.10.6", latest: "2026.11.6", channel: "latest" },
+      },
+    };
+  if (accountParams.openclawRun) state = updateRunScene(accountParams.openclawRun, state);
   const checkInParams = options.checkIns ?? {
     checkins: null,
     defaultPrompt: false,
@@ -616,6 +694,8 @@ export function createFixtureBridge(
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
+  if (options.gatewayName && state.connection.gatewayUrl)
+    state = withConnection(state, { gatewayName: cleanGatewayName(options.gatewayName) || null });
   // The Computer scenes: a connection that may send and answer (unless read-only is asked for),
   // Juniper's research run that uses the browser, and the engine answered by a scripted plugin.
   const computerParams = options.computer ?? {
@@ -642,10 +722,13 @@ export function createFixtureBridge(
   }
   if (options.fullPairing)
     state = { ...state, connection: { ...state.connection, fullPairing: true } };
+  // The host keeps the choice across every state it sets, as it keeps the target below.
+  let showGatewayBot = options.showGatewayBot ?? true;
+  state = { ...state, showGatewayBot };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
-  let histories = state.transcripts;
+  let histories = { ...searchHistories(search), ...state.transcripts };
   const listeners = new Set<(state: ClawtrateState) => void>();
   // Tasks whose shared transcript is still kept (another view or unsettled work),
   // but omitted from this page's view after a refused reopen.
@@ -679,6 +762,8 @@ export function createFixtureBridge(
   const set = (next: ClawtrateState) => {
     // A state that already carries a higher target (a test's own) raises the counter with it.
     target = Math.max(target, next.connection.target);
+    if (next.showGatewayBot === undefined) next = { ...next, showGatewayBot };
+    else showGatewayBot = next.showGatewayBot;
     state = next.connection.target === target ? next : withConnection(next, { target });
     publish();
   };
@@ -718,6 +803,7 @@ export function createFixtureBridge(
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   const timers = holdableTimers();
+  const savedFiles: SavedFile[] = [];
   const { deferred } = timers;
   const searchCommand = searchCommands(search, deferred);
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
@@ -729,11 +815,25 @@ export function createFixtureBridge(
   const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
   // The rail's task actions, answered as the engine would.
   const railRefused = new Set<string>();
+  // Rail commands whose answers wait for the test to let them go (`holdRail`, `releaseRail`).
+  const railHeld = new Set<string>();
+  const railWaiting: Array<() => void> = [];
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const botDeleteCommand = botDeleteCommands(options.botDelete ?? NO_BOT_DELETE_PARAMS);
   const memory = memoryCommands(now);
+  const voice = voiceCommands(
+    options.voice ?? { voice: null, save: null },
+    () => state.connection.canWrite,
+    () => gatewayStamp(state.connection),
+    now,
+  );
+  const guides = guidesCommands(
+    options.guides ?? null,
+    () => state.connection.canAdmin,
+    () => gatewayStamp(state.connection),
+  );
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
@@ -746,6 +846,14 @@ export function createFixtureBridge(
     if (checkIn) {
       sent.push(command);
       return checkIn;
+    }
+    if (command.type === "readBotVoice" || command.type === "setBotVoice") {
+      sent.push(command);
+      return voice(command);
+    }
+    if (command.type === "readBotGuides" || command.type === "changeBotGuides") {
+      sent.push(command);
+      return guides(command);
     }
     if (
       command.type === "listMemory" ||
@@ -797,6 +905,8 @@ export function createFixtureBridge(
     );
     if (rail) {
       sent.push(command);
+      if (railHeld.has(command.type))
+        return new Promise<void>((resolve) => railWaiting.push(resolve)).then(() => rail);
       return rail;
     }
     const named = botNameCommand(
@@ -808,12 +918,22 @@ export function createFixtureBridge(
       sent.push(command);
       return named;
     }
+    const updated = updateRunCommand(
+      command,
+      () => state,
+      (next) => set(next),
+    );
+    if (updated) {
+      sent.push(command);
+      return updated;
+    }
     const live = liveCommand(command, () => state, setAnswer, files, deferred);
     sent.push(command);
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
     if (command.type === "readChatPicture") return pictureAnswer();
     if (command.type === "readSentPicture") return sentPictureAnswer(command);
+    if (command.type === "readChatFile") return botFileAnswer(command);
     if (computer && command.type.startsWith("computer")) {
       const e = computer.engine;
       const v = FIXTURE_VIEWER;
@@ -881,6 +1001,11 @@ export function createFixtureBridge(
         return;
       case "disconnect":
         set(idle());
+        return;
+      case "nameGateway":
+        if (command.gatewayUrl !== state.connection.gatewayUrl)
+          throw new Error(GATEWAY_CHANGED_MESSAGE);
+        set(withConnection(state, { gatewayName: cleanGatewayName(command.name) || null }));
         return;
       case "suspend":
         set(withConnection(state, { status: "disconnected", retryAt: null, error: null }));
@@ -1222,6 +1347,10 @@ export function createFixtureBridge(
       await apply(command);
     },
     invoke: answer,
+    ...(isBotFileScene(name)
+      ? { save: botFileSave(savedFiles, (run) => timers.deferred(run, 0)) }
+      : {}),
+    savedFiles,
     attach: async (file) => {
       const info = {
         id: `file-${files.size + 1}`,
@@ -1252,6 +1381,12 @@ export function createFixtureBridge(
     },
     badge: null,
     refuse: (type: string) => void railRefused.add(type),
+    allow: (type: string) => void railRefused.delete(type),
+    holdRail: (type: string) => void railHeld.add(type),
+    releaseRail: () => {
+      railHeld.clear();
+      for (const resolve of railWaiting.splice(0)) resolve();
+    },
     raceArchive: () => void (railRace.archive = true),
     hold: timers.hold,
     release: timers.release,

@@ -1,0 +1,332 @@
+name: OpenClaw update
+
+# A real OpenClaw self-update through the gateway's own `update.run`, called as Clawtrate's
+# "Update OpenClaw" calls it (a `webchat` requester with a tag of its own), on GitHub-hosted
+# runners that GitHub discards after the job. It installs an older OpenClaw globally, runs its
+# gateway the two ways `update.run` can hand an update off from (a systemd user service, and a
+# verified foreground process), and lets the gateway replace its own package and restart. That
+# touches the global package install and the service manager, so it runs only here, never on a
+# person's computer; the driver refuses to run anywhere but a GitHub-hosted runner.
+#
+# tools/openclaw-update-check/src/check.ts connects as an admin operator, follows the run across
+# the restart and fails, with the timeline and the gateway's log, unless the run succeeded, the
+# gateway kept its identity, the restarted gateway reports the run's after.version, and that is
+# the version the gateway offered before the run. The target is whatever npm's latest is.
+#
+# Each job is one case:
+# - `systemd` and `foreground`: an idle gateway. The foreground job also sends a second
+#   update.run, which must be refused as already running, and reopens its client mid-run.
+# - `-untagged`: the same press with no requester, to compare what each delivers.
+# - `dropped`: the connection closes right after the press; the run must be found by its tag.
+# - `unmanaged`: OpenClaw installed in a folder; update.run must refuse with
+#   unmanaged-package-install and no restart.
+# - `-busy`: a slow reply from the repository's scripted model is in flight at the press.
+# - `-session`: the main session exists, from a short turn that ended before the press.
+# - `engine`, `engine-dropped`, `engine-reopen`: Clawtrate's own update engine from
+#   packages/core, in a Node host, pressing Update as the interface does (engine.ts). The
+#   dropped job loses the press's answer; the reopen job quits and reopens the client mid-run.
+# - `campaign`: the beta channel with automatic updates on, so the press adopts the gateway's
+#   own update while it waits for a reply in flight.
+# The busy, session and campaign jobs measure (`--measure`): the driver writes their verdict to the
+# run's summary and exits 0, because their outcome depends on timing or is the gateway's own (#572).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 1"
+  pull_request:
+    paths:
+      - packages/core/src/openclaw-update.ts
+      - packages/core/src/gateway-update.ts
+      - tools/openclaw-update-check/**
+      - .github/workflows/openclaw-update.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-update-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  update:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { mode: systemd, start: systemd, install: global, args: "" }
+          - { mode: systemd-untagged, start: systemd, install: global, args: "--untagged" }
+          - mode: foreground
+            start: foreground
+            install: global
+            args: "--second-press --reopen"
+          - mode: foreground-untagged
+            start: foreground
+            install: global
+            args: "--second-press --reopen --untagged"
+          - { mode: dropped, start: systemd, install: global, args: "--drop-answer" }
+          - mode: unmanaged
+            start: foreground
+            install: folder
+            args: "--expect unmanaged"
+          - mode: engine
+            start: systemd
+            install: global
+            driver: engine
+            args: "--warm-session"
+            scripted: true
+          - mode: engine-dropped
+            start: systemd
+            install: global
+            driver: engine
+            args: "--drop-answer"
+          - mode: engine-reopen
+            start: systemd
+            install: global
+            driver: engine
+            args: "--reopen"
+          - mode: systemd-busy
+            start: systemd
+            install: global
+            args: "--busy-seconds 300 --measure"
+            scripted: true
+          - mode: foreground-busy
+            start: foreground
+            install: global
+            args: "--busy-seconds 300 --measure"
+            scripted: true
+          - mode: systemd-busy-untagged
+            start: systemd
+            install: global
+            args: "--busy-seconds 300 --untagged --measure"
+            scripted: true
+          - mode: foreground-busy-untagged
+            start: foreground
+            install: global
+            args: "--busy-seconds 300 --untagged --measure"
+            scripted: true
+          - mode: systemd-session
+            start: systemd
+            install: global
+            args: "--warm-session --measure"
+            scripted: true
+          - mode: systemd-session-untagged
+            start: systemd
+            install: global
+            args: "--warm-session --untagged --measure"
+            scripted: true
+          - mode: campaign
+            start: systemd
+            install: global
+            args: "--busy-seconds 300 --await-campaign --deadline-minutes 60 --measure"
+            scripted: true
+            campaign: true
+            timeout: 80
+    runs-on: ubuntu-latest
+    # The slowest case took 12.5 minutes (#572): a busy foreground gateway waits for the turn.
+    # The check then listens up to 5 minutes for rebroadcasts of the terminal state. An adopted
+    # campaign's drain can last 45 minutes on Linux, so that job gets longer.
+    timeout-minutes: ${{ matrix.timeout || 30 }}
+    env:
+      PROFILE: clawtrate-dev-update
+      PORT: "19431"
+      SCRIPTED_PROVIDER_PORT: "19432"
+      MODE: ${{ matrix.mode }}
+      SCRIPTED: ${{ matrix.scripted == true }}
+      CAMPAIGN: ${{ matrix.campaign == true }}
+      START: ${{ matrix.start }}
+      ARGS: ${{ matrix.args }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      # The scripted model comes from the development gateway tool.
+      - run: |
+          pnpm install --frozen-lockfile --filter "@clawtrate/openclaw-update-check..." \
+            --filter @clawtrate/dev-gateway
+      - run: |
+          echo "OUT=$RUNNER_TEMP/openclaw-update" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/openclaw-update"
+      - name: Install OpenClaw 2026.10.6 globally
+        if: matrix.install == 'global'
+        run: |
+          npm install --global openclaw@2026.10.6
+          echo "npm root: $(npm root --global)"
+          openclaw --profile "$PROFILE" --version
+      - name: Install OpenClaw 2026.10.6 in a folder
+        if: matrix.install == 'folder'
+        run: |
+          dir="$RUNNER_TEMP/openclaw-in-a-folder"
+          mkdir -p "$dir"
+          (cd "$dir" && npm init --yes > /dev/null && npm install openclaw@2026.10.6)
+          echo "$dir/node_modules/.bin" >> "$GITHUB_PATH"
+          "$dir/node_modules/.bin/openclaw" --profile "$PROFILE" --version
+      - name: A gateway token for this run only
+        run: |
+          token="$(openssl rand -hex 32)"
+          echo "::add-mask::$token"
+          echo "OPENCLAW_CHECK_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: The least config the gateway starts with
+        run: |
+          state="$HOME/.openclaw-$PROFILE"
+          mkdir -p "$state"
+          umask 077
+          # A job with a reply in flight also points the main bot at the scripted model, and the
+          # campaign job turns on automatic updates on the beta channel, which announces at once.
+          # shellcheck disable=SC2016 # the script is JavaScript, its ${} is a template literal
+          node -e '
+            const scripted = `http://127.0.0.1:${process.env.SCRIPTED_PROVIDER_PORT}/v1`;
+            const scriptedModel = process.env.SCRIPTED === "true";
+            const campaign = process.env.CAMPAIGN === "true";
+            const config = {
+              gateway: {
+                mode: "local",
+                port: Number(process.env.PORT),
+                bind: "loopback",
+                auth: { mode: "token", token: process.env.OPENCLAW_CHECK_TOKEN },
+              },
+              discovery: { mdns: { mode: "off" } },
+              // Scheduled turns of the gateway itself (heartbeat, memory upkeep) can run in the
+              // main session right after a restart. The update did not cause them, so they are
+              // off here. The campaign job keeps the scheduler, which its automatic update may use.
+              ...(campaign ? {} : { cron: { enabled: false } }),
+              update: campaign
+                ? { checkOnStart: true, channel: "beta", auto: { enabled: true } }
+                : { checkOnStart: true, auto: { enabled: false } },
+              ...(scriptedModel && {
+                models: {
+                  mode: "replace",
+                  providers: {
+                    scripted: {
+                      baseUrl: scripted,
+                      api: "openai-completions",
+                      apiKey: "scripted-dev-provider",
+                      models: [{ id: "dev-1", name: "Scripted dev model", input: ["text"] }],
+                    },
+                  },
+                },
+                agents: { defaults: { model: { primary: "scripted/dev-1" } } },
+              }),
+            };
+            process.stdout.write(JSON.stringify(config, null, 2));
+          ' > "$state/openclaw.json"
+      - name: Start the scripted model
+        if: matrix.scripted == true
+        run: |
+          nohup node tools/dev-gateway/src/provider-main.ts > "$OUT/scripted-model.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            if (exec 3<> "/dev/tcp/127.0.0.1/$SCRIPTED_PROVIDER_PORT") 2> /dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Start the gateway as a systemd user service
+        if: matrix.start == 'systemd'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do [ -S "$runtime/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"
+          systemctl --user show-environment > /dev/null
+          openclaw --profile "$PROFILE" gateway install
+          systemctl --user list-units --all 'openclaw*' --no-pager
+      - name: Start the gateway in the foreground of its own process
+        if: matrix.start == 'foreground'
+        run: |
+          # A clean environment: the runner's own systemd markers would make it look supervised.
+          env -i HOME="$HOME" PATH="$PATH" USER="$USER" LANG=C.UTF-8 TMPDIR="$RUNNER_TEMP" \
+            nohup openclaw --profile "$PROFILE" gateway run > "$OUT/gateway-foreground.log" 2>&1 &
+          echo "started gateway process $!"
+      - name: Wait for the gateway's port
+        run: |
+          for _ in $(seq 1 120); do
+            if (exec 3<> "/dev/tcp/127.0.0.1/$PORT") 2> /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "the gateway did not listen on $PORT within two minutes"
+          exit 1
+      - name: Update OpenClaw through update.run and follow it
+        if: matrix.driver != 'engine'
+        run: |
+          # shellcheck disable=SC2086 # ARGS is the matrix's list of flags
+          node tools/openclaw-update-check/src/check.ts --url "ws://127.0.0.1:$PORT" \
+            --profile "$PROFILE" --mode "$MODE" --out "$OUT" --deadline-minutes 20 $ARGS
+      - name: Update OpenClaw through Clawtrate's own engine and follow it
+        if: matrix.driver == 'engine'
+        run: |
+          # shellcheck disable=SC2086 # ARGS is the matrix's list of flags
+          node tools/openclaw-update-check/src/engine.ts --url "ws://127.0.0.1:$PORT" \
+            --profile "$PROFILE" --mode "$MODE" --out "$OUT" --deadline-minutes 20 $ARGS
+      - name: The gateway's update notices
+        run: |
+          # Clawtrate's press names no session, so the gateway should send no notice anywhere.
+          lines=$(cat /tmp/openclaw/*.log 2> /dev/null | grep 'update-run' | grep -i 'notice' || true)
+          echo "$lines" | cut -c1-400
+          other=$(echo "$lines" | grep -v 'notice skipped: no delivery target' | grep -v '^$' || true)
+          if [ -n "$other" ]; then
+            # A measuring job records it; a gating job fails.
+            case " $ARGS " in
+              *" --measure "*)
+                echo "::warning::the gateway logged an update notice other than 'skipped: no delivery target'"
+                echo "- Update notice other than 'skipped: no delivery target' in the gateway's log" >> "$GITHUB_STEP_SUMMARY"
+                ;;
+              *)
+                echo "::error::the gateway logged an update notice other than 'skipped: no delivery target'"
+                exit 1
+                ;;
+            esac
+          fi
+      - name: Collect the gateway's logs
+        if: always()
+        run: |
+          # Setup can fail before OUT is set: use the folder the upload reads.
+          OUT="${OUT:-$RUNNER_TEMP/openclaw-update}"
+          mkdir -p "$OUT/logs"
+          {
+            echo "## openclaw on PATH"; openclaw --profile "$PROFILE" --version || true
+            echo "## global packages"; npm ls --global --depth=0 || true
+            echo "## gateway processes"; pgrep -af 'openclaw' || true
+          } > "$OUT/state.txt" 2>&1
+          if [ "$START" = systemd ]; then
+            systemctl --user list-units --all 'openclaw*' --no-pager > "$OUT/units.txt" 2>&1 || true
+            journalctl --user --no-pager -o short-iso > "$OUT/journal.txt" 2>&1 || true
+          fi
+          # Logs only: the config, which holds the token, and the state databases stay behind.
+          for dir in "$HOME/.openclaw-$PROFILE" /tmp/openclaw "$RUNNER_TEMP/openclaw"; do
+            [ -d "$dir" ] || continue
+            find "$dir" -type f \( -name '*.log' -o -name '*.jsonl' -o -name '*.txt' \) -size -20M \
+              -exec cp --parents {} "$OUT/logs/" \; 2> /dev/null || true
+          done
+          # Setup can also fail before the token exists; an empty pattern would match everything.
+          if [ -n "${OPENCLAW_CHECK_TOKEN:-}" ]; then
+            grep -rlF "$OPENCLAW_CHECK_TOKEN" "$OUT" | xargs -r sed -i "s/$OPENCLAW_CHECK_TOKEN/[token]/g" || true
+          fi
+          # What the gateway's own logs say about locks and deliveries, for the run's page.
+          logs=$(find "$OUT" -type f \( -name '*.log' -o -name 'journal.txt' \) ! -name 'scripted-model.log')
+          {
+            echo "## database is locked"
+            echo "$logs" | xargs -r grep -hi "database is locked" | head -n 50
+            echo "## notices and deliveries"
+            echo "$logs" | xargs -r grep -hiE "notice|deliver|restart-resume" | head -n 50
+          } > "$OUT/findings.txt" 2>&1 || true
+          locked=$(echo "$logs" | xargs -r grep -hic "database is locked" | awk '{n += $1} END {print n + 0}') || true
+          echo "- \"database is locked\" in the gateway's logs: ${locked:-0} lines" >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUT/findings.txt"
+          cat "$OUT/state.txt"
+          echo "## the last 200 lines of each log"
+          find "$OUT" -type f \( -name '*.log' -o -name 'journal.txt' \) | while read -r file; do
+            echo "### $file"; tail -n 200 "$file"
+          done
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-update-${{ matrix.mode }}
+          path: ${{ runner.temp }}/openclaw-update/
+          if-no-files-found: warn
+          retention-days: 14

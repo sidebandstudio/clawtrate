@@ -1,11 +1,13 @@
 // What the Simulator checks use: the device, the gateway instance and the tools
 // `pnpm mobile:check` gives them (scripts/check.ts), Maestro to drive the app,
 // the dev tool's own guarded runner for OpenClaw commands, a loopback proxy the
-// checks can cut and restore, and a gateway that speaks another protocol.
+// checks can cut and restore, a gateway that speaks another protocol, and a
+// protected address for the gateway.
 
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -13,7 +15,10 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { createServer, Socket, type Server } from "node:net";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
@@ -237,9 +242,11 @@ export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
  */
 export function screen(pointsWide: number): (x: number, y: number) => [number, number, number] {
   const file = join(OUTPUT, "screen.png");
-  simctl("io", env.device, "screenshot", file);
+  const shown = screenshot(file);
   const image = decodePng(readFileSync(file));
-  const scale = image.width / pointsWide;
+  // On iPhone Duo the picture is of the display in use, whose width in points is known:
+  // there a side safe area can keep every element narrower than the screen.
+  const scale = image.width / (shown?.width ?? pointsWide);
   return (x, y) => {
     const i = (Math.round(y * scale) * image.width + Math.round(x * scale)) * 4;
     return [image.data[i]!, image.data[i + 1]!, image.data[i + 2]!];
@@ -264,6 +271,20 @@ function simctl(...args: string[]) {
 }
 
 /**
+ * The screen as a PNG. iPhone Duo has two displays, and simctl takes the inner
+ * one unless told otherwise, so there the picture is of the display in use.
+ */
+function screenshot(file: string): Display | null {
+  const active =
+    process.env.CLAWTRATE_IOS_FORM === "duo" ? (displays().find((d) => d.active) ?? null) : null;
+  simctl("io", env.device, "screenshot", ...(active ? [`--display=${active.id}`] : []), file);
+  return active;
+}
+
+/** What `launch` last started the app with. */
+let launchArgs: string[] = [];
+
+/**
  * Start the app, naming the gateway the check runs as the development gateway
  * (so the pairing screen shows the dev tool's approve command). `fresh` first
  * resets the device's Keychain: the app starts with no gateway and a new key.
@@ -275,10 +296,7 @@ export function launch(options: {
 }) {
   quit();
   if (options.fresh) simctl("keychain", env.device, "reset");
-  simctl(
-    "launch",
-    env.device,
-    env.bundle,
+  launchArgs = [
     "-ClawtrateDevGatewayURL",
     options.devGateway,
     "-ClawtrateDevGatewayInstance",
@@ -286,12 +304,17 @@ export function launch(options: {
     ...(options.switcherProbePort === undefined
       ? []
       : ["-ClawtrateSwitcherProbePort", String(options.switcherProbePort)]),
-  );
+  ];
+  simctl("launch", env.device, env.bundle, ...launchArgs);
 }
 
-/** Bring the app, still running, back to the front, as tapping it again would. */
+/**
+ * Bring the app back to the front, as tapping it again would. A running app
+ * only comes forward. One that is no longer running starts with what `launch`
+ * gave it, so it can still reach the Simulator probe.
+ */
 export function activate() {
-  simctl("launch", env.device, env.bundle);
+  simctl("launch", env.device, env.bundle, ...launchArgs);
 }
 
 /** Put the app in the background without starting a Maestro flow. */
@@ -388,12 +411,15 @@ export async function switcherSnapshot(after: number) {
   return { ...decodePng(readFileSync(png)), savedAt: snapshot.time };
 }
 
-/** The screen now, whole, as pixels. */
-export function frame(): { width: number; data: Uint8Array } {
+/**
+ * The screen now, whole, as pixels. On iPhone Duo it is the display in use, and
+ * `pointsWide` is that display's width in points.
+ */
+export function frame(): { width: number; data: Uint8Array; pointsWide: number | null } {
   const file = join(OUTPUT, "frame.png");
-  simctl("io", env.device, "screenshot", file);
+  const shown = screenshot(file);
   const image = decodePng(readFileSync(file));
-  return { width: image.width, data: image.data };
+  return { width: image.width, data: image.data, pointsWide: shown?.width ?? null };
 }
 
 /**
@@ -405,8 +431,9 @@ export async function moves(
   region: { x1: number; y1: number; x2: number; y2: number },
   pointsWide: number,
 ): Promise<boolean> {
-  const crop = ({ width, data }: { width: number; data: Uint8Array }) => {
-    const scale = width / pointsWide;
+  const crop = ({ width, data, pointsWide: shown }: ReturnType<typeof frame>) => {
+    // As in `screen`: a side safe area can keep every element narrower than the display.
+    const scale = width / (shown ?? pointsWide);
     const out: number[] = [];
     for (let y = Math.round(region.y1 * scale); y < Math.round(region.y2 * scale); y += 1)
       for (let x = Math.round(region.x1 * scale); x < Math.round(region.x2 * scale); x += 1) {
@@ -522,6 +549,8 @@ export class Proxy {
   port = 0;
   /** Every connection the app opened through the proxy, since it started. */
   connections = 0;
+  /** What each of those connections asked first: its request line, and whether it opened a WebSocket. */
+  readonly requests: Array<{ line: string; upgrade: boolean }> = [];
   private readonly target: number;
   constructor(target: number) {
     this.target = target;
@@ -535,6 +564,20 @@ export class Proxy {
   private listen(port: number) {
     const server = createServer((client) => {
       this.connections += 1;
+      // Classified once its whole header is in, which may take more than one chunk.
+      let head = "";
+      const classify = (chunk: Buffer) => {
+        head += chunk.toString("latin1");
+        const end = head.indexOf("\r\n\r\n");
+        if (end < 0 && head.length < 16_384) return;
+        client.off("data", classify);
+        const header = end < 0 ? head : head.slice(0, end + 2);
+        this.requests.push({
+          line: header.split("\r\n", 1)[0]!,
+          upgrade: /\r\nupgrade:[ \t]*websocket\r\n/i.test(header),
+        });
+      };
+      client.on("data", classify);
       const upstream = new Socket();
       upstream.connect(this.target, "127.0.0.1");
       for (const socket of [client, upstream]) {
@@ -572,6 +615,191 @@ export class Proxy {
   async stop() {
     await this.cut();
   }
+}
+
+/** One HTTP request the protected address served, as it arrived. */
+export type FrontRequest = {
+  method: string;
+  url: string;
+  authorization: string | undefined;
+  /** How many Authorization fields it carried, before Node keeps only the first. */
+  authorizations: number;
+  cookie: string | undefined;
+};
+
+/** This Mac's own address on its network, never loopback: en0's, or the first there is. */
+function ownAddress(): string {
+  const found = Object.entries(networkInterfaces()).flatMap(([name, list]) =>
+    (list ?? [])
+      .filter(
+        (each) => each.family === "IPv4" && !each.internal && !each.address.startsWith("169.254."),
+      )
+      .map((each) => ({ name, address: each.address })),
+  );
+  const chosen = found.find((each) => each.name === "en0") ?? found[0];
+  if (!chosen)
+    throw new Error("This Mac has no network address but loopback for a protected address.");
+  return chosen.address;
+}
+
+/**
+ * A protected address for the checks' gateway (F-557): `wss://<this Mac's network address>:<port>`,
+ * which is `wss://` and not loopback, as the product's rule reads an address. It is a TLS front of
+ * the check's own, listening on that address alone and taking connections from this Mac alone.
+ * Its certificate comes from a throwaway authority that `openssl` makes in a temporary folder, and
+ * only the check's own device trusts it (`simctl keychain add-root-cert`); the device goes with the
+ * run. A WebSocket is relayed to the gateway. Each other request is recorded and served by the
+ * gateway, with a cookie added to the answer, unless `answer` gives one of its own.
+ */
+export async function protectedFront(
+  gatewayPort: number,
+  answer: (url: URL) => { status: number; headers: Record<string, string> } | null = () => null,
+): Promise<{
+  url: string;
+  requests: FrontRequest[];
+  /** The device token the gateway last issued over this address, or null. */
+  issued: () => string | null;
+  close: () => Promise<void>;
+}> {
+  const address = ownAddress();
+  const dir = mkdtempSync(join(tmpdir(), "clawtrate-front-"));
+  const file = (name: string) => join(dir, name);
+  const openssl = (args: string[]) => execFileSync("openssl", args, { stdio: "ignore" });
+  openssl([
+    ...["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-sha256"],
+    ...[
+      "-keyout",
+      file("ca-key.pem"),
+      "-out",
+      file("ca.pem"),
+      "-subj",
+      "/CN=Clawtrate check authority",
+    ],
+    ...["-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign"],
+  ]);
+  openssl([
+    ...["req", "-newkey", "rsa:2048", "-nodes", "-sha256", "-subj", `/CN=${address}`],
+    ...["-keyout", file("key.pem"), "-out", file("request.pem")],
+  ]);
+  writeFileSync(
+    file("leaf.cnf"),
+    [
+      `subjectAltName=IP:${address}`,
+      "extendedKeyUsage=serverAuth",
+      "basicConstraints=critical,CA:FALSE",
+      "keyUsage=critical,digitalSignature,keyEncipherment",
+    ].join("\n"),
+  );
+  openssl([
+    ...[
+      "x509",
+      "-req",
+      "-in",
+      file("request.pem"),
+      "-CA",
+      file("ca.pem"),
+      "-CAkey",
+      file("ca-key.pem"),
+    ],
+    ...["-set_serial", String(Date.now()), "-days", "1", "-sha256", "-extfile", file("leaf.cnf")],
+    ...["-out", file("cert.pem")],
+  ]);
+  simctl("keychain", env.device, "add-root-cert", file("ca.pem"));
+
+  const requests: FrontRequest[] = [];
+  const sockets = new Set<Socket>();
+  const server = createHttpsServer(
+    { key: readFileSync(file("key.pem")), cert: readFileSync(file("cert.pem")) },
+    (req, res) => {
+      requests.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        authorization: req.headers.authorization,
+        authorizations: req.rawHeaders.filter(
+          (field, i) => i % 2 === 0 && field.toLowerCase() === "authorization",
+        ).length,
+        cookie: req.headers.cookie,
+      });
+      const own = answer(new URL(req.url ?? "/", `https://${address}`));
+      if (own) return void res.writeHead(own.status, own.headers).end();
+      const upstream = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: gatewayPort,
+          method: req.method,
+          path: req.url,
+          headers: req.headers,
+        },
+        (reply) => {
+          res.writeHead(reply.statusCode ?? 502, {
+            ...reply.headers,
+            "set-cookie": "clawtrate-front=1; Path=/; Secure; HttpOnly",
+          });
+          reply.pipe(res);
+        },
+      );
+      upstream.on("error", () => res.destroy());
+      req.pipe(upstream);
+    },
+  );
+  // The gateway socket is relayed frame by frame, as `relay` does, to keep the device token the
+  // gateway issues in its `hello-ok`: the token a ticket request must carry.
+  const issued: string[] = [];
+  const relays = new Set<WebSocket>();
+  const phones = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket: Socket, head: Buffer) => {
+    phones.handleUpgrade(req, socket, head, (phone) => {
+      const gateway = new WebSocket(`ws://127.0.0.1:${gatewayPort}${req.url ?? "/"}`);
+      const waiting: string[] = [];
+      for (const each of [phone, gateway]) {
+        relays.add(each);
+        each.on("close", () => relays.delete(each));
+      }
+      gateway.on("open", () => {
+        for (const data of waiting.splice(0)) gateway.send(data);
+      });
+      phone.on("message", (data) => {
+        if (gateway.readyState === WebSocket.OPEN) gateway.send(String(data));
+        else waiting.push(String(data));
+      });
+      gateway.on("message", (data) => {
+        const text = String(data);
+        try {
+          const frame = JSON.parse(text) as { payload?: { auth?: { deviceToken?: unknown } } };
+          const token = frame.payload?.auth?.deviceToken;
+          if (typeof token === "string") issued.push(token);
+        } catch {
+          // Not a frame of the gateway's protocol: passed on as it is.
+        }
+        if (phone.readyState === WebSocket.OPEN) phone.send(text);
+      });
+      gateway.on("close", () => phone.close());
+      gateway.on("error", () => phone.terminate());
+      phone.on("close", () => gateway.terminate());
+      phone.on("error", () => gateway.terminate());
+    });
+  });
+  server.on("connection", (socket: Socket) => {
+    if (socket.remoteAddress?.replace(/^::ffff:/, "") !== address) return void socket.destroy();
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, address, () => resolve());
+  });
+  const port = (server.address() as { port: number }).port;
+  return {
+    url: `wss://${address}:${port}`,
+    requests,
+    issued: () => issued.at(-1) ?? null,
+    close: async () => {
+      for (const each of relays) each.terminate();
+      for (const socket of sockets) socket.destroy();
+      await closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 /**
@@ -813,6 +1041,90 @@ export function appLog(sinceSeconds: number): string {
   return result.stdout;
 }
 
+/** One of the device's built-in displays, as CoreDevice reports it, in points. */
+export type Display = {
+  id: number;
+  name: string;
+  active: boolean;
+  on: boolean;
+  width: number;
+  height: number;
+};
+
+/**
+ * The device's built-in displays and which one is in use. iPhone Duo has two:
+ * folded, the outer one is active and the inner one is off.
+ */
+export function displays(): Display[] {
+  mkdirSync(OUTPUT, { recursive: true });
+  const file = join(OUTPUT, "displays.json");
+  // The JSON output is devicectl's stable one; its text output is not.
+  const result = spawnSync(
+    "xcrun",
+    [
+      "devicectl",
+      "device",
+      "info",
+      "displays",
+      "--device",
+      env.device,
+      "--quiet",
+      "--json-output",
+      file,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) throw new Error(`devicectl device info displays: ${result.stderr}`);
+  const report = JSON.parse(readFileSync(file, "utf8")) as {
+    result: {
+      displays: Array<{
+        displayId: number;
+        name: string;
+        active: boolean;
+        backlightState: string;
+        nativeSize: [number, number];
+        pointScale: number;
+        type: Record<string, unknown>;
+      }>;
+    };
+  };
+  return report.result.displays
+    .filter((d) => "integrated" in d.type)
+    .map((d) => ({
+      id: d.displayId,
+      name: d.name,
+      active: d.active,
+      on: d.backlightState !== "off",
+      width: d.nativeSize[0] / d.pointScale,
+      height: d.nativeSize[1] / d.pointScale,
+    }));
+}
+
+/** What the app measured of its window (modules/clawtrate-layout logs each change), oldest first. */
+export type MeasuredWindow = {
+  width: number;
+  height: number;
+  hinge: boolean;
+  sizeClass: "compact" | "regular";
+  bar: "none" | "left" | "right";
+  regions: number;
+  safe: { top: number; bottom: number; left: number; right: number };
+};
+
+export function measuredWindows(sinceSeconds: number): MeasuredWindow[] {
+  const pattern =
+    /window (\d+)x(\d+) hinge=(true|false) sizeClass=(compact|regular) bar=(none|left|right) regions=(\d+) safe=(\d+),(\d+),(\d+),(\d+)/g;
+  return [...appLog(sinceSeconds).matchAll(pattern)].map((m) => ({
+    width: Number(m[1]),
+    height: Number(m[2]),
+    hinge: m[3] === "true",
+    sizeClass: m[4] as MeasuredWindow["sizeClass"],
+    bar: m[5] as MeasuredWindow["bar"],
+    regions: Number(m[6]),
+    safe: { top: Number(m[7]), bottom: Number(m[8]), left: Number(m[9]), right: Number(m[10]) },
+  }));
+}
+
 /** A loopback port nothing listens on. */
 export async function deadPort(): Promise<number> {
   const server = createServer();
@@ -834,7 +1146,7 @@ export async function shoot(name: string) {
   for (const appearance of ["light", "dark"]) {
     simctl("ui", env.device, "appearance", appearance);
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    simctl("io", env.device, "screenshot", join(dir, `${name}-${appearance}.png`));
+    screenshot(join(dir, `${name}-${appearance}.png`));
   }
   simctl("ui", env.device, "appearance", "light");
   await new Promise((resolve) => setTimeout(resolve, 1000));

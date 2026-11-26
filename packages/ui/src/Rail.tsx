@@ -7,7 +7,12 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE, avatarFor } from "@clawtrate/core";
+import {
+  ACTIVE_RUN_MESSAGE,
+  avatarFor,
+  gatewayAddress,
+  MAX_GATEWAY_NAME_CHARS,
+} from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -19,9 +24,11 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import { Avatar, type FaceState } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
+import { screenStamp, shownStamp, type ShownStamp } from "./stamp.ts";
 import { copyText } from "./clipboard.ts";
 import { gatewayLabel, rowTime } from "./format.ts";
 import { forgetFailure } from "./forget.ts";
@@ -42,8 +49,7 @@ import {
   RestoreIcon,
   SearchIcon,
   SectionIcon,
-  SettingsIcon,
-  DownloadIcon,
+  GearIcon,
   SortIcon,
   StarIcon,
   TrashIcon,
@@ -73,10 +79,19 @@ import {
   type SelectionModel,
 } from "./selection.ts";
 import type { SettingsSection } from "./Settings.tsx";
+import { updatingPresence, type UpdatingHere } from "./bots/update-words.ts";
 import { isUnread } from "./unread.ts";
 
-/** The gateway's state in words, for the footer, its menu and its accessible name. */
-export function presenceWords(connection: ConnectionState, catchingUp: boolean): string {
+/**
+ * The gateway's state in words, for the footer, its menu and its accessible name; while OpenClaw
+ * updates on it, as the update engine knows it, that instead (#590).
+ */
+export function presenceWords(
+  connection: ConnectionState,
+  catchingUp: boolean,
+  updating: UpdatingHere | null = null,
+): string {
+  if (updating) return updatingPresence(updating);
   switch (connection.status) {
     case "connected":
       return catchingUp ? "Catching up" : "Connected";
@@ -292,7 +307,14 @@ function TaskRows({
     gone: ReadonlyMap<string, number | null>;
     open: boolean;
     onToggle: () => void;
-    onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
+    onMenu: (
+      task: ArchivedTask,
+      trigger: HTMLElement,
+      x: number,
+      y: number,
+      shown: ShownStamp,
+    ) => void;
+    shown: ShownStamp;
   };
   /** Rows shown before "Show all": fewer in one pane, so the rest of the list stays in view. */
   cap: number;
@@ -459,6 +481,7 @@ function TaskRows({
           open={archived.open}
           onToggle={archived.onToggle}
           onMenu={archived.onMenu}
+          shown={archived.shown}
           now={now}
         />
       )}
@@ -475,7 +498,15 @@ type MenuState =
   /** "Move to": the sections a bot can go to, in place of its menu. */
   | { kind: "move"; botId: string; trigger: HTMLElement; x: number; y: number }
   | { kind: "task"; botId: string; key: string; trigger: HTMLElement; x: number; y: number }
-  | { kind: "archived"; task: ArchivedTask; trigger: HTMLElement; x: number; y: number };
+  | {
+      kind: "archived";
+      task: ArchivedTask;
+      trigger: HTMLElement;
+      x: number;
+      y: number;
+      /** Where the menu was opened: its Delete goes only there. */
+      shown: ShownStamp;
+    };
 
 /** What a bot's line two says while one of its tasks waits for the person (F-021). */
 export function waitingWords(tasks: Task[]): string | null {
@@ -512,19 +543,23 @@ export function Rail({
   onTheme,
   bubbles,
   onBubbles,
-  updateEntry,
+  top,
+  notice,
   onOpenSettings,
+  settingsKeys = "⌘,",
   onNewBot,
   inert,
   interactive = false,
   sidebar,
   newTaskHint = "⌘T",
   routines = [],
+  showRoutineRuns = false,
   routinesOpen = false,
   onOpenRoutines,
   onOpenRoutineRun,
   onOpenPalette,
   paletteKeys = "⌘K",
+  updating = null,
 }: {
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
@@ -543,8 +578,13 @@ export function Rail({
   onTheme: (choice: ThemeChoice) => void;
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
-  updateEntry: boolean;
+  /** The one-pane layout's brand and update button, at the start of the top band (titlebar.md). */
+  top?: ReactNode;
+  /** A quiet card above the gateway row: the one-time offer of the bots' guides. */
+  notice?: ReactNode;
   onOpenSettings: (section?: SettingsSection) => void;
+  /** Settings' keys as this platform names them, for the gear's tooltip. */
+  settingsKeys?: string;
   /**
    * "New bot" in the "+" menu (visual-language.md section 7, bots.md section
    * 3); absent, with the "+" itself, when the connection may not write.
@@ -559,6 +599,8 @@ export function Rail({
   newTaskHint?: string;
   /** The gateway's routines: a bot works while one of its routines runs (F-024), and each run shows under it (F-193). */
   routines?: Routine[];
+  /** List every routine's latest run under its bot, not only a failed one: with "Show sessions from other tools" on (F-563). */
+  showRoutineRuns?: boolean;
   routinesOpen?: boolean;
   onOpenRoutines?: () => void;
   /** Open a routine's run that started at `runAt`, or the routine itself (`null`) while it runs. */
@@ -567,10 +609,21 @@ export function Rail({
   onOpenPalette?: () => void;
   /** The palette's keys as this platform names them, for the tooltip. */
   paletteKeys?: string;
+  /** OpenClaw updating on the gateway, as the update engine knows it: the footer says so. */
+  updating?: UpdatingHere | null;
 }) {
   const send = useCommand();
   const bridge = useBridge();
   const now = useMinuteClock();
+  /**
+   * A bot's routine runs listed under it: every recent one with "Show sessions from other tools"
+   * on, and otherwise only one whose latest run failed, which the person needs to know about and
+   * which leads to its routine (F-563).
+   */
+  const runsUnder = (bot: Bot) =>
+    recentRoutineRuns(bot, routines, now).filter(
+      (each) => showRoutineRuns || (each.runningAt === null && each.lastStatus === "error"),
+    );
   // The arrangement belongs to the gateway. Its identity arrives with its bots,
   // so the scope is settled only once there are bots.
   const roster = useRoster(
@@ -636,8 +689,10 @@ export function Rail({
       document.documentElement.removeAttribute("data-page-hidden");
     };
   }, []);
-  const gateway = gatewayLabel(connection.gatewayUrl);
-  const words = presenceWords(connection, catchingUp);
+  const address = gatewayLabel(connection.gatewayUrl);
+  // The name given on this device, or else the address (titlebar.md, section 4).
+  const gateway = connection.gatewayName ?? address;
+  const words = presenceWords(connection, catchingUp, updating);
   const dot = presenceDot(connection, catchingUp);
   const onScreenKey = routinesOpen ? null : (selection.task?.key ?? null);
   const manual = roster.prefs.sort === "manual";
@@ -681,9 +736,7 @@ export function Rail({
     [matches, arranged],
   );
   const pinHasRoutines = (botId: string) =>
-    arranged.pinned.some(
-      (bot) => bot.id === botId && recentRoutineRuns(bot, routines, now).length > 0,
-    );
+    arranged.pinned.some((bot) => bot.id === botId && runsUnder(bot).length > 0);
   const owner = matches
     ? undefined
     : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
@@ -711,7 +764,19 @@ export function Rail({
 
   const runner = useActionRunner(setAnnouncement);
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
-  const [renaming, setRenaming] = useState<string | null>(null);
+  if (dialog?.botId && !bots.some((each) => each.id === dialog.botId)) setDialog(null);
+  const menuBotId =
+    menu && (menu.kind === "bot" || menu.kind === "move" || menu.kind === "task")
+      ? menu.botId
+      : menu?.kind === "archived"
+        ? menu.task.botId
+        : null;
+  if (menuBotId && !bots.some((each) => each.id === menuBotId)) setMenu(null);
+  /**
+   * The task being renamed in place, and where its row was listed when the rename began: Enter
+   * sends that, since the field stays open while the list is read again, even on another gateway.
+   */
+  const [renaming, setRenaming] = useState<{ key: string; shown: ShownStamp } | null>(null);
   /** Bots whose Archived group is open. */
   const [archivedOpen, setArchivedOpen] = useState<Set<string>>(() => new Set());
   /** Bots whose New task is on its way; held across renders, read and written by events only. */
@@ -772,12 +837,26 @@ export function Rail({
     setFocusTask({ key: next, bot: bot.id });
   };
 
+  /**
+   * Where the task list the rail shows was read (`discovery.tasksRead`). After a reconnect the
+   * rows stay until the new list arrives, and the identity of the gateway that answered can be
+   * known first: a row acts with the stamp of its own read, never the connection's at the click.
+   */
+  const listedOn = (): ShownStamp => discovery.tasksRead ?? shownStamp(connection);
+
   const archive = (bot: Bot, task: Task, trigger: HTMLElement | null) => {
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
+    // Where the row was listed: a restored copy has the same keys, so the host sends it nowhere else.
+    const shown = listedOn();
     const act = async (stop: boolean) => {
-      const { stoppedRun } = await bridge.invoke({ type: "archiveTask", key: task.key, stop });
+      const { stoppedRun } = await bridge.invoke({
+        type: "archiveTask",
+        key: task.key,
+        stop,
+        stamp: await screenStamp(bridge, shown),
+      });
       setAnnouncement(`Archived ${task.title}.`);
       // The gateway's archive ends anything running in the task: a run that had just started,
       // seen to end as stopped on its own end event, is said here, with the way back.
@@ -794,6 +873,7 @@ export function Rail({
     };
     const askStop = () =>
       setDialog({
+        botId: bot.id,
         title: `Stop and archive “${task.title}”?`,
         body: <p>{bot.name} is still working on this task. Archiving it stops its run first.</p>,
         confirm: { label: "Stop and archive" },
@@ -821,11 +901,14 @@ export function Rail({
     task: { key: string; title: string; status?: Task["status"]; archivedAt?: number | null },
     trigger: HTMLElement | null,
     listed: boolean,
+    // Where the row was read; a menu that holds its task passes the stamp it opened with.
+    shown: ShownStamp = listedOn(),
   ) => {
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     setDialog({
+      botId: bot.id,
       title: `Delete “${task.title}”?`,
       body: (
         <>
@@ -838,7 +921,11 @@ export function Rail({
       ),
       confirm: { label: "Delete", tone: "danger" },
       onConfirm: async () => {
-        await bridge.invoke({ type: "deleteTask", key: task.key });
+        await bridge.invoke({
+          type: "deleteTask",
+          key: task.key,
+          stamp: await screenStamp(bridge, shown),
+        });
         setAnnouncement(`Deleted ${task.title}.`);
         if (listed) await afterRemoval(bot, task as Task, remaining, next);
         else {
@@ -863,13 +950,18 @@ export function Rail({
 
   const taskActions: TaskActions | null = interactive
     ? {
-        renaming,
+        renaming: renaming?.key ?? null,
         onRename: (task) => {
           setTip(null);
-          setRenaming(task.key);
+          setRenaming({ key: task.key, shown: listedOn() });
         },
         commitRename: async (task, label) => {
-          await bridge.invoke({ type: "renameTask", key: task.key, label });
+          await bridge.invoke({
+            type: "renameTask",
+            key: task.key,
+            label,
+            stamp: await screenStamp(bridge, renaming?.shown ?? listedOn()),
+          });
           setAnnouncement(`Renamed to ${label}.`);
         },
         endRename: (task) => {
@@ -885,7 +977,13 @@ export function Rail({
   // failed one leaves the rail and the badge as the gateway reports them.
   const mark = (task: Task, unread: boolean) =>
     void runner.run(unread ? "mark it unread" : "mark it read", async () => {
-      await bridge.invoke({ type: "markTask", key: task.key, unread, opened: false });
+      await bridge.invoke({
+        type: "markTask",
+        key: task.key,
+        unread,
+        opened: false,
+        stamp: await screenStamp(bridge, listedOn()),
+      });
       if (unread) selection.markUnreadHere(task.key);
       else selection.markReadHere(task);
     });
@@ -899,9 +997,15 @@ export function Rail({
     );
   };
 
-  const openArchivedMenu = (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => {
+  const openArchivedMenu = (
+    task: ArchivedTask,
+    trigger: HTMLElement,
+    x: number,
+    y: number,
+    shown: ShownStamp,
+  ) => {
     setTip(null);
-    setMenu({ kind: "archived", task, trigger, x, y });
+    setMenu({ kind: "archived", task, trigger, x, y, shown });
   };
 
   const archivedProps = (bot: Bot) => ({
@@ -909,6 +1013,7 @@ export function Rail({
     open: archivedOpen.has(bot.id),
     onToggle: () => toggleArchived(bot.id),
     onMenu: openArchivedMenu,
+    shown: shownStamp(connection),
   });
 
   const clickBot = (bot: Bot, count: number) => {
@@ -1219,7 +1324,7 @@ export function Rail({
     ) {
       event.preventDefault();
       setTip(null);
-      setRenaming(row.dataset.key);
+      setRenaming({ key: row.dataset.key, shown: listedOn() });
     }
   };
 
@@ -1234,6 +1339,47 @@ export function Rail({
         ...(connection.serverVersion ? [`OpenClaw ${connection.serverVersion}`] : []),
       ],
     },
+    ...(forgetUrl
+      ? [
+          {
+            kind: "item",
+            label: connection.gatewayName ? "Rename gateway…" : "Name this gateway…",
+            icon: <EditIcon />,
+            onSelect: () => {
+              const trigger = menu?.trigger ?? null;
+              setMenu(null);
+              setDialog({
+                title: connection.gatewayName ? "Rename gateway" : "Name this gateway",
+                body: (
+                  <>
+                    <p>
+                      The name shows in the sidebar instead of the address. It stays on this device
+                      and is never sent to the gateway.
+                    </p>
+                    <p className="rail-dialog-address">{gatewayAddress(forgetUrl) ?? address}</p>
+                  </>
+                ),
+                confirm: { label: "Save" },
+                field: {
+                  label: "Name",
+                  placeholder: "For example, Devbox",
+                  maxLength: MAX_GATEWAY_NAME_CHARS,
+                  initial: connection.gatewayName ?? "",
+                  optional: true,
+                  hint: "Leave it empty to show the address.",
+                },
+                onConfirm: async (name) => {
+                  await bridge.invoke({ type: "nameGateway", gatewayUrl: forgetUrl, name });
+                  setAnnouncement(name.trim() ? `Named ${name.trim()}.` : "Showing the address.");
+                  // Back to the card, which now carries the name.
+                  requestAnimationFrame(() => trigger?.focus());
+                },
+                returnTo: trigger,
+              });
+            },
+          } satisfies MenuEntry,
+        ]
+      : []),
     { kind: "rule" },
     { kind: "label", text: "Theme" },
     ...(
@@ -1272,7 +1418,7 @@ export function Rail({
     {
       kind: "item",
       label: "Settings",
-      icon: <SettingsIcon />,
+      icon: <GearIcon />,
       // Focus goes back to the gateway button first, so Settings returns it there.
       onSelect: () => {
         closeMenu(true);
@@ -1442,12 +1588,18 @@ export function Rail({
                 const trigger = menu?.trigger ?? null;
                 setMenu(null);
                 setDialog({
+                  botId: bot.id,
                   title: `Rename “${only.title}”`,
                   body: <p>The new name shows in the list and at the top of the conversation.</p>,
                   confirm: { label: "Rename" },
                   field: { label: "Name", placeholder: only.title, maxLength: 512 },
                   onConfirm: async (label) => {
-                    await bridge.invoke({ type: "renameTask", key: only.key, label });
+                    await bridge.invoke({
+                      type: "renameTask",
+                      key: only.key,
+                      label,
+                      stamp: await screenStamp(bridge, listedOn()),
+                    });
                     setAnnouncement(`Renamed to ${label.trim()}.`);
                   },
                   returnTo: trigger,
@@ -1566,6 +1718,7 @@ export function Rail({
           const trigger = menu?.trigger ?? null;
           setMenu(null);
           setDialog({
+            botId: bot.id,
             title: "Move to a new section",
             body: <p>{bot.name} moves into the section; others can join it with Move to.</p>,
             confirm: { label: "Create section" },
@@ -1615,7 +1768,7 @@ export function Rail({
               hint: "F2",
               onSelect: () => {
                 close();
-                setRenaming(task.key);
+                setRenaming({ key: task.key, shown: listedOn() });
               },
             },
             {
@@ -1625,7 +1778,12 @@ export function Rail({
               onSelect: () => {
                 close();
                 void runner.run(task.pinned ? "unpin it" : "pin it", async () => {
-                  await bridge.invoke({ type: "pinTask", key: task.key, pinned: !task.pinned });
+                  await bridge.invoke({
+                    type: "pinTask",
+                    key: task.key,
+                    pinned: !task.pinned,
+                    stamp: await screenStamp(bridge, listedOn()),
+                  });
                   setAnnouncement(`${task.pinned ? "Unpinned" : "Pinned"} ${task.title}.`);
                   setFocusTask({ key: task.key, bot: bot.id });
                 });
@@ -1688,7 +1846,7 @@ export function Rail({
   };
 
   /** An archived task's menu: Restore and Delete, when the connection writes. */
-  const archivedEntries = (task: ArchivedTask): MenuEntry[] => {
+  const archivedEntries = (task: ArchivedTask, shown: ShownStamp): MenuEntry[] => {
     const bot = bots.find((each) => each.id === task.botId);
     const trigger = menu?.trigger ?? null;
     if (!interactive || !bot) return [{ kind: "head", title: task.title, lines: ["Archived"] }];
@@ -1710,7 +1868,7 @@ export function Rail({
         tone: "danger",
         onSelect: () => {
           setMenu(null);
-          remove(bot, task, trigger, false);
+          remove(bot, task, trigger, false, shown);
         },
       },
     ];
@@ -1784,8 +1942,7 @@ export function Rail({
     const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
-    const routineRuns =
-      place !== "search" && (open || !several) ? recentRoutineRuns(bot, routines, now) : [];
+    const routineRuns = place !== "search" && (open || !several) ? runsUnder(bot) : [];
     const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
     const latest = summary.latest;
@@ -1931,33 +2088,10 @@ export function Rail({
     );
   };
 
-  const updateButton = updateEntry && (
-    <button
-      type="button"
-      className="icon-button update-entry"
-      aria-label="Open Updates"
-      title="Open Updates"
-      onClick={() => onOpenSettings("updates")}
-    >
-      <DownloadIcon />
-    </button>
-  );
   return (
     <nav className="rail" aria-label="Bots" inert={inert}>
       <div className="rail-top">
-        <button
-          type="button"
-          className="icon-button rail-status"
-          aria-haspopup="menu"
-          aria-expanded={menu?.kind === "gateway"}
-          aria-label={gatewayName}
-          onClick={(event) => openGatewayMenu(event.currentTarget)}
-          onKeyDown={onGatewayKey}
-        >
-          <SettingsIcon />
-          <span className="status-dot" data-status={dot} />
-        </button>
-        {updateButton}
+        {top}
         {query === null ? (
           <>
             {onOpenRoutines && (
@@ -2093,7 +2227,7 @@ export function Rail({
                   <TaskRows
                     bot={owner}
                     tasks={tasksByBot[owner.id] ?? []}
-                    routineRuns={recentRoutineRuns(owner, routines, now)}
+                    routineRuns={runsUnder(owner)}
                     onOpenRoutineRun={onOpenRoutineRun}
                     selection={selection}
                     onOpenTask={openTask}
@@ -2183,6 +2317,7 @@ export function Rail({
           Waiting for the gateway's owner to approve access. The change is made once they do.
         </p>
       )}
+      {notice}
       <div className="rail-footer">
         <button
           type="button"
@@ -2196,10 +2331,19 @@ export function Rail({
           <span className="status-dot" data-status={dot} />
           <span className="gateway-pill-text" aria-hidden="true">
             <strong>{gateway}</strong>
-            <span>{words}</span>
+            {/* Named and connected: the address. Otherwise the state, which matters more. */}
+            <span>{connection.gatewayName && words === "Connected" ? address : words}</span>
           </span>
         </button>
-        {updateButton}
+        <button
+          type="button"
+          className="icon-button settings-gear"
+          aria-label="Settings"
+          title={`Settings (${settingsKeys})`}
+          onClick={() => onOpenSettings()}
+        >
+          <GearIcon />
+        </button>
       </div>
       {menu?.kind === "gateway" && (
         <Menu
@@ -2306,7 +2450,7 @@ export function Rail({
             left: Math.max(8, Math.min(menu.x, window.innerWidth - 244)),
             top: Math.max(8, Math.min(menu.y, window.innerHeight - 140)),
           }}
-          entries={archivedEntries(menu.task)}
+          entries={archivedEntries(menu.task, menu.shown)}
           onClose={closeMenu}
           trigger={menu.trigger}
         />

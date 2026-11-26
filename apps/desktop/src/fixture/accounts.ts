@@ -23,7 +23,20 @@
 //   admin=grant               a request for admin access is approved after a moment, or on
 //                             release if a test holds answers
 //   defacct=1                 the gateway's default model names an account (openai:work)
+//   catalog=slow|fail|unsupported|big|latepicker|pickercut|partial|trimmed|xaimore
+//                             how "View more" and the picker load (bots.md section 9): the full
+//                             list held until releaseCatalog() (xAI's then also lists gpt-5.5),
+//                             failing once, refused, longer than kept, the picker held until
+//                             releasePicker(), the picker cut with more OpenAI models listed,
+//                             a first full list the gateway answers while still finding models,
+//                             one cut short to rows the picker has, with 70 more left out,
+//                             or xAI's full list with grok-4.8, which its picker lacks
+//   model=<id>                the open bot's model
+//   effort=none               the open bot keeps no effort
+//   openclaw=behind|beta      the gateway reports a newer OpenClaw than it runs: 2026.11.6, or
+//                             2026.11.10-beta.1 on the beta channel
 
+import { isUpdateRunScene, type UpdateRunScene } from "./openclaw-update.ts";
 import {
   ADMIN_SCOPES,
   INTERACTIVE_SCOPES,
@@ -32,6 +45,9 @@ import {
   sameStamp,
   type AccountsState,
   type BotBinding,
+  type CatalogModel,
+  MAX_PROVIDER_MODELS,
+  type ModelList,
   type BridgeCommand,
   type ClawtrateState,
   type GatewayAccount,
@@ -65,6 +81,16 @@ export type AccountParams = {
   picturesave: "hold" | "refused" | "unconfirmed" | "release" | null;
   /** New bot's Finish answered, or refused, when the page calls `releaseFinish()`. */
   finish: "release" | "release-failed" | null;
+  /** How "View more" and the picker load. */
+  catalog: string | null;
+  /** The open bot's model. */
+  model: string | null;
+  /** The open bot keeps no effort. */
+  noEffort: boolean;
+  /** The gateway reports a newer OpenClaw than it runs: a stable release, or a beta. */
+  openclaw: "behind" | "beta" | null;
+  /** An update of OpenClaw under way or ended, or a gateway that can't update itself (F-589). */
+  openclawRun: UpdateRunScene | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -99,6 +125,16 @@ export function accountParams(params: URLSearchParams): AccountParams {
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
         : null,
+    catalog: params.get("catalog"),
+    model: params.get("model"),
+    noEffort: params.get("effort") === "none",
+    openclaw:
+      params.get("openclaw") === "behind" || params.get("openclaw") === "beta"
+        ? (params.get("openclaw") as "behind" | "beta")
+        : null,
+    openclawRun: isUpdateRunScene(params.get("openclawRun"))
+      ? (params.get("openclawRun") as UpdateRunScene)
+      : null,
   };
 }
 
@@ -118,6 +154,11 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   keyread: false,
   picturesave: null,
   finish: null,
+  catalog: null,
+  model: null,
+  noEffort: false,
+  openclaw: null,
+  openclawRun: null,
 };
 
 const MINUTE = 60_000;
@@ -405,7 +446,108 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     ],
     bindings,
   };
-  return withLock(state, params, now);
+  const model = params.model;
+  const own = model
+    ? {
+        ...state,
+        bindings: state.bindings.map((b) =>
+          b.botId === (params.bot ?? "otto")
+            ? { ...b, model, ...(params.noEffort ? { effort: null } : {}) }
+            : b,
+        ),
+      }
+    : state;
+  // The picker arrives after the accounts, when the page calls releasePicker().
+  if (params.catalog === "latepicker") return withLock({ ...own, models: [] }, params, now);
+  if (params.catalog === "pickercut")
+    return withLock({ ...own, modelsCut: [{ provider: "openai", total: 140 }] }, params, now);
+  return withLock(own, params, now);
+}
+
+/**
+ * A provider's full list, in the gateway's order, which is not the picker's:
+ * models only it has sit between the picker's (bots.md section 9).
+ */
+function fullList(picker: CatalogModel[], provider: string, params: AccountParams) {
+  // A late xAI list that also lists the OpenAI model a bot has: it must not replace a choice.
+  if (provider === "xai" && params.catalog === "slow")
+    return [...picker, { ...picker[0]!, id: "gpt-5.5" }];
+  // xAI's full list with a model only it has, with its own levels.
+  if (provider === "xai" && params.catalog === "xaimore")
+    return [
+      ...picker,
+      { ...picker[0]!, id: "grok-4.8", levels: ["low", "medium", "high"], defaultLevel: "medium" },
+    ];
+  if (provider !== "openai") return picker;
+  const extra = (id: string, available: boolean, levels: string[]): CatalogModel => ({
+    provider,
+    id,
+    name: null,
+    available,
+    levels,
+    defaultLevel: levels[Math.floor((levels.length - 1) / 2)] ?? null,
+  });
+  const by = (id: string) => picker.find((m) => m.id === id)!;
+  const list = [
+    by("gpt-5.5"),
+    extra("gpt-5.4", true, ["low", "medium", "high"]),
+    by("gpt-5.5-mini"),
+    extra("gpt-5.4-mini", true, ["low", "medium"]),
+    by("gpt-5.5-codex"),
+    // Marked unavailable by the gateway: "View more" shows it like any other.
+    extra("gpt-5.5-pro", false, ["medium", "high"]),
+  ];
+  if (params.catalog !== "big") return list;
+  const many = Array.from({ length: MAX_PROVIDER_MODELS - list.length }, (_, i) =>
+    extra(`gpt-test-${String(i + 1).padStart(4, "0")}`, true, []),
+  );
+  return [...list, ...many];
+}
+
+/**
+ * Answer `loadModelCatalog` as the engine does, in the states the address asks for: the
+ * answer is the command's result, kept nowhere.
+ */
+function loadCatalog(
+  command: Extract<BridgeCommand, { type: "loadModelCatalog" }>,
+  params: AccountParams,
+  later: (ms: number, run: () => void) => void,
+): Promise<ModelList> {
+  const { provider } = command;
+  const answer = (): ModelList => {
+    const fixture = globalThis as unknown as { catalogTries?: number };
+    fixture.catalogTries = (fixture.catalogTries ?? 0) + 1;
+    if (params.catalog === "unsupported")
+      return { status: "unsupported", error: "invalid models.list params" };
+    if (params.catalog === "fail" && fixture.catalogTries === 1)
+      return { status: "error", error: "The gateway did not answer." };
+    const picker = fixtureAccounts(Date.now(), NO_ACCOUNT_PARAMS).models.filter(
+      (m) => m.provider === provider,
+    );
+    // A partial first answer: the gateway is still finding the provider's models. A trimmed
+    // one: what came is only rows the picker has, and 70 more were left out.
+    const partial = params.catalog === "partial" && fixture.catalogTries === 1;
+    const trimmed = params.catalog === "trimmed";
+    const rows = partial || trimmed ? picker : fullList(picker, provider, params);
+    // As the engine sends it: the rows the picker lacks first, only what the menu uses of each.
+    const known = new Set(picker.map((m) => m.id));
+    const models = [
+      ...rows.filter((m) => !known.has(m.id)),
+      ...rows.filter((m) => known.has(m.id)),
+    ].map(({ id, levels, defaultLevel }) => ({ id, levels, defaultLevel }));
+    return {
+      status: "ready",
+      models,
+      total: params.catalog === "big" ? 1500 : trimmed ? models.length + 70 : models.length,
+      partial,
+    };
+  };
+  return new Promise((resolve) => {
+    if (params.catalog === "slow")
+      (globalThis as unknown as { releaseCatalog: () => void }).releaseCatalog = () =>
+        resolve(answer());
+    else later(100, () => resolve(answer()));
+  });
 }
 
 /** The open bot's binding in the state the address names. */
@@ -705,9 +847,18 @@ export function accountCommand(
         }, 1000);
       return Promise.resolve();
     }
+    case "loadModelCatalog":
+      if (params.catalog === "latepicker")
+        (globalThis as unknown as { releasePicker: () => void }).releasePicker = () =>
+          put((a) => ({ ...a, models: fixtureAccounts(Date.now(), NO_ACCOUNT_PARAMS).models }));
+      return loadCatalog(command, params, later);
     case "refreshAccounts":
       pendingRead?.();
       pendingRead = null;
+      // The picker arrives on its own after the accounts, when the page releases it.
+      if (params.catalog === "latepicker")
+        (globalThis as unknown as { releasePicker: () => void }).releasePicker = () =>
+          put((a) => ({ ...a, models: fixtureAccounts(Date.now(), NO_ACCOUNT_PARAMS).models }));
       return Promise.resolve();
     case "checkLock":
       put((a) => ({
@@ -1010,6 +1161,20 @@ export function accountCommand(
       }));
       return Promise.resolve();
     case "disconnectAccount":
+      // As the host does (`requireSameGateway`): a confirmation from before the target moved,
+      // with no connection open, or for another gateway, removes nothing.
+      if (command.stamp.target !== get().connection.target)
+        return Promise.reject(
+          new Error(
+            "The connection changed since this screen was read, so nothing was sent. Look again, then try again.",
+          ),
+        );
+      if (get().connection.status !== "connected")
+        return Promise.reject(new Error("Not connected to the gateway."));
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
       put((a) => ({
         ...a,
         accounts: a.accounts.filter((x) => x.id !== command.profileId),

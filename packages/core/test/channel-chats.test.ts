@@ -191,6 +191,26 @@ describe("F-519: Show external channel chats", () => {
     client.stop();
   });
 
+  it("F-519: two quick changes keep the last one asked, in storage and in the list, when the first write finishes last", async () => {
+    const { client, storage, keys } = await connected();
+    const set = storage.set.bind(storage);
+    const first = deferred<void>();
+    let writes = 0;
+    storage.set = async (key, value) => {
+      if (key === "show-channel-chats" && (writes += 1) === 1) await first.promise;
+      return set(key, value);
+    };
+    const on = client.setShowChannelChats(true);
+    const off = client.setShowChannelChats(false);
+    await sleep(20);
+    first.resolve();
+    await Promise.all([on, off]);
+    expect(storage.data.get("show-channel-chats")).toBe("false");
+    expect(client.state.showChannelChats).toBe(false);
+    expect(keys()).toEqual([NATIVE, MAIN]);
+    client.stop();
+  });
+
   it("F-519: a sessions.changed event that names a channel moves a task out of the list, and back when shown", async () => {
     const peer = { key: "agent:pip:direct:u1", agentId: "pip", label: "Ada", updatedAt: 250 };
     const { client, gateway, keys } = await connected({}, [...rows(), peer]);

@@ -9,9 +9,16 @@ import type {
   Transcript,
   TranscriptItem,
 } from "@clawtrate/core";
-import { browserUse } from "@clawtrate/core";
+import {
+  browserUse,
+  LIVE_UPDATES_NOT_STARTED,
+  updateNoticeLine,
+  updateNoticeScope,
+} from "@clawtrate/core";
+import { refreshNoteWords } from "./StatusStrip.tsx";
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -24,7 +31,14 @@ import { AccessBar } from "./AccessBar.tsx";
 import { NameCard } from "./bots/NameCard.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
-import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
+import {
+  CardScope,
+  CardSlot,
+  focusPending,
+  oldestPending,
+  OpenTaskContext,
+  TrailingCards,
+} from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
 import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
@@ -41,11 +55,13 @@ import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
+import { UpdateLine } from "./UpdateLine.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { SentFiles } from "./SentFiles.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
+import { BriefTurn, StartedLine, starterOf, type Starter } from "./StartedBy.tsx";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -55,15 +71,19 @@ function Turn({
   taskKey,
   item,
   incomplete = false,
+  starter = null,
 }: {
   taskKey: string;
   item: TranscriptItem;
   incomplete?: boolean;
+  /** Who started the task, for the brief it wrote (F-565). */
+  starter?: Starter | null;
 }) {
+  if (item.brief && starter) return <BriefTurn text={itemText(item)} starter={starter} />;
   const role = item.role === "user" ? "user" : "assistant";
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
   return (
-    <div className="turn" data-role={role} data-testid="transcript-turn">
+    <div className="turn" data-role={role} data-item={item.id} data-testid="transcript-turn">
       <ReplyQuote item={item} />
       {role === "assistant" ? (
         <>
@@ -89,7 +109,7 @@ function Turn({
           )}
           <SentFiles
             taskKey={taskKey}
-            messageKey={item.idempotencyKey ?? null}
+            messageKey={item.idempotencyKey ?? item.messageId ?? null}
             files={item.attachments ?? []}
           />
         </MessageUnit>
@@ -257,6 +277,20 @@ function TranscriptView({
   onAnnounce: (text: string) => void;
 }) {
   const reading = useReading();
+  const { bots, tasksByBot, connection, openclawUpdating } = useClawtrateState();
+  const starter = useMemo(() => starterOf(task, bots, tasksByBot), [task, bots, tasksByBot]);
+  // The gateway's update notice is drawn as a line only in the main bot's main conversation (F-590).
+  const noticeScope = useMemo(
+    () =>
+      updateNoticeScope({
+        bots,
+        tasksByBot,
+        connection,
+        ...(openclawUpdating ? { openclawUpdating } : {}),
+      }),
+    [bots, tasksByBot, connection, openclawUpdating],
+  );
+  const openTask = useContext(OpenTaskContext);
   // The thread open over the transcript, and what opened it, for focus to go back to.
   const [thread, setThread] = useState<{ messageId: string; from: HTMLElement | null } | null>(
     null,
@@ -283,13 +317,19 @@ function TranscriptView({
     quiet: !commandsShown,
     thinking: thinkingShown,
   });
+  const items = transcript.items;
   const scroller = useRef<HTMLDivElement>(null);
-  const itemCount = transcript.items.length;
-  const contentSize = `${itemCount}:${live.signature}`;
+  // The view, while at the end, follows any change to what is drawn: its count or its last item.
+  // "Jump to latest" goes by the last item, by the gateway's id of the message it shows, or else
+  // its identity, never a count: a row pushed off the top of a full page, even a merged turn's
+  // first row, and the "Show commands" switch are not new activity.
+  const contentSize = `${items.length}:${itemIdentity(items.at(-1)?.id)}:${live.signature}`;
+  const lastSaid = items.at(-1);
+  const activity = `${lastSaid?.messageId ?? itemIdentity(lastSaid?.id)}:${live.signature}`;
   const [atEnd, setAtEnd] = useState(true);
-  const [seenSize, setSeenSize] = useState(contentSize);
+  const [seenActivity, setSeenActivity] = useState(activity);
   const [now] = useState(() => Date.now());
-  const newActivity = !atEnd && contentSize !== seenSize;
+  const newActivity = !atEnd && activity !== seenActivity;
 
   // Whether the view follows the end, and where it last put the end. A scroll
   // the reader did not make (the content grew under a followed end) keeps
@@ -376,15 +416,15 @@ function TranscriptView({
     else pinAt(near ? element.scrollTop : null);
     following.current = near;
     setAtEnd(near);
-    if (near) setSeenSize(contentSize);
-  }, [contentSize, toEnd, pinAt]);
+    if (near) setSeenActivity(activity);
+  }, [activity, toEnd, pinAt]);
 
   const jumpToLatest = useCallback(() => {
     following.current = true;
     toEnd();
     setAtEnd(true);
-    setSeenSize(contentSize);
-  }, [contentSize, toEnd]);
+    setSeenActivity(activity);
+  }, [activity, toEnd]);
 
   // Follow new output while the reader is at the end.
   useLayoutEffect(() => {
@@ -398,7 +438,7 @@ function TranscriptView({
   const rows: ReactNode[] = [];
   let previous: number | null = null;
   const endingsBefore = live.endingsBefore;
-  for (const item of transcript.items) {
+  for (const item of items) {
     if (item.role === "user") {
       // What ended the turn before this message sits under that turn: above the time
       // that introduces this message, which is not when that turn's work happened.
@@ -417,14 +457,25 @@ function TranscriptView({
       );
     }
     if (at !== null) previous = at;
+    const updateLine = updateNoticeLine(item, task.key, noticeScope);
     rows.push(
       <CardSlot key={item.id} item={item}>
-        {item.role === "system" ? (
+        {updateLine ? (
+          <UpdateLine
+            line={updateLine}
+            {...(item.messageId ? { messageId: item.messageId } : {})}
+          />
+        ) : item.role === "system" ? (
           <p className="event-line" data-side="center">
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
         ) : live.echoes.has(item.id) ? null : (
-          <Turn taskKey={task.key} item={item} incomplete={live.incomplete.has(item.id)} />
+          <Turn
+            taskKey={task.key}
+            item={item}
+            incomplete={live.incomplete.has(item.id)}
+            starter={starter}
+          />
         )}
       </CardSlot>,
     );
@@ -450,7 +501,7 @@ function TranscriptView({
               taskKey={task.key}
               transcript={transcript}
               engineRuns={live.engineRuns}
-              lost={!liveOptions.connected}
+              lost={!liveOptions.current}
               readOnly={!liveOptions.interactive}
               effort={task.effort ?? null}
               ctx={reading}
@@ -459,6 +510,7 @@ function TranscriptView({
                 <h1 className="task-line" tabIndex={-1}>
                   {task.title}
                 </h1>
+                {starter && <StartedLine starter={starter} onOpen={openTask} />}
                 <TaskContext task={task} />
                 {note}
                 {rows}
@@ -554,6 +606,11 @@ function EmptyState({
   );
 }
 
+/** A history item's identity across reads: its id without its place on the page the read gave it. */
+function itemIdentity(itemId: string | undefined): string {
+  return itemId?.replace(/:\d+$/, "") ?? "";
+}
+
 /** What the engine holds beyond history, laid out for the transcript. */
 type LiveParts = {
   bot: Bot;
@@ -591,7 +648,11 @@ type LiveOptions = {
   /** "Show thinking" is on (7.11). */
   thinking?: boolean;
   connected: boolean;
+  /** What the task shows is this connection's (`statusLineFor`): otherwise live work is last seen. */
+  current: boolean;
   interactive: boolean;
+  /** What this connection may act on: "Needs you" points only at a card it can answer. */
+  may: { canApprove: boolean; canAnswer: boolean };
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */
   onRequestAccess: (() => void) | null;
   /** Bring the running action's card into view; false when there is none. */
@@ -647,6 +708,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         .find(
           (item) =>
             item.role === "assistant" &&
+            item.runless !== true &&
             item.blocks.some((block) => block.kind === "text" && block.text.trim()),
         );
       // The gateway writes a failure as the run's last row, its text the error itself: the
@@ -756,7 +818,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
     );
   }
 
-  const needsYou = options.interactive && oldestPending(transcript) !== null;
+  const needsYou = oldestPending(transcript, options.may) !== null;
   return {
     bot,
     foot,
@@ -773,9 +835,13 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
 }
 
 /** The oldest card that needs the person, which "Review" and ⌘J go to: the cards' own choice. */
-function needsYouOf(bot: Bot, transcript: Transcript | undefined, interactive: boolean): NeedsYou {
-  if (!transcript || !interactive) return null;
-  const oldest = oldestPending(transcript);
+function needsYouOf(
+  bot: Bot,
+  transcript: Transcript | undefined,
+  may: { canApprove: boolean; canAnswer: boolean },
+): NeedsYou {
+  if (!transcript) return null;
+  const oldest = oldestPending(transcript, may);
   if (oldest?.kind === "approval")
     return { kind: "approval", text: `${bot.name} needs your approval to run a command` };
   if (oldest?.kind === "question")
@@ -818,10 +884,11 @@ export function Conversation({
   connection,
   info,
   online,
-  caughtUp,
+  current,
   inert = false,
   granted,
   onShowComputer,
+  updatingWords = null,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -847,14 +914,19 @@ export function Conversation({
   info: HostInfo;
   /** The gateway is connected, so a task without a transcript can load. */
   online: boolean;
-  /** Connected and caught up since the latest connect: until then live work is last seen. */
-  caughtUp: boolean;
+  /**
+   * The open task's live work is this connection's: false from a reconnect until the task has
+   * reloaded (or failed to), and while the connection is down. Until then it is last seen.
+   */
+  current: boolean;
   /** Set while the Work drawer covers the conversation, so focus cannot land behind it. */
   inert?: boolean;
   /** Access arrived a moment ago. */
   granted: boolean;
   /** Open the Work pane on Computer, focusing its tab (work-pane.md, section 15). */
   onShowComputer?: () => void;
+  /** While OpenClaw updates on the gateway, what the strip says: said instead of "Reconnecting". */
+  updatingWords?: string | null;
 }) {
   const itemCount = transcript?.items.length ?? 0;
   const send = useCommand();
@@ -901,10 +973,11 @@ export function Conversation({
     : "";
 
   const active = currentRun(transcript);
+  const { canApprove, canAnswer } = connection;
   const review = useCallback(() => {
-    const oldest = transcript ? oldestPending(transcript) : null;
+    const oldest = transcript ? oldestPending(transcript, { canApprove, canAnswer }) : null;
     if (oldest) focusPending(oldest);
-  }, [transcript]);
+  }, [transcript, canApprove, canAnswer]);
   // The status line brings the running action's card into view and focuses its line (7.8).
   const onShowAction = useCallback(
     (callId: string) => showAction(callId, sectionRef.current ?? document),
@@ -933,7 +1006,7 @@ export function Conversation({
   const heard = [
     bot ? lifecycleWords(bot, active, lastRun) : null,
     connection.status === "reconnecting"
-      ? "Reconnecting"
+      ? (updatingWords ?? "Reconnecting")
       : connection.status === "connected"
         ? "Connected"
         : null,
@@ -948,7 +1021,9 @@ export function Conversation({
     setSpoken(heard);
     const changed = heard.filter((words, index) => words && words !== spoken[index]);
     // A first hello is not news; a return after a drop is.
-    const news = changed.filter((words) => words !== "Connected" || spoken[1] === "Reconnecting");
+    const news = changed.filter(
+      (words) => words !== "Connected" || (spoken[1] !== null && spoken[1] !== "Connected"),
+    );
     if (news.length > 0) setAnnouncement(news.at(-1)!);
   }
 
@@ -1039,7 +1114,8 @@ export function Conversation({
       ) : (
         <EmptyState title="No bots to show" body="This gateway has no bots yet." />
       );
-  } else if (taskCount === 0) {
+  } else if (taskCount === 0 && !task) {
+    // A task opened from elsewhere (a routine's run, a search) shows though the list holds none.
     body = (
       <EmptyState
         bot={bot}
@@ -1093,8 +1169,14 @@ export function Conversation({
       </div>
     );
   } else if (transcript.status === "error" && itemCount === 0 && !hasLive) {
+    // Its history may have loaded empty while its live updates didn't start (#592).
+    const live = transcript.error === LIVE_UPDATES_NOT_STARTED;
     body = (
-      <EmptyState bot={bot} title="Could not load this conversation" body={transcript.error}>
+      <EmptyState
+        bot={bot}
+        title={live ? "Live updates didn't start" : "Could not load this conversation"}
+        body={transcript.error}
+      >
         <button type="button" className="button" onClick={onReload}>
           Try again
         </button>
@@ -1116,8 +1198,12 @@ export function Conversation({
         bot={bot}
         transcript={transcript}
         liveOptions={{
-          connected: caughtUp,
+          // Only the connection says "Offline": a load still being tried, or one that failed,
+          // never does (#592).
+          connected: online,
+          current,
           interactive,
+          may: { canApprove, canAnswer },
           onRequestAccess:
             info.readOnly || connection.fullPairing
               ? null
@@ -1130,7 +1216,7 @@ export function Conversation({
         note={
           refreshNote && (
             <p className="load-note" role="alert">
-              Couldn't refresh this conversation. Showing what was loaded before.
+              {refreshNoteWords(transcript)}
               <button type="button" className="button" data-size="sm" onClick={onReload}>
                 Try again
               </button>
@@ -1218,7 +1304,7 @@ export function Conversation({
           gateway={connection.gatewayUrl}
           taskKey={task.key}
           transcript={transcript}
-          connected={caughtUp}
+          connected={online}
           limits={connection.sendLimits}
           notices={[
             ...stopNotices.map((notice) => ({
@@ -1230,7 +1316,7 @@ export function Conversation({
             })),
             ...notices.filter((notice) => notice.task === task.key),
           ]}
-          needsYou={needsYouOf(bot, transcript, interactive)}
+          needsYou={needsYouOf(bot, transcript, { canApprove, canAnswer })}
           onReview={review}
           onNotice={addNotice}
           onDismissNotice={(id) => {

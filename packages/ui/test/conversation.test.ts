@@ -1,6 +1,7 @@
 import {
   emptyActivity,
   initialState,
+  LIVE_UPDATES_NOT_STARTED,
   type ClawtrateState,
   type ConnectionStatus,
   type Transcript,
@@ -8,7 +9,17 @@ import {
 import { describe, expect, it } from "vitest";
 import { rowTime, stampTime } from "../src/format.ts";
 import { reloadCommand } from "../src/Shell.tsx";
-import { stripFor, taskInSync } from "../src/StatusStrip.tsx";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  DETAIL_SHOWN_CHARS,
+  detailText,
+  refreshNoteShown,
+  refreshNoteWords,
+  StatusStrip,
+  stripFor,
+  taskInSync,
+} from "../src/StatusStrip.tsx";
 
 function state(
   status: ConnectionStatus,
@@ -17,7 +28,7 @@ function state(
   return {
     ...initialState,
     connection: { ...initialState.connection, status, gatewayUrl: "ws://127.0.0.1:19001" },
-    discovery: { status: discovery, error: null, partial: false },
+    discovery: { status: discovery, error: null, detail: null, partial: false, tasksRead: null },
   };
 }
 
@@ -102,6 +113,98 @@ describe("the status strip (visual-language.md, section 11)", () => {
       tone: "danger",
       action: "retry",
     });
+  });
+
+  it("#592: bots and tasks that couldn't be loaded: the gateway's words are behind the disclosure, never the headline", () => {
+    const detail =
+      "Could not load tasks: AgentDatabaseRegistryChangedError: Agent database registry ownership is changing during discovery";
+    const failed = state("connected", "error");
+    const strip = (error: string | null) =>
+      stripFor({ ...failed, discovery: { ...failed.discovery, error, detail } }, "dropped", null);
+    // The gateway gave no reason: only that they couldn't be loaded.
+    expect(strip(null)).toMatchObject({
+      text: "Couldn't load bots and tasks",
+      more: null,
+      detail,
+      action: "retry",
+    });
+    // The gateway marked its answer as passing: it says so.
+    expect(strip("The gateway wasn't ready.")).toMatchObject({
+      more: "The gateway wasn't ready.",
+      detail,
+    });
+  });
+
+  it("#592: the gateway's message is a disclosure outside the live region, named for what it shows", () => {
+    const strip = {
+      tone: "danger" as const,
+      text: "Couldn't load bots and tasks",
+      more: null,
+      detail: "Could not load tasks:\u0007 busy\n\n\n\nTry later",
+      action: "retry" as const,
+      countdown: false,
+    };
+    const render = (detailOpen: boolean) =>
+      renderToStaticMarkup(
+        createElement(StatusStrip, {
+          strip,
+          retryAt: null,
+          onRetry: () => {},
+          onReload: () => {},
+          detailOpen,
+        }),
+      );
+    const closed = render(false);
+    // Named the same everywhere; its words show beside Retry, its chevron alone on a phone.
+    expect(closed).toMatch(
+      /<button type="button" class="strip-detail-toggle" aria-label="Gateway&#x27;s message" aria-expanded="false" aria-controls="[^"]+"><span class="strip-long">Gateway&#x27;s message<\/span><svg[^>]*class="icon strip-short"/,
+    );
+    expect(closed).not.toContain("status-strip-detail");
+    // The strip's own text, which its live region announces, holds none of the gateway's words.
+    expect(closed).not.toContain("busy");
+    const open = render(true);
+    const id = /aria-controls="([^"]+)"/.exec(open)![1]!;
+    expect(open).toContain('aria-expanded="true"');
+    // The panel follows the strip, outside its live region, as text.
+    const [inStrip, after] = open.split("</div><div");
+    expect(inStrip).not.toContain("busy");
+    expect(after).toContain(`id="${id}"`);
+    expect(after).toContain('role="region" aria-label="Gateway&#x27;s message"');
+    expect(after).toContain("<p>Could not load tasks: busy\n\nTry later</p>");
+  });
+
+  it("#592: a task whose live updates didn't start says so: in the strip after a drop, in the note otherwise", () => {
+    const unsubscribed: Transcript = { ...failed, error: LIVE_UPDATES_NOT_STARTED };
+    expect(stripFor(withTask(state("connected"), unsubscribed), "dropped", KEY)).toMatchObject({
+      text: "Couldn't sync this task",
+      more: LIVE_UPDATES_NOT_STARTED,
+      action: "reload",
+    });
+    expect(refreshNoteWords(unsubscribed)).toBe(LIVE_UPDATES_NOT_STARTED);
+    expect(refreshNoteShown(withTask(state("connected"), unsubscribed), "none", unsubscribed)).toBe(
+      true,
+    );
+    // A reload that failed says that.
+    expect(stripFor(withTask(state("connected"), failed), "dropped", KEY)?.more).toBeNull();
+    expect(refreshNoteWords(failed)).toBe(
+      "Couldn't refresh this conversation. Showing what was loaded before.",
+    );
+  });
+
+  it("#592: after a drop, the open task's failed reload is the conversation's note when bots and tasks failed too", () => {
+    const both = withTask(state("connected", "error"), failed);
+    // The strip says bots and tasks couldn't be loaded; the note says the task's own failure.
+    expect(stripFor(both, "dropped", KEY)?.text).toBe("Couldn't load bots and tasks");
+    expect(refreshNoteShown(both, "dropped", failed)).toBe(true);
+    // Bots and tasks fine: the strip says the task couldn't sync, and no note repeats it.
+    expect(refreshNoteShown(withTask(state("connected"), failed), "dropped", failed)).toBe(false);
+  });
+
+  it("#592: the gateway's message is cleaned and bounded", () => {
+    expect(detailText("  a\u0000b\tc  ")).toBe("a b c");
+    const long = detailText("x".repeat(5_000));
+    expect(long).toHaveLength(DETAIL_SHOWN_CHARS);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
 

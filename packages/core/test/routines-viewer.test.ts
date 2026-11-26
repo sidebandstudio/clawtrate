@@ -58,6 +58,8 @@ describe("a routine row's action from a viewer behind the host", () => {
     await until(() => client.state.routines.routines.length === 1);
     // The list the viewer's rows came from.
     const shown = client.state.routines.listedOn;
+    // Where they were read: a drop and its reconnect keep the host's target.
+    const stamp = stampOn("gateway-1", client);
     // The connection drops and comes back; the host reads this connection's list
     // before the viewer has the snapshot that shows it.
     const connects = gateway.connects.length;
@@ -67,13 +69,19 @@ describe("a routine row's action from a viewer behind the host", () => {
     await viewer.apply({ type: "refreshRoutines" });
     await until(() => client.state.routines.listedOn !== shown);
     expect(
-      await viewer.apply({ type: "setRoutineEnabled", id: JOB, enabled: false, listedOn: shown }),
+      await viewer.apply({
+        type: "setRoutineEnabled",
+        id: JOB,
+        enabled: false,
+        listedOn: shown,
+        stamp,
+      }),
     ).toEqual({ status: "not-sent", reason: "gateway" });
-    expect(await viewer.apply({ type: "runRoutineNow", id: JOB, listedOn: shown })).toEqual({
+    expect(await viewer.apply({ type: "runRoutineNow", id: JOB, listedOn: shown, stamp })).toEqual({
       status: "not-sent",
       reason: "gateway",
     });
-    expect(await viewer.apply({ type: "removeRoutine", id: JOB, listedOn: shown })).toEqual({
+    expect(await viewer.apply({ type: "removeRoutine", id: JOB, listedOn: shown, stamp })).toEqual({
       status: "not-sent",
       reason: "gateway",
     });
@@ -87,6 +95,7 @@ describe("a routine row's action from a viewer behind the host", () => {
         id: JOB,
         enabled: false,
         listedOn: client.state.routines.listedOn,
+        stamp,
       }),
     ).toMatchObject({ status: "saved" });
     expect(gateway.calls("cron.update")).toHaveLength(1);

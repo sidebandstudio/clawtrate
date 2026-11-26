@@ -1,19 +1,27 @@
 export * from "./types.ts";
 export * from "./store.ts";
+export * from "./gateway-names.ts";
 export * from "./host.ts";
 export * from "./mapping.ts";
+export * from "./origins.ts";
+export * from "./update-notice.ts";
 export * from "./avatar.ts";
+export * from "./gateway-update.ts";
+export * from "./openclaw-update.ts";
 export * from "./runs.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";
 export * from "./cards.ts";
+export * from "./started-task-card.ts";
 export * from "./actions.ts";
 export * from "./action-feed.ts";
 export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
 export * from "./pictures.ts";
+export * from "./chat-files.ts";
 export * from "./bot-names.ts";
+export * from "./gateway-bot.ts";
 export * from "./computer.ts";
 export * from "./machine.ts";
 export * as computerWords from "./computer-words.ts";
@@ -37,6 +45,7 @@ export {
   type UsageBusy,
   type UsageReport,
 } from "./usage-engine.ts";
+export { READ_AGAIN_TRIES } from "./read-again.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./machines.ts";
@@ -79,8 +88,10 @@ export {
   MAX_FILE_READS,
   MAX_MESSAGE_CHARS,
   CONNECT_REFUSED,
+  DISCOVERY_NOT_READY,
   GATEWAY_CHANGED_MESSAGE,
   GatewayChangedError,
+  LIVE_UPDATES_NOT_STARTED,
   MAX_SESSION_PAGES,
   REQUESTED_SCOPES,
   SendTooLargeError,
@@ -110,3 +121,7 @@ export {
   type MemoryFile,
   type MemoryList,
 } from "./memory.ts";
+export { type BotVoice, type BotVoiceAnswer, type VoiceHook } from "./voice.ts";
+export * from "./start-tasks.ts";
+export * from "./guides.ts";
+export * from "./guide-text.ts";

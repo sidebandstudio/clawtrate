@@ -1,0 +1,41 @@
+- status
+- main "Routines":
+  - button "Back to bots"
+  - heading "Routines" [level=1]
+  - radiogroup "Show":
+    - radio "List" [checked]
+    - radio "Day"
+  - combobox "Bots":
+    - option "All bots"
+    - option "Juniper"
+    - option "Marlow"
+    - option "Otto" [selected]
+    - option "Pip"
+    - option "Quartermaster of the Family Calendar and Errands"
+  - text: 3 routines
+  - region "Check-ins":
+    - heading "Check-ins" [level=2]
+    - paragraph: A bot that checks in gets a turn on a schedule to look for anything that needs you. The gateway can skip a scheduled attempt.
+    - button "Refresh"
+    - region "Otto":
+      - heading "Otto" [level=4]
+      - text: No check-ins
+      - paragraph: Otto doesn't check in. The gateway's default for check-ins doesn't cover it.
+  - region "Otto":
+    - heading "Otto" [level=2]
+    - list "Otto":
+      - listitem:
+        - button "Disk space watch, Otto, Every 30 minutes, next run today 5:52 PM, last today, skipped": Disk space watch Every 30 minutes · Next today 5:52 PM · Last today, skipped
+      - listitem:
+        - button "Nightly backup check, Otto, Every day at 3:30 AM, New York, next run tomorrow 3:30 AM, last today, failed": Nightly backup check Every day at 3:30 AM, New York · Next tomorrow 3:30 AM · Last today, failed
+      - listitem:
+        - button "Certificate renewal, Otto, 0 9 1 * *, gateway's time, next run Dec 1 3:00 AM, last oct 29, succeeded":
+          - text: Certificate renewal
+          - code: 0 9 1 * *
+          - text: ", gateway's time · Next Dec 1 3:00 AM · Last Oct 29, succeeded"
+    - text: "Routines' time zone: New York"
+  - region "Access":
+    - text: Read-only. Creating and changing routines needs admin access.
+    - button "Request admin access"
+  - status
+- status

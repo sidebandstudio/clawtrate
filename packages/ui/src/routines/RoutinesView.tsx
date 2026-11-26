@@ -47,6 +47,7 @@ import { Markdown } from "../Markdown.tsx";
 import { Note } from "../bots/parts.tsx";
 import { Calendar } from "./Calendar.tsx";
 import { useKeyedRead } from "./read.ts";
+import { shownStamp } from "../stamp.ts";
 import {
   fullWhen,
   ownerOf,
@@ -833,7 +834,9 @@ export function RoutinesView({
   // Kept fewer routines than the gateway has: one bot's are read from the gateway when chosen.
   const [botRead, retryBot] = useKeyedRead(
     store.omitted > 0 && nav.bot !== null
-      ? `${gateway}:${nav.bot}:${store.revision}:${store.omitted}`
+      ? // A host started again starts at another target (a random one, so a repeat is only very
+        // unlikely), so a list read before a host restarted is read again.
+        `${gateway}:${state.connection.target}:${nav.bot}:${store.revision}:${store.omitted}`
       : null,
     () => bridge.invoke({ type: "readBotRoutines", botId: nav.bot! }),
   );
@@ -906,6 +909,20 @@ export function RoutinesView({
     nav.bot !== null && !shown && mode === "list"
       ? (bots.find((each) => each.id === nav.bot) ?? null)
       : null;
+  const botOptions = owners(bots, [...store.routines, ...fromBot]);
+  // A filtered bot that leaves the gateway's list and has no remaining routines clears the filter.
+  // Over a capped list, only the bot's own read can say it has none.
+  const filteredBotMissing =
+    nav.bot !== null &&
+    store.status === "loaded" &&
+    (store.omitted === 0 || botRead.status === "ready") &&
+    !botOptions.some((each) => each.id === nav.bot);
+  // Until then the filtered bot keeps its option, so the picker shows the filter it applies.
+  if (nav.bot !== null && !botOptions.some((each) => each.id === nav.bot))
+    botOptions.push(ownerOf(bots, nav.bot));
+  useEffect(() => {
+    if (filteredBotMissing) onNav({ ...nav, bot: null });
+  }, [filteredBotMissing, nav, onNav]);
   // Read in the list across bots too: its group heads say each bot's check-ins.
   const checkInsSection = useCheckInsSection({
     active: !shown && mode === "list",
@@ -920,7 +937,12 @@ export function RoutinesView({
   // Every way into a write passes here: below admin nothing opens.
   const admin = canAdmin(state.connection, info);
   const granted = useGranted(state.connection);
-  const actions = useRoutineActions(announce, store.routines, store.listedOn);
+  const actions = useRoutineActions(
+    announce,
+    store.routines,
+    store.listedOn,
+    shownStamp(state.connection),
+  );
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [deleting, setDeleting] = useState<Routine | null>(null);
   const [menu, setMenu] = useState<{ routine: Routine; x: number; y: number } | null>(null);
@@ -931,10 +953,12 @@ export function RoutinesView({
   if (!admin && deleting) setDeleting(null);
   // A row's menu and the delete confirmation hold a routine from the list they were
   // opened on; actions send the list now shown. When another connection's list
-  // arrives they close in this render, so an old row never goes out with the new list.
-  const [openedOn, setOpenedOn] = useState(store.listedOn);
-  if (openedOn !== store.listedOn) {
-    setOpenedOn(store.listedOn);
+  // arrives, or the host's target moves (a restarted host can keep the list's number),
+  // they close in this render, so an old row never goes out with the new list.
+  const listKey = `${store.listedOn}:${state.connection.target}`;
+  const [openedOn, setOpenedOn] = useState(listKey);
+  if (openedOn !== listKey) {
+    setOpenedOn(listKey);
     setMenu(null);
     setDeleting(null);
   }
@@ -1104,7 +1128,7 @@ export function RoutinesView({
                 onChange={(event) => onNav({ ...nav, bot: event.target.value || null })}
               >
                 <option value="">All bots</option>
-                {owners(bots, store.routines).map((each) => (
+                {botOptions.map((each) => (
                   <option key={each.id} value={each.id}>
                     {each.name}
                   </option>
@@ -1256,6 +1280,7 @@ export function RoutinesView({
         <DeleteRoutine
           routine={deleting}
           listedOn={store.listedOn}
+          shown={shownStamp(state.connection)}
           onCancel={() => setDeleting(null)}
           onDeleted={() => {
             announce(`Deleted ${deleting.name}`);

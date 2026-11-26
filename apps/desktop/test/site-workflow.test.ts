@@ -48,11 +48,15 @@ function deploysWithoutRecheck(text: string): string[] {
   const assemble = build.steps?.find((step) => step.run?.includes("site-feed.ts"));
   if (!assemble?.id || build.outputs?.tag !== `\${{ steps.${assemble.id}.outputs.tag }}`)
     problems.push("the build job does not pass on the tag it assembled");
+  if (build.outputs?.pinned !== `\${{ steps.${assemble?.id}.outputs.pinned }}`)
+    problems.push("the build job does not pass on the pinned tag");
   const steps = flow.jobs.deploy!.steps ?? [];
   const deploy = steps.findIndex((step) => step.uses?.startsWith("actions/deploy-pages@"));
   const check = steps.findIndex(
     (step) =>
       step.env?.TAG === "${{ needs.build.outputs.tag }}" &&
+      step.env?.PINNED === "${{ needs.build.outputs.pinned }}" &&
+      /^ *for TAG in \$TAG \$PINNED; do$/m.test(step.run ?? "") &&
       /gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$TAG"/.test(step.run ?? "") &&
       step.run!.includes('"false true"') &&
       step.run!.includes("exit 1"),
@@ -210,11 +214,17 @@ describe("the Site workflow and the feed assembler", () => {
         return `${text.replace(step, "")}${step}`;
       },
     ],
-    [
-      "no tag from the build job",
-      (text: string) => text.replace(/ {4}outputs:\n {6}tag: .*\n/, ""),
-    ],
+    ["no tag from the build job", (text: string) => text.replace(/ {6}tag: \$.*\n/, "")],
     ["a recheck that does not fail", (text: string) => text.replace("exit 1", "exit 0")],
+    ["no pinned tag from the build job", (text: string) => text.replace(/ {6}pinned: .*\n/, "")],
+    [
+      "a recheck of the newest beta alone",
+      (text: string) => text.replace("for TAG in $TAG $PINNED; do", "for TAG in $TAG; do"),
+    ],
+    [
+      "a recheck that is not given the pinned tag",
+      (text: string) => text.replace(/ {10}PINNED: .*\n/, ""),
+    ],
   ])("refuses a workflow with %s", (_name, change) => {
     const changed = change(WORKFLOW);
     expect(changed).not.toBe(WORKFLOW);

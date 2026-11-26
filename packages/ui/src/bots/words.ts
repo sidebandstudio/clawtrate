@@ -10,6 +10,7 @@ import {
   type AccountsState,
   type Bot,
   type BotBinding,
+  type CatalogModel,
   type ConnectionState,
   type GatewayAccount,
   type HostInfo,
@@ -298,10 +299,18 @@ export function firstEffort(
   model: string | null,
   keep?: string | null,
 ): string | null {
-  const levels = modelsOf(accounts, provider).find((m) => m.id === model)?.levels ?? [];
+  return effortFor(
+    modelsOf(accounts, provider).find((m) => m.id === model),
+    keep,
+  );
+}
+
+/** `firstEffort` for a model's row from either section of the menu. */
+export function effortFor(model: CatalogModel | undefined, keep?: string | null): string | null {
+  const levels = model?.levels ?? [];
   if (levels.length === 0) return null;
   if (keep && levels.includes(keep)) return keep;
-  const own = modelsOf(accounts, provider).find((m) => m.id === model)?.defaultLevel;
+  const own = model?.defaultLevel;
   if (own && levels.includes(own)) return own;
   return levels[Math.floor((levels.length - 1) / 2)]!;
 }

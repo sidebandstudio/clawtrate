@@ -4,9 +4,10 @@
 // same rows are checked against a real gateway in e2e/routines.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
-import { contextFor, openFixture, SIZES } from "./fixture.ts";
+import { contextFor, moveTarget, openFixture, SIZES } from "./fixture.ts";
 
-const ROUTINES = "scene=main&routines=on";
+// "Show sessions from other tools" on, so a routine's latest run is a row under its bot (F-193).
+const ROUTINES = "scene=main&routines=on&others=show";
 const size = (name: string) => SIZES.find((each) => each.name === name)!;
 const view = (page: Page) => page.getByTestId("routines-view");
 const rail = (page: Page, bot: string) =>
@@ -97,6 +98,50 @@ test.describe("1440", () => {
     await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
     await expect(view(page).getByTestId("routine-row")).toHaveCount(3);
     expect(await sent(page)).toContain("readBotRoutines");
+    // A new host target (as after a host restart, whose list counter starts again): read again.
+    const reads = async () =>
+      (await sent(page)).filter((type) => type === "readBotRoutines").length;
+    const before = await reads();
+    await moveTarget(page);
+    await expect.poll(reads).toBe(before + 1);
+  });
+
+  test("F-558: a filtered bot deleted elsewhere keeps the filter while its own read can still list its routines", async ({
+    page,
+  }) => {
+    // Quartermaster's one routine is beyond the capped list: only its own read lists it.
+    await open(page, "scene=main&routines=truncated&routinehold=quartermaster");
+    await view(page)
+      .getByRole("combobox", { name: "Bots" })
+      .selectOption({ label: "Quartermaster of the Family Calendar and Errands" });
+    await expect(view(page).getByLabel("Loading routines")).toBeVisible();
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            setState(f: (s: { bots: Array<{ id: string }> }) => unknown): void;
+          };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        bots: state.bots.filter((bot) => bot.id !== "quartermaster"),
+      })),
+    );
+    const picker = view(page).getByRole("combobox", { name: "Bots" });
+    await expect(view(page).getByLabel("Loading routines")).toBeVisible();
+    await expect(picker).toHaveValue("quartermaster");
+    await page.evaluate(() =>
+      (window as unknown as { releaseRoutineReads(): void }).releaseRoutineReads(),
+    );
+    await expect(view(page).getByTestId("routine-row")).toHaveCount(1);
+    await expect(view(page).getByTestId("routine-row")).toContainText("Stores count");
+    await expect(picker).toHaveValue("quartermaster");
+    // All bots clears the filter.
+    await picker.selectOption({ label: "All bots" });
+    await expect(picker).toHaveValue("");
+    await expect(
+      view(page).getByTestId("routine-row").filter({ hasText: "Stores count" }),
+    ).toHaveCount(0);
   });
 
   test("F-191: the bot filter confirms completeness only after a successful complete read", async ({
@@ -233,7 +278,7 @@ test.describe("1440", () => {
   test("F-024: a bot whose routine is running shows the working mark and the routine's name", async ({
     page,
   }) => {
-    await openFixture(page, "scene=main&routines=running", "light");
+    await openFixture(page, "scene=main&routines=running&others=show", "light");
     const marlow = page.getByTestId("bot-list").getByRole("button", { name: /^Marlow\b/ });
     await expect(marlow).toHaveAttribute("data-state", "working");
     await expect(marlow).toContainText("Running Morning digest");
@@ -291,7 +336,7 @@ test.describe("1440", () => {
   });
 
   test("F-193: a running row follows the same run into its conversation", async ({ page }) => {
-    await openFixture(page, "scene=main&routines=running", "light");
+    await openFixture(page, "scene=main&routines=running&others=show", "light");
     await rail(page, "Marlow").click();
     await expect(view(page).getByTestId("run-starting")).toHaveText("Running…");
     await change(
@@ -307,7 +352,7 @@ test.describe("1440", () => {
   test("F-193: a running row whose routine is removed stops loading and says the run is gone", async ({
     page,
   }) => {
-    await openFixture(page, "scene=main&routines=running", "light");
+    await openFixture(page, "scene=main&routines=running&others=show", "light");
     await rail(page, "Marlow").click();
     await expect(view(page).getByTestId("run-starting")).toHaveText("Running…");
     await change(

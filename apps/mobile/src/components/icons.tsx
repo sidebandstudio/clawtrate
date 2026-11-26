@@ -19,6 +19,7 @@ function Line({ d, color, size = 16, children }: IconProps & { d: string; childr
 export const BackIcon = (props: IconProps) => <Line d={ICON_PATHS.back} {...props} />;
 export const ChevronIcon = (props: IconProps) => <Line d={ICON_PATHS.chevron} {...props} />;
 export const CloseIcon = (props: IconProps) => <Line d={ICON_PATHS.close} {...props} />;
+export const FileIcon = (props: IconProps) => <Line d={ICON_PATHS.file} {...props} />;
 
 export const SettingsIcon = ({ color, size = 16 }: IconProps) => (
   <Line d={ICON_PATHS.settings} color={color} size={size}>

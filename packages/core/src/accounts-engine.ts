@@ -29,6 +29,9 @@ import {
   prefProfileId,
   readBotView,
   readCatalog,
+  readPickerCuts,
+  readProviderCatalog,
+  type ModelList,
   readIntent,
   readKeyProviders,
   readMethods,
@@ -42,6 +45,7 @@ import {
   SLOW_CREATE_MS,
   unreadEvidence,
   withoutSecret,
+  initialAccountsState,
   type AccountsState,
   type MissingStep,
   type AccountWrite,
@@ -57,14 +61,23 @@ import {
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import type { ReadStamp } from "./types.ts";
 
 /** What the engine needs from the client. */
+/** Why the accounts read shows no answer: its connection ended before it finished. */
+export const ACCOUNTS_READ_CUT_OFF = "The connection ended before the accounts were read.";
+
 export type AccountsContext = {
   request(
     method: string,
     params: unknown,
     options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<unknown>;
+  /**
+   * Read, and ask again while the gateway answers that it isn't ready and `current()` holds
+   * (`readAgain`, with the client's waits).
+   */
+  readAgain<T>(read: () => Promise<T>, current: () => boolean): Promise<T>;
   get(): AccountsState;
   update(change: (accounts: AccountsState) => AccountsState): void;
   /** The bots the client lists: ids, names, which is the default, and their pictures. */
@@ -78,6 +91,8 @@ export type AccountsContext = {
   gateway(): Promise<string | null>;
   /** The identity the connection has read so far, without asking: null until it is known. */
   gatewayNow(): string | null;
+  /** Where a read made now is made: the identity, the target and the connection's hello. */
+  readStamp(): ReadStamp;
   /** The host's target now (`ConnectionState.target`). */
   target(): number;
   /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
@@ -181,6 +196,8 @@ export class AccountsEngine {
    * it; a reset since it began retires it.
    */
   private resets = 0;
+  /** The default bot's picker read under way, which Create waits for. */
+  private pickerRead: Promise<unknown> | null = null;
   /** The bound write whose Create the state's creation and the slow timer belong to. */
   private creating: WriteMark | null = null;
   /** The gateway the state's creation was asked of: it is kept, and finished, only there. */
@@ -230,26 +247,121 @@ export class AccountsEngine {
   private async readAll(): Promise<void> {
     const { ctx } = this;
     if (!ctx.connected()) return;
+    // A reset since the read began (another gateway) retires it: nothing it read is published.
+    const resets = this.resets;
+    // Where this read is made: its requests all go now, and a close ends every one of them.
+    const readOn = ctx.readStamp();
+    // A read is asked again only on the connection it began on, for the same gateway.
+    const current = () => {
+      const now = ctx.readStamp();
+      return (
+        resets === this.resets &&
+        ctx.connected() &&
+        now.target === readOn.target &&
+        now.connectedAt === readOn.connectedAt
+      );
+    };
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
     try {
       const bots = ctx.bots();
       const [config, views, prefs] = await Promise.all([
-        ctx.request("config.get", {}).then(asRecord),
+        ctx.readAgain(() => ctx.request("config.get", {}), current).then(asRecord),
         this.readViews(bots.map((bot) => bot.id)),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
       ]);
+      // Checked before the preferences are read: another gateway's must never refill the maps
+      // the reset cleared.
+      if (resets !== this.resets) return;
       this.readPrefs(prefs);
-      const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
-      const catalog = await ctx
-        .request("models.list", { agentId: defaultBot })
-        .then(readCatalog, () => ctx.get().models);
       const at = ctx.now();
-      ctx.update((a) => this.compose(a, config, views, catalog, at));
+      // Read before the gateway named itself on this connection, and named since: the read is its.
+      const now = ctx.readStamp();
+      const read =
+        readOn.gatewayId === null &&
+        now.target === readOn.target &&
+        now.connectedAt === readOn.connectedAt
+          ? { ...readOn, gatewayId: now.gatewayId }
+          : readOn;
+      ctx.update((a) => {
+        // The catalog is kept only for the same gateway, named on both reads: one read on
+        // another (an answer at the same address after a reconnect) is never shown beside this
+        // read's stamp. The picker below reads this one's.
+        const same =
+          read.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === read.gatewayId;
+        return {
+          ...this.compose(a, config, views, same ? a.models : [], at),
+          ...(same ? {} : { modelsCut: initialAccountsState.modelsCut }),
+          readOn: read,
+        };
+      });
+      // The default bot's picker, the Model menu's rows (section 9), asked once the accounts are
+      // published and in the same read, so it never overlaps another account read or what a
+      // read is awaited for (a new bot's first task): the gateway refuses it alongside the reads
+      // above ("Chat metadata access changed while preparing its metadata"). Not published after
+      // a reset; a failed read keeps the rows there are.
+      const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
+      // Kept while it is out: Create waits for it rather than overlap it (section 4).
+      const picker = ctx
+        .readAgain(() => ctx.request("models.list", { agentId: defaultBot }), current)
+        .catch(() => null);
+      this.pickerRead = picker;
+      const answer = await picker;
+      if (this.pickerRead === picker) this.pickerRead = null;
+      if (answer === null || resets !== this.resets) return;
+      const models = readCatalog(answer);
+      const modelsCut = readPickerCuts(answer);
+      ctx.update((a) => ({ ...a, models, modelsCut }));
     } catch (error) {
+      // A failure of a read for another gateway is not this one's to show.
+      if (resets !== this.resets) return;
+      // Its connection ended: the gateway's words from it are not published (they may echo what
+      // was typed, and the sign-in's typed values are already forgotten). The screen says the
+      // read didn't finish instead of waiting on it.
+      if (!current()) {
+        ctx.update((a) =>
+          a.status === "loading" ? { ...a, status: "error", error: ACCOUNTS_READ_CUT_OFF } : a,
+        );
+        return;
+      }
       // While a sign-in lasts, its typed values are taken out of whatever comes back.
       const message = this.scrub(errorText(error));
       ctx.update((a) => ({ ...a, status: "error", error: message }));
     }
+  }
+
+  /**
+   * One provider's full list for "View more" (section 9): `models.list {view: "all",
+   * provider}` for the default bot, the same scope as the picker, read each time it is asked
+   * for and given to the screen that asked. Nothing of it is kept. Its answer is refused, not
+   * given, when the gateway was reset (another gateway) while it was read.
+   */
+  async readModelList(provider: string): Promise<ModelList> {
+    const { ctx } = this;
+    if (!ctx.connected()) throw new Error("Not connected to a gateway.");
+    const resets = this.resets;
+    const bots = ctx.bots();
+    const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
+    let list: ModelList;
+    try {
+      const answer = await ctx.request("models.list", {
+        agentId: defaultBot,
+        view: "all",
+        provider,
+      });
+      const known = new Set(
+        ctx
+          .get()
+          .models.filter((m) => m.provider === provider)
+          .map((m) => m.id),
+      );
+      list = { status: "ready", ...readProviderCatalog(answer, provider, known) };
+    } catch (error) {
+      const refused =
+        error instanceof GatewayProtocolRequestError && error.code === "INVALID_REQUEST";
+      list = { status: refused ? "unsupported" : "error", error: this.scrub(errorText(error)) };
+    }
+    if (resets !== this.resets) throw new Error("The gateway changed while its models were read.");
+    return list;
   }
 
   private async readViews(botIds: string[]): Promise<Map<string, BotView>> {
@@ -1296,6 +1408,9 @@ export class AccountsEngine {
   }
 
   async createBot(input: CreateBotInput, binding?: WriteBinding): Promise<CreatedBot> {
+    // The picker read already under way is answered before anything is written: a new bot's
+    // writes and first task never overlap it (the gateway refuses them alongside each other).
+    await this.pickerRead;
     return this.boundTo(binding, (ctx, mark) => this.create(ctx, input, mark));
   }
 
@@ -1783,13 +1898,42 @@ export class AccountsEngine {
     await this.removeFallbacks(botId);
   }
 
-  /** Change a bot's account, or to no fixed account, with its model and effort (section 11). */
+  /**
+   * The context a bot setting writes through: `beforeSend` runs before each request, told
+   * whether this setting has sent a write yet, and `check` runs it between steps.
+   */
+  private checked(beforeSend?: (sent: boolean) => void): {
+    ctx: AccountsContext;
+    check: () => void;
+  } {
+    if (!beforeSend) return { ctx: this.ctx, check: () => {} };
+    const base = this.ctx;
+    let wrote = false;
+    const check = () => beforeSend(wrote);
+    return {
+      check,
+      ctx: {
+        ...base,
+        request: async (method, params, options) => {
+          check();
+          if (method !== "config.get") wrote = true;
+          return base.request(method, params, options);
+        },
+      },
+    };
+  }
+
+  /**
+   * Change a bot's account, or to no fixed account, with its model and effort (section 11).
+   * `beforeSend` runs before each request: the host's check that the screen's gateway is here.
+   */
   async changeAccount(
     botId: string,
     account: string | null,
     provider: string,
     model: string,
     effort: string | null,
+    beforeSend?: (sent: boolean) => void,
   ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     if (account && accountProvider(account) !== provider)
@@ -1802,8 +1946,17 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
-      await this.writeModel(botId, { provider, model, account }, effort, false);
-      await this.recordIntent(botId, account ? { mode: "account", account } : { mode: "gateway" });
+      const { ctx, check } = this.checked(beforeSend);
+      await this.writeModel(botId, { provider, model, account }, effort, false, ctx);
+      // Before the record is kept here as well as sent: the gateway it is for is still the one.
+      check();
+      await this.recordIntent(
+        botId,
+        account ? { mode: "account", account } : { mode: "gateway" },
+        ctx,
+      );
+      // After the last answer: a change whose gateway has gone meanwhile is not shown as saved.
+      check();
       this.setWrite({
         what: "account",
         target: botId,
@@ -1824,8 +1977,13 @@ export class AccountsEngine {
     await this.checkLock(botId);
   }
 
-  /** The bot's model and effort, keeping its account. */
-  async setModel(botId: string, model: string, effort: string | null): Promise<void> {
+  /** The bot's model and effort, keeping its account. `beforeSend` as for `changeAccount`. */
+  async setModel(
+    botId: string,
+    model: string,
+    effort: string | null,
+    beforeSend?: (sent: boolean) => void,
+  ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     const binding = this.ctx.get().bindings.find((b) => b.botId === botId);
     if (!binding?.provider) throw new Error("Choose an account first.");
@@ -1837,12 +1995,16 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
+      const { ctx, check } = this.checked(beforeSend);
       await this.writeModel(
         botId,
         { provider: binding.provider, model, account: binding.account },
         effort,
         false,
+        ctx,
       );
+      // After the last answer: a change whose gateway has gone meanwhile is not shown as saved.
+      check();
       this.setWrite({
         what: "model",
         target: botId,
@@ -1864,7 +2026,7 @@ export class AccountsEngine {
   }
 
   /** "Remove fallbacks": the bot's model keeps its account; its fallback list becomes empty. */
-  async removeFallbacks(botId: string): Promise<void> {
+  async removeFallbacks(botId: string, beforeSend?: (sent: boolean) => void): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     this.setWrite({
       what: "fallbacks",
@@ -1874,9 +2036,13 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
-      await this.patch({ agents: { entries: { [botId]: { model: { fallbacks: [] } } } } }, [
-        `agents.entries.${botId}.model.fallbacks`,
-      ]);
+      const { ctx, check } = this.checked(beforeSend);
+      await this.patch(
+        { agents: { entries: { [botId]: { model: { fallbacks: [] } } } } },
+        [`agents.entries.${botId}.model.fallbacks`],
+        ctx,
+      );
+      check();
       this.unwritten.delete(botId);
       this.setWrite({
         what: "fallbacks",
@@ -1937,6 +2103,7 @@ export class AccountsEngine {
     this.onClose();
     this.kinds.clear();
     this.intents.clear();
+    this.pickerRead = null;
     this.unwritten.clear();
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;

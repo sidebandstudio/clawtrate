@@ -9,6 +9,7 @@ import { MODEL_ID } from "./env.ts";
 import { ScriptedAccounts, type FailureStatus, type ScriptedFailure } from "./scripted-accounts.ts";
 import { IMAGES_PATH, imagesAnswer } from "./scripted-images.ts";
 import {
+  effectivePrompt,
   messageText,
   gatewayTurnPrompt,
   planReply,
@@ -56,6 +57,8 @@ export type FakeProviderOptions = {
   pagesOrigin?: string;
   /** The iOS checks write their task key here while they need its stream to stay open. */
   streamHoldFile?: string;
+  /** The instance was started with `--with-skill-review`: answer the gateway's skill reviews. */
+  skillReview?: boolean;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -229,6 +232,8 @@ function nonStreamingBody(model: string, id: string, steps: ReplyStep[]) {
 export const OFFERED_TOOLS_PATH = "/scripted/offered-tools";
 /** The turns the gateway started itself in a session and the scripted model answered quietly, by the prompt each was. */
 export const QUIET_TURNS_PATH = "/scripted/quiet-turns";
+/** Where a check reads the system prompt the latest model request in a session carried. */
+export const SYSTEM_PROMPT_PATH = "/scripted/system-prompt";
 
 /** A scripted account failure, in the shape the providers' APIs answer it. */
 function failureBody({ status, message }: ScriptedFailure) {
@@ -271,6 +276,9 @@ export function startFakeProvider(options: FakeProviderOptions) {
   // The tool names of the latest model request in each session, as evidence
   // of which tools the gateway really offers a bot.
   const offered = new Map<string, string[]>();
+  // The system text of the latest model request in each session, as evidence
+  // of what the gateway really tells a bot (a plugin's prompt additions).
+  const systems = new Map<string, string>();
   // Gateway-started turns answered with the silent reply, which leave no trace
   // in the gateway's history, counted per session.
   const quiet = new Map<string, string[]>();
@@ -299,6 +307,11 @@ export function startFakeProvider(options: FakeProviderOptions) {
       if (req.method === "GET" && url.pathname === OFFERED_TOOLS_PATH) {
         const session = url.searchParams.get("session") ?? "";
         sendJson(res, 200, { session, tools: offered.get(session) ?? null });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === SYSTEM_PROMPT_PATH) {
+        const session = url.searchParams.get("session") ?? "";
+        sendJson(res, 200, { session, system: systems.get(session) ?? null });
         return;
       }
       if (req.method === "GET" && url.pathname === QUIET_TURNS_PATH) {
@@ -360,8 +373,13 @@ export function startFakeProvider(options: FakeProviderOptions) {
           return;
         }
         if (session) offered.set(session, [...toolNames].sort());
+        if (session) {
+          // As the model has it now: 2026.11.10 sends changes to it as messages of their own.
+          systems.set(session, effectivePrompt(messages));
+        }
         const steps = planReply(messages, new Set(toolNames), {
           pagesOrigin: options.pagesOrigin ?? null,
+          skillReview: options.skillReview === true,
         });
         if (
           session &&
@@ -418,6 +436,10 @@ export function startFakeProvider(options: FakeProviderOptions) {
   });
   // An HTTPS request through the proxy asks for a tunnel first, and gets none.
   server.on("connect", (req: IncomingMessage, socket: Duplex) => {
+    // A client may reset the tunnel before or while the refusal is written. That ends this socket
+    // alone: Node hands a tunnel's socket over with no 'error' listener, and an error on it would
+    // otherwise end the whole scripted model, and every check after it with "fetch failed".
+    socket.on("error", () => socket.destroy());
     log(`refused a request beyond loopback: CONNECT ${req.url ?? ""}`);
     socket.end("HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
   });

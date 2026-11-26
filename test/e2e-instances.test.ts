@@ -1,64 +1,65 @@
-// The end-to-end run starts the instance with the computer plugin only when it can run the
-// Computer tab's checks: every run with no file filter, and a run whose filters match them.
-import { resolve, sep } from "node:path";
+// CI runs each e2e shard with a list of files and nothing else on the command line, so global
+// setup can't tell which specs its shard runs. A spec that needs a gateway instance of its own
+// starts it in its own beforeAll, recorded first, and resets it in its afterAll: only the shard
+// that runs the file starts it.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { runIncludes } from "../e2e/run-record.ts";
 
-const FILE = "e2e/work-computer.spec.ts";
-const argv = (...args: string[]) => ["node", "playwright/cli.js", "test", ...args];
+const source = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
-describe("which end-to-end runs start the computer instance", () => {
-  it("every run without a file filter, sharded or grepped, may run the Computer checks", () => {
-    expect(runIncludes(argv(), FILE)).toBe(true);
-    expect(runIncludes(argv("--shard=1/3"), FILE)).toBe(true);
-    expect(runIncludes(argv("-g", "F-027|F-323", "--repeat-each", "3"), FILE)).toBe(true);
+/** The spec's beforeAll and afterAll, as written. */
+function hooks(file: string) {
+  const spec = source(file);
+  const start = spec.indexOf("test.beforeAll(");
+  const end = spec.indexOf("test.afterAll(");
+  expect(start, `${file} has a beforeAll`).toBeGreaterThan(-1);
+  expect(end, `${file} has an afterAll after its beforeAll`).toBeGreaterThan(start);
+  return { spec, before: spec.slice(start, end), after: spec.slice(end) };
+}
+
+describe.each([
+  { file: "e2e/bot-voice.spec.ts", suffix: "voice", plugin: '"--with-plugin", "clawtrate-voice"' },
+  {
+    file: "e2e/work-computer.spec.ts",
+    suffix: "computer",
+    plugin: '"--with-plugin",\n      "clawtrate-computer"',
+  },
+])("which end-to-end runs start the $suffix instance", ({ file, suffix, plugin }) => {
+  it("only the shard that runs its spec: the spec starts it, and global setup never does", () => {
+    const setup = source("e2e/global-setup.ts");
+    expect(setup).not.toContain(`-${suffix}\``);
+    expect(setup).not.toMatch(new RegExp(`clawtrate-${suffix}\\b`));
+    const { spec, before, after } = hooks(file);
+    expect(spec).toContain(`= \`e2e-\${record.run}-${suffix}\`;`);
+    // Recorded before it starts, and started in the beforeAll.
+    expect(before.indexOf("saveRecord(RECORDS, record)")).toBeGreaterThan(-1);
+    expect(before.indexOf(plugin)).toBeGreaterThan(before.indexOf("saveRecord(RECORDS, record)"));
+    // Reset in the afterAll, with its record removed.
+    expect(after).toContain("cleanUp(RECORDS, record, resetInstance)");
   });
+});
 
-  it("a run of other files does not, and one naming the Computer spec does", () => {
-    expect(runIncludes(argv("e2e/preview.spec.ts", "-g", "work-computer"), FILE)).toBe(false);
-    expect(runIncludes(argv("e2e/preview.spec.ts", "e2e/rail-tasks.spec.ts"), FILE)).toBe(false);
-    expect(runIncludes(argv("e2e/work-computer.spec.ts"), FILE)).toBe(true);
-    expect(runIncludes(argv("work-computer"), FILE)).toBe(true);
-  });
-
-  it("an option's separate value is not read as a file filter", () => {
-    expect(runIncludes(argv("--global-timeout", "900000"), FILE)).toBe(true);
-    expect(runIncludes(argv("-G", "F-027", "work-computer"), FILE)).toBe(true);
-    expect(runIncludes(argv("-G", "work-computer", "e2e/preview.spec.ts"), FILE)).toBe(false);
-    expect(runIncludes(argv("--tsconfig", "tsconfig.json", "--browser", "chromium"), FILE)).toBe(
-      true,
+describe("which end-to-end runs start the accounts instance", () => {
+  it("only a runner that runs one of its specs: their worker fixture starts it, global setup never does", () => {
+    const setup = source("e2e/global-setup.ts");
+    expect(setup).not.toContain("-acct`");
+    expect(setup).not.toContain("--with-accounts");
+    const fixture = source("e2e/accounts-instance.ts");
+    expect(fixture).toContain("= `e2e-${record.run}-acct`;");
+    expect(fixture).toContain('{ scope: "worker"');
+    // Recorded before it starts, and reset after the worker's last use of it.
+    const saved = fixture.indexOf("saveRecord(RECORDS, record)");
+    expect(saved).toBeGreaterThan(-1);
+    expect(fixture.indexOf('"--with-accounts"')).toBeGreaterThan(saved);
+    // Started, used and reset through whileStarted, which resets it also when the start's checks
+    // throw (test/e2e-accounts-instance.test.ts).
+    expect(fixture.replace(/\s+/g, " ")).toContain(
+      "whileStarted( start, () => use(ACCOUNTS), () => cleanUp(RECORDS, record, resetInstance), )",
     );
-    expect(runIncludes(argv("--project", "a", "b", "-g", "x"), FILE)).toBe(true);
-    expect(runIncludes(argv("--shuffle", "--project", "a", "work-computer"), FILE)).toBe(true);
-  });
-
-  it("handles grouped short options and their attached or separate values", () => {
-    const file = resolve(sep, FILE);
-    expect(runIncludes(argv("-xj", "1"), file)).toBe(true);
-    expect(runIncludes(argv("-x", "-j", "1"), file)).toBe(true);
-    expect(runIncludes(argv("-xxj", "1"), file)).toBe(true);
-    expect(runIncludes(argv("-xg", "work-computer", "preview.spec.ts"), file)).toBe(false);
-    expect(runIncludes(argv("-xj1", "preview.spec.ts"), file)).toBe(false);
-    expect(runIncludes(argv("-xu", "changed"), file)).toBe(true);
-    expect(runIncludes(argv("-xuchanged", FILE), file)).toBe(true);
-  });
-
-  it("ignores arguments after the Playwright separator", () => {
-    expect(runIncludes(argv("--", "run-label"), FILE)).toBe(true);
-    expect(runIncludes(argv("preview.spec.ts", "--", FILE), FILE)).toBe(false);
-  });
-
-  it("matches the absolute spec path and Playwright's regular-expression flags", () => {
-    const absolute = resolve(FILE).split(sep).join("/");
-    const escaped = absolute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    expect(runIncludes(argv(`^${escaped}$`), FILE)).toBe(true);
-    expect(runIncludes(argv("WORK-COMPUTER"), FILE)).toBe(true);
-    expect(runIncludes(argv("/WORK-COMPUTER/"), FILE)).toBe(false);
-  });
-
-  it("a file filter with a line, or a line and column, still names its file", () => {
-    expect(runIncludes(argv("e2e/work-computer.spec.ts:42"), FILE)).toBe(true);
-    expect(runIncludes(argv("work-computer.spec.ts:42:7"), FILE)).toBe(true);
-    expect(runIncludes(argv("e2e/preview.spec.ts:42"), FILE)).toBe(false);
+    for (const file of ["e2e/accounts.spec.ts", "e2e/machines.spec.ts", "e2e/check-ins.spec.ts"]) {
+      const { spec, before } = hooks(file);
+      expect(spec, file).toContain('import { ACCOUNTS, test } from "./accounts-instance.ts";');
+      expect(before, file).toContain("accountsInstance");
+    }
   });
 });

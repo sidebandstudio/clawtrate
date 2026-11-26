@@ -1,0 +1,24 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:10 PM
+    - paragraph: Is last night's backup log there, and did it finish?
+    - toolbar "Message actions":
+      - button "More"
+    - group: Read backup-2026-11-15.log 6 lines
+    - group: Ran tail tail -n 2 logs/backup-2026-11-15.log
+    - paragraph: Yes. The log is there, and the backup finished at 3:25 AM. The next run is tonight at 2:14.
+    - toolbar "Message actions":
+      - button "More"
+    - group: Worked 2 actions
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

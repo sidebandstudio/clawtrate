@@ -5,6 +5,7 @@
 // leaving no trace.
 
 import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
+import { GUIDES_NOT_SAVED, guidesKey, withSection } from "../src/guides.ts";
 import { describe, expect, it, vi } from "vitest";
 import {
   ACCOUNTS,
@@ -15,6 +16,8 @@ import {
   labelProblem,
   lockCommand,
   MAX_ACCOUNTS,
+  MAX_CATALOG_MODELS,
+  MAX_PROVIDER_MODELS,
   MAX_SECRET_CHARS,
   parseModelRef,
   readBotView,
@@ -25,24 +28,363 @@ import {
   worstCase,
   type ClawtrateState,
 } from "../src/index.ts";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
+import { gatewayStamp } from "../src/types.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { identityFile } from "../src/accounts-engine.ts";
+import { ACCOUNTS_READ_CUT_OFF, AccountsEngine, identityFile } from "../src/accounts-engine.ts";
+import { initialAccountsState, modelIdProblem, type AccountsState } from "../src/accounts.ts";
 import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
 import { FAST, stampOn, URL_A } from "./client-harness.ts";
 import {
   deferred,
   GatewayError,
   memoryStorage,
+  sleep,
   testHost,
   tokenKey,
   until,
 } from "./fake-gateway.ts";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { readAgain } from "../src/read-again.ts";
 
 const binding = (state: ClawtrateState["accounts"], botId: string) =>
   state.bindings.find((each) => each.botId === botId)!;
+
+describe("a model id", () => {
+  it("F-533: the field's rule and the bridge's are one: an id one refuses, the other refuses", () => {
+    const ids = [
+      "gpt-6.2-sol",
+      "",
+      "gpt\u007f9",
+      "gpt\u00019",
+      "gpt 9",
+      "gpt-9@acme:work",
+      "x".repeat(513),
+    ];
+    for (const model of ids) {
+      const refused = (() => {
+        try {
+          parseBridgeCommand({
+            type: "setBotModel",
+            botId: "otto",
+            model,
+            effort: null,
+            stamp: { gatewayId: "gateway-a", target: 4 },
+          });
+          return false;
+        } catch {
+          return true;
+        }
+      })();
+      expect(refused, JSON.stringify(model)).toBe(modelIdProblem(model) !== null);
+    }
+    expect(modelIdProblem("gpt\u007f9")).toBe("control");
+    expect(modelIdProblem("gpt-6.2-sol")).toBeNull();
+  });
+});
+
+describe("the Model menu's lists", () => {
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  it("F-478: account choices and bindings are published while the default bot's model list is held", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdPicker = held.promise;
+    const { client, accounts } = await accountsClient({ gateway: fake, read: false });
+    const loading = client.refreshAccounts();
+    await until(() => accounts().status === "ready");
+    expect(accounts().accounts.map((a) => a.id)).toContain("acme:work");
+    expect(accounts().bindings.length).toBeGreaterThan(0);
+    expect(accounts().models).toEqual([]);
+    held.resolve();
+    await loading;
+    expect(accounts().models.map((m) => m.id)).toEqual(["dev-1", "dev-2", "dev-1"]);
+    client.stop();
+  });
+
+  it("F-478: the next account read waits for the model list, so the two never overlap", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdPicker = held.promise;
+    const { client, accounts } = await accountsClient({ gateway: fake, read: false });
+    const first = client.refreshAccounts();
+    await until(() => accounts().status === "ready");
+    const configReads = () => fake.gateway.calls("config.get").length;
+    const before = configReads();
+    const second = client.refreshAccounts();
+    await settle();
+    // The accounts are shown, and the next read hasn't begun while the list is out.
+    expect(configReads()).toBe(before);
+    held.resolve();
+    await Promise.all([first, second]);
+    expect(configReads()).toBe(before + 1);
+    expect(accounts().models.length).toBeGreaterThan(0);
+  });
+
+  it("F-478: the model list is asked only after the account reads have answered", async () => {
+    const fake = new AccountsGateway();
+    const log: string[] = [];
+    for (const method of ["config.get", "models.authStatus", "users.prefs.get", "models.list"]) {
+      const handler = fake.gateway.handlers[method]!;
+      fake.gateway.handlers[method] = (params) => {
+        log.push(method);
+        const answer = handler(params);
+        log.push(`${method} answered`);
+        return answer;
+      };
+    }
+    const { client } = await accountsClient({ gateway: fake });
+    const asked = log.indexOf("models.list");
+    expect(asked).toBeGreaterThan(log.lastIndexOf("models.authStatus answered"));
+    expect(asked).toBeGreaterThan(log.indexOf("config.get answered"));
+    expect(asked).toBeGreaterThan(log.indexOf("users.prefs.get answered"));
+    client.stop();
+  });
+
+  it("F-478: a picker longer than kept says, for each provider it cut, how many the gateway listed", async () => {
+    const fake = new AccountsGateway();
+    const rows = (provider: string, n: number) =>
+      Array.from({ length: n }, (_, i) => ({ id: `m-${i}`, provider, available: true }));
+    fake.pickerCatalog = () => ({ models: [...rows("acme", 100), ...rows("globex", 40)] });
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await until(() => accounts().models.length > 0);
+    expect(accounts().models).toHaveLength(MAX_CATALOG_MODELS);
+    expect(accounts().modelsCut).toEqual([{ provider: "globex", total: 40 }]);
+    client.stop();
+  });
+
+  it("F-478: View more reads the provider's full list for the default bot each time, and keeps nothing", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    // The account read asks for the picker alone.
+    expect(fake.gateway.calls("models.list")).toEqual([{ agentId: "main" }]);
+    const before = JSON.stringify(accounts());
+    const list = await client.loadModelCatalog("acme");
+    expect(list).toEqual({
+      status: "ready",
+      // Only what the menu uses of each row, and the rows the picker lacks first.
+      models: [
+        { id: "dev-3", levels: [], defaultLevel: null },
+        { id: "dev-1", levels: ["low"], defaultLevel: null },
+        { id: "dev-2", levels: [], defaultLevel: null },
+      ],
+      total: 3,
+      partial: false,
+    });
+    // Nothing of it is in the state, and asking again reads again.
+    expect(JSON.stringify(accounts())).toBe(before);
+    await client.loadModelCatalog("acme");
+    expect(fake.gateway.calls("models.list").slice(1)).toEqual([
+      { agentId: "main", view: "all", provider: "acme" },
+      { agentId: "main", view: "all", provider: "acme" },
+    ]);
+    client.stop();
+  });
+
+  it("F-478: a refused full list is unsupported, a failed one says why, and a partial one says so", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    fake.failFull = { code: "INVALID_REQUEST", message: "invalid models.list params" };
+    expect(await client.loadModelCatalog("acme")).toEqual({
+      status: "unsupported",
+      error: "invalid models.list params",
+    });
+    fake.failFull = { code: "UNAVAILABLE", message: "catalogue busy" };
+    expect(await client.loadModelCatalog("acme")).toEqual({
+      status: "error",
+      error: "catalogue busy",
+    });
+    fake.failFull = null;
+    fake.fullMarkers = { pendingProviders: ["acme"] };
+    expect(await client.loadModelCatalog("acme")).toMatchObject({ status: "ready", partial: true });
+    fake.fullMarkers = { refreshFailed: true };
+    expect(await client.loadModelCatalog("acme")).toMatchObject({ status: "ready", partial: true });
+    fake.fullMarkers = { pendingProviders: ["globex"] };
+    expect(await client.loadModelCatalog("acme")).toMatchObject({
+      status: "ready",
+      partial: false,
+    });
+    client.stop();
+  });
+
+  /** The engine alone on the fake gateway, so a test can reset it while a read is answered. */
+  function engineOn(
+    fake: AccountsGateway,
+    options: {
+      connected?: () => boolean;
+      readAgain?: <T>(read: () => Promise<T>, current: () => boolean) => Promise<T>;
+    } = {},
+  ) {
+    let state: AccountsState = initialAccountsState;
+    const engine = new AccountsEngine({
+      request: (method, params) =>
+        Promise.resolve().then(() => fake.gateway.handlers[method]!(params)),
+      readAgain: options.readAgain ?? ((read) => read()),
+      get: () => state,
+      update: (change) => {
+        state = change(state);
+      },
+      bots: () => [
+        { id: "main", name: "main", isDefault: true, avatarUrl: null },
+        { id: "otto", name: "otto", isDefault: false, avatarUrl: null },
+      ],
+      connected: options.connected ?? (() => true),
+      admin: () => true,
+      refreshBots: () => Promise.resolve(),
+      gateway: () => Promise.resolve("gateway-a"),
+      gatewayNow: () => "gateway-a",
+      readStamp: () => ({ gatewayId: "gateway-a", target: 1, connectedAt: 1 }),
+      target: () => 0,
+      createMainTask: () => Promise.resolve(),
+      now: () => 0,
+      randomId: () => "id",
+      log: () => {},
+    });
+    // Another gateway: the engine is reset and the state starts empty, as the client does.
+    const switchGateway = () => {
+      engine.reset();
+      state = initialAccountsState;
+    };
+    return { engine, state: () => state, switchGateway };
+  }
+  const nothingPublished = (state: AccountsState) =>
+    expect([state.accounts, state.models, state.modelsCut]).toEqual([[], [], []]);
+
+  it("F-478: an account read answered after a gateway switch publishes nothing, and its preferences never reach the next gateway", async () => {
+    const fake = new AccountsGateway();
+    // The old gateway's record says Clawtrate set an account for otto.
+    fake.prefs["clawtrate.bot-account.otto"] = { mode: "account", account: "acme:work" };
+    const held = deferred<void>();
+    const prefs = fake.gateway.handlers["users.prefs.get"]!;
+    fake.gateway.handlers["users.prefs.get"] = (params) => held.promise.then(() => prefs(params));
+    const { engine, state, switchGateway } = engineOn(fake);
+    const loading = engine.load();
+    await settle();
+    switchGateway();
+    const answered = prefs({});
+    held.resolve();
+    await loading;
+    await settle();
+    nothingPublished(state());
+    // The next gateway has its own otto, on a model with no account, and no record of one.
+    fake.gateway.handlers["users.prefs.get"] = () => ({ status: "ok", entries: {} });
+    expect(answered).toBeTruthy();
+    const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
+      .entries;
+    entries.otto!.model = { primary: "acme/dev-1", fallbacks: [] };
+    await engine.load();
+    expect(state().bindings.find((b) => b.botId === "otto")).toMatchObject({ suffixLost: false });
+  });
+
+  it("#592: a settings read whose connection closes while it waits to be asked again asks nothing more, and publishes none of that connection's words", async () => {
+    const fake = new AccountsGateway();
+    let connected = true;
+    let asked = 0;
+    const config = fake.gateway.handlers["config.get"]!;
+    fake.gateway.handlers["config.get"] = (params) => {
+      asked += 1;
+      if (asked === 1)
+        throw new GatewayProtocolRequestError({
+          code: "UNAVAILABLE",
+          message: "busy reading clawtrate-dev-key.acme.work",
+        });
+      return config(params);
+    };
+    const { engine, state } = engineOn(fake, {
+      connected: () => connected,
+      readAgain: (read, current) => readAgain(read, current, { firstMs: 40 }),
+    });
+    const loading = engine.load();
+    await until(() => asked === 1);
+    connected = false;
+    await loading;
+    await sleep(80);
+    expect(asked).toBe(1);
+    // Not left loading, and nothing the gateway said is shown.
+    expect(state()).toMatchObject({ status: "error", error: ACCOUNTS_READ_CUT_OFF });
+    expect(JSON.stringify(state())).not.toContain("clawtrate-dev-key");
+  });
+
+  it("F-478: the default bot's model list answered after a gateway switch publishes nothing", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdPicker = held.promise;
+    const { engine, state, switchGateway } = engineOn(fake);
+    const loading = engine.load();
+    await until(() => state().accounts.length > 0);
+    switchGateway();
+    held.resolve();
+    await loading;
+    nothingPublished(state());
+  });
+
+  it("F-478: a provider's full list answered after a gateway switch is refused, not given", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdFull = held.promise;
+    const { engine, state, switchGateway } = engineOn(fake);
+    const reading = engine.readModelList("acme");
+    await settle();
+    switchGateway();
+    held.resolve();
+    await expect(reading).rejects.toThrow(/gateway changed/);
+    nothingPublished(state());
+  });
+
+  it("F-034 F-478: Create waits for the picker read under way before it writes anything", async () => {
+    const fake = new AccountsGateway();
+    const held = deferred<void>();
+    fake.holdPicker = held.promise;
+    const { client, accounts } = await accountsClient({ gateway: fake, read: false });
+    const loading = client.refreshAccounts();
+    await until(() => accounts().status === "ready");
+    const creating = client.createBot({
+      name: "Early",
+      account: null,
+      provider: "acme",
+      model: "dev-1",
+      effort: null,
+      avatar: null,
+    });
+    await settle();
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    held.resolve();
+    await loading;
+    await creating.catch(() => {});
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-478: a full list longer than kept keeps its bound and says how many it had", async () => {
+    const fake = new AccountsGateway();
+    fake.fullCatalog = {
+      acme: Array.from({ length: 1500 }, (_, i) => ({ id: `m-${i}`, provider: "acme" })),
+    };
+    const { client } = await accountsClient({ gateway: fake });
+    const list = await client.loadModelCatalog("acme");
+    expect(list.status === "ready" && [list.models.length, list.total]).toEqual([
+      MAX_PROVIDER_MODELS,
+      1500,
+    ]);
+    client.stop();
+  });
+
+  it("F-478: a viewer that can receive less gets fewer of the models and the same total", async () => {
+    const fake = new AccountsGateway();
+    fake.fullCatalog = {
+      acme: Array.from({ length: 1000 }, (_, i) => ({ id: `model-${i}`, provider: "acme" })),
+    };
+    const { client } = await accountsClient({ gateway: fake });
+    const viewer = createBridgeSession(client, { maxResultChars: 20_000 });
+    const list = await viewer.apply({ type: "loadModelCatalog", provider: "acme" });
+    expect(JSON.stringify(list).length).toBeLessThanOrEqual(20_000);
+    expect(list.status === "ready" && list.models.length).toBeGreaterThan(0);
+    expect(list.status === "ready" && list.models.length).toBeLessThan(1000);
+    expect(list.status === "ready" && list.total).toBe(1000);
+    client.stop();
+  });
+});
 
 describe("the accounts as each bot sees them", () => {
   it("reads every bot's refreshed view, and tells shared accounts from those one bot keeps", async () => {
@@ -807,6 +1149,210 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
       (each) => each.method,
     );
 
+  it("gets Clawtrate's guides at the top of its AGENTS.md when this device said yes to New bots too, and not otherwise", async () => {
+    for (const newBots of [true, false]) {
+      const fake = new AccountsGateway();
+      fake.identity = "gw-guides";
+      const { client, storage } = await accountsClient({ gateway: fake });
+      await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots }));
+      expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+      expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(
+        newBots ? withSection("# AGENTS.md\n") : "# AGENTS.md\n",
+      );
+      // Nothing else of the bot's, or of another bot's, was written for it.
+      expect(
+        fake.gateway
+          .calls("agents.files.set")
+          .map(
+            (call) => `${(call as { agentId: string }).agentId}/${(call as { name: string }).name}`,
+          ),
+      ).toEqual(newBots ? ["viral/IDENTITY.md", "viral/AGENTS.md"] : ["viral/IDENTITY.md"]);
+      client.stop();
+    }
+  });
+
+  it("gets no guides on a connection other than the one it was made on", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    // Right after the bot is made, as its guides are looked up, the connection is replaced by a
+    // new one to the same gateway. Once: the new connection's own reads go through as usual.
+    let switched = false;
+    const get = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (
+        key !== guidesKey("gw-guides") ||
+        switched ||
+        fake.gateway.calls("agents.create").length === 0
+      )
+        return get(key);
+      switched = true;
+      const was = client.state.connection.connectedAt;
+      fake.gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== was,
+      );
+      return get(key);
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(switched).toBe(true);
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    expect(
+      fake.gateway
+        .calls("agents.files.set")
+        .filter((call) => (call as { name: string }).name === "AGENTS.md"),
+    ).toEqual([]);
+    client.stop();
+  });
+
+  it("never keeps its guides, or New bots too, once the person removed them while it was made", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: ["pip"], newBots: true }));
+    const { stamp } = await client.readBotGuides();
+    // Right after the new bot's guides read the record (New bots too), the person presses
+    // Remove from all bots.
+    let removal: Promise<unknown> | null = null;
+    const get = storage.get.bind(storage);
+    storage.get = async (key: string) => {
+      if (
+        removal ||
+        key !== guidesKey("gw-guides") ||
+        fake.gateway.calls("agents.create").length === 0
+      )
+        return get(key);
+      const read = await get(key);
+      removal = client.changeBotGuides({ action: "remove" }, stamp);
+      // Left to finish first if it may: the bot's guides must not undo it.
+      await Promise.race([removal, new Promise<void>((resolve) => setTimeout(resolve, 200))]);
+      return read;
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(removal).not.toBeNull();
+    await removal;
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    expect(JSON.parse((await get(guidesKey("gw-guides")))!)).toEqual({ bots: [], newBots: false });
+    client.stop();
+  });
+
+  it("gets no guides once New bots too is turned off with every bot already current, and turning it off writes nothing", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    for (const bot of fake.bots) {
+      fake.seedWorkspace(bot.id);
+      fake.files.get(bot.id)!.set("AGENTS.md", withSection("# AGENTS.md\n"));
+    }
+    const { client, storage } = await accountsClient({ gateway: fake });
+    const everyone = fake.bots.map((bot) => bot.id);
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: everyone, newBots: true }));
+    const { stamp, folders } = await client.readBotGuides();
+    expect(folders.every((folder) => folder.state === "current")).toBe(true);
+    const off = await client.changeBotGuides({ action: "newBots", on: false }, stamp);
+    expect(off.record).toEqual({ bots: everyone, newBots: false });
+    expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    client.stop();
+  });
+
+  it("gets guides once New bots too is turned on, and turning it on adds or updates nothing by itself", async () => {
+    for (const record of [{ bots: [], newBots: false }, null]) {
+      const fake = new AccountsGateway();
+      fake.identity = "gw-guides";
+      const { client, storage } = await accountsClient({ gateway: fake });
+      if (record) await storage.set(guidesKey("gw-guides"), JSON.stringify(record));
+      const { stamp } = await client.readBotGuides();
+      const on = await client.changeBotGuides({ action: "newBots", on: true }, stamp);
+      expect(on.record).toEqual({ bots: [], newBots: true });
+      expect(fake.gateway.calls("agents.files.set")).toEqual([]);
+      expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+      expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+      client.stop();
+    }
+  });
+
+  it("gets no guides when its AGENTS.md is already long enough to be cut from a prompt", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const long = `# AGENTS.md\n${"x".repeat(19_000)}\n`;
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = (params) => {
+      const made = create(params) as { agentId: string };
+      fake.files.get(made.agentId)!.set("AGENTS.md", long);
+      return made;
+    };
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(long);
+    client.stop();
+  });
+
+  it("keeps New bots too as this device saved it when an Add carries a stale tick", async () => {
+    // Another window turned New bots too off; this one still showed it ticked and pressed Add.
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: false }));
+    const shown = await client.readBotGuides();
+    await client.changeBotGuides({ action: "add", bots: [], newBots: true }, shown.stamp);
+    expect(JSON.parse(storage.data.get(guidesKey("gw-guides"))!)).toMatchObject({
+      newBots: false,
+    });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe("# AGENTS.md\n");
+    client.stop();
+  });
+
+  it("takes New bots too from the press on the first Add, when this device has no record yet", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    const shown = await client.readBotGuides();
+    await client.changeBotGuides({ action: "add", bots: [], newBots: true }, shown.stamp);
+    expect(JSON.parse(storage.data.get(guidesKey("gw-guides"))!)).toMatchObject({
+      newBots: true,
+    });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+    client.stop();
+  });
+
+  it("follows the record really saved after a Remove that couldn't be saved", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    const set = storage.set.bind(storage);
+    storage.set = (key: string, value: string) =>
+      key === guidesKey("gw-guides") ? Promise.reject(new Error("disk full")) : set(key, value);
+    const shown = await client.readBotGuides();
+    const removed = await client.changeBotGuides({ action: "remove" }, shown.stamp);
+    expect(removed.errors).toEqual([GUIDES_NOT_SAVED]);
+    // Nothing was taken back, so New bots too is still what this device holds, and it acts.
+    expect(removed.record).toEqual({ bots: [], newBots: true });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+    client.stop();
+  });
+
+  it("is made even when this device can't save its record of the guides afterwards", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "gw-guides";
+    const { client, storage } = await accountsClient({ gateway: fake });
+    await storage.set(guidesKey("gw-guides"), JSON.stringify({ bots: [], newBots: true }));
+    const set = storage.set.bind(storage);
+    storage.set = (key: string, value: string) =>
+      key === guidesKey("gw-guides") ? Promise.reject(new Error("disk full")) : set(key, value);
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.files.get("viral")!.get("AGENTS.md")).toBe(withSection("# AGENTS.md\n"));
+    client.stop();
+  });
+
   it("right after agents.create, writes its name into IDENTITY.md, held to the template it read, and keeps the other starting files", async () => {
     const { client, fake, accounts } = await accountsClient();
     expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
@@ -1465,6 +2011,7 @@ describe("a typed API key leaves no trace", () => {
       provider: "globex",
       key: KEY,
       botId: null,
+      stamp: gatewayStamp(client.state.connection),
     });
     stop();
     expect(JSON.stringify(answer)).not.toContain(KEY);

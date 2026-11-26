@@ -21,9 +21,20 @@ const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
   "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
+  "packages/core/src/openclaw-update.ts:UPDATE_PHASES": "static, the gateway's eight update phases",
+  "packages/core/src/openclaw-update.ts:RUN_STATUSES": "static, the gateway's five run statuses",
+  "packages/core/src/openclaw-update.ts:UPDATE_ASK_WAITS_MS":
+    "static, the four waits between asks about a press whose answer was lost",
+  "packages/core/src/openclaw-update.ts:SETTLED": "static, the five outcomes that are final",
+  "packages/core/src/openclaw-update.ts:CANNOT_UPDATE":
+    "static, the reason codes a gateway gives for not updating itself",
   "apps/desktop/src/main/mac-install.ts:RESULTS": "static, the helper's eight result lines",
   "apps/desktop/src/main/mac-install.ts:HELPER_STEPS": "static, the helper's eleven step names",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
+  "packages/core/src/origins.ts:OTHER_TOOL_VIA":
+    "static, the gateway's five createdVia values for other tools",
+  "packages/core/src/origins.ts:OTHER_TOOL_CLASS":
+    "static, the gateway's eleven route classes of other surfaces",
   "packages/core/src/computer.ts:BUSY_REASONS": "static, the plugin's five busy codes",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
@@ -37,6 +48,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/file-paths.ts:filePathsOf>paths":
     "one call's paths, at most `MAX_STEP_PATHS`, returned to the caller",
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
+  "packages/core/src/mapping.ts:NOT_FILES": "static, six block types that are never a file",
+  "packages/core/src/mapping.ts:KNOWN_FILES": "static, three block types that hand a file over",
   "packages/core/src/pictures.ts:SIGNATURES.image/png": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/jpeg": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/gif": "static, two byte signatures",
@@ -121,6 +134,8 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.models":
     "static, an empty list copied on write",
+  "packages/core/src/accounts.ts:initialAccountsState.modelsCut":
+    "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.bindings":
     "static, an empty list copied on write",
   "packages/core/src/usage.ts:initialUsage.budgets": "static, an empty list copied on write",
@@ -169,6 +184,8 @@ const ALLOWED: Record<string, string> = {
     "one history read; the run ids that read established, at most 40 messages' runs, dropped when it returns",
   "packages/core/src/client.ts:readRecipientRuns>activeBefore":
     "one history read; the run ids active before it was asked, at most the named ids', dropped when it returns",
+  "packages/core/src/client.ts:botDeleteContext>listedUnder":
+    "one delete; the bot each listed task is under as the delete is sent, at most `MAX_LISTED_TASKS`, dropped with the context",
   "packages/core/src/client.ts:readRecipientRuns>inferred":
     "one history read; the run ids whose end that read does not establish, at most 40 messages' runs, dropped when it returns",
   // The renderer's side of the web bridge, in a browser tab, not the host.
@@ -295,6 +312,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/avatar.ts:LANTERN_HEADPHONES.box.left": "static, one headphone cup's centre",
   "packages/core/src/avatar.ts:LANTERN_HEADPHONES.box.right": "static, one headphone cup's centre",
   "packages/core/src/avatar.ts:wornAt>placed": "per call, at most three shapes for one pose",
+  "packages/core/src/guides.ts:applyGuidesChange>errors":
+    "one call; one sentence per instructions file it changed, returned to the caller",
 };
 
 describe("the source keeps no collection outside the registry", () => {

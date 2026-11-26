@@ -9,6 +9,7 @@
 // The instance has the scripted provider accounts and the development
 // sign-in plugin, so the account checks (account-checks.ts) run after the
 // scenario checks, with an admin client and a read-only one of their own.
+// The guide checks (guide-checks.ts) follow with the same admin client.
 // Then the computer checks (computer-checks.ts) run on a second instance,
 // `e2e-<run>-computer`, started with `--with-plugin clawtrate-computer`,
 // whose bots Marlow and Pip have browsers of their own; and the rules checks
@@ -28,6 +29,7 @@ import {
   openOperator,
 } from "../tools/dev-gateway/src/cli.ts";
 import { ACCOUNT_CLIENTS, runAccountChecks } from "../tools/dev-gateway/src/account-checks.ts";
+import { runGuideChecks } from "../tools/dev-gateway/src/guide-checks.ts";
 import {
   COMPUTER_CLIENTS,
   runComputerChecks,
@@ -45,17 +47,20 @@ import {
   openCheckClients,
   FAMILY_ROWS,
   IMAGE_CHECK,
+  SEND_KEYED_CHECK,
   SEND_PICTURE_CHECK,
   ownerAgent,
   runScenarioChecks,
   SEQ_GAP_NOTES,
   UNDECLARED_FIELDS,
 } from "../tools/dev-gateway/src/scenario-check.ts";
-import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, devGateway, listInstances } from "./global-setup.ts";
 import { cleanUp, recoverDeadRuns, saveRecord, type RunRecord } from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
+/** The checks that need the image instance, which offers the image and message tools. */
+const MESSAGE_TOOL_CHECKS = [IMAGE_CHECK, SEND_PICTURE_CHECK, SEND_KEYED_CHECK];
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 const reset = (name: string, runId: string) => void devGateway(name, "reset", "--run-id", runId);
@@ -71,11 +76,10 @@ async function main(): Promise<number> {
   const rulesRunId = newRunId();
   const imagesName = `${name}-images`;
   const imagesRunId = newRunId();
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this process's start time");
+  const self = ownIdentity();
   const record: RunRecord = {
     run,
-    runner: { pid: process.pid, identity: self.identity },
+    runner: { pid: process.pid, identity: self },
     instances: [
       { name, runId },
       { name: computerName, runId: computerRunId },
@@ -132,7 +136,7 @@ async function main(): Promise<number> {
       const { passed, failed, notes } = await runScenarioChecks(clients, {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
         providerUrl,
-        only: (check) => check.name !== IMAGE_CHECK && check.name !== SEND_PICTURE_CHECK,
+        only: (check) => !MESSAGE_TOOL_CHECKS.includes(check.name),
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
@@ -164,6 +168,7 @@ async function main(): Promise<number> {
       [...ACCOUNT_CLIENTS.reader.caps],
     );
     let accountsFailed = 0;
+    let guidesFailed = 0;
     try {
       const accounts = await runAccountChecks({
         admin,
@@ -178,6 +183,10 @@ async function main(): Promise<number> {
         `${accounts.passed} of ${accounts.passed + accounts.failed} account checks passed`,
       );
       accountsFailed = accounts.failed;
+      // Clawtrate's guides in a bot's AGENTS.md (guide-checks.ts), with the same admin client.
+      const guides = await runGuideChecks({ admin, providerUrl });
+      console.log(`${guides.passed} of ${guides.passed + guides.failed} guide checks passed`);
+      guidesFailed = guides.failed;
     } finally {
       await admin.close();
       await reader.close();
@@ -185,7 +194,11 @@ async function main(): Promise<number> {
     const computer = await computerChecks(computerName, computerRunId, startInstance);
     const rules = await rulesChecks(rulesName, rulesRunId, startInstance);
     const images = await imageChecks(imagesName, imagesRunId, startInstance);
-    return [scenariosFailed, accountsFailed, computer, rules, images].every((n) => n === 0) ? 0 : 1;
+    return [scenariosFailed, accountsFailed, guidesFailed, computer, rules, images].every(
+      (n) => n === 0,
+    )
+      ? 0
+      : 1;
   } finally {
     const problems = cleanUpOnce();
     if (problems.length > 0) {
@@ -263,7 +276,7 @@ async function imageChecks(
   );
   try {
     const { passed, failed } = await runScenarioChecks(clients, {
-      only: (check) => check.name === IMAGE_CHECK || check.name === SEND_PICTURE_CHECK,
+      only: (check) => MESSAGE_TOOL_CHECKS.includes(check.name),
       images: true,
       messageTool: true,
     });

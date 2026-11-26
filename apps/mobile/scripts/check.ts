@@ -12,6 +12,8 @@
 //
 // Set CLAWTRATE_IOS_SHOTS=<folder> to also save each screen in light and dark.
 // Arguments after the command go to Vitest (`pnpm mobile:check --bail=1`).
+// CLAWTRATE_IOS_DEVICE_TYPE and CLAWTRATE_IOS_RUNTIME choose another device;
+// on an iPhone Duo the checks written for it run too (docs/development/ios.md).
 
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readdirSync, rmSync } from "node:fs";
@@ -38,6 +40,8 @@ const REPO = join(import.meta.dirname, "../../..");
 const RECORD = join(BUILD_DIR, "check-run.json");
 /** iPhone sizes the checks prefer, in order. */
 const DEVICE_TYPES = ["iPhone 17", "iPhone 16", "iPhone 17 Pro", "iPhone 18 Pro"];
+/** The foldable iPhone, which the iOS 27.1 runtime has. */
+const DUO = "com.apple.CoreSimulator.SimDeviceType.iPhone-Duo";
 
 /** The newest file or folder under ~/.local/share matching a name, for a tool installed there. */
 function local(pattern: RegExp, inner: string): string | null {
@@ -262,6 +266,7 @@ export async function main(): Promise<number> {
           JAVA_HOME: javaHome,
           CLAWTRATE_IOS_MAESTRO: maestro,
           CLAWTRATE_IOS_DEVICE: record.device,
+          CLAWTRATE_IOS_FORM: choice.type === DUO ? "duo" : "phone",
           CLAWTRATE_IOS_BUNDLE: BUNDLE_ID,
           CLAWTRATE_IOS_APP: APP_PATH,
           CLAWTRATE_IOS_INSTANCE: record.instance,

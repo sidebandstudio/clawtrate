@@ -18,6 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { screenStamp, shownStamp } from "../stamp.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -30,17 +31,19 @@ import {
 } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
-import { ModelPair } from "./ModelPair.tsx";
+import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
+import { UpdateOpenClawNote } from "./UpdateOpenClaw.tsx";
 import { ManageGroup } from "./DeleteBot.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
+import { StartTasksRow } from "./StartTasks.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
   bindingWord,
   clock,
   defaultRef,
-  firstEffort,
+  effortFor,
   firstModel,
   gatewayCli,
   kindWord,
@@ -48,7 +51,6 @@ import {
   LOCK_OLD_MS,
   lockClaim,
   lockText,
-  modelsOf,
   providerName,
   stateWord,
 } from "./words.ts";
@@ -112,6 +114,24 @@ export function BotSettings({
   const granted = useGranted(connection);
   const admin = connection.canAdmin;
   const binding = accounts.bindings.find((each) => each.botId === bot.id) ?? null;
+  // "View more" for the bot's model, and for Change account's provider: each read when opened
+  // and held by this screen only.
+  const mainProvider = binding?.provider ?? defaultRef(accounts)?.provider ?? null;
+  const changeChosen =
+    pick ?? (binding?.mode === "gateway" ? GATEWAY_CHOICE : (binding?.account ?? null));
+  const changeProvider =
+    changeChosen === GATEWAY_CHOICE
+      ? mainProvider
+      : (accounts.accounts.find((a) => a.id === changeChosen)?.provider ?? null);
+  // Each pair counts as shown only while its page is on screen: Settings is the tab in view, and
+  // Usage isn't standing in for the page.
+  const onScreen = visible && usagePage === null;
+  const mainModels = useModelList(mainProvider ?? "", connection, onScreen && view === "main");
+  const changeModels = useModelList(
+    changeProvider ?? "",
+    connection,
+    onScreen && view === "change",
+  );
   const account = binding?.account
     ? (accounts.accounts.find((a) => a.id === binding.account) ?? null)
     : null;
@@ -152,9 +172,27 @@ export function BotSettings({
   const focusIn = useCallback((selector: string) => {
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
   }, []);
+  // Where the accounts Change account offers were read (`AccountsState.readOn`): its choices come
+  // from that read and go with its stamp. After a reconnect the accounts stay until read again, and
+  // the identity that answered can be known first. When they are read on another connection, a
+  // choice made from the earlier read is let go, and the new read's stamp goes with the next one.
+  const [choicesRead, setChoicesRead] = useState(() => accounts.readOn ?? shownStamp(connection));
+  const readKey = accounts.readOn
+    ? `${accounts.readOn.gatewayId}\n${accounts.readOn.target}\n${accounts.readOn.connectedAt}`
+    : null;
+  const [choicesFrom, setChoicesFrom] = useState(readKey);
+  if (choicesFrom !== readKey) {
+    setChoicesFrom(readKey);
+    setPick(null);
+    setPickModel(null);
+    setPickEffort(null);
+    setChoicesRead(accounts.readOn ?? shownStamp(connection));
+  }
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
+    if (next === "change" && view !== "change")
+      setChoicesRead(accounts.readOn ?? shownStamp(connection));
     if (next !== "change") setPick(null);
     focusIn(focus);
   };
@@ -292,6 +330,7 @@ export function BotSettings({
           </div>
         )}
         <MemoryRow onOpen={() => go("memory")} />
+        <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
         {runsOnRow}
         <ManageGroup bot={bot} onDelete={onDeleteBot} />
@@ -344,6 +383,8 @@ export function BotSettings({
           : "";
     const wordText = bindingWord(binding, age);
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
+    // Where the page shown was read: a restored copy has the same bot ids.
+    const shownOn = accounts.readOn ?? shownStamp(connection);
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
       try {
@@ -352,6 +393,7 @@ export function BotSettings({
           botId: bot.id,
           model: nextModel,
           effort: nextEffort,
+          stamp: await screenStamp(bridge, shownOn),
         });
         announce(nextModel !== model ? "Model saved" : "Effort saved");
       } catch (failure) {
@@ -399,14 +441,16 @@ export function BotSettings({
               <ModelPair
                 accounts={accounts}
                 provider={provider}
+                anyAccount={binding.mode !== "account"}
+                update={connection.openclawUpdate}
                 model={model}
-                effort={binding.effort ?? firstEffort(accounts, provider, model)}
+                list={mainModels}
+                effort={effortFor(rowFor(accounts, provider, model, mainModels), binding.effort)}
                 disabled={!admin}
-                onModel={(next) => {
-                  const levels =
-                    modelsOf(accounts, provider).find((m) => m.id === next)?.levels ?? [];
+                onModel={(next, row) => {
+                  const levels = row?.levels ?? [];
                   const was = binding.effort;
-                  const effort = firstEffort(accounts, provider, next, was);
+                  const effort = effortFor(row, was);
                   if (was && levels.length > 0 && !levels.includes(was) && effort) {
                     setEffortNote(
                       `Effort is now ${levelWord(effort)}: ${next} doesn't offer ${levelWord(was)}.`,
@@ -426,9 +470,16 @@ export function BotSettings({
           </>
         )}
         {binding.mode === "default-model" && (
-          <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
+          <>
+            <p className="b-hint">
+              The gateway's default model. Choose an account to pick another.
+            </p>
+            {/* With no Model menu, the update line stands here (#590). */}
+            <UpdateOpenClawNote />
+          </>
         )}
         <MemoryRow onOpen={() => go("memory")} />
+        <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
         {runsOnRow}
         <ManageGroup bot={bot} onDelete={onDeleteBot} />
@@ -496,16 +547,19 @@ export function BotSettings({
       ? (binding.provider ?? defaultRef(accounts)?.provider ?? null)
       : (target?.provider ?? null);
     const changed = chosen !== current && chosen !== null;
-    const offersModel = targetProvider
-      ? modelsOf(accounts, targetProvider).some((m) => m.id === binding.model)
-      : false;
-    const needModel = changed && !toGateway && targetProvider !== null && !offersModel;
+    // Another account of the same provider keeps the model, one chosen through "View more"
+    // included. Another provider's never keeps or infers one: the person chooses one of its models.
+    const sameProvider = targetProvider !== null && targetProvider === binding.provider;
+    const needModel = changed && !toGateway && targetProvider !== null && !sameProvider;
     const model = needModel
       ? pickModel
       : (binding.model ?? (targetProvider ? firstModel(accounts, targetProvider) : null));
     const effort =
       targetProvider && model
-        ? (pickEffort ?? firstEffort(accounts, targetProvider, model, binding.effort))
+        ? effortFor(
+            rowFor(accounts, targetProvider, model, changeModels),
+            pickEffort ?? binding.effort,
+          )
         : null;
     const running = tasks.some((task) =>
       transcripts[task.key]?.runs.some((run) => run.state === "running" || run.state === "waiting"),
@@ -526,6 +580,7 @@ export function BotSettings({
           provider: targetProvider,
           model,
           effort,
+          stamp: await screenStamp(bridge, choicesRead),
         });
         announce(
           toGateway
@@ -594,19 +649,20 @@ export function BotSettings({
             <ModelPair
               accounts={accounts}
               provider={targetProvider}
+              update={connection.openclawUpdate}
               model={pickModel}
+              list={changeModels}
               effort={effort}
               disabled={!admin}
               placeholder="Choose"
-              onModel={(next) => {
+              onModel={(next, row) => {
                 setPickModel(next);
-                setPickEffort(firstEffort(accounts, targetProvider, next, binding.effort));
+                setPickEffort(effortFor(row, binding.effort));
               }}
               onEffort={setPickEffort}
             />
             <p className="b-hint">
-              {providerName(targetProvider)} doesn't offer {binding.model ?? "the current model"}.
-              Choose one of its models.
+              Choose one of {providerName(targetProvider)}'s models for {name}.
             </p>
           </>
         )}
@@ -664,6 +720,24 @@ export function BotSettings({
 
   // --- The Account page --------------------------------------------------------------------
   const page: ReactNode[] = [];
+  // Where the page shown was read; a refusal is said under the page.
+  const shownOn = accounts.readOn ?? shownStamp(connection);
+  const removeFallbacks = async () => {
+    setError(null);
+    try {
+      await bridge.invoke({
+        type: "removeBotFallbacks",
+        botId: bot.id,
+        stamp: await screenStamp(bridge, shownOn),
+      });
+      return true;
+    } catch (failure) {
+      setError(
+        `Couldn't remove the fallbacks: ${failure instanceof Error ? failure.message : String(failure)}`,
+      );
+      return false;
+    }
+  };
   const changeButton = (label: string, primary: boolean) =>
     admin && (
       <div className="b-actions" style={{ marginTop: 14 }} key="change">
@@ -1051,12 +1125,7 @@ export function BotSettings({
           </p>
           {admin && (
             <div className="b-actions">
-              <button
-                type="button"
-                className="button"
-                data-size="sm"
-                onClick={() => void bridge.send({ type: "removeBotFallbacks", botId: bot.id })}
-              >
+              <button type="button" className="button" data-size="sm" onClick={removeFallbacks}>
                 Try again
               </button>
             </div>
@@ -1078,10 +1147,7 @@ export function BotSettings({
                 className="button"
                 data-size="sm"
                 onClick={() =>
-                  void bridge.send({ type: "removeBotFallbacks", botId: bot.id }).then(
-                    () => announce("Fallbacks removed"),
-                    () => {},
-                  )
+                  removeFallbacks().then((done) => done && announce("Fallbacks removed"))
                 }
               >
                 Remove fallbacks
@@ -1097,6 +1163,11 @@ export function BotSettings({
     <div ref={rootRef} className="b-tab" data-testid="bot-settings" data-word={word ?? undefined}>
       {sub("Account", "main", "[data-bs='account']")}
       {page}
+      {error && (
+        <p className="b-field-error" role="alert">
+          {error}
+        </p>
+      )}
       {foot}
     </div>
   );

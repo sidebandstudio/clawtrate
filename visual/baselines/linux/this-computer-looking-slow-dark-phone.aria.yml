@@ -1,0 +1,11 @@
+- status
+- main:
+  - button "Back"
+  - heading "Looking on this computer" [level=2]
+  - paragraph: Asking the gateway
+  - list "Steps":
+    - listitem "Finding OpenClaw, done": Finding OpenClaw
+    - listitem "Checking its version, done": Checking its version
+    - listitem "Asking the gateway, running": Asking the gateway
+  - status: Still looking. A gateway that has just started can take a while to answer.
+  - paragraph: Looking on this computer

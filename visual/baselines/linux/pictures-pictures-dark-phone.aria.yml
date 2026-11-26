@@ -1,0 +1,28 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:20 PM
+    - paragraph: Draw the sun over a green hill for the newsletter.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: I asked for the picture. It will arrive in this task when it is ready.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Here is the picture you asked for.
+    - figure:
+      - 'button "Picture made from the description: A sun over a green hill, in flat solid colours"':
+        - 'img "Picture made from the description: A sun over a green hill, in flat solid colours"'
+    - toolbar "Message actions":
+      - button "More"
+    - group: Worked 1 action
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

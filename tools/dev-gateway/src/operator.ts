@@ -18,6 +18,7 @@ import {
   sign,
 } from "node:crypto";
 import { GatewayClient, type DeviceIdentity } from "@openclaw/gateway-client";
+import { useOpenclawVersion, type OpenclawVersion } from "./versions.ts";
 
 export type GatewayEvent = { at: number; seq: number; event: string; payload: unknown };
 
@@ -61,6 +62,8 @@ export class OperatorSession {
   private lastClose = "";
   /** This connection's device, as the gateway lists it. */
   deviceId = "";
+  /** The OpenClaw version the gateway reported in its hello. */
+  serverVersion: OpenclawVersion | null = null;
 
   private constructor() {}
 
@@ -141,7 +144,17 @@ export class OperatorSession {
             if (session.ready) session.lastClose = `${code} ${reason}`.trim();
             session.ready = false;
           },
-          onHelloOk: () => {
+          onHelloOk: (hello) => {
+            // The checks take the running version's form from the gateway's own report.
+            try {
+              session.serverVersion = useOpenclawVersion(
+                String(asRecord(asRecord(hello).server).version),
+              );
+            } catch (error) {
+              void client.stopAndWait().catch(() => {});
+              settle({ ok: false, error: error as Error });
+              return;
+            }
             session.client = client;
             session.ready = true;
             for (const wake of session.helloWaiters) wake();

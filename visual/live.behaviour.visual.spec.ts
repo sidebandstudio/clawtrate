@@ -656,6 +656,126 @@ test.describe("the status line", () => {
     await expect(page.getByTestId("needs-you")).toHaveCount(0);
   });
 
+  test("F-292: on a grant that can answer questions but not decide approvals, Cmd/Ctrl+J goes to the question it can answer", async ({
+    page,
+  }) => {
+    await open(page, "run-waiting");
+    // A full pairing the gateway granted questions but neither approvals nor sending; the
+    // question came after the approval this device can't decide.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const approval = transcript.approvals[0]!;
+        return {
+          ...state,
+          connection: {
+            ...state.connection,
+            canWrite: false,
+            canApprove: false,
+            canAnswer: true,
+            scopes: ["operator.read", "operator.questions"],
+          },
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              questions: [
+                {
+                  id: "question-new",
+                  runId: "run-live",
+                  status: "pending",
+                  questions: [
+                    {
+                      id: "which",
+                      header: "Which",
+                      question: "Which disk first?",
+                      options: [
+                        { index: 0, label: "The media disk", description: null, value: null },
+                      ],
+                      optionsOmitted: 0,
+                      multiSelect: false,
+                      allowsOther: true,
+                    },
+                  ],
+                  createdAt: (approval.createdAt ?? Date.now()) + 60_000,
+                  expiresAt: null,
+                  answers: null,
+                  submitting: false,
+                  error: null,
+                  raw: null,
+                  ordinary: true,
+                  sent: null,
+                  settledBy: [],
+                },
+              ],
+            },
+          },
+        };
+      });
+    });
+    const firstOption = page.getByTestId("question-card").locator('.option[tabindex="0"]');
+    await expect(firstOption).toBeVisible();
+    await page.getByTestId("transcript").focus();
+    await page.keyboard.press("ControlOrMeta+j");
+    await expect(firstOption).toBeFocused();
+  });
+
+  test("F-292: a form Clawtrate can't answer gets no Needs you, on a grant that answers questions", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=question-unanswerable", "light");
+    const card = page.getByTestId("question-card");
+    await expect(card).toHaveAttribute("data-state", "unanswerable");
+    // Questions granted, nothing else; older messages above, so the reader can scroll away.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const task = Object.values(state.transcripts).find((each) => each.questions.length > 0)!;
+        const first = task.items[0]!;
+        const older = Array.from({ length: 35 }, (_, index) => ({
+          ...first,
+          id: `older-${index}`,
+          blocks: [{ kind: "text" as const, text: `Older message ${index}` }],
+          timestamp: (first.timestamp ?? Date.now()) - (35 - index) * 1000,
+        }));
+        return {
+          ...state,
+          connection: {
+            ...state.connection,
+            fullPairing: true,
+            scopes: ["operator.read", "operator.questions"],
+            canWrite: false,
+            canApprove: false,
+            canAnswer: true,
+          },
+          transcripts: {
+            ...state.transcripts,
+            [task.sessionKey]: { ...task, items: [...older, ...task.items] },
+          },
+        };
+      });
+    });
+    await settle(page);
+    await page.getByTestId("transcript").evaluate((el) => {
+      el.scrollTop = 0;
+      el.dispatchEvent(new Event("scroll"));
+    });
+    await settle(page);
+    const jump = page.getByTestId("jump-latest");
+    await expect(jump).toBeVisible();
+    await expect(jump).not.toHaveAttribute("data-state", "needs-you");
+  });
+
   test("F-292: Review and Cmd/Ctrl+J go to the oldest pending card by arrival, questions and approvals mixed", async ({
     page,
   }) => {
@@ -1972,17 +2092,15 @@ test.describe("errors and resync", () => {
     await expect(page.locator(".app")).toHaveAttribute("data-connection", "lost");
     await set("hello");
     await expect(page.getByTestId("status-strip")).toContainText("catching up");
-    // Connected is not caught up: nothing moves, the line and the composer stay as they were.
-    await expect(page.locator(".app")).toHaveAttribute("data-connection", "lost");
+    // Connected is not caught up: the run line stays last seen until the task reloads, but
+    // nothing says the connection is down, and the composer sends (#592).
+    await expect(page.locator(".app")).not.toHaveAttribute("data-connection", "lost");
     await expect(page.getByTestId("status-phrase")).toHaveText(
       // The default status line names the kind of work (conversation.md, 7.11).
-      "Reconnecting. Last seen reading files",
+      "Catching up. Last seen reading files",
     );
     await expect(page.locator(".status-elapsed")).toHaveCount(0);
-    await expect(field(page)).toHaveAttribute(
-      "placeholder",
-      "Offline. Messages send when you reconnect.",
-    );
+    await expect(field(page)).toHaveAttribute("placeholder", "Message Otto");
     expect(
       await page
         .locator(".status-line .presence")

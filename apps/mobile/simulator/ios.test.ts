@@ -16,11 +16,22 @@ import {
   avatarVariation,
   defaultAvatar,
   firstChoice,
+  INBOUND_MEDIA_ROUTE,
   pictureWithChoice,
   plainPreview,
+  READ_AGAIN_TRIES,
   type AvatarChoice,
 } from "@clawtrate/core";
-import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+} from "vitest";
 import {
   CLEARTEXT_WORDS,
   CONNECT_WORDS,
@@ -31,6 +42,7 @@ import {
 import { ENSEMBLE } from "../src/presentation/ensemble.ts";
 import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
+import { SENT_PICTURE_LINES, sentPictureAlt } from "../src/presentation/sent-files.ts";
 import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
 import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
@@ -47,6 +59,7 @@ import {
   deadPort,
   devGateway,
   devices,
+  displays,
   echoingGateway,
   env,
   gatewayCall,
@@ -56,6 +69,7 @@ import {
   launch,
   layout,
   lit,
+  measuredWindows,
   moves,
   near,
   notSee,
@@ -64,6 +78,7 @@ import {
   operator,
   relay,
   pasteboard,
+  protectedFront,
   protocolFiveGateway,
   Proxy,
   quit,
@@ -85,8 +100,10 @@ import {
   waitFor,
   waitGone,
   workspaceFor,
+  type FrontRequest,
   type Step,
 } from "./harness.ts";
+import { PAIRING, startsOnItsOwn } from "./jobs.ts";
 
 type SessionRow = {
   key: string;
@@ -311,6 +328,16 @@ afterAll(async () => {
   await new Promise<void>((resolve) => browser.close(() => resolve()));
 });
 
+// A run without the pairing check (one of CI's jobs, jobs.ts) pairs first, as that check does.
+beforeEach(async ({ task }) => {
+  if (!deviceId && !startsOnItsOwn(task.name)) await pairedSession();
+}, 15 * 60_000);
+// A check that set the app up itself leaves it on another gateway, with a new identity: the next
+// check pairs again. The pairing check alone ends in the paired session.
+afterEach(({ task }) => {
+  if (startsOnItsOwn(task.name) && !task.name.startsWith(PAIRING)) deviceId = "";
+});
+
 describe("the iOS app", () => {
   it("F-001 F-009 F-263: on iPhone, the first screen is the welcome with the mark, the tagline and Connect a gateway; an empty address, a gateway nobody answers and one on another protocol each get the desktop's words and a way on, and Retry repeats only the handshake", async () => {
     launch({
@@ -426,30 +453,35 @@ describe("the iOS app", () => {
     expect(first.scopes).toEqual(["operator.read"]);
     deviceId = first.deviceId!;
     const command = `pnpm dev-gateway approve --instance ${env.instance}`;
+    // From the top down; on a screen shorter than the list (iPhone Duo folded) the
+    // steps scroll to what they look at, and on an iPhone nothing needs to scroll.
     await steps("pairing", [
       waitFor({ id: "pairing" }, 90_000),
       see(lit(CONNECT_WORDS.approveTitle)),
       see({ id: "mark", text: PRODUCT_NAME }),
       see({ id: "approve-command", text: lit(command) }),
       notSee(".*openclaw devices approve.*"),
-      see({ id: "setup-step-0", text: lit(`Connected to ${hostOf(gateway)}`) }),
-      see({ id: "setup-step-1", text: `${lit(CONNECT_WORDS.waiting)}.*` }),
-      see({ id: "setup-step-2", text: "Load bots" }),
-      see({ id: "scope-operator.read", text: lit("Read bots, tasks and conversations") }),
+      tap({ id: "copy-command" }),
+      waitFor({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }, 30_000),
+      scrollTo({ id: "setup-step-0", text: lit(`Connected to ${hostOf(gateway)}`) }, "DOWN"),
+      scrollTo({ id: "setup-step-1", text: `${lit(CONNECT_WORDS.waiting)}.*` }, "DOWN"),
+      scrollTo({ id: "setup-step-2", text: "Load bots" }, "DOWN"),
+      scrollTo(
+        { id: "scope-operator.read", text: lit("Read bots, tasks and conversations") },
+        "DOWN",
+      ),
       notSee({ id: "scope-operator.write" }),
       notSee({ id: "scope-operator.approvals" }),
       notSee({ id: "scope-operator.questions" }),
       notSee({ id: "scope-operator.admin" }),
       // The gateway's echo is what this device signed: nothing to point out.
       notSee({ id: "scopes-differ" }),
-      tap({ id: "copy-command" }),
-      waitFor({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }, 30_000),
-      waitFor(
+      scrollTo(
         {
           id: "connect-foot",
           text: `Request ${first.requestId!.slice(0, 8)} · this device ${deviceId.slice(0, 8)} · .*`,
         },
-        30_000,
+        "DOWN",
       ),
     ]);
     expect(pasteboard()).toBe(command);
@@ -530,6 +562,58 @@ describe("the iOS app", () => {
     expect(paired?.scopes).toEqual(["operator.read"]);
   });
 
+  // Registered only when `pnpm mobile:check` runs on an iPhone Duo (CLAWTRATE_IOS_DEVICE_TYPE),
+  // never on the run's usual iPhone; see docs/development/ios.md.
+  if (process.env.CLAWTRATE_IOS_FORM === "duo") {
+    it("on iPhone Duo folded, the outer display keeps the phone's layout: Home, a bot's tasks and a task's chat each fill the screen inside its safe area, one at a time, clear of the clock and camera at its side, and Back goes from the chat to the bot's tasks and on to Home", async () => {
+      // Folded: the outer display is the one in use, and the inner one is off.
+      const [outer, inner] = displays().sort((a, b) => a.width * a.height - b.width * b.height);
+      expect(outer?.active).toBe(true);
+      expect(inner?.active).toBe(false);
+      expect(inner?.on).toBe(false);
+      // The app found the hinge, and only ever measured the outer display's compact window.
+      const seen = measuredWindows(Math.ceil((Date.now() - started) / 1000) + 30);
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.at(-1)).toMatchObject({ hinge: true, sizeClass: "compact" });
+      expect(seen.every((w) => w.sizeClass === "compact")).toBe(true);
+      const { width, safe } = seen.at(-1)!;
+      expect(Math.abs(width - outer!.width)).toBeLessThanOrEqual(1);
+      // The outer display keeps its clock and camera at a side, not along the top.
+      expect(safe.left + safe.right).toBeGreaterThan(0);
+      /** The element spans the window between its side safe areas, as a screen spans an iPhone. */
+      const fills = async (id: string) => {
+        const box = (await layout()).get(id)?.[0];
+        expect(box, id).toBeDefined();
+        expect(Math.abs(box!.x1 - safe.left), id).toBeLessThanOrEqual(1);
+        expect(Math.abs(box!.x2 - (width - safe.right)), id).toBeLessThanOrEqual(1);
+      };
+      await steps("duo-folded-home", [waitFor({ id: "home" }, 30_000), notSee({ id: "no-chat" })]);
+      await fills("home");
+      await shoot("duo-folded-home");
+      await steps("duo-folded-bot", [
+        tap({ id: "bot-otto" }),
+        waitFor({ id: "bot-tasks-otto" }, 20_000),
+        notSee({ id: "no-chat" }),
+      ]);
+      await fills("bot-tasks-otto");
+      await shoot("duo-folded-bot-tasks");
+      await steps("duo-folded-chat", [
+        tap({ id: `task-${lit("agent:otto:disk-space")}` }),
+        waitFor({ id: "turn-bot" }, 60_000),
+        notSee({ id: "bot-tasks-otto" }),
+        see({ id: "back", text: "Back to Otto's tasks" }),
+      ]);
+      await fills("transcript");
+      await shoot("duo-folded-chat");
+      await steps("duo-folded-back", [
+        tap({ id: "back", text: "Back to Otto's tasks" }),
+        waitFor({ id: "bot-tasks-otto" }, 20_000),
+        tap({ id: "back", text: "Back to bots" }),
+        waitFor({ id: "home" }, 20_000),
+      ]);
+    });
+  }
+
   it("on iPhone, the app switcher shows the privacy cover after leaving Home", async () => {
     // The app switcher's picture of the app is the cover: the background and the mark.
     const left = Date.now();
@@ -547,7 +631,8 @@ describe("the iOS app", () => {
       see({ id: "gateway-address", text: lit(addressWords(gateway)) }),
     ]);
 
-    const js = await until("the Simulator JS probe", async () => [...switcherProbe.clients][0]);
+    // The newest socket: the app opens another when one closes while it is away.
+    const js = await until("the Simulator JS probe", async () => [...switcherProbe.clients].at(-1));
     let blocked: { startedAt: number; unblockAt: number } | undefined;
     let resumed = false;
     js.on("message", (message) => {
@@ -1506,11 +1591,14 @@ describe("the iOS app", () => {
   it("on iPhone, a bot whose tasks the gateway failed to send claims no count on Home and says so in its list; sent an empty list, the list says it has none", async () => {
     let mode: "fail" | "empty" = "fail";
     let failed = 0;
+    // The app reads a task list the gateway may answer if asked again (an `UNAVAILABLE` with no
+    // reason) READ_AGAIN_TRIES more times, then once more on the gateway's next event, which
+    // arms no other read: with every task list failing, the count ends there.
+    const FAILED_READS = 1 + READ_AGAIN_TRIES + 1;
     const proxy = await relay(env.gateway, {
-      // The first task list after pairing fails, as a gateway's error would.
+      // Every task list fails until the switch below, as a gateway that stays unavailable would.
       fromPhone: (frame) => {
-        if (mode !== "fail" || frame.method !== "sessions.subscribe" || failed > 0 || !frame.id)
-          return null;
+        if (mode !== "fail" || frame.method !== "sessions.subscribe" || !frame.id) return null;
         failed += 1;
         return {
           type: "res",
@@ -1537,12 +1625,20 @@ describe("the iOS app", () => {
         waitFor({ id: "pairing" }, 90_000),
       ]);
       devGateway("approve");
+      // The tries take about 15 seconds before the failure shows; the wait covers them.
       await steps("tasks-failed-home", [
         waitFor({ id: "bot-otto", text: "Otto" }, 120_000),
+        waitFor({ id: "bot-preview-otto", text: lit(TASKS_FAILED) }, 120_000),
+        notSee(".*, 0 tasks.*"),
+      ]);
+      // The gateway's next event (a tick comes at least every 30 seconds) makes the last read.
+      await until("the next event's read", async () => failed >= FAILED_READS, 90_000);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      expect(failed).toBe(FAILED_READS);
+      await steps("tasks-failed-home-after", [
         see({ id: "bot-preview-otto", text: lit(TASKS_FAILED) }),
         notSee(".*, 0 tasks.*"),
       ]);
-      expect(failed).toBe(1);
       await steps("tasks-failed-list", [
         tap({ id: "bot-otto" }),
         waitFor({ id: "bot-tasks-otto" }),
@@ -1559,6 +1655,8 @@ describe("the iOS app", () => {
         see(lit(noTasksBody("Otto"))),
         notSee(lit(TASKS_FAILED)),
       ]);
+      // Nothing failed after the switch.
+      expect(failed).toBe(FAILED_READS);
     } finally {
       await proxy.close();
     }
@@ -1820,6 +1918,178 @@ describe("the iOS app", () => {
       await avatarGateway.close();
     }
   });
+
+  it("F-557: on iPhone, a picture you sent from another device shows in your message when the gateway's address is protected, read back with this device's token in one header and no cookie, and a redirect isn't followed; at a loopback ws:// address the message says this connection can't load it and nothing is asked for", async () => {
+    // Pictures of the check's own, sent with a message as another device sends them.
+    const solid = (rgb: [number, number, number]) =>
+      encodePng({
+        width: 360,
+        height: 240,
+        data: Uint8Array.from({ length: 360 * 240 * 4 }, (_, i) =>
+          i % 4 === 3 ? 255 : rgb[i % 4]!,
+        ),
+      });
+    const SHOT_RGB: [number, number, number] = [38, 110, 196];
+    const shot = solid(SHOT_RGB);
+    const words = "Here is the shelf I mentioned.";
+    const own = await gatewayTask("pip", "Picture check");
+    // Everything made from here on is released at the end, whatever fails.
+    let loopback: Proxy | null = null;
+    let front: Awaited<ReturnType<typeof protectedFront>> | null = null;
+    try {
+      await gatewayCall("chat.send", {
+        sessionKey: own.key,
+        message: words,
+        idempotencyKey: `ios-picture-${Date.now().toString(36)}`,
+        queueMode: "followup",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "shot.png",
+            content: shot.toString("base64"),
+          },
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "moved.png",
+            content: solid([200, 120, 40]).toString("base64"),
+          },
+        ],
+      });
+      await until("the message's files in history", async () => {
+        const history = await gatewayCall<{ messages?: unknown[] }>("chat.history", {
+          sessionKey: own.key,
+          limit: 20,
+        });
+        const text = JSON.stringify(history.messages ?? []);
+        return text.includes("media://inbound/shot") && text.includes("media://inbound/moved");
+      });
+      const lineFor = (name: string) =>
+        `${lit(name)}, \\d+ KB\\. ${lit(SENT_PICTURE_LINES["cannot-load"])}`;
+      const openTask = (name: string): Step[] => [
+        waitFor({ id: "bot-pip" }, 120_000),
+        tap({ id: "bot-pip" }),
+        waitFor({ id: `task-${lit(own.key)}` }, 60_000),
+        tap({ id: `task-${lit(own.key)}` }),
+        waitFor(lit(words), 60_000),
+        // The message's files under it, the last one in view.
+        scrollTo({ id: "sent-picture", text: name }, "DOWN"),
+      ];
+
+      // At a loopback ws:// address: each picture says this connection can't load it.
+      loopback = new Proxy(Number(new URL(env.gateway).port));
+      const nearUrl = await loopback.start();
+      const gatewayPort = Number(new URL(env.gateway).port);
+      const media = (url: string) => url.startsWith(INBOUND_MEDIA_ROUTE);
+      front = await protectedFront(gatewayPort, (url) =>
+        media(url.pathname) && url.searchParams.get("source")?.startsWith("media://inbound/moved")
+          ? { status: 302, headers: { location: "/elsewhere" } }
+          : null,
+      );
+      launch({ fresh: true, devGateway: nearUrl });
+      await steps("picture-near-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(nearUrl, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      await steps("picture-near", [
+        ...openTask(lineFor("moved.png")),
+        see({ id: "sent-picture", text: lineFor("shot.png") }),
+        see({ id: "sent-picture", text: lineFor("moved.png") }),
+        notSee({
+          id: "sent-picture",
+          text: lit(
+            sentPictureAlt({ fileName: "shot.png", mimeType: "image/png", sizeBytes: null }),
+          ),
+        }),
+      ]);
+      await shoot("sent-picture-loopback");
+      // Every connection the app made there opened its gateway socket: nothing else was asked.
+      expect(loopback.requests.length).toBeGreaterThan(0);
+      expect(loopback.requests.filter((request) => !request.upgrade)).toEqual([]);
+
+      // At a protected address, a new device of this gateway: the picture is read back and drawn.
+      const alt = sentPictureAlt({ fileName: "shot.png", mimeType: "image/png", sizeBytes: null });
+      launch({ fresh: true, devGateway: front.url });
+      await steps("picture-far-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(front.url, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      await steps("picture-far", [
+        ...openTask(lineFor("moved.png")),
+        waitFor({ id: "sent-picture", text: lit(alt) }, 60_000),
+        see({ id: "sent-picture", text: lineFor("moved.png") }),
+      ]);
+      await shoot("sent-picture-protected");
+      // The exact picture sent, drawn from the bytes the gateway gave.
+      const at = await layout();
+      const box = at.get("sent-picture")!.find((each) => each.text === alt)!;
+      const pixel = screen(at.get("transcript")![0]!.x2);
+      expect(near(pixel((box.x1 + box.x2) / 2, (box.y1 + box.y2) / 2), SHOT_RGB, 10)).toBe(true);
+
+      // The gateway was asked only on its media route, by GET, with no cookie, although each
+      // answer set one. The ticket requests carry this device's token in their one header, the
+      // bytes request none, and no address carries it. The redirect was not followed.
+      const asked = front.requests;
+      expect(asked.every((request) => request.method === "GET" && media(request.url))).toBe(true);
+      expect(asked.map((request) => request.cookie)).toEqual(asked.map(() => undefined));
+      const ticketFor = (name: string) =>
+        asked.filter((request) => {
+          const query = new URL(request.url, "https://front").searchParams;
+          return (
+            query.get("meta") === "1" && query.get("source")!.startsWith(`media://inbound/${name}`)
+          );
+        });
+      const bytes = asked.filter(
+        (request) => new URL(request.url, "https://front").searchParams.get("meta") !== "1",
+      );
+      expect(ticketFor("shot")).toHaveLength(1);
+      expect(ticketFor("moved")).toHaveLength(1);
+      expect(bytes).toHaveLength(1);
+      expect(bytes[0]!.url).toContain(encodeURIComponent("media://inbound/shot"));
+      // Each ticket request, the redirected one too, carries one Authorization field with the
+      // token the gateway issued this device; the bytes request carries none. The token is
+      // compared here and never printed, and no address holds it, raw or decoded.
+      const issued = front.issued();
+      expect(issued !== null && issued.length > 8).toBe(true);
+      const tickets = [...ticketFor("shot"), ...ticketFor("moved")];
+      expect(tickets.map((request) => request.authorizations)).toEqual([1, 1]);
+      expect(tickets.every((request) => request.authorization === `Bearer ${issued}`)).toBe(true);
+      expect(bytes[0]!.authorizations).toBe(0);
+      const holds = (request: FrontRequest) =>
+        request.url.includes(issued!) ||
+        [...new URL(request.url, "https://front").searchParams].some(
+          ([name, value]) => name.includes(issued!) || value.includes(issued!),
+        );
+      expect(asked.some(holds)).toBe(false);
+      expect(asked.some((request) => request.url.startsWith("/elsewhere"))).toBe(false);
+
+      // A tap opens it larger, as on the desktop, and Close brings the chat back.
+      await steps("picture-larger", [
+        tap({ id: "sent-picture", text: lit(alt) }),
+        waitFor({ id: "picture-viewer-close" }, 20_000),
+        see({ text: lit(alt) }),
+      ]);
+      await shoot("sent-picture-larger");
+      await steps("picture-larger-closed", [
+        tap({ id: "picture-viewer-close" }),
+        waitGone({ id: "picture-viewer-close" }, 20_000),
+        see({ id: "sent-picture", text: lit(alt) }),
+      ]);
+    } finally {
+      await loopback?.stop();
+      await front?.close();
+      await gatewayCall("sessions.delete", { key: own.key, deleteTranscript: true }).catch(
+        () => {},
+      );
+    }
+  });
 });
 
 /** A gateway frame, as far as the echoing relay reads and changes it. */
@@ -1839,11 +2109,40 @@ function anotherGateway(): Step[] {
   return [
     {
       runFlow: {
-        when: { visible: { id: "use-another" } },
-        commands: [tap({ id: "use-another" })],
+        // On the step list it is under the error, below the foot of a short screen.
+        when: { visible: { id: "setup" } },
+        commands: [scrollTo({ id: "use-another" }, "DOWN"), tap({ id: "use-another" })],
       },
     },
   ];
+}
+
+/**
+ * Pair the app read-only through the check's proxy and open Home, where the pairing check leaves
+ * it, for a run that leaves that check out. The gateway's owner approves with the dev tool.
+ */
+async function pairedSession(): Promise<void> {
+  launch({
+    fresh: true,
+    devGateway: gateway,
+    switcherProbePort: Number(new URL(browserUrl).port),
+  });
+  await steps("session-connect", [
+    waitFor({ id: "welcome" }),
+    tap({ id: "connect-a-gateway" }),
+    ...typeAddress(gateway, env.token),
+    waitFor({ id: "pairing" }, 90_000),
+  ]);
+  const request = await until("the app's pairing request", async () =>
+    (await devices()).pending.find((r) => r.displayName === "Clawtrate iPhone"),
+  );
+  expect(request.scopes).toEqual(["operator.read"]);
+  devGateway("approve");
+  await steps("session-home", [
+    waitFor({ id: "home" }, 120_000),
+    waitFor({ id: "bot-pip" }, 60_000),
+  ]);
+  deviceId = request.deviceId!;
 }
 
 /**

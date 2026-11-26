@@ -27,6 +27,8 @@ import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { AvatarSheet } from "./avatars.tsx";
+import { voiceParams } from "./voice.ts";
+import { guidesParam } from "./guides.ts";
 import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
 import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
@@ -116,9 +118,35 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   machines: machineParams(params),
   botDelete: botDeleteParams(params),
   search: searchParams(params),
+  voice: voiceParams(params),
+  guides: guidesParam(params),
   fullPairing: params.get("full") === "1",
+  gatewayName: params.get("gatewayName"),
+  showGatewayBot: params.get("gatewaybot") !== "off",
 });
 if (params.has("hold")) bridge.hold();
+// "Show sessions from other tools" on, for checks of what it lists (F-563, F-193).
+if (params.get("others") === "show")
+  bridge.setState((state) => ({ ...state, showOtherToolSessions: true }));
+// What `tools.effective` says of `sessions_spawn` for every task shown (#532): `starttasks=yes`,
+// `no` (excluded, with the gateway's reason) or `noreason` (excluded, with none).
+const startTasks = params.get("starttasks");
+if (startTasks === "yes" || startTasks === "no" || startTasks === "noreason")
+  bridge.setState((state) => ({
+    ...state,
+    transcripts: Object.fromEntries(
+      Object.entries(state.transcripts).map(([key, transcript]) => [
+        key,
+        {
+          ...transcript,
+          startTasks:
+            startTasks === "yes"
+              ? { can: true, reason: null }
+              : { can: false, reason: startTasks === "no" ? "Not included in tools.allow" : null },
+        },
+      ]),
+    ),
+  }));
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.
 if (params.get("uview") === "usage")
   requestUsagePage(params.get("bot") ?? OPEN_BOT, params.get("budget") === "invalid");

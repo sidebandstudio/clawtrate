@@ -1,11 +1,14 @@
 // View models the interface renders. Gateway payloads are mapped into these in
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
+import type { OpenClawUpdate } from "./gateway-update.ts";
+import type { OpenClawUpdateState } from "./openclaw-update.ts";
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { StartTasks } from "./start-tasks.ts";
 import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
@@ -80,12 +83,22 @@ export type ConnectionState = {
    */
   gatewayId: string | null;
   /**
+   * The name the person gave this address on this device (`gateway-names.ts`),
+   * or null. Local only: never sent to the gateway.
+   */
+  gatewayName: string | null;
+  /**
    * The host's target: raised whenever the host is pointed at a gateway anew (a Connect, a
    * Disconnect, a switch of saved gateway, a new pairing), kept across a reconnect to the same
    * one. With `gatewayId` it is what a screen read is stamped with (`GatewayStamp`).
    */
   target: number;
   serverVersion: string | null;
+  /**
+   * A newer OpenClaw, when the gateway's own update check reports one
+   * (`hello-ok` `snapshot.updateAvailable`, the `update.available` event).
+   */
+  openclawUpdate: OpenClawUpdate | null;
   protocol: number | null;
   /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
   scopes: string[];
@@ -146,6 +159,20 @@ export const sameStamp = (a: GatewayStamp | null | undefined, b: GatewayStamp | 
   a.gatewayId === b.gatewayId &&
   a.target === b.target;
 
+/**
+ * Where a list the screen draws was read: its stamp, and the connection (its hello) it was read
+ * on. A row's write carries it, so a row read before a reconnect never takes the identity of the
+ * gateway that answers it.
+ */
+export type ReadStamp = GatewayStamp & { connectedAt: number | null };
+
+/**
+ * Why a write that had already sent part of itself stopped: the connection changed before its
+ * outcome was read back, so what the gateway did is not known (a bot's Rename, a setting, a task).
+ */
+export const CONNECTION_CHANGED_AFTER_SEND =
+  "The connection changed before Clawtrate could confirm the change. Look again, then try again.";
+
 /** The stamp of what is read on the connection as it is now. */
 export const gatewayStamp = (
   connection: Pick<ConnectionState, "gatewayId" | "target">,
@@ -172,6 +199,11 @@ export type Bot = {
   theme: string | null;
   model: string | null;
   isDefault: boolean;
+  /**
+   * The gateway names no owner (`agents.list` `selectionRequired`): `isDefault` marks only its
+   * first bot, which is the person's like any other, not the gateway's own (F-562).
+   */
+  ownerless?: boolean;
   /** Paths of fields cut to their bound (an avatar too large to keep is dropped). */
   cut?: string[];
 };
@@ -229,12 +261,30 @@ export type Task = {
    */
   effort?: string;
   /**
+   * Another tool opened this session, not the person (`origins.ts`): an API client, a scheduled
+   * run, a plugin. Present and true only then; such a task is listed only with
+   * `showOtherToolSessions`, or while it waits for the person.
+   */
+  otherTool?: true;
+  /**
    * The external channel the chat came in through (`discord`, `telegram`, …), as the
    * gateway names it; absent for Clawtrate's own tasks and a bot's main task (`channels.ts`).
    */
   channel?: string;
+  /**
+   * A bot started this task with the gateway's `sessions_spawn` (`createdVia: "spawn"`): the task
+   * it was started from (`spawnedBy`) and that task's bot. Absent for every other task.
+   */
+  startedBy?: TaskStarter;
   /** Paths of fields cut to their bound. */
   cut?: string[];
+};
+
+/** Who started a task, as the gateway recorded it (`Task.startedBy`). */
+export type TaskStarter = {
+  botId: string;
+  /** The session key of the task it was started from. */
+  fromKey: string;
 };
 
 export type TaskContext = {
@@ -308,10 +358,28 @@ export type ChatPicture = {
 };
 
 /**
+ * A file that isn't a picture the gateway put on a bot's message (F-115): an
+ * `attachment` block (a document), an `audio` or `video` block, or an
+ * `attachment_error` block for one it couldn't hand over. `name` is the
+ * gateway's, cleaned (`cleanFileName`); `mimeType` and `sizeBytes` are its
+ * words, shown as text. `artifactId` is null when there is nothing to read:
+ * an `attachment_error`, or a block that named no id. Read with `readChatFile`.
+ */
+export type ChatFile = {
+  artifactId: string | null;
+  name: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  /** The row that carried it (`__openclaw.id`), as for a picture. */
+  messageId?: string;
+};
+
+/**
  * A file a person sent with their message, as the gateway's history names it
  * (`__openclaw.media`, OpenClaw 2026.10.6): its name, type and size, never the
- * reference the gateway keeps it under. Clawtrate loads none from the gateway
- * (#469); a picture is shown only from the sending app's own copy (`readSentPicture`).
+ * reference the gateway keeps it under, which stays in the host (`sentSources`).
+ * A picture shows from the sending app's own copy, or read back from the gateway
+ * at a protected address (`readSentPicture`).
  */
 export type SentAttachment = {
   fileName: string;
@@ -328,6 +396,13 @@ export type TranscriptItem = {
   model: string | null;
   /** The pictures the bot's messages of this item hand over, in their order. Absent when none. */
   pictures?: ChatPicture[];
+  /** The other files the bot's messages of this item hand over, in their order. Absent when none. */
+  files?: ChatFile[];
+  /**
+   * When the item's last row with text or files had only files: those files' names, the
+   * once-shown ones included, as the sidebar names them. Absent otherwise.
+   */
+  filesPreview?: string;
   /** The files a person's message carried, in the order sent. Absent when none. */
   attachments?: SentAttachment[];
   /**
@@ -351,6 +426,43 @@ export type TranscriptItem = {
    * message this client sent (`namesOutgoing`).
    */
   idempotencyKey?: string;
+  /**
+   * An assistant item whose first row names no run (neither `__openclaw.runId` nor
+   * `openclawAbort.runId`), such as a row the gateway appends after a turn: not a run's reply,
+   * so never a stopped or failed run's last text. Present and true only then. It goes by the run
+   * alone, never by the row's other fields.
+   */
+  runless?: true;
+  /**
+   * In a task a bot started, the brief it wrote: the first user row stored in that task, which the
+   * gateway attributes to the person but the bot wrote (`mapHistory`'s `startedAt`). Present and
+   * true only then; a message the person sends there later is theirs as always.
+   */
+  brief?: true;
+  /**
+   * The gateway's run id of a bot's turn that reports on a task it started, or on a follow-up it
+   * sent there (`announce:v1:<task key>:<that task's run id>`, `REPORT_RUN_PREFIX`). Present only
+   * on such a turn: the "Started a task" card ties its report to it by the exact id.
+   */
+  reportRunId?: string;
+  /**
+   * The update run a bot's row names as the gateway's finished notice (`updateNoticeRunId`): the
+   * first row of the conversation with that key and the gateway's fields. It is drawn as the
+   * line "OpenClaw updated to <version>" only when this device saw that run succeed
+   * (`updateNoticeLine`); otherwise it is the message it is.
+   */
+  updateRunId?: string;
+  /**
+   * On an item with `updateRunId`: the latest time of any row stored before it, every row of a
+   * merged turn included. Absent when no earlier row has a time.
+   */
+  updateNoticeAfter?: number;
+  /**
+   * On an item with `updateRunId`: the row's own `timestamp`, as the gateway stamped it when it
+   * wrote the row, without the store's record time `timestamp` may fall back on. Absent when the
+   * row has none; then it is never the line.
+   */
+  updateNoticeWrittenAt?: number;
   /**
    * History places this user row inside a run that began before it: the gateway took it into
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
@@ -412,6 +524,11 @@ export type Transcript = TaskActivity & {
    */
   builtinTools?: string[];
   /**
+   * Whether this task's bot has the gateway's tool for starting a task (`sessions_spawn`), from
+   * the same `tools.effective` read, with the gateway's reason when it hasn't. Absent until read.
+   */
+  startTasks?: StartTasks;
+  /**
    * The bot's workspace root, as the gateway names it (`agents.files.list`
    * `workspace`): an absolute path is a memory note only inside it (8.2).
    * Absent or null when the gateway has not said; nothing is inferred then.
@@ -433,8 +550,12 @@ export type DiscoveryState = {
   status: "idle" | "loading" | "ready" | "error";
   /** Set when a read failed; data from earlier successful reads is kept. */
   error: string | null;
+  /** The gateway's own words for the failure, when `error` says it plainly; null otherwise. */
+  detail: string | null;
   /** True when the gateway reported more tasks than the client loaded. */
   partial: boolean;
+  /** Where the task list shown was read (`ReadStamp`); null before the first list. */
+  tasksRead: ReadStamp | null;
 };
 
 export type ClawtrateState = {
@@ -483,6 +604,22 @@ export type ClawtrateState = {
    */
   showChannelChats?: boolean;
   /**
+   * Counts the times the gateway said the voice plugin's setting may have changed: its
+   * `changed` event, or `plugins.changed`. Settings reads `readBotVoice` again when it moves.
+   */
+  voiceChanges?: number;
+  /**
+   * "Show sessions from other tools": whether `tasksByBot` lists sessions an API client, a
+   * scheduled run or another tool opened with a bot (`Task.otherTool`). Off by default, kept by
+   * the host.
+   */
+  showOtherToolSessions?: boolean;
+  /**
+   * "Show the gateway's own bot": whether the gateway's default bot is listed beside the
+   * others (`gateway-bot.ts`). Off by default, kept by the host.
+   */
+  showGatewayBot?: boolean;
+  /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
    * does not read it.
@@ -518,6 +655,11 @@ export type ClawtrateState = {
    * that bot's conversation. Absent until the first.
    */
   botNames?: NameProposal[];
+  /**
+   * Updating OpenClaw from Clawtrate (`openclaw-update.ts`): the run followed, the press being
+   * sent, and why the gateway can't update itself. Absent until the first.
+   */
+  openclawUpdating?: OpenClawUpdateState;
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
 };
@@ -586,8 +728,10 @@ export const initialConnectionState: ConnectionState = {
   status: "idle",
   gatewayUrl: null,
   gatewayId: null,
+  gatewayName: null,
   target: 0,
   serverVersion: null,
+  openclawUpdate: null,
   protocol: null,
   scopes: [],
   requestedScopes: [],
@@ -610,7 +754,9 @@ export const initialConnectionState: ConnectionState = {
 export const initialDiscoveryState: DiscoveryState = {
   status: "idle",
   error: null,
+  detail: null,
   partial: false,
+  tasksRead: null,
 };
 
 export const initialState: ClawtrateState = {

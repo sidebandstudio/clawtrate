@@ -397,9 +397,7 @@ const SCENES: Scene[] = [
       await accountPage(page);
       await page.getByRole("button", { name: "Change account" }).click();
       await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
-      await expect(
-        page.getByText("xAI doesn't offer gpt-5.5. Choose one of its models."),
-      ).toBeVisible();
+      await expect(page.getByText("Choose one of xAI's models for Otto.")).toBeVisible();
     },
   },
 ];

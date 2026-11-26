@@ -10,7 +10,7 @@ import {
   type LoopbackHttpForTests,
   type ReleaseAssets,
 } from "./address.ts";
-import { parseVersion, versionTrack, type Version } from "./version.ts";
+import { fitsTrack, parseVersion, type Version } from "./version.ts";
 
 export const FEED_FORMAT = 1;
 
@@ -86,8 +86,7 @@ export function parseFeed(
   const releaseDate = parseReleaseDate(raw.releaseDate);
   if (!version || !releaseDate || !isObject(raw.files)) return MALFORMED;
   if (raw.track !== "stable" && raw.track !== "nightly") return MALFORMED;
-  if (raw.track !== track || versionTrack(version) !== track)
-    return { ok: false, cause: "wrong-track" };
+  if (raw.track !== track || !fitsTrack(version, track)) return { ok: false, cause: "wrong-track" };
   // Every entry is checked, not only this system's, so a feed is good or not
   // the same way on every system.
   let file: FeedFile | null = null;

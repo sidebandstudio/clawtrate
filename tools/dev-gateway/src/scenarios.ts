@@ -14,6 +14,13 @@ import type { ReplyStep } from "./scripts.ts";
 import { MESSAGING_PAIR, messagingPartner, SEED_BOTS } from "./seed-data.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { PICTURE_PATH } from "./seed-files.ts";
+import {
+  ATTACH_NOTE,
+  ATTACH_PDF_PATH,
+  ATTACH_TEXT,
+  ATTACH_TEXT_PATH,
+  reviewsDraftPdf,
+} from "./scripted-files.ts";
 
 /** What a scenario may look at: who is answering, and what its tools returned so far. */
 export type PlanContext = {
@@ -21,6 +28,8 @@ export type PlanContext = {
   sessionKey: string | null;
   /** Tool results since the user's message, in order. */
   results: { name: string; text: string }[];
+  /** Tool results of the whole conversation the model was sent, this turn's included, in order. */
+  history?: { name: string; text: string }[];
   /** The user's message, as the scripted model matched it. */
   prompt?: string;
   /**
@@ -45,6 +54,13 @@ export const IMAGE_PROMPT = "A sun over a green hill, in flat solid colours";
 /** The message `#send-picture` sends with the trail map, and the words after it. */
 export const SEND_PICTURE_TEXT = "Here is the trail map.";
 export const SEND_PICTURE_AFTER = "That is the route for Saturday.";
+/**
+ * The message `#send-keyed` sends, and the idempotency key it gives the message tool: the shape of
+ * the key the gateway gives its skill note, with a made-up review id. A bot can pass any key.
+ */
+export const SEND_KEYED_TEXT = "The Saturday hike moved to Sunday at 9.";
+export const SEND_KEYED_KEY =
+  "skill-workshop-notice:skill-workshop-review:5e1f0c2a-7b3d-4e8f-9a6b-1c2d3e4f5a6b";
 /** An address outside loopback, in a documentation range nothing answers. */
 export const OUTSIDE_ADDRESS = "http://192.0.2.1/";
 /** Another loopback port than the scripted pages' (one Chromium does not refuse itself): not theirs, so refused. */
@@ -121,9 +137,9 @@ function lastResult(ctx: PlanContext, name: string): Record<string, unknown> | n
   if (!found) return null;
   // The JSON may be the whole text, or follow a summary, or be followed by
   // the tool's own text: try each object that starts a line, up to each "}"
-  // that ends one.
+  // that ends one. Indented over several lines (2026.10.6) or on one (2026.11.10).
   const starts = [...found.text.matchAll(/^\{/gm)].map((m) => m.index);
-  const ends = [...found.text.matchAll(/^\}/gm)].map((m) => m.index + 1).reverse();
+  const ends = [...found.text.matchAll(/\}$/gm)].map((m) => m.index + 1).reverse();
   for (const start of starts) {
     for (const end of [found.text.length, ...ends]) {
       if (end <= start) continue;
@@ -155,6 +171,54 @@ const SIX_READS = [
   { path: "BOOTSTRAP.md" },
   { path: "AGENTS.md", offset: 3 },
 ];
+
+/** Nine reads: with the text after them, the ten model calls that make a task due for a review. */
+const LEARN_READS = [
+  ...SIX_READS,
+  { path: "SOUL.md", offset: 3 },
+  { path: "USER.md", offset: 2 },
+  { path: "IDENTITY.md", offset: 2 },
+];
+
+/** The skill the background review saves after `#learn`, and the reason it gives. */
+export const LEARNED_SKILL = "trail-check";
+export const LEARNED_REASON = "check the trail before a hike";
+
+/** How the gateway's background skill review prompt begins (buildSkillExperienceReviewPrompt). */
+export const SKILL_REVIEW_PROMPT = "Background skill review.";
+
+/**
+ * The scripted model's answer to the gateway's background skill review. It
+ * saves a skill only when the turn it reviews was a `#learn`: it lists the
+ * learned skills, as the review prompt asks, then creates `trail-check` (or
+ * `trail-check-2` and so on, when that name is taken), then says the gateway's
+ * "nothing to say". Every other review says only that.
+ */
+export function skillReviewReply(
+  conversation: { role: string; text: string }[],
+  results: { name: string; text: string }[],
+  tools: Set<string>,
+): ReplyStep[] {
+  const silent: ReplyStep[] = [{ kind: "text", text: "NO_REPLY" }];
+  const reviewed = conversation.findLast((message) => message.role === "user");
+  const learn =
+    reviewed && selectScenarios(reviewed.text).some(({ scenario }) => scenario.name === "learn");
+  if (!learn || !tools.has("skill_workshop")) return silent;
+  const done = results.filter((result) => result.name === "skill_workshop");
+  if (done.length === 0) return [tool("skill_workshop", { action: "list" })];
+  if (done.length > 1) return silent;
+  const taken = new Set(done[0]!.text.match(new RegExp(`\\b${LEARNED_SKILL}(?:-\\d+)?\\b`, "g")));
+  let name = LEARNED_SKILL;
+  for (let n = 2; taken.has(name); n += 1) name = `${LEARNED_SKILL}-${n}`;
+  return [
+    tool("skill_workshop", {
+      action: "create",
+      name,
+      reason: LEARNED_REASON,
+      content: `---\nname: ${name}\ndescription: Use before a hike to check the trail's conditions.\n---\n\n# Trail check\n\n1. Read the trail notes in the workspace.\n2. Say which parts are closed.\n`,
+    }),
+  ];
+}
 
 /** The only shell commands any scenario emits. All are harmless and stay in the bot's workspace. */
 export const SHELL_COMMANDS = {
@@ -256,6 +320,59 @@ function message(recipientDirective: string, request: string, timeoutSeconds: nu
       return [say(`The message to ${who} did not get through (${status}).`)];
     },
   ];
+}
+
+/** What `#hand-off` and its siblings ask the gateway to start: a label and a brief, as a bot writes them. */
+export const HAND_OFF = {
+  label: "Compare trail maps",
+  task: "Compare the lake loop and the ridge trail on the trail map, and say which suits a relaxed Saturday. Reply in plain text.",
+} as const;
+export const HAND_OFF_HIDDEN = {
+  label: "Check the forecast",
+  task: "Check the forecast for Saturday on the ridge. Reply in plain text.",
+} as const;
+export const HAND_OFF_PARTNER = {
+  label: "Review the route",
+  task: "Read over the Saturday route and say what you would change. Reply in plain text.",
+} as const;
+/** What `#follow-up` sends to the task the bot started last. */
+export const FOLLOW_UP_MESSAGE = "Also say which route has more shade. Reply in plain text.";
+
+/** A sessions_spawn call: visible when the person can open the task, under a partner when named. */
+function spawn(
+  brief: { label: string; task: string },
+  options: { visible?: boolean; partner?: boolean } = {},
+): Step {
+  return {
+    kind: "tool-from",
+    build: (ctx) =>
+      tool("sessions_spawn", {
+        task: brief.task,
+        label: brief.label,
+        ...(options.visible ? { visible: true } : {}),
+        ...(options.partner ? { agentId: partnerOf(ctx) } : {}),
+      }),
+  };
+}
+
+/** The reply after sessions_spawn: what started, or the gateway's reason it did not. */
+const afterSpawn =
+  (started: (ctx: PlanContext) => string): Step =>
+  (ctx) => {
+    const result = lastResult(ctx, "sessions_spawn");
+    if (result?.status === "accepted") return [say(started(ctx))];
+    const reason = typeof result?.error === "string" ? `: ${result.error}` : "";
+    return [say(`The task did not start (${String(result?.status ?? "unknown")})${reason}`)];
+  };
+
+/** The task the bot started last in this conversation, from its sessions_spawn results. */
+export function lastStartedTask(ctx: PlanContext): string | null {
+  for (const found of [...(ctx.history ?? [])].reverse()) {
+    if (found.name !== "sessions_spawn") continue;
+    const key = lastResult({ ...ctx, results: [found] }, "sessions_spawn")?.childSessionKey;
+    if (typeof key === "string") return key;
+  }
+  return null;
 }
 
 const QUESTION_ROUTE = {
@@ -435,6 +552,15 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "learn",
+    phrase: "learn from this",
+    summary: `Ten model calls in one turn (nine file reads, then text), the work after which the gateway reviews a task in the background. On an instance started with \`--with-skill-review\`, that review saves a skill (\`${LEARNED_SKILL}\`) and the gateway adds its note to the task about 30 seconds after the turn.`,
+    steps: () => [
+      ...LEARN_READS.map((args) => tool("read", args)),
+      say("I read through my workspace files one by one."),
+    ],
+  },
+  {
     name: "list",
     phrase: "list your files",
     summary: "One folder listing of the bot's workspace.",
@@ -533,6 +659,26 @@ export const SCENARIOS: Scenario[] = [
           ),
         ];
       },
+    ],
+  },
+  {
+    name: "send-keyed",
+    phrase: "send it with the note key",
+    summary: `Sends one line with the message tool, giving it the idempotency key \`${SEND_KEYED_KEY}\`, the shape of the gateway's skill-note key: the gateway delivers it as a message in the task under that key. The bot then answers \`NO_REPLY\`, so that message is the task's last.`,
+    bots: "any bot, on an instance started with `--with-message-tool`",
+    steps: () => [
+      tool("message", { action: "send", message: SEND_KEYED_TEXT, idempotencyKey: SEND_KEYED_KEY }),
+      say("NO_REPLY"),
+    ],
+  },
+  {
+    name: "attach",
+    phrase: "attach the reviews",
+    summary: `Writes a two-page PDF (${ATTACH_PDF_PATH}) and a text note (${ATTACH_TEXT_PATH}) in the bot's workspace, then ends its answer with a \`MEDIA:\` line for each: the gateway hands both over as files on the reply.`,
+    steps: () => [
+      tool("write", { path: ATTACH_PDF_PATH, content: reviewsDraftPdf() }),
+      tool("write", { path: ATTACH_TEXT_PATH, content: ATTACH_NOTE }),
+      say(`${ATTACH_TEXT}\nMEDIA:./${ATTACH_PDF_PATH}\nMEDIA:./${ATTACH_TEXT_PATH}`),
     ],
   },
   {
@@ -774,6 +920,64 @@ export const SCENARIOS: Scenario[] = [
     summary:
       "A message to the other bot, which reads its own instructions file before replying: a tool call in a run another bot's message started.",
     steps: () => message("#read", "Could you check your instructions?", 30),
+  },
+  {
+    name: "hand-off",
+    phrase: "put this in a task",
+    summary: `Starts a task of the bot's own with the gateway's \`sessions_spawn\` (\`visible: true\`), labelled "${HAND_OFF.label}", whose first message is the bot's brief. It runs at once, and the person can open it and write in it. Its end starts a turn in the task it came from.`,
+    steps: () => [
+      think("This is worth a task of its own. I will start one with a brief."),
+      spawn(HAND_OFF, { visible: true }),
+      afterSpawn(() => `I started a task for it: ${HAND_OFF.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-hidden",
+    phrase: "work on this in the background",
+    summary: `Starts a hidden helper with \`sessions_spawn\` (no \`visible\`), labelled "${HAND_OFF_HIDDEN.label}": a session the task list leaves out. Its end starts a turn in the task it came from.`,
+    steps: () => [
+      spawn(HAND_OFF_HIDDEN),
+      afterSpawn(() => "I started a helper on it in the background."),
+    ],
+  },
+  {
+    name: "follow-up",
+    phrase: "add to that task",
+    summary: `Sends a follow-up with \`sessions_send\` to the task this conversation started last ("${FOLLOW_UP_MESSAGE}"). Its answer starts a turn in this conversation again.`,
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const key = lastStartedTask(ctx);
+          if (!key) return say("I have started no task here to add to.");
+          return tool("sessions_send", {
+            sessionKey: key,
+            message: FOLLOW_UP_MESSAGE,
+            timeoutSeconds: 0,
+          });
+        },
+      },
+      (ctx) => {
+        const result = lastResult(ctx, "sessions_send");
+        if (!result) return [];
+        if (result.status === "accepted") return [say("I added that to the task.")];
+        return [say(`The task did not take it (${String(result.status ?? "unknown")}).`)];
+      },
+    ],
+  },
+  {
+    name: "hand-off-to-partner",
+    phrase: "put this in a task for your partner",
+    bots: "Marlow or Pip",
+    summary: `Starts a task under the other bot of the pair with \`sessions_spawn\` (\`visible: true\`, \`agentId\`), labelled "${HAND_OFF_PARTNER.label}". It is listed under that bot, and its end starts a turn in the task it came from.`,
+    steps: () => [
+      spawn(HAND_OFF_PARTNER, { visible: true, partner: true }),
+      afterSpawn((ctx) => {
+        const id = partnerOf(ctx);
+        const who = SEED_BOTS.find((bot) => bot.id === id)?.name ?? id;
+        return `I started a task for it under ${who}: ${HAND_OFF_PARTNER.label}.`;
+      }),
+    ],
   },
   {
     name: "mcp",

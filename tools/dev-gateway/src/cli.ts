@@ -48,6 +48,7 @@ import {
   inUseRefusal,
   markerProblems,
   newRunId,
+  ownIdentity,
   ownership,
   prepareFreshState,
   processIdentity,
@@ -100,6 +101,20 @@ import {
   selectInstance,
 } from "./instance.ts";
 import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
+import {
+  OPENCLAW_VERSION,
+  openclawProgram,
+  openclawReady,
+  PINNED_DIR,
+  setupOpenclaw,
+} from "./pinned.ts";
+import {
+  isOpenclawVersion,
+  OPENCLAW_VERSIONS,
+  shapeOf,
+  type OpenclawVersion,
+  type Shape,
+} from "./versions.ts";
 import {
   choosePorts,
   listInstances,
@@ -268,7 +283,10 @@ export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts"
  * the messaging pair may message each other.
  */
 function botEntries(stateDir: string, browserBots: readonly string[] | null) {
-  const entries: Record<string, { workspace: string; tools: Record<string, unknown> }> = {};
+  const entries: Record<
+    string,
+    { workspace: string; tools: Record<string, unknown>; subagents?: { allowAgents: string[] } }
+  > = {};
   for (const bot of SEED_BOTS) {
     const partner = messagingPartner(bot.id);
     entries[bot.id] = {
@@ -281,6 +299,8 @@ function botEntries(stateDir: string, browserBots: readonly string[] | null) {
         // With browsers of their own, only those bots get the browser tool.
         ...(browserBots && !browserBots.includes(bot.id) ? { deny: ["browser"] } : {}),
       },
+      // A task it starts may go under its partner too (`#hand-off-to-partner`).
+      ...(partner ? { subagents: { allowAgents: [partner] } } : {}),
     };
   }
   return entries;
@@ -413,6 +433,22 @@ export type StartOptions = {
    * a send that names no channel or target is the gateway's reply in the bot's own task.
    */
   messageTool?: boolean;
+  /**
+   * The gateway's OpenAI-compatible HTTP API (`POST /v1/chat/completions`), on the gateway's own
+   * loopback port with its token; named instances only. Another tool's sessions come from it.
+   */
+  httpApi?: boolean;
+  /**
+   * The `skill_workshop` tool offered to every bot, so the gateway's background skill review
+   * runs after a task's work; named instances only. The scripted model saves a skill in a
+   * review only after `#learn` (scenarios.ts, `skillReviewReply`).
+   */
+  skillReview?: boolean;
+  /**
+   * The OpenClaw version the gateway runs, the start's program's (versions.ts); absent, the pin.
+   * The config is written in that version's form, and its stamps are checked against it.
+   */
+  openclaw?: OpenclawVersion;
 };
 
 /** The config the development gateway runs with. Written fresh by every start. */
@@ -424,6 +460,7 @@ export function devConfig(
   options: StartOptions = {},
   chromium?: string,
 ) {
+  const form = shapeOf(options.openclaw ?? OPENCLAW_VERSION);
   const accounts = options.accounts ? accountsConfig(ports.providerPort, stateDir) : null;
   const owner = plugins.find((plugin) => plugin.botBrowsers);
   const browsers = owner?.botBrowsers
@@ -449,6 +486,7 @@ export function devConfig(
       // Require explicit approval even on loopback, so the pairing flow is real,
       // unless this instance was started to see the gateway's own default.
       ...(options.defaultLocalPairing ? {} : { nodes: { pairing: { autoApproveLocal: false } } }),
+      ...(options.httpApi ? { http: { endpoints: { chatCompletions: { enabled: true } } } } : {}),
     },
     discovery: { mdns: { mode: "off" } },
     update: { checkOnStart: false },
@@ -499,7 +537,8 @@ export function devConfig(
         model: { primary: MODEL_REF },
         thinkingDefault: "low",
         systemAgent: { agentId: "main" },
-        heartbeat: { agentId: "main" },
+        // 2026.11.10 refuses the key.
+        ...(form.heartbeat ? { heartbeat: { agentId: "main" } } : {}),
         ...(options.images ? { mediaModels: { image: { primary: IMAGE_MODEL_REF } } } : {}),
       },
       // The bots are declared here so their tool policy is part of the checked
@@ -534,18 +573,21 @@ export function devConfig(
         ...(browsers ? ["browser"] : []),
         ...(options.images ? ["image_generate"] : []),
         ...(options.messageTool ? ["message"] : []),
+        // 2026.11.10 adds skill_library beside skill_workshop itself (skillLibraryToolSplit).
+        ...(options.skillReview ? form.skillReviewTools : []),
       ],
       // Denied as well, so a change to the allowlist cannot bring them back:
       // tools that reach the network, manage the gateway or its installation,
       // drive a browser or another device, or send through a channel. With
       // bot browsers the browser tool is denied per bot instead (botEntries).
       // With the stand-in image provider, image_generate is offered instead, and
-      // with the message tool, message.
-      deny: DENIED_TOOLS.filter(
+      // with the message tool, message, and with skill reviews, skill_workshop.
+      deny: [...DENIED_TOOLS, ...form.extraDeniedTools].filter(
         (tool) =>
           !(browsers && tool === "browser") &&
           !(options.images && tool === "image_generate") &&
-          !(options.messageTool && tool === "message"),
+          !(options.messageTool && tool === "message") &&
+          !(options.skillReview && form.skillReviewTools.includes(tool)),
       ),
     },
     // The stand-in coding agent: a local command server, no network, run in
@@ -637,6 +679,12 @@ export const ALLOWED_TOOLS = [
   "ask_user",
   "sessions_send",
   "sessions_list",
+  // A bot starts a task of its own, reads it and waits on it; it never gets
+  // more tools than the bot that started it.
+  "sessions_spawn",
+  "sessions_history",
+  "subagents",
+  "sessions_yield",
   "progress_card",
   "automations",
   `${CODING_AGENT_SERVER}__*`,
@@ -676,7 +724,14 @@ export const DENIED_TOOLS = [
 
 /** What a plugin's contract addition is checked against. */
 export const PLUGIN_RULE: PluginRule = {
-  gatewayTools: [...GATEWAY_TOOLS, ...DENIED_TOOLS],
+  // Every listed version's own tools: a plugin may name none of them.
+  gatewayTools: [
+    ...new Set([
+      ...GATEWAY_TOOLS,
+      ...DENIED_TOOLS,
+      ...OPENCLAW_VERSIONS.flatMap((version) => shapeOf(version).addedGatewayTools),
+    ]),
+  ],
   reserved: RESERVED_PLUGIN_IDS,
   seedBots: SEED_BOTS.map((bot) => bot.id),
   scriptedProviders: ACCOUNT_PROVIDERS,
@@ -708,6 +763,7 @@ export function devConfigContract(
   options: StartOptions = {},
   chromium?: string,
 ): Contract {
+  const form = shapeOf(options.openclaw ?? OPENCLAW_VERSION);
   const contract = structuredClone(
     devConfig("", ports, stateDir, plugins, options, chromium),
   ) as unknown as Record<string, Record<string, unknown>>;
@@ -726,12 +782,11 @@ export function devConfigContract(
   // The CLI stamps the version that last wrote the config, and the migrations
   // it considers applied, whenever it writes it.
   (contract as Record<string, unknown>).meta = optional({
-    lastTouchedVersion: optional("2026.10.6"),
+    lastTouchedVersion: optional(form.version),
     lastTouchedAt: optional(matching("a time stamp", (value) => typeof value === "string")),
-    migrations: optional({
-      modelPolicyAllowlist: optional(true),
-      utilityModelSeparation: optional(true),
-    }),
+    migrations: optional(
+      Object.fromEntries(form.migrations.map((migration) => [migration, optional(true)])),
+    ),
   });
   return contract as unknown as Contract;
 }
@@ -778,6 +833,11 @@ function recordedPlugins(inst: DevInstance): DevPlugin[] {
 const renewChoice = (value: unknown) =>
   value === undefined || (BOT_BROWSER_CHOICES.renewTimeoutMs as readonly unknown[]).includes(value);
 
+/** The form of the OpenClaw version an instance's gateway runs, as its start recorded it. */
+export function instanceForm(inst: { runDir: string }): Shape {
+  return shapeOf(recordedStartOptions(inst).openclaw ?? OPENCLAW_VERSION);
+}
+
 /** What this run of the instance was started with besides plugins, beside its run file. */
 const startOptionsFile = (inst: DevInstance) => join(inst.runDir, "start-options.json");
 
@@ -795,13 +855,20 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
         key !== "defaultLocalPairing" &&
         key !== "renewTimeoutMs" &&
         key !== "images" &&
-        key !== "messageTool",
+        key !== "messageTool" &&
+        key !== "httpApi" &&
+        key !== "skillReview" &&
+        key !== "openclaw",
     ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).images) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).messageTool) ||
-    !renewChoice((recorded as StartOptions).renewTimeoutMs)
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).httpApi) ||
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).skillReview) ||
+    !renewChoice((recorded as StartOptions).renewTimeoutMs) ||
+    ((recorded as StartOptions).openclaw !== undefined &&
+      !isOpenclawVersion((recorded as StartOptions).openclaw))
   ) {
     throw new Error(`${path} is not a record of start options`);
   }
@@ -889,11 +956,160 @@ function writeFreshConfig(
 
 /** Healthy means the guard allows OpenClaw and the gateway answers; a refusal spawns nothing. */
 async function gatewayHealthy(inst: DevInstance): Promise<boolean> {
+  return (await gatewayHealth(inst)).healthy;
+}
+
+/** The health check, with what it saw when the gateway is not healthy. */
+async function gatewayHealth(inst: DevInstance): Promise<{ healthy: boolean; seen: string }> {
   const runner = inst.runner;
-  if (runner.refusal()) return false;
-  if (!(await inst.listening(runner.gatewayPort()))) return false;
+  const refusal = runner.refusal();
+  if (refusal) return { healthy: false, seen: refusal };
+  if (!(await inst.listening(runner.gatewayPort())))
+    return { healthy: false, seen: "its port is not open" };
   const result = await runner.run(["gateway", "call", "health", "--json", "--timeout", "3000"]);
-  return result.status === 0;
+  const said = `${result.stdout}${result.stderr}`.trim().split("\n").at(-1) ?? "";
+  return { healthy: result.status === 0, seen: `health exited ${result.status}: ${said}` };
+}
+
+/**
+ * Ceilings on a condition, not waits. Locally the gateway starts in seconds; on GitHub's Xcode 27
+ * runner, starts in the iOS workflow's logs took 59 to 254 s, and one ran out at 240 s (#537).
+ * The scripted provider is a small Node server that listens in under a second locally; at the
+ * runner's slowest seen ratio to local, 8 to 36 times, it needs up to about 25 s there, and it
+ * once missed a limit of 10 s (#574).
+ */
+const GATEWAY_START_MS = 480_000;
+const SCRIPTED_START_MS = 120_000;
+
+/** A line of a process's output, cut to a readable length. */
+const cut = (line: string, width = 300) =>
+  line.length > width ? `${line.slice(0, width)}…` : line;
+
+/** The last lines of a log, each cut to a readable length; "" when there is none. */
+export function logTail(path: string, lines = 40, width = 300): string {
+  if (!existsSync(path)) return "";
+  return readFileSync(path, "utf8")
+    .trimEnd()
+    .split("\n")
+    .slice(-lines)
+    .map((line) => cut(line, width))
+    .join("\n");
+}
+
+/** Why a process a start waits for never answered: how long, whether it exited, what it last said. */
+export function startProblem(problem: {
+  what: string;
+  waitedMs: number;
+  exited: boolean;
+  lastSeen: string | null;
+  log: string;
+  tail: string;
+}): string {
+  const seconds = Math.round(problem.waitedMs / 1000);
+  return [
+    problem.exited
+      ? `${problem.what} exited after ${seconds} s, before it answered`
+      : `timed out after ${seconds} s waiting for ${problem.what}, which is still running`,
+    `  last health check: ${problem.lastSeen ?? "none"}`,
+    logSection("its", problem.log, problem.tail),
+  ].join("\n");
+}
+
+/** The end of a process's log, as a failure prints it under its first line. */
+function logSection(owner: string, log: string, tail: string): string {
+  return tail
+    ? `  the end of ${owner} log, ${log}:\n${tail.replace(/^/gm, "    ")}`
+    : `  ${owner} log, ${log}, is empty`;
+}
+
+/**
+ * Why a seed stopped: what failed, then the end of the gateway's and the scripted model's logs,
+ * which the instance's reset removes, so a failed CI job still shows what the gateway was doing.
+ */
+export function seedProblem(problem: {
+  /** What stopped: the seed, or a start's check after its gateway answered. */
+  what?: string;
+  error: string;
+  logs: Array<{ owner: string; log: string; tail: string }>;
+}): string {
+  return [
+    `${problem.what ?? "the seed"} stopped: ${problem.error}`,
+    ...problem.logs.map(({ owner, log, tail }) => logSection(owner, log, tail)),
+  ].join("\n");
+}
+
+/** Run `step`; if it fails, say what stopped with the end of the gateway's and the model's logs. */
+async function withLogTails<T>(
+  inst: DevInstance,
+  what: string,
+  step: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    const logs = [
+      { owner: "the development gateway's", log: join(inst.runDir, "gateway.log") },
+      { owner: "the scripted model's", log: join(inst.runDir, "provider.log") },
+    ].map((each) => ({ ...each, tail: logTail(each.log) }));
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(seedProblem({ what, error: message, logs }), { cause: error });
+  }
+}
+
+/** What a start watches while one of its processes comes up. */
+export type StartWatch = {
+  what: string;
+  exited: () => boolean;
+  health: () => Promise<{ healthy: boolean; seen: string }>;
+  log: string;
+};
+
+/** Wait for a process a start began to answer. Stop as soon as it exits, and say why. */
+export async function waitForStart(watch: StartWatch, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  let lastSeen: string | null = null;
+  for (;;) {
+    if (!watch.exited()) {
+      // A probe can fail outright, for one when the process exits while it runs.
+      const health = await watch.health().catch((error: unknown) => ({
+        healthy: false,
+        seen: `the health check failed: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+      // A process that exited while its probe answered has not started.
+      if (health.healthy && !watch.exited()) return;
+      lastSeen = health.healthy ? "it answered as it exited" : cut(health.seen);
+    }
+    // Read again after the probe, which can end after the process exited.
+    const exited = watch.exited();
+    const waitedMs = Date.now() - started;
+    if (exited || waitedMs >= timeoutMs) {
+      const { what, log } = watch;
+      const tail = logTail(log);
+      throw new Error(startProblem({ what, waitedMs, exited, lastSeen, log, tail }));
+    }
+    await sleep(250);
+  }
+}
+
+/** Whether the process a start recorded in a role has exited. */
+function recordedExited(inst: DevInstance, role: "gateway" | "provider"): boolean {
+  const marker = readMarker(inst.stateDir);
+  return (
+    processState(marker?.[`${role}Pid`], marker?.[`${role}Identity`], inst.identify) === "dead"
+  );
+}
+
+/** The scripted provider's process, answering on one of its ports. */
+function scriptedWatch(inst: DevInstance, what: string, port: number): StartWatch {
+  return {
+    what,
+    exited: () => recordedExited(inst, "provider"),
+    health: async () =>
+      (await inst.listening(port))
+        ? { healthy: true, seen: "" }
+        : { healthy: false, seen: "its port is not open" },
+    log: join(inst.runDir, "provider.log"),
+  };
 }
 
 type ExecScope = {
@@ -924,8 +1140,11 @@ export function execScopeProblem(scope: ExecScope): string | null {
 
 /** Ask the running gateway what exec policy each bot actually gets. */
 export async function execPolicyProblems(inst: DevInstance): Promise<string[]> {
+  // A read, so safe to try again.
   const snapshot = parseJsonOutput<{ effectivePolicy?: { scopes?: ExecScope[] } }>(
-    await must(inst, ["approvals", "get", "--json"]),
+    await retryOnTransport(() => must(inst, ["approvals", "get", "--json"]), {
+      what: "approvals get",
+    }),
   );
   const scopes = snapshot.effectivePolicy?.scopes ?? [];
   if (scopes.length === 0) return ["the gateway reported no exec policy scopes"];
@@ -1097,6 +1316,10 @@ export async function start(
     images?: boolean;
     /** The message tool for every bot (`StartOptions.messageTool`). */
     messageTool?: boolean;
+    /** The gateway's HTTP API (`StartOptions.httpApi`). */
+    httpApi?: boolean;
+    /** The background skill review (`StartOptions.skillReview`). */
+    skillReview?: boolean;
   } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
@@ -1116,6 +1339,12 @@ export async function start(
   if (options.messageTool && inst.name === null) {
     throw new Error("the default instance never offers the message tool; use --instance <name>");
   }
+  if (options.httpApi && inst.name === null) {
+    throw new Error("the default instance never serves the HTTP API; use --instance <name>");
+  }
+  if (options.skillReview && inst.name === null) {
+    throw new Error("the default instance never reviews tasks for skills; use --instance <name>");
+  }
   if (!renewChoice(options.renewTimeoutMs)) {
     throw new Error(
       `--renew-timeout-ms must be one of ${BOT_BROWSER_CHOICES.renewTimeoutMs.join(", ")}`,
@@ -1127,6 +1356,8 @@ export async function start(
     ...(options.renewTimeoutMs !== undefined ? { renewTimeoutMs: options.renewTimeoutMs } : {}),
     ...(options.images ? { images: true } : {}),
     ...(options.messageTool ? { messageTool: true } : {}),
+    ...(options.httpApi ? { httpApi: true } : {}),
+    ...(options.skillReview ? { skillReview: true } : {}),
   };
   // Refused before anything changes: a name that is not this checkout's own
   // plugin, or whose addition breaks the rule for plugins.
@@ -1154,8 +1385,7 @@ export async function start(
     await stopLocked(inst);
     const blocked = await deletionRefusal(inst);
     if (blocked) throw new StateInUseError(blocked);
-    const self = inst.identify(process.pid);
-    if (self.state !== "alive") throw new Error("could not determine this process's start time");
+    const selfIdentity = ownIdentity(inst.identify);
     // Ports are chosen and recorded in the new marker under one lock, so two
     // starts on this machine never take the same ones.
     const ports = await withLock(
@@ -1187,7 +1417,7 @@ export async function start(
             ...picked,
             checkout: inst.checkout,
             startPid: process.pid,
-            startIdentity: self.identity,
+            startIdentity: selfIdentity,
           },
           inst.identify,
         );
@@ -1212,6 +1442,8 @@ export async function start(
         pluginsFile(inst),
         `${JSON.stringify(plugins.map(({ name, digest }) => ({ name, digest })))}\n`,
       );
+      // The config is written for the version the start's program is.
+      startOptions.openclaw = runner.openclawVersion();
       writeFileAtomic(startOptionsFile(inst), `${JSON.stringify(startOptions)}\n`);
       writeFreshConfig(inst, ports, runId, plugins, startOptions);
       const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
@@ -1228,6 +1460,8 @@ export async function start(
               ...(inst.name?.startsWith("ios-")
                 ? { SCRIPTED_STREAM_HOLD_FILE: join(inst.runDir, IOS_STREAM_HOLD_FILE) }
                 : {}),
+              // The background skill review's answers, on an instance that reviews.
+              ...(startOptions.skillReview ? { SCRIPTED_SKILL_REVIEW: "1" } : {}),
               // The pages the development browser may open, when there is one.
               ...(browserBots.length > 0
                 ? { SCRIPTED_PAGES_PORT: String(browserPorts(ports, browserBots).pagesPort) }
@@ -1237,10 +1471,13 @@ export async function start(
         ),
       );
       closeSync(providerLog);
-      await waitFor("the scripted provider", () => inst.listening(ports.providerPort), 10_000);
+      await waitForStart(
+        scriptedWatch(inst, "the scripted provider", ports.providerPort),
+        SCRIPTED_START_MS,
+      );
       if (browserBots.length > 0) {
         const { pagesPort } = browserPorts(ports, browserBots);
-        await waitFor("the scripted pages", () => inst.listening(pagesPort), 10_000);
+        await waitForStart(scriptedWatch(inst, "the scripted pages", pagesPort), SCRIPTED_START_MS);
       }
 
       const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "w");
@@ -1257,10 +1494,18 @@ export async function start(
     }
     // The lock is held until the gateway is healthy, sandboxed and seeded, so
     // no other command acts on an instance that is still starting.
-    // A ceiling on a condition, not a wait: on a heavily loaded machine a cold start of the
-    // gateway has taken more than 90 seconds.
-    await waitFor("the development gateway", () => gatewayHealthy(inst), 240_000);
-    await assertExecDenied(inst);
+    await waitForStart(
+      {
+        what: "the development gateway",
+        exited: () => recordedExited(inst, "gateway"),
+        health: () => gatewayHealth(inst),
+        log: join(inst.runDir, "gateway.log"),
+      },
+      GATEWAY_START_MS,
+    );
+    // The first read after the health check, which a gateway slow to settle can leave unanswered
+    // (#647): tried again as the seed's reads are, and its failure shows the gateway's log.
+    await withLogTails(inst, "the start's exec policy check", () => assertExecDenied(inst));
     if (options.node) await startScriptedNode(inst, runId, ports);
     const marker = readMarker(inst.stateDir);
     console.log(
@@ -1709,6 +1954,171 @@ export async function callGateway<T>(
   );
 }
 
+/** A gateway call that failed reaching or hearing from the gateway, not one the gateway refused. */
+export function isTransportFailure(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  // The gateway client's own error, or the CLI's for a gateway it couldn't reach: commands
+  // other than `gateway call`, such as `approvals get`, report that as a `cli_error`.
+  return /"type":\s*"gateway_transport_error"|Gateway not reachable at /.test(text);
+}
+
+/**
+ * The waits between tries of a seed call the gateway didn't answer, about 3 minutes in all, each
+ * try with its own 60 s timeout. On GitHub's Xcode runner the gateway answered the start's health
+ * check and then, minutes later, timed out or refused the connection on the seed's first
+ * `sessions.create` (#610).
+ */
+export const SEED_RETRY_DELAYS_MS: readonly number[] = [
+  5_000, 10_000, 20_000, 40_000, 60_000, 60_000,
+];
+
+/**
+ * `call`, tried again after each delay while it fails on transport; any other failure is thrown.
+ * Only for calls that are safe to repeat: a read, or one the gateway carries out once whatever
+ * number of times it comes, as `sessions.create` does for a key and label it already has.
+ */
+export async function retryOnTransport<T>(
+  call: () => Promise<T>,
+  options: {
+    delays?: readonly number[];
+    sleep?: (ms: number) => Promise<unknown>;
+    log?: (line: string) => void;
+    what?: string;
+  } = {},
+): Promise<T> {
+  const delays = options.delays ?? SEED_RETRY_DELAYS_MS;
+  const wait = options.sleep ?? sleep;
+  const log = options.log ?? console.log;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isTransportFailure(error) || attempt >= delays.length) throw error;
+      log(
+        `  the gateway didn't answer ${options.what ?? "a call"}; trying again in ${delays[attempt]! / 1000} s`,
+      );
+      await wait(delays[attempt]!);
+    }
+  }
+}
+
+/**
+ * A scripted turn's call that failed reaching or hearing from the gateway. The `agent` command
+ * reports a gateway it couldn't reach as its own error, not the gateway client's.
+ */
+export function isTurnTransportFailure(error: unknown): boolean {
+  if (isTransportFailure(error)) return true;
+  const text = error instanceof Error ? error.message : String(error);
+  // OpenClaw 2026.10.6 adds "Gateway agent call timed out" or "… connection closed" to a turn's
+  // transport failure (`formatGatewayAgentTransportLossHint`); 2026.11.10 words it the same.
+  return /Gateway not reachable at |Gateway agent call (?:timed out|connection closed)/.test(text);
+}
+
+/**
+ * A failed call whose request never reached the gateway: it couldn't connect at all. A turn the
+ * gateway accepted, or whose call timed out waiting for it, reached it and may still run.
+ */
+export function neverReachedGateway(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  if (/Gateway agent call timed out|\(accepted run /.test(text)) return false;
+  return /Gateway not reachable at |connect timeout|Opening handshake has timed out/.test(text);
+}
+
+/** A history message's text, from a plain string or its text blocks. */
+function historyText(message: HistoryMessage): string {
+  if (typeof message.content === "string") return message.content;
+  return (Array.isArray(message.content) ? (message.content as Record<string, unknown>[]) : [])
+    .flatMap((block) => (block.type === "text" ? [String(block.text)] : []))
+    .join("");
+}
+
+/**
+ * How far turn `index` (from 0) of a seeded task got, from the task's history: its message isn't
+ * there, it is there and its reply isn't yet, or both are. The turns before it ended earlier, so
+ * the history holds exactly `index` messages of the person's before it.
+ */
+export function turnLanding(
+  messages: HistoryMessage[],
+  index: number,
+  turn: SeedTurn,
+): { state: "absent" | "running" | "done" } | { problem: string } {
+  const users = messages.flatMap((message, at) => (message.role === "user" ? [at] : []));
+  if (users.length === index) return { state: "absent" };
+  if (users.length !== index + 1)
+    return { problem: `expected ${index + 1} messages of the person's, found ${users.length}` };
+  const at = users.at(-1)!;
+  if (historyText(messages[at]!).trim() !== turn.prompt.trim())
+    return { problem: "the last message in the task isn't this turn's" };
+  const last = messages.at(-1)!;
+  if (last.role !== "assistant" || last.stopReason === "toolUse" || at === messages.length - 1)
+    return { state: "running" };
+  if (last.stopReason !== "stop") return { problem: `the turn ended with ${last.stopReason}` };
+  if (historyText(last).trim() !== expectedFinalText(turn))
+    return { problem: "the turn's reply differs from the script" };
+  return { state: "done" };
+}
+
+/**
+ * Run one scripted turn, and when the gateway doesn't answer, find out from the task's history
+ * what happened before doing anything again (#627). A turn isn't safe to send twice: a slow but
+ * running gateway may still be carrying out the first. So after each wait the history is read:
+ * a turn whose reply is there is done; one whose message is there is waited for; one whose
+ * message isn't there is sent again only when no try so far reached the gateway, since a message
+ * that did may still land. Returns what is wrong with the turn's outcome, or null.
+ */
+export async function runSeedTurn(options: {
+  turn: SeedTurn;
+  index: number;
+  send: () => Promise<AgentRunOutput>;
+  history: () => Promise<HistoryMessage[]>;
+  what: string;
+  delays?: readonly number[];
+  sleep?: (ms: number) => Promise<unknown>;
+  log?: (line: string) => void;
+}): Promise<string | null> {
+  const { turn, index, send, history } = options;
+  const delays = options.delays ?? SEED_RETRY_DELAYS_MS;
+  const wait = options.sleep ?? sleep;
+  const log = options.log ?? console.log;
+  const what = `turn ${index + 1} of ${options.what}`;
+  let failure: unknown;
+  try {
+    return checkTurnOutcome(await send(), turn);
+  } catch (error) {
+    if (!isTurnTransportFailure(error)) throw error;
+    failure = error;
+  }
+  let reached = !neverReachedGateway(failure);
+  for (const delay of delays) {
+    log(`  the gateway didn't answer ${what}; reading its task in ${delay / 1000} s`);
+    await wait(delay);
+    let messages: HistoryMessage[];
+    try {
+      messages = await history();
+    } catch (error) {
+      if (!isTransportFailure(error)) throw error;
+      continue;
+    }
+    const landing = turnLanding(messages, index, turn);
+    if ("problem" in landing) return landing.problem;
+    if (landing.state === "done") return null;
+    if (landing.state === "running") {
+      reached = true;
+      continue;
+    }
+    // Not there: sent again only if no try reached the gateway, which could still carry it out.
+    if (reached) continue;
+    try {
+      return checkTurnOutcome(await send(), turn);
+    } catch (error) {
+      if (!isTurnTransportFailure(error)) throw error;
+      failure = error;
+      reached = !neverReachedGateway(error);
+    }
+  }
+  throw failure;
+}
+
 type AgentRow = { id: string; workspace?: string };
 
 async function existingSessionKeys(inst: DevInstance, botId: string): Promise<Set<string>> {
@@ -1740,6 +2150,8 @@ async function configureBot(
   }
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
+  // One command per bot, not one `config.patch` for all four: after that patch, two of four
+  // iPhone jobs on GitHub's runner timed out on the next gateway call (#571).
   await must(inst, [
     "agents",
     "set-identity",
@@ -1755,7 +2167,7 @@ async function configureBot(
   ]);
 }
 
-type AgentRunOutput = {
+export type AgentRunOutput = {
   status?: string;
   summary?: string;
   result?: {
@@ -1788,7 +2200,12 @@ export function checkTurnOutcome(output: AgentRunOutput, turn: SeedTurn): string
   return null;
 }
 
-type HistoryMessage = { role?: string; stopReason?: string; isError?: boolean; content?: unknown };
+export type HistoryMessage = {
+  role?: string;
+  stopReason?: string;
+  isError?: boolean;
+  content?: unknown;
+};
 
 /** Check a seeded session's durable history against its script. Returns what is wrong. */
 export function checkHistory(messages: HistoryMessage[], task: SeedTask): string[] {
@@ -1843,35 +2260,62 @@ export function checkHistory(messages: HistoryMessage[], task: SeedTask): string
   return problems;
 }
 
-/** Run a bot's scripted conversations. Sessions are independent, so bots run in parallel. */
-async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void> {
-  const existing = await existingSessionKeys(inst, bot.id);
+/**
+ * Run a bot's scripted conversations. Sessions are independent, so bots run in parallel.
+ * `existing` is the bot's task keys as the seed found them.
+ */
+async function seedConversations(
+  inst: DevInstance,
+  bot: SeedBot,
+  existing: Set<string>,
+): Promise<void> {
   for (const task of bot.tasks) {
     const key = sessionKeyFor(bot.id, task.slug);
     const alreadySeeded = existing.has(key);
-    for (const turn of alreadySeeded ? [] : task.turns) {
-      const output = parseJsonOutput<AgentRunOutput>(
-        await must(inst, [
-          "agent",
-          "--agent",
-          bot.id,
-          "--session-key",
-          key,
-          "--message",
-          turn.prompt,
-          "--thinking",
-          "low",
-          "--json",
-        ]),
-      );
-      const problem = checkTurnOutcome(output, turn);
+    // Made as Clawtrate makes a task, by an operator (`createdVia: "operator"`), so the sample
+    // conversations count as the person's own; the turns then run in it as the gateway's owner.
+    if (!alreadySeeded) {
+      // Answered with the same task when it comes again, so safe to try again.
+      const params = { key, agentId: bot.id, label: task.label };
+      await retryOnTransport(() => callGateway(inst, "sessions.create", params), {
+        what: `sessions.create for ${key}`,
+      });
+    }
+    for (const [index, turn] of (alreadySeeded ? [] : task.turns).entries()) {
+      const send = async () =>
+        parseJsonOutput<AgentRunOutput>(
+          await must(inst, [
+            "agent",
+            "--agent",
+            bot.id,
+            "--session-key",
+            key,
+            "--message",
+            turn.prompt,
+            "--thinking",
+            "low",
+            "--json",
+          ]),
+        );
+      const history = async () =>
+        (
+          await callGateway<{ messages?: HistoryMessage[] }>(inst, "chat.history", {
+            sessionKey: key,
+            limit: 200,
+          })
+        ).messages ?? [];
+      const problem = await runSeedTurn({ turn, index, send, history, what: key });
       if (problem) throw new Error(`${bot.name} / ${task.label}: ${problem}`);
     }
-    if (!alreadySeeded) await callGateway(inst, "sessions.patch", { key, label: task.label });
-    const history = await callGateway<{ messages?: HistoryMessage[] }>(inst, "chat.history", {
-      sessionKey: key,
-      limit: 200,
-    });
+    // A read, so safe to try again.
+    const history = await retryOnTransport(
+      () =>
+        callGateway<{ messages?: HistoryMessage[] }>(inst, "chat.history", {
+          sessionKey: key,
+          limit: 200,
+        }),
+      { what: `chat.history for ${key}` },
+    );
     const problems = checkHistory(history.messages ?? [], task);
     if (problems.length > 0) {
       const advice = alreadySeeded
@@ -1888,11 +2332,19 @@ async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void>
 export async function seed(inst: DevInstance): Promise<void> {
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
-  if (!(await gatewayHealthy(inst))) {
-    throw new Error(
-      `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
-    );
-  }
+  await withLogTails(inst, "the seed", async () => {
+    // Inside the diagnostics: a gateway that no longer answers its health call is one whose log
+    // says why.
+    if (!(await gatewayHealthy(inst))) {
+      throw new Error(
+        `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
+      );
+    }
+    await seedBotsAndTasks(inst);
+  });
+}
+
+async function seedBotsAndTasks(inst: DevInstance): Promise<void> {
   const listed = parseJsonOutput<AgentRow[] | { agents: AgentRow[] }>(
     await must(inst, ["agents", "list", "--json"]),
   );
@@ -1903,8 +2355,15 @@ export async function seed(inst: DevInstance): Promise<void> {
   // Configuring the bots rewrote the config; it must still keep every guarantee.
   assertSandboxed(inst, instancePorts(inst));
   await assertExecDenied(inst);
-  await Promise.all(SEED_BOTS.map((bot) => seedConversations(inst, bot)));
-  await seedScenarioExamples(inst);
+  // Each bot's tasks, read once: the examples are seeded only where their own task isn't there
+  // yet, and nothing the conversations make has an example's key.
+  const existing = new Map(
+    await Promise.all(
+      SEED_BOTS.map(async (bot) => [bot.id, await existingSessionKeys(inst, bot.id)] as const),
+    ),
+  );
+  await Promise.all(SEED_BOTS.map((bot) => seedConversations(inst, bot, existing.get(bot.id)!)));
+  await seedScenarioExamples(inst, existing);
   console.log("Seed complete");
 }
 
@@ -1947,11 +2406,10 @@ export async function openOperator(
  * it sends each prompt, answers the question and resolves the approval. Runs
  * one example at a time, after the scripted tasks, then unpairs itself.
  */
-async function seedScenarioExamples(inst: DevInstance): Promise<void> {
-  const keys = new Map<string, Set<string>>();
-  for (const botId of new Set(SCENARIO_EXAMPLES.map((example) => example.botId))) {
-    keys.set(botId, await existingSessionKeys(inst, botId));
-  }
+async function seedScenarioExamples(
+  inst: DevInstance,
+  keys: ReadonlyMap<string, Set<string>>,
+): Promise<void> {
   console.log(
     `Seeding live examples as the user, through a paired client "${SEED_CLIENT}" (scopes ${SEED_SCOPES.join(", ")})`,
   );
@@ -2186,7 +2644,8 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
+  "usage: pnpm dev-gateway setup   (OpenClaw 2026.10.6 for this tool; start does it when needed)\n" +
+  "       pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2206,6 +2665,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "renew-timeout-ms": { type: "string" },
       "with-images": { type: "boolean", default: false },
       "with-message-tool": { type: "boolean", default: false },
+      "with-http-api": { type: "boolean", default: false },
+      "with-skill-review": { type: "boolean", default: false },
       agent: { type: "string" },
       provider: { type: "string" },
     },
@@ -2215,6 +2676,15 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   // The selector is validated before any command runs or any path is built.
   const selected = selectInstance(values.instance, env);
   const [command, ...rest] = positionals;
+  if (command === "setup") {
+    if (selected !== null)
+      throw new Error("setup is for this checkout; it does not take --instance");
+    if (env.OPENCLAW_BIN) {
+      const { version } = openclawProgram(env);
+      console.log(`OPENCLAW_BIN is OpenClaw ${version}; nothing to set up.`);
+    } else await setupOpenclaw(PINNED_DIR, env);
+    return;
+  }
   if (command === "list" || command === "prune") {
     if (selected !== null) {
       throw new Error(
@@ -2242,7 +2712,13 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     process.exitCode = command ? 1 : 0;
     return;
   }
-  for (const option of ["default-local-pairing", "with-images", "with-message-tool"] as const) {
+  for (const option of [
+    "default-local-pairing",
+    "with-images",
+    "with-message-tool",
+    "with-http-api",
+    "with-skill-review",
+  ] as const) {
     if (values[option] && command !== "start" && command !== "up") {
       throw new Error(`--${option} is a start option; ${command} does not take it`);
     }
@@ -2256,6 +2732,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   switch (command) {
     case "start":
     case "up":
+      // The pinned OpenClaw, set up on first use; an OPENCLAW_BIN of an unlisted version is refused.
+      if (!env.OPENCLAW_BIN && !openclawReady(env)) await setupOpenclaw(PINNED_DIR, env);
+      openclawProgram(env);
       return start(inst, {
         seed: !values["no-seed"],
         ...(runId ? { runId } : {}),
@@ -2265,6 +2744,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         node: values["with-node"],
         images: values["with-images"],
         messageTool: values["with-message-tool"],
+        httpApi: values["with-http-api"],
+        skillReview: values["with-skill-review"],
         ...(renew !== undefined ? { renewTimeoutMs: Number(renew) } : {}),
       });
     case "stop":
