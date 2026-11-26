@@ -2622,11 +2622,26 @@ async function gatewayAdmitting(inst: DevInstance): Promise<void> {
 }
 
 /**
+ * What a command that stopped the instance's gateway and could not start it again says: why,
+ * that the gateway isn't running, and the commands that recover the instance.
+ */
+export function strandedMessage(inst: DevInstance, why: string): string {
+  const flag = instanceFlag(inst);
+  return (
+    `${label(inst)}: ${why}. Its gateway was stopped and is not running again. ` +
+    `\`pnpm dev-gateway reset${flag}\` removes the instance; \`pnpm dev-gateway start${flag}\` then starts it afresh.`
+  );
+}
+
+/**
  * Stop the instance's gateway alone, run `offline` while it is stopped, and
  * start the gateway again on the same state, port and run, as the gateway's
  * owner does for a command OpenClaw runs only while the gateway is stopped.
- * Under the instance's lifecycle lock; the scripted model keeps running, and
- * the gateway is started again whether or not `offline` succeeded.
+ * Under the instance's lifecycle lock; the scripted model keeps running. The
+ * gateway is started again whether or not `offline` succeeded. Where starting
+ * it again isn't safe (its stop not confirmed, its port still held, its record
+ * not cleared) or the start fails, the error says so and names the commands
+ * that recover the instance (`strandedMessage`).
  */
 async function withGatewayStopped<T>(inst: DevInstance, offline: () => Promise<T>): Promise<T> {
   return withInstanceLock(inst, async () => {
@@ -2641,11 +2656,24 @@ async function withGatewayStopped<T>(inst: DevInstance, offline: () => Promise<T
       port,
     };
     if (!(await stopProcess(target, inst.identify))) {
-      throw new StateInUseError(`${label(inst)}: could not confirm that its gateway stopped`);
+      throw new StateInUseError(
+        strandedMessage(
+          inst,
+          "could not confirm that its gateway stopped, so it isn't started again",
+        ),
+      );
     }
+    // A port still open or a record not cleared means another start could collide: not safe to
+    // start again here.
     const open = await portReleased(inst, target);
-    if (open) throw new StateInUseError(`${label(inst)}: ${open}`);
-    forgetStoppedProcess(inst.stateDir, marker.runId, "gateway", inst.identify);
+    if (open) throw new StateInUseError(strandedMessage(inst, open));
+    try {
+      forgetStoppedProcess(inst.stateDir, marker.runId, "gateway", inst.identify);
+    } catch (error) {
+      throw new StateInUseError(
+        strandedMessage(inst, error instanceof Error ? error.message : String(error)),
+      );
+    }
     const runner = inst.runner;
     let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     // OpenClaw may run on this run's state while its gateway is stopped, as during its start.
@@ -2657,24 +2685,40 @@ async function withGatewayStopped<T>(inst: DevInstance, offline: () => Promise<T
         outcome = { ok: false, error };
       }
       const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "a");
-      spawnRecorded(inst, marker.runId, "gateway", () =>
-        runner.spawnGated(["gateway", "run", "--port", String(port), "--bind", "loopback"], {
-          stdio: ["ignore", gatewayLog, gatewayLog],
-        }),
+      try {
+        spawnRecorded(inst, marker.runId, "gateway", () =>
+          runner.spawnGated(["gateway", "run", "--port", String(port), "--bind", "loopback"], {
+            stdio: ["ignore", gatewayLog, gatewayLog],
+          }),
+        );
+      } finally {
+        closeSync(gatewayLog);
+      }
+    } catch (error) {
+      throw new StateInUseError(
+        strandedMessage(
+          inst,
+          `its gateway could not be started again: ${error instanceof Error ? error.message : String(error)}`,
+        ),
       );
-      closeSync(gatewayLog);
     } finally {
       runner.freshRunId = null;
     }
-    await waitForStart(
-      {
-        what: "the development gateway",
-        exited: () => recordedExited(inst, "gateway"),
-        health: () => gatewayHealth(inst),
-        log: join(inst.runDir, "gateway.log"),
-      },
-      GATEWAY_START_MS,
-    );
+    try {
+      await waitForStart(
+        {
+          what: "the development gateway",
+          exited: () => recordedExited(inst, "gateway"),
+          health: () => gatewayHealth(inst),
+          log: join(inst.runDir, "gateway.log"),
+        },
+        GATEWAY_START_MS,
+      );
+    } catch (error) {
+      throw new StateInUseError(
+        strandedMessage(inst, error instanceof Error ? error.message : String(error)),
+      );
+    }
     await gatewayAdmitting(inst);
     await assertExecDenied(inst);
     if (!outcome.ok) throw outcome.error;

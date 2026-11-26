@@ -63,9 +63,15 @@ export const CHECK_MS = 30_000;
 
 /** Why a gateway's order changes need it stopped (OpenClaw 2026.10.10 on), and what that means. */
 const STOPPED_WHY =
-  "This version of OpenClaw changes a bot's account order only while the gateway is stopped. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway.";
+  "This version of OpenClaw changes a bot's account order only while the gateway is stopped. Stopping it gives work under way up to about five minutes to finish, then stops what is left. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway.";
 
-/** An order command as such a gateway needs it, in its own steps: stop it, run the command, start it. */
+/**
+ * An order command as such a gateway needs it, in its own steps: stop it, run the command, start
+ * it. `gateway stop` and `start` act on the gateway's service: with none installed, stop does
+ * nothing and says it succeeded, and start fails (OpenClaw's `docs/cli/gateway/service.md`), so
+ * the line for a gateway run by hand comes before the steps. Step 3 is needed whatever step 2
+ * did, or the gateway stays stopped.
+ */
 function StoppedSteps({
   cli,
   command,
@@ -79,33 +85,28 @@ function StoppedSteps({
 }) {
   const [stop, run, start] = stoppedGatewaySteps(cli, command);
   return (
-    <ol className="b-steps" data-testid="stopped-steps">
-      <li>
-        <p>Stop the gateway, and wait until it has stopped:</p>
-        <CommandBlock command={stop} label="Copy stop command" />
-      </li>
-      <li>
-        <p>Then run:</p>
-        <CommandBlock command={run} label={label} {...(onCopied ? { onCopied } : {})} />
-      </li>
-      <li>
-        <p>Start the gateway again:</p>
-        <CommandBlock command={start} label="Copy start command" />
-      </li>
-    </ol>
+    <>
+      <p className="b-hint" data-testid="unmanaged-hint">
+        These steps stop and start the gateway's service. If you run the gateway yourself, with{" "}
+        <code>openclaw gateway run</code>, stop it and start it again where it runs instead.
+      </p>
+      <ol className="b-steps" data-testid="stopped-steps">
+        <li>
+          <p>Stop the gateway, and wait until it has stopped; this can take a few minutes:</p>
+          <CommandBlock command={stop} label="Copy stop command" />
+        </li>
+        <li>
+          <p>Then run:</p>
+          <CommandBlock command={run} label={label} {...(onCopied ? { onCopied } : {})} />
+        </li>
+        <li>
+          <p>Start the gateway again, even if the command above failed:</p>
+          <CommandBlock command={start} label="Copy start command" />
+        </li>
+      </ol>
+    </>
   );
 }
-
-/**
- * `gateway stop` and `start` act on the gateway's service: with none installed, stop does nothing
- * and start fails (OpenClaw's `docs/cli/gateway/service.md`).
- */
-const UNMANAGED_HINT = (
-  <>
-    These stop and start the gateway's service. If you run the gateway yourself, with{" "}
-    <code>openclaw gateway run</code>, stop it and start it again where it runs instead.
-  </>
-);
 
 type View = "main" | "account" | "change" | "connect" | "runs" | "memory";
 
@@ -845,14 +846,11 @@ export function BotSettings({
             clear it on the gateway's machine{stopped ? `. ${STOPPED_WHY}` : ":"}
           </p>
           {stopped ? (
-            <>
-              <StoppedSteps
-                cli={cli}
-                command={unlockCommand(cli, bot.id, provider)}
-                label="Copy clear command"
-              />
-              <p>{UNMANAGED_HINT}</p>
-            </>
+            <StoppedSteps
+              cli={cli}
+              command={unlockCommand(cli, bot.id, provider)}
+              label="Copy clear command"
+            />
           ) : (
             <CommandBlock
               command={unlockCommand(cli, bot.id, provider)}
@@ -1068,8 +1066,8 @@ export function BotSettings({
                 label="Copy unlock command"
               />
               <p className="b-hint">
-                {UNMANAGED_HINT} Clawtrate sees the change when the gateway is back. {name} then
-                follows the gateway's other orders.
+                Clawtrate sees the change when the gateway is back. {name} then follows the
+                gateway's other orders.
               </p>
             </>
           ) : (
@@ -1127,7 +1125,7 @@ export function BotSettings({
                 onCopied={() => setWatching(true)}
               />,
               <p className="b-hint" key="back">
-                {UNMANAGED_HINT} Clawtrate reads the lock from the gateway when it is back.
+                Clawtrate reads the lock from the gateway when it is back.
               </p>,
             ]
           : [
@@ -1174,7 +1172,7 @@ export function BotSettings({
                 onCopied={() => setWatching(true)}
               />,
               <p className="b-hint" key="back">
-                {UNMANAGED_HINT} Clawtrate reads the lock from the gateway when it is back.
+                Clawtrate reads the lock from the gateway when it is back.
               </p>,
             ]
           : [

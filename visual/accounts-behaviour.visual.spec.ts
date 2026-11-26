@@ -444,20 +444,29 @@ test("F-490: on OpenClaw 2026.11.10 the lock, the unlock and the clear are the g
   await page.getByRole("button", { name: /^Account: OpenAI · Work, Bound\. Open\.$/ }).click();
   await expect(
     page.getByText(
-      "This version of OpenClaw changes a bot's account order only while the gateway is stopped. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway.",
+      "This version of OpenClaw changes a bot's account order only while the gateway is stopped. Stopping it gives work under way up to about five minutes to finish, then stops what is left. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway.",
     ),
   ).toBeVisible();
   const steps = page.getByTestId("stopped-steps");
   await expect(steps.getByRole("listitem")).toHaveText([
-    /^Stop the gateway, and wait until it has stopped:openclaw gateway stop$/,
+    /^Stop the gateway, and wait until it has stopped; this can take a few minutes:openclaw gateway stop$/,
     /^Then run:openclaw models auth order set --provider openai --agent otto openai:work$/,
-    /^Start the gateway again:openclaw gateway start$/,
+    /^Start the gateway again, even if the command above failed:openclaw gateway start$/,
   ]);
   // The steps act on the gateway's service; one run by hand is stopped and started where it runs.
-  await expect(
-    page.getByText(
-      "These stop and start the gateway's service. If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead. Clawtrate reads the lock from the gateway when it is back.",
+  // That is said before the first step, which does nothing to such a gateway.
+  const hint = page.getByTestId("unmanaged-hint");
+  await expect(hint).toHaveText(
+    "These steps stop and start the gateway's service. If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead.",
+  );
+  expect(
+    await hint.evaluate(
+      (node, list) => !!(node.compareDocumentPosition(list!) & Node.DOCUMENT_POSITION_FOLLOWING),
+      await steps.elementHandle(),
     ),
+  ).toBe(true);
+  await expect(
+    page.getByText("Clawtrate reads the lock from the gateway when it is back."),
   ).toBeVisible();
   // Copying the order command starts the watch, as before; copying stop or start doesn't.
   await steps.getByRole("button", { name: "Copy stop command" }).click();
@@ -493,8 +502,8 @@ test("F-490: on OpenClaw 2026.11.10 the lock, the unlock and the clear are the g
     "openclaw models auth order clear --provider openai --agent otto",
     "openclaw gateway start",
   ]);
-  await expect(page.getByTestId("retained-order")).toContainText(
-    "If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead.",
+  await expect(page.getByTestId("retained-order").getByTestId("unmanaged-hint")).toHaveText(
+    "These steps stop and start the gateway's service. If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead.",
   );
 
   // On 2026.10.6 the same page keeps the one command.
