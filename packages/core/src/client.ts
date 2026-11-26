@@ -54,7 +54,7 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
-import type { ModelList, ModelRefresh } from "./accounts.ts";
+import type { ModelList, ModelRefresh, OrderClear } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -1948,6 +1948,7 @@ export class ClawtrateClient {
     pairing: () => this.holds(PAIRING_SCOPE),
     readOnly: () => this.options.readOnly === true,
     bots: () => this.state.bots.map((bot) => ({ id: bot.id, name: bot.name })),
+    readStatus: (botId, send) => this.accounts.readStatus(botId, send),
     latestTask: (botId) => {
       const tasks = this.state.tasksByBot[botId] ?? [];
       let latest: { key: string; at: number } | null = null;
@@ -6703,6 +6704,24 @@ export class ClawtrateClient {
     if (stamp === undefined) return this.accounts.removeFallbacks(botId);
     await this.requireSameGateway(stamp);
     return this.accounts.removeFallbacks(botId, this.sameConnection(stamp));
+  }
+
+  /**
+   * Unlock, or Clear a kept order, after its confirmation (#660): only to the gateway the screen
+   * showed (`stamp`), each request on the connection that check read, and only while the bot's
+   * order still names `account` alone (`AccountsEngine.clearOrder`).
+   */
+  async clearBotOrder(
+    id: string,
+    botId: string,
+    provider: string,
+    account: string,
+    kind: OrderClear["kind"],
+    stamp: GatewayStamp,
+  ): Promise<void> {
+    if (this.options.readOnly) throw new Error("This host only reads.");
+    await this.requireSameGateway(stamp);
+    return this.accounts.clearOrder(id, botId, provider, account, kind, this.sameConnection(stamp));
   }
 
   /**
