@@ -346,6 +346,31 @@ describe("what a caller is given", () => {
     expect(Object.isFrozen(state.member(mac.device.listKey))).toBe(true);
   });
 
+  it("an entry is copied once on entry: bytes that change while append reads them can't split what it checks from what it keeps", () => {
+    // A view whose bytes change the first time the package takes a slice of it, as another
+    // thread writing to shared memory could. Read once, as a copy, it is the honest entry.
+    const world = makeWorld();
+    const entry = signAdd(
+      world.gatewayDevice.listKey,
+      world.state,
+      makeDevice(2).device,
+      TRANSCRIPT,
+    );
+    class Shifting extends Uint8Array {
+      #changed = false;
+      override subarray(begin?: number, end?: number): Uint8Array {
+        if (!this.#changed) {
+          this.#changed = true;
+          this[this.length - 1]! ^= 1;
+        }
+        return super.subarray(begin, end);
+      }
+    }
+    const shifting = new Shifting(entry.length);
+    shifting.set(entry);
+    expect(world.state.append(shifting).head).toEqual(world.state.append(entry).head);
+  });
+
   it("an entry appended is copied first: changing the caller's bytes afterwards changes nothing", () => {
     const world = makeWorld();
     const entry = signAdd(

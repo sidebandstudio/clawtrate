@@ -165,6 +165,14 @@ describe("the random values are the package's to derive", () => {
     const a = NewDeviceJoin.start(makeDevice(2), CONTEXT, zero);
     const b = NewDeviceJoin.start(makeDevice(3), CONTEXT, zero);
     expect(commitmentOf(a.commit)).not.toEqual(commitmentOf(b.commit));
+    // The nonce N reveals is not the caller's bytes, and differs between the two devices.
+    const nonceOf = (n: NewDeviceJoin) => {
+      const { reveal } = n.reveal(MemberJoin.answer(member, n.commit).answer);
+      return reveal.slice(reveal.length - 128, reveal.length - 96);
+    };
+    const [na, nb] = [nonceOf(a), nonceOf(b)];
+    expect(na).not.toEqual(zero);
+    expect(na).not.toEqual(nb);
     // What the caller still owes: the same keys and the same random give the same commitment,
     // so every attempt needs fresh keys and fresh random bytes (README).
     expect(NewDeviceJoin.start(makeDevice(2), CONTEXT, zero).commit).toEqual(a.commit);
