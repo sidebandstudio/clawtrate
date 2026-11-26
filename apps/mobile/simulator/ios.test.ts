@@ -16,8 +16,10 @@ import {
   avatarVariation,
   defaultAvatar,
   firstChoice,
+  INBOUND_MEDIA_ROUTE,
   pictureWithChoice,
   plainPreview,
+  READ_AGAIN_TRIES,
   type AvatarChoice,
 } from "@clawtrate/core";
 import {
@@ -40,6 +42,7 @@ import {
 import { ENSEMBLE } from "../src/presentation/ensemble.ts";
 import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
+import { SENT_PICTURE_LINES, sentPictureAlt } from "../src/presentation/sent-files.ts";
 import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
 import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
@@ -75,6 +78,7 @@ import {
   operator,
   relay,
   pasteboard,
+  protectedFront,
   protocolFiveGateway,
   Proxy,
   quit,
@@ -96,6 +100,7 @@ import {
   waitFor,
   waitGone,
   workspaceFor,
+  type FrontRequest,
   type Step,
 } from "./harness.ts";
 import { PAIRING, startsOnItsOwn } from "./jobs.ts";
@@ -1586,11 +1591,14 @@ describe("the iOS app", () => {
   it("on iPhone, a bot whose tasks the gateway failed to send claims no count on Home and says so in its list; sent an empty list, the list says it has none", async () => {
     let mode: "fail" | "empty" = "fail";
     let failed = 0;
+    // The app reads a task list the gateway may answer if asked again (an `UNAVAILABLE` with no
+    // reason) READ_AGAIN_TRIES more times, then once more on the gateway's next event, which
+    // arms no other read: with every task list failing, the count ends there.
+    const FAILED_READS = 1 + READ_AGAIN_TRIES + 1;
     const proxy = await relay(env.gateway, {
-      // The first task list after pairing fails, as a gateway's error would.
+      // Every task list fails until the switch below, as a gateway that stays unavailable would.
       fromPhone: (frame) => {
-        if (mode !== "fail" || frame.method !== "sessions.subscribe" || failed > 0 || !frame.id)
-          return null;
+        if (mode !== "fail" || frame.method !== "sessions.subscribe" || !frame.id) return null;
         failed += 1;
         return {
           type: "res",
@@ -1617,12 +1625,20 @@ describe("the iOS app", () => {
         waitFor({ id: "pairing" }, 90_000),
       ]);
       devGateway("approve");
+      // The tries take about 15 seconds before the failure shows; the wait covers them.
       await steps("tasks-failed-home", [
         waitFor({ id: "bot-otto", text: "Otto" }, 120_000),
+        waitFor({ id: "bot-preview-otto", text: lit(TASKS_FAILED) }, 120_000),
+        notSee(".*, 0 tasks.*"),
+      ]);
+      // The gateway's next event (a tick comes at least every 30 seconds) makes the last read.
+      await until("the next event's read", async () => failed >= FAILED_READS, 90_000);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      expect(failed).toBe(FAILED_READS);
+      await steps("tasks-failed-home-after", [
         see({ id: "bot-preview-otto", text: lit(TASKS_FAILED) }),
         notSee(".*, 0 tasks.*"),
       ]);
-      expect(failed).toBe(1);
       await steps("tasks-failed-list", [
         tap({ id: "bot-otto" }),
         waitFor({ id: "bot-tasks-otto" }),
@@ -1639,6 +1655,8 @@ describe("the iOS app", () => {
         see(lit(noTasksBody("Otto"))),
         notSee(lit(TASKS_FAILED)),
       ]);
+      // Nothing failed after the switch.
+      expect(failed).toBe(FAILED_READS);
     } finally {
       await proxy.close();
     }
@@ -1898,6 +1916,178 @@ describe("the iOS app", () => {
       await finished;
     } finally {
       await avatarGateway.close();
+    }
+  });
+
+  it("F-557: on iPhone, a picture you sent from another device shows in your message when the gateway's address is protected, read back with this device's token in one header and no cookie, and a redirect isn't followed; at a loopback ws:// address the message says this connection can't load it and nothing is asked for", async () => {
+    // Pictures of the check's own, sent with a message as another device sends them.
+    const solid = (rgb: [number, number, number]) =>
+      encodePng({
+        width: 360,
+        height: 240,
+        data: Uint8Array.from({ length: 360 * 240 * 4 }, (_, i) =>
+          i % 4 === 3 ? 255 : rgb[i % 4]!,
+        ),
+      });
+    const SHOT_RGB: [number, number, number] = [38, 110, 196];
+    const shot = solid(SHOT_RGB);
+    const words = "Here is the shelf I mentioned.";
+    const own = await gatewayTask("pip", "Picture check");
+    // Everything made from here on is released at the end, whatever fails.
+    let loopback: Proxy | null = null;
+    let front: Awaited<ReturnType<typeof protectedFront>> | null = null;
+    try {
+      await gatewayCall("chat.send", {
+        sessionKey: own.key,
+        message: words,
+        idempotencyKey: `ios-picture-${Date.now().toString(36)}`,
+        queueMode: "followup",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "shot.png",
+            content: shot.toString("base64"),
+          },
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "moved.png",
+            content: solid([200, 120, 40]).toString("base64"),
+          },
+        ],
+      });
+      await until("the message's files in history", async () => {
+        const history = await gatewayCall<{ messages?: unknown[] }>("chat.history", {
+          sessionKey: own.key,
+          limit: 20,
+        });
+        const text = JSON.stringify(history.messages ?? []);
+        return text.includes("media://inbound/shot") && text.includes("media://inbound/moved");
+      });
+      const lineFor = (name: string) =>
+        `${lit(name)}, \\d+ KB\\. ${lit(SENT_PICTURE_LINES["cannot-load"])}`;
+      const openTask = (name: string): Step[] => [
+        waitFor({ id: "bot-pip" }, 120_000),
+        tap({ id: "bot-pip" }),
+        waitFor({ id: `task-${lit(own.key)}` }, 60_000),
+        tap({ id: `task-${lit(own.key)}` }),
+        waitFor(lit(words), 60_000),
+        // The message's files under it, the last one in view.
+        scrollTo({ id: "sent-picture", text: name }, "DOWN"),
+      ];
+
+      // At a loopback ws:// address: each picture says this connection can't load it.
+      loopback = new Proxy(Number(new URL(env.gateway).port));
+      const nearUrl = await loopback.start();
+      const gatewayPort = Number(new URL(env.gateway).port);
+      const media = (url: string) => url.startsWith(INBOUND_MEDIA_ROUTE);
+      front = await protectedFront(gatewayPort, (url) =>
+        media(url.pathname) && url.searchParams.get("source")?.startsWith("media://inbound/moved")
+          ? { status: 302, headers: { location: "/elsewhere" } }
+          : null,
+      );
+      launch({ fresh: true, devGateway: nearUrl });
+      await steps("picture-near-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(nearUrl, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      await steps("picture-near", [
+        ...openTask(lineFor("moved.png")),
+        see({ id: "sent-picture", text: lineFor("shot.png") }),
+        see({ id: "sent-picture", text: lineFor("moved.png") }),
+        notSee({
+          id: "sent-picture",
+          text: lit(
+            sentPictureAlt({ fileName: "shot.png", mimeType: "image/png", sizeBytes: null }),
+          ),
+        }),
+      ]);
+      await shoot("sent-picture-loopback");
+      // Every connection the app made there opened its gateway socket: nothing else was asked.
+      expect(loopback.requests.length).toBeGreaterThan(0);
+      expect(loopback.requests.filter((request) => !request.upgrade)).toEqual([]);
+
+      // At a protected address, a new device of this gateway: the picture is read back and drawn.
+      const alt = sentPictureAlt({ fileName: "shot.png", mimeType: "image/png", sizeBytes: null });
+      launch({ fresh: true, devGateway: front.url });
+      await steps("picture-far-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(front.url, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      await steps("picture-far", [
+        ...openTask(lineFor("moved.png")),
+        waitFor({ id: "sent-picture", text: lit(alt) }, 60_000),
+        see({ id: "sent-picture", text: lineFor("moved.png") }),
+      ]);
+      await shoot("sent-picture-protected");
+      // The exact picture sent, drawn from the bytes the gateway gave.
+      const at = await layout();
+      const box = at.get("sent-picture")!.find((each) => each.text === alt)!;
+      const pixel = screen(at.get("transcript")![0]!.x2);
+      expect(near(pixel((box.x1 + box.x2) / 2, (box.y1 + box.y2) / 2), SHOT_RGB, 10)).toBe(true);
+
+      // The gateway was asked only on its media route, by GET, with no cookie, although each
+      // answer set one. The ticket requests carry this device's token in their one header, the
+      // bytes request none, and no address carries it. The redirect was not followed.
+      const asked = front.requests;
+      expect(asked.every((request) => request.method === "GET" && media(request.url))).toBe(true);
+      expect(asked.map((request) => request.cookie)).toEqual(asked.map(() => undefined));
+      const ticketFor = (name: string) =>
+        asked.filter((request) => {
+          const query = new URL(request.url, "https://front").searchParams;
+          return (
+            query.get("meta") === "1" && query.get("source")!.startsWith(`media://inbound/${name}`)
+          );
+        });
+      const bytes = asked.filter(
+        (request) => new URL(request.url, "https://front").searchParams.get("meta") !== "1",
+      );
+      expect(ticketFor("shot")).toHaveLength(1);
+      expect(ticketFor("moved")).toHaveLength(1);
+      expect(bytes).toHaveLength(1);
+      expect(bytes[0]!.url).toContain(encodeURIComponent("media://inbound/shot"));
+      // Each ticket request, the redirected one too, carries one Authorization field with the
+      // token the gateway issued this device; the bytes request carries none. The token is
+      // compared here and never printed, and no address holds it, raw or decoded.
+      const issued = front.issued();
+      expect(issued !== null && issued.length > 8).toBe(true);
+      const tickets = [...ticketFor("shot"), ...ticketFor("moved")];
+      expect(tickets.map((request) => request.authorizations)).toEqual([1, 1]);
+      expect(tickets.every((request) => request.authorization === `Bearer ${issued}`)).toBe(true);
+      expect(bytes[0]!.authorizations).toBe(0);
+      const holds = (request: FrontRequest) =>
+        request.url.includes(issued!) ||
+        [...new URL(request.url, "https://front").searchParams].some(
+          ([name, value]) => name.includes(issued!) || value.includes(issued!),
+        );
+      expect(asked.some(holds)).toBe(false);
+      expect(asked.some((request) => request.url.startsWith("/elsewhere"))).toBe(false);
+
+      // A tap opens it larger, as on the desktop, and Close brings the chat back.
+      await steps("picture-larger", [
+        tap({ id: "sent-picture", text: lit(alt) }),
+        waitFor({ id: "picture-viewer-close" }, 20_000),
+        see({ text: lit(alt) }),
+      ]);
+      await shoot("sent-picture-larger");
+      await steps("picture-larger-closed", [
+        tap({ id: "picture-viewer-close" }),
+        waitGone({ id: "picture-viewer-close" }, 20_000),
+        see({ id: "sent-picture", text: lit(alt) }),
+      ]);
+    } finally {
+      await loopback?.stop();
+      await front?.close();
+      await gatewayCall("sessions.delete", { key: own.key, deleteTranscript: true }).catch(
+        () => {},
+      );
     }
   });
 });

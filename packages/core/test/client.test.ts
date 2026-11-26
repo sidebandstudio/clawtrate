@@ -15,7 +15,7 @@ import {
 
 const URL_A = "ws://127.0.0.1:19001";
 const URL_B = "wss://gateway.example.com";
-const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
+const FAST = { reconnect: { initialMs: 20, maxMs: 40 }, readAgainMs: 5 };
 
 function connectParams(gateway: FakeGateway, index = 0) {
   return gateway.connects[index] as {
@@ -270,7 +270,9 @@ describe("discovery failures (B3)", () => {
     await client.connect({ url: URL_A, token: "t" });
     await until(() => client.state.discovery.status === "error");
     expect(client.state.connection.status).toBe("connected");
-    expect(client.state.discovery.error).toMatch(/synthetic list failure/);
+    // The gateway gave no reason, every try: nothing is claimed, its own text kept aside.
+    expect(client.state.discovery.error).toBeNull();
+    expect(client.state.discovery.detail).toMatch(/synthetic list failure/);
     expect(client.state.tasksByBot.main?.map((task) => task.title)).toEqual(["A"]);
 
     fail = false;
@@ -278,6 +280,7 @@ describe("discovery failures (B3)", () => {
     await until(() => client.state.discovery.status === "ready");
     expect(client.state.bots.map((bot) => bot.name)).toEqual(["Juniper"]);
     expect(client.state.discovery.error).toBeNull();
+    expect(client.state.discovery.detail).toBeNull();
     client.stop();
   });
 });
