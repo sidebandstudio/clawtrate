@@ -45,9 +45,13 @@ const shown = (clear: OrderClear, binding: BotBinding) =>
   clearShown(clear, binding)?.status ?? null;
 
 /** Otto locked to Work, or with no fixed account and an order kept naming Work alone. */
-async function locked(mode: "unlock" | "clear" = "unlock") {
+async function locked(
+  mode: "unlock" | "clear" = "unlock",
+  setup: (fake: AccountsGateway) => void = () => {},
+) {
   const fake = new AccountsGateway();
   fake.orders.otto = { acme: ["acme:work"] };
+  setup(fake);
   if (mode === "clear") {
     const entries = (fake.config.agents as { entries: Record<string, { model: unknown }> }).entries;
     entries.otto!.model = { primary: "acme/dev-1", fallbacks: [] };
@@ -1204,6 +1208,100 @@ describe("F-592: never clear what the person didn't confirm", () => {
       check.release();
       await checking;
       expect(otto(accounts()).order).toMatchObject({ ids: ["acme:home"], stored: true });
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("a load whose later chunk reads Otto after the press's read before the send, finding Home: nothing is sent", async () => {
+    const { client, fake, accounts, press } = await locked("unlock", (fake) => {
+      // Three bots after Juniper and before Otto: Otto's request goes in the load's second chunk.
+      fake.bots.splice(1, 0, ...["ada", "bea", "cal"].map((id) => ({ id, name: id })));
+    });
+    const restore = fixedClock();
+    try {
+      const ottoReads = () =>
+        fake.gateway
+          .calls("models.authStatus")
+          .filter((each) => (each as { agentId: string }).agentId === "otto").length;
+      const earlier = ottoReads();
+      // The load's first chunk held: its second, with Otto, isn't sent yet.
+      const first = holdStatusOf(fake, "main");
+      const loading = client.refreshAccounts();
+      await until(() => first.asked());
+      expect(ottoReads()).toBe(earlier);
+      // The press's read before the send: its config answer held, its status Work alone.
+      const get = fake.gateway.handlers["config.get"]!;
+      const held = deferred<void>();
+      let holding = false;
+      fake.gateway.handlers["config.get"] = async (params) => {
+        const answer = get(params);
+        if (!holding) {
+          holding = true;
+          await held.promise;
+        }
+        return answer;
+      };
+      const pressed = press();
+      await until(() => holding);
+      fake.orders.otto = { acme: ["acme:home"] };
+      // The first chunk answers; the second goes out now, after the press's read, and finds Home.
+      first.release();
+      await loading;
+      expect(otto(accounts()).order).toMatchObject({ ids: ["acme:home"], stored: true });
+      held.resolve();
+      await pressed;
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
+      expect(accounts().clear?.status).toBe("moved");
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("the machines page reads Otto's status after the press's read before the send: nothing is sent, Home stays", async () => {
+    const { client, fake, accounts, release, restore } = await heldPress();
+    try {
+      fake.orders.otto = { acme: ["acme:home"] };
+      // Never applied to the accounts, so it is a newer read that confirms nothing.
+      await client.readPlacement("otto", "inventory");
+      await release();
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
+      expect(accounts().clear).toMatchObject({
+        status: "unsent",
+        error: unconfirmedOrder("unlock"),
+      });
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("a newer read that didn't list the provider, and a newer one still out: the Check-now line", async () => {
+    const { client, fake, accounts, release, restore } = await heldPress();
+    try {
+      const status = fake.status("otto") as { providers: Array<{ provider: string }> };
+      fake.blankStatus = {
+        agentId: "otto",
+        answer: { ...status, providers: status.providers.filter((p) => p.provider !== "acme") },
+      };
+      await client.checkLock("otto");
+      expect(otto(accounts()).evidence.providerRead).toBe(false);
+      fake.blankStatus = null;
+      const check = holdStatusOf(fake, "otto");
+      const checking = client.checkLock("otto");
+      await until(() => check.asked());
+      await release();
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(accounts().clear).toMatchObject({
+        status: "unsent",
+        error: unconfirmedOrder("unlock"),
+      });
+      check.release();
+      await checking;
     } finally {
       restore();
     }

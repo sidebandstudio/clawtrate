@@ -584,6 +584,8 @@ export type MachinesContext = {
   /** This host only reads: it changes nothing. */
   readOnly(): boolean;
   bots(): Array<{ id: string; name: string }>;
+  /** A read of the bot's account status is sent now: the accounts stamp it (`statusSent`). */
+  statusSent(botId: string): void;
   /** The key of a bot's most recently active task the client lists, or null. */
   latestTask(botId: string): string | null;
   deviceId(): string | null;
@@ -723,7 +725,10 @@ export class MachinesEngine {
     const latest = ctx.latestTask(botId);
     const [{ config }, status, listing, secrets] = await Promise.all([
       this.placementConfig(),
-      settle(() => ctx.request("models.authStatus", { agentId: botId })),
+      settle(() => {
+        ctx.statusSent(botId);
+        return ctx.request("models.authStatus", { agentId: botId });
+      }),
       latest
         ? ctx.request("tools.effective", { sessionKey: latest }).then(
             (value) => ({ key: latest, value, readAt: ctx.now() }),

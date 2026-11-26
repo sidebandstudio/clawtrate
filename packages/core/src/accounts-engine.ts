@@ -124,7 +124,13 @@ export type AccountsContext = {
 };
 
 /** One bot's order a read failed to read: as `readFailed` says it on the binding. */
-type BotReadFailure = { botId: string; status: "failed" | "unavailable"; error: string };
+type BotReadFailure = {
+  botId: string;
+  /** The number its chunk was sent with. */
+  seq: number;
+  status: "failed" | "unavailable";
+  error: string;
+};
 
 /**
  * One bot write, its optional gateway identity and the host's target its screen was read under
@@ -310,13 +316,10 @@ export class AccountsEngine {
     const seq = this.nextSeq();
     const startedAt = ctx.now();
     const bots = ctx.bots();
-    this.started(
-      ctx,
-      bots.map((bot) => bot.id),
-      seq,
-    );
     // Each bot whose order this read failed to read, as a failed Check now would say it.
     const failed: BotReadFailure[] = [];
+    // Each bot's request, by the number its chunk took as it was sent (`readViews`).
+    const sent = new Map<string, number>();
     let configFailed = false;
     try {
       // Every read asked is answered before the account read ends, a failed one too: a Refresh
@@ -340,6 +343,7 @@ export class AccountsEngine {
           this.readViews(
             bots.map((bot) => bot.id),
             failed,
+            sent,
           ),
         ),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
@@ -368,7 +372,17 @@ export class AccountsEngine {
         const same =
           read.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === read.gatewayId;
         return settleClear({
-          ...this.compose(a, config, views, same ? a.models : [], at, startedAt, seq, gateway),
+          ...this.compose(
+            a,
+            config,
+            views,
+            same ? a.models : [],
+            at,
+            startedAt,
+            seq,
+            gateway,
+            sent,
+          ),
           ...(same ? {} : { modelsCut: initialAccountsState.modelsCut }),
           readOn: read,
         });
@@ -401,8 +415,8 @@ export class AccountsEngine {
       const said = cut ? ACCOUNTS_READ_CUT_OFF : this.scrub(errorText(error));
       for (const bot of bots) {
         const own = failed.find((each) => each.botId === bot.id);
-        if (own) this.readFailed(ctx, bot.id, seq, own.status, cut ? said : own.error);
-        else if (shared) this.readFailed(ctx, bot.id, seq, "failed", said);
+        if (own) this.readFailed(ctx, bot.id, own.seq, own.status, cut ? said : own.error);
+        else if (shared) this.readFailed(ctx, bot.id, sent.get(bot.id) ?? seq, "failed", said);
       }
       // Its connection ended: the gateway's words from it are not published (they may echo what
       // was typed, and the sign-in's typed values are already forgotten). The screen says the
@@ -602,15 +616,23 @@ export class AccountsEngine {
     return result;
   }
 
-  /** Every bot's view, in chunks; each bot whose read fails or is unavailable goes in `failed`. */
+  /**
+   * Every bot's view, in chunks; each bot whose read fails or is unavailable goes in `failed`. Each
+   * chunk takes its number as it is sent, and stamps its bots with it (`sent`): a later chunk goes
+   * out after the earlier ones settle, maybe after a press's read before its send.
+   */
   private async readViews(
     botIds: string[],
     failed: BotReadFailure[] = [],
+    sent: Map<string, number> = new Map(),
   ): Promise<Map<string, BotView>> {
     const views = new Map<string, BotView>();
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
     for (let i = 0; i < botIds.length; i += ACCOUNT_READ_CONCURRENCY) {
       const chunk = botIds.slice(i, i + ACCOUNT_READ_CONCURRENCY);
+      const seq = this.nextSeq();
+      this.started(this.ctx, chunk, seq);
+      for (const botId of chunk) sent.set(botId, seq);
       // Every request of the chunk is answered before a failure ends the read, so nothing of it
       // is still out when a Refresh that waits for the read asks (#565); no later chunk starts.
       const settled = await Promise.allSettled(
@@ -625,13 +647,13 @@ export class AccountsEngine {
           if (each.status === "rejected") throw each.reason;
           view = readBotView(each.value);
         } catch (error) {
-          failed.push({ botId, status: "failed", error: this.scrub(errorText(error)) });
+          failed.push({ botId, seq, status: "failed", error: this.scrub(errorText(error)) });
           first ??= error;
           continue;
         }
         // Not a reading: the last good one stands, and the screens say why there is none.
         if (view.unavailable) {
-          failed.push({ botId, status: "unavailable", error: view.unavailable });
+          failed.push({ botId, seq, status: "unavailable", error: view.unavailable });
           first ??= new Error(
             `The gateway says its account status is unavailable (${view.unavailable}).`,
           );
@@ -676,6 +698,7 @@ export class AccountsEngine {
     startedAt: number = at,
     seq: number | null = null,
     gateway: string | null = null,
+    sent: ReadonlyMap<string, number> | null = null,
   ): AccountsState {
     const root = asRecord(config?.config) ?? {};
     const agents = asRecord(root.agents) ?? {};
@@ -687,9 +710,11 @@ export class AccountsEngine {
     const anyView = views.get("main") ?? [...views.values()][0];
     const bindings = [...views.keys()].map((botId) => {
       const before = previous.bindings.find((each) => each.botId === botId);
-      // A bot's order read since these reads began, by Check now or a press, stays as it was read,
+      // Numbered as its own request was sent.
+      const own = sent?.get(botId) ?? seq;
+      // A bot's order read since this one began, by Check now or a press, stays as it was read,
       // and so does a failure of one begun since.
-      if (seq !== null && before?.evidence.attemptSeq != null && before.evidence.attemptSeq > seq)
+      if (own !== null && before?.evidence.attemptSeq != null && before.evidence.attemptSeq > own)
         return before;
       return this.binding(
         botId,
@@ -697,7 +722,7 @@ export class AccountsEngine {
         views.get(botId)!,
         before,
         startedAt,
-        seq,
+        own,
         gateway,
       );
     });
@@ -814,6 +839,14 @@ export class AccountsEngine {
           : { ...b, evidence: { ...b.evidence, status, error, attemptSeq: seq } },
       ),
     );
+  }
+
+  /**
+   * Another read of a bot's account status is sent now (the machines page's inventory): it is
+   * never applied here, so a press begun before it sends nothing after it.
+   */
+  statusSent(botId: string): void {
+    this.started(this.ctx, [botId], this.nextSeq());
   }
 
   /** Each of `botIds` has a read sent now, numbered `seq`: stamped as sent, not as applied. */
@@ -986,6 +1019,7 @@ export class AccountsEngine {
     if (
       latest?.evidence.attemptSeq != null &&
       latest.evidence.attemptSeq > firstSeq &&
+      latest.evidence.startedSeq === latest.evidence.attemptSeq &&
       latest.provider === provider &&
       !latest.evidence.providerRead
     ) {
