@@ -2,15 +2,15 @@
 // job uses: one of the changes job's MACOS_PATHS (#392). This checks that list against the job's
 // steps. Each step says here what it uses, and every file it reaches through imports from there
 // must be in the list. A step added to the job fails this test until it is named here.
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+// The import walk stops at packages/: shared code holds no macOS code, and the Linux and Windows
+// jobs test it on every change.
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import ts from "typescript";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MACOS_SPECS } from "../playwright.visual.config.ts";
+import { reached, ROOT, tracked } from "./ci-gate.ts";
 
-const ROOT = join(import.meta.dirname, "..");
 const yaml = createRequire(join(ROOT, "apps/desktop/package.json"))("js-yaml") as {
   load(text: string): unknown;
 };
@@ -87,43 +87,6 @@ const STEPS: { step: string; uses: string[] }[] = [
     ],
   },
 ];
-
-function tracked(...pathspecs: string[]): string[] {
-  const out = execFileSync("git", ["ls-files", "-z", "--", ...pathspecs], { cwd: ROOT });
-  return out.toString("utf8").split("\0").filter(Boolean);
-}
-
-/** A relative import's file: the specifier as written, or with a TypeScript extension. */
-function resolveImport(from: string, specifier: string): string | undefined {
-  const base = resolve(dirname(from), specifier);
-  const stem = base.replace(/\.m?js$/, "");
-  return [base, `${stem}.ts`, `${stem}.tsx`, join(base, "index.ts")].find(
-    (file) => existsSync(file) && statSync(file).isFile(),
-  );
-}
-
-/**
- * The files `entries` reach through relative imports. The walk stops at packages/: shared code
- * holds no macOS code, and the Linux and Windows jobs test it on every change.
- */
-function reached(entries: string[]): Set<string> {
-  const seen = new Set<string>();
-  const visit = (file: string) => {
-    // Git's paths use forward slashes on every system.
-    const path = relative(ROOT, file).split(sep).join("/");
-    if (seen.has(path) || path.startsWith("packages/")) return;
-    seen.add(path);
-    if (!/\.(ts|tsx|mts)$/.test(file)) return;
-    const { importedFiles } = ts.preProcessFile(readFileSync(file, "utf8"), true, true);
-    for (const { fileName } of importedFiles) {
-      if (!fileName.startsWith(".")) continue;
-      const target = resolveImport(file, fileName);
-      if (target) visit(target);
-    }
-  };
-  for (const entry of entries) visit(join(ROOT, entry));
-  return seen;
-}
 
 describe("the macos job's gate", () => {
   it("runs the job when the changes job says so", () => {

@@ -2,6 +2,7 @@
 // untrusted `unknown` values: a field with the wrong type is ignored rather than
 // trusted, so a newer gateway adding or changing fields cannot crash the UI.
 
+import { cutText, jsonTextLength } from "./bounds.ts";
 import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
@@ -529,7 +530,7 @@ export function sentSources(messages: unknown): Map<string, string> {
   const rows = new Set<string>();
   for (const entry of [...arr(messages)].reverse()) {
     const message = asRecord(entry);
-    if (message?.role !== "user" || gatewayTurnText(message)) continue;
+    if (message?.role !== "user" || gatewayTurn(message, false)) continue;
     const info = meta(message);
     const rowKey = str(info.idempotencyKey) ?? str(message.idempotencyKey) ?? str(info.id);
     // The first row of a key, newest first, is the one its message shows.
@@ -611,17 +612,68 @@ const SYSTEM_ROW_TEXT: Record<string, string> = {
 
 /**
  * A turn the gateway wrote itself: a user row whose `provenance.kind` is
- * `internal_system` (OpenClaw 2026.10.6, `input-provenance`). Its text is the
- * gateway's prompt to the bot, not the person's words, so it shows as a line
- * saying what the gateway did. The restart recovery's prompt names a restart
- * the gateway believes happened; the line says only that it resumed a turn.
+ * `internal_system` (OpenClaw 2026.10.6 and 2026.11.10, `input-provenance`). It shows
+ * as a line saying what the gateway did. The restart recovery's prompt names a
+ * restart the gateway believes happened; the line says only that it resumed a turn.
+ * On 2026.11.10 that recovery is a session event of its own, `source: "restart"`, whose
+ * text is the gateway's prompt to the bot (`session-restart-resume.ts`); on 2026.10.6 a
+ * `restart` event is the restart sentinel's queued message, which keeps today's line.
+ * `event` is the row's text when it is a system event the gateway woke the task with
+ * (`mapHistory`'s `gatewayEvents`, `isSessionEventRow`), not its own prompt to the bot.
  */
-function gatewayTurnText(message: RawRecord): string | null {
+function gatewayTurn(
+  message: RawRecord,
+  events: boolean,
+): { line: string; event: string | null } | null {
   const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
   if (provenance?.kind !== "internal_system") return null;
-  return str(provenance.sourceTool)?.toLowerCase() === "main_session_restart_recovery"
-    ? "The gateway resumed an earlier turn by itself"
-    : "The gateway started a turn by itself";
+  const source = str(provenance.sourceTool)?.toLowerCase();
+  if (source === "main_session_restart_recovery" || (events && source === "restart"))
+    return { line: "The gateway resumed an earlier turn by itself", event: null };
+  return {
+    line: "The gateway started a turn by itself",
+    event: events && isSessionEventRow(message) ? eventText(textOf(message.content)) : null,
+  };
+}
+
+/**
+ * The row the gateway's own session event path writes (OpenClaw 2026.11.10,
+ * `session-event-context.ts`): its delivery names the event's occurrence
+ * (`__openclaw.transport.messageId`), the key it is stored under, and no person sent it
+ * (no `__openclaw.senderId`). The provenance alone is not enough: a client with
+ * `operator.write` can have `agent` write it on a row of its own, which the gateway stores
+ * under `<its key>:user`, with no such delivery and the client's person as its sender.
+ */
+function isSessionEventRow(message: RawRecord): boolean {
+  const info = meta(message);
+  const key = str(message.idempotencyKey);
+  return (
+    key !== null &&
+    str(info.idempotencyKey) === key &&
+    str(asRecord(info.transport)?.messageId) === key &&
+    (info.senderId === undefined || info.senderId === null)
+  );
+}
+
+/** The most of a system event's text kept, in JSON characters as the state counts them: within one block's bound. */
+export const MAX_EVENT_TEXT_CHARS = 2_000;
+
+/**
+ * A system event's text as content from elsewhere: a command's output, a scheduled event's
+ * words, what a bot or a plugin woke the task with. Control and format characters go, line
+ * breaks stay (at most one blank line in a row), cut to `MAX_EVENT_TEXT_CHARS` with "…".
+ * Null when nothing is left.
+ */
+export function eventText(raw: string): string | null {
+  const text = raw
+    .replace(/\r\n?/g, "\n")
+    .replace(/(?:(?![\n\t])[\p{Cc}\p{Cs}\u2028\u2029]|(?!\p{Join_Control})\p{Cf})+/gu, " ")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!text) return null;
+  if (jsonTextLength(text) <= MAX_EVENT_TEXT_CHARS) return text;
+  return `${cutText(text, MAX_EVENT_TEXT_CHARS - 1).trimEnd()}…`;
 }
 
 /** The row's own time (`timestamp`, kept as written when a row is copied) is at or after `since`. */
@@ -655,6 +707,13 @@ export function mapHistory(
      * search: nothing after it is the brief.
      */
     startedAt?: number | null;
+    /**
+     * The gateway writes a system event it wakes a task with as the text of its own user row
+     * (OpenClaw 2026.11.10, which has no heartbeat): that row's line then carries the event's
+     * text. On 2026.10.6 the same row holds the gateway's heartbeat or completion prompt, so it
+     * stays the line alone. Only the gateway's reported version tells them apart.
+     */
+    gatewayEvents?: boolean;
   } = {},
 ): TranscriptItem[] {
   const items: TranscriptItem[] = [];
@@ -717,16 +776,20 @@ export function mapHistory(
       case "user": {
         const text = textOf(message.content);
         currentRun = null;
-        const gatewayTurn = gatewayTurnText(message);
-        if (gatewayTurn) {
+        const turn = gatewayTurn(message, options.gatewayEvents === true);
+        if (turn) {
           precedingRun = null;
           pendingUsers.length = 0;
           items.push({
             id,
             role: "system",
             timestamp,
-            blocks: [{ kind: "text", text: gatewayTurn }],
+            blocks: [
+              { kind: "text", text: turn.line },
+              ...(turn.event ? [{ kind: "text" as const, text: turn.event }] : []),
+            ],
             model: null,
+            ...(turn.event ? { gatewayEvent: true as const } : {}),
           });
           return;
         }
