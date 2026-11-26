@@ -1,8 +1,13 @@
 # clawtrate-bots
 
-Bots and external agents propose changes to bots, and a person decides. The design is `docs/design/main-bot-onboarding.md`, sections 5 to 10.
+Clawtrate's plugin for bots. Two designs: `docs/design/main-bot-onboarding.md`, sections 5 to 10 (the records), and `docs/design/bots-in-clawtrate.md` (#669: where a run came from and the read tools).
 
-So far: **the records**, and **the journal and Undo**. It keeps proposals and agent grants, decides admission, decline and revocation, and holds the claim, journal, crash settling and Undo that Apply needs. It writes nothing to any bot. On OpenClaw 2026.10.6 no stored request can be applied (section 17), so accept and Undo always refuse, and the journal stays empty. Apply runs only in the unit tests, through a stand-in for the gateway's missing conditional writes (`test/harness.ts`, `standInApply`); `index.js` gives the plugin none, and a test checks that. The bots' tools come in a later part.
+So far:
+
+- **The records**, and **the journal and Undo**. It keeps proposals and agent grants, decides admission, decline and revocation, and holds the claim, journal, crash settling and Undo that Apply needs. It writes nothing to any bot. On OpenClaw 2026.10.6 no stored request can be applied (section 17), so accept and Undo always refuse, and the journal stays empty. Apply runs only in the unit tests, through a stand-in for the gateway's missing conditional writes (`test/harness.ts`, `standInApply`); `index.js` gives the plugin none, and a test checks that.
+- **Where each run came from**, and whether it has read anything from outside (`lib/origins.js`); and **three read tools**, `clawtrate_here`, `clawtrate_tasks` and `clawtrate_bots` (`lib/here.js`, `lib/runs.js`). Its `before_tool_call` (`lib/hooks.js`) records each call and decides none: the holds on the tools a bot already has come next. Below, from "Where a run came from".
+
+No gateway gets this plugin yet: Clawtrate installs it in a later step of #669. Until Clawtrate's own record of the messages it sent exists (that design's step 1 and 3), the plugin never treats a call as the person's ask (A): a run typed on the gateway's own chat is at most B.
 
 ## Gateway methods
 
@@ -18,6 +23,7 @@ So far: **the records**, and **the journal and Undo**. It keeps proposals and ag
 | `.managers.set`         | admin | `{ bots }`: the bots that may ask to change other bots, by incarnation, written to this plugin's own config entry with `config.patch` under the hash just read, and read back                                                                                                                                                                           |
 | `.relay.grants.get`     | read  | A grant's generation, state and details                                                                                                                                                                                                                                                                                                                 |
 | `.relay.grants.set`     | admin | Writes a grant's version (`scope`, `bots`, `includeInstructions`, `includeFuture`, `expiresAt`) and publishes it: a new grant at generation 1, or, with `id` and the `expectedGeneration` it read, a new version at the next generation, which withdraws the grant's open suggestions. A stale update is refused. `{ id, revoke: true }` removes access |
+| `.runs.get`             | read  | `{ runId }`: the plugin's record of one run: whether it knows it, its kind, bot, session, trigger, channel, its input's provenance, whether it has read anything from outside and from which source, whether its message had files, how many messages joined it, whether it ended. No text                                                              |
 | `.relay.propose`        | admin | `{ grant, generation, bot, fields, reason? }`: records an agent's suggestion for a bot the grant covers. It only proposes, and records its source                                                                                                                                                                                                       |
 
 Every method but the reads needs a person's own connection: a direct operator request over the gateway's socket. An in-process call, such as a turn with no operator (research finding R6), is refused with `operator-required`, even when it reuses a client.
@@ -38,9 +44,39 @@ Three keyed stores in the gateway's database (`lib/records.js`): the ledger in a
 - **Undo** has its own version, by an id derived from the entry it undoes, so a retry finds the first. It reads the field once and writes the journaled value back under that read's token only when the field still holds the journaled result. It's offered for 7 days, until the next change to the same field.
 - **When the store fills,** new records are refused with `records-full` until cleanup frees a slot. Active grants can keep the store full beyond 30 days. The cleanup protocol and capacity estimates are in [design §9](../../docs/design/main-bot-onboarding.md#9-for-the-avatar-studio-describe-and-proposal-records).
 
+## Where a run came from
+
+From the gateway's hooks, per run, in memory (`lib/origins.js`). `before_prompt_build` gives the run's id, session, bot, trigger, channel, workspace, its routine (`jobId`) and the provenance of its input; `before_model_resolve` whether its message came with files; `before_message_write` a message that joined a run under way; `before_tool_call` each call's run id, call id and requester; `agent_end` that the run ended. The first three need `plugins.entries.clawtrate-bots.hooks.allowConversationAccess: true`; without it no run is known, and every call is C.
+
+A run is one of: **typed** (the gateway's own chat channel, `webchat`, trigger `user`, no provenance but a person's: necessary for the person's ask, never enough), **chat-app**, **bot-message** (another bot's `sessions_send`), **task** (a task's brief, told by its provenance on 2026.11.10; on 2026.10.6 it carries nothing that tells it from a typed run, so only Clawtrate's own record will), **report** (a task reporting back), **routine**, **check-in**, **command-line** or **unknown**. A call's origin, as the holds will read it: **B** for a typed run (A needs Clawtrate's own record, a later step), **O** for a chat-app run whose requester OpenClaw resolved as its owner (`requester.senderIsOwner`, on the run's own channel), and **C** for everything else: another bot, a task's brief, a routine, a check-in, the command line, a chat-app sender who isn't the owner, a run the store doesn't hold, and a gateway whose version this build doesn't know (it knows 2026.10.6 and 2026.11.10).
+
+A tool finds its own run by its run id on 2026.11.10, and on 2026.10.6, whose tools aren't told it, by the session key and call id `before_tool_call` saw.
+
+**Bounds.** At most 512 runs. When full, an ended run leaves first; with none ended, a new run isn't held, so its calls are C. A run unseen for 24 hours leaves; one that hadn't ended is remembered as lost (512, oldest first out) and is C from then on, never held again. The call lookup keeps 2,048 entries, oldest first out. After a gateway restart the store is empty: every call is C until a new run's first prompt.
+
+## Read from outside
+
+A run is marked, once, with the first source, when (design 4.3): a call passes the hook, for every tool but `ask_user`, `progress_card`, `sessions_spawn`, Tool Search's `tool_search` and `tool_describe` (the catalog's own names and schemas, which a run without tool search has in its prompt) and the wrappers `tool_call` (`dispatch_action` on 2026.11.10) and Code Mode's `exec` cell, whose calls each reach the hook themselves; its message came with files; or a message no person typed (another bot's, the system's) joined it. A call is marked as it passes, not when its result comes back, so a later call in the same Code Mode cell already sees it. Clawtrate's own read tools mark it when their answer holds text a bot may have written (below).
+
+## The read tools
+
+Each answer is at most 8 KiB and only about this bot.
+
+- **`clawtrate_here {}`**: whether this conversation is in Clawtrate: "can't tell yet" for a typed run, since the plugin alone can't tell Clawtrate from the gateway's web page or another app, and "no", with why, for every other origin; whether the run has read anything from outside; this conversation (main or a task, and who started it); what the person sees in Clawtrate; the bot's model, effort, how it runs commands and its check-ins. It returns no name or title: until Clawtrate's record says who set each field, any of them could be a bot's, so nothing it returns is outside content.
+- **`clawtrate_tasks { state?, limit? }`**: the bot's tasks, newest first, with the gateway's state. A title may be a label a bot gave, so an answer with a title marks the run.
+- **`clawtrate_bots { find? }`**: with `find`, the bots whose name is that name, by id, whether this bot can reach each now, and its account; no name text, so it marks nothing. Without it, every other bot with its name, which marks the run, since a bot may have chosen its own name.
+
+## Failing safe
+
+The hook only records, and never throws: both OpenClaw versions block a call when a `before_tool_call` handler throws or takes 15 seconds (their global hook runner runs it fail-closed), so a recording failure is caught and logged, and the call goes on. A run the store doesn't hold, conversation access turned off, and a version this build doesn't know all leave a run unknown, never the person's.
+
 ## Tests
 
 ```sh
 pnpm exec vitest run plugins/clawtrate-bots
 node plugins/clawtrate-bots/test/gateway-check.ts   # starts and resets its own development instances
+pnpm dev-gateway start --instance bots --with-plugin clawtrate-bots
+node tools/dev-gateway/src/bots-checks.ts --instance bots
 ```
+
+`pnpm scenarios` runs the same checks (`tools/dev-gateway/src/bots-checks.ts`) on an instance of their own.

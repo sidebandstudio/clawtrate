@@ -107,7 +107,9 @@ describe("shell commands", () => {
       ...[5, 20, 120].map(SHELL_COMMANDS.sleep),
     ]);
     const all = SCENARIOS.flatMap((s) => shellSteps(s.name)).flatMap((step) =>
-      step.kind === "tool" && step.name === "exec" ? [String(step.arguments.command)] : [],
+      step.kind === "tool" && step.name === "exec" && "command" in step.arguments
+        ? [String(step.arguments.command)]
+        : [],
     );
     expect(all.length).toBeGreaterThan(0);
     for (const command of all) expect(allowed).toContain(command);
