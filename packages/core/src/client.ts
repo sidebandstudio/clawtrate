@@ -47,6 +47,7 @@ import {
   AdminNeededError,
   type CreateBotInput,
   type CreatedBot,
+  isCertainRefusal,
 } from "./accounts-engine.ts";
 import { BotNames, CLAIM_DELAY_MS, NAME_RECORD_KEY } from "./bot-names.ts";
 import type { ModelList } from "./accounts.ts";
@@ -1846,9 +1847,10 @@ export class ClawtrateClient {
       };
     },
     refreshBots: () => this.refreshBots(),
+    // A run some of whose steps aren't kept is a run whose steps aren't known.
     runSteps: (sessionKey, runId) => {
       const run = this.state.transcripts[sessionKey]?.runs.find((each) => each.id === runId);
-      return run
+      return run && run.omittedSteps === 0
         ? run.steps.map((step) => ({ toolName: step.toolName, args: step.argsText?.text ?? null }))
         : null;
     },
@@ -1856,6 +1858,7 @@ export class ClawtrateClient {
       this.noteMissingScope(error);
       return isMissingScope(error);
     },
+    certainRefusal: (error) => isCertainRefusal(error),
     now: () => this.now(),
     waitToClaim: () =>
       new Promise((resolve) =>
