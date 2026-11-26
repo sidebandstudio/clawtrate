@@ -51,6 +51,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
   "packages/core/src/mapping.ts:NOT_FILES": "static, six block types that are never a file",
   "packages/core/src/mapping.ts:KNOWN_FILES": "static, three block types that hand a file over",
+  "packages/core/src/mapping.ts:RUN_STATE_FIELDS":
+    "static, the two run-state fields of a session row",
+  "packages/core/src/not-run.ts:PREFIXES":
+    "static, three patterns the gateway puts before a reason",
   "packages/core/src/pictures.ts:SIGNATURES.image/png": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/jpeg": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/gif": "static, two byte signatures",
@@ -94,6 +98,8 @@ const ALLOWED: Record<string, string> = {
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":
     "the words for those steps, one each, gone when it returns",
+  "packages/core/src/accounts-engine.ts:readAll>sent":
+    "one accounts read's number per listed bot, as its request was sent, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/scopes.ts:IMPLIED_BY_WRITE": "static, the scopes write implies",
   "packages/core/src/state-bounds.ts:SESSION_ROW_FIELDS": "static, the twenty-one fields read",
   "packages/core/src/state-bounds.ts:SESSION_ROW_IDS": "static, five field names",

@@ -55,7 +55,7 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
-import type { ModelList, ModelRefresh } from "./accounts.ts";
+import type { ModelList, ModelRefresh, OrderClear } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -1284,6 +1284,10 @@ function withAlarm(state: ClawtrateState): ClawtrateState {
 /** The share of the arithmetic bound past which the alarm says it is near. */
 export const ALARM_FRACTION = 0.8;
 
+/** A finite number, or null. */
+const numberOr = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
 function withLive(transcript: Transcript): Transcript {
   const active = transcript.runs.find((run) => isActive(run.state));
   const live = active ? { runId: active.id, text: active.text } : null;
@@ -1949,6 +1953,7 @@ export class ClawtrateClient {
     pairing: () => this.holds(PAIRING_SCOPE),
     readOnly: () => this.options.readOnly === true,
     bots: () => this.state.bots.map((bot) => ({ id: bot.id, name: bot.name })),
+    readStatus: (botId, send) => this.accounts.readStatus(botId, send),
     latestTask: (botId) => {
       const tasks = this.state.tasksByBot[botId] ?? [];
       let latest: { key: string; at: number } | null = null;
@@ -6765,6 +6770,24 @@ export class ClawtrateClient {
   }
 
   /**
+   * Unlock, or Clear a kept order, after its confirmation (#660): only to the gateway the screen
+   * showed (`stamp`), each request on the connection that check read, and only while the bot's
+   * order still names `account` alone (`AccountsEngine.clearOrder`).
+   */
+  async clearBotOrder(
+    id: string,
+    botId: string,
+    provider: string,
+    account: string,
+    kind: OrderClear["kind"],
+    stamp: GatewayStamp,
+  ): Promise<void> {
+    if (this.options.readOnly) throw new Error("This host only reads.");
+    await this.requireSameGateway(stamp);
+    return this.accounts.clearOrder(id, botId, provider, account, kind, this.sameConnection(stamp));
+  }
+
+  /**
    * Rename on a name card: `name` and `gatewayId` must be the ones it shows (`bot-names.ts`).
    * Nothing is sent unless that gateway is still the one connected.
    */
@@ -10027,6 +10050,8 @@ export class ClawtrateClient {
       for (const [index, task] of tasks.entries()) {
         // A row with no active run ends what waited before it; a newer marker stays.
         if (task.status !== "running") this.waiting.settle(task.key, task.updatedAt);
+        // A run the row says started after a failure: the failure is no longer the latest (#664).
+        this.waiting.settleFailure(task.key, numberOr(this.rows.get(task.key)?.startedAt));
         const waiting = this.waiting.waitingFor(task.key);
         if (waiting) {
           tasks[index] = {
@@ -10041,6 +10066,13 @@ export class ClawtrateClient {
         ) {
           // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
           tasks[index] = { ...task, status: "stopped" };
+        } else if (
+          (task.status === "idle" || task.status === "done") &&
+          this.waiting.failedAt(task.key) !== null
+        ) {
+          // A message OpenClaw 2026.11.10 failed before running it leaves the row no status: its
+          // `chat` error, or the task's runs, said so (#663, #664).
+          tasks[index] = { ...task, status: "failed" };
         }
       }
       if (this.showChannelChats && this.showOtherToolSessions) continue;
@@ -10175,6 +10207,13 @@ export class ClawtrateClient {
     this.noteMessageChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
+    // A new input admitted: a failure after it may be that message's (`waiting.ts`, #686).
+    if (
+      row &&
+      rowKey &&
+      (row.hasActiveRun === true || row.status === "queued" || row.status === "running")
+    )
+      this.waiting.noteInput(rowKey);
     // Rows are kept under the id cap.
     const key = rowKey === null ? null : capId(rowKey, MAX_ID_CHARS);
     if (!row || !key) {
@@ -10660,9 +10699,19 @@ export class ClawtrateClient {
         if (typeof key === "string" && this.tracked(key)) this.scheduleHistory(key);
         return;
       }
-      case "chat":
+      case "chat": {
+        const payload = asRecord(event.payload);
+        if (payload) {
+          const before = this.keptKeys();
+          // The gateway's time for it, as its row last gave it: what a later run's start is
+          // compared with (`settleFailure`).
+          const key = typeof payload.sessionKey === "string" ? payload.sessionKey : "";
+          const at = numberOr(this.rows.get(capId(key, MAX_ID_CHARS))?.updatedAt) ?? this.now();
+          if (this.waiting.onChat(payload, at)) this.waitingChanged(before);
+        }
         this.handleChat(event);
         return;
+      }
       case "agent": {
         const payload = asRecord(event.payload);
         if (payload) {

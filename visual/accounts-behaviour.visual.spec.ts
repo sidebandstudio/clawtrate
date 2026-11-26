@@ -474,10 +474,11 @@ test("F-490: on OpenClaw 2026.11.10 the lock, the unlock and the clear are the g
   await steps.getByRole("button", { name: "Copy lock command" }).click();
   await expect(page.getByText("Checking the gateway for the lock, again in 4s")).toBeVisible();
 
-  // Locked: the unlock, folded, takes the same steps around the clear command.
+  // Locked, below admin: the unlock, folded, takes the same steps around the clear command.
+  // With admin it is a button (F-592).
   await openFixture(
     page,
-    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=locked&version=2026.11.10`,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=write&lock=locked&version=2026.11.10`,
     "light",
   );
   await page.getByRole("button", { name: /^Account: / }).click();
@@ -489,11 +490,14 @@ test("F-490: on OpenClaw 2026.11.10 the lock, the unlock and the clear are the g
     "openclaw gateway start",
   ]);
   await expect(unlock).toContainText("Clawtrate sees the change when the gateway is back.");
+  await expect(unlock.getByTestId("clear-needs-admin")).toHaveText(
+    "With admin access, Clawtrate unlocks Otto from here, with the gateway running.",
+  );
 
   // The gateway choosing, with a one-account order still kept: its clear, likewise.
   await openFixture(
     page,
-    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=retained&version=2026.11.10`,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=write&lock=retained&version=2026.11.10`,
     "light",
   );
   await page.getByRole("button", { name: /^Account: OpenAI, Gateway chooses\. Open\.$/ }).click();
@@ -505,6 +509,11 @@ test("F-490: on OpenClaw 2026.11.10 the lock, the unlock and the clear are the g
   await expect(page.getByTestId("retained-order").getByTestId("unmanaged-hint")).toHaveText(
     "These steps stop and start the gateway's service. If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead.",
   );
+  await expect(page.getByTestId("retained-order").getByTestId("clear-needs-admin")).toHaveText(
+    "With admin access, Clawtrate clears it from here, with the gateway running.",
+  );
+  await expect(page.getByTestId("admin-bar")).toContainText("Admin access needed.");
+  await expect(page.getByRole("button", { name: "Request admin access" })).toBeVisible();
 
   // On 2026.10.6 the same page keeps the one command.
   await openFixture(
@@ -607,7 +616,7 @@ test("F-478: changing to another provider's account asks for one of its models b
   });
 });
 
-test("F-472: Let the gateway choose for an existing bot, and the one-account order still stored, with its clear command", async ({
+test("F-472: Let the gateway choose for an existing bot, and the one-account order still stored, with Clear order", async ({
   page,
 }) => {
   await openFixture(
@@ -620,9 +629,10 @@ test("F-472: Let the gateway choose for an existing bot, and the one-account ord
   await expect(page.getByTestId("retained-order")).toContainText(
     "The gateway still has an order for Otto that names only OpenAI · Work",
   );
-  await expect(page.getByTestId("retained-order").getByTestId("command")).toHaveText(
-    "openclaw models auth order clear --provider openai --agent otto",
-  );
+  await expect(
+    page.getByTestId("retained-order").getByRole("button", { name: "Clear order…" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("retained-order").getByTestId("command")).toHaveCount(0);
   await page.getByRole("button", { name: "Bind to an account" }).click();
   await expect(page.getByRole("radio", { name: /^Let the gateway choose/ })).toHaveAttribute(
     "aria-checked",
@@ -2328,3 +2338,199 @@ for (const size of [WIDE, PHONE]) {
     });
   });
 }
+
+// Unlock and Clear order with a button (#660, F-592): one confirmation, then the gateway's call,
+// and the page shows the state only from the gateway's read after it.
+const LOCKED = (more = "") =>
+  `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=locked${more}`;
+
+test("F-592: Unlock is a button with admin: one confirmation, Escape keeps everything, then the gateway's read", async ({
+  page,
+}) => {
+  await openFixture(page, LOCKED("&version=2026.11.10"), "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  // No terminal, and no stopped gateway: the steps are gone from this page.
+  await expect(page.getByTestId("stopped-steps")).toHaveCount(0);
+  await expect(page.locator("details.b-disclosure", { hasText: "Unlock" })).toHaveCount(0);
+  const unlock = page.getByRole("button", { name: "Unlock…" });
+  await unlock.click();
+  const dialog = page.getByRole("alertdialog", { name: "Unlock Otto?" });
+  await expect(dialog).toHaveAccessibleDescription(
+    "Otto's ordinary runs use OpenAI · Work only. After this, Otto follows the gateway's other orders, and when OpenAI · Work fails the gateway may use another OpenAI account. Locking Otto again needs the gateway stopped and a command on its machine.",
+  );
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  // Escape: nothing sent, focus back on Unlock.
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(unlock).toBeFocused();
+  expect((await sent(page)).filter((each) => each.type === "clearBotOrder")).toEqual([]);
+  // Then the press, by keyboard.
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Unlock", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  const press = (await sent(page)).filter((each) => each.type === "clearBotOrder");
+  expect(press).toMatchObject([
+    { botId: "otto", provider: "openai", account: "openai:work", kind: "unlock" },
+  ]);
+  const outcome = page.getByTestId("clear-outcome");
+  await expect(outcome).toHaveText(
+    /^Unlocked\. The gateway no longer keeps an order for Otto that names only OpenAI · Work, so Otto follows its other orders\. Checked with the gateway at \d{1,2}:\d{2} [AP]M\.$/,
+  );
+  await expect(outcome.getByRole("status")).toBeFocused();
+  await expect(page.getByTestId("bound-note")).toBeVisible();
+  await expect(page.getByText("The lock is gone")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Unlock…" })).toHaveCount(0);
+});
+
+test("F-592: the press carries the stamp of the page it was confirmed on", async ({ page }) => {
+  await openFixture(page, LOCKED(), "light");
+  const read = await page.evaluate(() => {
+    let read = { gatewayId: null as string | null, target: 0 };
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      read = { gatewayId: state.connection.gatewayId, target: state.connection.target };
+      return {
+        ...state,
+        accounts: {
+          ...state.accounts,
+          readOn: { ...read, connectedAt: state.connection.connectedAt },
+        },
+        connection: { ...state.connection, gatewayId: "another-gateway" },
+      };
+    });
+    return read;
+  });
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Unlock…" }).click();
+  // On OpenClaw 2026.10.6 locking again takes only the command.
+  await expect(page.getByRole("alertdialog")).toContainText(
+    "Locking Otto again needs a command on the gateway's machine.",
+  );
+  await page.getByRole("button", { name: "Unlock", exact: true }).click();
+  await expect.poll(() => sentStamp(page, "clearBotOrder")).toEqual(read);
+});
+
+for (const [end, words, word] of [
+  [
+    "refused",
+    "The gateway refused to unlock Otto: auth profile order is temporarily unavailable.",
+    "locked",
+  ],
+  [
+    "unanswered",
+    "The gateway didn't answer (gateway request timeout for models.authOrderSet), so Clawtrate can't tell yet whether Otto's order was cleared. Check now reads it again.",
+    "locked",
+  ],
+  [
+    "kept",
+    "The gateway answered, but its order for Otto still names only OpenAI · Work. Check now reads it again.",
+    "locked",
+  ],
+  [
+    "unread",
+    "The gateway answered, but Clawtrate couldn't read Otto's order back, so it can't say yet whether it was cleared. Check now reads it again.",
+    "locked",
+  ],
+  [
+    "moved",
+    "Otto's order changed on the gateway while this was open, so Clawtrate sent nothing. The page shows the order as the gateway has it now.",
+    "stale",
+  ],
+  ["unsent", "Nothing was sent. The gateway says its account status is unavailable.", "locked"],
+] as const)
+  test(`F-592: an Unlock that ends ${end} says so, and the page keeps the gateway's read`, async ({
+    page,
+  }) => {
+    await openFixture(page, LOCKED(`&clear=${end}`), "light");
+    await page.getByRole("button", { name: /^Account: / }).click();
+    await page.getByRole("button", { name: "Unlock…" }).click();
+    await page.getByRole("button", { name: "Unlock", exact: true }).click();
+    const outcome = page.getByTestId("clear-outcome");
+    await expect(outcome).toHaveText(words);
+    await expect(outcome.getByRole("alert")).toHaveCount(1);
+    await expect(page.getByTestId("bot-settings")).toHaveAttribute("data-word", word);
+  });
+
+test("F-592: while the press is under way the page says so and Unlock waits", async ({ page }) => {
+  await openFixture(page, LOCKED("&clear=hold"), "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Unlock…" }).click();
+  await page.getByRole("button", { name: "Unlock", exact: true }).click();
+  await expect(page.getByText("Unlocking Otto…")).toBeVisible();
+  // The page's Unlock waits (the confirmation's own button reads "Unlock…" while it is busy).
+  await expect(page.locator("[data-bs='unlock']")).toBeDisabled();
+  // Cancel while busy closes the confirmation, not the press: Unlock still waits, nothing more goes.
+  await page.getByTestId("confirm").getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("confirm")).toHaveCount(0);
+  await expect(page.locator("[data-bs='unlock']")).toBeDisabled();
+  expect((await sent(page)).filter((each) => each.type === "clearBotOrder")).toHaveLength(1);
+  await page.evaluate(() => (window as unknown as { releaseClear: () => void }).releaseClear());
+  await expect(page.getByTestId("clear-outcome")).toContainText("Unlocked.");
+});
+
+test("F-592: Clear order for a bot the gateway chooses for, with its own confirmation", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=retained&version=2026.11.10`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: OpenAI, Gateway chooses\. Open\.$/ }).click();
+  await expect(page.getByTestId("retained-order")).toContainText(
+    "Clear it to let the gateway choose among OpenAI's accounts.",
+  );
+  await page.getByRole("button", { name: "Clear order…" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Clear Otto's order?" });
+  await expect(dialog).toHaveAccessibleDescription(
+    "The gateway still has an order for Otto that names only OpenAI · Work. After this, the gateway chooses among OpenAI's accounts for each of Otto's runs, by its other orders. Keeping Otto on one account again needs the gateway stopped and a command on its machine.",
+  );
+  await dialog.getByRole("button", { name: "Clear order" }).click();
+  expect((await sent(page)).filter((each) => each.type === "clearBotOrder")).toMatchObject([
+    { botId: "otto", provider: "openai", account: "openai:work", kind: "clear" },
+  ]);
+  await expect(page.getByTestId("clear-outcome")).toHaveText(
+    /^Cleared\. The gateway no longer keeps an order for Otto that names only OpenAI · Work, so it chooses among OpenAI's accounts for Otto\. Checked with the gateway at /,
+  );
+  await expect(page.getByTestId("retained-order")).toHaveCount(0);
+});
+
+test("F-592: Change account names the button, with admin, where it named the command", async ({
+  page,
+}) => {
+  await openFixture(page, LOCKED(), "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^Let the gateway choose/ }).click();
+  await expect(page.getByTestId("locked-change-note")).toContainText(
+    "goes on using that account alone until the order is cleared. Account then has Clear order.",
+  );
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await expect(page.getByTestId("locked-change-note")).toContainText(
+    "Account then shows the lock command, and Unlock.",
+  );
+});
+
+test("F-592: an unsure Clear order says Check now, and its line has the button the page lacks", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=retained&clear=unread`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: OpenAI, Gateway chooses\. Open\.$/ }).click();
+  await page.getByRole("button", { name: "Clear order…" }).click();
+  await page.getByTestId("confirm").getByRole("button", { name: "Clear order" }).click();
+  const outcome = page.getByTestId("clear-outcome");
+  await expect(outcome).toContainText("Check now reads it again.");
+  const before = (await sent(page)).filter((each) => each.type === "checkLock").length;
+  await outcome.getByRole("button", { name: "Check now" }).click();
+  await expect
+    .poll(async () => (await sent(page)).filter((each) => each.type === "checkLock").length)
+    .toBeGreaterThan(before);
+});

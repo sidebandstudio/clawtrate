@@ -84,7 +84,7 @@ Describe the problem in a sentence or two, then explain the change and how you c
 
 CodeRabbit reviews every pull request into `main` that is not a draft. Its comments are advice: check each one against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
 
-End your pull request with the model and harness that did the work. For example, `AI: gpt-6.2-astra via Codex (T3 Code)` identifies the model and the coding agent that ran it. If several pairs contributed changes, put each on its own line in the final paragraph. If you used no AI, end with `No AI used.` Keep the footer current when someone adds changes. Reviewers must verify it before they approve or merge.
+End your pull request with the model and harness that did the work. For example, `AI: gpt-6.2-astra via Codex (T3 Code)` identifies the model and the coding agent that ran it. If several pairs contributed changes, put each on its own line in the final paragraph. If you used no AI, end with `No AI used.` Dependabot's pull requests are exempt, since it rewrites their body on every rebase. Keep the footer current when someone adds changes. Reviewers must verify it before they approve or merge.
 
 You are responsible for every line you submit. Read the diff before opening the pull request. Keep co-author trailers, "generated with" lines and tool credits out of commit messages and pull request titles.
 
