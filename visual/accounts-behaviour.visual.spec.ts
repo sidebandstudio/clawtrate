@@ -2459,7 +2459,8 @@ test("F-592: while the press is under way the page says so and Unlock waits", as
   await page.getByRole("button", { name: "Unlock…" }).click();
   await page.getByRole("button", { name: "Unlock", exact: true }).click();
   await expect(page.getByText("Unlocking Otto…")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Unlock…" })).toBeDisabled();
+  // The page's Unlock waits (the confirmation's own button reads "Unlock…" while it is busy).
+  await expect(page.locator("[data-bs='unlock']")).toBeDisabled();
   await page.evaluate(() => (window as unknown as { releaseClear: () => void }).releaseClear());
   await expect(page.getByTestId("clear-outcome")).toContainText("Unlocked.");
 });

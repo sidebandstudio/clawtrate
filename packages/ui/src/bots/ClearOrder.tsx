@@ -5,6 +5,7 @@
 
 import { clearShown, type BotBinding, type OrderClear } from "@clawtrate/core";
 import { Confirm } from "./Dialog.tsx";
+import { CheckIcon } from "../icons.tsx";
 import { Note, Wait } from "./parts.tsx";
 import { clock } from "./words.ts";
 
@@ -89,11 +90,14 @@ export function ClearOutcome({
   const doing = unlock ? `unlock ${name}` : `clear ${name}'s order`;
   const at = binding.evidence.checkedAt;
   const line = (tone: "warn" | undefined, text: string, alert = false) => (
-    <Note tone={tone} testId="clear-outcome">
-      <p role={alert ? "alert" : "status"} tabIndex={-1} data-bs="clear-outcome">
-        {text}
-      </p>
-    </Note>
+    // Apart from the account's facts that follow it.
+    <div style={{ marginBottom: 12 }}>
+      <Note tone={tone} icon={tone ? undefined : <CheckIcon />} testId="clear-outcome">
+        <p role={alert ? "alert" : "status"} tabIndex={-1} data-bs="clear-outcome">
+          {text}
+        </p>
+      </Note>
+    </div>
   );
   switch (status) {
     case "sending":
