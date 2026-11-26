@@ -799,6 +799,7 @@ export function Settings({
   atOpenClaw = false,
   updateReading,
   onClose,
+  onOpenRoutines = null,
 }: {
   connection: ConnectionState;
   info: HostInfo;
@@ -812,6 +813,8 @@ export function Settings({
   atOpenClaw?: boolean;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
+  /** Closes Settings and opens a bot's routines; null when the shell isn't shown. */
+  onOpenRoutines?: ((botId: string) => void) | null;
 }) {
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -1005,6 +1008,7 @@ export function Settings({
     info,
     announce,
     toNav,
+    openRoutines: onOpenRoutines,
   });
 
   const gatewayPane = (

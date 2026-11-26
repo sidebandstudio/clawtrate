@@ -12,6 +12,7 @@ const state = (main: { every: string; prompt: string | null }, kept = false): Ch
   status: "ready",
   error: null,
   stamp: { gatewayId: "gw-1", target: 0 },
+  model: "heartbeat",
   scheduler: true,
   readBotIds: ["main", "otto", "pip"],
   jobs: [
@@ -107,6 +108,12 @@ describe("F-201 a check-ins draft", () => {
 
   it("is not opened while nothing says which gateway the check-ins are from", () => {
     expect(openDraft({ ...state({ every: "30m", prompt: null }), stamp: null }, "main")).toBeNull();
+  });
+
+  it("F-201: is not opened on a gateway that keeps check-ins as routines (OpenClaw 2026.11.10)", () => {
+    const heartbeat = state({ every: "30m", prompt: null });
+    expect(openDraft(heartbeat, "main")).not.toBeNull();
+    expect(openDraft({ ...heartbeat, model: "routines" }, "main")).toBeNull();
   });
 });
 

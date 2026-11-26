@@ -740,6 +740,93 @@ test("F-201: below admin, one bot's check-ins in Routines are read-only, with no
   await expect(section.getByRole("button", { name: "Change Marlow's check-ins" })).toHaveCount(0);
 });
 
+test("F-201: on an OpenClaw that keeps check-ins as routines, Check-ins say so, change nothing, and lead to the bot's routines", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&routines=on&checkins=routines`, "light");
+  await checkIns(page);
+  const marlow = block(page, "marlow");
+  await expect(marlow.getByTestId("check-in-text")).toHaveText(
+    "This OpenClaw keeps check-ins as routines. Marlow's routines",
+  );
+  // No setting is read, so none is shown as Off, and nothing offers a change.
+  await expect(page.getByText("No check-ins")).toHaveCount(0);
+  await expect(page.getByText(/doesn't check in/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Change .*'s check-ins$/ })).toHaveCount(0);
+  await marlow.getByRole("button", { name: "Marlow's routines" }).click();
+  await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+  await expect(routinesView(page).getByRole("combobox", { name: "Bots" })).toHaveValue("marlow");
+  // There, the block above Marlow's routines says the same, with no link to where it is.
+  const section = routinesView(page).getByTestId("routines-check-ins");
+  await expect(section.getByTestId("check-in-text")).toHaveText(
+    "This OpenClaw keeps check-ins as routines.",
+  );
+  await expect(section.getByRole("button")).toHaveCount(1);
+  await expect(section.getByRole("button", { name: "Refresh" })).toBeVisible();
+  expect((await sent(page)).filter((each) => each.type === "saveCheckIn")).toEqual([]);
+});
+
+test("F-201: leaving a bot's routines opened from Settings' Check-ins puts focus on the rail's Routines button", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&routines=on&checkins=routines`, "light");
+  await checkIns(page);
+  // By keyboard, as a person who can't use a pointer would.
+  await block(page, "marlow").getByRole("button", { name: "Marlow's routines" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+  await routinesView(page).getByRole("button", { name: "Back to conversation" }).click();
+  await expect(routinesView(page)).toHaveCount(0);
+  // The link that opened Routines closed with Settings: focus goes to a live control, not the page.
+  await expect(page.locator(".rail").getByRole("button", { name: "Routines" })).toBeFocused();
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
+});
+
+test("F-201: an open dialog closes when the gateway, updated while it was open, keeps check-ins as routines, and nothing is saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&checkins=updated`, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const marlow = dialog(page, "Marlow");
+  await marlow.getByRole("radio", { name: /^Daily/ }).click();
+  // The gateway restarts on its new version: the connection drops and comes back, and is read again.
+  await change(
+    page,
+    "return { ...state, connection: { ...state.connection, status: 'reconnecting' } };",
+  );
+  await change(
+    page,
+    "return { ...state, connection: { ...state.connection, status: 'connected' } };",
+  );
+  await expect(block(page, "marlow").getByTestId("check-in-text")).toHaveText(
+    "This OpenClaw keeps check-ins as routines. Marlow's routines",
+  );
+  await expect(page.getByTestId("check-ins-dialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Change .*'s check-ins$/ })).toHaveCount(0);
+  expect(await saves(page)).toEqual([]);
+});
+
+test("F-201: below admin, on an OpenClaw that keeps check-ins as routines, nothing asks for admin to change them", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=read&checkins=routines`, "light");
+  await checkIns(page);
+  await expect(block(page, "marlow").getByTestId("check-in-text")).toContainText(
+    "This OpenClaw keeps check-ins as routines.",
+  );
+  await expect(page.getByTestId("admin-bar")).toHaveCount(0);
+  await expect(page.getByText("Changing check-ins needs admin access.")).toHaveCount(0);
+});
+
+test("F-201: on an OpenClaw that keeps check-ins as routines, no group head claims a bot's check-ins", async ({
+  page,
+}) => {
+  await openRoutines(page, `${ROUTINES}&checkins=routines`);
+  await expect(routinesView(page).getByRole("heading", { name: "Marlow" })).toBeVisible();
+  await expect(routinesView(page).locator('[data-testid="check-in-summary"]')).toHaveCount(0);
+});
+
 test("F-201: in the list across bots, a group head claims no check-ins before they are read", async ({
   page,
 }) => {
