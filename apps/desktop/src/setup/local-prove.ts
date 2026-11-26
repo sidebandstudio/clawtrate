@@ -5,7 +5,8 @@
 // (e) Every process holding the server end of exactly this connection is a
 //     process of this account, and at least one is found.
 // (f) One of them runs Node, has OpenClaw's own native module mapped (pinned by
-//     SHA-256, in a package that is OpenClaw of the pinned version), holds this
+//     SHA-256, in a package that is OpenClaw of a version pinned in
+//     openclaw-pins.ts, that version's own module), holds this
 //     profile's gateway lock and state database open, and is the process that
 //     lock names, with this port, this state folder and its start time.
 //
@@ -16,7 +17,7 @@
 
 import type { FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import { FS_SAFE_NATIVE_SHA256, PINNED_OPENCLAW_VERSION } from "./openclaw-pins.ts";
+import { PROVED_OPENCLAW } from "./openclaw-pins.ts";
 import {
   guardHome,
   holdHome,
@@ -127,9 +128,10 @@ export async function proveLocalGateway(options: ProveOptions): Promise<Proof> {
 
 /** The kernel's facts against the pins and the lock. */
 function judge(facts: Facts, stateDir: string, port: number): Proof {
-  if (FS_SAFE_NATIVE_SHA256[facts.suffix] !== facts.sha256) return no("pin");
   const pkg = parsed(facts.pkg);
-  if (pkg?.name !== "openclaw" || pkg.version !== PINNED_OPENCLAW_VERSION) return no("package");
+  const version = typeof pkg?.version === "string" ? pkg.version : "";
+  if (pkg?.name !== "openclaw" || !Object.hasOwn(PROVED_OPENCLAW, version)) return no("package");
+  if (PROVED_OPENCLAW[version]![facts.suffix] !== facts.sha256) return no("pin");
   const lock = parsed(facts.lock);
   const named =
     lock !== null &&

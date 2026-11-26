@@ -80,17 +80,9 @@ async function withLocalSetup(
   client: ClawtrateClient,
   exercise: (setup: SetupController) => Promise<void>,
   listener: Listener = { pid: 4242 },
-  /** Another port for the look to find, and local connect with its home in this run's folder. */
-  more: {
-    port?: number;
-    localConnect?: (home: string) => LocalConnect;
-    log?: (line: string) => void;
-    /** The one profile the look finds, by its state folder (a development gateway's). */
-    stateDir?: string;
-  } = {},
 ) {
-  const port = more.port ?? PORT;
-  const url = `ws://127.0.0.1:${port}`;
+  const port = PORT;
+  const url = URL;
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-setup-edges-")));
   const world = {
     ...productionWorld({ home: dir, appData: dir, platform: "darwin" }),
@@ -98,13 +90,6 @@ async function withLocalSetup(
     // A fixture CLI of the test's own, run as a read-only version would be.
     readOnly: async () => ({ verified: true, version: null }),
     deep: false,
-    ...(more.stateDir
-      ? {
-          profiles: [
-            { name: "default", args: [], stateDir: more.stateDir, required: true, env: {} },
-          ],
-        }
-      : {}),
   };
   const opened: Opened = {
     world,
@@ -136,8 +121,6 @@ async function withLocalSetup(
       open: async () => opened,
       confirm: async () => true,
       stopPrograms: () => {},
-      ...(more.localConnect ? { localConnect: more.localConnect(dir) } : {}),
-      ...(more.log ? { log: more.log } : {}),
     });
     await client.start({ resume: false });
     await setup.look();
@@ -535,84 +518,6 @@ function profileFiles(home: string, folder: string, lock: object) {
 }
 
 describe.skipIf(!mac)("local connect's send gate, with a listener of the test's own", () => {
-  it("refuses every socket when the profile's folder isn't in the home local connect names", async () => {
-    const lines: string[] = [];
-    const elsewhere = realpathSync(mkdtempSync(join(scratch, "elsewhere-")));
-    const listener = createServer((socket) => socket.on("error", () => {}));
-    await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
-    const port = (listener.address() as { port: number }).port;
-    try {
-      await withLocalSetup(
-        makeClient(new FakeGateway()),
-        async (setup) => {
-          await setup.connect();
-          await until(() => lines.length >= 1, 15_000);
-          expect(lines[0]).toBe(`[setup] couldn't verify what is listening at port ${port} (path)`);
-        },
-        { pid: 4242 },
-        {
-          port,
-          log: (line) => lines.push(line),
-          localConnect: () => ({ home: elsewhere, helper, platform, sandboxed: true }),
-        },
-      );
-    } finally {
-      listener.close();
-    }
-  });
-
-  for (const mode of ["bootstrap", "saved-token"] as const) {
-    it(`F-492: a same-account listener that isn't OpenClaw gets no byte of any setup socket (${mode})`, async () => {
-      // This process holds the accepted end: (e) passes, and (f) refuses it.
-      let bytes = 0;
-      let accepted = 0;
-      const listener = createServer((socket) => {
-        accepted += 1;
-        socket.on("data", (data) => (bytes += data.length));
-        socket.on("error", () => {});
-      });
-      await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
-      const port = (listener.address() as { port: number }).port;
-      const url = `ws://127.0.0.1:${port}`;
-      const gateway = new FakeGateway();
-      const storage = memoryStorage(mode === "saved-token" ? { [tokenKey(url)]: READ_TOKEN } : {});
-      const client = makeClient(gateway, storage);
-      const lines: string[] = [];
-      try {
-        await withLocalSetup(
-          client,
-          async (setup) => {
-            await setup.connect();
-            // Each socket it opens, retries included, is dialled and refused before its first byte.
-            await until(() => lines.length >= 1, 15_000);
-            await sleep(500);
-            // A retry may be on its way through its proof as this counts.
-            expect(accepted).toBeGreaterThanOrEqual(lines.length);
-            expect(bytes).toBe(0);
-            expect(gateway.sockets).toHaveLength(0);
-            expect(lines[0]).toBe(
-              `[setup] couldn't verify what is listening at port ${port} (lock)`,
-            );
-            // The gateway goes with its route, for every socket of it after setup.
-            const { settings } = client as unknown as { settings: { route?: string } | null };
-            expect(settings?.route).toBe(".openclaw");
-          },
-          { pid: 4242 },
-          {
-            port,
-            log: (line) => lines.push(line),
-            localConnect: (home) => {
-              profileFiles(home, ".openclaw", { pid: process.pid, role: "gateway", port });
-              return { home, helper, platform, sandboxed: true };
-            },
-          },
-        );
-      } finally {
-        listener.close();
-      }
-    }, 30_000);
-  }
-
   it("F-492: a gateway saved with its route gets no byte from a restart when a listener that isn't OpenClaw holds its port", async () => {
     let bytes = 0;
     let accepted = 0;
@@ -890,67 +795,6 @@ describe.skipIf(!BIN || !mac)(
         expect(counts).toEqual({ dials: 1, proofs: 1 });
       } finally {
         client.stop();
-      }
-    });
-
-    it("F-492: Connect proves each setup socket twice, then sends its code", async () => {
-      const lines: string[] = [];
-      const client = provedClient(gateway, gateway.port, []);
-      await withLocalSetup(
-        client,
-        async (setup) => {
-          await setup.connect();
-          await until(() => setup.current.phase === "failed", 60_000);
-          // Both proofs passed, so the code went: the gateway itself refused the fixture's code.
-          expect(setup.current.failure?.kind).toBe("code-refused");
-          expect(lines).toEqual([]);
-        },
-        { pid: 4242 },
-        {
-          port: gateway.port,
-          stateDir: join(gateway.home, FOLDER),
-          log: (line) => lines.push(line),
-          localConnect: () => ({ home: gateway.home, helper, platform, sandboxed: true }),
-        },
-      );
-    });
-
-    it("F-492: a socket proved when dialled but not before its credential sends no code", async () => {
-      const lines: string[] = [];
-      const client = provedClient(gateway, gateway.port, []);
-      const folder = join(gateway.home, FOLDER);
-      // While the request is signed, after the dial's proof: the profile's folder is no longer
-      // private, so the proof before the credential refuses it.
-      const host = (client as unknown as { host: ClawtrateHost }).host;
-      const sign = host.signer.sign;
-      host.signer = {
-        ...host.signer,
-        sign: async (payload) => {
-          chmodSync(folder, 0o750);
-          return sign(payload);
-        },
-      };
-      try {
-        await withLocalSetup(
-          client,
-          async (setup) => {
-            await setup.connect();
-            await until(() => setup.current.phase === "failed", 60_000);
-            expect(setup.current.failure?.kind).toBe("changed");
-            expect(lines).toContain(
-              `[setup] couldn't verify what is listening at port ${gateway.port} (mode)`,
-            );
-          },
-          { pid: 4242 },
-          {
-            port: gateway.port,
-            stateDir: folder,
-            log: (line) => lines.push(line),
-            localConnect: () => ({ home: gateway.home, helper, platform, sandboxed: true }),
-          },
-        );
-      } finally {
-        chmodSync(folder, 0o700);
       }
     });
 

@@ -301,7 +301,15 @@ const CANT_TELL: Record<string, string> = {
     "Clawtrate couldn't confirm where this gateway answers, so it doesn't connect to it by itself. Use Advanced.",
   "read-only":
     "This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.",
+  settings:
+    "Clawtrate can't use OpenClaw's settings on this Mac to connect by itself. Use Advanced.",
 };
+
+/** Why local connect didn't offer a gateway that answered: nothing was sent to it. */
+const unverifiedWords = (look: SetupLook) =>
+  look.reason === "version"
+    ? "This version of OpenClaw is one Clawtrate can't check yet, so it doesn't connect to it by itself. Use Advanced, or look again."
+    : `Clawtrate couldn't verify what is listening at port ${look.port}, so it doesn't connect to it by itself. Use Advanced, or look again.`;
 
 /** The found card and actions for each result of the look (§6). */
 function LookResult({
@@ -387,14 +395,29 @@ function LookResult({
           <HowToUpdate />
         </Found>
       );
+    case "unverified":
+      return (
+        <Found mark={<WarnIcon />} tone="warn" heading="OpenClaw settings found">
+          <Lede>{unverifiedWords(look)}</Lede>
+          <Actions>
+            {advanced}
+            <Quiet onClick={lookAgain}>Look again</Quiet>
+          </Actions>
+        </Found>
+      );
     case "stopped":
       return (
         <Found
           mark={<PauseIcon />}
           heading="OpenClaw is installed but not running"
           facts={[
-            ["Installed program", look.version ?? NOT_REPORTED],
-            ["Service", serviceWords(look.service)],
+            // Local connect reads settings, not the program or its service.
+            ...(offer.local
+              ? []
+              : ([
+                  ["Installed program", look.version ?? NOT_REPORTED],
+                  ["Service", serviceWords(look.service)],
+                ] as Array<[string, string]>)),
             ["Port", `No gateway answered on port ${look.port}`],
           ]}
         >
@@ -541,6 +564,12 @@ const FAILURES: Record<
     next: "look",
     step: 0,
   },
+  unverified: {
+    lead: "",
+    text: () => "Nothing was sent to it. Use Advanced, or look again.",
+    next: "advanced",
+    step: 0,
+  },
   "no-dialog": {
     lead: "Pairing needs the desktop app, which asks you first.",
     text: () => "In this web preview, use Advanced.",
@@ -573,6 +602,11 @@ const CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
   new: ["Making a one-time code", "Requesting read access", "Loading your bots"],
   paired: ["Checking the gateway", "Requesting read access", "Loading your bots"],
 };
+/** And with local connect (setup-effortless.md §3). */
+const LOCAL_CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
+  new: ["Checking it's OpenClaw on this Mac", "Pairing this Mac", "Loading your bots"],
+  paired: ["Checking it's OpenClaw on this Mac", "Connecting this Mac", "Loading your bots"],
+};
 
 /** Why a run that must look in a sandbox couldn't use the one it was given, in words. */
 const REFUSED: Record<SetupRefusal, string> = {
@@ -583,6 +617,7 @@ const REFUSED: Record<SetupRefusal, string> = {
   pairing: "it pairs only in its pairing scenario.",
 };
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
+const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it's OpenClaw on this Mac"];
 
 /** A screen's identity, so that a new one takes focus and is announced. */
 function screenKey(view: SetupView, setup: SetupState): string {
@@ -678,7 +713,7 @@ export function SetupFlow({
         <Back onBack={toFirst} />
         <Mark />
         <Title id="setup-title">Looking on this computer</Title>
-        <Steps steps={LOOK_STEPS} current={setup.step} />
+        <Steps steps={offer.local ? LOCAL_LOOK_STEPS : LOOK_STEPS} current={setup.step} />
         {setup.slow && (
           <p className="s-slow" role="status">
             Still looking. A gateway that has just started can take a while to answer.
@@ -711,14 +746,16 @@ export function SetupFlow({
     const lead =
       failure?.kind === "unreachable"
         ? `Nothing answered on port ${failure.port}.`
-        : (copy?.lead ?? "");
+        : failure?.kind === "unverified"
+          ? `Clawtrate couldn't verify what is listening at port ${failure.port}.`
+          : (copy?.lead ?? "");
     body = (
       <>
         <Back onBack={backFromConnect} />
         <Mark />
         <Title id="setup-title">Connecting</Title>
         <Steps
-          steps={CONNECT_STEPS[setup.look?.access ?? "new"]}
+          steps={(offer.local ? LOCAL_CONNECT_STEPS : CONNECT_STEPS)[setup.look?.access ?? "new"]}
           current={failure ? copy!.step : setup.step}
           failed={!!failure}
         />
@@ -735,6 +772,9 @@ export function SetupFlow({
                 <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
               )}
               {copy.next === "advanced" && <Primary onClick={advanced}>Use Advanced</Primary>}
+              {failure.kind === "unverified" && (
+                <Quiet onClick={() => void send({ type: "setupLook" })}>Look again</Quiet>
+              )}
               {copy.next === "back" && <Primary onClick={backFromConnect}>Back</Primary>}
               {copy.next === "bots" && (
                 <Primary onClick={() => void send({ type: "retry" })}>Try again</Primary>

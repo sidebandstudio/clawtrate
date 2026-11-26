@@ -686,7 +686,15 @@ export type ConnectionSettings = {
    * `ClientOptions.localConnect` for this name; with none, nothing is opened.
    */
   route?: string;
+  /**
+   * For a gateway saved with a `route`: the identity (`gateway.identity.get`) that route's
+   * gateway reported at its first hello. Another identity there later drops this device's token.
+   */
+  gatewayId?: string;
 };
+
+/** A gateway saved with a proved route reported another identity than the one it paired as. */
+export const ROUTE_IDENTITY_CHANGED = "ROUTE_IDENTITY_CHANGED";
 
 /**
  * Sockets the host proves itself (local connect, docs/design/setup-effortless.md
@@ -8975,7 +8983,12 @@ export class ClawtrateClient {
               await this.writeRecord({ ...saved, token: null });
               this.settings = { ...saved, token: null };
             } else this.settings = { ...current, token: null };
-            this.writes.retiredShared.set(settings.url, current.token);
+            // A gateway set up over a proved route keeps no copy of the token it was paired with,
+            // here or in the attempt: it is the person's own OpenClaw's token, read from its
+            // settings for this pairing only, and its route reconnects with this device's token.
+            if (current.route === undefined)
+              this.writes.retiredShared.set(settings.url, current.token);
+            else if (this.typedAttempt?.url === settings.url) this.typedAttempt = null;
           } catch {
             // The settings keep the secret, so the next hello tries again; this one goes on.
             this.log("warn", "Could not remove the shared gateway token from this device.");
@@ -9521,10 +9534,54 @@ export class ClawtrateClient {
 
   private confirmGatewayIdentity(id: string | null, current: () => boolean): void {
     if (id === null || !current()) return;
+    this.bindRouteIdentity(id, current);
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
     if (current()) this.settleReadStamps(id);
+  }
+
+  /**
+   * A gateway saved with a proved route is the gateway that route first reported
+   * (docs/decisions.md, "Routes"): its identity is saved with the route at that hello. One that
+   * reports another identity later has this device's token for it dropped and its connection
+   * closed, and the route isn't used again until this device pairs there again.
+   */
+  private bindRouteIdentity(id: string, current: () => boolean): void {
+    const settings = this.settings;
+    const deviceId = this.state.connection.deviceId;
+    if (settings?.route === undefined || settings.gatewayId === id) return;
+    const { url, route } = settings;
+    void this.changeConnection(async () => {
+      const now = this.settings;
+      if (!current() || now?.url !== url || now.route !== route) return;
+      if (now.gatewayId === undefined) {
+        // From the record as it is now: another client on this store may have changed it.
+        const saved = await this.savedSettings();
+        if (!current() || saved?.url !== url || saved.route !== route) return;
+        await this.writeRecord({ ...saved, gatewayId: id });
+        if (this.settings === now) this.settings = { ...now, gatewayId: id };
+        return;
+      }
+      if (now.gatewayId === id) return;
+      if (deviceId) {
+        const key = this.tokenKey(url, deviceId, "operator");
+        await this.host.storage.delete(key);
+        this.writes.grants.set(key, null);
+      }
+      this.endEligibility(url);
+      this.close();
+      this.setConnection({
+        status: "error",
+        retryAt: null,
+        error: {
+          code: ROUTE_IDENTITY_CHANGED,
+          message:
+            "Another OpenClaw gateway answers on this computer now, so Clawtrate removed this device's pairing for it. Connect again to pair with it.",
+          hint: null,
+        },
+      });
+    }).catch(() => this.log("warn", "Could not check which gateway answers on this route."));
   }
 
   /**

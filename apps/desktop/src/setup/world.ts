@@ -177,6 +177,17 @@ export function mustSandbox(options: {
 }
 
 /**
+ * Whether this process is a packaged app's: Electron's main process, not
+ * started as Electron's default app with a folder to run (`electron .`, as a
+ * development build is). Node, a test runner and the web host never are.
+ */
+export function packagedApp(
+  proc: { versions: { electron?: string }; defaultApp?: boolean } = process,
+): boolean {
+  return typeof proc.versions.electron === "string" && proc.defaultApp !== true;
+}
+
+/**
  * The real home folder, from the account, never from an environment a test
  * may have changed. Null when the account can't be read: the caller refuses.
  */

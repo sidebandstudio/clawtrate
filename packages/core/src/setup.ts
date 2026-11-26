@@ -27,6 +27,12 @@ export type LookOutcome =
   | "cant-tell"
   /** The program was found but couldn't be started. */
   | "cant-run"
+  /**
+   * Local connect: OpenClaw's settings name a port where something answers, but
+   * Clawtrate couldn't prove it is this account's OpenClaw (`reason` `version`: an
+   * OpenClaw whose version it can't check).
+   */
+  | "unverified"
   | "not-found"
   | "windows";
 
@@ -43,7 +49,11 @@ export type CantTellReason =
    * its launcher may repair its own installation before any command runs, so
    * the look runs nothing (docs/decisions.md, "What the look runs").
    */
-  | "read-only";
+  | "read-only"
+  /** Local connect: OpenClaw's settings file can't be used here (its form, its sign-in, its rights). */
+  | "settings"
+  /** For `unverified`: an OpenClaw version local connect can't check. */
+  | "version";
 
 /** The gateway's service, as the status reports it for this gateway. `none`: it reports no matching unit. */
 export type LookService =
@@ -88,6 +98,8 @@ export type SetupFailureKind =
   | "bots"
   /** Back couldn't close the connection setup opened; Back tries again. */
   | "cleanup"
+  /** Local connect couldn't prove a socket to the port is this account's OpenClaw: nothing went. */
+  | "unverified"
   /** The connection failed in another way; the connection state says how. */
   | "other";
 
@@ -150,7 +162,8 @@ export type SetupHost = {
   cancel(): void;
   /**
    * Ask the host to pair with what the last look found. The host shows its own
-   * dialog and runs nothing unless that dialog's answer is yes.
+   * dialog and runs nothing unless that dialog's answer is yes; with local
+   * connect, this request is the consent (`SetupOffer.local`).
    */
   connect(): Promise<void>;
   /** Back to the first screen. */
@@ -159,6 +172,8 @@ export type SetupHost = {
 
 /**
  * Whether the screens of setup are offered, and which: `look` runs on the
- * host's computer, `pair` needs a native dialog of the host's.
+ * host's computer, `pair` needs a native dialog of the host's. `local`: the
+ * host proves this computer's gateway itself (local connect), so Connect is
+ * the consent and no dialog follows it.
  */
-export type SetupOffer = { look: boolean; pair: boolean; platform: string };
+export type SetupOffer = { look: boolean; pair: boolean; platform: string; local?: boolean };

@@ -22,7 +22,11 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { localGatewayBuild } from "../packaging/config.ts";
 import { proveLocalGateway, type ProveOptions } from "../src/setup/local-prove.ts";
-import { FS_SAFE_NATIVE_SHA256, PINNED_OPENCLAW_VERSION } from "../src/setup/openclaw-pins.ts";
+import {
+  FS_SAFE_1110_SHA256,
+  FS_SAFE_NATIVE_SHA256,
+  PINNED_OPENCLAW_VERSION,
+} from "../src/setup/openclaw-pins.ts";
 
 const platform = process.platform;
 const FOLDER = ".openclaw-clawtrate";
@@ -426,6 +430,24 @@ describe.skipIf(platform !== "darwin")(
       expect(await prove(at, answer({ lock: padded }))).toEqual({ proved: true });
     });
 
+    it("passes either proved version with its own module, and neither with the other's", async () => {
+      const at = path();
+      const lock = named(at);
+      const v1110 = { name: "openclaw", version: "2026.11.10" };
+      for (const arch of ["arm64", "x64"]) {
+        const sha256 = FS_SAFE_1110_SHA256[`darwin-${arch}`]!;
+        expect(await prove(at, answer({ lock, pkg: v1110, arch, sha256 })), arch).toEqual({
+          proved: true,
+        });
+        // 2026.10.6's module in a package that says 2026.11.10, and the other way round.
+        const older = FS_SAFE_NATIVE_SHA256[`darwin-${arch}`]!;
+        expect(await prove(at, answer({ lock, pkg: v1110, arch, sha256: older }))).toEqual(
+          refused("pin"),
+        );
+        expect(await prove(at, answer({ lock, arch, sha256 }))).toEqual(refused("pin"));
+      }
+    });
+
     it("refuses a module that isn't the pinned one", async () => {
       const at = path();
       const lock = named(at);
@@ -434,6 +456,7 @@ describe.skipIf(platform !== "darwin")(
       expect(await prove(at, answer({ lock, arch: "x64" }))).toEqual(refused("pin"));
       for (const pkg of [
         { name: "openclaw", version: "2026.10.5" },
+        { name: "openclaw", version: "2026.11.11" },
         { name: "not-openclaw", version: PINNED_OPENCLAW_VERSION },
         {},
       ])

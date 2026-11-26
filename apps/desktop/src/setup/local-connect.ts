@@ -9,14 +9,15 @@
 // `provedRouteFor` gives the client its sockets after setup, and after a
 // restart, the same way.
 //
-// No shipped host turns this on yet: `SetupControllerOptions.localConnect` and
-// `ClientOptions.localConnect` are off in every one of them.
+// No shipped host turns it on yet. When one does, a person's packaged app gets
+// the account's own home; every other run has no default home
+// (`localConnectFor`).
 
 import { connect as dial, type Socket } from "node:net";
 import type { ProvedRoute, WebSocketLike } from "@clawtrate/core";
 import { Agent, WebSocket } from "undici";
 import { proveLocalGateway, type ProveRefusal } from "./local-prove.ts";
-import { mustSandbox } from "./world.ts";
+import { accountHome, mustSandbox } from "./world.ts";
 
 /** What local connect needs from its host: where to look, the helper, and the home rule. */
 export type LocalConnect = {
@@ -26,14 +27,27 @@ export type LocalConnect = {
   platform: NodeJS.Platform;
   /** `mustSandbox(…)` for this run: the reader's and the proof's home rule. */
   sandboxed: boolean;
+  /** The helper's and the parse worker's deadline: `READ_DEADLINE_MS` unless a test lengthens it. */
+  deadlineMs?: number;
 };
 
-/** The host's options for local connect, its home rule from `mustSandbox`. */
+/**
+ * The host's options for local connect, its home rule from `mustSandbox`, or
+ * null when it is off. A person's packaged app looks in the account's own
+ * home, as the system reports it, and nowhere else. Any other run (a
+ * development build, a test, an automated launch) has no default home: only
+ * one the run names itself, which the reader and the proof then take only as
+ * a private folder below the system's temporary root (`guardHome`).
+ */
 export function localConnectFor(
   run: Parameters<typeof mustSandbox>[0],
-  where: Omit<LocalConnect, "sandboxed">,
-): LocalConnect {
-  return { ...where, sandboxed: mustSandbox(run) };
+  where: { home?: string | null; helper: string | null; platform: NodeJS.Platform },
+  accountHomeOf: () => string | null = accountHome,
+): LocalConnect | null {
+  const sandboxed = mustSandbox(run);
+  const home = sandboxed ? where.home : accountHomeOf();
+  if (!home || (!sandboxed && where.home != null && where.home !== home)) return null;
+  return { home, helper: where.helper, platform: where.platform, sandboxed };
 }
 
 /** Proves the far end of the host's connection from this local port; false sends nothing. */

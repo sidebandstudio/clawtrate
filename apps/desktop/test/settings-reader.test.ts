@@ -29,11 +29,7 @@ import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LOCAL_GATEWAY_HELPER, localGatewayBuild } from "../packaging/config.ts";
-import {
-  FS_SAFE_NATIVE_SHA256,
-  PINNED_FS_SAFE_VERSION,
-  PINNED_OPENCLAW_VERSION,
-} from "../src/setup/openclaw-pins.ts";
+import { PROVED_FS_SAFE, PROVED_OPENCLAW } from "../src/setup/openclaw-pins.ts";
 import {
   checkOpened,
   guardHome,
@@ -47,7 +43,7 @@ import {
   sameFolder,
   SETTINGS_LIMIT,
 } from "../src/setup/settings-reader.ts";
-import { accountHome, SetupRefusedError } from "../src/setup/world.ts";
+import { accountHome, packagedApp, SetupRefusedError } from "../src/setup/world.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
 const WORKER = new URL("../src/setup/settings-parse.ts", import.meta.url);
@@ -360,7 +356,15 @@ describe.skipIf(!posix)("the home folder", () => {
     expect(guardHome(path, true, {}, () => account)).toEqual(exact(path));
     // A marker makes the run sandboxed whatever the caller says; only both together are production.
     expect(guardHome(path, false, { CLAWTRATE_AUTOMATED: "" }, () => account)).toEqual(exact(path));
-    expect(guardHome(path, false, {}, () => path)).toBe(null);
+    expect(
+      guardHome(
+        path,
+        false,
+        {},
+        () => path,
+        () => true,
+      ),
+    ).toBe(null);
   });
 
   it("holds a sandboxed home to the folder the guard checked, still private", async () => {
@@ -963,7 +967,13 @@ describe("the account's real home", () => {
 
   it("in a production run, is only the home the system reports for this account", () => {
     const production = (home: string, account: string | null) => () =>
-      guardHome(home, false, {}, () => account);
+      guardHome(
+        home,
+        false,
+        {},
+        () => account,
+        () => true,
+      );
     expect(production(synthetic, synthetic)).not.toThrow();
     expect(production(synthetic, `${synthetic}${sep}`)).not.toThrow();
     // A home the caller names that isn't the account's, or no account home at all, refuses.
@@ -971,6 +981,26 @@ describe("the account's real home", () => {
     expect(production(`${synthetic}${sep}`, synthetic)).toThrow(SetupRefusedError);
     expect(production(join(synthetic, ".openclaw"), synthetic)).toThrow(SetupRefusedError);
     expect(production(synthetic, null)).toThrow(SetupRefusedError);
+  });
+
+  it("outside a person's packaged app has no default home: a production run there is refused", () => {
+    // A development build, a test runner, the web host: this process isn't a packaged app's, so
+    // even the account's own home, named exactly, is refused before anything is opened.
+    expect(() => guardHome(synthetic, false, {}, () => synthetic)).toThrow(SetupRefusedError);
+    expect(() =>
+      guardHome(
+        synthetic,
+        false,
+        {},
+        () => synthetic,
+        () => false,
+      ),
+    ).toThrow(SetupRefusedError);
+    expect(packagedApp({ versions: {} })).toBe(false);
+    expect(packagedApp({ versions: { electron: "41.0.0" }, defaultApp: true })).toBe(false);
+    expect(packagedApp({ versions: { electron: "41.0.0" } })).toBe(true);
+    // This test runner itself.
+    expect(packagedApp()).toBe(false);
   });
 
   it("is never a default: every reader entry point takes the home from its caller", () => {
@@ -982,7 +1012,7 @@ describe("the account's real home", () => {
   });
 });
 
-it("a shipped host reaches the reader only through local connect's proof, and reads no settings yet", () => {
+it("a shipped host reaches the reader only through local connect: its look, its Connect and its proof", () => {
   const own = new Set([
     "settings-reader.ts",
     "settings-parse.ts",
@@ -1002,9 +1032,12 @@ it("a shipped host reaches the reader only through local connect's proof, and re
       readFileSync(file, "utf8").includes(module.replace(/\.ts$/, "")),
     );
   });
-  // The proof holds the home and runs the helper as the reader does; local connect, which no
-  // shipped host turns on (local-connect.test.ts), is the proof's one caller.
-  expect(importers.map((file) => relative(ROOT, file).split(sep).join("/"))).toEqual([
+  // The proof holds the home and runs the helper as the reader does; the look reads settings,
+  // and Connect holds the token it found: local connect, which no shipped host turns on yet
+  // (local-connect.test.ts).
+  expect(importers.map((file) => relative(ROOT, file).split(sep).join("/")).sort()).toEqual([
+    "apps/desktop/src/setup/controller.ts",
+    "apps/desktop/src/setup/local-look.ts",
     "apps/desktop/src/setup/local-prove.ts",
   ]);
   const readers = shipped.filter(
@@ -1012,18 +1045,22 @@ it("a shipped host reaches the reader only through local connect's proof, and re
       !file.endsWith(`${sep}settings-reader.ts`) &&
       /\b(readLocalSettings|openSettingsFile|parseInWorker)\b/.test(readFileSync(file, "utf8")),
   );
-  expect(readers).toEqual([]);
+  expect(readers.map((file) => relative(ROOT, file).split(sep).join("/"))).toEqual([
+    "apps/desktop/src/setup/local-look.ts",
+  ]);
 });
 
-// CI installs the pinned OpenClaw from npm and names its folder: it must be the pinned version,
-// carry this platform's own module, and every module it carries must match its pin.
+// CI installs the pinned OpenClaw from npm and names its folder: it must be a version local
+// connect proves, carry this platform's own module, and every module it carries must match its
+// version's pin.
 it.skipIf(!process.env.CLAWTRATE_PINNED_OPENCLAW)(
   "the pinned hashes match the installed OpenClaw's own modules",
   () => {
     const root = process.env.CLAWTRATE_PINNED_OPENCLAW!;
     const version = (path: string) =>
       (JSON.parse(readFileSync(join(path, "package.json"), "utf8")) as { version: string }).version;
-    expect(version(root)).toBe(PINNED_OPENCLAW_VERSION);
+    const openclaw = version(root);
+    expect(Object.keys(PROVED_OPENCLAW)).toContain(openclaw);
     const scope = join(root, "node_modules/@openclaw");
     const found = readdirSync(scope).filter((name) => /^fs-safe-.+/.test(name));
     const libc =
@@ -1035,10 +1072,10 @@ it.skipIf(!process.env.CLAWTRATE_PINNED_OPENCLAW)(
           : "-musl";
     expect(found).toContain(`fs-safe-${platform}-${process.arch}${libc}`);
     for (const name of found) {
-      expect(version(join(scope, name)), name).toBe(PINNED_FS_SAFE_VERSION);
+      expect(version(join(scope, name)), name).toBe(PROVED_FS_SAFE[openclaw]);
       const file = readFileSync(join(scope, name, "fs-safe-native.node"));
       const hash = createHash("sha256").update(file).digest("hex");
-      expect(hash, name).toBe(FS_SAFE_NATIVE_SHA256[name.slice("fs-safe-".length)]);
+      expect(hash, name).toBe(PROVED_OPENCLAW[openclaw]![name.slice("fs-safe-".length)]);
     }
   },
 );

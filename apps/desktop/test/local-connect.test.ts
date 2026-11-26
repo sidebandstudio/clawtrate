@@ -252,21 +252,37 @@ describe("local connect's connector", () => {
     expect(await fine(new AbortController().signal)).toBe(true);
   });
 
-  it("takes its home rule from mustSandbox", () => {
-    const where = { home: "/nowhere", helper: null, platform: "darwin" as const };
+  it("takes its home rule from mustSandbox, and has no default home outside a person's app", () => {
+    const where = { helper: null, platform: "darwin" as const };
     const none = () => false;
-    expect(localConnectFor({ packaged: true, env: {}, switches: none }, where).sandboxed).toBe(
-      false,
-    );
-    expect(localConnectFor({ packaged: false, env: {}, switches: none }, where).sandboxed).toBe(
-      true,
-    );
+    const account = () => "/clawtrate-account-home";
+    const person = { packaged: true, env: {}, switches: none };
+    // A person's packaged app: the account's own home, and no other.
+    expect(localConnectFor(person, where, account)).toEqual({
+      ...where,
+      home: "/clawtrate-account-home",
+      sandboxed: false,
+    });
     expect(
-      localConnectFor(
-        { packaged: true, env: { CLAWTRATE_SETUP_SANDBOX: "1" }, switches: none },
-        where,
-      ).sandboxed,
-    ).toBe(true);
+      localConnectFor(person, { ...where, home: "/clawtrate-account-home" }, account)?.home,
+    ).toBe("/clawtrate-account-home");
+    expect(localConnectFor(person, { ...where, home: "/tmp/elsewhere" }, account)).toBe(null);
+    expect(localConnectFor(person, where, () => null)).toBe(null);
+    // A development build, an automated run, a driven app: off unless the run names a home of
+    // its own, which is then a sandbox's; the account's home is never the default.
+    for (const run of [
+      { packaged: false, env: {}, switches: none },
+      { packaged: true, env: { CLAWTRATE_SETUP_SANDBOX: "1" }, switches: none },
+      { packaged: true, env: { VITEST: "" }, switches: none },
+      { packaged: true, env: {}, switches: (name: string) => name === "remote-debugging-port" },
+    ]) {
+      expect(localConnectFor(run, where, account), JSON.stringify(run.env)).toBe(null);
+      expect(localConnectFor(run, { ...where, home: "/tmp/sandbox-home" }, account)).toEqual({
+        ...where,
+        home: "/tmp/sandbox-home",
+        sandboxed: true,
+      });
+    }
   });
 });
 
@@ -346,9 +362,10 @@ it("no shipped host turns local connect on", () => {
   const found = shipped.flatMap((file) =>
     localConnectUses(relative(ROOT, file).split(sep).join("/"), readFileSync(file, "utf8")),
   );
-  // Each option's declaration and its one read; nothing sets either, or calls the builder.
+  // Each option's declaration and its reads; nothing sets either, or calls the builder.
   expect(found.sort()).toEqual([
-    "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect;",
+    "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect & { worker: URL };",
+    "apps/desktop/src/setup/controller.ts read this.options.localConnect",
     "apps/desktop/src/setup/controller.ts read this.options.localConnect",
     "packages/core/src/client.ts PropertySignature localConnect?: (url: string, route: string) => ProvedRoute | null;",
     "packages/core/src/client.ts read this.options.localConnect",

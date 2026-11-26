@@ -32,7 +32,7 @@ import {
   systemTempRoots,
   within,
 } from "./sandbox.ts";
-import { accountHome, SANDBOX_MARKERS, SetupRefusedError } from "./world.ts";
+import { accountHome, packagedApp, SANDBOX_MARKERS, SetupRefusedError } from "./world.ts";
 
 export const SETTINGS_LIMIT = 1024 * 1024;
 /** The helper's deadline, and the parse worker's. */
@@ -137,9 +137,12 @@ export const sameFolder = (a: HomeIdentity, b: HomeIdentity) => a.dev === b.dev 
 
 /**
  * Which home may be read, decided before anything in it is opened. A
- * production run (the caller says so, and no sandbox marker is present)
- * reads only the home the operating system reports for this account, and
- * nothing when that can't be determined. Any other run reads only a private
+ * production run (the caller says so, no sandbox marker is present, and this
+ * process is a packaged app's: `packagedApp`) reads only the home the
+ * operating system reports for this account, and nothing when that can't be
+ * determined. A caller that says production anywhere else (a development
+ * build, a test, a Node host) is refused outright: outside a person's
+ * packaged app there is no default home. Any other run reads only a private
  * folder of this account's, by its canonical path, below one of this
  * machine's temporary roots with no folder on the way that another account
  * could swap, and away from the account's real home; its identity is
@@ -150,10 +153,11 @@ export function guardHome(
   sandboxed: boolean | undefined,
   env: NodeJS.ProcessEnv = process.env,
   accountHomeOf: () => string | null = accountHome,
+  packaged: () => boolean = packagedApp,
 ): HomeIdentity | null {
   const real = accountHomeOf();
   if (sandboxed === false && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) {
-    if (real === null || home !== resolve(real)) throw new SetupRefusedError("home");
+    if (!packaged() || real === null || home !== resolve(real)) throw new SetupRefusedError("home");
     return null;
   }
   const uid = process.geteuid?.() ?? null;
