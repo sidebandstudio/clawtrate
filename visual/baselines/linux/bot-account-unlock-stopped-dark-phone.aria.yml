@@ -110,7 +110,10 @@
           - code: openclaw gateway start
           - button "Copy start command"
           - status
-      - paragraph: Clawtrate sees the change when the gateway is back. Otto then follows the gateway's other orders.
+      - paragraph:
+        - text: These stop and start the gateway's service. If you run the gateway yourself, with
+        - code: openclaw gateway run
+        - text: ", stop it and start it again where it runs instead. Clawtrate sees the change when the gateway is back. Otto then follows the gateway's other orders."
     - group: What a lock doesn't cover
     - button "Change account"
   - status

@@ -107,7 +107,10 @@
         - code: openclaw gateway start
         - button "Copy start command"
         - status
-    - paragraph: Clawtrate reads the lock from the gateway when it is back.
+    - paragraph:
+      - text: These stop and start the gateway's service. If you run the gateway yourself, with
+      - code: openclaw gateway run
+      - text: ", stop it and start it again where it runs instead. Clawtrate reads the lock from the gateway when it is back."
     - status: Not locked. Checked at 5:40 PM.
     - button "Check now"
     - paragraph: "What this cannot see: if OpenAI · Work is pausing after a failure, a run can start on another OpenAI account without leaving a record Clawtrate can read."
