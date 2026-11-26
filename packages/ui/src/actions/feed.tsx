@@ -187,22 +187,17 @@ function callEntries(
 }
 
 /**
- * Whether the engine's run already draws text block `i` of its history item, by where the block
- * stands, never by its words: right before a call the engine places text beside, or the last text
- * of the run's last item, with no call after it, while the engine draws the run's text (as its
- * reply, or beside a call whose row history doesn't hold yet).
+ * Whether the engine's run already draws text block `i` of its history item: the text right before
+ * a call the engine places text beside, known by that call's id, never by its words. No history
+ * row names an item of the `assistant` stream, so every other text of the run is drawn from
+ * history, even while the engine still streams it as the reply: drawn twice until the run ends,
+ * rather than text the person already read disappearing.
  */
-function shownByEngine(
-  run: Run,
-  blocks: TranscriptItem["blocks"],
-  i: number,
-  lastOfRun: boolean,
-): boolean {
-  const after = blocks.slice(i + 1).filter((block) => block.kind !== "reasoning");
-  const next = after[0];
-  if (next?.kind === "tool-call")
-    return (run.preambles ?? []).some((p) => p.beforeCall === next.callId);
-  return lastOfRun && after.length === 0 && run.text.trim() !== "";
+function shownByEngine(run: Run, blocks: TranscriptItem["blocks"], i: number): boolean {
+  const next = blocks.slice(i + 1).find((block) => block.kind !== "reasoning");
+  return (
+    next?.kind === "tool-call" && (run.preambles ?? []).some((p) => p.beforeCall === next.callId)
+  );
 }
 
 const gap = (id: string, count: number): FeedEntry<FeedRef> => ({
@@ -323,7 +318,6 @@ function itemEntries(
   tally: Tally,
   fromEngine = false,
   record: EngineRecord | null = null,
-  lastOfRun = false,
 ): FeedEntry<FeedRef>[] {
   const reasoningSteps = run ? run.steps.filter((s) => s.kind === "reasoning") : [];
   const reasoningBlocks = item.blocks.filter((b) => b.kind === "reasoning").length;
@@ -336,7 +330,7 @@ function itemEntries(
   item.blocks.forEach((block, i) => {
     if (block.kind === "text") {
       // The engine already shows this text for its run: a preamble, or the streaming reply.
-      if (fromEngine && run && shownByEngine(run, item.blocks, i, lastOfRun)) return;
+      if (fromEngine && run && shownByEngine(run, item.blocks, i)) return;
       const head = block.text.slice(0, 64);
       const n = (seen.get(head) ?? 0) + 1;
       seen.set(head, n);
@@ -729,11 +723,12 @@ export function ActionScope({
       // holds of it keep only their text, so nothing is drawn twice and nothing only history has is lost.
       const fromEngine = run !== undefined && engineRunIds.has(run.id);
       const drawn = run ? (drawnOf.get(run.id) ?? new Set<string>()) : null;
-      const last = run !== undefined && lastItem.get(run.id) === item.id;
       if (run && drawn) drawnOf.set(run.id, drawn);
       const record =
-        run && drawn && !fromEngine ? engineRecord(run, inRows, drawn, last, tally) : null;
-      const entries = itemEntries(item, run, index, skip, cards, tally, fromEngine, record, last);
+        run && drawn && !fromEngine
+          ? engineRecord(run, inRows, drawn, lastItem.get(run.id) === item.id, tally)
+          : null;
+      const entries = itemEntries(item, run, index, skip, cards, tally, fromEngine, record);
       const placed = { pictures: placePictures(item, entries), files: placeFiles(item, entries) };
       built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0, placed });
     }

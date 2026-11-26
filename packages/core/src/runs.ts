@@ -2835,7 +2835,12 @@ export function textPlaced(run: Pick<Run, "textItemId" | "preambles">): boolean 
   return itemId !== null && (run.preambles ?? []).some((p) => p.item === itemId);
 }
 
-/** Text beside a tool call: its updates replace its text in place; `end` ends it. */
+/**
+ * Text beside a tool call: its updates replace its text in place; `end` ends it. A new item
+ * (2026.10.6) takes the `assistant` stream's item that is streaming, the same join
+ * `textBesideCall` makes when the call starts, made as soon as the item arrives: the gateway sends
+ * it after that message's text and before its call, and in between the text is not drawn twice.
+ */
 function applyPreamble(run: Run, data: RawRecord): Run {
   const id = str(data.itemId);
   const text = typeof data.progressText === "string" ? data.progressText : null;
@@ -2843,9 +2848,16 @@ function applyPreamble(run: Run, data: RawRecord): Run {
   const list = run.preambles ?? [];
   const existing = list.find((each) => each.id === id);
   const ended = data.phase === "end";
+  const streaming = run.textItemId !== null && run.text.trim() !== "" && !textPlaced(run);
   const next: Preamble = existing
     ? { ...existing, text: text ?? existing.text, ended: existing.ended || ended }
-    : { id, text: text ?? "", ended, beforeCall: null };
+    : {
+        id,
+        ...(streaming ? { item: run.textItemId! } : {}),
+        text: text ?? "",
+        ended,
+        beforeCall: null,
+      };
   const preambles = existing
     ? list.map((each) => (each.id === id ? next : each))
     : [...list, next].slice(-MAX_PREAMBLES_PER_RUN);

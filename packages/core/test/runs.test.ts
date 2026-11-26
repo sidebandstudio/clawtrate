@@ -1407,6 +1407,44 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
     ]);
   });
 
+  it("F-088: on 2026.10.6, the preamble item takes the stream's item as it arrives, before its call starts", () => {
+    const preamble = (seq: number, phase: string, text = BESIDE): Frame =>
+      A("run-1", seq, "item", {
+        kind: "preamble",
+        title: "Preamble",
+        phase,
+        progressText: text,
+        itemId: `commentary-0-${text.length}`,
+      });
+    const waiting = only(
+      play([start, ...said(2, "s:1", BESIDE), preamble(4, "update"), preamble(5, "end")]).activity,
+    );
+    expect(waiting.preambles).toEqual([
+      {
+        id: `commentary-0-${BESIDE.length}`,
+        item: "s:1",
+        text: BESIDE,
+        ended: true,
+        beforeCall: null,
+      },
+    ]);
+    // An item a call already placed is not taken again: the next message's text came only as its item.
+    const next = "Then the second listing.";
+    const placed = only(
+      play([
+        start,
+        ...said(2, "s:1", BESIDE),
+        ...call(4, "c1"),
+        preamble(8, "update", next),
+        preamble(9, "end", next),
+      ]).activity,
+    );
+    expect(placed.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+      { id: `commentary-0-${next.length}`, text: next, ended: true, beforeCall: null },
+    ]);
+  });
+
   it("F-088: a preamble item that came with other words still keeps its call, and the stream's text is not added beside it", () => {
     const run = only(
       play([

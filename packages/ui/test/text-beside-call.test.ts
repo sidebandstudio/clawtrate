@@ -189,7 +189,10 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(html).not.toContain('data-testid="live-turn"');
   });
 
-  it("history's row of the reply the engine still streams is drawn once, as the reply", () => {
+  it("history's row of the reply the engine still streams is drawn from history, and again as the reply until the run ends", () => {
+    // No history row names an item of the stream, so the row can't be known as the reply being
+    // drawn: it is shown, and the reply is doubled for as long as the run streams it. Pinned so
+    // that hiding it again is a deliberate change.
     const rows = [
       {
         role: "assistant",
@@ -217,7 +220,8 @@ describe("F-088: text beside a call is known by its item, never by its words", (
       ),
     );
     expect(count(html, "Checking logs.")).toBe(1);
-    expect(count(html, "Both logs are clean.")).toBe(1);
+    expect(count(html, "Both logs are clean.")).toBe(2);
+    expect(html).toContain('data-testid="live-turn"');
   });
 
   it("text the run wrote before a person's message steered it stays where it was while the run answers", () => {
@@ -256,5 +260,78 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(count(html, "An interim note.")).toBe(1);
     expect(count(html, "Checking the cache.")).toBe(1);
     expect(count(html, "All clean.")).toBe(1);
+  });
+
+  it("text the run wrote before a person's message stays while history holds only the rows before it", () => {
+    // The history read every send schedules holds the run's row and the person's message, not
+    // the steered run's next row.
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "c1", name: "ls", arguments: { path: "." } },
+          { type: "text", text: "An interim note." },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: RUN },
+      },
+      { role: "user", content: "Also check the cache.", __openclaw: { id: "u2", seq: 3 } },
+    ];
+    const html = draw(
+      transcriptOf(
+        [
+          ...start,
+          ...call("c1"),
+          ...said("m:1", "An interim note."),
+          ...said("m:2", "Checking the cache."),
+          ...call("c2"),
+          ...said("m:3", "All clean."),
+        ],
+        rows,
+      ),
+    );
+    expect(count(html, "An interim note.")).toBe(1);
+    expect(count(html, "Checking the cache.")).toBe(1);
+    expect(count(html, "All clean.")).toBe(1);
+  });
+
+  it("text written after a call stays while the run's next message streams, with no message of the person's", () => {
+    // OpenClaw 2026.11.10 rereads history at each row it writes: the earlier row, not the next.
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "c1", name: "ls", arguments: { path: "." } },
+          { type: "text", text: "The listing is in." },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: RUN },
+      },
+    ];
+    const html = draw(
+      transcriptOf(
+        [
+          ...start,
+          ...call("c1"),
+          ...said("m:1", "The listing is in."),
+          ...said("m:2", "Now the summary."),
+        ],
+        rows,
+      ),
+    );
+    expect(count(html, "The listing is in.")).toBe(1);
+    expect(count(html, "Now the summary.")).toBe(1);
+  });
+
+  it("on 2026.10.6, text its preamble item holds before its call has started is drawn once", () => {
+    // The gateway sends the preamble item after the message's text and before the call's start.
+    const text = "Checking logs.";
+    const preamble = (phase: string): [string, Record<string, unknown>] => [
+      "item",
+      { itemId: "commentary-0-a1", kind: "preamble", title: "Preamble", phase, progressText: text },
+    ];
+    const html = draw(
+      transcriptOf([...start, ...said("m:1", text), preamble("update"), preamble("end")]),
+    );
+    expect(count(html, text)).toBe(1);
+    expect(html).not.toContain('data-testid="live-turn"');
   });
 });
