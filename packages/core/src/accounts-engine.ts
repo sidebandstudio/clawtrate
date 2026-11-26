@@ -27,6 +27,7 @@ import {
   parseModelRef,
   prefBotId,
   prefProfileId,
+  providerNotListed,
   readBotView,
   readCatalog,
   readPickerCuts,
@@ -702,6 +703,7 @@ export class AccountsEngine {
         at,
         seq,
         gateway,
+        ref !== null && view.providers.includes(ref.provider),
       ),
       // Clawtrate set this bot's account (its own record says so) and the gateway's model has no
       // explicit fallback list: the empty list it writes did not land, then or since a restart.
@@ -760,7 +762,8 @@ export class AccountsEngine {
   /**
    * One read of a bot's order and model, published as its binding, stamped with when it began.
    * An older read that answers after a newer one has published or failed publishes nothing: what
-   * the page shows is never older than what it showed. Returns the bot's view, or null when the
+   * the page shows is never older than what it showed. Returns the bot's view, whether it was
+   * published (`applied`), and the gateway that answered it (`answeredBy`), or null when the
    * gateway says its account status is unavailable (said on the binding). An answer with no
    * account status in it throws (`NO_ACCOUNT_STATUS`): it is a failed read, never an empty order.
    */
@@ -770,7 +773,7 @@ export class AccountsEngine {
     ctx: AccountsContext,
     seq: number = this.nextSeq(),
     at: number = ctx.now(),
-  ): Promise<BotView | null> {
+  ): Promise<{ view: BotView; applied: boolean; gateway: string | null } | null> {
     const on = ctx.readStamp();
     const [answer, config] = await Promise.all([
       ctx.request("models.authStatus", { agentId: botId, refresh: true }),
@@ -783,16 +786,18 @@ export class AccountsEngine {
     }
     const entry = asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
     const gateway = answeredBy(on, ctx.readStamp());
+    let applied = false;
     ctx.update((a) => {
       const current = a.bindings.find((each) => each.botId === botId) ?? before;
       if (current.evidence.attemptSeq !== null && current.evidence.attemptSeq > seq) return a;
+      applied = true;
       const next = this.binding(botId, entry, view, current, at, seq, gateway);
       return settleClear({
         ...a,
         bindings: a.bindings.map((each) => (each.botId === botId ? next : each)),
       });
     });
-    return view;
+    return { view, applied, gateway };
   }
 
   /**
@@ -876,18 +881,17 @@ export class AccountsEngine {
         if (live()) base.update(change);
       },
     };
-    const holds = (view: BotView | null) => {
-      const order = view?.orders[provider];
+    const holds = (view: BotView) => {
+      const order = view.orders[provider];
       return order?.stored === true && order.ids.length === 1 && order.ids[0] === account;
     };
-    const clearedIn = (view: BotView | null) => view !== null && !view.orders[provider]?.stored;
     publish({ status: "sending", error: null });
     const before = base.get().bindings.find((each) => each.botId === botId);
     if (!before) {
       publish({ status: "unsent", error: "The bot is no longer listed." });
       return;
     }
-    let first: BotView | null;
+    let first: Awaited<ReturnType<AccountsEngine["readOrder"]>>;
     const firstSeq = this.nextSeq();
     try {
       first = await this.readOrder(botId, before, ctx, firstSeq);
@@ -899,9 +903,23 @@ export class AccountsEngine {
       publish({ status: "unsent", error: "The gateway says its account status is unavailable." });
       return;
     }
+    // An answer that doesn't list the provider says nothing of its order: nothing is sent.
+    if (!first.view.providers.includes(provider)) {
+      publish({ status: "unsent", error: providerNotListed(provider) });
+      return;
+    }
     // A read begun after this one may have been shown meanwhile (Check now, a load, another
     // device's change): the press acts on the newest the page has, never on one it superseded.
     const latest = base.get().bindings.find((each) => each.botId === botId);
+    if (
+      latest?.evidence.attemptSeq != null &&
+      latest.evidence.attemptSeq > firstSeq &&
+      latest.provider === provider &&
+      !latest.evidence.providerRead
+    ) {
+      publish({ status: "unsent", error: providerNotListed(provider) });
+      return;
+    }
     const superseded =
       latest?.evidence.readSeq != null &&
       latest.evidence.readSeq > firstSeq &&
@@ -911,7 +929,7 @@ export class AccountsEngine {
         latest.order.ids.length === 1 &&
         latest.order.ids[0] === account
       );
-    if (!holds(first) || superseded) {
+    if (!holds(first.view) || superseded) {
       publish({ status: "moved", error: null });
       return;
     }
@@ -938,7 +956,7 @@ export class AccountsEngine {
       else lost = errorText(error);
     }
     // Null when the read after failed, or the gateway said its status is unavailable.
-    let after: BotView | null = null;
+    let after: Awaited<ReturnType<AccountsEngine["readOrder"]>> = null;
     const afterSeq = this.nextSeq();
     const afterAt = base.now();
     try {
@@ -950,16 +968,44 @@ export class AccountsEngine {
       // As Check now says a failed read.
       this.readFailed(ctx, botId, afterSeq, "failed", this.scrub(errorText(error)));
     }
+    // What the gateway's reads say of the order since the send: the read after it when the page
+    // took it, answered by the gateway the press was sent to and listing the provider; when the
+    // page took a newer one instead, or the read after failed, the newest read the page shows,
+    // only when it began after the send, is the newest attempt (none failed since) and is as
+    // good. Anything else is no reading: the press can't say the order is gone.
+    const decided = ((): { gone: boolean; seq: number; at: number | null } | null => {
+      if (after?.applied) {
+        const { view, gateway } = after;
+        if (gatewayId === null || gateway !== gatewayId || !view.providers.includes(provider))
+          return null;
+        return { gone: view.orders[provider]?.stored !== true, seq: afterSeq, at: afterAt };
+      }
+      const b = base.get().bindings.find((each) => each.botId === botId);
+      const e = b?.evidence;
+      if (
+        !b ||
+        !e ||
+        e.readSeq === null ||
+        e.readSeq <= (sentSeq ?? Infinity) ||
+        e.attemptSeq !== e.readSeq ||
+        gatewayId === null ||
+        e.readGateway !== gatewayId ||
+        !e.providerRead ||
+        b.provider !== provider
+      )
+        return null;
+      return { gone: b.order?.stored !== true, seq: e.readSeq, at: e.checkedAt };
+    })();
     // The gateway's read decides before its answer does: a refusal whose order is gone is cleared.
-    if (clearedIn(after)) {
-      checkedSeq = afterSeq;
-      checkedAt = afterAt;
+    if (decided?.gone) {
+      checkedSeq = decided.seq;
+      checkedAt = decided.at;
       // The person's own unlock: not a lock lost, so no "The lock is gone" for it, and no lock to
       // remember either, so a later read that fails doesn't bring "Locked, as of …" back.
       // Only while the page still shows that read: a newer one that confirmed a lock keeps it.
       ctx.update((a) =>
         this.patchBinding(a, botId, (b) =>
-          b.evidence.readSeq === afterSeq && b.provider === provider
+          b.evidence.readSeq === decided.seq && b.provider === provider
             ? { ...b, evidence: { ...b.evidence, lostAt: null, lastMatchAt: null } }
             : b,
         ),
@@ -967,7 +1013,7 @@ export class AccountsEngine {
       publish({ status: "cleared", error: null });
     } else if (refused !== null) publish({ status: "refused", error: refused });
     else if (lost !== null) publish({ status: "unanswered", error: lost });
-    else if (after === null) publish({ status: "unread", error: null });
+    else if (decided === null) publish({ status: "unread", error: null });
     else publish({ status: "kept", error: null });
   }
 
@@ -2588,6 +2634,7 @@ function settleClear(a: AccountsState): AccountsState {
     seq <= clear.sentSeq ||
     clear.gatewayId === null ||
     binding.evidence.readGateway !== clear.gatewayId ||
+    !binding.evidence.providerRead ||
     binding.provider !== clear.provider ||
     binding.order?.stored === true
   )

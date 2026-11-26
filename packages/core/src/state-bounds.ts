@@ -1147,6 +1147,7 @@ const lockEvidence = object<LockEvidence>()({
   readSeq: NUMBER,
   attemptSeq: NUMBER,
   readGateway: ID,
+  providerRead: FLAG,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const binding = object<BotBinding>()({

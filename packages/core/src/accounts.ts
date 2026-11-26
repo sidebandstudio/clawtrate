@@ -350,6 +350,11 @@ export type LockEvidence = {
    * null when that wasn't known. Only a read of the gateway a press was sent to settles it.
    */
   readGateway: string | null;
+  /**
+   * The read that gave this evidence listed the binding's provider: only then does its missing
+   * order mean there is none. False until a read, and for a read that didn't list it.
+   */
+  providerRead: boolean;
   error: string | null;
 };
 
@@ -600,6 +605,7 @@ export const unreadEvidence: LockEvidence = {
   readSeq: null,
   attemptSeq: null,
   readGateway: null,
+  providerRead: false,
   error: null,
 };
 
@@ -681,6 +687,11 @@ export type ViewProfile = {
 /** One bot's `models.authStatus` answer, as read. */
 export type BotView = {
   profiles: ViewProfile[];
+  /**
+   * The providers the answer lists, within `MAX_ACCOUNTS`. A provider not here was not read: its
+   * missing order says nothing, so it is never taken as "no order".
+   */
+  providers: string[];
   orders: Record<string, StoredOrder>;
   /** Providers with a key configured or saved: `apiKey` set, or an `api_key` profile. */
   keyed: string[];
@@ -716,11 +727,13 @@ export function readBotView(answer: unknown): BotView {
   const profiles: ViewProfile[] = [];
   const orders: Record<string, StoredOrder> = {};
   const keyed = new Set<string>();
+  const listed = new Set<string>();
   const providers = Array.isArray(record.providers) ? record.providers : [];
   for (const raw of providers.slice(0, MAX_ACCOUNTS)) {
     const provider = asRecord(raw);
     const id = str(provider?.provider);
     if (!provider || !id) continue;
+    listed.add(id);
     if (asRecord(provider.apiKey)) keyed.add(id);
     const order = strings(provider.profileOrder, MAX_ORDER_IDS);
     if (Array.isArray(provider.profileOrder)) {
@@ -757,6 +770,7 @@ export function readBotView(answer: unknown): BotView {
     .slice(0, MAX_KEY_PROVIDERS);
   return {
     profiles,
+    providers: [...listed],
     orders,
     keyed: [...keyed],
     capabilities,
@@ -1170,7 +1184,19 @@ export function evaluateOrder(
   at: number,
   seq: number | null = null,
   gateway: string | null = null,
+  providerRead = true,
 ): LockEvidence {
+  // A bot bound to an account whose provider the answer doesn't list: no reading of its order.
+  // As a failed read, the last confirmation stands with its time, and nothing is said lost.
+  if (binding.mode === "account" && binding.account && !providerRead)
+    return {
+      ...previous,
+      status: "failed",
+      attemptSeq: seq,
+      readGateway: gateway,
+      providerRead: false,
+      error: providerNotListed(binding.provider ?? ""),
+    };
   let status: LockEvidence["status"];
   const ids = order?.ids ?? [];
   if (binding.mode !== "account" || !binding.account || ids.length === 0) status = "none";
@@ -1197,8 +1223,14 @@ export function evaluateOrder(
     readSeq: seq,
     attemptSeq: seq,
     readGateway: gateway,
+    providerRead,
     error: null,
   };
+}
+
+/** Said when the gateway's answer for a bot doesn't list the provider of its account or order. */
+export function providerNotListed(provider: string): string {
+  return `The gateway's answer didn't list ${provider}, so it says nothing of that provider's order.`;
 }
 
 /** The word a bot's account row carries, from what was read. */
@@ -1231,7 +1263,8 @@ export function retainedOrder(binding: BotBinding): string | null {
  * What an Unlock or Clear is shown as now, from the gateway's reads of the bot, ordered by when
  * each began (`readSeq`, never the clock): as it ended, with the time of the read that settled it.
  * An unsure ending (`unanswered`, `unread`, `kept`) becomes `cleared` when a read begun after the
- * send, answered by the gateway the press was sent to, finds no stored order for its provider. A `cleared` one is shown no more (null) once a read
+ * send, answered by the gateway the press was sent to, lists its provider and finds no stored order
+ * for it. A `cleared` one is shown no more (null) once a read
  * begun after its own finds a stored order there again: the line never says the order is gone
  * above a page that shows it.
  */
@@ -1248,7 +1281,10 @@ export function clearShown(
       : { status: "cleared", checkedAt: clear.checkedAt };
   const unsure =
     clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
-  const gateway = clear.gatewayId !== null && binding.evidence.readGateway === clear.gatewayId;
+  const gateway =
+    clear.gatewayId !== null &&
+    binding.evidence.readGateway === clear.gatewayId &&
+    binding.evidence.providerRead;
   if (
     unsure &&
     gateway &&

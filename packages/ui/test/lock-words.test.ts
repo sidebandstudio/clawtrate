@@ -29,6 +29,7 @@ const locked = (evidence: Partial<LockEvidence>): BotBinding => ({
     readSeq: null,
     attemptSeq: null,
     readGateway: null,
+    providerRead: true,
     error: null,
     ...evidence,
   },

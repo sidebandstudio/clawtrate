@@ -237,6 +237,7 @@ const evidence = (patch: Partial<LockEvidence>): LockEvidence => ({
   readSeq: null,
   attemptSeq: null,
   readGateway: null,
+  providerRead: true,
   error: null,
   ...patch,
 });
@@ -1625,6 +1626,7 @@ export function accountCommand(
                     readSeq: 2,
                     attemptSeq: 2,
                     readGateway: asked,
+                    providerRead: true,
                   },
                 }
               : b,
