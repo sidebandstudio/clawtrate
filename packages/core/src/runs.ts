@@ -2610,7 +2610,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
       ctx.raw.set(ctx.sessionKey, id, { source: "live", runId: run.id, call: data, result: null });
       // The call is known now; carry it inline while the tool runs when it is small.
       return upsertStep(
-        current,
+        existing ? current : textBesideCall(current),
         settleRaw(
           {
             ...step,
@@ -2689,13 +2689,30 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   if (!existing && data.phase !== "start") return run;
   const step = existing ?? blankToolStep(toolCallId, str(data.name), num(data.startedAt));
   const title = str(data.title);
-  return upsertStep(run, {
+  return upsertStep(existing ? run : textBesideCall(run), {
     ...step,
     ...(data.commandBearing === true ? { commandBearing: true } : {}),
     ...(title ? { gatewayTitle: title } : {}),
     startedAt: num(data.startedAt) ?? step.startedAt,
     endedAt: isOpenStep(step) ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
   });
+}
+
+/**
+ * As a tool call starts, the text the model was writing on the `assistant` stream is text beside
+ * that call when the gateway sent no `preamble` item for it. OpenClaw 2026.11.10 sends none: the
+ * text is an `assistant` item of its own, and the next item would replace it. Nothing is added
+ * when the gateway sent one (2026.10.6): one waits for its call, or one already holds the text.
+ */
+function textBesideCall(run: Run): Run {
+  const itemId = run.textItemId;
+  const text = run.text.trim();
+  // An item id comes only with the `assistant` stream's text, never the chat stream's.
+  if (itemId === null || !text) return run;
+  const list = run.preambles ?? [];
+  if (list.some((p) => p.beforeCall === null || p.text.trim().startsWith(text))) return run;
+  const next: Preamble = { id: itemId, text: run.text, ended: true, beforeCall: null };
+  return { ...run, preambles: [...list, next].slice(-MAX_PREAMBLES_PER_RUN) };
 }
 
 /** Text beside a tool call: its updates replace its text in place; `end` ends it. */
