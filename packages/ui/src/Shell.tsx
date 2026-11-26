@@ -57,6 +57,7 @@ import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "
 import { SearchPalette, type SearchTarget } from "./search/SearchPalette.tsx";
 import { PlacementSavesProvider } from "./machines/RunsOn.tsx";
 import type { SettingsSection } from "./Settings.tsx";
+import { DeviceRequestPrompt, DevicesAsking } from "./DeviceApproval.tsx";
 
 /**
  * Command for Try again on an open task: carries the failure text this view is retrying so the
@@ -897,9 +898,12 @@ export function Shell({
           onBubbles={onBubbles}
           top={railTop}
           notice={
-            interactive && !info.readOnly ? (
-              <BotGuidesOffer onReview={() => onOpenSettings("conversation")} />
-            ) : null
+            <>
+              {interactive && !info.readOnly && (
+                <BotGuidesOffer onReview={() => onOpenSettings("conversation")} />
+              )}
+              <DevicesAsking onReview={() => onOpenSettings("gateway")} />
+            </>
           }
           onOpenSettings={onOpenSettings}
           updating={updating}
@@ -1027,6 +1031,8 @@ export function Shell({
             onClose={() => setOfferOpen(false)}
           />
         )}
+        {/* A device waiting for approval, opened by itself when it is the only one (§5). */}
+        <DeviceRequestPrompt inert={inert === true || offerOpen} />
         {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
         {searchOpen && (
           <SearchPalette

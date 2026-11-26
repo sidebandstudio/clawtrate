@@ -31,6 +31,9 @@ import {
   noDesktopUpdates,
   type ClawtrateState,
   type ConnectionState,
+  type DeviceDecision,
+  type DeviceRequest,
+  type DeviceRequestsState,
   type HostInfo,
   type RunRawRead,
   type TaskActivity,
@@ -153,6 +156,9 @@ export const SCENES = [
   "pairing-full",
   "access-narrowed",
   "access-offer",
+  "device-request",
+  "devices-asking",
+  "device-notice",
   ...LIVE_SCENES,
   ...RAIL_SCENES,
   ...ACTION_SCENES,
@@ -237,10 +243,41 @@ function pairing(): ClawtrateState {
           "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
         ).note,
         requestedScopes: ["operator.read"],
+        code: DEVICE_CODE,
       },
     },
   };
 }
+
+/** The waiting device's code, the same in the pairing scene and the approving sheet. Invented. */
+const DEVICE_CODE = "K7QF-2MXA";
+/** A waiting device as an admin connection lists it (`device-approval.ts`). Invented. */
+const deviceRequest = (n: number, extra: Partial<DeviceRequest> = {}): DeviceRequest => ({
+  requestId: `0c4f7a2e-91d3-4b6e-8a5f-${String(n).padStart(12, "0")}`,
+  deviceId: `${n}e9b2d4f6a8c0e1f3b5d7a9c2e4f6b8d0a1c3e5f7b9d2a4c6e8f0b1d3a5c7e9f`.slice(0, 64),
+  publicKey: "q3J8bW2xR5tY7uN0kP4sV6aD9fG1hL3zX8cB5nM2vQw",
+  name: "Clawtrate Desktop",
+  platform: "darwin",
+  app: "gateway-client · ui",
+  remoteIp: "203.0.113.7",
+  origin: null,
+  roles: ["operator"],
+  scopes: [...FULL_SCOPES],
+  at: 1_000 + n,
+  blocked: null,
+  choices: ["4C7R-MZ2D", "9H3K-TQ8B", DEVICE_CODE, "WX5N-0PJ6"],
+  spent: false,
+  ...extra,
+});
+const deviceRequests = (change: Partial<DeviceRequestsState>): DeviceRequestsState => ({
+  access: "admin",
+  requests: [],
+  omitted: 0,
+  noticed: 0,
+  prompt: null,
+  error: null,
+  ...change,
+});
 
 /** The view the fixture's own page is; tests name any other view with `sendFrom`. */
 const PAGE_VIEW = "page";
@@ -366,6 +403,57 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
         steps: [],
       };
     // A device paired read-only before full control, offered it once (§6).
+    case "device-request":
+      return {
+        initial: {
+          ...withConnection(base, {
+            scopes: [...FULL_SCOPES],
+            canWrite: true,
+            canAnswer: true,
+            canApprove: true,
+            canAdmin: true,
+            fullPairing: true,
+          }),
+          deviceRequests: deviceRequests({
+            requests: [deviceRequest(1)],
+            prompt: deviceRequest(1).requestId,
+          }),
+        },
+        steps: [],
+      };
+    case "devices-asking":
+      return {
+        initial: {
+          ...withConnection(base, {
+            scopes: [...FULL_SCOPES],
+            canWrite: true,
+            canAnswer: true,
+            canApprove: true,
+            canAdmin: true,
+            fullPairing: true,
+          }),
+          deviceRequests: deviceRequests({
+            requests: [
+              deviceRequest(3, { name: "Pixel 9", platform: "android", remoteIp: null }),
+              deviceRequest(2, {
+                name: "Work laptop",
+                platform: "win32",
+                remoteIp: "198.51.100.24",
+              }),
+              deviceRequest(1),
+            ],
+          }),
+        },
+        steps: [],
+      };
+    case "device-notice":
+      return {
+        initial: {
+          ...withConnection(base, { scopes: ["operator.read", "operator.pairing"] }),
+          deviceRequests: deviceRequests({ access: "notice", noticed: 1 }),
+        },
+        steps: [],
+      };
     case "access-offer":
       return {
         initial: withConnection(base, { gatewayUrl: "wss://gateway.example", fullOffer: "offer" }),
@@ -1344,6 +1432,24 @@ export function createFixtureBridge(
               }
             : { status: "available", holds: raw.holds, payload: FAILED_EVENT };
         return read as BridgeResultFor<C>;
+      }
+      case "takeDevicePrompt": {
+        const taken = state.deviceRequests?.prompt === command.requestId;
+        if (taken) set({ ...state, deviceRequests: { ...state.deviceRequests!, prompt: null } });
+        return { taken } as BridgeResultFor<C>;
+      }
+      case "approveDevice":
+      case "refuseDevice": {
+        sent.push({ ...command });
+        const decision: DeviceDecision =
+          command.type === "approveDevice"
+            ? command.code === DEVICE_CODE
+              ? { kind: "approved", deviceId: deviceRequest(1).deviceId }
+              : { kind: "wrong-code" }
+            : command.why === "not-mine"
+              ? { kind: "denied" }
+              : { kind: "none-match" };
+        return decision as BridgeResultFor<C>;
       }
       default:
         // The live scenes answer their own commands (takeBackMessage, sendAgain, sendMessage).
