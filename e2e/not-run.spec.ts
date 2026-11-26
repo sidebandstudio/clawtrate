@@ -21,6 +21,8 @@ const BOT = "wren";
 test.describe.configure({ mode: "serial" });
 
 let host: { child: ChildProcess; url: string; data: string } | null = null;
+/** A second device: a preview host of its own, with its own pairing. */
+let second: { child: ChildProcess; url: string; data: string } | null = null;
 let page: Page;
 let admin: OperatorSession;
 
@@ -76,7 +78,35 @@ async function hostCommand(command: Json): Promise<void> {
   );
 }
 
-const botRow = () => page.getByTestId("bot-list").getByRole("button", { name: /^Wren\b/ });
+const botRow = (on: Page = page) =>
+  on.getByTestId("bot-list").getByRole("button", { name: /^Wren\b/ });
+
+/**
+ * What the line says once only the gateway's history has the message: 2026.10.6 keeps the reason
+ * in its row for it; 2026.11.10, which fails this message at dispatch, keeps only that it failed.
+ */
+function afterReload(): { reason: string; changeAccount: boolean } {
+  return admin.serverVersion === "2026.10.6"
+    ? {
+        reason:
+          "The account Wren is set to isn't available on the gateway. Choose another account.",
+        changeAccount: true,
+      }
+    : { reason: "The gateway didn't say why.", changeAccount: false };
+}
+
+/** The task's line on a page, its words as the gateway's history rebuilds them. */
+async function lineFromHistory(on: Page): Promise<void> {
+  await botRow(on).click();
+  const line = on.getByTestId("turn-error");
+  await expect(line).toContainText("The gateway couldn't run this message", { timeout: 60_000 });
+  const { reason, changeAccount } = afterReload();
+  await expect(line).toContainText(reason);
+  await expect(line.getByRole("button", { name: "Change account" })).toHaveCount(
+    changeAccount ? 1 : 0,
+  );
+  await expect(line.getByRole("button", { name: "Try again" })).toBeVisible();
+}
 
 test.beforeAll(async ({ accountsInstance, browser }) => {
   expect(accountsInstance).toBe(INSTANCE);
@@ -119,14 +149,17 @@ test.beforeAll(async ({ accountsInstance, browser }) => {
 test.afterAll(async () => {
   await admin?.request("agents.delete", { agentId: BOT, deleteFiles: true }).catch(() => {});
   await admin?.close();
-  if (host) {
-    await stopChild(host.child);
-    rmSync(host.data, { recursive: true, force: true });
+  for (const each of [host, second]) {
+    if (!each) continue;
+    await stopChild(each.child);
+    rmSync(each.data, { recursive: true, force: true });
   }
 });
 
-test("F-480 #663 #664: a message the gateway couldn't run says why; fixed and sent again, the reply comes and the mark goes without a reload", async () => {
-  test.setTimeout(240_000);
+test("F-480 #663 #664: a message the gateway couldn't run says why, after a reload and on another device too; fixed and sent again, the reply comes and the mark goes", async ({
+  browser,
+}) => {
+  test.setTimeout(420_000);
   await botRow().click();
   await page.locator(".rail-top").getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("menuitem", { name: "New task for Wren" }).click();
@@ -139,12 +172,36 @@ test("F-480 #663 #664: a message the gateway couldn't run says why; fixed and se
   const line = page.getByTestId("turn-error");
   await expect(line).toContainText("The gateway couldn't run this message", { timeout: 60_000 });
   await expect(line).toContainText(
-    "The account Wren is set to isn't on the gateway any more. Choose another account.",
+    "The account Wren is set to isn't available on the gateway. Choose another account.",
   );
   await expect(line.getByRole("button", { name: "Change account" })).toBeVisible();
   await expect(line.getByRole("button", { name: "Try again" })).toBeVisible();
   // The bot's row says its latest run failed.
   await expect(botRow()).toHaveAccessibleName(/^Wren, a run failed\b/, { timeout: 20_000 });
+
+  // Reloaded, the task opened again: the line is rebuilt from the gateway's history.
+  await page.reload();
+  await expect(botRow()).toBeVisible({ timeout: 30_000 });
+  await lineFromHistory(page);
+  await expect(botRow()).toHaveAccessibleName(/^Wren, a run failed\b/, { timeout: 20_000 });
+
+  // Another device, paired now, reads the same task: the same line, and the bot marked.
+  const data = mkdtempSync(join(tmpdir(), "clawtrate-not-run-second-"));
+  const started = startHost(INSTANCE, STATIC, data);
+  started.gated.release();
+  second = { child: started.host, url: await started.url, data };
+  const other = await (
+    await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  ).newPage();
+  await other.goto(second.url);
+  await other.getByRole("button", { name: "Use the development gateway" }).click();
+  await expect(other.getByRole("heading", { name: "Approve this device" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await approve();
+  await expect(botRow(other)).toBeVisible({ timeout: 30_000 });
+  await lineFromHistory(other);
+  await expect(botRow(other)).toHaveAccessibleName(/^Wren, a run failed\b/, { timeout: 20_000 });
 
   // Change account opens the bot's Account page in the Work pane.
   await line.getByRole("button", { name: "Change account" }).click();
@@ -163,6 +220,8 @@ test("F-480 #663 #664: a message the gateway couldn't run says why; fixed and se
     timeout: 60_000,
   });
   await expect(botRow()).not.toHaveAccessibleName(/a run failed/, { timeout: 20_000 });
+  // On the other device too, without a reload.
+  await expect(botRow(other)).not.toHaveAccessibleName(/a run failed/, { timeout: 20_000 });
   // The first message keeps its line: it still wasn't run.
   await expect(line).toContainText("The gateway couldn't run this message");
 });
