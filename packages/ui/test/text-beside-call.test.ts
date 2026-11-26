@@ -169,6 +169,26 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(later).not.toContain("The end.");
     expect(count(later, "All clean.")).toBe(1);
   });
+
+  it("on 2026.10.6, the text its preamble item and the stream both carry is drawn once, before the call", () => {
+    const text = "Checking logs.";
+    const preamble = (phase: string): [string, Record<string, unknown>] => [
+      "item",
+      { itemId: "commentary-0-a1", kind: "preamble", title: "Preamble", phase, progressText: text },
+    ];
+    const html = draw(
+      transcriptOf([
+        ...start,
+        ...said("m:1", text),
+        preamble("update"),
+        preamble("end"),
+        ...call("c1"),
+      ]),
+    );
+    expect(count(html, text)).toBe(1);
+    expect(html).not.toContain('data-testid="live-turn"');
+  });
+
   it("history's row of the reply the engine still streams is drawn once, as the reply", () => {
     const rows = [
       {
