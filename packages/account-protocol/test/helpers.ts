@@ -112,8 +112,8 @@ export function makeWorld(
     serial: 1,
     tlsPin: fill(32, 0xd0),
     addresses: [
-      { host: "192.168.1.20", port: 18790 },
-      { host: "windows-pc.tail0000.ts.net", port: 18790 },
+      { host: "windows-pc.local", port: 18790 },
+      { host: "fd00::20", port: 18790 },
     ],
     name: "Windows PC",
   });
