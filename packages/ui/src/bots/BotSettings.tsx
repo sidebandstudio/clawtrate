@@ -32,7 +32,7 @@ import {
   WarnIcon,
 } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
-import { settleBotSettingsRequest, useBotSettingsRequest } from "./settings-request.ts";
+import { settleBotSettingsRequest, settlement, useBotSettingsRequest } from "./settings-request.ts";
 import { Connect } from "./Connect.tsx";
 import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
 import { UpdateOpenClawNote } from "./UpdateOpenClaw.tsx";
@@ -251,31 +251,30 @@ export function BotSettings({
   // model on the first page, or the Account page, shown once.
   const request = useBotSettingsRequest();
   const [requestShown, setRequestShown] = useState(0);
+  // Another bot: a request still open for the bot left is applied again when its page is back.
+  const [requestBot, setRequestBot] = useState(bot.id);
+  if (requestBot !== bot.id) {
+    setRequestBot(bot.id);
+    setRequestShown(0);
+  }
   if (request && request.seq !== requestShown && request.botId === bot.id) {
     setRequestShown(request.seq);
     setView(request.part === "account" ? "account" : "main");
     setError(null);
     setPick(null);
   }
-  // Settled once its page is drawn: while the accounts are still read there is none yet. Focus
-  // goes to the control when it can take it, else to the Account page's heading; the first page
-  // has no heading to take it (a default-model binding has no model menu, and below admin the
-  // menu is disabled), so there the request settles where the page already stands.
+  // Settled once its own bot's page is drawn (`settlement`): while the accounts are still read
+  // there is none yet, and another bot's page never settles it.
   useEffect(() => {
     if (!request || request.seq !== requestShown) return;
     const root = rootRef.current;
-    const usable = (selector: string) => {
+    const done = settlement(request, bot.id, (selector) => {
       const found = root?.querySelector<HTMLElement>(selector);
-      return found && !found.matches(":disabled") ? selector : null;
-    };
-    const target =
-      request.part === "account"
-        ? (usable("[data-bs='change']") ?? usable("[data-bs-focus]"))
-        : usable('[data-testid="model-select"]');
-    const drawn = request.part === "account" ? target : root?.querySelector("[data-bs='account']");
-    if (!drawn) return;
+      return !found ? null : found.matches(":disabled") ? "disabled" : "usable";
+    });
+    if (!done) return;
     settleBotSettingsRequest(request);
-    if (target) focusIn(target);
+    if (done.focus) focusIn(done.focus);
   });
 
   // The evidence: read when the Account page opens, every 4 seconds while it

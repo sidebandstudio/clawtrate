@@ -3,7 +3,13 @@
 
 import { newRun, type Run } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { requestBotSettings, setBotSettingsOpener } from "../src/bots/settings-request.ts";
+import {
+  requestBotSettings,
+  setBotSettingsOpener,
+  settlement,
+  type BotSettingsRequest,
+  type ControlState,
+} from "../src/bots/settings-request.ts";
 import { endingOf, notRunWords } from "../src/live.ts";
 
 const NOW = 1_795_000_000_000;
@@ -113,6 +119,40 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
     expect(words(started)).toBe("not a not-run line: failed");
     // History's run of a failed turn has no start of its own: only the gateway's row says it never ran.
     expect(endingOf(failed("401 Invalid API key", { origin: "history" }))?.kind).toBe("failed");
+  });
+
+  it("a request settles on its own bot's page only, once drawn, focusing what can take focus", () => {
+    const model: BotSettingsRequest = { botId: "otto", part: "model", seq: 1 };
+    const account: BotSettingsRequest = { botId: "otto", part: "account", seq: 2 };
+    const page =
+      (controls: Record<string, ControlState>) =>
+      (selector: string): ControlState =>
+        controls[selector] ?? null;
+    const first = page({
+      "[data-bs='account']": "usable",
+      '[data-testid="model-select"]': "usable",
+    });
+    expect(settlement(model, "otto", first)).toEqual({ focus: '[data-testid="model-select"]' });
+    // Another bot's page, drawn with an enabled model menu: Otto's request is not settled there.
+    expect(settlement(model, "pip", first)).toBeNull();
+    expect(settlement(account, "pip", page({ "[data-bs='change']": "usable" }))).toBeNull();
+    // Not drawn yet (the accounts still read).
+    expect(settlement(model, "otto", page({}))).toBeNull();
+    // Below admin the model menu is disabled: settled, focus left where it is.
+    expect(
+      settlement(
+        model,
+        "otto",
+        page({ "[data-bs='account']": "usable", '[data-testid="model-select"]': "disabled" }),
+      ),
+    ).toEqual({ focus: null });
+    // The Account page: its Change button, else its heading.
+    expect(settlement(account, "otto", page({ "[data-bs='change']": "usable" }))).toEqual({
+      focus: "[data-bs='change']",
+    });
+    expect(settlement(account, "otto", page({ "[data-bs-focus]": "usable" }))).toEqual({
+      focus: "[data-bs-focus]",
+    });
   });
 
   it("Change model and Change account open the bot's settings on that part", () => {
