@@ -147,6 +147,17 @@ export class AccountsGateway {
       { id: "dev-2", provider: "acme", thinkingLevels: [], available: true },
     ],
   };
+  /**
+   * A Refresh (`models.list {provider, refresh: true}`): its rows for the provider, then the
+   * picker's from then on; null answers with the picker's rows for the provider.
+   */
+  refreshed: Record<string, Json[]> | null = null;
+  /** More of a Refresh's answer: `providerOutcomes`, `pendingProviders`, `refreshFailed`. */
+  refreshMarkers: Json = {};
+  /** A Refresh is answered once this settles. */
+  holdRefresh: Promise<void> | null = null;
+  /** Refuse a Refresh with this error. */
+  failRefresh: { code: string; message: string } | null = null;
   /** The gateway's picker for the default bot. */
   pickerCatalog: () => Json = () => ({
     models: [
@@ -277,7 +288,29 @@ export class AccountsGateway {
       return { status: "ok" };
     };
     g.handlers["models.list"] = (params) => {
-      const { view, provider } = params as { view?: string; provider?: string };
+      const { view, provider, refresh } = params as {
+        view?: string;
+        provider?: string;
+        refresh?: boolean;
+      };
+      if (refresh === true) {
+        const answer = () => {
+          if (this.failRefresh) throw new GatewayError(this.failRefresh);
+          if (this.refreshed) {
+            const now = this.refreshed;
+            const before = this.pickerCatalog();
+            const rest = ((before as { models: Json[] }).models ?? []).filter(
+              (row) => !Object.hasOwn(now, String(row.provider)),
+            );
+            this.pickerCatalog = () => ({ models: [...Object.values(now).flat(), ...rest] });
+          }
+          const rows = ((this.pickerCatalog() as { models: Json[] }).models ?? []).filter(
+            (row) => row.provider === provider,
+          );
+          return { models: rows, ...this.refreshMarkers };
+        };
+        return this.holdRefresh ? this.holdRefresh.then(answer) : answer();
+      }
       if (view !== "all")
         return this.holdPicker
           ? this.holdPicker.then(() => this.pickerCatalog())
