@@ -13,7 +13,12 @@ import { join } from "node:path";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
 import { runningRunId } from "../packages/core/src/runs.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
-import { openInstance, openOperator, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
+import {
+  instanceForm,
+  openInstance,
+  openOperator,
+  readDevConnection,
+} from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -155,20 +160,28 @@ test("a turn the gateway runs from its queue under an id of its own is one run, 
     // A follow-up, not a steer: the gateway queues it behind the first turn.
     const second = await op.send(key, "Then this. #text", { queueMode: "followup" });
     const ids = [first.runId, second.runId] as string[];
-    // The gateway's own id for the queued turn, named beside the send's id.
-    const named = await op.waitFor("the queued turn's own id", (e) => {
-      const p = e.payload as { runId?: string; clientRunId?: string };
-      return (
-        e.event === "sessions.changed" && p.clientRunId === second.runId && p.runId !== second.runId
-      );
-    });
-    const own = (named.payload as { runId: string }).runId;
+    // The gateway's own id for the queued turn, named beside the send's id. 2026.11.10 runs the
+    // queued turn under the send's id and names none.
+    const own = instanceForm(openInstance(INSTANCE)).queuedTurnOwnId
+      ? (
+          (
+            await op.waitFor("the queued turn's own id", (e) => {
+              const p = e.payload as { runId?: string; clientRunId?: string };
+              return (
+                e.event === "sessions.changed" &&
+                p.clientRunId === second.runId &&
+                p.runId !== second.runId
+              );
+            })
+          ).payload as { runId: string }
+        ).runId
+      : null;
     await expect.poll(() => gatewayIdle(op, key), { timeout: 60_000 }).toBe(true);
     await expect
       .poll(() => runs(client, key).map((run) => [run.id, run.state]), { timeout: 15_000 })
       .toEqual(ids.map((runId) => [runId, "completed"]));
     await sleep(500);
-    expect(runs(client, key).some((run) => run.id === own)).toBe(false);
+    if (own) expect(runs(client, key).some((run) => run.id === own)).toBe(false);
     expect(runs(client, key).map((run) => [run.id, run.state])).toEqual(
       ids.map((runId) => [runId, "completed"]),
     );

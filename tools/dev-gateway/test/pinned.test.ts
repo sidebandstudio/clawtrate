@@ -70,15 +70,23 @@ describe("the development gateway's OpenClaw (#597)", () => {
       expect(supportsNode(no), no).toBe(false);
   });
 
-  it("runs OPENCLAW_BIN only when it is the pinned version, and says why it refuses another", () => {
+  it("runs OPENCLAW_BIN only when it is a listed version, and says why it refuses another", () => {
     const pinned = installed(OPENCLAW_VERSION);
     expect(programVersion(pinned)).toBe(OPENCLAW_VERSION);
     expect(openclawProgram({ OPENCLAW_BIN: pinned }, temp())).toEqual({
       command: pinned,
       args: [],
+      version: OPENCLAW_VERSION,
     });
-    expect(() => openclawProgram({ OPENCLAW_BIN: installed("2026.11.10") }, temp())).toThrow(
-      `OPENCLAW_BIN is OpenClaw 2026.11.10; the development gateway runs only ${OPENCLAW_VERSION}.`,
+    // npm's newest, which the OpenClaw latest workflow runs (#609).
+    const latest = installed("2026.11.10");
+    expect(openclawProgram({ OPENCLAW_BIN: latest }, temp())).toEqual({
+      command: latest,
+      args: [],
+      version: "2026.11.10",
+    });
+    expect(() => openclawProgram({ OPENCLAW_BIN: installed("2026.10.33") }, temp())).toThrow(
+      "OPENCLAW_BIN is OpenClaw 2026.10.33; the development gateway runs only 2026.10.6 or 2026.11.10.",
     );
     expect(() => openclawProgram({ OPENCLAW_BIN: installed("1.0.0", "other") }, temp())).toThrow(
       /OPENCLAW_BIN is OpenClaw of a version this tool cannot read/,
@@ -100,11 +108,13 @@ describe("the development gateway's OpenClaw (#597)", () => {
     expect(openclawProgram({}, dir, "26.12.1", process.execPath)).toEqual({
       command: process.execPath,
       args: [entry],
+      version: OPENCLAW_VERSION,
     });
     // On one it doesn't, the Node the setup installed beside it.
     expect(openclawProgram({}, dir, "26.0.0", process.execPath)).toEqual({
       command: join(dir, `node-${NODE_VERSION}`, "bin/node"),
       args: [entry],
+      version: OPENCLAW_VERSION,
     });
     // OPENCLAW_NODE names another, which must exist.
     expect(
@@ -123,12 +133,17 @@ describe("the development gateway's OpenClaw (#597)", () => {
     const pinned = installed(OPENCLAW_VERSION);
     const bin = relative(process.cwd(), pinned);
     expect(bin.startsWith("/")).toBe(false);
-    expect(openclawProgram({ OPENCLAW_BIN: bin }, temp())).toEqual({ command: pinned, args: [] });
+    expect(openclawProgram({ OPENCLAW_BIN: bin }, temp())).toEqual({
+      command: pinned,
+      args: [],
+      version: OPENCLAW_VERSION,
+    });
     const node = relative(process.cwd(), process.execPath);
     const dir = setUp(false);
     expect(openclawProgram({ OPENCLAW_NODE: node }, dir, "26.0.0", "/x")).toEqual({
       command: process.execPath,
       args: [join(dir, `openclaw-${OPENCLAW_VERSION}`, "node_modules/openclaw/openclaw.mjs")],
+      version: OPENCLAW_VERSION,
     });
   });
 

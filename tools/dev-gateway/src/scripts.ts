@@ -99,12 +99,104 @@ const isRuntimeContext = (message: ChatMessage) =>
   message.role === "user" &&
   messageText(message).trimStart().startsWith("OpenClaw runtime context:");
 
+/**
+ * 2026.11.10's note of what changed in the system prompt since the last turn, which it sends as a
+ * user message of its own after the prompt (SYSTEM_PROMPT_UPDATE_HEADER); not the user's words.
+ */
+const isPromptUpdate = (message: ChatMessage) =>
+  message.role === "user" &&
+  messageText(message)
+    .trimStart()
+    .startsWith("System prompt update. The sections below replace their earlier versions;");
+
+const PROMPT_UPDATE_HEADER =
+  "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.";
+
+/** A workspace file's heading, as the gateway injects files: a path ending in `.md`. */
+const FILE_HEADING = /^## [^\n]*\/[^\n]*\.md\s*$/;
+/** The gateway's own marker around the parts of an attempt's prompt. */
+const ATTEMPT_MARKER = /^<!-- \/?openclaw:attempt:[A-Z]+ -->\s*$/;
+
+/**
+ * Where the section whose heading line starts at `at` ends: at the gateway's attempt marker, or
+ * at the next heading. A workspace file's section holds the file's own `##` headings, so it ends
+ * only at the next file's heading, as the memory read below takes it.
+ */
+function sectionEnd(text: string, at: number): number {
+  const headingEnd = text.indexOf("\n", at);
+  if (headingEnd === -1) return text.length;
+  const file = FILE_HEADING.test(text.slice(at, headingEnd));
+  let offset = headingEnd + 1;
+  for (const line of text.slice(headingEnd + 1).split("\n")) {
+    if (ATTEMPT_MARKER.test(line) || (line.startsWith("## ") && (!file || FILE_HEADING.test(line))))
+      return offset;
+    offset += line.length + 1;
+  }
+  return text.length;
+}
+
+/** Where each section's heading starts in `text`: every heading but a workspace file's own. */
+function sectionStarts(text: string): number[] {
+  const starts: number[] = [];
+  for (let at = text.search(/^## /m); at !== -1;) {
+    starts.push(at);
+    const end = sectionEnd(text, at);
+    const next = text.slice(end).search(/^## /m);
+    at = next === -1 ? -1 : end + next;
+  }
+  return starts;
+}
+
+/** The heading line that starts at `at`. */
+const headingAt = (text: string, at: number) => {
+  const newline = text.indexOf("\n", at);
+  return text.slice(at, newline === -1 ? undefined : newline);
+};
+
+/**
+ * The system prompt a request gives the model, with 2026.11.10's updates to it applied in order:
+ * each section of an update replaces the section of that heading, is added when there is none,
+ * and is taken out when its body is `(removed)`. With no update, the system prompt as sent.
+ */
+export function effectivePrompt(messages: ChatMessage[]): string {
+  let prompt = messages
+    .filter((m) => m.role === "system" || m.role === "developer")
+    .map(messageText)
+    .join("\n\n");
+  for (const update of messages.filter(isPromptUpdate)) {
+    const body = messageText(update).trimStart().slice(PROMPT_UPDATE_HEADER.length);
+    for (const at of sectionStarts(body)) {
+      const heading = headingAt(body, at);
+      // The body as sent, from the line after the heading.
+      const content = body.slice(at + heading.length, sectionEnd(body, at)).trimEnd();
+      // The gateway's own section of that heading, never one inside a workspace file.
+      const found = sectionStarts(prompt).find(
+        (start) => headingAt(prompt, start).trimEnd() === heading.trimEnd(),
+      );
+      const replacement = content.trim() === "(removed)" ? "" : `${heading}${content}\n\n`;
+      prompt =
+        found === undefined
+          ? `${prompt}\n\n${replacement}`
+          : prompt.slice(0, found) + replacement + prompt.slice(sectionEnd(prompt, found));
+    }
+  }
+  return prompt;
+}
+
+/** A user message the gateway wrote itself beside the prompt. */
+const isGatewayAside = (message: ChatMessage) =>
+  isRuntimeContext(message) || isPromptUpdate(message);
+
 /** The gateway's own follow-up after a reply that had reasoning but no visible text. */
-export const VISIBLE_ANSWER_REPROMPT =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer";
+export const VISIBLE_ANSWER_REPROMPTS = [
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer",
+  // 2026.11.10's wording.
+  "Your turn ended without a final reply. Continue from the current conversation and answer",
+] as const;
+
 const isReprompt = (message: ChatMessage) =>
   message.role === "user" &&
-  normalizePrompt(messageText(message)).startsWith(VISIBLE_ANSWER_REPROMPT);
+  VISIBLE_ANSWER_REPROMPTS.some((start) => normalizePrompt(messageText(message)).startsWith(start));
 
 /** The reply the gateway treats as "nothing to say" (OpenClaw's SILENT_REPLY_TOKEN). */
 export const SILENT_REPLY = "NO_REPLY";
@@ -214,7 +306,7 @@ export const isGatewayTurn = (prompt: string) =>
 
 /** Which of GATEWAY_TURN_PROMPTS a request's prompt is, or null for any other prompt. */
 export function gatewayTurnPrompt(messages: ChatMessage[]): string | null {
-  const last = messages.findLast((m) => m.role === "user" && !isRuntimeContext(m));
+  const last = messages.findLast((m) => m.role === "user" && !isGatewayAside(m));
   const prompt = last ? normalizePrompt(messageText(last)) : "";
   return GATEWAY_TURN_PROMPTS.find((start) => prompt.startsWith(start)) ?? null;
 }
@@ -243,7 +335,7 @@ export function planReply(
 ): ReplyStep[] {
   let lastUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]!.role === "user" && !isRuntimeContext(messages[i]!)) {
+    if (messages[i]!.role === "user" && !isGatewayAside(messages[i]!)) {
       lastUserIndex = i;
       break;
     }
@@ -253,7 +345,7 @@ export function planReply(
     // Asked again for a visible answer: a reasoning-only scenario stays reasoning-only.
     const earlier = messages
       .slice(0, lastUserIndex)
-      .findLast((m) => m.role === "user" && !isRuntimeContext(m) && !isReprompt(m));
+      .findLast((m) => m.role === "user" && !isGatewayAside(m) && !isReprompt(m));
     const selected = earlier ? selectScenarios(messageText(earlier)) : [];
     if (selected.at(-1)?.scenario.name === "think-only") {
       return [
@@ -265,16 +357,23 @@ export function planReply(
   const raw = messageText(messages[lastUserIndex]!);
   const prompt = normalizePrompt(raw);
   if (prompt === "What do you remember about me?") {
+    // The system prompt, then each of 2026.11.10's updates to it in order: the last one that
+    // has the memory section is the memory the bot has now.
     const memory = messages
-      .filter((message) => message.role === "system")
+      .filter((message) => message.role === "system" || isPromptUpdate(message))
       .map(messageText)
       .map((prompt) => prompt.split("\n<!-- /openclaw:attempt:STABLE -->", 1)[0]!)
-      .find((prompt) => /^## .*\/MEMORY\.md\s*$/m.test(prompt))
+      .findLast((prompt) => /^## .*\/MEMORY\.md\s*$/m.test(prompt))
       // A heading stops the extract only when it names another workspace file, as the
-      // gateway's injected-file headings do; a `##` inside the memory itself does not.
-      ?.match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|(?![\s\S]))/m)?.[1]
+      // gateway's injected-file headings do; a `##` inside the memory itself does not. The
+      // gateway's attempt marker stops it too.
+      ?.match(
+        /^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|^<!-- \/?openclaw:attempt:[A-Z]+ -->|(?![\s\S]))/m,
+      )?.[1]
       ?.trim();
-    return [{ kind: "text", text: memory || "I have no root memory for this task." }];
+    // An update that takes the section out leaves the bot no memory.
+    const kept = memory === "(removed)" ? "" : memory;
+    return [{ kind: "text", text: kept || "I have no root memory for this task." }];
   }
   const after = messages.slice(lastUserIndex + 1);
   // Each assistant message after the user's turn is one completed round.
@@ -336,7 +435,7 @@ export function planReply(
     const reply = skillReviewReply(
       messages
         .slice(0, lastUserIndex)
-        .filter((m) => m.role === "user" && !isRuntimeContext(m))
+        .filter((m) => m.role === "user" && !isGatewayAside(m))
         .map((m) => ({ role: m.role, text: normalizePrompt(messageText(m)) })),
       toolResults(after),
       tools,
