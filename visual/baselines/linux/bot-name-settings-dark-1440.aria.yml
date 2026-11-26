@@ -1,0 +1,102 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "Otto, working, 14 tasks, unread, home server operations":
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
+    - listitem:
+      - button "Johnny, 1 task":
+        - text: Johnny
+        - time: 5:35 PM
+        - text: Johnny it is.
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research, primary bot":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
+    - listitem:
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
+    - listitem:
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
+  - status
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "Johnny, Main. Show details.": Johnny ·Main
+  - button "Hide work panel" [pressed]
+  - region "Transcript":
+    - heading "Main" [level=1]
+    - text: Today 5:35 PM
+    - paragraph: can i name u
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Yes. What would you like to call me?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Johnny
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Johnny it is.
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - group: Worked 2 actions
+    - status
+  - region "Johnny's name":
+    - status: Renamed to Johnny
+    - 'button "Undo: back to New bot"': Undo
+    - button "Close"
+  - button "Attach files"
+  - textbox "Message Johnny"
+  - button "Send" [disabled]
+  - status
+- complementary "Work":
+  - button "Close work panel"
+  - button "Change Johnny's picture"
+  - heading "Johnny" [level=2]
+  - tablist "Work":
+    - tab "Details"
+    - tab "Files"
+    - tab "Computer"
+    - tab "Settings" [selected]
+  - tabpanel "Settings":
+    - heading "Memory" [level=3]
+    - button "Memory"
+    - heading "Usage" [level=3]
+    - 'button "Usage: This week: 0 tokens · about $0.00, as of 5:39 PM. Open."': "Usage This week: 0 tokens · about $0.00, as of 5:39 PM"
+    - heading "Runs on" [level=3]
+    - 'button "Where Johnny runs: Command setting: not set · Same setting as Juniper and Quartermaster of the Family Calendar and Errands. Open."': "Where Johnny runs Command setting: not set · Same setting as Juniper and Quartermaster of the Family Calendar and Errands"
+    - heading "Recent changes" [level=4]
+    - list:
+      - listitem:
+        - text: Renamed from New bot to Johnny · Mon 5:35 PM
+        - 'button "Undo: back to New bot"': Undo
+    - heading "Manage" [level=3]
+    - button "Delete bot…"
+  - status
+- status

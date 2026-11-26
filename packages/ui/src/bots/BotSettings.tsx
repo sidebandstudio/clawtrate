@@ -334,6 +334,7 @@ export function BotSettings({
         <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
         {runsOnRow}
+        <NameChanges bot={bot} />
         <ManageGroup bot={bot} onDelete={onDeleteBot} />
       </div>
     );

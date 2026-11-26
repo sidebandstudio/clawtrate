@@ -1,0 +1,77 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "Otto, working, 14 tasks, unread, home server operations":
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
+    - listitem:
+      - button "New bot, 1 task":
+        - text: New bot
+        - time: 5:35 PM
+        - text: Johnny it is.
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research, primary bot":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
+    - listitem:
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
+    - listitem:
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
+  - status
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "New bot, Main. Show details.": New bot ·Main
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Main" [level=1]
+    - text: Today 5:35 PM
+    - paragraph: can i name u
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Yes. What would you like to call me?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Johnny
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Johnny it is.
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - group: Worked 2 actions
+    - status
+  - region "New bot's name":
+    - status: Back to New bot. Johnny isn't used again unless you rename it yourself.
+    - button "Close"
+  - button "Attach files"
+  - textbox "Message New bot"
+  - button "Send" [disabled]
+  - status
+- status
