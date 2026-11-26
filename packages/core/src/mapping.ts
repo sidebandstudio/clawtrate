@@ -2,6 +2,7 @@
 // untrusted `unknown` values: a field with the wrong type is ignored rather than
 // trusted, so a newer gateway adding or changing fields cannot crash the UI.
 
+import { cutText, jsonTextLength } from "./bounds.ts";
 import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
@@ -631,7 +632,7 @@ function isSessionEventRow(message: RawRecord): boolean {
   );
 }
 
-/** The most of a system event's text kept, in characters: within one block's bound. */
+/** The most of a system event's text kept, in JSON characters as the state counts them: within one block's bound. */
 export const MAX_EVENT_TEXT_CHARS = 2_000;
 
 /**
@@ -648,13 +649,8 @@ export function eventText(raw: string): string | null {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   if (!text) return null;
-  const chars = [...text];
-  return chars.length > MAX_EVENT_TEXT_CHARS
-    ? `${chars
-        .slice(0, MAX_EVENT_TEXT_CHARS - 1)
-        .join("")
-        .trimEnd()}…`
-    : text;
+  if (jsonTextLength(text) <= MAX_EVENT_TEXT_CHARS) return text;
+  return `${cutText(text, MAX_EVENT_TEXT_CHARS - 1).trimEnd()}…`;
 }
 
 /** The row's own time (`timestamp`, kept as written when a row is copied) is at or after `since`. */

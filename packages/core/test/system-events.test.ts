@@ -11,6 +11,8 @@ import { helloOk } from "./fake-gateway.ts";
 import { until } from "./fake-gateway.ts";
 import { eventText, mapHistory, MAX_EVENT_TEXT_CHARS } from "../src/mapping.ts";
 import { reconcileOutbox } from "../src/runs.ts";
+import { jsonTextLength } from "../src/bounds.ts";
+import { MAX_BLOCK_CHARS } from "../src/state-bounds.ts";
 
 const LINE = "The gateway started a turn by itself";
 
@@ -230,12 +232,17 @@ describe("an event's text is content from elsewhere", () => {
     expect(eventText(" ​\u0007\n ")).toBeNull();
   });
 
-  it(`is cut to ${MAX_EVENT_TEXT_CHARS} characters, with "…"`, () => {
-    const long = "🙂".repeat(MAX_EVENT_TEXT_CHARS + 1);
-    const cut = eventText(long)!;
-    expect([...cut]).toHaveLength(MAX_EVENT_TEXT_CHARS);
-    expect(cut.endsWith("…")).toBe(true);
-    expect(eventText("a".repeat(MAX_EVENT_TEXT_CHARS))).toBe("a".repeat(MAX_EVENT_TEXT_CHARS));
+  it(`is cut to ${MAX_EVENT_TEXT_CHARS} JSON characters, as the state counts them, with "…" and whole characters`, () => {
+    // An emoji is two UTF-16 units: 1,500 of them are 3,002 JSON characters, past a block's bound.
+    const cut = eventText("🙂".repeat(1_500))!;
+    expect(jsonTextLength(cut)).toBeLessThanOrEqual(MAX_EVENT_TEXT_CHARS);
+    expect(jsonTextLength(cut)).toBeLessThanOrEqual(MAX_BLOCK_CHARS);
+    expect(cut.endsWith("🙂…")).toBe(true);
+    // Quotes and backslashes count as JSON escapes them.
+    expect(jsonTextLength(eventText('"'.repeat(1_500))!)).toBeLessThanOrEqual(MAX_EVENT_TEXT_CHARS);
+    const fits = "a".repeat(MAX_EVENT_TEXT_CHARS - 2);
+    expect(eventText(fits)).toBe(fits);
+    expect(eventText(`${fits}a`)).toBe(`${"a".repeat(MAX_EVENT_TEXT_CHARS - 3)}…`);
   });
 });
 
