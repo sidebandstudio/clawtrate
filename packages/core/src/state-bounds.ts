@@ -25,6 +25,7 @@ import {
   MAX_SIGNIN_METHODS,
   type AccountsState,
   type AccountWrite,
+  type OrderClear,
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
@@ -1207,6 +1208,15 @@ const accountWrite = object<AccountWrite>()({
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,
 });
+const orderClear = object<OrderClear>()({
+  botId: ID,
+  provider: ID,
+  kind: ENUM,
+  account: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  at: NUMBER,
+});
 export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
@@ -1224,6 +1234,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   signIn,
   creation: botCreation,
   write: accountWrite,
+  clear: orderClear,
 });
 
 /** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */

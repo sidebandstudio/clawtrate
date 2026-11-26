@@ -20,7 +20,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { screenStamp, shownStamp } from "../stamp.ts";
+import { screenStamp, shownStamp, type ShownStamp } from "../stamp.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -32,6 +32,7 @@ import {
   WarnIcon,
 } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
+import { ClearOrderConfirm, ClearOutcome, type ClearAsk } from "./ClearOrder.tsx";
 import { Connect } from "./Connect.tsx";
 import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
 import { UpdateOpenClawNote } from "./UpdateOpenClaw.tsx";
@@ -149,6 +150,12 @@ export function BotSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [effortNote, setEffortNote] = useState<string | null>(null);
+  // Unlock and Clear (#660): the confirmation open, where its page was read, and since when the
+  // Account page has been open (a press before that isn't this visit's to report).
+  const [ask, setAsk] = useState<ClearAsk | null>(null);
+  const [asking, setAsking] = useState(false);
+  const askedOn = useRef<ShownStamp | null>(null);
+  const [pageSince, setPageSince] = useState(0);
   // The page's clock: evidence ages while the page stays open, and with every change of the connection.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -210,6 +217,7 @@ export function BotSettings({
     setView("main");
     setWatching(false);
     setPick(null);
+    setAsk(null);
   }
 
   // Every connect clears the gateway's id until its identity read answers, the reconnect that
@@ -240,6 +248,7 @@ export function BotSettings({
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
+    if (next === "account" && view !== "account") setPageSince(Date.now());
     if (next === "change" && view !== "change")
       setChoicesRead(accounts.readOn ?? shownStamp(connection));
     if (next !== "change") setPick(null);

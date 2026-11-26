@@ -54,6 +54,8 @@ import {
   type BotView,
   type LockCheck,
   type ModelRef,
+  ORDER_CLEAR_WAIT_MS,
+  type OrderClear,
   type SignInResult,
   type SignInState,
   type StoredOrder,
@@ -508,30 +510,7 @@ export class AccountsEngine {
       })),
     );
     try {
-      const [answer, config] = await Promise.all([
-        ctx.request("models.authStatus", { agentId: botId, refresh: true }),
-        ctx.request("config.get", {}).then(asRecord),
-      ]);
-      const view = readBotView(answer);
-      if (view.unavailable) {
-        const reason = view.unavailable;
-        ctx.update((a) =>
-          this.patchBinding(a, botId, (b) => ({
-            ...b,
-            evidence: { ...b.evidence, status: "unavailable", error: reason },
-          })),
-        );
-        return;
-      }
-      const entry = asRecord(
-        asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId],
-      );
-      const at = ctx.now();
-      ctx.update((a) => {
-        const current = a.bindings.find((each) => each.botId === botId) ?? before;
-        const next = this.binding(botId, entry, view, current, at);
-        return { ...a, bindings: a.bindings.map((each) => (each.botId === botId ? next : each)) };
-      });
+      await this.readOrder(botId, before, ctx);
     } catch (error) {
       ctx.update((a) =>
         this.patchBinding(a, botId, (b) => ({
@@ -540,6 +519,144 @@ export class AccountsEngine {
         })),
       );
     }
+  }
+
+  /**
+   * One read of a bot's order and model, published as its binding. Returns the bot's view, or
+   * null when the gateway says its account status is unavailable (said on the binding).
+   */
+  private async readOrder(
+    botId: string,
+    before: BotBinding,
+    ctx: AccountsContext,
+  ): Promise<BotView | null> {
+    const [answer, config] = await Promise.all([
+      ctx.request("models.authStatus", { agentId: botId, refresh: true }),
+      ctx.request("config.get", {}).then(asRecord),
+    ]);
+    const view = readBotView(answer);
+    if (view.unavailable) {
+      const reason = view.unavailable;
+      ctx.update((a) =>
+        this.patchBinding(a, botId, (b) => ({
+          ...b,
+          evidence: { ...b.evidence, status: "unavailable", error: reason },
+        })),
+      );
+      return null;
+    }
+    const entry = asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
+    const at = ctx.now();
+    ctx.update((a) => {
+      const current = a.bindings.find((each) => each.botId === botId) ?? before;
+      const next = this.binding(botId, entry, view, current, at);
+      return { ...a, bindings: a.bindings.map((each) => (each.botId === botId ? next : each)) };
+    });
+    return view;
+  }
+
+  /**
+   * Unlock, or Clear a kept order (#660): the person's press, after its confirmation. The order
+   * is read first, and the press goes on only while the bot's own stored order for `provider`
+   * still names `account` alone, the order the confirmation showed. Then `models.authOrderSet
+   * {provider, agentId}` with no account ids (`operator.admin`), which clears it on the running
+   * gateway on OpenClaw 2026.10.6 and 2026.11.10 alike, and the order read again: the outcome is
+   * `cleared` only when that read finds no stored order. `beforeSend` as for `changeAccount`;
+   * after another gateway (`reset`) nothing more is published.
+   */
+  async clearOrder(
+    botId: string,
+    provider: string,
+    account: string,
+    kind: OrderClear["kind"],
+    beforeSend?: (sent: boolean) => void,
+  ): Promise<void> {
+    this.requireAdmin(kind === "unlock" ? "Unlocking a bot" : "Clearing a bot's order");
+    const resets = this.resets;
+    const base = this.ctx;
+    const live = () => this.resets === resets;
+    const publish = (patch: Pick<OrderClear, "status" | "error">) => {
+      if (!live()) return;
+      const error = patch.error === null ? null : this.scrub(patch.error).slice(0, 400);
+      base.update((a) => ({
+        ...a,
+        clear: { botId, provider, kind, account, ...patch, error, at: base.now() },
+      }));
+    };
+    const { ctx: checked, check } = this.checked(beforeSend);
+    const ctx: AccountsContext = {
+      ...checked,
+      update: (change) => {
+        if (live()) base.update(change);
+      },
+    };
+    const holds = (view: BotView | null) => {
+      const order = view?.orders[provider];
+      return order?.stored === true && order.ids.length === 1 && order.ids[0] === account;
+    };
+    const clearedIn = (view: BotView | null) => view !== null && !view.orders[provider]?.stored;
+    publish({ status: "sending", error: null });
+    const before = base.get().bindings.find((each) => each.botId === botId);
+    if (!before) {
+      publish({ status: "unsent", error: "The bot is no longer listed." });
+      return;
+    }
+    let first: BotView | null;
+    try {
+      first = await this.readOrder(botId, before, ctx);
+    } catch (error) {
+      publish({ status: "unsent", error: errorText(error) });
+      return;
+    }
+    if (first === null) {
+      publish({ status: "unsent", error: "The gateway says its account status is unavailable." });
+      return;
+    }
+    if (!holds(first)) {
+      publish({ status: "moved", error: null });
+      return;
+    }
+    try {
+      // The host's check, at once before the send: a connection changed since is said as unsent.
+      check();
+    } catch (error) {
+      publish({ status: "unsent", error: errorText(error) });
+      return;
+    }
+    let refused: string | null = null;
+    let lost: string | null = null;
+    try {
+      await ctx.request(
+        "models.authOrderSet",
+        { provider, agentId: botId },
+        { timeoutMs: ORDER_CLEAR_WAIT_MS },
+      );
+    } catch (error) {
+      if (isRefusal(error)) refused = errorText(error);
+      else lost = errorText(error);
+    }
+    let after: BotView | null = null;
+    let unread = false;
+    try {
+      // The connection the press was sent on, still: a read on another says nothing of this one.
+      check();
+      after = await this.readOrder(botId, before, ctx);
+      unread = after === null;
+    } catch (error) {
+      unread = true;
+      // As Check now says a failed read: the last confirmation stands, with its time.
+      ctx.update((a) =>
+        this.patchBinding(a, botId, (b) => ({
+          ...b,
+          evidence: { ...b.evidence, status: "failed", error: this.scrub(errorText(error)) },
+        })),
+      );
+    }
+    if (clearedIn(after)) publish({ status: "cleared", error: null });
+    else if (refused !== null) publish({ status: "refused", error: refused });
+    else if (lost !== null) publish({ status: "unanswered", error: lost });
+    else if (unread) publish({ status: "unread", error: null });
+    else publish({ status: "kept", error: null });
   }
 
   private patchBinding(
@@ -1916,7 +2033,7 @@ export class AccountsEngine {
         ...base,
         request: async (method, params, options) => {
           check();
-          if (method !== "config.get") wrote = true;
+          if (method !== "config.get" && method !== "models.authStatus") wrote = true;
           return base.request(method, params, options);
         },
       },
@@ -2096,6 +2213,8 @@ export class AccountsEngine {
   reset(): void {
     // A write under way belongs to the gateway it was asked of: retired, it sends nothing more.
     this.resets += 1;
+    // An Unlock's line is about the gateway it was pressed for.
+    if (this.ctx.get().clear) this.ctx.update((a) => ({ ...a, clear: null }));
     this.creating = null;
     this.creationGateway = null;
     this.creationTarget = null;

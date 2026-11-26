@@ -406,6 +406,35 @@ export type AccountWrite = {
   at: number;
 };
 
+/**
+ * A press of Unlock or Clear on a bot's Account page (#660): `models.authOrderSet {provider,
+ * agentId}` with no account ids, which clears the bot's stored order for the provider over the
+ * connection. What it ended as is said only from the gateway's own read after it.
+ */
+export type OrderClear = {
+  botId: string;
+  provider: string;
+  /** `unlock`: the order of a bot bound to an account; `clear`: one kept for a bot the gateway chooses for. */
+  kind: "unlock" | "clear";
+  /** The one account the order named when the confirmation opened: the order the press acts on. */
+  account: string;
+  /**
+   * `sending`: under way. `cleared`: the read after it finds no stored order. `refused`: the
+   * gateway answered no. `unanswered`: no answer came, and the read after it doesn't show the
+   * order cleared. `kept`: the gateway answered yes, and its read still shows the order. `unread`:
+   * the gateway answered yes, and the read after it failed. `moved`: the order read before
+   * sending wasn't the one the confirmation showed, so nothing was sent. `unsent`: that read
+   * failed, or the connection changed first, so nothing was sent.
+   */
+  status: "sending" | "cleared" | "refused" | "unanswered" | "kept" | "unread" | "moved" | "unsent";
+  /** The gateway's words for a refusal, or why an answer or a read didn't come. */
+  error: string | null;
+  at: number;
+};
+
+/** How long a press waits for the gateway's answer before it reads the order to find out. */
+export const ORDER_CLEAR_WAIT_MS = 20_000;
+
 export type AccountsState = {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
@@ -428,6 +457,8 @@ export type AccountsState = {
   signIn: SignInState | null;
   creation: BotCreationState | null;
   write: AccountWrite | null;
+  /** The last Unlock or Clear, for the line that says how it went. */
+  clear: OrderClear | null;
 };
 
 export const initialAccountsState: AccountsState = {
@@ -447,6 +478,7 @@ export const initialAccountsState: AccountsState = {
   signIn: null,
   creation: null,
   write: null,
+  clear: null,
 };
 
 export const unreadEvidence: LockEvidence = {
@@ -863,6 +895,18 @@ export function accountWord(binding: BotBinding): AccountWord {
 export function retainedOrder(binding: BotBinding): string | null {
   if (binding.mode !== "gateway" || !binding.order?.stored) return null;
   return binding.order.ids.length === 1 ? binding.order.ids[0]! : null;
+}
+
+/**
+ * What an Unlock or Clear is shown as now: as it ended, unless it ended unsure (`unanswered`,
+ * `unread`, `kept`) and a read of the bot since then finds no stored order for its provider,
+ * which settles it as `cleared` from the gateway's own read.
+ */
+export function clearShown(clear: OrderClear, binding: BotBinding): OrderClear["status"] {
+  const unsure = clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
+  const readSince = binding.evidence.checkedAt !== null && binding.evidence.checkedAt >= clear.at;
+  const gone = binding.provider === clear.provider && !binding.order?.stored;
+  return unsure && readSince && gone ? "cleared" : clear.status;
 }
 
 /** The gateway's command line for the lock, in its own form (rows 12 and 14). */
