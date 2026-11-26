@@ -23,7 +23,7 @@ import {
 
 const URL = "wss://gateway.example:19980";
 const DEVICE = "device-1";
-const FAST = { reconnect: { initialMs: 20, maxMs: 40 }, fullAccess: true };
+const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
 type ConnectParams = { scopes: string[]; auth?: { deviceToken?: string } };
 type Storage = KeyValueStore & { data: Map<string, string> };
 
@@ -78,13 +78,12 @@ function gatewayFor() {
 function clientOn(
   gateway: FakeGateway,
   storage: Storage,
-  options: { secure?: boolean; readOnly?: boolean; fullAccess?: boolean } = {},
+  options: { secure?: boolean; readOnly?: boolean } = {},
 ) {
   return new ClawtrateClient(
     { ...testHost(gateway, storage), secureCredentials: async () => options.secure ?? true },
     {
       ...FAST,
-      ...(options.fullAccess === false ? { fullAccess: false } : {}),
       ...(options.readOnly ? { readOnly: true } : {}),
     },
   );
@@ -323,7 +322,6 @@ describe("the one-time offer of full control (F-500)", () => {
     ["a loopback wss:// address", "wss://127.0.0.1:19982", {}],
     ["a session-only host", URL, { secure: false }],
     ["a read-only host", URL, { readOnly: true }],
-    ["a host without full access", URL, { fullAccess: false }],
   ] as const)("F-549: isn't offered on %s", async (_name, url, options) => {
     const storage = pairedAt(url);
     const { gateway } = gatewayFor();
