@@ -37,7 +37,7 @@ export const NAMED_BOT = "new-bot";
 export const NAMED_TASK = "agent:new-bot:main";
 const SECOND = 1000;
 const FILE =
-  "# IDENTITY.md - Who Am I?\n\n- **Name:** New bot\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above. Clawtrate shows it as your name at once.\n";
+  "# IDENTITY.md - Who Am I?\n\n- **Name:** New bot\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above. Clawtrate shows it as your name after your turn, when it can.\n";
 
 function rows(start: number) {
   const run = "3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40";

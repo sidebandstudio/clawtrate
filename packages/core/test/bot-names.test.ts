@@ -488,8 +488,11 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     await me.engine.undo("pip", runTag("run-1"), STAMP);
     expect(me.lines()[0]).toMatchObject({ status: "undone" });
     expect(me.lines()[0]!.error).toMatch(/couldn't keep this on the gateway/);
-    gw.state.prefsDown = false;
+    // While the gateway still won't take it, the same name written again changes nothing here.
     await me.engine.afterRun("pip", "agent:pip:main", "run-2");
+    expect(me.lines()[0]).toMatchObject({ status: "undone" });
+    gw.state.prefsDown = false;
+    await me.engine.afterRun("pip", "agent:pip:main", "run-3");
     expect(gw.state.updates).toEqual(["Juniper", "Pip"]);
     // Written once the gateway takes it again.
     expect(parseNameRecord(gw.state.record, NOW).declined).toEqual([

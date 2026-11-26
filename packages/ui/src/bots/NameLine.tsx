@@ -82,8 +82,8 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
   const state = useClawtrateState();
   const bridge = useBridge();
   const [busy, setBusy] = useState(false);
-  // Undo's window is days long: the time the line was drawn is near enough.
-  const now = useNow(false);
+  // Ticks while a line is up, so Undo goes at the end of its window.
+  const now = useNow(!!state.botNames?.some((each) => each.botId === bot.id));
   const line = state.botNames?.find((each) => each.botId === bot.id);
   if (!line) return null;
   const changes = state.botNameRecord?.changes ?? [];
@@ -145,7 +145,7 @@ export function NameChanges({ bot }: { bot: Bot }) {
   const state = useClawtrateState();
   const bridge = useBridge();
   const [problem, setProblem] = useState<string | null>(null);
-  const now = useNow(false);
+  const now = useNow(!!state.botNameRecord?.changes.some((each) => each.bot === bot.id));
   const record = state.botNameRecord;
   const changes = record?.changes ?? [];
   const mine = changes.filter((each) => each.bot === bot.id);

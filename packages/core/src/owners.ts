@@ -348,9 +348,17 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 3 * ID + 2 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + 4 * SHORT,
     row: "bookkeeping",
   },
+  // Undos whose decline couldn't be written to the gateway yet: a key, a stamp, a bot, a name
+  // and a run's tag each, one per listed bot.
+  "botNames.unrecorded": {
+    max: MAX_BOTS,
+    each: 4 * ID + MAX_NAME_CHARS + N,
+    row: "bookkeeping",
+  },
   "botNames.sentRuns": {
     max: MAX_SENT_RUNS,
-    each: MAX_CHECKED_RUN_CHARS + ID + MAX_SENT_TEXT_CHARS,
+    // The text as JSON writes it: up to six characters (`\uXXXX`) for each one kept.
+    each: MAX_CHECKED_RUN_CHARS + ID + 6 * MAX_SENT_TEXT_CHARS,
     row: "bookkeeping",
   },
   "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },

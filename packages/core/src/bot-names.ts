@@ -167,7 +167,7 @@ export function judgeRename(facts: RunFacts, name: string): { asked: boolean; so
  * Text that merely mentions the file, or `notes/IDENTITY.md`, isn't it.
  */
 function ownIdentityFile(tool: string, args: string | null): boolean {
-  let parsed: Record<string, unknown> | null = null;
+  let parsed: Record<string, unknown> | null;
   try {
     parsed = asRecord(JSON.parse(args ?? "null"));
   } catch {
@@ -358,7 +358,7 @@ export class BotNames {
   private readonly sentRuns = new Map<string, { sessionKey: string; text: string }>();
   /**
    * Undos whose change this device couldn't mark undone on the gateway, by gateway and bot, at
-   * most `MAX_NAME_CARDS`: their names count as declined here, and are written again.
+   * most `MAX_NAME_CARDS` (`MAX_BOTS`): their names count as declined here, and are written again.
    */
   private readonly unrecorded = new Map<
     string,

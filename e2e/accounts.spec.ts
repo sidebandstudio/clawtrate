@@ -474,7 +474,29 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
       platform: process.platform,
     },
   });
-  const second = new ClawtrateClient(node, { allowGatewayUrl: (url) => url === connection.url });
+  // Every request the second client sends, by method: it must never send a rename.
+  const secondSent: string[] = [];
+  const second = new ClawtrateClient(
+    {
+      ...node,
+      createWebSocket(url) {
+        const socket = node.createWebSocket(url);
+        const send = socket.send.bind(socket);
+        socket.send = (data) => {
+          try {
+            const method = (JSON.parse(data) as { method?: unknown }).method;
+            if (typeof method === "string") secondSent.push(method);
+          } catch {
+            // Not a request frame.
+          }
+          send(data);
+        };
+        return socket;
+      },
+    },
+    { allowGatewayUrl: (url) => url === connection.url },
+  );
+  const renames = () => secondSent.filter((method) => method === "agents.update");
   const viewer = createBridgeSession(second);
   try {
     await second.start();
@@ -526,6 +548,7 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
       .poll(() => second.state.botNames?.[0], { timeout: 30_000 })
       .toMatchObject({ to: "Johnny", status: "renamed", asked: true });
     expect(second.state.botNameRecord?.changes).toHaveLength(1);
+    expect(renames()).toEqual([]);
     await shots("bot-name-renamed");
 
     // Undo puts the name before back, everywhere, and the same edit doesn't rename it again.
@@ -552,6 +575,8 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
     await expect
       .poll(() => second.state.botNameRecord?.changes.length, { timeout: 30_000 })
       .toBe(2);
+    // Throughout, the second client renamed nothing, and only read the record and files.
+    expect(renames()).toEqual([]);
     await shots("bot-name-own");
     // Thistle stays: deleting it behind the page's back would leave the page listing a bot the
     // gateway no longer has, and the accounts checks after this read every listed bot.

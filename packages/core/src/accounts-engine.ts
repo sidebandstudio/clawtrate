@@ -2173,7 +2173,7 @@ export function identityFile(name: string, picture: boolean): string {
       ? "Your name and picture were chosen in Clawtrate when you were made. Keep both. Don't make or save another picture unless the person asks for one."
       : "Your name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.",
     "",
-    "When the person gives you a new name, write it on the `- Name:` line above. Clawtrate shows it as your name at once.",
+    "When the person gives you a new name, write it on the `- Name:` line above. Clawtrate shows it as your name after your turn, when it can.",
     "",
   ].join("\n");
 }
