@@ -41,6 +41,7 @@ Every document in the repository, by what you want to do.
 - [Effortless setup and connection](design/setup-effortless.md): full access at the first connect, connecting on this Mac from OpenClaw's settings file, approving devices inside Clawtrate, and the first run timed.
 - [Search](design/search.md): the Cmd/Ctrl+K palette, what each source covers, opening a result in its place, and the iPhone's scopes.
 - [The Main Bot](design/main-bot-onboarding.md): the first run's chat with the Main Bot, how bots run commands, bots asking to change themselves and other bots through Clawtrate's plugin, proposals, and external agents over MCP.
+- [Connectors](design/connectors.md): giving bots tool servers by address or as a program on the gateway's machine, choosing which bots use each, seeing what the gateway reached, signing in through the gateway's own page, and removing them; then apps from the catalog, a sign-in in the conversation and the first-run question.
 - [Title bar](design/titlebar.md): the mark, wordmark and Beta pill, the update button's states, the gear for Settings, and naming a gateway on this device.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 
@@ -59,6 +60,8 @@ Every document in the repository, by what you want to do.
 - `research/bot-self-management/`: a gateway-free stand-in for the contract that note leads to.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - [The model list](research/model-catalog.md): where a bot's model list comes from, what the gateway's picker leaves out, what OpenClaw 2026.10.6 and 2026.11.6 know about OpenAI's models, model ids the catalogue doesn't list, using a model newer than the list, and the gateway's update signals.
+- [Connectors](research/connectors.md): tool servers added by address or as a program, which bots reach them, their sign-in and where their secrets are kept, the plugin catalog with and without ClawHub, and what changed in OpenClaw 2026.11.10, from both versions' source and development gateways of each.
+- `research/connectors/`: the probe behind the connectors note, which connects only to a development gateway named by its address.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs
