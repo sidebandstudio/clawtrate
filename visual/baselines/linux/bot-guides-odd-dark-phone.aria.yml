@@ -15,31 +15,22 @@
     - link "Where the guide doesn't reach":
       - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach
     - group: What the guide asks the bots to do
-    - heading "How bots work in Clawtrate" [level=4]
-    - paragraph: Pip and Quartermaster of the Family Calendar and Errands aren't told what a task is in Clawtrate, so a bot asked to put something in a task may not start one.
+    - text: Bots know how Clawtrate works On
+    - switch "Bots know how Clawtrate works" [checked]
     - paragraph:
-      - text: Clawtrate can add a short section, marked as Clawtrate's, to the top of each bot's instructions file (
+      - text: Clawtrate keeps a short section at the top of the
       - code: AGENTS.md
-      - text: "): how to talk to you, and what a task is in Clawtrate. Your bots get it in every conversation, task and routine, including outside Clawtrate. It adds about 3,100 characters to each prompt. Clawtrate keeps it up to date and changes nothing else in the file. Remove it here any time, and Clawtrate takes it out."
+      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate.
     - group: Read it
-    - list "How bots work in Clawtrate":
-      - listitem: Juniper Added
+    - list "Bots know how Clawtrate works":
       - listitem:
-        - checkbox "Marlow An older version. Add brings it up to date." [checked]
-        - text: Marlow An older version. Add brings it up to date.
+        - text: Marlow Its section isn't at the top, where Clawtrate put it, so Clawtrate leaves it as it is. Move it back to the top, or remove it yourself.
+        - button "Show"
       - listitem:
         - text: Otto Its markers aren't as Clawtrate wrote them, so Clawtrate can't tell where its section ends. Edit the file, or remove the section's text yourself.
         - button "Show"
-      - listitem:
-        - checkbox "Pip Not added" [checked]
-        - text: Pip Not added
-      - listitem:
-        - 'checkbox "Quartermaster of the Family Calendar and Errands Not added Its instructions are long: with this section, the gateway may leave part of them out of Quartermaster of the Family Calendar and Errands''s prompt."'
-        - text: "Quartermaster of the Family Calendar and Errands Not added Its instructions are long: with this section, the gateway may leave part of them out of Quartermaster of the Family Calendar and Errands's prompt."
-    - checkbox "New bots too, when they're made in Clawtrate"
-    - text: New bots too, when they're made in Clawtrate
-    - button "Add to 2 bots"
-    - button "Remove from all bots"
+      - listitem: Pip Pip's AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it. Save it as UTF-8 and Clawtrate can add, update or remove its section again.
+      - listitem: Quartermaster of the Family Calendar and Errands Couldn't read its instructions file. The gateway did not answer.
   - status
 - region "Conversation":
   - button "Back to bots"
