@@ -33,7 +33,7 @@ export const INTERACTIVE_SCOPES: readonly string[] = [
 export const ADMIN_SCOPES: readonly string[] = [...INTERACTIVE_SCOPES, ADMIN_SCOPE];
 
 /**
- * What a first pairing asks for with full access on (`ClientOptions.fullAccess`), in this
+ * What a first pairing asks for on a host with secure storage, at a protected route, in this
  * order (docs/decisions.md, "Scopes, once, at the first pairing"). Pairing is named although admin implies it:
  * pairing events and the gateway's device rules check the named scope.
  */

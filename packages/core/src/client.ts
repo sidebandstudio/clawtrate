@@ -739,14 +739,6 @@ export type ClientOptions = {
    */
   readOnly?: boolean;
   /**
-   * A first pairing asks for all six operator scopes (`FULL_SCOPES`), and a
-   * reconnect asks for what the gateway confirmed within them. Off by default.
-   * Honoured only while the host keeps this device's credentials in the
-   * system's secure storage (`ClawtrateHost.secureCredentials`), and never with
-   * `readOnly`. A device paired before keeps what it holds.
-   */
-  fullAccess?: boolean;
-  /**
    * Local connect: the proved sockets for a gateway saved with `route`, asked as
    * each connection to it opens, or null when the host can't prove that route
    * (then nothing is opened). Off in every shipped host.
@@ -1208,17 +1200,30 @@ function isMissingScope(error: unknown): boolean {
 
 export { validateGatewayUrl };
 
-export function defaultApprovalInstructions(_url: string, requestId: string): ApprovalInstructions {
-  // Without a request id (a setup connection keeps none), the gateway's pending-devices list.
+export function defaultApprovalInstructions(url: string, requestId: string): ApprovalInstructions {
+  // OpenClaw's own page approves a device in one click at Settings › Devices (`/settings/devices`
+  // in 2026.10.6 and 2026.11.10, docs/web/urls.md), but only from a browser on the gateway's
+  // computer that its default local policy lets in; otherwise the page itself asks for a command
+  // to approve the browser. So the command stays, for where the page can't be used. Without a
+  // request id (a setup connection keeps none), the gateway's pending-devices list.
+  const where = `On the computer running OpenClaw, open ${pageAddress(url)}, go to Settings › Devices and approve this device. If that page asks to approve the browser first, or that computer has no browser,`;
   if (requestId === "")
-    return {
-      command: "openclaw devices list",
-      note: "The gateway's owner approves this device from the pending requests it lists, on the machine where the gateway runs.",
-    };
+    return { command: "openclaw devices list", note: `${where} find it with this there instead.` };
   return {
     command: `openclaw devices approve ${requestId}`,
-    note: "The gateway's owner runs this on the machine where the gateway runs.",
+    note: `${where} run this there instead.`,
   };
+}
+
+/** OpenClaw's page on the gateway's own computer: the port is known only from a `ws://` address. */
+function pageAddress(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "ws:" && parsed.port) return `http://127.0.0.1:${parsed.port}`;
+  } catch {
+    // An address that doesn't parse names no port.
+  }
+  return "OpenClaw's page (http://127.0.0.1 and the gateway's port)";
 }
 
 export class GatewayNotAllowedError extends Error {
@@ -1362,8 +1367,8 @@ export class ClawtrateClient {
   /** The next try of a reopen that failed before its connection could retry by itself (`reopen`). */
   private reopenTimer: ReturnType<typeof setTimeout> | null = null;
   /**
-   * Full access holds for the current connection: asked for, not read-only, and the host
-   * keeps this device's credentials in secure storage. Read again as each connection opens.
+   * Full access holds for the current connection: a protected route, not read-only, and the
+   * host keeps this device's credentials in secure storage. Read again as each connection opens.
    */
   private fullAccess = false;
   /**
@@ -8282,7 +8287,9 @@ export class ClawtrateClient {
     // pairing's token there asks for read too. What a first pairing may ask for on that route
     // is `firstPairingMayAskFull`'s. Only a plain connect's token takes the proved route: a setup
     // code, and setup's reuse of a saved pairing, ask for read there.
-    const full = this.options.fullAccess === true && !this.options.readOnly;
+    // There is no switch for it (docs/decisions.md, 2026-11-25): a host that allows writes and keeps
+    // this device's credentials in secure storage asks for the six at a first pairing there.
+    const full = !this.options.readOnly;
     // A gateway set up through local connect: every socket of this connection is the host's
     // proved one, once setup's own sockets end; false when the host can't prove it.
     const route =
