@@ -242,3 +242,17 @@ describe("a task's preview shows a person's words alone", () => {
     expect(plainPreview("**Done.** The backup finished")).toBe("Done. The backup finished");
   });
 });
+
+describe("a task's title the gateway derived shows a person's words alone", () => {
+  it("loses the marker it was named with, and a label someone set is kept as it is", () => {
+    const named = `Short one\n\nWorking context c`;
+    expect(mapSessionRow({ key: KEY, derivedTitle: named, displayName: named })?.title).toBe(
+      "Short one",
+    );
+    expect(mapSessionRow({ key: KEY, displayName: named })?.title).toBe("Short one");
+    expect(
+      mapSessionRow({ key: KEY, label: "Working context captured", derivedTitle: named })?.title,
+    ).toBe("Working context captured");
+    expect(mapSessionRow({ key: KEY, derivedTitle: "Plan the walk" })?.title).toBe("Plan the walk");
+  });
+});

@@ -132,6 +132,16 @@ export function isSessionRemoval(payload: unknown): boolean {
 }
 
 /**
+ * A title the gateway made from a task's first message: on OpenClaw 2026.11.10 a model names the
+ * task from the model's copy of it, which ends with the marker a message from Clawtrate carries.
+ * The marker comes off, and a title of nothing else is none.
+ */
+function derivedTitle(value: unknown): string | null {
+  const title = str(value);
+  return title === null ? null : str(snippetWithoutMarker(title).text);
+}
+
+/**
  * Gateway previews are the start of the last message, often markdown, and for
  * a channel turn wrapped in what the gateway wrote around it. Reduce them to
  * readable plain text for a two-line list preview.
@@ -219,7 +229,10 @@ export function mapSessionRow(row: RawRecord): Task | null {
     sessionId: str(row.sessionId),
     title: channel
       ? channelChatTitle(row, channel)
-      : (str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? fallbackTitle(key)),
+      : (str(row.label) ??
+        derivedTitle(row.derivedTitle) ??
+        derivedTitle(row.displayName) ??
+        fallbackTitle(key)),
     preview: plainPreview(str(row.lastMessagePreview)),
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
