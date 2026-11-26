@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chunkText } from "../src/fake-provider.ts";
-import { normalizePrompt, planReply, type ChatMessage } from "../src/scripts.ts";
+import { effectivePrompt, normalizePrompt, planReply, type ChatMessage } from "../src/scripts.ts";
 import { SEED_BOTS } from "../src/seed-data.ts";
 import { LEARNED_REASON, LEARNED_SKILL, SKILL_REVIEW_PROMPT } from "../src/scenarios.ts";
 
@@ -245,5 +245,132 @@ describe("tasks a bot starts", () => {
         tools,
       ),
     ).toEqual([{ kind: "text", text: "Check the forecast finished." }]);
+  });
+});
+
+// OpenClaw 2026.11.10 keeps a task's system prompt and sends what changed in it as a user message
+// of its own after the prompt (#609).
+describe("the system prompt as the model has it now", () => {
+  const update = (body: string): ChatMessage => ({
+    role: "user",
+    content: `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${body}`,
+  });
+  const system: ChatMessage = {
+    role: "system",
+    content: "Intro.\n\n## Runtime\nModel one.\n\n## How you talk to your person\nPlainly.\n",
+  };
+
+  it("is the system prompt alone when nothing changed", () => {
+    expect(effectivePrompt([system, { role: "user", content: "#text" }])).toBe(
+      "Intro.\n\n## Runtime\nModel one.\n\n## How you talk to your person\nPlainly.\n",
+    );
+  });
+
+  it("replaces a section's whole body, past an ordinary comment in it, up to the next section", () => {
+    const now = effectivePrompt([
+      {
+        role: "system",
+        content: "## Runtime\nOld.\n<!-- note -->\nStale.\n## Other\nKeep.\n",
+      },
+      { role: "user", content: "#text" },
+      update("## Runtime\nNew."),
+    ]);
+    expect(now).toContain("## Runtime\nNew.");
+    expect(now).not.toContain("Old.");
+    expect(now).not.toContain("Stale.");
+    expect(now).toContain("## Other\nKeep.");
+  });
+
+  it("keeps a workspace file's own headings inside its section, when replaced and when removed", () => {
+    const withFile: ChatMessage = {
+      role: "system",
+      content:
+        "## /workspace/MEMORY.md\nGym on Tuesday.\n## Preferred days\nTuesday.\n## /workspace/USER.md\nAli.\n",
+    };
+    const replaced = effectivePrompt([
+      withFile,
+      update("## /workspace/MEMORY.md\nGym on Friday.\n## Preferred days\nFriday."),
+    ]);
+    expect(replaced).toContain(
+      "## /workspace/MEMORY.md\nGym on Friday.\n## Preferred days\nFriday.",
+    );
+    expect(replaced).not.toContain("Tuesday");
+    expect(replaced).toContain("## /workspace/USER.md\nAli.");
+    const removed = effectivePrompt([withFile, update("## /workspace/MEMORY.md\n(removed)")]);
+    expect(removed).not.toContain("Preferred days");
+    expect(removed).not.toContain("Gym");
+    expect(removed).toContain("## /workspace/USER.md\nAli.");
+  });
+
+  it("updates the gateway's section, not a heading of the same name inside a workspace file", () => {
+    const now = effectivePrompt([
+      {
+        role: "system",
+        content:
+          "## /workspace/MEMORY.md\nNotes.\n## Runtime\nMy own runtime notes.\n<!-- /openclaw:attempt:STABLE -->\n## Runtime\nModel one.\n",
+      },
+      update("## Runtime\nModel two."),
+    ]);
+    expect(now).toContain("## /workspace/MEMORY.md\nNotes.\n## Runtime\nMy own runtime notes.");
+    expect(now).toContain("## Runtime\nModel two.");
+    expect(now).not.toContain("Model one.");
+  });
+
+  it("takes out a removed section, replaces a changed one and adds a new one, in order", () => {
+    const now = effectivePrompt([
+      system,
+      { role: "user", content: "#text" },
+      update("## How you talk to your person\n(removed)\n<!-- /openclaw:attempt:DYNAMIC -->"),
+      update("## Runtime\nModel two.\n\n## MEMORY.md\nTuesday."),
+    ]);
+    expect(now).not.toContain("How you talk to your person");
+    expect(now).not.toContain("Model one.");
+    expect(now).toContain("## Runtime\nModel two.");
+    expect(now).toContain("## MEMORY.md\nTuesday.");
+    expect(now.startsWith("Intro.")).toBe(true);
+  });
+});
+
+describe("the memory a bot answers with", () => {
+  const ask: ChatMessage = { role: "user", content: "What do you remember about me?" };
+  const system: ChatMessage = {
+    role: "system",
+    content:
+      "Intro.\n\n## /workspace/MEMORY.md\nTuesday is gym day.\n\n## /workspace/USER.md\nAli.\n",
+  };
+  const update = (body: string): ChatMessage => ({
+    role: "user",
+    content: `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${body}`,
+  });
+
+  it("is the memory section of the system prompt", () => {
+    expect(planReply([system, ask], ALL_TOOLS)).toEqual([
+      { kind: "text", text: "Tuesday is gym day." },
+    ]);
+  });
+
+  it("is the latest update's memory, and none once an update removes it (2026.11.10)", () => {
+    expect(
+      planReply([system, ask, update("## /workspace/MEMORY.md\nFriday is gym day.")], ALL_TOOLS),
+    ).toEqual([{ kind: "text", text: "Friday is gym day." }]);
+    expect(
+      planReply([system, ask, update("## /workspace/MEMORY.md\n(removed)")], ALL_TOOLS),
+    ).toEqual([{ kind: "text", text: "I have no root memory for this task." }]);
+  });
+
+  it("ends at the gateway's attempt marker after the memory, as kept or removed", () => {
+    const marked = (body: string) =>
+      planReply(
+        [
+          system,
+          ask,
+          update(`## /workspace/MEMORY.md\n${body}\n<!-- /openclaw:attempt:DYNAMIC -->`),
+        ],
+        ALL_TOOLS,
+      );
+    expect(marked("Friday.")).toEqual([{ kind: "text", text: "Friday." }]);
+    expect(marked("(removed)")).toEqual([
+      { kind: "text", text: "I have no root memory for this task." },
+    ]);
   });
 });

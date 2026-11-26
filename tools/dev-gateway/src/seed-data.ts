@@ -2,6 +2,7 @@
 // Everything here is invented. Tool calls only touch each bot's own dev workspace.
 
 import type { ReplyStep } from "./scripts.ts";
+import { toolJson } from "./versions.ts";
 
 /** One model call. A turn with tool calls spans several rounds. */
 export type Round = ReplyStep[];
@@ -550,10 +551,16 @@ export type ExampleResult = {
 
 const quoted = (names: string[]) => names.map((name) => JSON.stringify(name)).join("\n");
 const answered = (header: string, id: string, value: string) =>
-  `${header}: ${value}\n\n${JSON.stringify({ status: "answered", answers: { answers: { [id]: [value] } } }, null, 2)}`;
+  `${header}: ${value}\n\n${toolJson({ status: "answered", answers: { answers: { [id]: [value] } } })}`;
 
 const JUNIPER_INSTRUCTIONS = SEED_BOTS.find((bot) => bot.id === "main")!.instructions;
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A tool result's JSON in the running version's form, with each placeholder a pattern. */
+const jsonPattern = (prefix: string, value: unknown, holes: Record<string, string>) => {
+  let source = escape(prefix + toolJson(value));
+  for (const [hole, pattern] of Object.entries(holes)) source = source.replaceAll(hole, pattern);
+  return new RegExp(`^${source}$`);
+};
 
 export const SCENARIO_EXAMPLES: ScenarioExample[] = [
   {
@@ -582,23 +589,22 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
       {
         toolName: "sessions_send",
         isError: false,
-        content: [
-          new RegExp(
-            `^${escape(
-              JSON.stringify(
-                {
-                  runId: "RUNID",
-                  sessionKey: "agent:marlow:main",
-                  status: "ok",
-                  delivery: { status: "skipped" },
-                  reply: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
-                },
-                null,
-                2,
-              ),
-            ).replace("RUNID", "[0-9a-f-]{36}")}$`,
-          ),
-        ],
+        // The JSON in the running version's form (versions.ts), so read when the seed checks it.
+        get content() {
+          return [
+            jsonPattern(
+              "",
+              {
+                runId: "RUNID",
+                sessionKey: "agent:marlow:main",
+                status: "ok",
+                delivery: { status: "skipped" },
+                reply: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
+              },
+              { RUNID: "[0-9a-f-]{36}" },
+            ),
+          ];
+        },
         details: { sessionKey: "agent:marlow:main" },
       },
     ],
@@ -635,9 +641,15 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
       {
         toolName: "read",
         isError: true,
-        content: [
-          /^\{\n {2}"status": "error",\n {2}"tool": "read",\n {2}"error": "File not found: \S+\/workspace\/missing\/old-notes\.md\."\n\}$/,
-        ],
+        get content() {
+          return [
+            jsonPattern(
+              "",
+              { status: "error", tool: "read", error: "File not found: MISSING" },
+              { MISSING: String.raw`\S+\/workspace\/missing\/old-notes\.md\.` },
+            ),
+          ];
+        },
       },
     ],
   },
@@ -653,10 +665,21 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
       {
         toolName: "coder__send_message",
         isError: false,
-        content: [
-          /^structuredContent:\n\{\n {2}"reply": "Opened a branch and drafted the change for: Add a dark mode toggle to the settings page\.",\n {2}"threadId": "(thread-\d+)",\n {2}"url": "https:\/\/coding-agent\.example\/threads\/\1"\n\}$/,
-          "Opened a branch and drafted the change.",
-        ],
+        get content() {
+          return [
+            jsonPattern(
+              "structuredContent:\n",
+              {
+                reply:
+                  "Opened a branch and drafted the change for: Add a dark mode toggle to the settings page.",
+                threadId: "THREAD",
+                url: "https://coding-agent.example/threads/LINK",
+              },
+              { THREAD: String.raw`(thread-\d+)`, LINK: String.raw`\1` },
+            ),
+            "Opened a branch and drafted the change.",
+          ];
+        },
       },
     ],
   },
@@ -670,7 +693,13 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     toolErrors: 0,
     interaction: { kind: "question", answers: { route: ["Lake loop"] } },
     results: [
-      { toolName: "ask_user", isError: false, content: [answered("Route", "route", "Lake loop")] },
+      {
+        toolName: "ask_user",
+        isError: false,
+        get content() {
+          return [answered("Route", "route", "Lake loop")];
+        },
+      },
     ],
   },
   {

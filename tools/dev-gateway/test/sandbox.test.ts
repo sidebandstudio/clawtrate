@@ -383,3 +383,30 @@ describe("seed verification", () => {
     );
   });
 });
+
+// The background skill review's tools are offered, on each version, and stay denied without it.
+describe("the skill review's tools", () => {
+  const tools = (openclaw: "2026.10.6" | "2026.11.10", skillReview: boolean) =>
+    devConfig("t", undefined, undefined, [], { openclaw, ...(skillReview ? { skillReview } : {}) })
+      .tools;
+
+  it("are allowed and not denied when the review is on", () => {
+    for (const [version, review] of [
+      ["2026.10.6", ["skill_workshop"]],
+      ["2026.11.10", ["skill_workshop", "skill_library"]],
+    ] as const) {
+      const { allow, deny } = tools(version, true);
+      for (const tool of review) {
+        expect(allow, `${version} allows ${tool}`).toContain(tool);
+        expect(deny, `${version} denies ${tool}`).not.toContain(tool);
+      }
+    }
+  });
+
+  it("are denied when the review is off", () => {
+    expect(tools("2026.10.6", false).deny).toContain("skill_workshop");
+    expect(tools("2026.11.10", false).deny).toEqual(
+      expect.arrayContaining(["skill_workshop", "skill_library"]),
+    );
+  });
+});

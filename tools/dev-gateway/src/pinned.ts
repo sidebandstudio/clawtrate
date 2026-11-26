@@ -1,8 +1,8 @@
 // The OpenClaw the development gateway runs (#597): the version this project tests against
 // (docs/decisions.md), installed into this tool's own git-ignored folder, on a Node it supports.
 // Never the `openclaw` on PATH: on a computer that runs its own gateway, that one is the person's
-// own, at whatever version they last installed. OPENCLAW_BIN may name another copy of the same
-// version, as CI's throwaway runners do; any other version is refused, not run.
+// own, at whatever version they last installed. OPENCLAW_BIN may name another copy of a version
+// the tool runs (versions.ts), as CI's throwaway runners do; any other version is refused, not run.
 //
 //   pnpm dev-gateway setup   installs it; `pnpm dev-gateway start` does so too when it is missing
 
@@ -20,8 +20,15 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { withLock } from "./lock.ts";
+import {
+  isOpenclawVersion,
+  OPENCLAW_VERSIONS,
+  PINNED_OPENCLAW,
+  type OpenclawVersion,
+} from "./versions.ts";
 
-export const OPENCLAW_VERSION = "2026.10.6";
+/** The version `setup` installs, and the one every pull request tests. */
+export const OPENCLAW_VERSION = PINNED_OPENCLAW;
 /** The Node the pinned OpenClaw runs on when the one running this tool is outside its range. */
 export const NODE_VERSION = "24.22.1";
 /** Node's own published SHA-256 of each archive (nodejs.org/dist/v24.22.1/SHASUMS256.txt). */
@@ -34,8 +41,8 @@ const NODE_SHA256: Readonly<Record<string, string>> = {
 /** This tool's own folder for them, next to its run state. */
 export const PINNED_DIR = join(import.meta.dirname, "../.openclaw");
 
-/** A program and the arguments that come before OpenClaw's own. */
-export type Program = { command: string; args: string[] };
+/** A program, the arguments that come before OpenClaw's own, and the OpenClaw version it is. */
+export type Program = { command: string; args: string[]; version: OpenclawVersion };
 
 /** Whether OpenClaw 2026.10.6 runs on a Node version: `>=24.22.1 <25 || >=26.12.1`. */
 export function supportsNode(version: string): boolean {
@@ -86,18 +93,18 @@ export function openclawProgram(
     // Resolved once, as OPENCLAW_NODE is: checked and run as the same absolute path.
     const bin = resolve(env.OPENCLAW_BIN);
     const found = programVersion(bin);
-    if (found !== OPENCLAW_VERSION)
+    if (!isOpenclawVersion(found))
       throw new Error(
-        `OPENCLAW_BIN is OpenClaw ${found ?? "of a version this tool cannot read"}; the development gateway runs only ${OPENCLAW_VERSION}. Unset it to use the copy \`pnpm dev-gateway setup\` installs.`,
+        `OPENCLAW_BIN is OpenClaw ${found ?? "of a version this tool cannot read"}; the development gateway runs only ${OPENCLAW_VERSIONS.join(" or ")}. Unset it to use the copy \`pnpm dev-gateway setup\` installs.`,
       );
-    return { command: bin, args: [] };
+    return { command: bin, args: [], version: found };
   }
   const node = nodeFor(env, dir, version, execPath);
   if (!existsSync(entryIn(dir)) || !existsSync(node))
     throw new Error(
       `OpenClaw ${OPENCLAW_VERSION} is not set up for the development gateway. Run \`pnpm dev-gateway setup\`.`,
     );
-  return { command: node, args: [entryIn(dir)] };
+  return { command: node, args: [entryIn(dir)], version: OPENCLAW_VERSION };
 }
 
 /** Whether `openclawProgram` has a program to give, without setting anything up. */
