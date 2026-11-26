@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: tool servers and apps</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <link rel="stylesheet" href="css/connectors.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/prototype.js"></script>
+    <script src="js/connectors.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <!-- docs/design/connectors.md. js/connectors.js draws one screen from the
+             address (view=, screen=, name=, gw=, access=, write=, read= and the
+             rest in README.md) and plays it on a stand-in gateway. -->
+        <div class="c-app" id="c-root" data-testid="connectors"></div>
+        <p class="visually-hidden" id="c-live" role="status" aria-live="polite"></p>
+      </div>
+    </main>
+  </body>
+</html>
