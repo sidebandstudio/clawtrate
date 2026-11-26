@@ -314,6 +314,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/avatar.ts:wornAt>placed": "per call, at most three shapes for one pose",
   "packages/core/src/guides.ts:applyGuidesChange>errors":
     "one call; one sentence per instructions file it changed, returned to the caller",
+  "packages/core/src/guides.ts:applyGuidesChange>onList":
+    "one call; the bot ids of the one agents.list it read, dropped when it returns",
 };
 
 describe("the source keeps no collection outside the registry", () => {

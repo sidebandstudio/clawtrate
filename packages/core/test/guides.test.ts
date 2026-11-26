@@ -8,6 +8,7 @@ import { VOICE_GUIDE, WHERE_GUIDE } from "../src/guide-text.ts";
 import { VOICE_GET } from "../src/voice.ts";
 import {
   applyGuidesChange,
+  GUIDES_NOT_READ,
   GUIDES_NOT_RECORDED,
   GUIDES_NOT_SAVED,
   GUIDES_OFF,
@@ -339,6 +340,42 @@ describe("the switch and the rows' changes", () => {
       });
   });
 
+  it("by itself, leaves a section someone removed while it wrote, though this device didn't know it", async () => {
+    // Otto's older section is being brought up to date when someone takes it out: the write is
+    // refused for its stale hash, and the read again finds no section.
+    const files = fakeFiles({ otto: olderSection() + BOT_FILE });
+    let removed = false;
+    const request = async (method: string, params: unknown) => {
+      if (method === "agents.files.set" && !removed) {
+        removed = true;
+        files.store.set("otto", BOT_FILE);
+      }
+      return files.request(method, params);
+    };
+    const result = await applyGuidesChange(request, null, { action: "auto" });
+    expect(removed).toBe(true);
+    expect(files.store.get("otto")).toBe(BOT_FILE);
+    expect(files.sets).toEqual([]);
+    // Recorded as one it saw, so the next change leaves it too.
+    expect(result.record).toEqual({ on: true, bots: ["otto"] });
+    await applyGuidesChange(request, result.record, { action: "auto" });
+    expect(files.store.get("otto")).toBe(BOT_FILE);
+  });
+
+  it("keeps in its record only bots still on the gateway's list", async () => {
+    const files = fakeFiles({ pip: withSection(BOT_FILE) });
+    for (const change of [
+      { action: "auto" },
+      { action: "switch", on: true },
+      { action: "add", bots: ["pip"] },
+    ] as GuidesChange[])
+      expect(
+        (await applyGuidesChange(files.request, { on: true, bots: ["gone", "pip"] }, change))
+          .record,
+        change.action,
+      ).toEqual({ on: true, bots: ["pip"] });
+  });
+
   it("keeps a record it can read back, and refuses one it can't", () => {
     expect(parseGuidesRecord(JSON.stringify({ on: true, bots: ["pip", 3] }))).toEqual({
       on: true,
@@ -365,16 +402,27 @@ describe("the switch and the rows' changes", () => {
 });
 
 describe("the guides in the client", () => {
-  const adminStorage = () =>
-    memoryStorage({
-      connection: JSON.stringify({ url: URL_A, token: null }),
-      [tokenKey(URL_A)]: JSON.stringify({
-        token: "device-token",
-        grantedScopes: ADMIN_SCOPES,
-        heldScopes: INTERACTIVE_SCOPES,
-        adminHeld: true,
+  /** Admin storage that counts the reads of this gateway's guides record (`guideReads`). */
+  const adminStorage = () => {
+    const storage = Object.assign(
+      memoryStorage({
+        connection: JSON.stringify({ url: URL_A, token: null }),
+        [tokenKey(URL_A)]: JSON.stringify({
+          token: "device-token",
+          grantedScopes: ADMIN_SCOPES,
+          heldScopes: INTERACTIVE_SCOPES,
+          adminHeld: true,
+        }),
       }),
-    });
+      { guideReads: 0 },
+    );
+    const get = storage.get.bind(storage);
+    storage.get = (key: string) => {
+      if (key === guidesKey("gw-a")) storage.guideReads += 1;
+      return get(key);
+    };
+    return storage;
+  };
   const withFiles = <T extends { handlers: Record<string, (params: unknown) => unknown> }>(
     gateway: T,
     files: ReturnType<typeof fakeFiles>,
@@ -387,19 +435,26 @@ describe("the guides in the client", () => {
   const recordIn = (storage: { data: Map<string, string> }) =>
     parseGuidesRecord(storage.data.get(guidesKey("gw-a")) ?? null);
   /** Connect again, and wait until Clawtrate's own change after it has had its turn. */
+  /**
+   * Connect again, and wait until Clawtrate's own change after it has had its turn: with admin
+   * storage, until that change has read the record (a read of the guides then waits for it to
+   * finish); without, where no change starts, a while.
+   */
   const reconnect = async (
     client: Awaited<ReturnType<typeof openTask>>["client"],
     gateway: { dropAll(): void },
+    storage?: { guideReads: number },
   ) => {
     const was = client.state.connection.connectedAt;
+    const reads = storage?.guideReads ?? 0;
     gateway.dropAll();
     await until(
       () =>
         client.state.connection.status === "connected" &&
         client.state.connection.connectedAt !== was,
     );
-    // A read waits for a guide change on its way; give the one after the connect time to start.
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    if (storage) await until(() => storage.guideReads > reads);
+    else await new Promise<void>((resolve) => setTimeout(resolve, 300));
     return client.readBotGuides();
   };
 
@@ -419,7 +474,7 @@ describe("the guides in the client", () => {
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
-      const read = await reconnect(client, gateway);
+      const read = await reconnect(client, gateway, storage);
       expect(read.folders.map((f) => [f.bots.join("+"), f.state])).toEqual([
         ["pip+shared", "current"],
         ["otto", "current"],
@@ -429,7 +484,7 @@ describe("the guides in the client", () => {
       expect(files.sets).toHaveLength(2);
       expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "shared", "otto"] });
       // Again on the next connect: nothing left to write.
-      await reconnect(client, gateway);
+      await reconnect(client, gateway, storage);
       expect(files.sets).toHaveLength(2);
     } finally {
       client.stop();
@@ -443,7 +498,7 @@ describe("the guides in the client", () => {
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
-      const read = await reconnect(client, gateway);
+      const read = await reconnect(client, gateway, storage);
       expect(read.folders.map((f) => [f.bots[0], f.state])).toEqual([
         ["pip", "removed"],
         ["otto", "current"],
@@ -451,7 +506,7 @@ describe("the guides in the client", () => {
       expect(files.store.get("pip")).toBe(BOT_FILE);
       expect(files.sets.map((set) => set.agentId)).toEqual(["otto"]);
       // And on every connect after.
-      await reconnect(client, gateway);
+      await reconnect(client, gateway, storage);
       expect(files.store.get("pip")).toBe(BOT_FILE);
       const added = await client.changeBotGuides({ action: "add", bots: ["pip"] }, read.stamp);
       expect(added.folders[0]?.state).toBe("current");
@@ -470,7 +525,7 @@ describe("the guides in the client", () => {
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
-      await reconnect(client, gateway);
+      await reconnect(client, gateway, storage);
       // It can't tell a bot never given the section from one cleared elsewhere: Otto gets it.
       expect(files.store.get("otto")).toBe(withSection(BOT_FILE));
       expect(files.store.get("marlow")).toBe(changed);
@@ -479,7 +534,7 @@ describe("the guides in the client", () => {
       // applies to both.
       files.store.set("pip", BOT_FILE);
       files.store.set("marlow", BOT_FILE);
-      const read = await reconnect(client, gateway);
+      const read = await reconnect(client, gateway, storage);
       for (const bot of ["pip", "marlow"]) {
         expect(read.folders.find((f) => f.bots[0] === bot)?.state, bot).toBe("removed");
         expect(files.store.get(bot), bot).toBe(BOT_FILE);
@@ -496,7 +551,7 @@ describe("the guides in the client", () => {
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
-      const read = await reconnect(client, gateway);
+      const read = await reconnect(client, gateway, storage);
       expect(read.record).toEqual({ on: false, bots: [] });
       expect(read.folders.map((f) => f.state)).toEqual(["none", "older"]);
     } finally {
@@ -507,7 +562,7 @@ describe("the guides in the client", () => {
     await reopened.start();
     try {
       await until(() => reopened.state.connection.status === "connected");
-      await reconnect(reopened, gateway);
+      await reconnect(reopened, gateway, storage);
       expect(files.sets).toEqual([]);
       expect(recordIn(storage)).toEqual({ on: false, bots: [] });
     } finally {
@@ -521,7 +576,7 @@ describe("the guides in the client", () => {
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
-      const on = await reconnect(client, gateway);
+      const on = await reconnect(client, gateway, storage);
       expect(on.folders.map((f) => f.state)).toEqual(["current", "current"]);
       const off = await client.changeBotGuides({ action: "switch", on: false }, on.stamp);
       expect(off.errors).toEqual([]);
@@ -529,7 +584,7 @@ describe("the guides in the client", () => {
       expect([files.store.get("pip"), files.store.get("otto")]).toEqual([BOT_FILE, BOT_FILE]);
       // Off: nothing reads removed, and nothing comes back by itself.
       expect(off.folders.map((f) => f.state)).toEqual(["none", "none"]);
-      await reconnect(client, gateway);
+      await reconnect(client, gateway, storage);
       expect(files.store.get("pip")).toBe(BOT_FILE);
       const again = await client.changeBotGuides({ action: "switch", on: true }, off.stamp);
       expect(again.record).toEqual({ on: true, bots: ["pip", "otto"] });
@@ -581,7 +636,7 @@ describe("the guides in the client", () => {
         ["otto", "current"],
       ]);
       expect(recordIn(storage)).toEqual({ on: false, bots: [] });
-      await reconnect(client, gateway);
+      await reconnect(client, gateway, storage);
       expect(files.store.get("pip")).toBe(BOT_FILE);
     } finally {
       client.stop();
@@ -589,17 +644,23 @@ describe("the guides in the client", () => {
   });
 
   it("a row's Add changes the files first and records them last, and says so truly when it can't record it", async () => {
-    const files = fakeFiles({ pip: BOT_FILE });
+    // Pip's section was removed outside Clawtrate; Otto never had one (this connect's own change
+    // came before the files could be read).
+    const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
     const storage = diskFull({ on: true, bots: ["pip"] });
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
       const shown = await client.readBotGuides();
-      expect(shown.folders[0]?.state).toBe("removed");
-      const after = await client.changeBotGuides({ action: "add", bots: ["pip"] }, shown.stamp);
+      expect(shown.folders.map((f) => f.state)).toEqual(["removed", "none"]);
+      // Pip was recorded already: nothing new to record, so nothing to say.
+      const pip = await client.changeBotGuides({ action: "add", bots: ["pip"] }, shown.stamp);
       expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
-      expect(after.errors).toEqual([GUIDES_NOT_RECORDED]);
-      expect(after.folders[0]?.state).toBe("current");
+      expect(pip.errors).toEqual([]);
+      const otto = await client.changeBotGuides({ action: "add", bots: ["otto"] }, pip.stamp);
+      expect(files.store.get("otto")).toBe(withSection(BOT_FILE));
+      expect(otto.errors).toEqual([GUIDES_NOT_RECORDED]);
+      expect(otto.folders.map((f) => f.state)).toEqual(["current", "current"]);
     } finally {
       client.stop();
     }
@@ -644,6 +705,7 @@ describe("the guides in the client", () => {
       const { client, gateway } = await openTask(options);
       withFiles(gateway, files);
       try {
+        // No change of Clawtrate's own starts here, so there is nothing to wait for.
         const shown = await reconnect(client, gateway);
         for (const change of [
           { action: "add", bots: ["pip"] },
@@ -681,6 +743,94 @@ describe("the guides in the client", () => {
     }
   });
 
+  it("writes nothing while this device's record can't be read: it may say off", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ on: false, bots: [] }));
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    const get = storage.get;
+    storage.get = (key: string) => {
+      if (key !== guidesKey("gw-a")) return get(key);
+      storage.guideReads += 1;
+      return Promise.reject(new Error("locked"));
+    };
+    try {
+      const shown = await reconnect(client, gateway, storage);
+      expect(files.sets).toEqual([]);
+      for (const change of [
+        { action: "switch", on: true },
+        { action: "add", bots: ["pip"] },
+      ] as GuidesChange[]) {
+        const after = await client.changeBotGuides(change, shown.stamp);
+        expect(after.errors, change.action).toEqual([GUIDES_NOT_READ]);
+      }
+      expect(files.sets).toEqual([]);
+      expect(recordIn(storage)).toEqual({ on: false, bots: [] });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("says files changed only when they did: a Replace that wrote nothing saves nothing", async () => {
+    const changed = withSection(BOT_FILE).replace("Be warm", "Be cold");
+    const files = fakeFiles({ pip: changed });
+    const storage = diskFull({ on: true, bots: ["pip"] });
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const shown = await client.readBotGuides();
+      const after = await client.changeBotGuides(
+        { action: "replace", bot: "pip", shown: "not what is there" },
+        shown.stamp,
+      );
+      expect(after.errors).toEqual([
+        "pip: AGENTS.md changed again after Settings read it, so nothing was replaced. Look at its section again before you replace it.",
+      ]);
+      expect(files.store.get("pip")).toBe(changed);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("sends nothing for a change whose viewer went away while it waited its turn", async () => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ on: true, bots: ["pip", "otto"] }));
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const shown = await client.readBotGuides();
+      // The first change holds the line at its read of the record until released.
+      let release = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const get = storage.get;
+      let first = true;
+      storage.get = async (key: string) => {
+        if (key === guidesKey("gw-a") && first) {
+          first = false;
+          await held;
+        }
+        return get(key);
+      };
+      const ahead = client.changeBotGuides({ action: "add", bots: ["pip"] }, shown.stamp);
+      const viewer = createBridgeSession(client);
+      const waiting = viewer.apply({
+        type: "changeBotGuides",
+        change: { action: "add", bots: ["otto"] },
+        stamp: shown.stamp,
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      viewer.dispose();
+      release();
+      await ahead;
+      await expect(waiting).rejects.toThrow(/withdrawn/);
+      expect(files.sets.map((set) => set.agentId)).toEqual(["pip"]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("never changes the voice plugin's own guide: the switch sends nothing to the plugin", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
     const gateway = grantingGateway();
@@ -693,7 +843,8 @@ describe("the guides in the client", () => {
         payload: { ...hello.payload, features: { methods: [VOICE_GET], events: [] } },
       };
     };
-    const { client } = await openTask({ gateway, storage: adminStorage() });
+    const storage = adminStorage();
+    const { client } = await openTask({ gateway, storage });
     withFiles(gateway, files);
     const voiceSets: unknown[] = [];
     const voice = (on: boolean) => ({
@@ -711,7 +862,7 @@ describe("the guides in the client", () => {
       return voice(on);
     };
     try {
-      const shown = await reconnect(client, gateway);
+      const shown = await reconnect(client, gateway, storage);
       expect(shown.voicePlugin).toBe(true);
       expect(shown.folders[0]?.state).toBe("current");
       const off = await client.changeBotGuides({ action: "switch", on: false }, shown.stamp);

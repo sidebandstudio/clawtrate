@@ -433,6 +433,8 @@ export function withdrawnRecord(change: GuidesChange): GuidesRecord | null {
 
 /** Said when the switch can't be changed because this device couldn't save it: nothing was done. */
 export const GUIDES_NOT_SAVED = "Couldn't save this on this device, so nothing was changed.";
+/** Said when this device's record can't be read: it may say off, so nothing is changed. */
+export const GUIDES_NOT_READ = "Couldn't read this on this device, so nothing was changed.";
 /** Said when files were changed on the gateway but this device couldn't record which. */
 export const GUIDES_NOT_RECORDED =
   "The bots' files were changed, but this device couldn't record which, so it can't tell later whether one of these sections was removed on purpose.";
@@ -456,6 +458,9 @@ export async function applyGuidesChange(
   const folders = guideFolders(await request("agents.list", {}));
   const errors: string[] = [];
   const kept = new Set(on ? (record?.bots ?? []) : []);
+  /** Only bots still on the gateway's list are kept, so the record holds no deleted bot's id. */
+  const onList = new Set(folders.flat());
+  const listed = (bots: string[]) => bots.filter((bot) => onList.has(bot));
   /** Change one folder's file; whether it holds Clawtrate's section, or any marked one, after. */
   const each = async (
     bots: string[],
@@ -502,7 +507,7 @@ export async function applyGuidesChange(
       );
       if (ours) for (const bot of bots) kept.add(bot);
     }
-    return { record: { on: true, bots: [...kept] }, errors };
+    return { record: { on: true, bots: listed([...kept]) }, errors };
   }
   if (!on) {
     for (const bots of folders)
@@ -515,13 +520,18 @@ export async function applyGuidesChange(
   // holds a marked section now is recorded, so this device knows if it goes.
   const only = change.action === "auto" ? change.bot : undefined;
   for (const bots of folders.filter((group) => only === undefined || group.includes(only))) {
-    const known = bots.some((bot) => kept.has(bot));
+    // A section seen on an earlier attempt of this change, and gone on the retry, was just
+    // removed by someone: it is left, as one this device knew.
+    let known = bots.some((bot) => kept.has(bot));
     const { marked } = await each(
       bots,
-      (file, found) => (found.kind === "none" && known ? null : addOrUpdate(true)(file, found)),
+      (file, found) => {
+        if (found.kind !== "none") known = true;
+        return found.kind === "none" && known ? null : addOrUpdate(true)(file, found);
+      },
       true,
     );
-    if (marked) for (const bot of bots) kept.add(bot);
+    if (marked || known) for (const bot of bots) kept.add(bot);
   }
-  return { record: { on: true, bots: [...kept] }, errors };
+  return { record: { on: true, bots: listed([...kept]) }, errors };
 }

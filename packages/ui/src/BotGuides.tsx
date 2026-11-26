@@ -209,7 +209,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
     void guides.change({ action: "switch", on: next }).then((read) => {
       // Announced only when the files, read back, hold what was asked.
       if (!read || read.errors.length > 0 || guidesOn(read.record) !== next) return;
-      announce(next ? "Bots now know how Clawtrate works" : "Taken out of every bot");
+      announce(`"Bots know how Clawtrate works" is ${next ? "on" : "off"}`);
     });
   const rows = folders.flatMap((folder) => {
     const label = list(names(bots, folder.bots));

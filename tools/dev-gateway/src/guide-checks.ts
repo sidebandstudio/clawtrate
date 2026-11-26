@@ -228,12 +228,35 @@ export const GUIDE_CHECKS: GuideCheck[] = [
     name: "turning it off gives the file back byte for byte, with its earlier hash",
     async run(h, world) {
       const request = (method: string, params: unknown) => h.admin.request(method, params);
-      const { errors } = await applyGuidesChange(request, null, { action: "switch", on: false });
-      expect(errors.length === 0, `the removal failed: ${errors.join("; ")}`);
-      const after = await readFile(h);
-      expect(after.content === world.original!.content, "the file isn't what it was");
-      expect(after.hash === world.original!.hash, "the file's hash isn't what it was");
-      world.original = null;
+      // Off takes the section out of every bot: each other bot's file is put back as it was.
+      const listed = rec(await h.admin.request("agents.list", {})).agents;
+      const others = (Array.isArray(listed) ? listed : [])
+        .map((agent) => String(rec(agent).id))
+        .filter((id) => id !== BOT);
+      const before = new Map<string, string>();
+      for (const id of others) {
+        const file = await readFile(h, id).catch(() => null);
+        if (file) before.set(id, file.content);
+      }
+      try {
+        const { errors } = await applyGuidesChange(request, null, { action: "switch", on: false });
+        expect(errors.length === 0, `the removal failed: ${errors.join("; ")}`);
+        const after = await readFile(h);
+        expect(after.content === world.original!.content, "the file isn't what it was");
+        expect(after.hash === world.original!.hash, "the file's hash isn't what it was");
+        world.original = null;
+      } finally {
+        for (const [id, content] of before) {
+          const now = await readFile(h, id).catch(() => null);
+          if (now && now.content !== content)
+            await h.admin.request("agents.files.set", {
+              agentId: id,
+              name: GUIDES_FILE,
+              content,
+              expectedHash: now.hash,
+            });
+        }
+      }
     },
   },
 ];

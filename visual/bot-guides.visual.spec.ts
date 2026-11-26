@@ -69,13 +69,13 @@ test.describe("bots know how Clawtrate works", () => {
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await expect(pane.getByTestId("bot-guides-state")).toHaveText("Off");
-    await expect(page.getByText("Taken out of every bot")).toBeAttached();
+    await expect(page.getByText('"Bots know how Clawtrate works" is off')).toBeAttached();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     // Off: no bot is listed, since none holds a section now.
     await expect(pane.getByRole("listitem")).toHaveCount(0);
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByText("Bots now know how Clawtrate works")).toBeAttached();
+    await expect(page.getByText('"Bots know how Clawtrate works" is on')).toBeAttached();
     expect(await changes(page)).toEqual([
       { action: "switch", on: false },
       { action: "switch", on: true },

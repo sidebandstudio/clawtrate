@@ -7,6 +7,7 @@ import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
   applyGuidesChange,
+  GUIDES_NOT_READ,
   GUIDES_NOT_RECORDED,
   GUIDES_NOT_SAVED,
   guidesKey,
@@ -7239,7 +7240,7 @@ export class ClawtrateClient {
       this.state.connection.status === "connected";
     const gatewayId = await this.readGatewayIdentity();
     this.confirmGatewayIdentity(gatewayId, alive);
-    const record = gatewayId === null ? null : await this.guidesRecord(gatewayId);
+    const record = gatewayId === null ? null : await this.guidesRecord(gatewayId).catch(() => null);
     const request = (method: string, params: unknown) => this.request(method, params);
     const [folders, voice] = await Promise.all([
       readGuideFolders(request, record),
@@ -7282,22 +7283,30 @@ export class ClawtrateClient {
         () => true,
         () => false,
       );
+    /** Saved when it differs from `was`: false only when a save was needed and failed. */
+    const saveIfChanged = (record: GuidesRecord | null, was: GuidesRecord | null) =>
+      !record || JSON.stringify(record) === JSON.stringify(was) ? true : save(record);
     const { errors } = await this.oneGuidesChangeAtATime(async () => {
-      const before = await this.guidesRecord(gatewayId);
+      // The viewer may have gone while the change waited its turn: then nothing is sent or saved.
+      this.checkNotWithdrawn(owner);
+      const before = await this.guidesRecord(gatewayId).catch(() => undefined);
+      // Unreadable: whether the switch is off can't be told, so nothing is changed.
+      if (before === undefined) return { record: null, errors: [GUIDES_NOT_READ] };
       // The switch is saved first, off and on: if it can't be, nothing is changed, so the files
       // and this device's record never disagree about what the person last asked for. Off holds
       // from then on: nothing this device does adds a section while it lasts.
       if (change.action === "switch") {
         const first = withdrawnRecord(change) ?? { on: true, bots: before?.bots ?? [] };
-        if (!(await save(first))) return { record: before, errors: [GUIDES_NOT_SAVED] };
+        if (!(await saveIfChanged(first, before)))
+          return { record: before, errors: [GUIDES_NOT_SAVED] };
         const result = await applyGuidesChange(request, first, change);
-        if (change.on && result.record && !(await save(result.record)))
+        if (change.on && !(await saveIfChanged(result.record, first)))
           return { ...result, errors: [...result.errors, GUIDES_NOT_RECORDED] };
         return result;
       }
       // A row's Add or Replace is saved last, once the files hold it.
       const result = await applyGuidesChange(request, before, change);
-      if (result.record && result.record !== before && !(await save(result.record)))
+      if (!(await saveIfChanged(result.record, before)))
         return { ...result, errors: [...result.errors, GUIDES_NOT_RECORDED] };
       return result;
     });
@@ -7305,8 +7314,12 @@ export class ClawtrateClient {
     return { ...read, errors };
   }
 
+  /**
+   * This device's record for a gateway, or null when it has none. A read the host's storage
+   * refuses fails: it is never taken for no record, which reads as on.
+   */
   private async guidesRecord(gatewayId: string): Promise<GuidesRecord | null> {
-    return parseGuidesRecord(await this.host.storage.get(guidesKey(gatewayId)).catch(() => null));
+    return parseGuidesRecord(await this.host.storage.get(guidesKey(gatewayId)));
   }
 
   /**
@@ -7337,7 +7350,9 @@ export class ClawtrateClient {
     const errors = await this.oneGuidesChangeAtATime(async () => {
       const gatewayId = await identify();
       if (gatewayId === null || !current()) return [];
-      const record = await this.guidesRecord(gatewayId);
+      // A record that can't be read may say off: nothing is written until it can be.
+      const record = await this.guidesRecord(gatewayId).catch(() => undefined);
+      if (record === undefined) return [GUIDES_NOT_READ];
       if (!current()) return [];
       const result = await applyGuidesChange(
         request,
