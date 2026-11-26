@@ -18,7 +18,13 @@ import {
   type BotSettingsRequest,
   type ControlState,
 } from "../src/bots/settings-request.ts";
-import { endingOf, forEarlierMessage, notRunWords, type RunEnding } from "../src/live.ts";
+import {
+  endingOf,
+  failedTurnTitle,
+  forEarlierMessage,
+  notRunWords,
+  type RunEnding,
+} from "../src/live.ts";
 import { messageTextOf } from "../src/LiveTurn.tsx";
 
 const KEY = "agent:otto:disk-space";
@@ -265,5 +271,28 @@ describe("#686: a not-run line sits only under the message its run is known to h
       reason: "The account Otto is set to isn't available on the gateway. Choose another account.",
       ways: ["account"],
     });
+  });
+
+  it("a turn that started and failed, with no message known to have started it: an earlier turn, no Try again", () => {
+    const { transcript, run } = reloaded([
+      userRow(null, "Back up the photos.", 1),
+      userRow("run-b", "And the notes.", 2),
+      {
+        role: "assistant",
+        content: "provider down",
+        stopReason: "error",
+        errorMessage: "provider down",
+        timestamp: T0 + 3,
+        __openclaw: { id: "a-3", seq: 3, runId: "run-a" },
+      },
+      replyRow("run-b", 4),
+    ]);
+    expect(endingOf(run)?.kind).toBe("failed");
+    expect(run.anchorItemId).toBeNull();
+    expect(messageTextOf(run, transcript)).toBeNull();
+    expect(failedTurnTitle("Otto", forEarlierMessage(run, transcript))).toBe(
+      "Otto couldn't finish an earlier turn",
+    );
+    expect(failedTurnTitle("Otto", false)).toBe("Otto couldn't finish this turn");
   });
 });

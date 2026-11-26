@@ -18,7 +18,7 @@ import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
-import { endingOf, forEarlierMessage, notRunWords } from "./live.ts";
+import { endingOf, failedTurnTitle, forEarlierMessage, notRunWords } from "./live.ts";
 import { requestBotSettings } from "./bots/settings-request.ts";
 import { Markdown } from "./Markdown.tsx";
 import { SentFiles } from "./SentFiles.tsx";
@@ -340,9 +340,7 @@ export function RunEnding({
       ? `${bot.name}'s turn reached its ${ending.minutes} minute limit`
       : ending.kind === "gateway-timeout"
         ? `${bot.name}'s turn reached the gateway's time limit`
-        : earlier
-          ? `${bot.name} couldn't finish an earlier turn`
-          : `${bot.name} couldn't finish this turn`;
+        : failedTurnTitle(bot.name, earlier);
   const reason = notRun
     ? notRun.reason
     : ending.kind === "turn-limit"

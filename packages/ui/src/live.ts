@@ -495,6 +495,11 @@ export function forEarlierMessage(run: Run, transcript: Pick<Transcript, "outbox
   );
 }
 
+/** The failed-turn card's title: for an earlier turn when no message is known to have started it. */
+export function failedTurnTitle(bot: string, earlier: boolean): string {
+  return earlier ? `${bot} couldn't finish an earlier turn` : `${bot} couldn't finish this turn`;
+}
+
 /**
  * How a finished run ended, when the transcript says more than its text. A stop is this
  * client's only when its own Stop of that run stands (`stopRequestedAt`, cleared when the gateway
