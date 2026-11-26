@@ -23,6 +23,7 @@ import {
 } from "../src/accounts.ts";
 import {
   devConfig,
+  lockMode,
   lockOrder,
   main,
   openInstance,
@@ -437,9 +438,27 @@ describe("the lock subcommand", () => {
     expect(await lockWork(inst, "otto")).toEqual(["acme:work"]);
     expect(runner.run.mock.calls.map(([args]) => args.slice(0, 4).join(" "))).toEqual([
       "gateway call health --json",
+      "--version",
       "models auth order set",
       "models auth order get",
     ]);
+  });
+
+  it("changes the order beside the gateway before OpenClaw 2026.10.10, and with it stopped from then", async () => {
+    const { inst, runner } = lockable({});
+    for (const [version, mode] of [
+      ["OpenClaw 2026.10.6 (fe06181)", "live"],
+      ["OpenClaw 2026.10.9 (0000000)", "live"],
+      ["OpenClaw 2026.10.10 (0000000)", "stopped"],
+      ["OpenClaw 2026.11.10 (0000000)", "stopped"],
+      ["not a version", "live"],
+    ] as const) {
+      runner.run.mockResolvedValueOnce({ status: 0, stdout: `${version}\n`, stderr: "" });
+      expect(await lockMode(inst), version).toBe(mode);
+    }
+    expect(runner.run.mock.calls.map(([args]) => args.join(" "))).toEqual(
+      Array(5).fill("--version"),
+    );
   });
 
   it("names every store a config can point a command at", () => {

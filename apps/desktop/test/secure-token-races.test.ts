@@ -17,7 +17,7 @@ import {
 } from "../../../packages/core/test/fake-gateway.ts";
 
 const URL_A = "wss://gateway.example:19001";
-const FAST = { reconnect: { initialMs: 20, maxMs: 40 }, fullAccess: true };
+const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });

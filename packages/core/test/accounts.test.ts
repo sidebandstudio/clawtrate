@@ -20,8 +20,10 @@ import {
   MAX_PROVIDER_MODELS,
   MAX_SECRET_CHARS,
   parseModelRef,
+  orderNeedsStoppedGateway,
   readBotView,
   retainedOrder,
+  stoppedGatewaySteps,
   unlockCommand,
   unreadEvidence,
   withoutSecret,
@@ -37,6 +39,7 @@ import { ACCOUNTS_READ_CUT_OFF, AccountsEngine, identityFile } from "../src/acco
 import { initialAccountsState, modelIdProblem, type AccountsState } from "../src/accounts.ts";
 import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
 import { FAST, stampOn, URL_A } from "./client-harness.ts";
+import type { helloOk } from "./fake-gateway.ts";
 import {
   deferred,
   GatewayError,
@@ -736,6 +739,77 @@ describe("a bot's account: bound, locked, and the gateway choosing", () => {
 /** A real 2×2 PNG: a picture the gateway can keep and Clawtrate can read back. */
 const PICTURE =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4z8DAAMIM/4EAAB/uBfsL2WiLAAAAAElFTkSuQmCC";
+
+describe("a bot's lock on a gateway whose command line changes orders only while it is stopped", () => {
+  it("is a gateway that reports OpenClaw 2026.10.10 or later", () => {
+    for (const version of ["2026.10.10", "2026.10.10-beta.1", "2026.11.10", "2027.1.1"])
+      expect(orderNeedsStoppedGateway(version), version).toBe(true);
+    for (const version of ["2026.10.9", "2026.10.6", "test", null])
+      expect(orderNeedsStoppedGateway(version), String(version)).toBe(false);
+  });
+
+  it("gives the order command between stopping the gateway and starting it again, in its own form", () => {
+    const lock = lockCommand("openclaw", { botId: "marlow", provider: "openai" }, "openai:work");
+    expect(stoppedGatewaySteps("openclaw", lock)).toEqual([
+      "openclaw gateway stop",
+      "openclaw models auth order set --provider openai --agent marlow openai:work",
+      "openclaw gateway start",
+    ]);
+    expect(
+      stoppedGatewaySteps(
+        "openclaw --profile clawtrate-dev-x",
+        unlockCommand("openclaw --profile clawtrate-dev-x", "marlow", "openai"),
+      ),
+    ).toEqual([
+      "openclaw --profile clawtrate-dev-x gateway stop",
+      "openclaw --profile clawtrate-dev-x models auth order clear --provider openai --agent marlow",
+      "openclaw --profile clawtrate-dev-x gateway start",
+    ]);
+  });
+
+  it("is Locked only once the gateway, started again, reports the order; a refused command leaves it Bound", async () => {
+    const fake = new AccountsGateway();
+    const hello = fake.gateway.connectReply;
+    // OpenClaw 2026.11.10's hello: the version is the only sign of how its command line works.
+    fake.gateway.connectReply = (params, url) => {
+      const reply = hello(params, url);
+      if (!reply.ok) return reply;
+      const payload = reply.payload as ReturnType<typeof helloOk>;
+      return {
+        ok: true,
+        payload: { ...payload, server: { ...payload.server, version: "2026.11.10" } },
+      };
+    };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const otto = () => binding(accounts(), "otto");
+    expect(client.state.connection.serverVersion).toBe("2026.11.10");
+    expect(orderNeedsStoppedGateway(client.state.connection.serverVersion)).toBe(true);
+    expect(accountWord(otto())).toBe("bound");
+    // The command typed beside the running gateway is refused and changes nothing: still Bound.
+    await client.checkLock("otto");
+    expect(otto().evidence.status).toBe("none");
+    expect(accountWord(otto())).toBe("bound");
+    // Stopped, the command run, started again: the gateway's own answer, once it is back.
+    fake.gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    fake.orders.otto = { acme: ["acme:work"] };
+    expect(accountWord(otto())).toBe("bound");
+    await until(() => client.state.connection.status === "connected", 8000);
+    await client.checkLock("otto");
+    expect(otto().order).toEqual({ ids: ["acme:work"], stored: true, configured: null });
+    expect(otto().evidence).toMatchObject({ status: "matched", lostAt: null });
+    expect(accountWord(otto())).toBe("locked");
+    // Unlocked the same way: Bound again, and the lock is gone.
+    fake.gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    delete fake.orders.otto;
+    await until(() => client.state.connection.status === "connected", 8000);
+    await client.checkLock("otto");
+    expect(otto().evidence.lostAt).not.toBeNull();
+    expect(accountWord(otto())).toBe("bound");
+    client.stop();
+  });
+});
 
 describe("creating a bot", () => {
   it("on an account: the model with its suffix, an empty fallback list, and the bot read back", async () => {

@@ -153,34 +153,53 @@ const headingAt = (text: string, at: number) => {
   return text.slice(at, newline === -1 ? undefined : newline);
 };
 
+/** A part of a prompt: a section with its heading, or the text between and around sections. */
+type PromptPart = { heading: string | null; text: string };
+
+/** A prompt's parts, in order, whose texts join to the whole prompt. */
+function promptParts(text: string): PromptPart[] {
+  const parts: PromptPart[] = [];
+  let from = 0;
+  for (const at of sectionStarts(text)) {
+    if (at > from) parts.push({ heading: null, text: text.slice(from, at) });
+    from = sectionEnd(text, at);
+    parts.push({ heading: headingAt(text, at).trimEnd(), text: text.slice(at, from) });
+  }
+  if (from < text.length) parts.push({ heading: null, text: text.slice(from) });
+  return parts;
+}
+
 /**
  * The system prompt a request gives the model, with 2026.11.10's updates to it applied in order:
  * each section of an update replaces the section of that heading, is added when there is none,
  * and is taken out when its body is `(removed)`. With no update, the system prompt as sent.
+ * The updates apply to the prompt's parts, so a section one update adds stays a section of its
+ * own for the next, whatever follows it (#659).
  */
 export function effectivePrompt(messages: ChatMessage[]): string {
-  let prompt = messages
-    .filter((m) => m.role === "system" || m.role === "developer")
-    .map(messageText)
-    .join("\n\n");
+  const parts = promptParts(
+    messages
+      .filter((m) => m.role === "system" || m.role === "developer")
+      .map(messageText)
+      .join("\n\n"),
+  );
   for (const update of messages.filter(isPromptUpdate)) {
     const body = messageText(update).trimStart().slice(PROMPT_UPDATE_HEADER.length);
-    for (const at of sectionStarts(body)) {
-      const heading = headingAt(body, at);
+    for (const section of promptParts(body)) {
+      if (section.heading === null) continue;
+      const heading = headingAt(section.text, 0);
       // The body as sent, from the line after the heading.
-      const content = body.slice(at + heading.length, sectionEnd(body, at)).trimEnd();
+      const content = section.text.slice(heading.length).trimEnd();
+      const removed = content.trim() === "(removed)";
+      const replacement = { heading: section.heading, text: `${heading}${content}\n\n` };
       // The gateway's own section of that heading, never one inside a workspace file.
-      const found = sectionStarts(prompt).find(
-        (start) => headingAt(prompt, start).trimEnd() === heading.trimEnd(),
-      );
-      const replacement = content.trim() === "(removed)" ? "" : `${heading}${content}\n\n`;
-      prompt =
-        found === undefined
-          ? `${prompt}\n\n${replacement}`
-          : prompt.slice(0, found) + replacement + prompt.slice(sectionEnd(prompt, found));
+      const found = parts.findIndex((part) => part.heading === section.heading);
+      if (found !== -1 && removed) parts.splice(found, 1);
+      else if (found !== -1) parts[found] = replacement;
+      else if (!removed) parts.push({ heading: null, text: "\n\n" }, replacement);
     }
   }
-  return prompt;
+  return parts.map((part) => part.text).join("");
 }
 
 /** A user message the gateway wrote itself beside the prompt. */

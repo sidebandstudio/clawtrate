@@ -518,6 +518,28 @@ export function recordPending(stateDir: string, runId: string, role: SpawnedRole
   writeMarker(stateDir, { ...markerOfRun(stateDir, runId), [`${role}Pending`]: true });
 }
 
+/**
+ * Forget a process of this run that is proven gone, so that it can be spawned
+ * again under the same run: the gateway, started again after a command
+ * OpenClaw runs only while it is stopped. A process not proven gone is kept.
+ */
+export function forgetStoppedProcess(
+  stateDir: string,
+  runId: string,
+  role: SpawnedRole,
+  identify: Identify = processIdentity,
+): void {
+  const marker = markerOfRun(stateDir, runId);
+  const pid = marker[`${role}Pid`];
+  if (pid !== undefined && processState(pid, marker[`${role}Identity`], identify) !== "dead") {
+    throw new Error(`the ${role} process (pid ${pid}) is not proven stopped; its record is kept`);
+  }
+  const next: Marker = { ...marker };
+  delete next[`${role}Pid`];
+  delete next[`${role}Identity`];
+  writeMarker(stateDir, next);
+}
+
 /** Complete a pending record with the PID and start time of the process just spawned. */
 export function recordProcess(
   stateDir: string,
