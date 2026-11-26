@@ -20,7 +20,7 @@ import {
 } from "./fake-gateway.ts";
 
 const URL = "wss://gateway.example:19960";
-const FAST: ClientOptions = { reconnect: { initialMs: 20, maxMs: 40 }, fullAccess: true };
+const FAST: ClientOptions = { reconnect: { initialMs: 20, maxMs: 40 } };
 type ConnectParams = { scopes: string[]; auth?: { token?: string; deviceToken?: string } };
 
 const host = (

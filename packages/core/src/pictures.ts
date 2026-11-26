@@ -124,23 +124,45 @@ export function gatewayOrigin(gatewayUrl: string): string | null {
   return scheme && url.host ? `${scheme}//${url.host}` : null;
 }
 
+/** The attachment a bot's file is, in the artifact id the gateway gives it: a lower-case UUID. */
+const MANAGED_ARTIFACT =
+  /^artifact_managed_(?:image|media)_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+// The ticket of a managed download, exactly as each OpenClaw writes it in the query. Nothing
+// else is a ticket.
+
+/** 2026.10.6 signs one: `v1.`, the payload, `.`, its HMAC-SHA256 (43 characters), in base64url. */
+const SIGNED_TICKET = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/;
+/** 2026.11.10 names a grant: the connection's UUID, `%2F`, 32 random bytes in base64url (43). */
+const GRANT_TICKET =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}%2F[A-Za-z0-9_-]{43}$/;
+
 /**
- * The path of a download the gateway issued for this task, exactly as
- * `artifacts.download` writes a managed one: the task's own session, the
- * attachment, `full`, and a `v1` ticket, with nothing else. Null otherwise.
+ * The path of a download the gateway issued for this task's attachment, exactly as
+ * `artifacts.download` writes a managed one: the task's session as `encodeURIComponent` writes
+ * it, the attachment the artifact id names, `full`, and a ticket of either form, with nothing
+ * else. It is returned as given, never decoded or encoded again. Null otherwise.
  */
-export function issuedPath(key: string, url: unknown): string | null {
+export function issuedPath(key: string, artifactId: string, url: unknown): string | null {
   if (typeof url !== "string" || url.length > 4096) return null;
-  const match =
-    /^\/api\/chat\/media\/outgoing\/([^/?#]+)\/([A-Za-z0-9_-]+)\/full\?mediaTicket=v1\.[A-Za-z0-9._~-]+$/.exec(
-      url,
-    );
-  if (!match) return null;
+  const attachment = MANAGED_ARTIFACT.exec(artifactId)?.[1];
+  let session: string;
   try {
-    return decodeURIComponent(match[1]!) === key ? url : null;
+    session = encodeURIComponent(key);
   } catch {
+    // A key with a lone surrogate can't be written in a path: nothing is fetched for it.
     return null;
   }
+  // Refused even though both versions issue and serve such a path: a task whose key is empty, a
+  // dot segment, or holds `/` or `\` (`%2F`, `%5C`). Whoever makes a session can choose its key,
+  // and a key must never shape the path fetched with this connection's credentials, as one a
+  // server or proxy decodes or normalises would. Such a task's pictures and files aren't read.
+  if (!attachment || !session || session === "." || session === ".." || /%2F|%5C/.test(session))
+    return null;
+  const route = `/api/chat/media/outgoing/${session}/${attachment}/full?mediaTicket=`;
+  if (!url.startsWith(route)) return null;
+  const ticket = url.slice(route.length);
+  return SIGNED_TICKET.test(ticket) || GRANT_TICKET.test(ticket) ? url : null;
 }
 
 /** The bytes start as their declared type's do. */
@@ -258,7 +280,7 @@ export async function readIssued(
       `The gateway didn't give this ${noun}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const path = issuedPath(key, answer?.url);
+  const path = issuedPath(key, artifactId, answer?.url);
   const expires = expiry(answer?.expiresAt);
   if (!path || expires === null || !(expires > ctx.now()))
     return failed(`The gateway didn't give a download for this ${noun}.`);

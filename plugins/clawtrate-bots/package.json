@@ -1,9 +1,19 @@
 {
-  "name": "clawtrate-bots",
+  "name": "@clawtrate/clawtrate-bots",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidebandstudio/clawtrate.git",
+    "directory": "plugins/clawtrate-bots"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "openclaw.plugin.json"
+  ],
   "openclaw": {
     "extensions": [
       "./index.js"

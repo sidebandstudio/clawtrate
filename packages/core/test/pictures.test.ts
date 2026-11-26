@@ -9,7 +9,12 @@ import { ClawtrateClient } from "../src/client.ts";
 import { FileTransfers } from "../src/files.ts";
 import type { HttpFetch, HttpResponseLike } from "../src/host.ts";
 import { mapHistory } from "../src/mapping.ts";
-import { MAX_PICTURE_BYTES, readChatPicture, type ChatPictureContext } from "../src/pictures.ts";
+import {
+  issuedPath,
+  MAX_PICTURE_BYTES,
+  readChatPicture,
+  type ChatPictureContext,
+} from "../src/pictures.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, KEY, URL_A, URL_B } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -17,7 +22,7 @@ import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 const TASK = "tool:image_generate:9b21401e-321f-48bb-a101-c2db7c0d78e9";
 const ARTIFACT = "artifact_managed_image_2de197ca-510c-4299-bd7a-ded7fe92de0c";
 const PROMPT = "A sun over a green hill, in flat solid colours";
-const ISSUED = `/api/chat/media/outgoing/${encodeURIComponent(KEY)}/2de197ca-510c-4299-bd7a-ded7fe92de0c/full?mediaTicket=v1.eyJzY29wZSI6Im1hbmFnZWQifQ.wvFYVx-PH9Ic`;
+const ISSUED = `/api/chat/media/outgoing/${encodeURIComponent(KEY)}/2de197ca-510c-4299-bd7a-ded7fe92de0c/full?mediaTicket=v1.eyJzY29wZSI6Im1hbmFnZWQifQ.wvFYVx-PH9Ic0Rq3n8dJt2LmWbYk5sAeUoCiGzXhT1v`;
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 const ascii = (text: string) => Uint8Array.from(text, (char) => char.charCodeAt(0));
 const NOW = Date.parse("2026-11-23T00:40:00.000Z");
@@ -323,6 +328,121 @@ describe("F-535: reading a picture", () => {
       message: "This device can't load pictures from the gateway.",
     });
     expect(asked).toEqual([]);
+  });
+});
+
+describe("F-535: the download path either OpenClaw issues", () => {
+  // 2026.10.6 signs a ticket (`v1.<payload>.<HMAC-SHA256>`); 2026.11.10 names a grant on the
+  // connection that asked (`<connection UUID>/<32 random bytes>`), written by `URLSearchParams`.
+  const ATTACHMENT = ARTIFACT.slice(-36);
+  const ROUTE = `/api/chat/media/outgoing/${encodeURIComponent(KEY)}/${ATTACHMENT}/full`;
+  const SIGNATURE = ISSUED.slice(-43);
+  const CONNECTION = "6f1c2a9e-3b7d-4e58-a0c4-9d2e81f7b630";
+  const GRANT = "Qm9vay1yZXZpZXdzLWdyYW50LXRva2VuLWZvci10ZXM";
+  // What the gateway writes the query with and the host's fetch parses with; core's types leave them out.
+  const web = globalThis as unknown as {
+    URLSearchParams: new (init: string | Record<string, string>) => {
+      get(name: string): string | null;
+      toString(): string;
+    };
+    Request: new (url: string) => { url: string };
+  };
+  const NEWER = `${ROUTE}?${new web.URLSearchParams({ mediaTicket: `${CONNECTION}/${GRANT}` })}`;
+
+  it("F-535: a download of either form is fetched, its bytes sent as the gateway wrote them", async () => {
+    expect(NEWER).toBe(`${ROUTE}?mediaTicket=${CONNECTION}%2F${GRANT}`);
+    for (const url of [ISSUED, NEWER]) {
+      expect(issuedPath(KEY, ARTIFACT, url)).toBe(url);
+      const { ctx, fetched } = context({ url, expiresAt: LATER }, png);
+      expect(await readChatPicture(ctx, KEY, ARTIFACT)).toMatchObject({ status: "content" });
+      const sent = fetched[0]!.url;
+      expect(sent).toBe(`http://127.0.0.1:19540${url}`);
+      // What the host's fetch parses and sends: the same bytes, the slash still `%2F`.
+      expect(new web.Request(sent).url).toBe(sent);
+      expect(new URL(sent).pathname + new URL(sent).search).toBe(url);
+    }
+    expect(
+      new web.URLSearchParams(new URL(`http://127.0.0.1:19540${NEWER}`).search).get("mediaTicket"),
+    ).toBe(`${CONNECTION}/${GRANT}`);
+  });
+
+  it("F-535: a path of any other shape, or of another task or attachment, is refused", () => {
+    const refused: Array<[string, unknown, string?, string?]> = [
+      ["not a string", 42],
+      ["no ticket", ROUTE],
+      ["the thumbnail route", NEWER.replace("/full?", "/thumbnail?")],
+      ["a connection's grant route", `/api/artifacts/download/${CONNECTION}/${GRANT}`],
+      ["a person's media route", NEWER.replace("/outgoing/", "/incoming/")],
+      ["a prefix before the route", `/x${NEWER}`],
+      ["another parameter after", `${NEWER}&next=/elsewhere`],
+      ["another parameter before", NEWER.replace("?mediaTicket=", "?next=1&mediaTicket=")],
+      ["the ticket twice", `${NEWER}&mediaTicket=${CONNECTION}%2F${GRANT}`],
+      ["a fragment", `${NEWER}#top`],
+      ["an empty fragment", `${ISSUED}#`],
+      ["a scheme and host", `https://pictures.example${NEWER}`],
+      ["a host without a scheme", `//pictures.example${NEWER}`],
+      ["a dot segment", NEWER.replace(`/${ATTACHMENT}/`, `/../${ATTACHMENT}/`)],
+      ["an encoded dot segment", NEWER.replace(`/${ATTACHMENT}/`, `/%2E%2E/${ATTACHMENT}/`)],
+      ["an encoded slash in the route", NEWER.replace(`/${ATTACHMENT}/`, `%2F${ATTACHMENT}/`)],
+      ["the slash decoded", `${ROUTE}?mediaTicket=${CONNECTION}/${GRANT}`],
+      ["the slash in lower case", `${ROUTE}?mediaTicket=${CONNECTION}%2f${GRANT}`],
+      ["the slash encoded twice", `${ROUTE}?mediaTicket=${CONNECTION}%252F${GRANT}`],
+      ["a second encoded slash", `${NEWER}%2F${GRANT}`],
+      ["a backslash", `${ROUTE}?mediaTicket=${CONNECTION}\\${GRANT}`],
+      ["an encoded backslash", `${ROUTE}?mediaTicket=${CONNECTION}%5C${GRANT}`],
+      ["a newline after", `${NEWER}\n`],
+      ["an encoded newline", `${NEWER}%0A`],
+      ["a tab inside", ISSUED.replace("v1.", "v1.\t")],
+      ["an empty ticket", `${ROUTE}?mediaTicket=`],
+      ["a grant one character short", NEWER.slice(0, -1)],
+      ["a grant one character long", `${NEWER}A`],
+      ["a grant with a dot", `${NEWER.slice(0, -1)}.`],
+      ["a grant with padding", `${NEWER.slice(0, -1)}=`],
+      ["a connection in upper case", NEWER.replace(CONNECTION, CONNECTION.toUpperCase())],
+      ["a connection that isn't a UUID", NEWER.replace(CONNECTION, CONNECTION.replace(/-/g, ""))],
+      ["a signature one character short", ISSUED.slice(0, -1)],
+      ["a signature one character long", `${ISSUED}A`],
+      ["another version", ISSUED.replace("mediaTicket=v1.", "mediaTicket=v2.")],
+      ["a path before the version", ISSUED.replace("mediaTicket=v1.", "mediaTicket=../v1.")],
+      ["no payload", `${ROUTE}?mediaTicket=v1..${SIGNATURE}`],
+      ["a third part", ISSUED.replace("mediaTicket=v1.", "mediaTicket=v1.e30.")],
+      ["a tilde, outside base64url", ISSUED.replace("v1.eyJ", "v1.~eyJ")],
+      ["a payload with a plus", ISSUED.replace("v1.eyJ", "v1.+eyJ")],
+      ["over 4096 characters", ISSUED.replace("v1.", `v1.${"e".repeat(4096)}`)],
+      ["another task's", NEWER.replace(encodeURIComponent(KEY), encodeURIComponent("agent:x:y"))],
+      ["the task not encoded", NEWER.replace(encodeURIComponent(KEY), KEY)],
+      ["the task encoded in lower case", NEWER.replace("%3A", "%3a")],
+      ["another attachment", NEWER.replace(ATTACHMENT, CONNECTION)],
+      ["an attachment in upper case", NEWER.replace(ATTACHMENT, ATTACHMENT.toUpperCase())],
+      ["an artifact id of another kind", NEWER, KEY, `artifact_other_${ATTACHMENT}`],
+      [
+        "an artifact id that isn't a UUID",
+        NEWER.replace(ATTACHMENT, "pdf"),
+        KEY,
+        "artifact_managed_media_pdf",
+      ],
+      [
+        "an artifact id in upper case",
+        NEWER.replace(ATTACHMENT, ATTACHMENT.toUpperCase()),
+        KEY,
+        ARTIFACT.toUpperCase().replace("ARTIFACT_MANAGED_IMAGE_", "artifact_managed_image_"),
+      ],
+      ["an empty task", NEWER.replace(encodeURIComponent(KEY), ""), ""],
+      ["a task that is a dot segment", NEWER.replace(encodeURIComponent(KEY), ".."), ".."],
+      ["a task with a slash", NEWER.replace(encodeURIComponent(KEY), "agent%3Aa%2Fb"), "agent:a/b"],
+      [
+        "a task with a backslash",
+        NEWER.replace(encodeURIComponent(KEY), "agent%3Aa%5Cb"),
+        "agent:a\\b",
+      ],
+      ["a task with a lone surrogate", NEWER, "agent:\uD800"],
+    ];
+    for (const [label, url, key = KEY, artifactId = ARTIFACT] of refused)
+      expect(issuedPath(key, artifactId, url), label).toBeNull();
+    // Another task's path is refused only for being another's: for its own task it is a download.
+    const another = refused.find(([label]) => label === "another task's")![1];
+    expect(issuedPath("agent:x:y", ARTIFACT, another)).toBe(another);
+    expect(issuedPath(KEY, `artifact_managed_media_${ATTACHMENT}`, NEWER)).toBe(NEWER);
   });
 });
 
