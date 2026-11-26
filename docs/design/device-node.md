@@ -341,7 +341,7 @@ Keep a record for each request that reached this node, even when the gateway lat
 
 ## 9. Stopping, taking back, and the phone in the background
 
-**Stop takes effect on this device first.** Turning the switch off asks first: **"Stop letting bots use this Mac?"**, "This Mac stops answering at once, here, whether or not the gateway can be reached. An operation already started can't always be undone: a message already sent stays sent. This Mac keeps its saved device sign-in, so turning it on again needs no new code. This Mac's separate operator sign-in and the gateway's allowlist stay as read." With admin, a checkbox "Also remove this Mac's node pairing from the gateway". Then "Stop" and Cancel. On Stop, in this order:
+**Stop takes effect on this device first.** Turning the switch off stops at once, with nothing asked ("Doing, not asking"), and the line under it says: "Bots can't use this Mac now. An operation already started can't always be undone: a message already sent stays sent. This Mac keeps its saved device sign-in, so turning it on again needs no new code." with **Turn on**. Removing this Mac's node pairing from the gateway is a separate action, with admin, under the switch: it removes a credential, so it asks once, plainly. On turning off, in this order:
 
 1. The host stops taking requests. Each request not yet started is refused `TURNED_OFF_ON_DEVICE` while the node can still send; each card closes as "Stopped", "Clawtrate stopped answering on this Mac."
 2. An operation already started is cancelled where its app allows that, and recorded as "Stopped the operation" only if the native cancellation result confirms it; otherwise "Started it. Clawtrate couldn't confirm whether it stopped", or the demonstrated effect ("Sent the message before Stop."), or "Ran it" when it had finished.
@@ -361,7 +361,7 @@ The gateway's phone queue excludes agent-runtime calls. Clawtrate returns `NOT_O
 - **When the person opens Clawtrate again**, it reads the gateway, and "Requests to this device" shows the records this iPhone kept, one each, as section 8 says. When the app was suspended and its socket closed unobserved, it says once: "While Clawtrate was suspended, whether requests were delivered to this iPhone, and when the gateway saw its socket close, isn't known. The records show only what this iPhone received."
 - This iPhone's state line reads "Connected as a device for bots (read 5:31 PM)" only with the local hello and a positive read, with the two facts of section 2 under it.
 
-**This iPhone, off and on.** The iPhone's switch works as the Mac's, with its own confirmation, steps and Stop.
+**This iPhone, off and on.** The iPhone's switch works as the Mac's: off at once, the same line and steps, and removing its pairing as a separate action that asks.
 
 ## 10. Other devices asking to be used by bots
 

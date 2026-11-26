@@ -41,6 +41,7 @@ Every document in the repository, by what you want to do.
 - [Effortless setup and connection](design/setup-effortless.md): full access at the first connect, connecting on this Mac from OpenClaw's settings file, approving devices inside Clawtrate, and the first run timed.
 - [Search](design/search.md): the Cmd/Ctrl+K palette, what each source covers, opening a result in its place, and the iPhone's scopes.
 - [The Main Bot](design/main-bot-onboarding.md): the first run's chat with the Main Bot, how bots run commands, bots asking to change themselves and other bots through Clawtrate's plugin, proposals, and external agents over MCP.
+- [Doing, not asking](design/doing-not-asking.md): every place Clawtrate asks a person, what each becomes under the rule that only something destructive asks, commands on the person's computer, and the order of the conversions.
 - [Title bar](design/titlebar.md): the mark, wordmark and Beta pill, the update button's states, the gear for Settings, and naming a gateway on this device.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 

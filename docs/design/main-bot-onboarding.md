@@ -1,6 +1,6 @@
 # The Main Bot, the autonomy choice, and bots that set themselves up
 
-Issue #292. A fresh start opens on a chat with the Main Bot. It greets you, and a small card under its greeting asks what to call it and how it should help. When you save, the sidebar and the chat's header change as soon as the gateway confirms the new name. Before that, one question sets how bots run commands. Later, a bot can ask to change its own settings, a bot you allow can ask to create or change other bots, and an external agent you allow can see bots and suggest changes through MCP. **A bot never changes a setting by itself: you confirm each change, on a card that shows exactly what will be written.** Every change goes through the gateway's own methods, and Clawtrate shows only what the gateway confirmed.
+Issue #292. A fresh start opens on a chat with the Main Bot. It greets you, and a small card under its greeting asks what to call it and how it should help. When you save, the sidebar and the chat's header change as soon as the gateway confirms the new name. Before that, one question sets how bots run commands. Later, a bot can ask to change its own settings, a bot you allow can ask to create or change other bots, and an external agent you allow can see bots and suggest changes through MCP. **A change you ask for happens at once and is shown with Undo; a change a bot makes on its own is either shown with a note and Undo or not made, and only something destructive asks (`docs/decisions.md`, "Doing, not asking"; each case in `doing-not-asking.md`, section 2.6).** Every change goes through the gateway's own methods, and Clawtrate shows only what the gateway confirmed.
 
 It builds on:
 
@@ -58,7 +58,7 @@ One step, titled **"How should bots run commands?"**, with two cards. Each card 
 
 Under the cards, two lines and a link:
 
-- "Either way, a bot asks you before it changes its own or another bot's settings, and you confirm each change with one click."
+- "Either way, a change you ask a bot for happens at once, and you can undo it." (The earlier line had each change confirmed with a click; under "Doing, not asking" this whole step is the command question of `doing-not-asking.md` section 3.)
 - "Clawtrate's limits cover changes made through Clawtrate. A command a bot runs can still change things on the computer running OpenClaw."
 - **What this means** opens a sheet:
   - "**Hands-off** runs a bot's commands without stopping for approval, as the computer's own user, where that computer's rules allow it. A command can change files and OpenClaw's own settings."
