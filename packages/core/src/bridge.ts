@@ -399,6 +399,21 @@ export type BridgeCommand =
       stamp: GatewayStamp;
     }
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
+  /**
+   * Unlock, or Clear a kept order, after its confirmation (#660): `account` is the one account
+   * the order named on screen, and nothing is sent unless it still does, on the gateway `stamp`
+   * names (`ClawtrateState.accounts.clear`).
+   */
+  | {
+      type: "clearBotOrder";
+      /** The press's id, chosen by the screen: the line it shows as its own. */
+      press: string;
+      botId: string;
+      provider: string;
+      account: string;
+      kind: "unlock" | "clear";
+      stamp: GatewayStamp;
+    }
   /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
   | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
   | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
@@ -944,6 +959,13 @@ function botId(value: unknown): string {
   return value;
 }
 
+/** A press's id, as a screen makes one: short, plain characters. */
+function pressId(value: unknown): string {
+  if (typeof value !== "string" || !/^[\w-]{8,64}$/.test(value))
+    throw new Error("invalid press id");
+  return value;
+}
+
 function flag(value: unknown): boolean {
   if (typeof value !== "boolean") throw new Error("invalid flag");
   return value;
@@ -1362,6 +1384,16 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "removeBotFallbacks",
         botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "clearBotOrder":
+      return {
+        type: "clearBotOrder",
+        press: pressId(command.press),
+        botId: botId(command.botId),
+        provider: providerId(command.provider),
+        account: profileId(command.account),
+        kind: oneOf(command.kind, ["unlock", "clear"] as const, "kind"),
         stamp: gatewayStampOf(command.stamp),
       };
     case "acceptBotName":
@@ -2333,6 +2365,15 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId, command.stamp);
+      case "clearBotOrder":
+        return client.clearBotOrder(
+          command.press,
+          command.botId,
+          command.provider,
+          command.account,
+          command.kind,
+          command.stamp,
+        );
       case "acceptBotName":
         return client.acceptBotName(command.botId, command.name, command.stamp);
       case "declineBotName":
