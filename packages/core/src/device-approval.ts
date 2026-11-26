@@ -623,9 +623,9 @@ export class DeviceApprovals {
   }
 
   /** The whole pending list read again from the gateway, for a decision. */
-  private async readAgain(): Promise<{ seq: number; applied: boolean; rows: unknown[] }> {
-    const { seq, applied, pending } = await this.list();
-    return { seq, applied, rows: pending };
+  private async readAgain(): Promise<{ applied: boolean; rows: unknown[] }> {
+    const { applied, pending } = await this.list();
+    return { applied, rows: pending };
   }
 
   private spend(requestId: string): void {
@@ -691,10 +691,11 @@ export class DeviceApprovals {
     // Each step goes on the connection the sheet was read on, or not at all.
     const same = this.here();
     try {
-      const { seq, applied, rows } = await this.readAgain();
+      const { applied, rows } = await this.readAgain();
       if (!same()) return { kind: "interrupted" };
-      // A newer reply, from any read, was applied before or since this one: decide nothing on it.
-      if (!applied || seq !== this.applied) {
+      // A newer reply, from any read, was applied before this one: decide nothing on it. One
+      // applied since is in the published list the decision checks below.
+      if (!applied) {
         this.refreshOn(same);
         return { kind: "not-allowed" };
       }

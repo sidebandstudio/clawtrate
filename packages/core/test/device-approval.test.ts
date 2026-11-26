@@ -358,6 +358,47 @@ describe("approving a waiting device", () => {
     expect(t.request(x.requestId as string).blocked).toBe("same-code");
   });
 
+  it("approves nothing on a decision read older than another decision's paired-device read", async () => {
+    // W is approved first. While its approval is out, a decision on X sends its list read; then
+    // W's check reads the paired device and that reply, the newer one, lists X and a twin Y
+    // sharing its code; only then does X's older reply, without Y, arrive. The list read W's
+    // decision starts after its check answers last of all.
+    const [x, w, y] = [pendingRow(), pendingRow(), pendingRow()];
+    const t = await listed([x, w], { sameCode: [x.requestId as string, y.requestId as string] });
+    let lists = 0;
+    let releaseX: () => void = () => {};
+    let xDecision: Promise<unknown> = Promise.resolve();
+    let releaseRefresh: () => void = () => {};
+    t.answers["device.pair.list"] = async () => {
+      lists += 1;
+      if (lists === 1) return { pending: [x, w], paired: [] }; // W's read again
+      if (lists === 2) {
+        // X's read again: answered only after W's check has had its newer reply.
+        await new Promise<void>((resolve) => (releaseX = resolve));
+        return { pending: [x], paired: [] };
+      }
+      if (lists === 3) return { pending: [x, y], paired: [pairedOf(w)] }; // W's paired-device read
+      // The list read W's decision starts afterwards answers last.
+      await new Promise<void>((resolve) => (releaseRefresh = resolve));
+      return { pending: [x, y], paired: [pairedOf(w)] };
+    };
+    t.answers["device.pair.approve"] = (params) => {
+      if ((params as Row).requestId === w.requestId)
+        xDecision = t.engine.approve(x.requestId as string, codeOf(x), [...FULL_SCOPES]);
+      return { requestId: (params as Row).requestId };
+    };
+    expect(await t.engine.approve(w.requestId as string, codeOf(w), [...FULL_SCOPES])).toEqual({
+      kind: "approved",
+      deviceId: w.deviceId,
+    });
+    releaseX();
+    expect(await xDecision).toEqual({ kind: "not-allowed" });
+    releaseRefresh();
+    await t.settle();
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+    expect(t.request(x.requestId as string).blocked).toBe("same-code");
+  });
+
   it("changes nothing with a reply older than one already applied", async () => {
     const row = pendingRow();
     const t = await listed([row]);
