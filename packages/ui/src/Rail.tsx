@@ -10,6 +10,7 @@ import type {
 import {
   ACTIVE_RUN_MESSAGE,
   avatarFor,
+  gatewayStamp,
   gatewayAddress,
   MAX_GATEWAY_NAME_CHARS,
 } from "@clawtrate/core";
@@ -635,6 +636,11 @@ export function Rail({
       sidebar,
       interactive,
       change: (change, base) => bridge.invoke({ type: "changeSidebar", change, base }),
+      connected: connection.status === "connected",
+      merge: (base) =>
+        bridge
+          .invoke({ type: "mergeSidebar", base, stamp: gatewayStamp(connection) })
+          .then((answer) => answer?.merged === true),
     },
   );
   const [tip, setTip] = useState<Tip | null>(null);

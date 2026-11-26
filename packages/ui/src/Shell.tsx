@@ -19,6 +19,7 @@ import { useBridge, useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import {
+  ownChoices,
   readPreference,
   writePreference,
   type BubbleChoice,
@@ -127,8 +128,28 @@ export function Shell({
     setOfferOpen(true);
   }
 
-  // When access arrives, the strip says so for four seconds; the conversation announces it.
+  // The first-time merge of this device's own conversation switches into the gateway's choices
+  // (#639, docs/decisions.md): nothing to click, once per gateway in this window, and only while
+  // the connection already writes. The engine fills only the choices the gateway holds none of.
   const connectedNow = state.connection.status === "connected";
+  const mergeFor =
+    connectedNow && interactive && state.choices?.status === "ok"
+      ? state.connection.gatewayId
+      : null;
+  const mergedFor = useRef<string | null>(null);
+  const mergeTarget = state.connection.target;
+  useEffect(() => {
+    if (mergeFor === null || mergedFor.current === mergeFor) return;
+    mergedFor.current = mergeFor;
+    const base = ownChoices();
+    if (Object.keys(base).length === 0) return;
+    const stamp = { gatewayId: mergeFor, target: mergeTarget };
+    send({ type: "mergeChoices", base, stamp }).catch(() => {
+      if (mergedFor.current === mergeFor) mergedFor.current = null;
+    });
+  }, [mergeFor, mergeTarget, send]);
+
+  // When access arrives, the strip says so for four seconds; the conversation announces it.
   const [tier, setTier] = useState(interactive);
   const [granted, setGranted] = useState(false);
   if (connectedNow && interactive !== tier) {

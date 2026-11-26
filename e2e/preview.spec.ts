@@ -2802,6 +2802,12 @@ test("F-551: by default a real run shows no thinking and no failed action, which
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(transcript.locator("details.thought").first()).toBeVisible();
+  // Kept on the run's shared gateway for every device (F-601): put back as it was.
+  await page.keyboard.press("ControlOrMeta+,");
+  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await page.keyboard.press("Escape");
 });
 
 /** The action cards' and folds' lines in a transcript, in order. */

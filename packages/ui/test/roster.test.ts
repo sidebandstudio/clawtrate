@@ -87,6 +87,23 @@ describe("F-031 F-266: the rail's order", () => {
     expect(names(arranged.list)).toEqual(["Marlow", "juniper"]);
     expect(names(arranged.hidden)).toEqual(["Otto", "Pip"]);
   });
+
+  it("F-601 F-027: a hidden bot that waits on the person shows in the list until it doesn't", () => {
+    const waiting = {
+      ...at("pip", 5),
+      status: "waiting" as const,
+      waitingFor: "approval" as const,
+    };
+    const hidden = prefs({ hidden: ["pip", "otto"] });
+    const arranged = arrange(BOTS, { ...TASKS, pip: [waiting] }, hidden);
+    expect(names(arranged.list)).toContain("Pip");
+    expect(names(arranged.hidden)).toEqual(["Otto"]);
+    // Answered, it goes back where the person put it.
+    expect(names(arrange(BOTS, { ...TASKS, pip: [at("pip", 5)] }, hidden).hidden)).toEqual([
+      "Otto",
+      "Pip",
+    ]);
+  });
 });
 
 describe("each gateway's arrangement", () => {
@@ -119,6 +136,15 @@ describe("each gateway's arrangement", () => {
       pinned: ["main"],
     });
     expect(readRoster(null)).toMatchObject({ pinned: [], hidden: [], sort: "recent" });
+  });
+
+  it("F-601: once merged into the gateway's, the device's arrangement says so, and only then", () => {
+    data.set(`clawtrate.${rosterKey("gateway:a1")}`, saved({ pinned: ["main"], merged: true }));
+    data.set(`clawtrate.${rosterKey("gateway:b2")}`, saved({ pinned: ["main"] }));
+    expect(readRoster("gateway:a1").merged).toBe(true);
+    expect(readRoster("gateway:b2")).not.toHaveProperty("merged");
+    data.set(`clawtrate.${rosterKey("gateway:c3")}`, JSON.stringify({ merged: "yes" }));
+    expect(readRoster("gateway:c3")).not.toHaveProperty("merged");
   });
 
   it("F-013 F-027 F-266: a gateway opened for the first time starts with no pins, nothing hidden and the default order, even when old state that names no gateway exists", () => {

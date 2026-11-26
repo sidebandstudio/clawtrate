@@ -110,19 +110,25 @@ test.beforeAll(async ({ browser }) => {
     .toMatch(/^Approved /m);
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   // These checks read a routine's runs under its bot, which "Show sessions from other tools"
-  // lists (F-563): turned on as a person turns it on.
+  // lists (F-563): turned on as a person turns it on. The choice is kept on the run's shared
+  // gateway for every device (F-601), so it is turned off again after.
+  await setOthersShown(true);
+});
+
+async function setOthersShown(on: boolean): Promise<void> {
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Advanced", exact: true }).click();
   const others = settings.getByRole("switch", { name: "Show sessions from other tools" });
-  await others.click();
-  await expect(others).toHaveAttribute("aria-checked", "true");
+  if ((await others.getAttribute("aria-checked")) !== String(on)) await others.click();
+  await expect(others).toHaveAttribute("aria-checked", String(on));
   await page.keyboard.press("Escape");
-});
+}
 
 test.afterAll(async () => {
   test.setTimeout(120_000);
   for (const id of made) await call("cron.remove", { id }).catch(() => {});
+  if (page) await setOthersShown(false).catch(() => {});
   await admin?.close();
   await page?.context().close();
   if (host) {

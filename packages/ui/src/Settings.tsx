@@ -6,6 +6,7 @@
 // inside it, Escape closes it, and focus returns to where it was.
 
 import {
+  gatewayStamp,
   INTERACTIVE_SCOPES,
   scopeSatisfied,
   type AccountsState,
@@ -143,9 +144,10 @@ function DeviceSwitch({
   note: string;
   /** What is announced once it is on, and once it is off. */
   said: [string, string];
-  value: [boolean, (shown: boolean) => void];
+  value: [boolean, (shown: boolean) => Promise<void>];
   announce: (text: string) => void;
 }) {
+  const [error, setError] = useState<string | null>(null);
   return (
     <div className="b-field device-switch">
       <span className="device-switch-row">
@@ -159,14 +161,23 @@ function DeviceSwitch({
           aria-describedby={`${id}-note`}
           data-testid={id}
           onClick={() => {
-            setShown(!shown);
-            announce(shown ? said[1] : said[0]);
+            setError(null);
+            void setShown(!shown).then(
+              () => announce(shown ? said[1] : said[0]),
+              (failure: unknown) =>
+                setError(failure instanceof Error ? failure.message : String(failure)),
+            );
           }}
         />
       </span>
       <p className="b-hint" id={`${id}-note`}>
         {note}
       </p>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -188,7 +199,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
   const toggleOtherTools = () => {
     const on = !showOtherTools;
     setOtherToolsError(null);
-    void send({ type: "setShowOtherToolSessions", on }).then(
+    void send({ type: "setShowOtherToolSessions", on, stamp: gatewayStamp(state.connection) }).then(
       () => announce(on ? "Sessions from other tools shown" : "Sessions from other tools hidden"),
       (failure: unknown) =>
         setOtherToolsError(failure instanceof Error ? failure.message : String(failure)),
@@ -197,14 +208,23 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
   const toggleChannelChats = () => {
     const on = !showChannelChats;
     setChannelError(null);
-    void send({ type: "setShowChannelChats", on }).then(
+    void send({ type: "setShowChannelChats", on, stamp: gatewayStamp(state.connection) }).then(
       () => announce(on ? "Channel chats shown" : "Channel chats hidden"),
       (failure: unknown) =>
         setChannelError(failure instanceof Error ? failure.message : String(failure)),
     );
   };
+  // A gateway with roles set keeps no preferences for a paired device (#639): said in one line.
+  const perDevice =
+    state.connection.status === "connected" && state.choices?.status === "unavailable";
   return (
     <>
+      {perDevice && (
+        <p className="b-hint" data-testid="choices-per-device">
+          This gateway doesn&apos;t keep choices for this connection, so the switches here apply to
+          this device only.
+        </p>
+      )}
       <DeviceSwitch
         id="show-commands"
         label="Show commands"
@@ -277,12 +297,13 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
 /** "Show the gateway's own bot", off by default and kept by the host (F-562). */
 function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
   const send = useCommand();
-  const shown = useClawtrateState().showGatewayBot === true;
+  const state = useClawtrateState();
+  const shown = state.showGatewayBot === true;
   const [error, setError] = useState<string | null>(null);
   const toggle = () => {
     const on = !shown;
     setError(null);
-    void send({ type: "setShowGatewayBot", on }).then(
+    void send({ type: "setShowGatewayBot", on, stamp: gatewayStamp(state.connection) }).then(
       () => announce(on ? "The gateway's own bot shown" : "The gateway's own bot hidden"),
       (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)),
     );

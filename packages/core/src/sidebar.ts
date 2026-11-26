@@ -202,6 +202,77 @@ export function applySidebarChange(prefs: SidebarPrefs, change: SidebarChange): 
   }
 }
 
+/**
+ * A device's own arrangement merged into the gateway's, the first time the device writes there
+ * (docs/decisions.md, "Your choices follow you"). The gateway's comes first and wins: a bot it
+ * pins stays pinned, and its order and sections keep their places. Hidden is a union, except a
+ * bot the gateway pins; the device's pins, order and section places are added after for bots the
+ * gateway doesn't place. Within every bound; the gateway's `rev` is kept for the caller to raise.
+ */
+export function mergeSidebars(gateway: SidebarPrefs, device: SidebarPrefs): SidebarPrefs {
+  const hidden = [
+    ...gateway.hidden,
+    ...device.hidden.filter((id) => !gateway.hidden.includes(id) && !gateway.pins.includes(id)),
+  ];
+  const pins = [
+    ...gateway.pins,
+    ...device.pins.filter((id) => !gateway.pins.includes(id) && !hidden.includes(id)),
+  ];
+  const sections = gateway.sections.map((section) => ({ ...section, bots: [...section.bots] }));
+  const placed = new Set(sections.flatMap((section) => section.bots));
+  for (const section of device.sections) {
+    const bots = section.bots.filter((id) => !placed.has(id));
+    if (bots.length === 0) continue;
+    const same = sections.find((each) => each.name === section.name);
+    if (same) same.bots.push(...bots);
+    else if (sections.length < MAX_SIDEBAR_SECTIONS) sections.push({ name: section.name, bots });
+    else continue;
+    bots.forEach((id) => placed.add(id));
+  }
+  const order = [...gateway.order, ...device.order.filter((id) => !gateway.order.includes(id))];
+  return parseSidebar({ pins, sections, hidden, order, rev: gateway.rev });
+}
+
+const sameArrangement = (a: SidebarPrefs, b: SidebarPrefs) =>
+  JSON.stringify([a.pins, a.sections, a.hidden, a.order]) ===
+  JSON.stringify([b.pins, b.sections, b.hidden, b.order]);
+
+/**
+ * Merge this device's arrangement into the gateway's (`mergeSidebars`), with a compare-and-set
+ * as for a change. Nothing is written when it adds nothing, or when the merged arrangement would
+ * pass the gateway's bound: the gateway's then stays as it is. Answers what the gateway holds.
+ */
+export async function mergeSidebar(
+  ctx: Pick<SidebarContext, "request">,
+  base: SidebarPrefs,
+): Promise<SidebarState> {
+  const device = parseSidebar(base);
+  for (let attempt = 0; attempt < SIDEBAR_WRITE_ATTEMPTS; attempt += 1) {
+    const read = await readRaw(ctx);
+    if (read.status !== "ok")
+      throw new Error("This gateway keeps no preferences for this connection.");
+    const held = read.raw === null || read.raw === undefined ? null : parseSidebar(read.raw);
+    const merged = mergeSidebars(held ?? parseSidebar({}), device);
+    if (
+      (held && sameArrangement(merged, held)) ||
+      (!held && sameArrangement(merged, parseSidebar({})))
+    )
+      return { status: "ok", prefs: held };
+    const next = { ...merged, rev: (held?.rev ?? 0) + 1 };
+    if (sidebarBytes(next) > MAX_SIDEBAR_BYTES) return { status: "ok", prefs: held };
+    const result = asRecord(
+      await ctx.request("users.prefs.set", {
+        entries: { [SIDEBAR_PREF_KEY]: next },
+        expectedEntries: { [SIDEBAR_PREF_KEY]: read.raw ?? null },
+      }),
+    );
+    if (result?.status === "ok") return { status: "ok", prefs: next };
+    if (result?.status !== "conflict")
+      throw new Error("This gateway keeps no preferences for this connection.");
+  }
+  throw new Error("The arrangement kept changing on another device. Try again.");
+}
+
 /** Context: the gateway, and the write tier for a change. */
 export type SidebarContext = {
   request: (method: string, params: unknown) => Promise<unknown>;
@@ -210,7 +281,7 @@ export type SidebarContext = {
 
 /** What the gateway holds now: the parsed arrangement and the raw value to compare against. */
 async function readRaw(
-  ctx: SidebarContext,
+  ctx: Pick<SidebarContext, "request">,
 ): Promise<{ status: "ok"; raw: unknown } | { status: "unavailable" }> {
   const result = asRecord(await ctx.request("users.prefs.get", { keys: [SIDEBAR_PREF_KEY] }));
   if (result?.status !== "ok") return { status: "unavailable" };
@@ -229,6 +300,12 @@ export async function readSidebar(ctx: SidebarContext): Promise<SidebarState> {
     status: "ok",
     prefs: read.raw === null || read.raw === undefined ? null : parseSidebar(read.raw),
   };
+}
+
+/** The arrangement as read with other preferences (`entries` of a `users.prefs.get` answer). */
+export function sidebarFromEntries(entries: Record<string, unknown>): SidebarState {
+  const raw = Object.hasOwn(entries, SIDEBAR_PREF_KEY) ? entries[SIDEBAR_PREF_KEY] : null;
+  return { status: "ok", prefs: raw === null || raw === undefined ? null : parseSidebar(raw) };
 }
 
 /**

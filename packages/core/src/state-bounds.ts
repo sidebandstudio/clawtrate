@@ -122,6 +122,7 @@ import {
   type SidebarSection,
   type SidebarState,
 } from "./sidebar.ts";
+import type { ChoicesPrefs, ChoiceSet, ChoicesState } from "./choices.ts";
 import type { Digest } from "./bounds.ts";
 import {
   MAX_COMPUTER_PANES,
@@ -854,6 +855,20 @@ const sidebar = object<SidebarState>()({
     rev: NUMBER,
   }),
 });
+/** The person's choices as the gateway keeps them (`choices.ts`): five switches and a revision. */
+const choices = object<ChoicesState>()({
+  status: ENUM,
+  prefs: object<ChoicesPrefs>()({
+    on: object<ChoiceSet>()({
+      commands: FLAG,
+      thinking: FLAG,
+      channelChats: FLAG,
+      otherTools: FLAG,
+      gatewayBot: FLAG,
+    }),
+    rev: NUMBER,
+  }),
+});
 /** Warning budgets, their counts and the providers' limits (`usage.ts`). */
 // An id bound counts JSON characters: a plain id of `MAX_BUDGET_ID_CHARS` and its two quotes,
 // and a budget's key, `routine:` before such an id.
@@ -1352,6 +1367,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   routines: ROUTINES,
   retention: retentionAlarm,
   sidebar,
+  choices,
   computer: COMPUTER,
   setup,
   checkIns: CHECK_INS,

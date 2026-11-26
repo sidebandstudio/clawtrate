@@ -5,6 +5,9 @@
 // writes changes it there. Until it holds one, or where it keeps none (a
 // connection with no durable user), the rail keeps its arrangement per device,
 // and the first change a writing connection makes starts the gateway's from it.
+// The first time a writing connection reads the gateway's, this device's own is
+// merged into it once, with nothing to click (`mergeSidebars` in the engine,
+// docs/decisions.md), and is then only this device's copy.
 // The sort order is always this device's own.
 //
 // Bot ids belong to a gateway (every gateway has a `main`), so the arrangement
@@ -21,7 +24,7 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { readPreference, writePreference } from "./preferences.ts";
 
 export type SortOrder = "recent" | "name" | "manual";
@@ -41,6 +44,8 @@ export type RosterPrefs = {
   manual: string[];
   /** The user's sections, each a name and its bots; a bot is in at most one. */
   sections: Array<{ name: string; bots: string[] }>;
+  /** This arrangement was merged into the gateway's: from then on it is only this device's copy. */
+  merged?: true;
 };
 
 /** The preference key of one gateway's arrangement. */
@@ -101,8 +106,13 @@ function parseRoster(raw: string | null): RosterPrefs {
     sort,
     manual: ids(parsed.manual),
     sections,
+    ...(parsed.merged === true ? { merged: true as const } : {}),
   };
 }
+
+/** Whether this device arranged anything of its own. */
+const arranged = (prefs: RosterPrefs) =>
+  prefs.pinned.length + prefs.hidden.length + prefs.manual.length + prefs.sections.length > 0;
 
 /** This device's arrangement in the gateway's form, the base of its first change there. */
 export function toSidebar(prefs: RosterPrefs): SidebarPrefs {
@@ -194,7 +204,11 @@ export function arrange(
   tasksByBot: Record<string, Task[]>,
   prefs: RosterPrefs,
 ): Arrangement {
-  const hidden = new Set(prefs.hidden);
+  // A hidden bot that waits on the person shows in the list until it doesn't: hiding, which any
+  // device of the person (or anything that writes to the gateway) can do, never keeps an approval
+  // or a question out of view.
+  const waits = (id: string) => (tasksByBot[id] ?? []).some((task) => task.status === "waiting");
+  const hidden = new Set(prefs.hidden.filter((id) => !waits(id)));
   const pinnedIds = prefs.pinned.filter((id) => !hidden.has(id));
   const byId = new Map(bots.map((bot) => [bot.id, bot]));
   const pinned = pinnedIds.flatMap((id) => byId.get(id) ?? []);
@@ -242,6 +256,10 @@ export type RosterSync = {
   /** The connection writes: a change goes to the gateway. */
   interactive: boolean;
   change: (change: SidebarChange, base: SidebarPrefs | null) => Promise<void>;
+  /** The connection is up now: the first-time merge waits for it. */
+  connected?: boolean;
+  /** Merge this device's arrangement into the gateway's; answers whether it was merged. */
+  merge?: (base: SidebarPrefs) => Promise<boolean>;
 };
 
 /**
@@ -277,6 +295,37 @@ export function useRoster(
   useLayoutEffect(() => {
     latest.current = { sync, synced, local: current.prefs };
   });
+
+  // The first-time merge: once per gateway, while a writing connection is up.
+  const mergeScope =
+    gateway !== null &&
+    sync?.interactive === true &&
+    sync.connected === true &&
+    sync.merge !== undefined &&
+    current.scope !== null &&
+    current.prefs.merged !== true &&
+    arranged(current.prefs)
+      ? current.scope
+      : null;
+  const merging = useRef<string | null>(null);
+  useEffect(() => {
+    const merge = latest.current.sync?.merge;
+    if (mergeScope === null || merging.current === mergeScope || !merge) return;
+    merging.current = mergeScope;
+    const done = () => {
+      if (merging.current === mergeScope) merging.current = null;
+    };
+    merge(toSidebar(latest.current.local)).then((merged) => {
+      done();
+      if (!merged) return;
+      setHeld((now) => {
+        if (now.scope !== mergeScope) return now;
+        const next = { ...now.prefs, merged: true as const };
+        writePreference(rosterKey(mergeScope), JSON.stringify(next));
+        return { scope: now.scope, prefs: next };
+      });
+    }, done);
+  }, [mergeScope]);
 
   /** Apply a change where the arrangement lives. Read-only, on the gateway's: nothing to do. */
   const apply = useCallback(

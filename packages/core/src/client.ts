@@ -351,7 +351,8 @@ import { createStore, type Store } from "./store.ts";
 import {
   changeSidebar,
   initialSidebar,
-  readSidebar,
+  mergeSidebar,
+  sidebarFromEntries,
   sidebarRev,
   SIDEBAR_PREF_KEY,
   type SidebarChange,
@@ -359,6 +360,19 @@ import {
   type SidebarPrefs,
   type SidebarState,
 } from "./sidebar.ts";
+import {
+  CHOICE_IDS,
+  CHOICES_PREF_KEY,
+  choicesFromEntries,
+  choicesRev,
+  heldChoice,
+  initialChoices,
+  shownChoice,
+  writeChoices,
+  type ChoiceId,
+  type ChoiceSet,
+  type ChoicesState,
+} from "./choices.ts";
 import {
   UsageEngine,
   type UsageBusy,
@@ -503,6 +517,22 @@ const CHANNEL_CHATS_KEY = "show-channel-chats";
 const OTHER_TOOLS_KEY = "show-other-tool-sessions";
 /** Where the host keeps "Show the gateway's own bot"; absent is off. */
 const GATEWAY_BOT_KEY = "show-gateway-bot";
+/** A switch as the host keeps it: "true" or "false", else none chosen on this device. */
+const kept = (value: string | null): boolean | undefined =>
+  value === "true" ? true : value === "false" ? false : undefined;
+const withoutUnset = (set: ChoiceSet): ChoiceSet => {
+  const out: ChoiceSet = {};
+  for (const name of CHOICE_IDS) if (typeof set[name] === "boolean") out[name] = set[name];
+  return out;
+};
+/** Who asked for a change of choices, and where the screen read them (as a task action's). */
+export type ChoiceOptions = { owner?: object; stamp?: GatewayStamp };
+/** Why a choice the gateway keeps isn't changed: the connection only reads. */
+export const CHOICE_READ_ONLY =
+  "This was turned on for all your devices on your gateway, and this connection only reads, so it can't be turned off here.";
+/** Why a choice the gateway keeps isn't changed: the gateway can't be reached now. */
+export const CHOICE_OFFLINE =
+  "This was turned on for all your devices on your gateway, which can't be reached now, so it can't be turned off yet. Try again once it's back.";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
 /**
@@ -1466,12 +1496,21 @@ export class ClawtrateClient {
   private gatewayBootId: string | null = null;
   /** The turn limit in force (F-100): the host's option, else the person's choice, else 50 minutes. */
   private turnLimitMs = DEFAULT_TURN_LIMIT_MS;
-  /** "Show external channel chats": the person's choice, off until they turn it on. */
+  /**
+   * "Show external channel chats" as shown: on when this device turned it on (`ownChoices`) or
+   * the gateway holds it on for this user (`choices.ts`, `shownChoice`); off by default.
+   */
   private showChannelChats = false;
-  /** "Show sessions from other tools": the person's choice, off until they turn it on. */
+  /** "Show sessions from other tools" as shown, as `showChannelChats`. */
   private showOtherToolSessions = false;
-  /** "Show the gateway's own bot": the person's choice, off until they turn it on. */
+  /** "Show the gateway's own bot" as shown, as `showChannelChats`. */
   private showGatewayBot = false;
+  /**
+   * This device's own choices, from the host's storage: those the person made on this device. A
+   * name is absent until they made one. One turned on shows whatever the gateway holds, and they
+   * fill the gateway's the first time this device writes there (`mergeChoices`).
+   */
+  private ownChoices: ChoiceSet = {};
   /** How often the person set each preference: a startup read begun before a change doesn't undo it. */
   private readonly preferenceSets = {
     turnLimit: 0,
@@ -1517,6 +1556,9 @@ export class ClawtrateClient {
   /** Reads and writes of the rail's arrangement in the order they were asked, and the latest shown. */
   private sidebarIssued = 0;
   private sidebarShown = 0;
+  /** As `sidebarIssued`, for the person's choices (`choices.ts`). */
+  private choicesIssued = 0;
+  private choicesShown = 0;
   /** Reads of the bot list in the order they were asked, and the latest shown. */
   private botsIssued = 0;
   private botsShown = 0;
@@ -2181,10 +2223,8 @@ export class ClawtrateClient {
           this.options.turnLimitMs === undefined
             ? Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null))
             : null;
-        const channelChats =
-          (await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null)) === "true";
-        const otherTools =
-          (await this.host.storage.get(OTHER_TOOLS_KEY).catch(() => null)) === "true";
+        const channelChats = kept(await this.host.storage.get(CHANNEL_CHATS_KEY).catch(() => null));
+        const otherTools = kept(await this.host.storage.get(OTHER_TOOLS_KEY).catch(() => null));
         // In the names' queue, so a rename sent meanwhile starts from what was read. A stop ends
         // the wait, so a read that never answers can't hold the queue for later starts and
         // renames. A failed or abandoned read is null: the names already held stay.
@@ -2201,8 +2241,7 @@ export class ClawtrateClient {
             null,
           ),
         );
-        const gatewayBot =
-          (await this.host.storage.get(GATEWAY_BOT_KEY).catch(() => null)) === "true";
+        const gatewayBot = kept(await this.host.storage.get(GATEWAY_BOT_KEY).catch(() => null));
         // A startup stopped while it read keeps nothing: the next one reads again. A preference
         // the person set meanwhile is newer than what was read.
         if (stops !== this.stops) return;
@@ -2212,20 +2251,20 @@ export class ClawtrateClient {
           validTurnLimit(limit)
         )
           this.turnLimitMs = limit * 60_000;
-        if (sets.channelChats === this.preferenceSets.channelChats)
-          this.showChannelChats = channelChats;
+        // A choice the person made meanwhile is newer than what was read.
+        const read: Record<string, boolean | undefined> = {
+          ...(sets.channelChats === this.preferenceSets.channelChats ? { channelChats } : {}),
+          ...(sets.otherTools === this.preferenceSets.otherTools ? { otherTools } : {}),
+          ...(sets.gatewayBot === this.preferenceSets.gatewayBot ? { gatewayBot } : {}),
+        };
         if (names !== null && sets.gatewayNames === this.preferenceSets.gatewayNames)
           this.gatewayNames = names;
-        if (sets.otherTools === this.preferenceSets.otherTools)
-          this.showOtherToolSessions = otherTools;
-        if (sets.gatewayBot === this.preferenceSets.gatewayBot) this.showGatewayBot = gatewayBot;
+        this.ownChoices = withoutUnset({ ...this.ownChoices, ...read } as ChoiceSet);
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
-          showChannelChats: this.showChannelChats,
-          showOtherToolSessions: this.showOtherToolSessions,
-          showGatewayBot: this.showGatewayBot,
         }));
+        this.applyChoices();
         if (options.resume === false) return;
         // Startup needs to open the socket without waiting for another client's credential write.
         // A write that lands during the read may or may not be in what it returned, so the record
@@ -2499,9 +2538,7 @@ export class ClawtrateClient {
       this.store.set({
         ...initialState,
         turnLimitMinutes: this.turnLimitMs / 60_000,
-        showChannelChats: this.showChannelChats,
-        showOtherToolSessions: this.showOtherToolSessions,
-        showGatewayBot: this.showGatewayBot,
+        ...this.ownShown(),
         connection: {
           ...initialConnectionState,
           deviceId: this.identity?.deviceId ?? null,
@@ -8098,14 +8135,15 @@ export class ClawtrateClient {
    * channels, or leave them out (the default). Kept for the next start. The rows are already
    * held, so the list changes at once, with nothing read again; a bot's main task always shows.
    */
-  async setShowChannelChats(on: boolean): Promise<void> {
+  async setShowChannelChats(on: boolean, options: ChoiceOptions = {}): Promise<void> {
     return this.inOrder("channelChats", async () => {
+      // On the gateway first when it keeps the person's choices; then kept here, as this device's.
+      await this.changeChoices({ channelChats: on }, options);
       // Kept first: a choice the host could not keep is not taken.
       await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
       this.preferenceSets.channelChats += 1;
-      this.showChannelChats = on;
-      this.store.update((state) => ({ ...state, showChannelChats: on }));
-      this.publishTasks();
+      this.ownChoices = { ...this.ownChoices, channelChats: on };
+      this.applyChoices();
     });
   }
 
@@ -8114,29 +8152,132 @@ export class ClawtrateClient {
    * tool opened with a bot (`origins.ts`), or leave them out (the default). Kept for the next
    * start, and applied to the rows already held, as `setShowChannelChats` is.
    */
-  async setShowOtherToolSessions(on: boolean): Promise<void> {
+  async setShowOtherToolSessions(on: boolean, options: ChoiceOptions = {}): Promise<void> {
     return this.inOrder("otherTools", async () => {
+      await this.changeChoices({ otherTools: on }, options);
       await this.host.storage.set(OTHER_TOOLS_KEY, String(on));
       this.preferenceSets.otherTools += 1;
-      this.showOtherToolSessions = on;
-      this.store.update((state) => ({ ...state, showOtherToolSessions: on }));
-      this.publishTasks();
+      this.ownChoices = { ...this.ownChoices, otherTools: on };
+      this.applyChoices();
     });
   }
 
   /**
    * "Show the gateway's own bot": list the gateway's default bot beside the others, or leave it
-   * out while another bot exists (the default). Kept for the next start. Only what the app shows
-   * changes; nothing is sent to the gateway.
+   * out while another bot exists (the default). Kept for the next start, and on the gateway as
+   * the person's choice (`changeChoices`). Only what the app shows changes; nothing about the bot
+   * on the gateway does.
    */
-  async setShowGatewayBot(on: boolean): Promise<void> {
+  async setShowGatewayBot(on: boolean, options: ChoiceOptions = {}): Promise<void> {
     return this.inOrder("gatewayBot", async () => {
+      await this.changeChoices({ gatewayBot: on }, options);
       // Kept first: a choice the host could not keep is not taken.
       await this.host.storage.set(GATEWAY_BOT_KEY, String(on));
       this.preferenceSets.gatewayBot += 1;
-      this.showGatewayBot = on;
-      this.store.update((state) => ({ ...state, showGatewayBot: on }));
+      this.ownChoices = { ...this.ownChoices, gatewayBot: on };
+      this.applyChoices();
     });
+  }
+
+  // The person's choices on the gateway (`choices.ts`; docs/decisions.md, "Your choices follow you")
+
+  /**
+   * Change choices on the gateway too, once it keeps this user's preferences, and only from a
+   * connection that already writes (never asking for access), bound to the gateway the screen
+   * showed (`stamp`). The caller keeps each on this device as well. Answers `device` when nothing
+   * was sent: the gateway keeps no choices for this connection, or this connection can't write and
+   * the change shows only here. Turning off what the gateway holds on can't be done from a
+   * connection that doesn't write it, since the gateway's on would still show: refused, in plain
+   * words, for a connection that only reads and while the gateway can't be reached.
+   */
+  async changeChoices(
+    change: ChoiceSet,
+    options: ChoiceOptions = {},
+  ): Promise<"gateway" | "device"> {
+    const held = this.state.choices;
+    if (held?.status !== "ok") return "device";
+    const names = CHOICE_IDS.filter((name) => typeof change[name] === "boolean");
+    const stays = names.some((name) => change[name] === false && heldChoice(held, name) === true);
+    const connected = this.state.connection.status === "connected";
+    if (!connected || this.options.readOnly || !this.holds(WRITE_SCOPE)) {
+      if (!stays) return "device";
+      throw new Error(connected ? CHOICE_READ_ONLY : CHOICE_OFFLINE);
+    }
+    const generation = this.generation;
+    const ctx = await this.settleTaskWrite(options.owner ?? null, options.stamp);
+    const issued = ++this.choicesIssued;
+    const next = await writeChoices(ctx, withoutUnset(change), "set");
+    if (generation === this.generation) this.setChoices(next, issued);
+    return "gateway";
+  }
+
+  /**
+   * The first-time merge (docs/decisions.md): this device's own choices, and `base` (the
+   * interface's own), fill the ones the gateway holds none of; where it holds one, the gateway's
+   * wins. Nothing to click and nothing asked: made only while the connection already writes, and
+   * nothing is sent when there is nothing to fill. A choice the gateway holds is never removed, so
+   * this fills each one at most once.
+   */
+  async mergeChoices(base: ChoiceSet = {}, options: ChoiceOptions = {}): Promise<void> {
+    const held = this.state.choices;
+    if (held?.status !== "ok" || this.options.readOnly || !this.holds(WRITE_SCOPE)) return;
+    if (this.state.connection.status !== "connected") return;
+    const fill = withoutUnset({ ...base, ...this.ownChoices });
+    if (CHOICE_IDS.every((name) => fill[name] === undefined || held.prefs?.on[name] !== undefined))
+      return;
+    const generation = this.generation;
+    const ctx = options.stamp
+      ? await this.settleTaskWrite(options.owner ?? null, options.stamp)
+      : this.actionContext(options.owner ?? null, this.epoch);
+    const issued = ++this.choicesIssued;
+    const next = await writeChoices(ctx, fill, "fill");
+    if (generation === this.generation) this.setChoices(next, issued);
+  }
+
+  /** The device's own choices shown, as after a switch of gateway: none of another gateway's. */
+  private ownShown(): Pick<
+    ClawtrateState,
+    "showChannelChats" | "showOtherToolSessions" | "showGatewayBot"
+  > {
+    this.showChannelChats = this.ownChoices.channelChats ?? false;
+    this.showOtherToolSessions = this.ownChoices.otherTools ?? false;
+    this.showGatewayBot = this.ownChoices.gatewayBot ?? false;
+    return {
+      showChannelChats: this.showChannelChats,
+      showOtherToolSessions: this.showOtherToolSessions,
+      showGatewayBot: this.showGatewayBot,
+    };
+  }
+
+  /** Show each choice: on when this device or the gateway has it on (`shownChoice`); the list follows. */
+  private applyChoices(): void {
+    const value = (name: ChoiceId) => shownChoice(this.state.choices, this.ownChoices[name], name);
+    const listed =
+      value("channelChats") !== this.showChannelChats ||
+      value("otherTools") !== this.showOtherToolSessions;
+    this.showChannelChats = value("channelChats");
+    this.showOtherToolSessions = value("otherTools");
+    this.showGatewayBot = value("gatewayBot");
+    this.store.update((state) => ({
+      ...state,
+      showChannelChats: this.showChannelChats,
+      showOtherToolSessions: this.showOtherToolSessions,
+      showGatewayBot: this.showGatewayBot,
+    }));
+    if (listed) this.publishTasks();
+  }
+
+  /** Show choices unless newer ones are shown, ordered by their own revision (`setSidebar`). */
+  private setChoices(choices: ChoicesState, issued: number): void {
+    const shown = this.state.choices;
+    if (choices.status === "ok" && shown?.status === "ok") {
+      const next = choicesRev(choices.prefs);
+      const now = choicesRev(shown.prefs);
+      if (next < now || (next === now && issued < this.choicesShown)) return;
+    }
+    this.choicesShown = Math.max(this.choicesShown, issued);
+    this.store.update((state) => ({ ...state, choices }));
+    this.applyChoices();
   }
 
   private turnLimitReached(key: string, runId: string): void {
@@ -8257,9 +8398,7 @@ export class ClawtrateClient {
       this.store.set({
         ...initialState,
         turnLimitMinutes: this.turnLimitMs / 60_000,
-        showChannelChats: this.showChannelChats,
-        showOtherToolSessions: this.showOtherToolSessions,
-        showGatewayBot: this.showGatewayBot,
+        ...this.ownShown(),
         connection: {
           ...initialConnectionState,
           target: this.target,
@@ -8337,9 +8476,7 @@ export class ClawtrateClient {
         : {
             ...initialState,
             turnLimitMinutes: this.turnLimitMs / 60_000,
-            showChannelChats: this.showChannelChats,
-            showOtherToolSessions: this.showOtherToolSessions,
-            showGatewayBot: this.showGatewayBot,
+            ...this.ownShown(),
           }),
       connection: {
         ...initialConnectionState,
@@ -9665,7 +9802,7 @@ export class ClawtrateClient {
     for (const key of Object.keys(this.state.transcripts)) {
       if (this.tracked(key)) void this.loadTranscript(key, true, resync);
     }
-    void this.loadSidebar(generation);
+    void this.loadPrefs(generation);
     void this.loadWaitingQuestions(generation);
     void this.loadWaitingApprovals(generation);
 
@@ -10445,8 +10582,11 @@ export class ClawtrateClient {
       }
       case "users.prefs.changed": {
         const keys = asRecord(event.payload)?.keys;
-        if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
-          void this.loadSidebar(this.generation);
+        if (
+          Array.isArray(keys) &&
+          (keys.includes(SIDEBAR_PREF_KEY) || keys.includes(CHOICES_PREF_KEY))
+        )
+          void this.loadPrefs(this.generation);
         this.usage.onPrefsChanged(keys);
         return;
       }
@@ -11029,21 +11169,66 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, sidebar }));
   }
 
-  /** Read the arrangement the gateway keeps; on any failure the rail keeps its own. */
-  private async loadSidebar(generation: number): Promise<void> {
+  /**
+   * Read the arrangement and the choices the gateway keeps, in one read; on any failure the rail
+   * and the choices keep their own. Then this device's own choices fill those the gateway holds
+   * none of (`mergeChoices`), on the connection this read went on.
+   */
+  private async loadPrefs(generation: number): Promise<void> {
     const issued = ++this.sidebarIssued;
+    const choicesIssued = ++this.choicesIssued;
     const epoch = this.epoch;
     try {
-      const sidebar = await this.readAgain(
-        () => readSidebar(this.actionContext(null)),
-        () => generation === this.generation && epoch === this.epoch,
+      // A read that failed once is asked again on the same connection (`readAgain`).
+      const result = asRecord(
+        await this.readAgain(
+          () =>
+            this.actionContext(null).request("users.prefs.get", {
+              keys: [SIDEBAR_PREF_KEY, CHOICES_PREF_KEY],
+            }),
+          () => generation === this.generation && epoch === this.epoch,
+        ),
       );
-      if (generation === this.generation) this.setSidebar(sidebar, issued);
+      if (generation !== this.generation) return;
+      if (result?.status !== "ok") {
+        this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
+        this.setChoices({ ...initialChoices, status: "unavailable" }, choicesIssued);
+        return;
+      }
+      const entries = asRecord(result.entries) ?? {};
+      this.setSidebar(sidebarFromEntries(entries), issued);
+      this.setChoices(choicesFromEntries(entries), choicesIssued);
     } catch (error) {
       this.logFailure("warn", "users.prefs.get", error);
       if (generation === this.generation && this.state.sidebar?.status !== "ok")
         this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
+      if (generation === this.generation && this.state.choices?.status !== "ok")
+        this.setChoices({ ...initialChoices, status: "unavailable" }, choicesIssued);
+      return;
     }
+    if (epoch !== this.epoch) return;
+    await this.mergeChoices().catch((error: unknown) =>
+      this.logFailure("warn", "users.prefs.set", error),
+    );
+  }
+
+  /**
+   * The first-time merge of the rail's arrangement (docs/decisions.md): this device's own,
+   * `base`, merged into the gateway's by `mergeSidebars`, with nothing to click and nothing
+   * asked. Made only while the connection already writes, bound to the gateway the screen showed
+   * (`stamp`). Answers whether the merge is done, so the interface keeps its copy as a cache only:
+   * false when this connection can't write it.
+   */
+  async mergeSidebar(base: SidebarPrefs, options: ChoiceOptions = {}): Promise<boolean> {
+    if (this.state.sidebar?.status !== "ok" || this.options.readOnly || !this.holds(WRITE_SCOPE))
+      return false;
+    if (this.state.connection.status !== "connected") return false;
+    const generation = this.generation;
+    const issued = ++this.sidebarIssued;
+    const ctx = await this.settleTaskWrite(options.owner ?? null, options.stamp);
+    const next = await mergeSidebar(ctx, base);
+    if (generation === this.generation) this.setSidebar(next, issued);
+    return true;
   }
 
   /**
