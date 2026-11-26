@@ -7,6 +7,9 @@
 //   name      bot: the bot names itself without the person typing the name
 //   slow      1: the hello doesn't come
 //   opening   unconfirmed: the first message couldn't be confirmed after its resend
+//             failed: the gateway couldn't run the first message (#663, #686's line)
+//             taken: someone else wrote first under the first message's key
+//   device    limited: a device without full control while the first run's questions are open
 //   from      juniper: the Main Bot started from what another bot knows
 //   existing  1: a Main Bot already made, on another device
 //   plugin    missing: the Main Bot's menu without Clawtrate's bot tools
@@ -28,6 +31,7 @@
     selfName: p.get("name") === "bot",
     slow: p.get("slow") === "1",
     opening: p.get("opening"),
+    limited: p.get("device") === "limited",
     from: p.get("from") === "juniper",
     existing: p.get("existing") === "1",
     plugin: p.get("plugin") === "missing" ? "missing" : "present",
@@ -38,13 +42,19 @@
   const START_NAME = "Clawtrate Main Bot";
 
   const esc = (s) =>
-    String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    String(s).replace(
+      /[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+    );
   const say = (text) => {
     live.textContent = "";
     setTimeout(() => (live.textContent = text), 30);
   };
   // A name as the gateway stores it: whitespace collapsed and trimmed (R26).
-  const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
+  const norm = (s) =>
+    String(s || "")
+      .replace(/\s+/g, " ")
+      .trim();
   const reduced = () => document.documentElement.dataset.motion === "reduce";
   const phone = () => document.documentElement.dataset.width === "phone";
 
@@ -72,7 +82,8 @@
   };
   function clawChoice(name) {
     const key = name.trim().normalize("NFC").toLowerCase();
-    const pick = (field, list) => list[fnv(`clawtrate-name\u0000${key}\u0000${field}`) % list.length];
+    const pick = (field, list) =>
+      list[fnv(`clawtrate-name\u0000${key}\u0000${field}`) % list.length];
     return {
       color: pick("color", Object.keys(COLORS)),
       body: pick("body", ["dome", "tall", "wide", "round"]),
@@ -185,15 +196,25 @@
 
   function header() {
     const b = mainBot();
-    const back = phone() ? `<button type="button" class="mb-round mb-back" aria-label="Back to bots">‹</button>` : "";
+    const back = phone()
+      ? `<button type="button" class="mb-round mb-back" aria-label="Back to bots">‹</button>`
+      : "";
     return (
       `<header class="mb-head">${back}<button type="button" class="mb-pill" data-testid="title-pill" aria-label="${esc(`${b.name}, Main Bot`)}">` +
       `${claw(b.name, 22, { star: true })}<span class="mb-pill-name" data-testid="title-name">${esc(b.name)}</span></button></header>`
     );
   }
 
-  const BRIEF =
-    "[Clawtrate] Clawtrate made you a moment ago as this person's Main Bot, and this is your first conversation. They haven't written yet, so say hello first. Lead, one short message and one question at a time: ask what they'd like to call you, then what they'd like help with, then offer to show them how you work in Clawtrate by starting a small task that makes a file. If they want to skip, stop the tour and help with that.";
+  // Pull request 4's brief, word for word as the design publishes it (section 3).
+  const BRIEF = [
+    "[Clawtrate] Clawtrate made you a moment ago as this person's Main Bot, and this is your first conversation. They haven't written yet, so say hello first.",
+    "Lead, one short message and one question at a time:\n" +
+      '1. Ask what they\'d like to call you. When they answer, write that name on the "- Name:" line of your IDENTITY.md and change nothing else there. Clawtrate shows it at once.\n' +
+      "2. Ask what they'd like help with. Before you look anything up, add one short note of what they said at the end of your USER.md, and leave the rest of the file as it is.\n" +
+      "3. Offer to show them how you work in Clawtrate, in about a minute. If they say yes, start one task with sessions_spawn and visible: true, with a short label and a full brief, that makes something small and useful for what they said they want help with and saves it as a file. Tell them they can watch it under your name in the sidebar. When its result comes back, hand them the file with a MEDIA: line.\n" +
+      "4. Then tell them they can ask you anything, or ask you to start something in its own task.",
+    "If they want to skip, or ask for something else at any point, stop the tour and help with that. Don't ask them to set anything up, and don't mention this message.",
+  ].join("\n\n");
 
   function item(it) {
     switch (it.kind) {
@@ -211,9 +232,13 @@
         return `<p class="mb-status" role="status"><span class="mb-dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(it.text)}</p>`;
       case "line": {
         const acts = (it.actions || [])
-          .map(([label, act]) => ` · <button type="button" class="mb-link" data-act="${act}">${esc(label)}</button>`)
+          .map(
+            ([label, act]) =>
+              ` · <button type="button" class="mb-link" data-act="${act}">${esc(label)}</button>`,
+          )
           .join("");
-        return `<p class="mb-line" data-testid="${it.testid || "app-line"}">${esc(it.text)}${acts}</p>`;
+        const words = typeof it.text === "function" ? it.text() : it.text;
+        return `<p class="mb-line" data-testid="${it.testid || "app-line"}">${esc(words)}${acts}</p>`;
       }
       case "app":
         return app(it);
@@ -240,7 +265,10 @@
   // Clawtrate's own messages in the conversation: never the bot's words.
   function app(it) {
     const buttons = (it.buttons || [])
-      .map(([label, act, variant]) => `<button type="button" class="mb-btn" data-variant="${variant || "quiet"}" data-act="${act}">${esc(label)}</button>`)
+      .map(
+        ([label, act, variant]) =>
+          `<button type="button" class="mb-btn" data-variant="${variant || "quiet"}" data-act="${act}">${esc(label)}</button>`,
+      )
       .join("");
     return (
       `<section class="mb-app" data-testid="${it.testid}" aria-label="From Clawtrate"><p class="mb-app-from">Clawtrate</p>` +
@@ -253,15 +281,18 @@
   function render() {
     const focus = document.activeElement?.id;
     const b = mainBot();
-    const skip = tour.active
-      ? `<div class="mb-skip-wrap"><button type="button" class="mb-chip" data-act="skip" data-testid="skip">Skip the tour</button></div>`
-      : "";
+    const skip =
+      tour.active && !state.limited
+        ? `<div class="mb-skip-wrap"><button type="button" class="mb-chip" data-act="skip" data-testid="skip">Skip the tour</button></div>`
+        : "";
     const pane =
       `<section class="mb-conv" aria-label="Conversation">${header()}` +
       `<div class="mb-transcript" data-testid="transcript"><div class="mb-transcript-inner">${items.map(item).join("")}</div></div>${skip}` +
-      `<form class="mb-composer" data-testid="composer"><label class="visually-hidden" for="mb-input">Message</label>` +
-      `<textarea id="mb-input" rows="1" placeholder="Message ${esc(b.name)}">${esc(composer.value)}</textarea>` +
-      `<button type="submit" class="mb-send" aria-label="Send" ${composer.value ? "" : "disabled"}>↑</button></form></section>`;
+      (state.limited
+        ? `<p class="mb-line mb-limited" data-testid="limited-line">You can write to your Main Bot here once it's set up.</p></section>`
+        : `<form class="mb-composer" data-testid="composer"><label class="visually-hidden" for="mb-input">Message</label>` +
+          `<textarea id="mb-input" rows="1" placeholder="Message ${esc(b.name)}">${esc(composer.value)}</textarea>` +
+          `<button type="submit" class="mb-send" aria-label="Send" ${composer.value ? "" : "disabled"}>↑</button></form></section>`);
     root.innerHTML = `<div class="mb-shell" data-phone="${phone()}">${phone() ? "" : rail()}${pane}</div>`;
     const t = root.querySelector(".mb-transcript");
     t.scrollTop = t.scrollHeight;
@@ -305,12 +336,16 @@
   }
 
   async function opening() {
-    items.push({ kind: "quiet" });
+    // A first row under the opening's key with other words is someone else's
+    // message, drawn as what it is; only the published brief is the quiet line.
+    if (state.opening === "taken") items.push({ kind: "user", text: "Hey, are you there?" });
+    else items.push({ kind: "quiet" });
     if (state.from)
       items.push({
         kind: "line",
         testid: "from-line",
-        text: `${mainBot().name} started from what Juniper knows: its memory, what it knows about you, 2 skills`,
+        text: () =>
+          `${mainBot().name} started from what Juniper knows: its memory, what it knows about you. 2 skills stay with Juniper`,
         actions: [
           ["See what", "see-what"],
           ["Undo", "undo-from"],
@@ -325,16 +360,30 @@
       });
       return render();
     }
+    if (state.opening === "taken") {
+      items.push({
+        kind: "line",
+        testid: "opening-line",
+        text: "Someone else wrote first in this conversation, so Clawtrate didn't send its first message.",
+      });
+      return render();
+    }
+    if (state.opening === "failed") {
+      items.push({
+        kind: "line",
+        testid: "failed-line",
+        text: "The gateway couldn't run this message. Your account can't be used with this bot's model.",
+        actions: [["Try again", "try-again"]],
+      });
+      return render();
+    }
     if (state.slow) {
       items.push({ kind: "status", text: `${mainBot().name} is writing…` });
       items.push({
         kind: "line",
         testid: "slow-line",
         text: "Your Main Bot hasn't answered yet.",
-        actions: [
-          ["Stop", "stop"],
-          ["Try again", "try-again"],
-        ],
+        actions: [["Stop", "stop"]],
       });
       return render();
     }
@@ -368,7 +417,8 @@
     items.push({ kind: "user", text });
     render();
     const step = tour.step;
-    if (!tour.active || step === "over") return botSays("Happy to help. What would you like to do?");
+    if (!tour.active || step === "over")
+      return botSays("Happy to help. What would you like to do?");
     if (step === "name") {
       // The bot writes its own name line. Clawtrate checks, silently, whether
       // the name is in what the person typed: that decides only the line's words.
@@ -378,10 +428,13 @@
     }
     if (step === "help") {
       tour.step = "offer";
-      return botSays("Got it, I'll remember that. Want me to show you how I work here? It takes about a minute.");
+      return botSays(
+        "Got it, I'll remember that. Want me to show you how I work here? It takes about a minute.",
+      );
     }
     if (step === "offer") {
-      if (/\b(no|skip|later)\b/i.test(text)) return endTour("Sure, no tour. I'm here whenever you need me.");
+      if (/\b(no|skip|later)\b/i.test(text))
+        return endTour("Sure, no tour. I'm here whenever you need me.");
       return startTask(holdTask);
     }
     return botSays("I'm on it.");
@@ -400,12 +453,14 @@
     items.push({
       kind: "line",
       testid: "named-line",
-      text: typed ? `Named ${read.name}` : `Your Main Bot renamed itself ${read.name}`,
+      text: typed ? `Renamed to ${read.name}` : `${before} renamed itself to ${read.name}`,
       actions: [["Undo", "undo-name"]],
     });
-    say(typed ? `Named ${read.name}` : `Your Main Bot renamed itself ${read.name}`);
+    say(typed ? `Renamed to ${read.name}` : `${before} renamed itself to ${read.name}`);
     tour.step = "help";
-    await botSays(`${read.name} it is. What would you like a hand with? Anything from your week to your code.`);
+    await botSays(
+      `${read.name} it is. What would you like a hand with? Anything from your week to your code.`,
+    );
   }
 
   async function startTask(hold) {
@@ -420,10 +475,15 @@
     if (hold) return;
     await wait(1200);
     task.state = "Done";
-    items.push({ kind: "bot", text: "It's done. Here's the checklist. You'll find the task under my name whenever you want it." });
+    items.push({
+      kind: "bot",
+      text: "It's done. Here's the checklist. You'll find the task under my name whenever you want it.",
+    });
     items.push({ kind: "file" });
     render();
-    await endTour("That's the tour. Ask me anything, or ask me to start something in its own task.");
+    await endTour(
+      "That's the tour. Ask me anything, or ask me to start something in its own task.",
+    );
   }
 
   async function endTour(text) {
@@ -449,7 +509,11 @@
     }
     if (act === "sign-in") {
       const card = items.find((x) => x.testid === "account-step");
-      Object.assign(card, { text: "Signing in… Finish on the page that opened.", buttons: [], note: "" });
+      Object.assign(card, {
+        text: "Signing in… Finish on the page that opened.",
+        buttons: [],
+        note: "",
+      });
       render();
       await wait(900);
       Object.assign(card, { text: `Signed in with ${t.textContent}.`, note: "" });
@@ -478,19 +542,24 @@
     }
     if (act === "undo-from") {
       const it = items.find((x) => x.testid === "from-line");
-      Object.assign(it, { text: "Removed what came from Juniper. Juniper keeps all of it.", actions: [] });
+      Object.assign(it, {
+        text: "Removed what came from Juniper. Juniper keeps all of it.",
+        actions: [],
+      });
       render();
       return say("Removed what came from Juniper");
     }
     if (act === "see-what") {
       const it = items.find((x) => x.testid === "from-line");
-      it.text = `${mainBot().name} started from what Juniper knows: 23 things it keeps in mind, how you like to be helped, and the skills Disk check and Weekly plan`;
+      it.text = () =>
+        `${mainBot().name} started from what Juniper knows: 23 things it keeps in mind and how you like to be helped. 1 line read like an instruction, so it wasn't brought. The skills Disk check and Weekly plan stay with Juniper`;
       it.actions = [["Undo", "undo-from"]];
       return render();
     }
     if (act === "try-again") {
-      items = items.filter((x) => x.kind !== "status" && x.testid !== "slow-line");
-      state.slow = false;
+      // The person's own press: the first message goes again as a new attempt.
+      items = items.filter((x) => x.testid !== "failed-line");
+      state.opening = null;
       return hello();
     }
     if (act === "stop") {

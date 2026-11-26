@@ -642,6 +642,7 @@
 }
 
 .mb-quiet .mb-brief {
+  white-space: pre-line;
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
@@ -747,4 +748,13 @@
 
 .mb-task-state[data-state="working"] {
   color: var(--accent);
+}
+
+/* A device without full control while the first run's questions are open. */
+.mb-limited {
+  width: min(var(--transcript-max), calc(100% - 2 * var(--space-4)));
+  margin: 0 auto var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
