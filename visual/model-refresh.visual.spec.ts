@@ -330,6 +330,8 @@ for (const size of [WIDE, PHONE]) {
       test("F-588: the Model menu with why nothing new was found open", async ({ page }) => {
         await openMenu(page, `${SETTINGS}&openclaw=behind&allowlist=1`, theme);
         await press(page);
+        await expect(why(page)).toBeVisible();
+        await expect(refreshRow(page)).toBeFocused();
         await page.keyboard.press("ArrowDown");
         await page.keyboard.press("Enter");
         await expect(panel(page)).toBeVisible();

@@ -203,13 +203,7 @@ export function Menu({
               </li>
             );
           case "panel":
-            return (
-              <li key={index} id={entry.id} className="menu-panel" role="none">
-                {entry.lines.map((line) => (
-                  <p key={line}>{line}</p>
-                ))}
-              </li>
-            );
+            return <MenuPanel key={index} id={entry.id} lines={entry.lines} />;
           case "rule":
             return <li key={index} className="menu-rule" role="separator" />;
           case "radio":
@@ -272,5 +266,20 @@ export function Menu({
         }
       })}
     </ul>
+  );
+}
+
+/** Text under a menu's line: as it shows, it comes into view in a menu that scrolls. */
+function MenuPanel({ id, lines }: { id: string; lines: string[] }) {
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, []);
+  return (
+    <li ref={ref} id={id} className="menu-panel" role="none">
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </li>
   );
 }

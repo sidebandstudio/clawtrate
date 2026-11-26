@@ -572,15 +572,23 @@ button.b-choice:hover {
   white-space: normal;
 }
 
-/* What a row's action found, and the more text under it: as wide as the menu, never wider, so
-   they wrap at its edge and don't widen it past its dialog (a phone's included). */
+/* What a row's action found, and the more text under it, use the menu's whole width. The line
+   widens a narrow menu as far as a section line may, never past its dialog; the more text never
+   widens it. On a phone, where the menu is as wide as its select, both fill it. */
 .b-menu .menu-line,
 .b-menu .menu-panel {
-  width: 0;
   min-width: 100%;
   font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--text-muted);
+}
+
+.b-menu .menu-line {
+  max-width: 260px;
+}
+
+.b-menu .menu-panel {
+  width: 0;
 }
 
 .b-menu .menu-line {

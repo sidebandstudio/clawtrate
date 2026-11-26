@@ -318,7 +318,12 @@ export function Select({
   const box = anchor?.element.closest("dialog")?.getBoundingClientRect() ?? null;
   const floor = Math.min(innerHeight, box?.bottom ?? innerHeight) - 8;
   const ceiling = Math.max(0, box?.top ?? 0) + 8;
-  const wanted = Math.min(MENU_MAX_HEIGHT, 10 + MENU_ROW * entries.length);
+  // A panel of text takes about a row for each of its lines.
+  const rowsTall = entries.reduce(
+    (n, entry) => n + (entry.kind === "panel" ? entry.lines.length : 1),
+    0,
+  );
+  const wanted = Math.min(MENU_MAX_HEIGHT, 10 + MENU_ROW * rowsTall);
   const below = rect ? floor - (rect.bottom + 6) : wanted;
   const above = rect ? rect.top - 6 - ceiling : 0;
   const under = below >= wanted || below >= above;
