@@ -50,6 +50,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
   "packages/core/src/mapping.ts:NOT_FILES": "static, six block types that are never a file",
   "packages/core/src/mapping.ts:KNOWN_FILES": "static, three block types that hand a file over",
+  "packages/core/src/mapping.ts:RUN_STATE_FIELDS":
+    "static, the two run-state fields of a session row",
+  "packages/core/src/not-run.ts:PREFIXES":
+    "static, three patterns the gateway puts before a reason",
   "packages/core/src/pictures.ts:SIGNATURES.image/png": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/jpeg": "static, one byte signature",
   "packages/core/src/pictures.ts:SIGNATURES.image/gif": "static, two byte signatures",

@@ -143,6 +143,21 @@ export const LIVE_VIEWS: Array<{
     ready: (page) => expect(page.getByTestId("stop-note")).toContainText("Finished before Stop"),
   },
   {
+    scene: "not-run-api-key",
+    rows: "F-480",
+    ready: (page) => expect(page.getByTestId("turn-error")).toContainText("Change account"),
+  },
+  {
+    scene: "not-run-other",
+    rows: "F-480",
+    ready: (page) => expect(page.getByTestId("turn-error")).toContainText("The gateway said"),
+  },
+  {
+    scene: "not-started",
+    rows: "",
+    ready: (page) => expect(page.getByTestId("turn-error")).toContainText("didn't start a run"),
+  },
+  {
     scene: "run-failed",
     rows: "F-102 F-433",
     ready: (page) => expect(page.getByTestId("turn-error")).toBeVisible(),
