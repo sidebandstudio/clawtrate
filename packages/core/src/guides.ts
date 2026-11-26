@@ -72,22 +72,37 @@ export function guidesLimit(answer: unknown, botId: string): number {
   );
 }
 
+/** Each configured bot's id in a config: its entry under `agents.entries`, or in `agents.list`. */
+function configuredBots(answer: unknown): string[] {
+  const agents = rec(rec(rec(answer).config).agents);
+  const listed = Array.isArray(agents.list) ? agents.list.map((each) => rec(each).id) : [];
+  return [...Object.keys(rec(agents.entries)), ...listed].filter(
+    (id): id is string => typeof id === "string" && id !== "",
+  );
+}
+
 /**
- * Each folder's limit (`guidesLimit`, the least of its bots'), from one `config.get`; null for
- * every folder when the config can't be read: the limit isn't known then, and 20,000 could be
- * more than the gateway keeps whole. A settings file the gateway can't read or parse is answered
- * `valid: false` with an empty `config`, and is not known either; nor is a saved revision the
- * gateway hasn't applied yet (`configRevisionHash` not `appliedConfigHash`, where it reports
- * both): what it runs may still have a lower limit. A config that sets no limit gives 20,000, the
- * gateway's own.
+ * Each folder's limit (`guidesLimit`, the least of its bots'), from one `config.get`, or null when
+ * it isn't established, for every folder: then 20,000 could be more than the gateway keeps whole,
+ * and Clawtrate writes nothing by itself. It is established only from the config the gateway runs
+ * with: `config.get` reads the settings file, and both OpenClaw 2026.10.6 and 2026.11.10 answer the
+ * revision of that file (`configRevisionHash`, null when it isn't valid) beside the revision the
+ * running gateway applied (`appliedConfigHash`, `config-get-response.ts`); both have to be there
+ * and the same. And only when `visible`, the bots the gateway lists to this connection, holds
+ * every bot that config names: `agents.list` leaves out the bots an operator's role doesn't
+ * allow, and one of those may read a folder shown here, with a lower limit. A config that sets no
+ * limit gives 20,000, the gateway's own.
  */
 export async function readGuidesLimits(
   request: Request,
+  visible: string[],
 ): Promise<(bots: string[]) => number | null> {
+  const shown = new Set(visible.map((id) => id.toLowerCase()));
   const known = (read: unknown) => {
-    const { config, valid, configRevisionHash: saved, appliedConfigHash: applied } = rec(read);
-    if (config === undefined || valid === false) return false;
-    return saved === undefined || applied === undefined || saved === applied;
+    const { config, configRevisionHash: saved, appliedConfigHash: applied } = rec(read);
+    if (config === undefined || typeof saved !== "string" || saved === "" || saved !== applied)
+      return false;
+    return configuredBots(read).every((id) => shown.has(id.toLowerCase()));
   };
   const answer = await request("config.get", {}).then(
     (read) => (known(read) ? read : null),
@@ -96,6 +111,91 @@ export async function readGuidesLimits(
   return (bots) =>
     answer === null ? null : Math.min(...bots.map((bot) => guidesLimit(answer, bot)));
 }
+
+/**
+ * The gateway's own record of the bots that held Clawtrate's section, from any of this person's
+ * devices: one user preference (`users.prefs`, per person, as the sidebar's arrangement and the
+ * budgets are), so a device that has never seen the gateway knows a section removed on another
+ * one was removed, and doesn't add it again. The device's own record can't carry that: it is kept
+ * on the device. `full`: the bots didn't all fit, so a bot not listed has no known history.
+ */
+export type GuidesHistory = { bots: string[]; full: boolean };
+export const GUIDES_HISTORY_KEY = "clawtrate.guides.history";
+/** The most the gateway keeps in one preference: 4,096 UTF-8 bytes of its JSON (`value-too-large`). */
+export const MAX_GUIDES_HISTORY_BYTES = 4_096;
+/** The most bots read from it, whatever its size. */
+export const MAX_GUIDES_HISTORY_BOTS = 512;
+/** Tries of a history save against another device's save at the same time (`conflict`). */
+const GUIDES_HISTORY_ATTEMPTS = 3;
+
+type HistoryRead = { known: true; history: GuidesHistory; raw: unknown } | { known: false };
+
+/** The history the gateway holds, as read now; never guessed when it can't be read. */
+export async function readGuidesHistory(request: Request): Promise<HistoryRead> {
+  const answer = rec(
+    await request("users.prefs.get", { keys: [GUIDES_HISTORY_KEY] }).catch(() => null),
+  );
+  // `no_durable_identity`, an unknown method, a failure: the history isn't known.
+  if (answer.status !== "ok") return { known: false };
+  const entries = rec(answer.entries);
+  const raw = Object.hasOwn(entries, GUIDES_HISTORY_KEY) ? entries[GUIDES_HISTORY_KEY] : null;
+  // None yet: no device of this person has recorded a bot on this gateway.
+  if (raw === null || raw === undefined)
+    return { known: true, history: { bots: [], full: false }, raw: null };
+  const fields = rec(raw);
+  if (fields.v !== 1 || !Array.isArray(fields.bots)) return { known: false };
+  const bots = fields.bots
+    .filter((bot): bot is string => typeof bot === "string" && bot !== "")
+    .slice(0, MAX_GUIDES_HISTORY_BOTS);
+  return {
+    known: true,
+    history: { bots, full: fields.full === true || bots.length < fields.bots.length },
+    raw,
+  };
+}
+
+/** The history as written: as many bots as fit in one preference, and `full` when some don't. */
+export function fitGuidesHistory(history: GuidesHistory): { v: 1; bots: string[]; full?: true } {
+  const bots = [...new Set(history.bots)].slice(0, MAX_GUIDES_HISTORY_BOTS);
+  let full = history.full || bots.length < new Set(history.bots).size;
+  const value = () =>
+    full ? { v: 1 as const, bots, full: true as const } : { v: 1 as const, bots };
+  while (utf8Bytes(JSON.stringify(value())).length > MAX_GUIDES_HISTORY_BYTES) {
+    bots.pop();
+    full = true;
+  }
+  return value();
+}
+
+/** Save `next` of the history read, compare-and-set; on another device's save, `next` of that. */
+async function saveGuidesHistory(
+  request: Request,
+  read: HistoryRead & { known: true },
+  next: (history: GuidesHistory) => GuidesHistory,
+): Promise<boolean> {
+  let current = read;
+  for (let attempt = 0; attempt < GUIDES_HISTORY_ATTEMPTS; attempt += 1) {
+    const value = fitGuidesHistory(next(current.history));
+    if (
+      current.raw !== null &&
+      JSON.stringify(value) === JSON.stringify(fitGuidesHistory(current.history))
+    )
+      return true;
+    const answer = rec(
+      await request("users.prefs.set", {
+        entries: { [GUIDES_HISTORY_KEY]: value },
+        expectedEntries: { [GUIDES_HISTORY_KEY]: current.raw ?? null },
+      }).catch(() => null),
+    );
+    if (answer.status === "ok") return true;
+    if (answer.status !== "conflict") return false;
+    const again = await readGuidesHistory(request);
+    if (!again.known) return false;
+    current = again;
+  }
+  return false;
+}
+
 /** The second line of the section: whose it is, and where it is turned off. */
 export const GUIDES_NOTICE =
   "<!-- Added by Clawtrate, which keeps it current. Turn it off in Clawtrate: Settings, Conversation. -->";
@@ -446,11 +546,16 @@ export async function readGuideFolders(
   request: Request,
   record: GuidesRecord | null,
 ): Promise<GuideFolder[]> {
-  const [listed, limits] = await Promise.all([
+  const [listed, history] = await Promise.all([
     request("agents.list", {}),
-    readGuidesLimits(request),
+    readGuidesHistory(request),
   ]);
   const folders = guideFolders(listed);
+  const limits = await readGuidesLimits(request, folders.flat());
+  // A bot another of this person's devices recorded counts as one this device knew, while on.
+  const knew = (bot: string) =>
+    record?.bots.includes(bot) === true ||
+    (record?.on !== false && history.known && history.history.bots.includes(bot));
   const refusedOf = (bots: string[]) =>
     bots.map((bot) => record?.refused?.[bot]).find((reason) => reason !== undefined) ?? null;
   return Promise.all(
@@ -465,7 +570,7 @@ export async function readGuideFolders(
               : "older"
             : found.kind === "changed"
               ? "changed"
-              : bots.some((bot) => record?.bots.includes(bot))
+              : bots.some(knew)
                 ? "removed"
                 : "none";
         return {
@@ -622,6 +727,14 @@ export async function applyGuidesChange(
   if (on && change.action === "remove")
     return { record, errors: [GUIDES_ON], wrote: false, missing: [] };
   const folders = guideFolders(await request("agents.list", {}));
+  // The gateway's history of the bots that held the section, from any of this person's devices.
+  const history = await readGuidesHistory(request);
+  const elsewhere = new Set(history.known ? history.history.bots : []);
+  /** Whether a folder's history is known: a bot not in a history that is full has none. */
+  const historyKnown = (bots: string[]) =>
+    history.known && (!history.history.full || bots.some((bot) => elsewhere.has(bot)));
+  /** Bots whose folder held a marked section in this change, for the gateway's history. */
+  const held = new Set<string>();
   const errors: string[] = [];
   const kept = new Set(on ? (record?.bots ?? []) : []);
   /** Only bots still on the gateway's list are kept, so the record holds no deleted bot's id. */
@@ -653,7 +766,9 @@ export async function applyGuidesChange(
       if (result.missing && byItself) missing.push(bots);
       if (result.written) wrote = true;
       const ours = result.written || (result.found.kind === "ours" && result.found.current);
-      return { ours, marked: ours || result.found.kind !== "none" };
+      const marked = ours || result.found.kind !== "none";
+      if (marked) for (const bot of bots) held.add(bot);
+      return { ours, marked };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (byItself && error instanceof GuideRefusedError)
@@ -668,8 +783,23 @@ export async function applyGuidesChange(
   // the next occasion. The person's own Add doesn't depend on it.
   const limits =
     change.action === "auto" || (change.action === "switch" && change.on)
-      ? await readGuidesLimits(request)
+      ? await readGuidesLimits(request, folders.flat())
       : () => GUIDES_LONG_CHARS;
+  /**
+   * The gateway's history after this change: the bots that held a marked section added to it.
+   * Turning the switch on starts it again from the bots that hold the section after it, as it
+   * does this device's record: the person asked for it on every bot. A history that can't be
+   * read isn't written; a save that fails leaves it as it was, and nothing is said.
+   */
+  const finish = async <T>(result: T): Promise<T> => {
+    if (history.known)
+      await saveGuidesHistory(request, history, (was) =>
+        change.action === "switch" && change.on
+          ? { bots: [...kept].filter((bot) => onList.has(bot)), full: false }
+          : { bots: [...was.bots, ...held], full: was.full },
+      );
+    return result;
+  };
   const addOrUpdate =
     (byItself: boolean, bots: string[]) => (file: string, found: FoundSection) => {
       if (found.kind !== "none" && !(found.kind === "ours" && !found.current)) return null;
@@ -689,7 +819,7 @@ export async function applyGuidesChange(
           );
         return found.kind === "ours" ? withoutSection(file) : null;
       });
-    return { record, errors, wrote, missing };
+    return finish({ record, errors, wrote, missing });
   }
   if (change.action === "add" || change.action === "replace") {
     const asked = change.action === "add" ? change.bots : [change.bot];
@@ -723,12 +853,12 @@ export async function applyGuidesChange(
       );
       if (ours) for (const bot of bots) kept.add(bot);
     }
-    return { record: onRecord(), errors, wrote, missing };
+    return finish({ record: onRecord(), errors, wrote, missing });
   }
   if (!on) {
     for (const bots of folders)
       await each(bots, (file, found) => (found.kind === "ours" ? withoutSection(file) : null));
-    return { record: { on: false, bots: [] }, errors, wrote, missing };
+    return finish({ record: { on: false, bots: [] }, errors, wrote, missing });
   }
   // On, by the switch or by itself: every folder this device never knew the section in gets it,
   // unless its file doesn't exist yet or that would make it too long; an older one is brought up
@@ -739,17 +869,28 @@ export async function applyGuidesChange(
   for (const bots of folders.filter((group) => only === undefined || group.includes(only))) {
     if (bots.some((bot) => refused.has(bot))) continue;
     // A section seen on an earlier attempt of this change, and gone on the retry, was just
-    // removed by someone: it is left, as one this device knew.
-    let known = bots.some((bot) => kept.has(bot));
+    // removed by someone: it is left, as one this device knew. By itself, so is one that another
+    // of this person's devices recorded (the gateway's history); and while that history isn't
+    // known, nothing is added by itself, since the section may have been removed elsewhere: it
+    // is tried again at the next occasion. Turning the switch on asks for it on every bot.
+    const byItself = change.action === "auto";
+    let known = bots.some((bot) => kept.has(bot) || (byItself && elsewhere.has(bot)));
+    const unknown = byItself && !historyKnown(bots);
     const { marked } = await each(
       bots,
       (file, found) => {
         if (found.kind !== "none") known = true;
-        return found.kind === "none" && known ? null : addOrUpdate(true, bots)(file, found);
+        return found.kind === "none" && (known || unknown)
+          ? null
+          : addOrUpdate(true, bots)(file, found);
       },
       true,
     );
-    if (marked || known) for (const bot of bots) kept.add(bot);
+    if (marked || known)
+      for (const bot of bots) {
+        kept.add(bot);
+        held.add(bot);
+      }
   }
-  return { record: onRecord(), errors, wrote, missing };
+  return finish({ record: onRecord(), errors, wrote, missing });
 }

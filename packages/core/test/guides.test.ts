@@ -31,6 +31,9 @@ import {
   readGuideFolders,
   withoutSection,
   withSection,
+  fitGuidesHistory,
+  GUIDES_HISTORY_KEY,
+  MAX_GUIDES_HISTORY_BYTES,
 } from "../src/guides.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
@@ -66,6 +69,8 @@ function fakeFiles(
   const hashOf = (key: string, content: string) => bytesHash[key] ?? hash(content);
   const sets: { agentId: string; content: string }[] = [];
   const faults = { conflicts: 0, refuse: new Set<string>(), unavailable: 0 };
+  /** The person's preferences on the gateway (`users.prefs`); `prefs.answer` other than ok: kept none. */
+  const prefs = { entries: new Map<string, unknown>(), answer: "ok" as string, sets: 0 };
   const folder = (agentId: string) => workspaces[agentId] ?? agentId;
   const request = async (method: string, params: unknown) => {
     const p = params as Record<string, unknown>;
@@ -116,11 +121,33 @@ function fakeFiles(
     }
     if (method === "config.get") {
       if (config === null) throw new Error("config.get failed");
-      return { config, hash: "h" };
+      // As both OpenClaw versions answer it: the file's revision beside the one the gateway applied.
+      return { config, hash: "h", valid: true, configRevisionHash: "r1", appliedConfigHash: "r1" };
+    }
+    if (method === "users.prefs.get") {
+      if (prefs.answer !== "ok") return { status: prefs.answer };
+      const keys = (p.keys as string[] | undefined) ?? [...prefs.entries.keys()];
+      return {
+        status: "ok",
+        entries: Object.fromEntries(
+          keys.filter((key) => prefs.entries.has(key)).map((key) => [key, prefs.entries.get(key)]),
+        ),
+      };
+    }
+    if (method === "users.prefs.set") {
+      if (prefs.answer !== "ok") return { status: prefs.answer };
+      const expected = (p.expectedEntries ?? {}) as Record<string, unknown>;
+      for (const [key, value] of Object.entries(expected))
+        if (JSON.stringify(prefs.entries.get(key) ?? null) !== JSON.stringify(value))
+          return { status: "conflict" };
+      for (const [key, value] of Object.entries(p.entries as Record<string, unknown>))
+        prefs.entries.set(key, value);
+      prefs.sets += 1;
+      return { status: "ok" };
     }
     throw new Error(`unknown method ${method}`);
   };
-  return { request, store, sets, faults };
+  return { request, store, sets, faults, prefs };
 }
 
 describe("the section", () => {
@@ -529,29 +556,37 @@ describe("the switch and the rows' changes", () => {
     const long = `# Pip\n${"x".repeat(9_500)}\n`;
     for (const change of [{ action: "auto" }, { action: "switch", on: true }] as GuidesChange[]) {
       const files = fakeFiles({ pip: long });
-      const request: typeof files.request = (method, params) =>
+      const request: (method: string, params: unknown) => Promise<unknown> = (method, params) =>
         method === "config.get"
-          ? Promise.resolve({ valid: false, config: {}, hash: "h", issues: [] })
+          ? Promise.resolve({
+              valid: false,
+              config: {},
+              hash: "h",
+              issues: [],
+              configRevisionHash: null,
+              appliedConfigHash: "r1",
+            })
           : files.request(method, params);
       const result = await applyGuidesChange(request, null, change);
       expect(files.sets, change.action).toEqual([]);
       expect(result.record?.bots ?? [], change.action).not.toContain("pip");
     }
-    // A saved revision the gateway hasn't applied yet: what it runs may still set a lower limit.
-    for (const applied of ["r1", "r2"]) {
+    // A saved revision the gateway hasn't applied yet, or an answer without both revisions: what
+    // it runs may still set a lower limit.
+    const revisions: [string, Record<string, unknown>, number][] = [
+      ["applied", { configRevisionHash: "r2", appliedConfigHash: "r2" }, 1],
+      ["not applied yet", { configRevisionHash: "r2", appliedConfigHash: "r1" }, 0],
+      ["no applied revision", { configRevisionHash: "r2", appliedConfigHash: null }, 0],
+      ["no revisions", {}, 0],
+    ];
+    for (const [name, fields, written] of revisions) {
       const files = fakeFiles({ pip: long });
-      const request: typeof files.request = (method, params) =>
+      const request: (method: string, params: unknown) => Promise<unknown> = (method, params) =>
         method === "config.get"
-          ? Promise.resolve({
-              valid: true,
-              config: {},
-              hash: "h",
-              configRevisionHash: "r2",
-              appliedConfigHash: applied,
-            })
+          ? Promise.resolve({ valid: true, config: {}, hash: "h", ...fields })
           : files.request(method, params);
       await applyGuidesChange(request, null, { action: "auto" });
-      expect(files.sets, applied).toHaveLength(applied === "r2" ? 1 : 0);
+      expect(files.sets, name).toHaveLength(written);
     }
     // The same file under a valid config that sets no limit is written.
     const valid = fakeFiles({ pip: long }, {}, {}, {});
@@ -559,12 +594,101 @@ describe("the switch and the rows' changes", () => {
     expect(valid.sets).toHaveLength(1);
     // The person's own Add doesn't depend on the limit.
     const asked = fakeFiles({ pip: long });
-    const askedRequest: typeof asked.request = (method, params) =>
+    const askedRequest: (method: string, params: unknown) => Promise<unknown> = (method, params) =>
       method === "config.get"
-        ? Promise.resolve({ valid: false, config: {}, hash: "h", issues: [] })
+        ? Promise.resolve({
+            valid: false,
+            config: {},
+            hash: "h",
+            issues: [],
+            configRevisionHash: null,
+            appliedConfigHash: "r1",
+          })
         : asked.request(method, params);
     await applyGuidesChange(askedRequest, null, { action: "add", bots: ["pip"] });
     expect(asked.sets).toHaveLength(1);
+  });
+
+  it("by itself, takes a folder's limit only when the config names no bot this connection isn't shown", async () => {
+    // Otto shares Pip's folder, with a lower limit, and the gateway doesn't list him here.
+    const file = `# Pip\n${"x".repeat(9_500)}\n`;
+    const hidden = {
+      agents: { list: [{ id: "pip" }, { id: "otto", bootstrapMaxChars: 10_000 }] },
+    };
+    for (const change of [{ action: "auto" }, { action: "switch", on: true }] as GuidesChange[]) {
+      const files = fakeFiles({ pip: file }, {}, {}, hidden);
+      await applyGuidesChange(files.request, null, change);
+      expect(files.sets, change.action).toEqual([]);
+    }
+    // Every bot the config names is listed: the folder's limit is theirs, and it fits.
+    const all = fakeFiles({ pip: file }, {}, {}, { agents: { list: [{ id: "Pip" }] } });
+    await applyGuidesChange(all.request, null, { action: "auto" });
+    expect(all.sets).toHaveLength(1);
+    // The person's Add doesn't depend on it.
+    const asked = fakeFiles({ pip: file }, {}, {}, hidden);
+    await applyGuidesChange(asked.request, null, { action: "add", bots: ["pip"] });
+    expect(asked.sets).toHaveLength(1);
+  });
+
+  it("a section removed on another device isn't added again by a device that never saw the gateway", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    // Device A adds it, and the gateway's history says Pip had it.
+    const a = await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+    // Device A turns it off: the section comes out, and the history still has Pip.
+    await applyGuidesChange(files.request, a.record, { action: "switch", on: false });
+    expect(files.store.get("pip")).toBe(BOT_FILE);
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+    // Device B has no record of this gateway: it writes nothing, and shows Pip's as removed.
+    const b = await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(files.sets).toHaveLength(2);
+    expect(b.record).toEqual({ on: true, bots: ["pip"] });
+    const [folder] = await readGuideFolders(files.request, null);
+    expect(folder?.state).toBe("removed");
+    // A section this device knew from before the gateway kept a history: Off records it there.
+    const before = fakeFiles({ otto: withSection(BOT_FILE) });
+    await applyGuidesChange(
+      before.request,
+      { on: true, bots: ["otto"] },
+      { action: "switch", on: false },
+    );
+    expect(before.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["otto"] });
+    // Turning the switch on there asks for it on every bot, and starts the history again.
+    await applyGuidesChange(files.request, null, { action: "switch", on: true });
+    expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+  });
+
+  it("by itself, adds nothing to a folder whose history the gateway can't say; turning it on, or Add, still does", async () => {
+    for (const answer of ["no_durable_identity", "full"]) {
+      const files = fakeFiles({ pip: BOT_FILE, otto: withSection(BOT_FILE) });
+      if (answer === "full")
+        files.prefs.entries.set(GUIDES_HISTORY_KEY, { v: 1, bots: ["otto"], full: true });
+      else files.prefs.answer = answer;
+      const result = await applyGuidesChange(files.request, null, { action: "auto" });
+      expect(files.sets, answer).toEqual([]);
+      expect(result.record?.bots, answer).toEqual(["otto"]);
+      await applyGuidesChange(files.request, null, { action: "switch", on: true });
+      expect(files.store.get("pip"), answer).toBe(withSection(BOT_FILE));
+    }
+    const asked = fakeFiles({ pip: BOT_FILE });
+    asked.prefs.answer = "no_durable_identity";
+    await applyGuidesChange(asked.request, null, { action: "add", bots: ["pip"] });
+    expect(asked.store.get("pip")).toBe(withSection(BOT_FILE));
+  });
+
+  it("the gateway's history fits one preference: past it, it says it is full", () => {
+    // 300 bots, under the count kept, but past the bytes the gateway keeps in one preference.
+    const bots = Array.from({ length: 300 }, (_, i) => `bot-with-a-long-name-${i}`);
+    const fitted = fitGuidesHistory({ bots, full: false });
+    expect(utf8Bytes(JSON.stringify(fitted)).length).toBeLessThanOrEqual(MAX_GUIDES_HISTORY_BYTES);
+    expect(fitted.full).toBe(true);
+    expect(fitted.bots).toEqual(bots.slice(0, fitted.bots.length));
+    expect(fitGuidesHistory({ bots: ["pip", "pip"], full: false })).toEqual({
+      v: 1,
+      bots: ["pip"],
+    });
   });
 
   it("a row's Remove of a section that changed since Settings read it says so, and leaves it", async () => {
@@ -728,7 +852,14 @@ describe("the guides in the client", () => {
     files: ReturnType<typeof fakeFiles>,
   ) => {
     // A gateway error the files give goes out as the gateway's own frame, with its code.
-    for (const method of ["agents.list", "agents.files.get", "agents.files.set", "config.get"])
+    for (const method of [
+      "agents.list",
+      "agents.files.get",
+      "agents.files.set",
+      "config.get",
+      "users.prefs.get",
+      "users.prefs.set",
+    ])
       gateway.handlers[method] = (params) =>
         files.request(method, params).catch((error: unknown) => {
           if (error instanceof GatewayProtocolRequestError)
@@ -1257,6 +1388,8 @@ describe("the guides in the client", () => {
       // A gateway with a record of its own keeps it whatever the default says.
       await storage.set(GUIDES_DEFAULT_KEY, JSON.stringify({ on: false, bots: [] }));
       other.store.set("otto", BOT_FILE);
+      // No device of this person's has recorded Otto there either, on the gateway.
+      other.prefs.entries.clear();
       await storage.set(guidesKey("gw-b"), JSON.stringify({ on: true, bots: [] }));
       await reconnect(client, gateway, storage);
       expect(other.store.get("otto")).toBe(withSection(BOT_FILE));
