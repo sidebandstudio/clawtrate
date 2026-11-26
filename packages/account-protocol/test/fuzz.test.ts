@@ -7,6 +7,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AccountProtocolError,
+  assembleRelink,
+  signRelink,
   assembleFreshStart,
   ListState,
   openFirstSecret,
@@ -258,6 +260,16 @@ describe("seeded fuzzing", () => {
     ).entry;
     fuzz(21, fresh, (b) => withMac.state.freshStart(b));
     fuzz(22, fresh, (b) => ListState.fromGenesis(CONTEXT, b));
+    const gatewayGone = withMac.state.append(
+      signRemoval(gateway.listKey, withMac.state, gateway.device.listKey),
+    );
+    const relink = assembleRelink(
+      gatewayGone,
+      mac.device.listKey,
+      signRelink(world.connector, gatewayGone, mac.device.listKey),
+      signRelink(mac.listKey, gatewayGone, mac.device.listKey),
+    );
+    fuzz(23, relink, (b) => gatewayGone.append(b));
   }, 120_000);
 
   it("the session request", () => {

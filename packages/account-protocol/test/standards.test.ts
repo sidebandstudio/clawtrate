@@ -132,7 +132,10 @@ interface Edge {
   readonly publicKey: string;
   readonly message: string;
   readonly signature: string;
+  /** Whether this package accepts it. */
   readonly accept: boolean;
+  /** Whether OpenSSL accepts it: the same, except where OpenSSL is laxer than strict verifiers. */
+  readonly openssl: boolean;
 }
 
 function makeEdges(): Edge[] {
@@ -144,12 +147,14 @@ function makeEdges(): Edge[] {
     name: string,
     sig: { publicKey: Uint8Array; signature: Uint8Array },
     accept: boolean,
+    openssl = accept,
   ) => ({
     name,
     publicKey: toHex(sig.publicKey),
     message: toHex(message),
     signature: toHex(sig.signature),
     accept,
+    openssl,
   });
   return [
     edge("an honest signature", { publicKey, signature: honest }, true),
@@ -175,6 +180,9 @@ function makeEdges(): Edge[] {
     edge("R = r*B plus a point of order 8", crafted(seed, message, 123456789n, true), false),
     edge("R the point of order 8 itself", crafted(seed, message, 0n, true), false),
     edge("R = r*B, crafted honestly", crafted(seed, message, 987654321n, false), true),
+    // OpenSSL accepts R as the identity point; libsodium and strict verifiers refuse it, so this
+    // package refuses it too: what it accepts, every one of them accepts.
+    edge("R the identity point (order 1)", crafted(seed, message, 0n, false), false, true),
   ];
 }
 
@@ -188,12 +196,13 @@ describe("Ed25519 edge cases", () => {
     expect(made).toEqual(JSON.parse(readFileSync(EDGES, "utf8")));
   });
 
-  it("are accepted by this package exactly when OpenSSL accepts them", () => {
+  it("are accepted by this package only when OpenSSL accepts them too, and refused where strict verifiers refuse", () => {
     const edges = JSON.parse(readFileSync(EDGES, "utf8")) as Edge[];
     for (const v of edges) {
       const args = [fromHex(v.publicKey), fromHex(v.message), fromHex(v.signature)] as const;
-      expect([v.name, openssl(...args)]).toEqual([v.name, v.accept]);
+      expect([v.name, openssl(...args)]).toEqual([v.name, v.openssl]);
       expect([v.name, verifyEd25519(...args)]).toEqual([v.name, v.accept]);
+      if (v.accept) expect(v.openssl).toBe(true);
     }
   });
 });

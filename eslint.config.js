@@ -112,7 +112,8 @@ export default tseslint.config(
           "ExportNamedDeclaration",
           "ImportExpression",
         ].map((node) => ({
-          selector: `${node}[source.value=/account-protocol\\u002Fsrc/]`,
+          // Any spelling of the path: "/src", "//src", "/./src".
+          selector: `${node}[source.value=/account-protocol(\\u002F+\\.?)*\\u002F+src/]`,
           message: "import @clawtrate/account-protocol, not its src/ files",
         })),
       ],

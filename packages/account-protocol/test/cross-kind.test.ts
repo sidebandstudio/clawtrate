@@ -12,6 +12,8 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   AccountProtocolError,
+  assembleRelink,
+  signRelink,
   assembleFreshStart,
   readEntryUnverified,
   encodeRemovalNotice,
@@ -170,6 +172,21 @@ function kinds(): Kind[] {
   );
   if (firstPicked.outcome !== "confirmed") throw new Error("expected confirmed");
   const serverFirst = firstPicked.result.firstEntry!;
+  // K as the connector again: a re-link of the gateway device's role, after it removed itself.
+  const gatewayGone = appended(
+    plus,
+    signRemoval(
+      asConnector.gatewayDevice.listKey,
+      plus.state,
+      asConnector.gatewayDevice.device.listKey,
+    ),
+  );
+  const relink = assembleRelink(
+    gatewayGone.state,
+    other.device.listKey,
+    signRelink(asConnector.connector, gatewayGone.state, other.device.listKey),
+    signRelink(other.listKey, gatewayGone.state, other.device.listKey),
+  );
 
   // K as the answering member: the add entry, the confirmation, a refusal, a removal, a restore.
   const asMember = makeWorld({ gatewayDevice: K });
@@ -326,6 +343,13 @@ function kinds(): Kind[] {
       signatures: 2,
       label: 32,
       verify: asEntry("server-first", null, (b) => ListState.fromGenesis(CONTEXT, b)),
+    },
+    {
+      name: "re-link entry",
+      bytes: relink,
+      signatures: 2,
+      label: 32,
+      verify: asEntry("relink", null, (b) => gatewayGone.state.append(b)),
     },
   ];
 }
