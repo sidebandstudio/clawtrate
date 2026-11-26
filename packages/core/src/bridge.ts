@@ -154,7 +154,7 @@ export type BridgeCommand =
   | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** Clawtrate's guides in the bots' `AGENTS.md`, read now (guides.ts). */
   | { type: "readBotGuides" }
-  /** Add, replace or remove them, or answer "Not now", on the gateway `stamp` names (admin). */
+  /** The switch, or a row's Add or Replace, on the gateway `stamp` names (admin). */
   | { type: "changeBotGuides"; change: GuidesChange; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
@@ -883,26 +883,19 @@ function guidesChange(value: unknown): GuidesChange {
   const change =
     value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
   switch (change.action) {
+    case "switch":
+      if (typeof change.on !== "boolean") throw new Error("invalid guides change");
+      return { action: "switch", on: change.on };
     case "add":
-      if (
-        !Array.isArray(change.bots) ||
-        change.bots.length > 512 ||
-        typeof change.newBots !== "boolean"
-      )
+      if (!Array.isArray(change.bots) || change.bots.length > 512)
         throw new Error("invalid guides change");
-      return { action: "add", bots: change.bots.map(botId), newBots: change.newBots };
+      return { action: "add", bots: change.bots.map(botId) };
     case "replace":
       if (typeof change.shown !== "string" || change.shown.length > MAX_CHANGED_SECTION_CHARS)
         throw new Error("invalid guides change");
       return { action: "replace", bot: botId(change.bot), shown: change.shown };
-    case "remove":
-    case "decline":
-      return { action: change.action };
-    case "newBots":
-      if (typeof change.on !== "boolean") throw new Error("invalid guides change");
-      return { action: "newBots", on: change.on };
     default:
-      // "update" is the client's own, after a connect: never a viewer's.
+      // "auto" is the client's own, after a connect and for a bot just made: never a viewer's.
       throw new Error("invalid guides change");
   }
 }

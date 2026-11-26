@@ -1,5 +1,5 @@
 // The guide checks: Clawtrate's guides as a marked section at the top of a bot's AGENTS.md
-// (packages/core/src/guides.ts, #532, #544), on the scenario check's instance, with the account
+// (packages/core/src/guides.ts, #532, #544, #628), on the scenario check's instance, with the account
 // checks' admin client. Each check asserts from the gateway's own answers and from the scripted
 // model's record of the system prompt each session's latest request carried. Pip's file is put
 // back as it was at the end, whatever happens.
@@ -85,11 +85,8 @@ export const GUIDE_CHECKS: GuideCheck[] = [
     async run(h, world) {
       world.original = await readFile(h);
       const request = (method: string, params: unknown) => h.admin.request(method, params);
-      const { errors } = await applyGuidesChange(request, null, {
-        action: "add",
-        bots: [BOT],
-        newBots: false,
-      });
+      // Clawtrate's own change, as after a connect with admin access, kept to Pip: nothing asked.
+      const { errors } = await applyGuidesChange(request, null, { action: "auto", bot: BOT });
       expect(errors.length === 0, `the write failed: ${errors.join("; ")}`);
       const after = await readFile(h);
       expect(
@@ -152,9 +149,8 @@ export const GUIDE_CHECKS: GuideCheck[] = [
       const original = await readFile(h, PARTNER);
       try {
         const { errors } = await applyGuidesChange(request, null, {
-          action: "add",
-          bots: [PARTNER],
-          newBots: false,
+          action: "auto",
+          bot: PARTNER,
         });
         expect(errors.length === 0, `the write failed: ${errors.join("; ")}`);
         const key = `agent:${PARTNER}:guides-hand-off-${randomUUID().slice(0, 8)}`;
@@ -229,10 +225,10 @@ export const GUIDE_CHECKS: GuideCheck[] = [
     },
   },
   {
-    name: "removing the section gives the file back byte for byte, with its earlier hash",
+    name: "turning it off gives the file back byte for byte, with its earlier hash",
     async run(h, world) {
       const request = (method: string, params: unknown) => h.admin.request(method, params);
-      const { errors } = await applyGuidesChange(request, null, { action: "remove" });
+      const { errors } = await applyGuidesChange(request, null, { action: "switch", on: false });
       expect(errors.length === 0, `the removal failed: ${errors.join("; ")}`);
       const after = await readFile(h);
       expect(after.content === world.original!.content, "the file isn't what it was");

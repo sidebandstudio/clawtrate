@@ -1712,7 +1712,7 @@ button.b-open > .icon {
   margin-top: var(--space-5);
 }
 
-/* "How bots work in Clawtrate" (BotGuides.tsx): one row per instructions file. */
+/* "Bots know how Clawtrate works" (BotGuides.tsx): a row per instructions file that needs a look. */
 .bot-guides-list {
   display: grid;
   gap: 10px;
@@ -1721,28 +1721,14 @@ button.b-open > .icon {
   list-style: none;
 }
 
-.bot-guides-list .bot-guides-check,
-.bot-guides-check {
-  margin: 0;
-}
-
-.bot-guides-check > span,
 .bot-guides-row {
   display: grid;
   gap: 1px;
   min-width: 0;
-}
-
-.bot-guides-row {
   padding-left: 2px;
 }
 
-.bot-guides-check small,
 .bot-guides-row small {
   color: var(--text-muted);
   font-size: var(--text-sm);
-}
-
-.bot-guides > .bot-guides-check {
-  margin-top: 14px;
 }

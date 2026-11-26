@@ -1,6 +1,7 @@
-// Clawtrate's guides as a marked section in a bot's AGENTS.md (#532, #544): render, find,
-// replace and remove, each bot's state, the changes the person asks for, and the client's
-// guards. The gateway's half is the guide checks of `pnpm scenarios` (guides-checks.ts).
+// Clawtrate's guides as a marked section in a bot's AGENTS.md (#532, #544, #628): render, find,
+// replace and remove, each bot's state, the switch and the rows' changes, Clawtrate's own change
+// with nothing asked, and the client's guards. The gateway's half is the guide checks of
+// `pnpm scenarios` (guides-checks.ts).
 import { describe, expect, it } from "vitest";
 import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
 import { VOICE_GUIDE, WHERE_GUIDE } from "../src/guide-text.ts";
@@ -9,6 +10,7 @@ import {
   applyGuidesChange,
   GUIDES_NOT_RECORDED,
   GUIDES_NOT_SAVED,
+  GUIDES_OFF,
   findSection,
   GUIDES_LONG_CHARS,
   GUIDES_PINNED_SHA256,
@@ -28,7 +30,9 @@ import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import type { BotGuidesAnswer, GuidesChange } from "../src/guides.ts";
 import { grantingGateway, openTask } from "./client-harness.ts";
-import { memoryStorage, tokenKey, until } from "./fake-gateway.ts";
+import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { ClawtrateClient } from "../src/client.ts";
+import { FAST } from "./client-harness.ts";
 import { URL_A } from "./client-harness.ts";
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
@@ -173,7 +177,7 @@ describe("the bots' states", () => {
       },
       { shared: "pip" },
     );
-    const folders = await readGuideFolders(request, { bots: ["juniper"], newBots: true });
+    const folders = await readGuideFolders(request, { on: true, bots: ["juniper"] });
     const state = Object.fromEntries(folders.map((f) => [f.bots.join("+"), f.state]));
     expect(state).toEqual({
       "pip+shared": "current",
@@ -205,15 +209,11 @@ describe("the bots' states", () => {
   });
 });
 
-describe("the changes the person asks for", () => {
-  it("adds to the chosen bots only, once per shared folder, and records them", async () => {
+describe("the switch and the rows' changes", () => {
+  it("a row's Add adds to its bots only, once per shared folder, and records them", async () => {
     const files = fakeFiles({ pip: BOT_FILE, shared: BOT_FILE, otto: BOT_FILE }, { shared: "pip" });
-    const result = await applyGuidesChange(files.request, null, {
-      action: "add",
-      bots: ["pip"],
-      newBots: true,
-    });
-    expect(result).toEqual({ record: { bots: ["pip", "shared"], newBots: true }, errors: [] });
+    const result = await applyGuidesChange(files.request, null, { action: "add", bots: ["pip"] });
+    expect(result).toEqual({ record: { on: true, bots: ["pip", "shared"] }, errors: [] });
     expect(files.sets).toHaveLength(1);
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
     expect(files.store.get("otto")).toBe(BOT_FILE);
@@ -222,9 +222,10 @@ describe("the changes the person asks for", () => {
   it("never writes over a section changed outside Clawtrate, unless asked to replace it", async () => {
     const changed = withSection(BOT_FILE).replace("Be warm", "Be cold");
     const files = fakeFiles({ pip: changed });
-    await applyGuidesChange(files.request, null, { action: "add", bots: ["pip"], newBots: false });
-    await applyGuidesChange(files.request, null, { action: "update" });
-    await applyGuidesChange(files.request, null, { action: "remove" });
+    await applyGuidesChange(files.request, null, { action: "add", bots: ["pip"] });
+    await applyGuidesChange(files.request, null, { action: "auto" });
+    await applyGuidesChange(files.request, null, { action: "switch", on: true });
+    await applyGuidesChange(files.request, null, { action: "switch", on: false });
     expect(files.sets).toEqual([]);
     const shown = (findSection(changed) as { text: string }).text;
     await applyGuidesChange(files.request, null, { action: "replace", bot: "pip", shown });
@@ -244,7 +245,7 @@ describe("the changes the person asks for", () => {
     expect(result.errors).toEqual([
       "pip: AGENTS.md changed again after Settings read it, so nothing was replaced. Look at its section again before you replace it.",
     ]);
-    expect(result.record).toEqual({ bots: [], newBots: false });
+    expect(result.record).toEqual({ on: true, bots: [] });
   });
 
   it("takes Replace from a viewer only with the section it was shown, at most what Show shows", () => {
@@ -260,39 +261,42 @@ describe("the changes the person asks for", () => {
       ).toThrow("invalid guides change");
   });
 
-  it("takes New bots too from a viewer only as on or off", () => {
+  it("takes the switch from a viewer only as on or off, and never Clawtrate's own change", () => {
     const command = {
       type: "changeBotGuides",
-      change: { action: "newBots", on: false },
+      change: { action: "switch", on: false },
       stamp: { gatewayId: "gw-a", target: 1 },
     };
     expect(parseBridgeCommand(command)).toEqual(command);
-    for (const on of [undefined, "false", 0])
-      expect(() => parseBridgeCommand({ ...command, change: { action: "newBots", on } })).toThrow(
-        "invalid guides change",
-      );
+    for (const change of [
+      ...[undefined, "false", 0].map((on) => ({ action: "switch", on })),
+      { action: "auto" },
+      { action: "auto", bot: "pip" },
+      // #542's changes, from a viewer of an earlier build: none of them is taken.
+      { action: "remove" },
+      { action: "decline" },
+      { action: "newBots", on: true },
+      { action: "update" },
+    ])
+      expect(() => parseBridgeCommand({ ...command, change })).toThrow("invalid guides change");
   });
 
-  it("brings an older version up to date after a connect, and leaves the rest", async () => {
-    const files = fakeFiles({
-      otto: olderSection() + BOT_FILE,
-      pip: BOT_FILE,
-      juniper: GUIDES_SECTION,
-    });
-    const result = await applyGuidesChange(files.request, null, { action: "update" });
+  it("brings an older version up to date by itself, and leaves a current one", async () => {
+    const files = fakeFiles({ otto: olderSection() + BOT_FILE, juniper: GUIDES_SECTION });
+    const result = await applyGuidesChange(files.request, null, { action: "auto" });
     expect(result.errors).toEqual([]);
     expect(files.sets.map((set) => set.agentId)).toEqual(["otto"]);
     expect(findSection(files.store.get("otto")!)).toMatchObject({ kind: "ours", current: true });
   });
 
-  it("removes it from every file as it was, and forgets the bots so none reads as removed", async () => {
+  it("turned off, takes it out of every file as it was, and forgets the bots so none reads as removed", async () => {
     const files = fakeFiles({ pip: withSection(BOT_FILE), otto: withSection(""), main: BOT_FILE });
     const result = await applyGuidesChange(
       files.request,
-      { bots: ["pip", "otto"], newBots: true },
-      { action: "remove" },
+      { on: true, bots: ["pip", "otto"] },
+      { action: "switch", on: false },
     );
-    expect(result.record).toEqual({ bots: [], newBots: false });
+    expect(result.record).toEqual({ on: false, bots: [] });
     expect(files.store.get("pip")).toBe(BOT_FILE);
     expect(files.store.get("otto")).toBe("");
     expect(files.sets).toHaveLength(2);
@@ -301,38 +305,62 @@ describe("the changes the person asks for", () => {
   it("reads again and retries once when the file changed meanwhile, then says it left it", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
     files.faults.conflicts = 1;
-    await applyGuidesChange(files.request, null, { action: "add", bots: ["pip"], newBots: false });
+    await applyGuidesChange(files.request, null, { action: "add", bots: ["pip"] });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
     const again = fakeFiles({ pip: BOT_FILE });
     again.faults.conflicts = 2;
-    const result = await applyGuidesChange(again.request, null, {
-      action: "add",
-      bots: ["pip"],
-      newBots: false,
-    });
+    const result = await applyGuidesChange(again.request, null, { action: "add", bots: ["pip"] });
     expect(result.errors).toEqual([
       "pip: AGENTS.md kept changing while Clawtrate wrote it, so it was left as it is.",
     ]);
-    expect(result.record).toEqual({ bots: [], newBots: false });
+    expect(result.record).toEqual({ on: true, bots: [] });
     expect(again.store.get("pip")).toBe(BOT_FILE);
+    // Clawtrate's own change reads again and retries once too.
+    const own = fakeFiles({ pip: BOT_FILE });
+    own.faults.conflicts = 1;
+    await applyGuidesChange(own.request, null, { action: "auto" });
+    expect(own.store.get("pip")).toBe(withSection(BOT_FILE));
   });
 
-  it("answers Not now without asking the gateway anything", async () => {
-    const result = await applyGuidesChange(
-      () => Promise.reject(new Error("nothing may be asked")),
-      null,
-      { action: "decline" },
-    );
-    expect(result).toEqual({ record: { bots: [], newBots: false }, errors: [] });
+  it("while it is off, adds and replaces nothing, whoever asks, and asks the gateway nothing", async () => {
+    const off = { on: false, bots: [] };
+    const nothing = () => Promise.reject(new Error("nothing may be asked"));
+    expect(await applyGuidesChange(nothing, off, { action: "auto" })).toEqual({
+      record: off,
+      errors: [],
+    });
+    for (const change of [
+      { action: "add", bots: ["pip"] },
+      { action: "replace", bot: "pip", shown: "" },
+    ] as GuidesChange[])
+      expect(await applyGuidesChange(nothing, off, change)).toEqual({
+        record: off,
+        errors: [GUIDES_OFF],
+      });
   });
 
   it("keeps a record it can read back, and refuses one it can't", () => {
-    expect(parseGuidesRecord(JSON.stringify({ bots: ["pip", 3], newBots: true }))).toEqual({
+    expect(parseGuidesRecord(JSON.stringify({ on: true, bots: ["pip", 3] }))).toEqual({
+      on: true,
       bots: ["pip"],
-      newBots: true,
+    });
+    expect(parseGuidesRecord(JSON.stringify({ on: false, bots: [] }))).toEqual({
+      on: false,
+      bots: [],
     });
     for (const bad of [null, "", "{", "[]", JSON.stringify({ bots: ["pip"] })])
       expect(parseGuidesRecord(bad)).toBeNull();
+  });
+
+  it("reads a record from before the switch as off only when it holds no yes, so an update never turns a no into a yes", () => {
+    const old = (bots: string[], newBots: boolean) =>
+      parseGuidesRecord(JSON.stringify({ bots, newBots }));
+    // "Not now", "Remove from all bots", or New bots too turned off with nothing added.
+    expect(old([], false)).toEqual({ on: false, bots: [] });
+    // Any yes: bots it added, or New bots too.
+    expect(old(["pip"], false)).toEqual({ on: true, bots: ["pip"] });
+    expect(old([], true)).toEqual({ on: true, bots: [] });
+    expect(old(["pip"], true)).toEqual({ on: true, bots: ["pip"] });
   });
 });
 
@@ -356,6 +384,24 @@ describe("the guides in the client", () => {
     gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
     return gateway;
   };
+  const recordIn = (storage: { data: Map<string, string> }) =>
+    parseGuidesRecord(storage.data.get(guidesKey("gw-a")) ?? null);
+  /** Connect again, and wait until Clawtrate's own change after it has had its turn. */
+  const reconnect = async (
+    client: Awaited<ReturnType<typeof openTask>>["client"],
+    gateway: { dropAll(): void },
+  ) => {
+    const was = client.state.connection.connectedAt;
+    gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.connectedAt !== was,
+    );
+    // A read waits for a guide change on its way; give the one after the connect time to start.
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    return client.readBotGuides();
+  };
 
   /** Admin storage whose saves of this gateway's guides record fail ("disk full"). */
   const diskFull = (record: Record<string, unknown>) => {
@@ -367,75 +413,193 @@ describe("the guides in the client", () => {
     return storage;
   };
 
-  it("takes a yes back only once it is saved: when it can't be, nothing is removed and it says so", async () => {
-    const files = fakeFiles({ pip: withSection(BOT_FILE) });
-    const saved = { bots: ["pip"], newBots: true };
-    const storage = diskFull(saved);
+  it("on a connect with admin access, adds it to every bot without one, with no call from the screen, and records them", async () => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: null, shared: BOT_FILE }, { shared: "pip" });
+    const storage = adminStorage();
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
-      const shown = await client.readBotGuides();
-      for (const change of [
-        { action: "remove" },
-        { action: "newBots", on: false },
-      ] as GuidesChange[]) {
-        const after = await client.changeBotGuides(change, shown.stamp);
-        expect(after.errors, change.action).toEqual([GUIDES_NOT_SAVED]);
-        expect(files.sets).toEqual([]);
-        // The rows say what the files and this device hold: the section is still Pip's.
-        expect(after.folders[0]?.state).toBe("current");
-        expect(after.record).toEqual(saved);
-      }
-      expect(parseGuidesRecord(storage.data.get(guidesKey("gw-a")) ?? null)).toEqual(saved);
+      const read = await reconnect(client, gateway);
+      expect(read.folders.map((f) => [f.bots.join("+"), f.state])).toEqual([
+        ["pip+shared", "current"],
+        ["otto", "current"],
+      ]);
+      expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+      expect(files.store.get("otto")).toBe(withSection(""));
+      expect(files.sets).toHaveLength(2);
+      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "shared", "otto"] });
+      // Again on the next connect: nothing left to write.
+      await reconnect(client, gateway);
+      expect(files.sets).toHaveLength(2);
     } finally {
       client.stop();
     }
   });
 
-  it("after a Remove that was saved, a file that refused keeps its section, offered again, and new bots get nothing", async () => {
+  it("never adds back a section this device added and that is gone: it reads removed, and Add puts it back", async () => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ on: true, bots: ["pip"] }));
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const read = await reconnect(client, gateway);
+      expect(read.folders.map((f) => [f.bots[0], f.state])).toEqual([
+        ["pip", "removed"],
+        ["otto", "current"],
+      ]);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+      expect(files.sets.map((set) => set.agentId)).toEqual(["otto"]);
+      // And on every connect after.
+      await reconnect(client, gateway);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+      const added = await client.changeBotGuides({ action: "add", bots: ["pip"] }, read.stamp);
+      expect(added.folders[0]?.state).toBe("current");
+      expect(added.errors).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("records a section it finds, another device's too, so one cleared later reads removed and is left", async () => {
+    // A device with no record for this gateway: Pip's section came from elsewhere, and Marlow's
+    // was changed since by the bot.
+    const changed = withSection(BOT_FILE).replace("Be warm", "Be cold");
+    const files = fakeFiles({ pip: withSection(BOT_FILE), otto: BOT_FILE, marlow: changed });
+    const storage = adminStorage();
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      await reconnect(client, gateway);
+      // It can't tell a bot never given the section from one cleared elsewhere: Otto gets it.
+      expect(files.store.get("otto")).toBe(withSection(BOT_FILE));
+      expect(files.store.get("marlow")).toBe(changed);
+      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "otto", "marlow"] });
+      // Someone takes Pip's and Marlow's out outside Clawtrate: from now on this device's record
+      // applies to both.
+      files.store.set("pip", BOT_FILE);
+      files.store.set("marlow", BOT_FILE);
+      const read = await reconnect(client, gateway);
+      for (const bot of ["pip", "marlow"]) {
+        expect(read.folders.find((f) => f.bots[0] === bot)?.state, bot).toBe("removed");
+        expect(files.store.get(bot), bot).toBe(BOT_FILE);
+      }
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("with the switch off writes nothing, across a reconnect and a reopen of the app", async () => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: olderSection() + BOT_FILE });
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ on: false, bots: [] }));
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const read = await reconnect(client, gateway);
+      expect(read.record).toEqual({ on: false, bots: [] });
+      expect(read.folders.map((f) => f.state)).toEqual(["none", "older"]);
+    } finally {
+      client.stop();
+    }
+    // The app opened again on this device, the same gateway.
+    const reopened = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await reopened.start();
+    try {
+      await until(() => reopened.state.connection.status === "connected");
+      await reconnect(reopened, gateway);
+      expect(files.sets).toEqual([]);
+      expect(recordIn(storage)).toEqual({ on: false, bots: [] });
+    } finally {
+      reopened.stop();
+    }
+  });
+
+  it("turning it off saves off first and takes the section out of every bot; on adds it again; neither asks", async () => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
+    const storage = adminStorage();
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const on = await reconnect(client, gateway);
+      expect(on.folders.map((f) => f.state)).toEqual(["current", "current"]);
+      const off = await client.changeBotGuides({ action: "switch", on: false }, on.stamp);
+      expect(off.errors).toEqual([]);
+      expect(off.record).toEqual({ on: false, bots: [] });
+      expect([files.store.get("pip"), files.store.get("otto")]).toEqual([BOT_FILE, BOT_FILE]);
+      // Off: nothing reads removed, and nothing comes back by itself.
+      expect(off.folders.map((f) => f.state)).toEqual(["none", "none"]);
+      await reconnect(client, gateway);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+      const again = await client.changeBotGuides({ action: "switch", on: true }, off.stamp);
+      expect(again.record).toEqual({ on: true, bots: ["pip", "otto"] });
+      expect(again.folders.map((f) => f.state)).toEqual(["current", "current"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("turns the switch only once it is saved: when it can't be, nothing is written and it says so", async () => {
+    for (const [saved, on] of [
+      [{ on: true, bots: ["pip"] }, false],
+      [{ on: false, bots: [] }, true],
+    ] as const) {
+      const files = fakeFiles({ pip: on ? BOT_FILE : withSection(BOT_FILE) });
+      const storage = diskFull(saved);
+      const { client, gateway } = await openTask({ storage });
+      withFiles(gateway, files);
+      try {
+        const shown = await client.readBotGuides();
+        const writes = files.sets.length;
+        const after = await client.changeBotGuides({ action: "switch", on }, shown.stamp);
+        expect(after.errors, `on: ${on}`).toEqual([GUIDES_NOT_SAVED]);
+        expect(files.sets).toHaveLength(writes);
+        // The rows say what the files and this device hold.
+        expect(after.folders[0]?.state).toBe(on ? "none" : "current");
+        expect(after.record).toEqual(saved);
+        expect(recordIn(storage)).toEqual(saved);
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
+  it("after an Off that was saved, a file that refused keeps its section, and nothing is added after", async () => {
     const files = fakeFiles({ pip: withSection(BOT_FILE), otto: withSection(BOT_FILE) });
     files.faults.refuse.add("otto");
     const storage = adminStorage();
-    await storage.set(guidesKey("gw-a"), JSON.stringify({ bots: ["pip", "otto"], newBots: true }));
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ on: true, bots: ["pip", "otto"] }));
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
       const shown = await client.readBotGuides();
-      const after = await client.changeBotGuides({ action: "remove" }, shown.stamp);
+      const after = await client.changeBotGuides({ action: "switch", on: false }, shown.stamp);
       expect(after.errors).toEqual([expect.stringMatching(/^otto: .*exceeds its write bound$/)]);
       expect(files.store.get("pip")).toBe(BOT_FILE);
       expect(after.folders.map((f) => [f.bots[0], f.state])).toEqual([
         ["pip", "none"],
         ["otto", "current"],
       ]);
-      expect(parseGuidesRecord(storage.data.get(guidesKey("gw-a")) ?? null)).toEqual({
-        bots: [],
-        newBots: false,
-      });
+      expect(recordIn(storage)).toEqual({ on: false, bots: [] });
+      await reconnect(client, gateway);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
     } finally {
       client.stop();
     }
   });
 
-  it("gives a yes on the files first and records it last, and says so truly when it can't record it", async () => {
+  it("a row's Add changes the files first and records them last, and says so truly when it can't record it", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
-    const storage = diskFull({ bots: [], newBots: false });
+    const storage = diskFull({ on: true, bots: ["pip"] });
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
       const shown = await client.readBotGuides();
-      const after = await client.changeBotGuides(
-        { action: "add", bots: ["pip"], newBots: true },
-        shown.stamp,
-      );
+      expect(shown.folders[0]?.state).toBe("removed");
+      const after = await client.changeBotGuides({ action: "add", bots: ["pip"] }, shown.stamp);
       expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
       expect(after.errors).toEqual([GUIDES_NOT_RECORDED]);
       expect(after.folders[0]?.state).toBe("current");
-      // Not recorded: this device keeps nothing current and adds nothing to new bots.
-      expect(after.record).toEqual({ bots: [], newBots: false });
-      const on = await client.changeBotGuides({ action: "newBots", on: true }, after.stamp);
-      expect(on.errors).toEqual([GUIDES_NOT_SAVED]);
-      expect(on.record?.newBots).toBe(false);
     } finally {
       client.stop();
     }
@@ -443,28 +607,27 @@ describe("the guides in the client", () => {
 
   it("adds, reads back and records, on the gateway the screen was read from", async () => {
     const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
-    const { client, gateway, storage } = await openTask({ storage: adminStorage() });
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ on: true, bots: ["pip", "otto"] }));
+    const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
       const shown = await client.readBotGuides();
-      expect(shown.folders.map((f) => f.state)).toEqual(["none", "none"]);
+      expect(shown.folders.map((f) => f.state)).toEqual(["removed", "removed"]);
       expect(shown.stamp.gatewayId).toBe("gw-a");
-      const after = await client.changeBotGuides(
-        { action: "add", bots: ["pip"], newBots: true },
-        shown.stamp,
-      );
+      const after = await client.changeBotGuides({ action: "add", bots: ["pip"] }, shown.stamp);
       expect(after.folders.map((f) => [f.bots[0], f.state])).toEqual([
         ["pip", "current"],
-        ["otto", "none"],
+        ["otto", "removed"],
       ]);
       expect(after.errors).toEqual([]);
-      expect(parseGuidesRecord(storage.data.get(guidesKey("gw-a")) ?? null)).toEqual({
-        bots: ["pip"],
-        newBots: true,
-      });
+      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "otto"] });
       // A stale screen's stamp sends nothing.
       await expect(
-        client.changeBotGuides({ action: "remove" }, { ...shown.stamp, gatewayId: "gw-b" }),
+        client.changeBotGuides(
+          { action: "switch", on: false },
+          { ...shown.stamp, gatewayId: "gw-b" },
+        ),
       ).rejects.toThrow(/another gateway/);
       expect(files.sets).toHaveLength(1);
     } finally {
@@ -472,30 +635,23 @@ describe("the guides in the client", () => {
     }
   });
 
-  it("writes nothing below admin, or from a read-only viewer, and Not now or New bots too off writes nothing anywhere", async () => {
+  it("writes nothing below admin, or from a read-only viewer, by itself or when asked", async () => {
     for (const options of [
       { held: INTERACTIVE_SCOPES },
       { storage: adminStorage(), client: { readOnly: true } },
     ]) {
-      const files = fakeFiles({ pip: BOT_FILE });
+      const files = fakeFiles({ pip: BOT_FILE, otto: olderSection() + BOT_FILE });
       const { client, gateway } = await openTask(options);
       withFiles(gateway, files);
       try {
-        const shown = await client.readBotGuides();
-        await expect(
-          client.changeBotGuides({ action: "add", bots: ["pip"], newBots: false }, shown.stamp),
-        ).rejects.toThrow(/admin/i);
-        expect((await client.changeBotGuides({ action: "decline" }, shown.stamp)).record).toEqual({
-          bots: [],
-          newBots: false,
-        });
-        // A yes for new bots needs admin too; taking it back never does.
-        await expect(
-          client.changeBotGuides({ action: "newBots", on: true }, shown.stamp),
-        ).rejects.toThrow(/admin/i);
-        expect(
-          (await client.changeBotGuides({ action: "newBots", on: false }, shown.stamp)).record,
-        ).toEqual({ bots: [], newBots: false });
+        const shown = await reconnect(client, gateway);
+        for (const change of [
+          { action: "add", bots: ["pip"] },
+          { action: "switch", on: true },
+          { action: "switch", on: false },
+          { action: "replace", bot: "pip", shown: "" },
+        ] as GuidesChange[])
+          await expect(client.changeBotGuides(change, shown.stamp)).rejects.toThrow(/admin/i);
         expect(files.sets).toEqual([]);
       } finally {
         client.stop();
@@ -503,61 +659,18 @@ describe("the guides in the client", () => {
     }
   });
 
-  it("brings an older section up to date after a connect with admin, where this device said yes, and only then", async () => {
-    for (const [admin, said] of [
-      [true, true],
-      [false, true],
-      [true, false],
-    ] as const) {
-      const files = fakeFiles({ otto: olderSection() + BOT_FILE });
-      const storage = admin ? adminStorage() : undefined;
-      if (said)
-        await (storage ?? memoryStorage({})).set(
-          guidesKey("gw-a"),
-          JSON.stringify({ bots: ["otto"], newBots: false }),
-        );
-      const { client, gateway } = await openTask({
-        ...(storage ? { storage } : {}),
-      });
-      withFiles(gateway, files);
-      try {
-        gateway.dropAll();
-        await until(() => client.state.connection.status === "connected");
-        if (admin && said) await until(() => files.sets.length === 1);
-        else await new Promise<void>((resolve) => setTimeout(resolve, 100));
-        expect(files.sets.length).toBe(admin && said ? 1 : 0);
-      } finally {
-        client.stop();
-      }
-    }
-  });
-
-  it("brings nothing up to date from a read-only viewer, even where this device said yes", async () => {
-    const files = fakeFiles({ otto: olderSection() + BOT_FILE });
-    const storage = adminStorage();
-    await storage.set(guidesKey("gw-a"), JSON.stringify({ bots: ["otto"], newBots: false }));
-    const { client, gateway } = await openTask({ storage, client: { readOnly: true } });
-    withFiles(gateway, files);
-    try {
-      gateway.dropAll();
-      await until(() => client.state.connection.status === "connected");
-      await new Promise<void>((resolve) => setTimeout(resolve, 150));
-      expect(files.sets).toEqual([]);
-    } finally {
-      client.stop();
-    }
-  });
-
   it("refuses a change from a viewer that went away before it was sent", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
-    const { client, gateway } = await openTask({ storage: adminStorage() });
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ on: true, bots: ["pip"] }));
+    const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
       const viewer = createBridgeSession(client);
       const shown = (await viewer.apply({ type: "readBotGuides" })) as BotGuidesAnswer;
       const change = viewer.apply({
         type: "changeBotGuides",
-        change: { action: "add", bots: ["pip"], newBots: false },
+        change: { action: "add", bots: ["pip"] },
         stamp: shown.stamp,
       });
       viewer.dispose();
@@ -568,7 +681,7 @@ describe("the guides in the client", () => {
     }
   });
 
-  it("never changes the voice plugin's own guide: adding the section sends nothing to the plugin", async () => {
+  it("never changes the voice plugin's own guide: the switch sends nothing to the plugin", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
     const gateway = grantingGateway();
     const reply = gateway.connectReply;
@@ -598,16 +711,12 @@ describe("the guides in the client", () => {
       return voice(on);
     };
     try {
-      const shown = await client.readBotGuides();
+      const shown = await reconnect(client, gateway);
       expect(shown.voicePlugin).toBe(true);
-      const after = await client.changeBotGuides(
-        { action: "add", bots: ["pip"], newBots: false },
-        shown.stamp,
-      );
-      expect(voiceSets).toEqual([]);
-      expect(after.voicePlugin).toBe(true);
-      expect(after.folders[0]?.state).toBe("current");
-      await client.changeBotGuides({ action: "remove" }, after.stamp);
+      expect(shown.folders[0]?.state).toBe("current");
+      const off = await client.changeBotGuides({ action: "switch", on: false }, shown.stamp);
+      expect(off.voicePlugin).toBe(true);
+      await client.changeBotGuides({ action: "switch", on: true }, off.stamp);
       expect(voiceSets).toEqual([]);
     } finally {
       client.stop();
@@ -628,9 +737,9 @@ describe("files Clawtrate leaves alone", () => {
     const bytes = Uint8Array.from([...`# Otto\ncaf\xe9 r\xe8gles\n`].map((c) => c.charCodeAt(0)));
     const text = "# Otto\ncaf\uFFFD r\uFFFDgles\n";
     for (const [content, change] of [
-      [text, { action: "add", bots: ["otto"], newBots: false }],
-      [withSection(text), { action: "remove" }],
-      [olderSection() + text, { action: "update" }],
+      [text, { action: "add", bots: ["otto"] }],
+      [olderSection() + text, { action: "add", bots: ["otto"] }],
+      [withSection(text), { action: "switch", on: false }],
       [
         withSection(text).replace("Be warm", "Be cold"),
         { action: "replace", bot: "otto", shown: "" },
@@ -643,6 +752,14 @@ describe("files Clawtrate leaves alone", () => {
         "otto: otto's AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it.",
       ]);
     }
+    // Clawtrate's own change, and the switch turned on, leave it without a word: Settings says why.
+    for (const content of [text, olderSection() + text])
+      for (const change of [{ action: "auto" }, { action: "switch", on: true }] as GuidesChange[]) {
+        const files = fakeFiles({ otto: content }, {}, { otto: sha256Hex(bytes) });
+        const result = await applyGuidesChange(files.request, null, change);
+        expect(files.sets).toEqual([]);
+        expect(result.errors).toEqual([]);
+      }
   });
 
   it("still shows the section a file that isn't plain UTF-8 holds, and offers nothing that writes", async () => {
@@ -650,15 +767,15 @@ describe("files Clawtrate leaves alone", () => {
     const bytesHash = sha256Hex(utf8Bytes("not the bytes of the text"));
     const text = `${withSection("# Otto\ncaf\uFFFD\n")}`;
     const files = fakeFiles({ otto: text }, {}, { otto: bytesHash });
-    const [folder] = await readGuideFolders(files.request, { bots: ["otto"], newBots: true });
+    const [folder] = await readGuideFolders(files.request, { on: true, bots: ["otto"] });
     expect(folder).toMatchObject({ state: "current", utf8: false, error: null });
     for (const change of [
-      { action: "add", bots: ["otto"], newBots: true },
-      { action: "remove" },
-      { action: "update" },
+      { action: "add", bots: ["otto"] },
+      { action: "switch", on: false },
+      { action: "auto" },
       { action: "replace", bot: "otto", shown: "" },
     ] as GuidesChange[]) {
-      await applyGuidesChange(files.request, { bots: ["otto"], newBots: true }, change);
+      await applyGuidesChange(files.request, { on: true, bots: ["otto"] }, change);
       expect(files.sets, change.action).toEqual([]);
     }
   });
@@ -687,12 +804,13 @@ describe("files Clawtrate leaves alone", () => {
       expect(findSection(file), name).toMatchObject({ kind: "changed", replaceable: false });
       for (const change of [
         { action: "replace", bot: "pip", shown: "" },
-        { action: "add", bots: ["pip"], newBots: true },
-        { action: "remove" },
-        { action: "update" },
+        { action: "add", bots: ["pip"] },
+        { action: "switch", on: false },
+        { action: "switch", on: true },
+        { action: "auto" },
       ] as GuidesChange[]) {
         const files = fakeFiles({ pip: file });
-        await applyGuidesChange(files.request, { bots: ["pip"], newBots: true }, change);
+        await applyGuidesChange(files.request, null, change);
         expect(files.sets, `${name}: ${change.action}`).toEqual([]);
       }
       const [folder] = await readGuideFolders(fakeFiles({ pip: file }).request, null);
@@ -708,11 +826,12 @@ describe("files Clawtrate leaves alone", () => {
     const newer = newerSection() + BOT_FILE;
     expect(findSection(newer)).toMatchObject({ kind: "ours", current: true });
     for (const change of [
-      { action: "update" },
-      { action: "add", bots: ["pip"], newBots: true },
+      { action: "auto" },
+      { action: "switch", on: true },
+      { action: "add", bots: ["pip"] },
     ] as GuidesChange[]) {
       const files = fakeFiles({ pip: newer });
-      await applyGuidesChange(files.request, { bots: ["pip"], newBots: true }, change);
+      await applyGuidesChange(files.request, null, change);
       expect(files.sets).toEqual([]);
     }
     const [folder] = await readGuideFolders(fakeFiles({ pip: newer }).request, null);
@@ -743,21 +862,21 @@ describe("files Clawtrate leaves alone", () => {
       ["juniper", false],
       ["marlow", false],
     ]);
-    // The background update and New bots too leave a file the section would push past the limit.
-    const older = fakeFiles({ pip: olderSection("## Old\n") + long });
-    await applyGuidesChange(older.request, { bots: ["pip"], newBots: true }, { action: "update" });
-    expect(older.sets).toEqual([]);
-    const newBot = fakeFiles({ pip: long });
-    await applyGuidesChange(newBot.request, null, {
-      action: "add",
-      bots: ["pip"],
-      newBots: true,
-      background: true,
-    });
-    expect(newBot.sets).toEqual([]);
-    // The person's own Add still adds it.
+    // Clawtrate's own change, for every bot or a new one, and the switch turned on leave a file
+    // the section would push past the limit, an older section's included.
+    for (const content of [long, olderSection("## Old\n") + long])
+      for (const change of [
+        { action: "auto" },
+        { action: "auto", bot: "pip" },
+        { action: "switch", on: true },
+      ] as GuidesChange[]) {
+        const files = fakeFiles({ pip: content });
+        await applyGuidesChange(files.request, null, change);
+        expect(files.sets).toEqual([]);
+      }
+    // The person's own Add on its row still adds it.
     const asked = fakeFiles({ pip: long });
-    await applyGuidesChange(asked.request, null, { action: "add", bots: ["pip"], newBots: true });
+    await applyGuidesChange(asked.request, null, { action: "add", bots: ["pip"] });
     expect(asked.sets).toHaveLength(1);
   });
 
@@ -773,20 +892,12 @@ describe("files Clawtrate leaves alone", () => {
     expect(files.sets).toEqual([]);
     expect(replaced.record?.bots ?? []).toEqual([]);
     const changed = fakeFiles({ otto: withSection(BOT_FILE).replace("Be warm", "Be cold") });
-    const added = await applyGuidesChange(changed.request, null, {
-      action: "add",
-      bots: ["otto"],
-      newBots: false,
-    });
+    const added = await applyGuidesChange(changed.request, null, { action: "add", bots: ["otto"] });
     expect(changed.sets).toEqual([]);
     expect(added.record?.bots).toEqual([]);
     // Already current: recorded, with nothing written.
     const current = fakeFiles({ otto: withSection(BOT_FILE) });
-    const kept = await applyGuidesChange(current.request, null, {
-      action: "add",
-      bots: ["otto"],
-      newBots: false,
-    });
+    const kept = await applyGuidesChange(current.request, null, { action: "add", bots: ["otto"] });
     expect(current.sets).toEqual([]);
     expect(kept.record?.bots).toEqual(["otto"]);
   });
@@ -802,13 +913,13 @@ describe("files Clawtrate leaves alone", () => {
         moved: true,
       });
       for (const change of [
-        { action: "add", bots: ["pip"], newBots: true },
-        { action: "update" },
+        { action: "add", bots: ["pip"] },
+        { action: "auto" },
         { action: "replace", bot: "pip", shown: file },
-        { action: "remove" },
+        { action: "switch", on: false },
       ] as GuidesChange[]) {
         const files = fakeFiles({ pip: file });
-        await applyGuidesChange(files.request, { bots: ["pip"], newBots: true }, change);
+        await applyGuidesChange(files.request, null, change);
         expect(files.sets, `${name}: ${change.action}`).toEqual([]);
       }
       const [folder] = await readGuideFolders(fakeFiles({ pip: file }).request, null);
@@ -820,8 +931,11 @@ describe("files Clawtrate leaves alone", () => {
       const files = fakeFiles({ pip: file });
       await applyGuidesChange(
         files.request,
-        { bots: ["pip"], newBots: true },
-        { action: "remove" },
+        { on: true, bots: ["pip"] },
+        {
+          action: "switch",
+          on: false,
+        },
       );
       expect(files.store.get("pip")).toBe(
         file.startsWith("\uFEFF") ? `\uFEFF${BOT_FILE}` : BOT_FILE,

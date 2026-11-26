@@ -1,6 +1,7 @@
-// Clawtrate's guides in a bot's instructions (#532, #544). With the person's yes, an admin
-// connection writes one marked section at the top of a bot's `AGENTS.md` (`agents.files.set`,
-// held to the hash it read): how to talk to the person, and what a task is in Clawtrate. The
+// Clawtrate's guides in a bot's instructions (#532, #544, #628). On by default, with nothing
+// asked first, an admin connection writes one marked section at the top of each bot's `AGENTS.md`
+// (`agents.files.set`, held to the hash it read): how to talk to the person, and what a task is in
+// Clawtrate; one switch in Settings turns it off, and takes it out again. The
 // gateway puts `AGENTS.md` into every run's prompt (main conversations, tasks, routines, the
 // helpers a bot starts), and the section's place at the top keeps it whole when the gateway
 // cuts a long file. No plugin, no config key and no grant are involved.
@@ -38,7 +39,7 @@ export const guidesWouldBeCut = (file: string) => file.trimEnd().length > GUIDES
 /** The second line of the section: whose it is, and where it is turned off. */
 export const GUIDES_NOTICE =
   "<!-- Added by Clawtrate, which keeps it current. Turn it off in Clawtrate: Settings, Conversation. -->";
-/** The guides themselves, as the person reads them before saying yes. */
+/** The guides themselves, as Settings shows them (Read it). */
 export const GUIDES_TEXT = `${VOICE_GUIDE}\n\n${WHERE_GUIDE}`;
 
 const END = "<!-- clawtrate:guides end -->";
@@ -184,13 +185,14 @@ const isHash = (value: unknown): value is string =>
 
 /**
  * Where a bot's section stands:
- * - `none`: not there, and not added from this device before;
+ * - `none`: not there, and this device never knew it there; while the switch is on it is added
+ *   by itself, unless that would make the file too long;
  * - `current`: this version, as Clawtrate wrote it;
  * - `older`: an earlier version, as Clawtrate wrote it; it is brought up to date by itself;
  * - `changed`: edited outside Clawtrate, by the bot or a person, or moved from the top of the
  *   file (`moved`); it is left as it is;
- * - `removed`: added from this device before, and taken out outside Clawtrate since; it is not
- *   added again without asking.
+ * - `removed`: this device added it or saw it there, and it was taken out outside Clawtrate
+ *   since, on purpose by someone; it is not added again unless the person asks.
  */
 export type GuideState = "none" | "current" | "older" | "changed" | "removed";
 
@@ -215,12 +217,16 @@ export type GuideFolder = {
   error: string | null;
 };
 
-/** What this device keeps of the person's answer, per gateway. */
+/** What this device keeps, per gateway. */
 export type GuidesRecord = {
-  /** The bots Clawtrate added the section to with the person's yes. */
+  /** The switch: off only once the person turned it off. No record at all reads as on. */
+  on: boolean;
+  /**
+   * The bots this device knew to carry Clawtrate's section while the switch was on: those it
+   * added it to, and those it found holding one. Such a bot whose section is gone was cleared on
+   * purpose by someone, so it reads `removed` and isn't added to again by itself.
+   */
   bots: string[];
-  /** Whether bots made in Clawtrate later get it too. */
-  newBots: boolean;
 };
 
 /** Where this device keeps its record for a gateway, by the gateway's identity. */
@@ -229,7 +235,7 @@ export const guidesKey = (gatewayId: string) => `clawtrate.guides.${gatewayId}`;
 /** The guides as Settings shows them: read now, never assumed. */
 export type BotGuides = {
   folders: GuideFolder[];
-  /** This device's record of the person's answer for this gateway, or null before any. */
+  /** This device's record for this gateway, or null before any: the switch reads on then. */
   record: GuidesRecord | null;
   /** The voice plugin adds its own voice guide (on, its hook permitted). */
   voicePlugin: boolean;
@@ -266,21 +272,25 @@ const conflict = (error: unknown) =>
 
 /**
  * Change one bot's file by `next`, read now and held to the hash read: `next` returns the new
- * text, or null to leave it. A write refused because the file changed meanwhile reads it again
- * and tries once more. Answers whether anything was written.
+ * text, or null to leave it. A file that isn't plain UTF-8 is never written: the change fails,
+ * or with `skipNotUtf8` (Clawtrate's own changes) it is left without a word. A write refused
+ * because the file changed meanwhile reads it again and tries once more. Answers whether anything
+ * was written, and what the file held.
  */
 export async function changeGuideFile(
   request: Request,
   agentId: string,
   next: (file: string, found: FoundSection) => string | null,
+  options: { skipNotUtf8?: boolean } = {},
 ): Promise<{ written: boolean; found: FoundSection }> {
   for (let attempt = 0; ; attempt += 1) {
     const { content, held, utf8 } = await readFile(request, agentId);
+    const found = findSection(content);
+    if (!utf8 && options.skipNotUtf8) return { written: false, found };
     if (!utf8)
       throw new Error(
         `${agentId}'s ${GUIDES_FILE} isn't plain UTF-8 text, so Clawtrate can't change it.`,
       );
-    const found = findSection(content);
     const wanted = next(content, found);
     if (wanted === null || wanted === content) return { written: false, found };
     try {
@@ -319,7 +329,7 @@ export function guideFolders(agents: unknown): string[][] {
   return [...groups.values()];
 }
 
-/** The state of each folder's file, read now; `record` tells removed from never added. */
+/** The state of each folder's file, read now; `record` tells removed from never there. */
 export async function readGuideFolders(
   request: Request,
   record: GuidesRecord | null,
@@ -367,7 +377,12 @@ export async function readGuideFolders(
   );
 }
 
-/** A record as this device stored it, or null when it isn't one. */
+/**
+ * A record as this device stored it, or null when it isn't one. A record from before the switch
+ * (#542: the bots added with the person's yes, and "New bots too") reads as on when it holds any
+ * yes, and as off when it holds none: "Not now", "Remove from all bots", or "New bots too" turned
+ * off with nothing added. An update never turns a no into a yes.
+ */
 export function parseGuidesRecord(value: string | null): GuidesRecord | null {
   if (value === null) return null;
   try {
@@ -375,55 +390,54 @@ export function parseGuidesRecord(value: string | null): GuidesRecord | null {
     const bots = Array.isArray(raw.bots)
       ? raw.bots.filter((bot): bot is string => typeof bot === "string").slice(0, 512)
       : null;
-    return bots && typeof raw.newBots === "boolean" ? { bots, newBots: raw.newBots } : null;
+    if (!bots) return null;
+    if (typeof raw.on === "boolean") return { on: raw.on, bots };
+    return typeof raw.newBots === "boolean" ? { on: raw.newBots || bots.length > 0, bots } : null;
   } catch {
     return null;
   }
 }
 
 /**
- * What the person asked for:
- * - `add`: the section for these bots (and the bots sharing their folders), and whether new bots
- *   get it too. A section of an older version is brought up to date; a changed one is left.
+ * A change to the guides:
+ * - `switch`: the person's one switch. On adds the section to every bot that has none and that
+ *   this device never knew it on, and brings older ones up to date, as `auto` does. Off takes it
+ *   out of every file it is in as Clawtrate wrote it, and nothing is added after; a changed one
+ *   is left as it is.
+ * - `add`: the person's Add on one row: the section for these bots (and the bots sharing their
+ *   folders), a removed one's or a long file's included; an older one is brought up to date and a
+ *   changed one is left. Only while the switch is on.
  * - `replace`: this version in place of a section changed outside Clawtrate, for one bot's file.
- * - `remove`: the section out of every file it is in as Clawtrate wrote it; a changed one is
- *   left as it is.
- * - `decline`: "Not now": nothing is written, and the offer isn't made again on this device.
- * - `newBots`: whether bots made in Clawtrate from now on get it too, kept on this device only:
- *   nothing is written to the gateway, and no bot that exists is added to or updated.
- * - `update`: bring each section of an older version up to date (after a connect).
+ *   Only while the switch is on.
+ * - `auto`: the client's own, never a viewer's: after a connect with admin access, and for a bot
+ *   just made (`bot`), while the switch is on. As `switch` on, without changing the switch.
  */
 export type GuidesChange =
-  /** `background`: a new bot's, not the person's own Add: it never makes a file too long. */
-  | { action: "add"; bots: string[]; newBots: boolean; background?: boolean }
+  | { action: "switch"; on: boolean }
+  | { action: "add"; bots: string[] }
   /** `shown`: the changed section as Settings read it (`changedText`); nothing else is replaced. */
   | { action: "replace"; bot: string; shown: string }
-  | { action: "remove" }
-  | { action: "decline" }
-  | { action: "newBots"; on: boolean }
-  | { action: "update" };
+  | { action: "auto"; bot?: string };
+
+/** The switch as this device holds it: on until the person turns it off. */
+export const guidesOn = (record: GuidesRecord | null) => record?.on ?? true;
 
 /**
- * What a change that takes a yes back leaves as this device's record, or null for a change that
- * grants one. A yes taken back is saved before anything else, so nothing is done when it can't
- * be saved; a yes given is saved last, once the files hold it.
+ * What a change that turns the switch off leaves as this device's record, or null for any other
+ * change. Off is saved before anything else, so nothing is done when it can't be saved; it holds
+ * no bots, so nothing reads as removed and nothing is added while it lasts.
  */
-export function withdrawnRecord(
-  record: GuidesRecord | null,
-  change: GuidesChange,
-): GuidesRecord | null {
-  if (change.action === "remove") return { bots: [], newBots: false };
-  if (change.action === "newBots" && !change.on)
-    return { bots: record?.bots ?? [], newBots: false };
-  if (change.action === "decline") return record ?? { bots: [], newBots: false };
-  return null;
+export function withdrawnRecord(change: GuidesChange): GuidesRecord | null {
+  return change.action === "switch" && !change.on ? { on: false, bots: [] } : null;
 }
 
-/** Said when a yes can't be taken back because this device couldn't save it: nothing was done. */
+/** Said when the switch can't be changed because this device couldn't save it: nothing was done. */
 export const GUIDES_NOT_SAVED = "Couldn't save this on this device, so nothing was changed.";
-/** Said when a yes was carried out on the gateway but this device couldn't record it. */
+/** Said when files were changed on the gateway but this device couldn't record which. */
 export const GUIDES_NOT_RECORDED =
-  "The bots' files were changed, but this device couldn't record it, so it won't keep these sections up to date or add them to new bots.";
+  "The bots' files were changed, but this device couldn't record which, so it can't tell later whether one of these sections was removed on purpose.";
+/** Said when a stale screen asks for a section while the switch is off: off wins. */
+export const GUIDES_OFF = '"Bots know how Clawtrate works" is off, so nothing was added.';
 
 /**
  * Apply `change` to the gateway's files, each read now and held to its hash, and answer the
@@ -435,24 +449,28 @@ export async function applyGuidesChange(
   record: GuidesRecord | null,
   change: GuidesChange,
 ): Promise<{ record: GuidesRecord | null; errors: string[] }> {
-  if (change.action === "decline")
-    return { record: record ?? { bots: [], newBots: false }, errors: [] };
-  if (change.action === "newBots")
-    return { record: { bots: record?.bots ?? [], newBots: change.on }, errors: [] };
+  const on = change.action === "switch" ? change.on : guidesOn(record);
+  // Off wins: nothing is added or replaced while it is off, whoever asks.
+  if (!on && change.action !== "switch")
+    return { record, errors: change.action === "auto" ? [] : [GUIDES_OFF] };
   const folders = guideFolders(await request("agents.list", {}));
   const errors: string[] = [];
-  const kept = new Set(record?.bots ?? []);
-  /** Whether the file was written, or already held this version: only then is it recorded. */
+  const kept = new Set(on ? (record?.bots ?? []) : []);
+  /** Change one folder's file; whether it holds Clawtrate's section, or any marked one, after. */
   const each = async (
     bots: string[],
     next: (file: string, found: FoundSection) => string | null,
-  ): Promise<boolean> => {
+    background = false,
+  ): Promise<{ ours: boolean; marked: boolean }> => {
     try {
-      const { written, found } = await changeGuideFile(request, bots[0]!, next);
-      return written || (found.kind === "ours" && found.current);
+      const { written, found } = await changeGuideFile(request, bots[0]!, next, {
+        skipNotUtf8: background,
+      });
+      const ours = written || (found.kind === "ours" && found.current);
+      return { ours, marked: ours || found.kind !== "none" };
     } catch (error) {
       errors.push(`${bots.join(", ")}: ${error instanceof Error ? error.message : String(error)}`);
-      return false;
+      return { ours: false, marked: false };
     }
   };
   /** What Clawtrate writes by itself never takes a file past the length the gateway keeps whole. */
@@ -462,47 +480,48 @@ export async function applyGuidesChange(
     found.kind === "none" || (found.kind === "ours" && !found.current)
       ? fits(withSection(file), background)
       : null;
-  if (change.action === "add") {
-    const background = change.background === true;
-    for (const bots of folders.filter((group) => group.some((bot) => change.bots.includes(bot))))
-      if (await each(bots, addOrUpdate(background))) for (const bot of bots) kept.add(bot);
-    // New bots too is changed only by its own switch: once this device has a record, Add keeps
-    // the value the record has now. Only the first Add, where the offer's tick is part of the
-    // yes, sets it from the press.
-    return {
-      record: { bots: [...kept], newBots: record ? record.newBots : change.newBots },
-      errors,
-    };
+  if (change.action === "add" || change.action === "replace") {
+    const asked = change.action === "add" ? change.bots : [change.bot];
+    const chosen = folders.filter((group) => group.some((bot) => asked.includes(bot)));
+    if (change.action === "replace" && chosen.length === 0)
+      return { record, errors: [`${change.bot} isn't on the gateway's list of bots.`] };
+    for (const bots of chosen) {
+      const { ours } = await each(
+        bots,
+        change.action === "add"
+          ? addOrUpdate(false)
+          : (file, found) => {
+              if (found.kind !== "changed" || !found.replaceable) return null;
+              // Changed again since the person was shown it: what they'd replace isn't what they saw.
+              if (found.text !== change.shown)
+                throw new Error(
+                  `${GUIDES_FILE} changed again after Settings read it, so nothing was replaced. Look at its section again before you replace it.`,
+                );
+              return withSection(file);
+            },
+      );
+      if (ours) for (const bot of bots) kept.add(bot);
+    }
+    return { record: { on: true, bots: [...kept] }, errors };
   }
-  if (change.action === "replace") {
-    const bots = folders.find((group) => group.includes(change.bot));
-    if (!bots) return { record, errors: [`${change.bot} isn't on the gateway's list of bots.`] };
-    if (
-      await each(bots, (file, found) => {
-        if (found.kind !== "changed" || !found.replaceable) return null;
-        // Changed again since the person was shown it: what they'd replace isn't what they saw.
-        if (found.text !== change.shown)
-          throw new Error(
-            `${GUIDES_FILE} changed again after Settings read it, so nothing was replaced. Look at its section again before you replace it.`,
-          );
-        return withSection(file);
-      })
-    )
-      for (const bot of bots) kept.add(bot);
-    return { record: { bots: [...kept], newBots: record?.newBots ?? false }, errors };
+  if (!on) {
+    for (const bots of folders)
+      await each(bots, (file, found) => (found.kind === "ours" ? withoutSection(file) : null));
+    return { record: { on: false, bots: [] }, errors };
   }
-  for (const bots of folders)
-    await each(bots, (file, found) =>
-      found.kind !== "ours"
-        ? null
-        : change.action === "remove"
-          ? withoutSection(file)
-          : found.current
-            ? null
-            : fits(withSection(file), true),
+  // On, by the switch or by itself: every folder this device never knew the section in gets it,
+  // unless that would make the file too long; an older one is brought up to date. A folder it knew
+  // the section in and that has none now was cleared on purpose, so it is left. Every folder that
+  // holds a marked section now is recorded, so this device knows if it goes.
+  const only = change.action === "auto" ? change.bot : undefined;
+  for (const bots of folders.filter((group) => only === undefined || group.includes(only))) {
+    const known = bots.some((bot) => kept.has(bot));
+    const { marked } = await each(
+      bots,
+      (file, found) => (found.kind === "none" && known ? null : addOrUpdate(true)(file, found)),
+      true,
     );
-  return {
-    record: change.action === "remove" ? { bots: [], newBots: false } : record,
-    errors,
-  };
+    if (marked) for (const bot of bots) kept.add(bot);
+  }
+  return { record: { on: true, bots: [...kept] }, errors };
 }
