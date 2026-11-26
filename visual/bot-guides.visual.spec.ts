@@ -213,7 +213,14 @@ test.describe("bots know how Clawtrate works", () => {
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "true");
     await expect(pane.locator("#bot-guides-note")).not.toContainText("another gateway");
-    expect(await changes(page)).toEqual([{ action: "switch", on: true }]);
+    // Turned off again here, it is this gateway's own Off now, not the default's.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(pane.locator("#bot-guides-note")).not.toContainText("another gateway");
+    expect(await changes(page)).toEqual([
+      { action: "switch", on: true },
+      { action: "switch", on: false },
+    ]);
   });
 
   test("F-566: without admin access, one sentence says so, and nothing can be sent", async ({

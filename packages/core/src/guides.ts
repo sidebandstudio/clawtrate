@@ -73,13 +73,19 @@ export function guidesLimit(answer: unknown, botId: string): number {
 }
 
 /**
- * Each folder's limit (`guidesLimit`, the least of its bots'), from one `config.get`; 20,000 for
- * every folder when the config can't be read.
+ * Each folder's limit (`guidesLimit`, the least of its bots'), from one `config.get`; null for
+ * every folder when the config can't be read: the limit isn't known then, and 20,000 could be
+ * more than the gateway keeps whole. A config that sets no limit gives 20,000, the gateway's own.
  */
-export async function readGuidesLimits(request: Request): Promise<(bots: string[]) => number> {
-  const answer = await request("config.get", {}).catch(() => null);
+export async function readGuidesLimits(
+  request: Request,
+): Promise<(bots: string[]) => number | null> {
+  const answer = await request("config.get", {}).then(
+    (read) => (rec(read).config === undefined ? null : read),
+    () => null,
+  );
   return (bots) =>
-    answer === null ? GUIDES_LONG_CHARS : Math.min(...bots.map((bot) => guidesLimit(answer, bot)));
+    answer === null ? null : Math.min(...bots.map((bot) => guidesLimit(answer, bot)));
 }
 /** The second line of the section: whose it is, and where it is turned off. */
 export const GUIDES_NOTICE =
@@ -458,7 +464,8 @@ export async function readGuideFolders(
           state,
           replaceable: found.kind === "changed" && found.replaceable,
           moved: found.kind === "changed" && found.moved,
-          long: guidesWouldBeCut(withSection(content), limits(bots)),
+          // Shown against the gateway's limit, or its default when the config couldn't be read.
+          long: guidesWouldBeCut(withSection(content), limits(bots) ?? GUIDES_LONG_CHARS),
           utf8,
           missing,
           refused: state === "none" ? refusedOf(bots) : null,
@@ -647,7 +654,9 @@ export async function applyGuidesChange(
     }
   };
   // What Clawtrate writes by itself never takes a file past the length the gateway keeps whole:
-  // the gateway's own limit for the folder's bots, read once for the change.
+  // the gateway's own limit for the folder's bots, read once for the change. When the config
+  // can't be read the limit isn't known, so nothing is written by itself: it is tried again at
+  // the next occasion. The person's own Add doesn't depend on it.
   const limits =
     change.action === "auto" || (change.action === "switch" && change.on)
       ? await readGuidesLimits(request)
@@ -656,11 +665,21 @@ export async function applyGuidesChange(
     (byItself: boolean, bots: string[]) => (file: string, found: FoundSection) => {
       if (found.kind !== "none" && !(found.kind === "ours" && !found.current)) return null;
       const next = withSection(file);
-      return byItself && guidesWouldBeCut(next, limits(bots)) ? null : next;
+      if (!byItself) return next;
+      const limit = limits(bots);
+      return limit === null || guidesWouldBeCut(next, limit) ? null : next;
     };
   if (change.action === "remove") {
     for (const bots of folders.filter((group) => group.some((bot) => change.bots.includes(bot))))
-      await each(bots, (file, found) => (found.kind === "ours" ? withoutSection(file) : null));
+      await each(bots, (file, found) => {
+        // A section that changed since Settings read it isn't Clawtrate's to take out: said, so
+        // nothing announces it as gone.
+        if (found.kind === "changed")
+          throw new Error(
+            `${GUIDES_FILE}'s section changed after Settings read it, so Clawtrate left it as it is.`,
+          );
+        return found.kind === "ours" ? withoutSection(file) : null;
+      });
     return { record, errors, wrote, missing };
   }
   if (change.action === "add" || change.action === "replace") {
@@ -675,6 +694,9 @@ export async function applyGuidesChange(
       };
     if (change.action === "replace")
       for (const [bot, reason] of Object.entries(record?.refused ?? {})) refused.set(bot, reason);
+    // The person's Add tries a refused folder again: every bot sharing it, not only the one asked.
+    if (change.action === "add")
+      for (const bots of chosen) for (const bot of bots) refused.delete(bot);
     for (const bots of chosen) {
       const { ours } = await each(
         bots,

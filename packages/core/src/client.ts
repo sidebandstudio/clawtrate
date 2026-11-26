@@ -7302,6 +7302,9 @@ export class ClawtrateClient {
       this.state.connection.status === "connected";
     const gatewayId = await this.readGatewayIdentity();
     this.confirmGatewayIdentity(gatewayId, alive);
+    // Learning the name can queue Clawtrate's own change on this connection: what is shown is
+    // what that change leaves.
+    await this.guidesChanges;
     const record =
       gatewayId === null ? null : await this.guidesRecord(gatewayId).catch(() => undefined);
     // Off only by the device-wide default: this gateway has no choice of its own yet.
@@ -7383,7 +7386,13 @@ export class ClawtrateClient {
           !change.on && !(await ok(storage.set(GUIDES_DEFAULT_KEY, JSON.stringify(offRecord()))))
             ? [GUIDES_DEFAULT_NOT_SAVED]
             : [];
-        const result = await applyGuidesChange(request, first, change);
+        // A failure after the saves keeps what was saved, and says so with what failed.
+        const result = await applyGuidesChange(request, first, change).catch((error: unknown) => ({
+          record: first,
+          errors: [error instanceof Error ? error.message : String(error)],
+          wrote: false,
+          missing: [] as string[][],
+        }));
         // A file that doesn't exist yet is read again when a run of its bot ends, as after a connect.
         if (change.on) this.armGuidesMissing(result.missing.flat(), stamp.target);
         if (change.on && !(await saveIfChanged(result.record, first)))
@@ -7399,7 +7408,13 @@ export class ClawtrateClient {
         return { ...result, errors: [...result.errors, notSaved(result.wrote)] };
       return result;
     });
-    const read = await this.readBotGuides();
+    // A read-back that fails still carries what the change said, the saves' warnings included.
+    const read = await this.readBotGuides().catch((error: unknown) => {
+      if (errors.length === 0) throw error;
+      throw new Error(
+        [...errors, error instanceof Error ? error.message : String(error)].join(" "),
+      );
+    });
     return { ...read, errors };
   }
 

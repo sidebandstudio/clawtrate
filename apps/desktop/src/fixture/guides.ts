@@ -90,7 +90,8 @@ export function guidesCommands(
       : { on: true, bots: param === "mixed" ? ["main", "marlow", "otto", "pip"] : BOTS };
   const voicePlugin = param === "voice";
   const unreadable = param === "unreadable";
-  const inherited = param === "inherited";
+  // Off only by the device's default until a switch command saves this gateway's own choice.
+  let inherited = param === "inherited";
   const missing = new Set(param === "new" ? ["pip"] : []);
   const refused = new Map(
     param === "new" ? [["otto", "Workspace document exceeds its write bound"]] : [],
@@ -117,7 +118,7 @@ export function guidesCommands(
     folders: folders(),
     record: unreadable ? null : record,
     unreadable,
-    inherited: inherited && !record.on,
+    inherited,
     voicePlugin,
     errors,
     stamp: stampNow(),
@@ -131,6 +132,7 @@ export function guidesCommands(
     if (!canAdmin()) throw new Error("Changing the bots' instructions needs admin access.");
     if (unreadable) return answer(["Couldn't read this on this device, so nothing was changed."]);
     // Off is saved first, whatever the files do after.
+    if (change.action === "switch") inherited = false;
     if (change.action === "switch" && !change.on) record = { on: false, bots: [] };
     if (save === "fail")
       return answer([
