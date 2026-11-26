@@ -189,7 +189,8 @@ function callEntries(
 /**
  * Whether the engine's run already draws text block `i` of its history item, by where the block
  * stands, never by its words: right before a call the engine places text beside, or the last text
- * of the run's last item, with no call after it, while the engine draws a reply.
+ * of the run's last item, with no call after it, while the engine draws the run's text (as its
+ * reply, or beside a call whose row history doesn't hold yet).
  */
 function shownByEngine(
   run: Run,
@@ -201,7 +202,7 @@ function shownByEngine(
   const next = after[0];
   if (next?.kind === "tool-call")
     return (run.preambles ?? []).some((p) => p.beforeCall === next.callId);
-  return lastOfRun && after.length === 0 && run.text.trim() !== "" && !textPlaced(run);
+  return lastOfRun && after.length === 0 && run.text.trim() !== "";
 }
 
 const gap = (id: string, count: number): FeedEntry<FeedRef> => ({

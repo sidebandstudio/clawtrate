@@ -169,4 +169,72 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(later).not.toContain("The end.");
     expect(count(later, "All clean.")).toBe(1);
   });
+  it("history's row of the reply the engine still streams is drawn once, as the reply", () => {
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Checking logs." },
+          { type: "toolCall", id: "c1", name: "ls", arguments: { path: "." } },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: RUN },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Both logs are clean." }],
+        __openclaw: { id: "a2", seq: 4, runId: RUN },
+      },
+    ];
+    const html = draw(
+      transcriptOf(
+        [
+          ...start,
+          ...said("m:1", "Checking logs."),
+          ...call("c1"),
+          ...said("m:2", "Both logs are clean."),
+        ],
+        rows,
+      ),
+    );
+    expect(count(html, "Checking logs.")).toBe(1);
+    expect(count(html, "Both logs are clean.")).toBe(1);
+  });
+
+  it("text the run wrote before a person's message steered it stays where it was while the run answers", () => {
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "c1", name: "ls", arguments: { path: "." } },
+          { type: "text", text: "An interim note." },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: RUN },
+      },
+      { role: "user", content: "Also check the cache.", __openclaw: { id: "u2", seq: 3 } },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Checking the cache." },
+          { type: "toolCall", id: "c2", name: "ls", arguments: { path: "cache" } },
+        ],
+        __openclaw: { id: "a2", seq: 4, runId: RUN },
+      },
+    ];
+    const html = draw(
+      transcriptOf(
+        [
+          ...start,
+          ...call("c1"),
+          ...said("m:1", "An interim note."),
+          ...said("m:2", "Checking the cache."),
+          ...call("c2"),
+          ...said("m:3", "All clean."),
+        ],
+        rows,
+      ),
+    );
+    expect(count(html, "An interim note.")).toBe(1);
+    expect(count(html, "Checking the cache.")).toBe(1);
+    expect(count(html, "All clean.")).toBe(1);
+  });
 });
