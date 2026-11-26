@@ -5,7 +5,7 @@
 
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachments.ts";
 import { utf8Length } from "./encoding.ts";
-import { CLAWTRATE_WORK_CONTEXT, isCommandText } from "./send-marker.ts";
+import { CLAWTRATE_WORK_CONTEXT, goesUnmarked } from "./send-marker.ts";
 import type { SendLimits } from "./types.ts";
 
 /** A file as a request carries it, its content aside: what its size depends on. */
@@ -37,13 +37,13 @@ export const attachmentType = (mimeType: string) =>
 
 /**
  * The `chat.send` parameters, built only here. `content` is each file's base64. `marked`: the
- * message says it comes from Clawtrate (`send-marker.ts`), unless it is a command; a message the
- * gateway refused it on goes without it.
+ * message says it comes from Clawtrate (`send-marker.ts`), unless it is a command or a stop word
+ * (`goesUnmarked`); a message the gateway refused it on goes without it.
  */
 export function chatSendParams<A extends { fileName: string; mimeType: string; content: string }>(
   shape: Omit<SendShape, "files">,
   attachments: Array<A & { type: string }>,
-  marked = !isCommandText(shape.text),
+  marked = !goesUnmarked(shape.text),
 ) {
   return {
     sessionKey: shape.sessionKey,

@@ -146,20 +146,84 @@ export async function searchMessages(
 }
 
 /**
+ * A text's terms as the gateway's message index reads them, folded past both versions' folding:
+ * - SQLite's `unicode61 remove_diacritics 2` (2026.10.6, and 2026.11.10's SQLite index): letters,
+ *   digits, private-use characters and the 25 Latin diacritics it removes (`TERM_SPLIT`) make a
+ *   term, and anything else, any other combining mark among it, parts terms.
+ * - 2026.11.10's own index (`session-actor-memory-search`): a combining mark stays in its term,
+ *   a Latin letter's marks are taken off, and terms compare without case.
+ * Each term then loses case (both ways, so "ẞ" and "ß" and "ss" are one), its compatibility
+ * forms and every mark. Two terms either index takes as one are one here too, so a query that
+ * finds a person's words there finds them here. Checked for every character to U+2FFFF against
+ * both; the exceptions are 21 New Tai Lue and Vedic signs, which SQLite's older tables part
+ * terms at, and a Latin letter followed by the Greek iota mark.
+ */
+const TERM_SPLIT =
+  /[\p{L}\p{N}\p{Co}\u0300-\u0304\u0306-\u030c\u030f\u0311\u031b\u0323-\u0328\u032d\u032e\u0330\u0331]+/gu;
+const TERM_JOINED = /[\p{L}\p{N}\p{Co}][\p{L}\p{N}\p{Co}\p{M}]*/gu;
+const folded = (term: string) =>
+  term
+    .toLowerCase()
+    .toUpperCase()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/ς/g, "σ");
+const termsOf = (text: string, pattern: RegExp) =>
+  [...text.matchAll(pattern)].map((match) => folded(match[0])).filter(Boolean);
+
+/**
+ * Whether a person's words would match the query on their own, read as `sessions.search` reads
+ * it on both versions: each of the query's words is a phrase of its terms, and the last term of
+ * its last word matches the start of a term (`match: "prefix"`). One phrase is enough: the
+ * excerpt is a window of the message, so another of the query's words may lie outside it.
+ */
+function wordsMatch(text: string, query: string): boolean {
+  const words = query.trim().split(/\s+/u);
+  let searchable = false;
+  for (const pattern of [TERM_SPLIT, TERM_JOINED]) {
+    const terms = termsOf(text, pattern);
+    for (const [index, word] of words.entries()) {
+      const phrase = termsOf(word, pattern);
+      if (phrase.length === 0) continue;
+      searchable = true;
+      const prefix = index === words.length - 1;
+      const at = (start: number) =>
+        phrase.every((term, offset) => {
+          const found = terms[start + offset];
+          return (
+            found !== undefined &&
+            (prefix && offset === phrase.length - 1 ? found.startsWith(term) : found === term)
+          );
+        });
+      for (let start = 0; start + phrase.length <= terms.length; start += 1)
+        if (at(start)) return true;
+    }
+  }
+  // A query with no term in it finds nothing the marker could have given it.
+  return !searchable;
+}
+
+/**
  * The gateway indexes the model's copy of a person's message, so a message sent from Clawtrate
  * is found and shown with the marker after its words (`send-marker.ts`). The person's view is
- * their words alone: the marker comes off the snippet, and a hit that matched only the marker
- * (no word of the query left in what they wrote) is left out.
+ * their words: the marker comes off the snippet (`snippetWithoutMarker`). A hit is left out only
+ * when the snippet held the marker whole and the words left match nothing of the query, so the
+ * marker is all it matched; in every other case it stays.
  */
 function personSnippet(snippet: string, query: string): string | null {
-  const { text, cut } = snippetWithoutMarker(snippet);
-  if (!cut) return snippet;
-  const shown = text.toLowerCase();
-  const words = query
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((word) => word.length > 0);
-  return shown.replace(/[\s…]/gu, "") && words.some((word) => shown.includes(word)) ? text : null;
+  const { text, whole } = snippetWithoutMarker(snippet);
+  return !whole || wordsMatch(text, query) ? text : null;
+}
+
+/**
+ * A snippet within `MAX_SNIPPET_CHARS` as JSON writes it. The gateway's own 500 characters and
+ * "…" can be more than that: one cut here ends in "…" too, so it still says it was cut.
+ */
+function shownSnippet(snippet: string): string {
+  const shown = cutText(snippet, MAX_SNIPPET_CHARS);
+  return shown === snippet ? snippet : `${cutText(snippet, MAX_SNIPPET_CHARS - 1).trimEnd()}…`;
 }
 
 export function readMessageSearch(reply: RawRecord | null, query = ""): MessageSearch {
@@ -181,7 +245,7 @@ export function readMessageSearch(reply: RawRecord | null, query = ""): MessageS
       botId,
       role,
       timestamp: num(row.timestamp),
-      snippet: cutText(snippet, MAX_SNIPPET_CHARS),
+      snippet: shownSnippet(snippet),
     });
     if (hits.length === MESSAGE_SEARCH_LIMIT) break;
   }

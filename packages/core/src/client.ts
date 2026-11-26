@@ -44,7 +44,7 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
 import { fromBase64, toBase64 } from "./bytes.ts";
-import { isCommandText, markerRefusal } from "./send-marker.ts";
+import { goesUnmarked, markerRefusal } from "./send-marker.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -3758,7 +3758,7 @@ export class ClawtrateClient {
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
     replyToId?: string,
-    marked = !isCommandText(text),
+    marked = !goesUnmarked(text),
   ) {
     return chatSendParams(
       { sessionKey: key, text, idempotencyKey, queueMode, replyToId: replyToId ?? null },
@@ -4433,11 +4433,11 @@ export class ClawtrateClient {
     let result: RawRecord | null;
     try {
       // It says it comes from Clawtrate (#666), unless the gateway already refused that for this
-      // message, or for every message on this connection. A command (`/…`, `!…`) goes without it
-      // at once: the gateway takes the marker only on ordinary chat messages, and `/stop` must
-      // not depend on recognising the gateway's refusal of it.
+      // message, or for every message on this connection. A command (`/…`, `!…`) or a stop word
+      // goes without it at once (`goesUnmarked`): the gateway takes the marker only on ordinary
+      // chat messages, and a stop must not depend on its refusal of the marker arriving.
       const marked =
-        message.unmarked !== true && !this.markerRefused && !isCommandText(message.text);
+        message.unmarked !== true && !this.markerRefused && !goesUnmarked(message.text);
       const params = this.sendParams(
         key,
         message.text,

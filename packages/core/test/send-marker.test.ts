@@ -8,11 +8,15 @@ import { mapSessionRow, plainPreview } from "../src/mapping.ts";
 import { isActive } from "../src/runs.ts";
 import {
   CLAWTRATE_WORK_CONTEXT,
+  goesUnmarked,
+  isAbortWord,
   MARKER_AS_SEARCHED,
   markerRefusal,
   snippetWithoutMarker,
   titleWithoutMarker,
 } from "../src/send-marker.ts";
+import { chatSendParams } from "../src/send-size.ts";
+import { mapArchivedRow } from "../src/task-actions.ts";
 import { gatewayPreviewOf } from "../src/update-notice.ts";
 import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
@@ -127,21 +131,23 @@ describe("every route a message leaves by carries the marker", () => {
 });
 
 describe("a refusal of the marker", () => {
-  it("a stop word: the same message once more, without it, under the same key", async () => {
+  // A word a later gateway may take as a stop, which the two supported versions don't: it goes
+  // marked, and their refusal of the marker is what is left to fall back on.
+  it("a message the gateway won't take it on: the same message once more, without it, under the same key", async () => {
     const { client, gateway, transcript } = await openTask();
     answering(gateway, [ORDINARY_ONLY]);
-    const id = client.sendMessage(KEY, "exit");
+    const id = client.sendMessage(KEY, "cancel");
     await until(() => transcript().outbox.find((m) => m.id === id)?.status === "sent");
     expect(sends(gateway)).toEqual([
       expect.objectContaining({
-        message: "exit",
+        message: "cancel",
         idempotencyKey: id,
         workContext: { page: "Clawtrate" },
       }),
-      { sessionKey: KEY, message: "exit", idempotencyKey: id, queueMode: "followup" },
+      { sessionKey: KEY, message: "cancel", idempotencyKey: id, queueMode: "followup" },
     ]);
     expect(transcript().outbox.find((m) => m.id === id)).toMatchObject({
-      text: "exit",
+      text: "cancel",
       unmarked: true,
       error: null,
     });
@@ -205,7 +211,7 @@ describe("a refusal of the marker", () => {
   it("a resend that fails is the message's own failure, sent once, and a retry goes as the gateway last took it", async () => {
     const { client, gateway, transcript } = await openTask();
     answering(gateway, [ORDINARY_ONLY, "budget exhausted"]);
-    const id = client.sendMessage(KEY, "stop");
+    const id = client.sendMessage(KEY, "cancel");
     await until(() => transcript().outbox.find((m) => m.id === id)?.status === "failed");
     expect(transcript().outbox.find((m) => m.id === id)).toMatchObject({
       error: "budget exhausted",
@@ -247,6 +253,11 @@ const wordsOf = (length: number) => {
   return `${text}x`;
 };
 
+/** What `plainPreview` shows of the row the gateway lists after a message from Clawtrate. */
+const shownAfter = (words: string) => plainPreview(gatewayPreviewOf(modelCopy(words)));
+/** A start of the marker that comes off with the gateway's "...": its first three words and more. */
+const LONG_START = "Working context captured ";
+
 describe("a task's preview shows a person's words alone", () => {
   it("the row's preview, from the gateway's start of the last message, loses the marker after the words", () => {
     expect(mapSessionRow({ key: KEY, lastMessagePreview: modelCopy("#slow 30") })?.preview).toBe(
@@ -257,19 +268,92 @@ describe("a task's preview shows a person's words alone", () => {
   });
 
   // The gateway lists the model's copy flattened to one line and cut to 240 characters with "..."
-  // (`gatewayPreviewOf`), so after a message of about 75 to 235 characters the cut falls inside
-  // the marker, and what is left of it, down to a letter, is the marker's.
-  it.each([75, 100, 150, 200, 225, 230, 234, 235])(
-    "a message of %i characters, cut by the gateway inside the marker",
+  // (`gatewayPreviewOf`), so after a message of about 73 to 235 characters the cut falls inside
+  // the marker. A long start of it is the marker's, and the words show whole.
+  it.each([75, 100, 150, 200, 211])(
+    "a message of %i characters, cut by the gateway inside the marker's opening words and more",
     (length) => {
       const words = wordsOf(length);
       const listed = gatewayPreviewOf(modelCopy(words))!;
       expect(listed.length).toBe(240);
       expect(listed).toMatch(/\.\.\.$/);
+      expect(listed.slice(words.length + 1, -3).startsWith(LONG_START)).toBe(true);
       expect(plainPreview(listed)).toBe(words);
       expect(mapSessionRow({ key: KEY, lastMessagePreview: listed })?.preview).toBe(words);
     },
   );
+
+  // A short start, down to one letter, is the marker's or the person's own next word: the
+  // gateway's preview is the same for both. It comes off and the gateway's "..." stays.
+  it.each([212, 225, 230, 234, 235])(
+    "a message of %i characters, cut by the gateway inside the marker's first words",
+    (length) => {
+      const words = wordsOf(length);
+      const listed = gatewayPreviewOf(modelCopy(words))!;
+      expect(listed.length).toBe(240);
+      const piece = listed.slice(words.length + 1, -3);
+      expect(LONG_START.startsWith(piece) && piece.length < LONG_START.length).toBe(true);
+      expect(plainPreview(listed)).toBe(`${words}...`);
+      expect(mapSessionRow({ key: KEY, lastMessagePreview: listed })?.preview).toBe(`${words}...`);
+    },
+  );
+
+  it("two messages the gateway lists alike both show the person's words, cut, and none of the marker", () => {
+    // One person's 235 characters, sent from Clawtrate; another's 235 and " Work", also sent from
+    // Clawtrate, which is 240 and would be listed whole without the marker. Both lists end " W...".
+    const first = gatewayPreviewOf(modelCopy("a".repeat(235)))!;
+    const second = gatewayPreviewOf(modelCopy(`${"a".repeat(235)} Work`))!;
+    expect(first).toBe(second);
+    expect(first.endsWith(" W...")).toBe(true);
+    for (const listed of [first, second]) {
+      expect(plainPreview(listed)).toBe(`${"a".repeat(235)}...`);
+      expect(mapSessionRow({ key: KEY, lastMessagePreview: listed })?.preview).toBe(
+        `${"a".repeat(235)}...`,
+      );
+    }
+    // The same for a next word that starts as the marker does without being it.
+    const welcome = gatewayPreviewOf(modelCopy(`${"a".repeat(235)} Welcome back`))!;
+    expect(welcome).toBe(first);
+    // An archived task's row is read the same way.
+    expect(
+      mapArchivedRow({ key: KEY, archived: true, lastMessagePreview: first }, "otto")?.preview,
+    ).toBe(`${"a".repeat(235)}...`);
+  });
+
+  // Every length to 260, in four kinds of text, through the gateway's cut (`gatewayPreviewOf`,
+  // which gives what OpenClaw 2026.10.6 and 2026.11.10 give for each of these): no piece of the
+  // marker is shown, and nothing of the words is lost but what the gateway cut.
+  const kinds: Record<string, string> = {
+    ASCII: "please check the photos ",
+    Han: "我们明天去看看照片",
+    emoji: "📷🎉",
+    "decomposed accents": "cafe\u0301 re\u0301sume\u0301 ",
+  };
+  it.each(Object.entries(kinds))("%s, every length from 1 to 260", (_kind, unit) => {
+    for (let length = 1; length <= 260; length += 1) {
+      let words =
+        unit
+          .repeat(Math.ceil(length / unit.length))
+          .slice(0, length)
+          .trim() || "x";
+      if (/[\uD800-\uDBFF]$/.test(words)) words = `${words.slice(0, -1)}x`;
+      const shown = shownAfter(words)!;
+      // As the gateway would list the words alone, cut and all.
+      const own = gatewayPreviewOf(words)!;
+      const kept = shown.replace(/ ?\.\.\.$/, "");
+      expect(own.startsWith(kept) || own === shown, `${length}: ${shown}`).toBe(true);
+      // Shown whole, or as the gateway cut them, or cut where the marker may have begun.
+      if (shown !== own) expect(shown.endsWith("..."), `${length}: ${shown}`).toBe(true);
+      if (shown !== own) expect(own.slice(0, -3).length, `${length}`).toBeGreaterThanOrEqual(0);
+      expect(kept === words || kept === own.replace(/\.\.\.$/, "") || words.startsWith(kept)).toBe(
+        true,
+      );
+      // Nothing before the cut is lost: what was cut is the gateway's or a start of the marker.
+      if (shown.endsWith("...") && words.length < 237) expect(kept).toBe(words);
+      expect(shown).not.toMatch(/(?:^| )W(?:o|or|ork|orki|orkin|orking)?(?: context)?(?:\.\.\.)?$/);
+      expect(shown).not.toContain("Working context");
+    }
+  });
 
   it("a message whose marker fits, and one the gateway cut before the marker, are as listed", () => {
     for (const length of [1, 12, 40, 70]) {
@@ -289,6 +373,7 @@ describe("a task's preview shows a person's words alone", () => {
   });
 
   it("a preview that ends in dots the gateway didn't add keeps every word", () => {
+    // Shorter than the gateway's cut, so not cut: whatever ends it is the person's.
     for (const text of ["Rename it to Working...", `${wordsOf(100)} Working context...`])
       expect(plainPreview(text)).toBe(text);
   });
@@ -296,7 +381,7 @@ describe("a task's preview shows a person's words alone", () => {
 
 describe("a task's title the gateway derived shows a person's words alone", () => {
   it("loses the marker it was named with, and a label someone set is kept as it is", () => {
-    const named = `Short one\n\nWorking context c`;
+    const named = "Short one Working context captured at send time. Treat the…";
     expect(mapSessionRow({ key: KEY, derivedTitle: named, displayName: named })?.title).toBe(
       "Short one",
     );
@@ -307,22 +392,195 @@ describe("a task's title the gateway derived shows a person's words alone", () =
     expect(mapSessionRow({ key: KEY, derivedTitle: "Plan the walk" })?.title).toBe("Plan the walk");
   });
 
+  /** OpenClaw's `deriveGoalSessionTitle` on a message with no sentence of a task's verb. */
+  const derived = (text: string) => {
+    const folded = text.replace(/\s+/g, " ").trim();
+    if (folded.length <= 60) return folded;
+    const cut = folded.slice(0, 59);
+    const space = cut.lastIndexOf(" ");
+    return space > 36 ? `${cut.slice(0, space)}…` : `${cut}…`;
+  };
+
   it("a title the gateway made from the start of the model's copy, as it makes it", () => {
-    // OpenClaw's `deriveGoalSessionTitle` (2026.10.6 and 2026.11.10): the first sentence that
-    // starts with a task's verb, or else the whole, cut to 60 characters with "…".
+    // The first sentence that starts with a task's verb: it ends where the marker's first does.
     expect(titleWithoutMarker("Check the disk Working context captured at send time.")).toBe(
       "Check the disk",
     );
+    // Else the whole, cut to 60 with "…", backing up to a space.
     expect(titleWithoutMarker("Short one Working context captured at send time. Treat the…")).toBe(
       "Short one",
     );
-    expect(titleWithoutMarker("Check the photos folder and the backup Working context…")).toBe(
-      "Check the photos folder and the backup",
+    // Cut where the gateway backed up to a space: the marker's first three words are whole there.
+    expect(derived(modelCopy("Short one, and some more of them"))).toBe(
+      "Short one, and some more of them Working context captured…",
     );
-    // A model that quotes the JSON it was given (2026.11.10) writes the line break as `\n`.
+    expect(titleWithoutMarker("Short one, and some more of them Working context captured…")).toBe(
+      "Short one, and some more of them",
+    );
+    // A short start of the marker at the cut: it, or the person's next word; the "…" stays.
+    expect(titleWithoutMarker("Check the photos folder and the backup Working context…")).toBe(
+      "Check the photos folder and the backup…",
+    );
+    for (let length = 1; length <= 80; length += 1) {
+      const words = wordsOf(length);
+      const title = titleWithoutMarker(derived(modelCopy(words)));
+      expect(title, `${length}`).not.toMatch(/ W\w*(?: context)?…?$/);
+      expect(words.startsWith(title.replace(/…$/, "")) || title === derived(words)).toBe(true);
+    }
+  });
+
+  it("a model's label on 2026.11.10, which quotes the copy as JSON and is cut at 60", () => {
+    // The scripted model's echo of the label prompt, as the gateway keeps it.
+    const echo = '> {"conversationLabelSource":Short one\\n\\nWorking context c';
+    expect(echo.length).toBeGreaterThanOrEqual(50);
+    expect(titleWithoutMarker(echo)).toBe('> {"conversationLabelSource":Short one…');
     expect(
-      titleWithoutMarker('> {"conversationLabelSource":Short one\\n\\nWorking context c'),
-    ).toBe('> {"conversationLabelSource":Short one');
+      titleWithoutMarker('> {"conversationLabelSource":A\\n\\nWorking context captured a'),
+    ).toBe('> {"conversationLabelSource":A');
+  });
+
+  it("a title with an ellipsis of the person's own, shorter than the gateway's cut, is theirs", () => {
+    for (const title of ["Write to W…", "Write to Working…", "Ask about Working context…"]) {
+      expect(titleWithoutMarker(title)).toBe(title);
+      expect(mapSessionRow({ key: KEY, derivedTitle: title })?.title).toBe(title);
+    }
+  });
+});
+
+describe("a stop word goes without the marker from its first frame", () => {
+  // OpenClaw 2026.10.6 and 2026.11.10 take the same 43 words as a stop on `chat.send`
+  // (`ABORT_TRIGGERS`), read the same way (`normalizeAbortTriggerText`).
+  const WORDS = [
+    "stop",
+    "esc",
+    "abort",
+    "exit",
+    "interrupt",
+    "detente",
+    "deten",
+    "detén",
+    "arrete",
+    "arrête",
+    "停止",
+    "停下来",
+    "暂停",
+    "やめて",
+    "止めて",
+    "रुको",
+    "توقف",
+    "стоп",
+    "остановись",
+    "останови",
+    "остановить",
+    "прекрати",
+    "halt",
+    "anhalten",
+    "aufhören",
+    "hoer auf",
+    "stopp",
+    "pare",
+    "stop openclaw",
+    "openclaw stop",
+    "stop action",
+    "stop current action",
+    "stop run",
+    "stop current run",
+    "stop agent",
+    "stop the agent",
+    "stop don't do anything",
+    "stop dont do anything",
+    "stop do not do anything",
+    "stop doing anything",
+    "do not do that",
+    "please stop",
+    "stop please",
+  ];
+
+  it("the words both versions take as a stop, as they read them, and words that only look like one", () => {
+    for (const word of WORDS) expect(isAbortWord(word), word).toBe(true);
+    // Case, spaces, punctuation at the end, ’ and `, NFD, control characters: as the gateway reads.
+    for (const text of [
+      "Stop",
+      "STOP!",
+      " stop. ",
+      "stop!!?",
+      "stop\n",
+      "Please  Stop",
+      "hoer\tauf",
+      "stop don’t do anything",
+      "stop don`t do anything",
+      "dete\u0301n",
+      "停止。",
+      "Стоп!",
+      "stop\u0007",
+      "stop’",
+      "do not do that.",
+    ])
+      expect(isAbortWord(text), text).toBe(true);
+    for (const text of [
+      "stop it",
+      "stopping",
+      "don't stop",
+      "please, stop",
+      "'stop'",
+      "(stop",
+      "stop stop",
+      "esc key",
+      "abort mission",
+      "quit",
+      "cancel",
+      "wait",
+      "Stop the music, please",
+      "stop… and think",
+    ])
+      expect(isAbortWord(text), text).toBe(false);
+  });
+
+  it("a stop word and a command go without it, an ordinary message with it, and the frame is sized as sent", () => {
+    for (const text of ["stop", "Exit!", "/stop", "/status", "!ls", "  /btw what"])
+      expect(goesUnmarked(text), text).toBe(true);
+    for (const text of [
+      "stop it",
+      "Please stop the backup when it ends",
+      "hello",
+      "Working context",
+    ])
+      expect(goesUnmarked(text), text).toBe(false);
+    const shape = { sessionKey: KEY, idempotencyKey: "k", queueMode: "followup" as const };
+    expect(chatSendParams({ ...shape, text: "stop", replyToId: null }, [])).not.toHaveProperty(
+      "workContext",
+    );
+    expect(chatSendParams({ ...shape, text: "stop it", replyToId: null }, [])).toMatchObject({
+      workContext: CLAWTRATE_WORK_CONTEXT,
+    });
+  });
+
+  it("a typed stop reaches the gateway's stop handler on its first frame, though the answer is lost", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === "run-x"));
+    // Both versions refuse a marked stop word before their stop handler, so it stops nothing;
+    // an unmarked one is handled. Then the connection drops before any answer arrives.
+    const reached: string[] = [];
+    gateway.handlers["chat.send"] = (params) => {
+      const { message, workContext } = params as Send;
+      reached.push(workContext ? "refused" : isAbortWord(message) ? "stopped" : "sent");
+      gateway.dropAll();
+      return new Promise(() => {});
+    };
+    const id = client.sendMessage(KEY, "stop");
+    await until(() => reached.length === 1);
+    expect(reached).toEqual(["stopped"]);
+    expect(sends(gateway)).toEqual([
+      { sessionKey: KEY, message: "stop", idempotencyKey: id, queueMode: "steer" },
+    ]);
+    // Its delivery is unknown: it is never sent again by itself, since another run may be going.
+    await until(() => client.state.connection.status === "connected");
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status !== "sending");
+    await sleep(100);
+    expect(sends(gateway)).toHaveLength(1);
+    client.stop();
   });
 });
 
@@ -345,7 +603,7 @@ describe("a command, and a Stop before the gateway answered", () => {
     client.stop();
   });
 
-  it("a Stop pressed while a marked stop word waited: sent once more without it, and handled as before the marker", async () => {
+  it("a Stop pressed while a marked word the gateway took as a stop waited: sent once more without it, and handled", async () => {
     const { client, gateway, transcript } = await openTask();
     const answer = deferred<unknown>();
     let asked = 0;
@@ -354,14 +612,14 @@ describe("a command, and a Stop before the gateway answered", () => {
       // The gateway's answer to a stop word with nothing to stop.
       return asked === 1 ? answer.promise : { ok: true, aborted: false, runIds: [] };
     };
-    const id = client.sendMessage(KEY, "stop");
+    const id = client.sendMessage(KEY, "cancel");
     await until(() => sends(gateway).length === 1);
     await client.stopRun(KEY, id);
     answer.reject(refusal(ORDINARY_ONLY));
     await until(() => transcript().outbox.find((m) => m.id === id)?.status === "handled");
     expect(sends(gateway).map((p) => [p.message, p.idempotencyKey, "workContext" in p])).toEqual([
-      ["stop", id, true],
-      ["stop", id, false],
+      ["cancel", id, true],
+      ["cancel", id, false],
     ]);
     const message = transcript().outbox.find((m) => m.id === id)!;
     expect(message).toMatchObject({ status: "handled", error: null, unmarked: true });
@@ -408,7 +666,7 @@ describe("a command, and a Stop before the gateway answered", () => {
       const { runId } = params as { runId: string };
       return { ok: true, aborted: true, runIds: [runId] };
     };
-    const id = client.sendMessage(KEY, "stop");
+    const id = client.sendMessage(KEY, "cancel");
     await until(() => sends(gateway).length === 1);
     expect(sends(gateway)[0]).toMatchObject({
       queueMode: "steer",
@@ -437,7 +695,7 @@ describe("words the marker also has are a person's own", () => {
     for (let length = 1; length < MARKER_AS_SEARCHED.length; length += 1) {
       const start = MARKER_AS_SEARCHED.slice(0, length).trimEnd();
       for (const text of [`Please rename the section to ${start}`, start]) {
-        expect(snippetWithoutMarker(text)).toEqual({ text, cut: false });
+        expect(snippetWithoutMarker(text)).toEqual({ text, whole: false });
         expect(plainPreview(text)).toBe(text);
         // A title made of a message's first sentence ends where the marker's first sentence
         // does: that whole sentence after the words is the marker's.
@@ -450,14 +708,15 @@ describe("words the marker also has are a person's own", () => {
 
   it("a preview, a title or a snippet that is only such a word keeps it", () => {
     for (const text of ["Clawtrate", "JSON", "send", "Working context", "sessions:"]) {
-      expect(snippetWithoutMarker(text)).toEqual({ text, cut: false });
+      expect(snippetWithoutMarker(text)).toEqual({ text, whole: false });
       expect(plainPreview(text)).toBe(text);
       expect(mapSessionRow({ key: KEY, derivedTitle: text })?.title).toBe(text);
     }
-    // A snippet that starts inside the marker and runs to its end is the marker's.
-    expect(snippetWithoutMarker(`…other sessions: {"page":"Clawtrate"}`)).toEqual({
-      text: "",
-      cut: true,
+    // A search excerpt that starts inside the marker and runs to its end: the end comes off, and
+    // the excerpt's "…" stays.
+    expect(snippetWithoutMarker(` … other sessions: {"page":"Clawtrate"}`)).toEqual({
+      text: "…",
+      whole: false,
     });
   });
 });

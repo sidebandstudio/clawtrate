@@ -3,7 +3,7 @@
 // adds to the model's copy of the message after the person's words. What the person sees stays
 // exactly what they typed: in the conversation, after a reload, on another device, in the rail,
 // in search and in another client of the same gateway. A command and a stop word, which the
-// gateway refuses the field on, are sent again without it and still work.
+// gateway takes the field on only for ordinary messages, go without it and still work.
 //
 // Two preview hosts of its own, each a paired device of its own, and a paired operator that
 // creates the spec's task, reads it as another client would, and removes it afterwards.
