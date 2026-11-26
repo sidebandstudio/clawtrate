@@ -11,13 +11,15 @@
 //
 // Where the gateway does something the design did not know, the check
 // asserts what it does and says so in its name (the plugin turned off in the
-// middle of a run, a run another bot's message started).
+// middle of a run, a run another bot's message started). Where OpenClaw
+// versions differ, the check says beside its expectation which does what.
 
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GatewayEvent, OperatorSession } from "./operator.ts";
 import { drainSessions } from "./scenario-check.ts";
+import { shape } from "./versions.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -70,6 +72,19 @@ const VERSION = "1.0.0";
 /** What the gateway answers for a call whose approval it could not take (OpenClaw 2026.10.6). */
 const GATEWAY_UNAVAILABLE = "Plugin approval required (gateway unavailable)";
 const DENIED = "Denied by user. The tool call did not run.";
+/** The plugin's refusal of an Ask in a run another bot's message started. */
+const BOT_RUN_REFUSAL = "Refused by Clawtrate's rules plugin without asking anyone:";
+/** The plugin's refusal of a call whose card was answered after its rule changed. */
+const CHANGED_WHILE_WAITING = "the rules changed while the card waited";
+/**
+ * A call in a run under way when the plugin was turned off: the plugin's refusal where the
+ * gateway still runs its policy (2026.10.6), the gateway's where the plugin is gone
+ * (2026.11.10: its trusted policy fails, "blocked by rules: policy evaluation failed").
+ */
+const TURNED_OFF_REFUSALS = [
+  "it was turned off while this run was under way",
+  "blocked by rules: policy evaluation failed",
+];
 /** Juniper, whose id is the gateway's built-in `main`. */
 const BOT = "main";
 
@@ -1055,61 +1070,116 @@ export const RULES_CHECKS: RulesCheck[] = [
     },
   },
   {
-    name: "a setting changed while a card waits: after a rules change Allow once runs the call; after a config change the call fails",
+    name: "a rule changed while a card waits: to Allow, Allow once runs the call; to Never or to another Ask, Allow once does not run it",
     covers: ["#write"],
     async run(ctx, world) {
-      const original = await botEntry(ctx, BOT);
-      for (const change of ["rules", "config"] as const) {
-        await save(ctx, BOT, [askWrite()]);
-        const key = await task(ctx, world, BOT, `waiting-${change}`);
+      // An answer is for the rule the card showed. The gateway runs the call on either version
+      // once it is answered; the plugin looks at the rules again before it runs.
+      for (const change of ["allow", "never", "other-ask"] as const) {
+        const saved = await save(ctx, BOT, [askWrite()]);
+        const key = await task(ctx, world, BOT, `rule-${change}`);
         const since = marks(ctx);
         const runId = await start(ctx, key, "#write");
         const card = await cardFor(ctx, runId, since.interactive);
-        const answer = async () => {
+        const id = saved.rules[0]!.id;
+        await save(
+          ctx,
+          BOT,
+          change === "allow"
+            ? [{ action: "allow", tools: ["write"] }]
+            : change === "never"
+              ? [{ action: "never", tools: ["write"] }]
+              : [{ ...askWrite("**"), id }],
+        );
+        expect(
+          (await waitingCards(ctx.clients.interactive)).includes(card.id),
+          `the card was no longer listed after the change to ${change}`,
+        );
+        await resolve(ctx, card.id, "allow-once");
+        const write = (await finish(ctx, runId)).calls[0];
+        if (change === "allow") {
+          expect(ranOk(write), `after a change to Allow: ${show(write)}`);
+          continue;
+        }
+        expect(
+          write?.isError &&
+            write.text.includes(CHANGED_WHILE_WAITING) &&
+            write.text.includes(change === "never" ? "now says Never" : "version 2"),
+          `after a change to ${change}: ${show(write)}`,
+        );
+        // Exactly the card's ask and the refusal: each call is decided once.
+        const records = await decisionsOf(ctx, { runId });
+        same(
+          records.map((r) => [r.decision, rec(r.source).action, r.answer]),
+          [
+            ["block", change === "never" ? "never" : "ask", null],
+            ["ask", "ask", "allow-once"],
+          ],
+          `the decision records after a change to ${change}`,
+        );
+        same(
+          (await joined(ctx, records[0]!)).status,
+          "blocked",
+          "the joined audit record's status",
+        );
+      }
+    },
+  },
+  {
+    name: "a gateway setting changed while a card waits: the card's rule still holds, so Allow once runs the call where the gateway lets it",
+    covers: ["#write"],
+    async run(ctx, world) {
+      const original = await botEntry(ctx, BOT);
+      await save(ctx, BOT, [askWrite()]);
+      const key = await task(ctx, world, BOT, "waiting-config");
+      const since = marks(ctx);
+      const runId = await start(ctx, key, "#write");
+      const card = await cardFor(ctx, runId, since.interactive);
+      // The deny is undone however the check ends.
+      const run = await withConfig(
+        ctx,
+        () =>
+          patchConfig(ctx, {
+            agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
+          }),
+        async () => {
+          if (
+            await configHolds(ctx, (config) => rec(entryOf(config, BOT).tools).deny === undefined)
+          ) {
+            return;
+          }
+          await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
+            `agents.entries.${BOT}.tools.deny`,
+          ]);
+        },
+        async () => {
           expect(
             (await waitingCards(ctx.clients.interactive)).includes(card.id),
-            `the card was no longer listed after the ${change} change`,
+            "the card was no longer listed after the config change",
           );
           await resolve(ctx, card.id, "allow-once");
           return finish(ctx, runId);
-        };
-        if (change === "rules") {
-          await save(ctx, BOT, [{ action: "allow", tools: ["write"] }]);
-          const run = await answer();
-          expect(ranOk(run.calls[0]), `after a rules change: ${show(run.calls)}`);
-          continue;
-        }
-        // The deny is undone however the check ends.
-        const run = await withConfig(
-          ctx,
-          () =>
-            patchConfig(ctx, {
-              agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
-            }),
-          async () => {
-            if (
-              await configHolds(ctx, (config) => rec(entryOf(config, BOT).tools).deny === undefined)
-            ) {
-              return;
-            }
-            await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
-              `agents.entries.${BOT}.tools.deny`,
-            ]);
-          },
-          answer,
-        );
-        const write = run.calls[0];
+        },
+      );
+      const write = run.calls[0];
+      if (shape().version === "2026.10.6") {
+        // 2026.10.6 binds a waiting approval to the gateway's config as it was and fails the
+        // call after any config change (`Approval requester authority changed`): stricter than
+        // the rule asks, and the gateway's own, which the plugin cannot loosen.
         expect(
           write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
           `after a config change: ${show(run.calls)}`,
         );
+      } else {
+        // Newer versions keep the approval: the rule the card showed is unchanged, so it stands.
+        expect(ranOk(write), `after a config change: ${show(run.calls)}`);
       }
       same(await botEntry(ctx, BOT), original, "Juniper's settings once the deny is removed again");
       await pluginRunning(ctx);
     },
   },
   {
-    name: "the plugin turned off mid-run: that run's next call is still asked; a run started after runs the call with no card",
+    name: "the plugin turned off mid-run: that run's next call is refused with no card; a run started after runs the call with no card",
     covers: ["#slow-tool", "#write"],
     async run(ctx, world) {
       await save(ctx, BOT, [askWrite()]);
@@ -1135,18 +1205,24 @@ export const RULES_CHECKS: RulesCheck[] = [
       await withConfig(ctx, plugin(false), pluginBackOn, async () => {
         const off = await rules(ctx.clients.reader, "status");
         expect(!off.ok, `status still answered with the plugin off: ${show(off)}`);
-        // The run that started with the plugin keeps its hook: its write is asked.
-        const card = await cardFor(ctx, runId, since.interactive);
-        await resolve(ctx, card.id, "allow-once");
+        // The run that started with the plugin makes no more calls: 2026.10.6 keeps the
+        // plugin's policy for it, and the plugin refuses; 2026.11.10 refuses the call itself,
+        // as the plugin is gone. Either way no one is asked.
         const during = await finish(ctx, runId);
         same(
           during.calls.map((c) => [c.name, ranOk(c)]),
           [
             ["coder__slow_task", true],
-            ["write", true],
+            ["write", false],
           ],
           "the run the plugin was turned off in",
         );
+        const refused = during.calls[1]!;
+        expect(
+          refused.result && TURNED_OFF_REFUSALS.some((reason) => refused.text.includes(reason)),
+          `the write in the run the plugin was turned off in: ${show(refused)}`,
+        );
+        same(cardsSeen(ctx, since, runId), [], "who received a card in that run");
         // A run that starts with the plugin off: nothing asks.
         const fresh = await task(ctx, world, BOT, "stopped-fresh");
         const after = marks(ctx);
@@ -1218,7 +1294,12 @@ export const RULES_CHECKS: RulesCheck[] = [
         );
         return mine ? JSON.stringify(mine.content ?? "") : undefined;
       });
-      expect(text.includes(GATEWAY_UNAVAILABLE), `Pip's read result: ${text.slice(0, 300)}`);
+      // The plugin refuses before asking, on every version, and names the bot whose message
+      // started the run (2026.10.6 also failed the card itself; newer versions would raise it).
+      expect(
+        text.includes(BOT_RUN_REFUSAL) && text.includes("started by a message from bot marlow."),
+        `Pip's read result: ${text.slice(0, 300)}`,
+      );
     },
   },
   {

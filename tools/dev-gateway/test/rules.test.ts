@@ -390,7 +390,9 @@ describe("the rules checks' final clean-up", () => {
 
 describe("the rules checks' recipient run", () => {
   const hashed = (id: string) => `sha256:${createHash("sha256").update(id).digest("hex")}`;
-  const denied = "Plugin approval required (gateway unavailable)";
+  /** The plugin's refusal of the Ask in the run Marlow's message started. */
+  const denied =
+    "Refused by Clawtrate's rules plugin without asking anyone: pip's rule 'Ask first · read', version 1 (rule 0123456789ab), asks first, and this run was started by a message from bot marlow. An Ask in a run another bot started is a refusal, so a person never approves what a bot asked for. The call did not run.";
   const decision = (runId: string, callId: string, at: number) => ({
     id: runId,
     agentId: "pip",

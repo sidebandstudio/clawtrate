@@ -4,10 +4,18 @@
 // What it adds to an OpenClaw gateway, and what it cannot guarantee, is in
 // README.md beside this file. In short:
 //
-//   before_tool_call   decides each agent tool call by the rules (lib/evaluate.js):
+//   tool policy        a trusted tool policy (`rules`, declared in the manifest)
+//                      decides each agent tool call by the rules (lib/evaluate.js):
 //                      a Never blocks with the rule named, an Ask and "Ask when
 //                      nothing else decides" ask through the gateway's own
-//                      approval card, Allow once or Deny; it never rewrites a call
+//                      approval card, Allow once or Deny, and refuse in a run
+//                      another bot's message started; it never rewrites a call
+//   before_tool_call   after Allow once, refuses the call if its rule changed
+//                      while the card waited (where there is no trusted policy,
+//                      it decides instead)
+//   before_message_write, model_call_started
+//                      note which bot's message started a run (the message's
+//                      role and the gateway's mark on it, never its text)
 //   gateway methods    clawtrate-tool-rules.status, .get, .decisions.list
 //                      (operator.read); .set (operator.admin)
 //   event              plugin.clawtrate-tool-rules.changed, empty (operator.read)
@@ -68,6 +76,15 @@ const CURSOR = /^[0-9a-f]{16}$/;
 /** The longest filter `decisions.list` takes. */
 const FILTER_MAX = 512;
 const ANSWERS = new Set(["allow-once", "allow-always", "deny", "timeout", "cancelled"]);
+/** The trusted tool policy that decides each call; the manifest declares it. */
+export const POLICY_ID = "rules";
+/**
+ * How many tasks, runs and answered cards the plugin remembers who started or
+ * what was shown, each; the oldest is forgotten first.
+ */
+export const MEMORY_LIMIT = 1000;
+/** A bot's id as the gateway writes it in a task's key; anything else is not named. */
+const BOT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 const isPlainObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -95,6 +112,10 @@ function sharedState(dir, options) {
       lastCallAt: null,
       /** registration -> { hook: whether it registered the hook, emit } while its service runs */
       active: new Map(),
+      /** Who started each task's latest turn and each run: null, or { bot } for another bot's message. */
+      origins: { sessions: new Map(), runs: new Map(), current: new Map() },
+      /** The cards answered Allow once, by run and call, with the source each card showed. */
+      approved: new Map(),
     };
     shared.store.onExternalChange = () => emitChanged(shared);
     // Every change of state is said in the log, not only at start. (Readers are
@@ -236,6 +257,88 @@ export function blockReason(result) {
   return `Blocked by Clawtrate's rules plugin: ${scopeWords(source.scope)} '${ruleLabel(rule)}', version ${source.version} (rule ${source.ruleId}). The call did not run.`;
 }
 
+/** What asked, in words for a refusal: the rule, the fallback, or the lost rules. */
+function askerWords(result) {
+  const { source, rule } = result;
+  if (source.kind === "rules-lost")
+    return "its rules could not be read, so it asks before every call";
+  if (source.kind === "fallback") {
+    return `"Ask when nothing else decides" is on for ${source.scope === EVERY_BOT ? "every bot" : source.scope}`;
+  }
+  return `${scopeWords(source.scope)} '${ruleLabel(rule)}', version ${source.version} (rule ${source.ruleId}), asks first`;
+}
+
+/**
+ * Who sent a task's user message, from the gateway's own mark on it: null for
+ * a person or the gateway, `{ bot }` for another task's message (`bot` its id,
+ * or null when the key names no bot the plugin can name).
+ */
+export function messageOrigin(message) {
+  const provenance = isPlainObject(message) ? message.provenance : null;
+  if (!isPlainObject(provenance) || provenance.kind !== "inter_session") return null;
+  const key = typeof provenance.sourceSessionKey === "string" ? provenance.sourceSessionKey : "";
+  const id = /^agent:([^:]{1,64}):/.exec(key)?.[1]?.toLowerCase();
+  return { bot: id && BOT_ID.test(id) ? id : null };
+}
+
+/**
+ * The refusal of an Ask in a run another bot's message started: no card, the
+ * asking rule and the bot named. The bot's id is one the gateway wrote in a
+ * task's key, checked against its form, so it carries nothing else.
+ */
+export function botRunReason(result, origin) {
+  const who = origin.bot ? `bot ${origin.bot}` : "another bot";
+  return clip(
+    `Refused by Clawtrate's rules plugin without asking anyone: ${askerWords(result)}, and this run was started by a message from ${who}. An Ask in a run another bot started is a refusal, so a person never approves what a bot asked for. The call did not run.`,
+    DESCRIPTION_MAX,
+  );
+}
+
+/** Whether the gateway's config turns this plugin off, as the gateway reads it. */
+export function turnedOff(config) {
+  const plugins = isPlainObject(config?.plugins) ? config.plugins : {};
+  if (plugins.enabled === false) return true;
+  if (Array.isArray(plugins.deny) && plugins.deny.includes(PLUGIN_ID)) return true;
+  if (
+    Array.isArray(plugins.allow) &&
+    plugins.allow.length > 0 &&
+    !plugins.allow.includes(PLUGIN_ID)
+  )
+    return true;
+  const entry = isPlainObject(plugins.entries) ? plugins.entries[PLUGIN_ID] : undefined;
+  return isPlainObject(entry) && entry.enabled === false;
+}
+
+export const TURNED_OFF_REASON =
+  "Refused by Clawtrate's rules plugin: it was turned off while this run was under way. A run that started under the rules makes no more calls; a run started now is not ruled. The call did not run.";
+
+/** The refusal of a call whose card was answered after its rule changed. */
+export function changedReason(now) {
+  const what =
+    now.decision === "block"
+      ? `${scopeWords(now.source.scope)} '${ruleLabel(now.rule)}', version ${now.source.version} (rule ${now.source.ruleId}), now says Never`
+      : `${askerWords(now)} now`;
+  return clip(
+    `Refused by Clawtrate's rules plugin: the rules changed while the card waited, and ${what}. The answer was for the rule the card showed. The call did not run.`,
+    DESCRIPTION_MAX,
+  );
+}
+
+/** Whether two decision sources name the same rule at the same version, or the same fallback. */
+const sameSource = (a, b) =>
+  a?.kind === b?.kind &&
+  a?.scope === b?.scope &&
+  a?.ruleId === b?.ruleId &&
+  a?.version === b?.version &&
+  a?.action === b?.action;
+
+/** Keep `value` under `key` as the newest entry, forgetting the oldest past the limit. */
+function remember(map, key, value) {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > MEMORY_LIMIT) map.delete(map.keys().next().value);
+}
+
 /**
  * Register the plugin on `api`. Returns a handle for tests. `options` lets
  * tests give the state folder, the shared slots and the decision record's
@@ -280,64 +383,182 @@ export function createToolRules(api, options = {}) {
     }
   };
 
-  // ---- the hook ----
+  // ---- who started a run ----
 
-  function decide(event, ctx) {
-    shared.lastCallAt = now();
+  // The gateway marks a task's user message that came from another task
+  // (`provenance.kind: "inter_session"`, with that task's key). The plugin
+  // reads only that mark and the message's role, never its text, and keeps
+  // only the sending bot's id: per task for its latest message, and per run
+  // from the run's first model call.
+  const { origins, approved } = shared;
+
+  function noteMessage(event, ctx) {
+    try {
+      const message = event?.message;
+      if (!isPlainObject(message) || message.role !== "user") return undefined;
+      const sessionKey = text(ctx?.sessionKey) ?? text(event?.sessionKey);
+      if (!sessionKey) return undefined;
+      const origin = messageOrigin(message);
+      remember(origins.sessions, sessionKey, origin);
+      // A bot's message that reaches a run already under way makes it a run a bot started too.
+      const running = origins.current.get(sessionKey);
+      if (origin && running !== undefined && !origins.runs.get(running)) {
+        remember(origins.runs, running, origin);
+      }
+    } catch {
+      // Noting who wrote is never a reason to stop a write.
+    }
+    return undefined;
+  }
+
+  function noteRun(event, ctx) {
+    const runId = text(ctx?.runId) ?? text(event?.runId);
+    const sessionKey = text(ctx?.sessionKey) ?? text(event?.sessionKey);
+    if (!runId || !sessionKey || origins.runs.has(runId)) return;
+    remember(origins.runs, runId, origins.sessions.get(sessionKey) ?? null);
+    remember(origins.current, sessionKey, runId);
+  }
+
+  /** Who started a run: the run's own note, else its task's latest message. */
+  const startedBy = (runId, sessionKey) => {
+    if (runId && origins.runs.has(runId)) return origins.runs.get(runId);
+    return sessionKey ? (origins.sessions.get(sessionKey) ?? null) : null;
+  };
+
+  const approvalKey = (runId, toolCallId) =>
+    runId && toolCallId ? `${runId}\n${toolCallId}` : null;
+
+  // ---- the decision ----
+
+  /** Whether the call's answer is looked at again after a card (the decision is a trusted policy). */
+  let rechecks = false;
+
+  const callOf = (event, ctx) => {
     const tool = text(event?.toolName) ?? "";
     const agentId = text(ctx?.agentId);
+    const toolCallId = text(event?.toolCallId) ?? text(ctx?.toolCallId);
     const base = {
       agentId,
       sessionKey: text(ctx?.sessionKey),
       runId: text(event?.runId) ?? text(ctx?.runId),
-      callId: hashCallId(text(event?.toolCallId) ?? text(ctx?.toolCallId)),
+      callId: hashCallId(toolCallId),
       tool,
     };
+    return { tool, agentId, toolCallId, base };
+  };
+
+  function decide(event, ctx) {
+    shared.lastCallAt = now();
+    const { tool, agentId, toolCallId, base } = callOf(event, ctx);
     // Before anything that could fail: a question is never asked about or blocked.
     if (tool === EXEMPT_TOOL) {
       log.add({ ...base, decision: "none", source: null });
       return undefined;
     }
+    const config = currentConfig();
     const view = store.view();
     const rules = view.kind === "lost" ? (view.kept ? "kept" : "lost") : view.kind;
-    const redacted = cardDetails(cardSetting, currentConfig()).mode === "redacted";
-    const target = readTarget(tool, event?.params, workspaceOf(agentId));
-    const ask = (text, id) => ({
-      requireApproval: {
-        ...text,
-        severity: "warning",
-        timeoutMs: APPROVAL_TIMEOUT_MS,
-        allowedDecisions: [...ALLOWED_DECISIONS],
-        // Only the decision word is kept; nothing standing is made from it.
-        onResolution: (decision) => log.answer(id, ANSWERS.has(decision) ? decision : "unknown"),
-      },
-    });
-    if (view.enforced === null) {
-      // Lost, with no copy: nothing a person forbade may run unasked.
-      const id = log.add({ ...base, rules, decision: "ask", source: { kind: "rules-lost" } });
-      return ask(lostRulesText(tool, target, redacted), id);
+    // Called while turned off: a run that started under the rules (the gateway keeps
+    // such a run's hooks on some versions and refuses its calls on others).
+    if (turnedOff(config)) {
+      log.add({ ...base, rules, decision: "block", source: { kind: "turned-off" } });
+      return { block: true, blockReason: TURNED_OFF_REASON };
     }
-    const result = evaluate(view.enforced, { agentId, tool, target });
+    const redacted = cardDetails(cardSetting, config).mode === "redacted";
+    const target = readTarget(tool, event?.params, workspaceOf(agentId));
+    const lost = view.enforced === null;
+    // Lost, with no copy: nothing a person forbade may run unasked.
+    const result = lost
+      ? { decision: "ask", source: { kind: "rules-lost" } }
+      : evaluate(view.enforced, { agentId, tool, target });
     const id = log.add({ ...base, rules, decision: result.decision, source: result.source });
     if (result.decision === "block") return { block: true, blockReason: blockReason(result) };
     if (result.decision !== "ask") return undefined;
+    // A run another bot's message started asks no one: a person never approves what a bot asked for.
+    const origin = startedBy(base.runId, base.sessionKey);
+    if (origin) {
+      log.answer(id, "cancelled");
+      return { block: true, blockReason: botRunReason(result, origin) };
+    }
+    const key = approvalKey(base.runId, toolCallId);
     return {
       requireApproval: {
-        ...approvalText(result, tool, target, redacted),
+        ...(lost
+          ? lostRulesText(tool, target, redacted)
+          : approvalText(result, tool, target, redacted)),
         severity: "warning",
         timeoutMs: APPROVAL_TIMEOUT_MS,
         allowedDecisions: [...ALLOWED_DECISIONS],
+        // The gateway stamps a hook's card with its plugin; a trusted policy's card names it itself.
+        pluginId: PLUGIN_ID,
         // Only the decision word is kept; nothing standing is made from it.
-        onResolution: (decision) => log.answer(id, ANSWERS.has(decision) ? decision : "unknown"),
+        onResolution: (decision) => {
+          log.answer(id, ANSWERS.has(decision) ? decision : "unknown");
+          // The rules are looked at again before the approved call runs.
+          if (rechecks && key && decision === "allow-once") {
+            remember(approved, key, result.source);
+          }
+        },
       },
     };
   }
 
-  // Every tool: "Ask when nothing else decides" can apply to any of them.
-  // The hook needs no conversation access.
+  /**
+   * After a card's Allow once, before the call runs: the answer was for the
+   * rule the card showed. The call runs when the rules still ask by that rule
+   * at that version, or would now run it without asking; otherwise it is
+   * refused, naming what the rules say now.
+   */
+  function recheck(event, ctx) {
+    const { tool, agentId, toolCallId, base } = callOf(event, ctx);
+    const key = approvalKey(base.runId, toolCallId);
+    if (!key || !approved.has(key)) return undefined;
+    const shown = approved.get(key);
+    approved.delete(key);
+    const view = store.view();
+    const rules = view.kind === "lost" ? (view.kept ? "kept" : "lost") : view.kind;
+    if (turnedOff(currentConfig())) {
+      log.add({ ...base, rules, decision: "block", source: { kind: "turned-off" } });
+      return { block: true, blockReason: TURNED_OFF_REASON };
+    }
+    const result =
+      view.enforced === null
+        ? { decision: "ask", source: { kind: "rules-lost" } }
+        : evaluate(view.enforced, {
+            agentId,
+            tool,
+            target: readTarget(tool, event?.params, workspaceOf(agentId)),
+          });
+    if (result.decision === "none" || result.decision === "allow") return undefined;
+    if (result.decision === "ask" && sameSource(result.source, shown)) return undefined;
+    log.add({ ...base, rules, decision: "block", source: result.source });
+    return { block: true, blockReason: changedReason(result) };
+  }
+
+  // Every tool: "Ask when nothing else decides" can apply to any of them. The
+  // decision is a trusted tool policy, which the gateway runs before ordinary
+  // hooks and before asking; after a card is answered, the ordinary hook
+  // looks at the rules again. None of it needs conversation access.
   let hookRegistered = false;
+  if (typeof api.registerTrustedToolPolicy === "function") {
+    try {
+      api.registerTrustedToolPolicy({
+        id: POLICY_ID,
+        description: "Clawtrate's rules: run without asking, ask first, or never",
+        evaluate: decide,
+      });
+      hookRegistered = true;
+    } catch (error) {
+      logger.warn?.(
+        `${PLUGIN_ID}: the gateway did not take its tool policy (${error?.message ?? error}); its hook decides instead, and a card's answer is not looked at again.`,
+      );
+    }
+  }
   if (typeof api.on === "function") {
-    api.on("before_tool_call", decide);
+    api.on("before_tool_call", hookRegistered ? recheck : decide);
+    api.on("before_message_write", noteMessage);
+    api.on("model_call_started", noteRun);
+    rechecks = hookRegistered;
     hookRegistered = true;
   }
 

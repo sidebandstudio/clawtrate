@@ -23,6 +23,7 @@ export type HookResult = {
     severity?: string;
     timeoutMs?: number;
     allowedDecisions?: string[];
+    pluginId?: string;
     onResolution?: (decision: string) => void;
   };
 };
@@ -39,13 +40,16 @@ export function tempState() {
 /**
  * Register the plugin on a fake host. `stateDir` is the gateway's state
  * folder; `slots` the process-wide state (fresh per host unless shared);
- * `on: false` leaves the hook API out, as a load without hooks would.
+ * `on: false` leaves the hook API out, as a load without hooks would;
+ * `trusted: false` leaves out trusted tool policies, as a host without them
+ * would, and `trusted: "refused"` refuses the registration.
  */
 export function load(
   options: {
     stateDir: string;
     slots?: Map<unknown, unknown>;
     on?: boolean;
+    trusted?: boolean | "refused";
     config?: Json;
     pluginConfig?: Json;
     workspaces?: Record<string, string>;
@@ -56,6 +60,12 @@ export function load(
 ) {
   const methods = new Map<string, { handler: (opts: Json) => Promise<void>; opts: Json }>();
   const hooks: { name: string; fn: (event: Json, ctx: Json) => unknown; opts: Json }[] = [];
+  const policies: {
+    id: string;
+    description: string;
+    matcher?: unknown;
+    evaluate: (event: Json, ctx: Json) => unknown;
+  }[] = [];
   const services: { start(ctx: Json): void; stop(): void }[] = [];
   const events: { name: string; payload: unknown; opts: unknown }[] = [];
   const warnings: string[] = [];
@@ -83,6 +93,12 @@ export function load(
   if (options.on !== false) {
     api.on = (name: string, fn: (event: Json, ctx: Json) => unknown, opts: Json = {}) =>
       hooks.push({ name, fn, opts });
+  }
+  if (options.trusted !== false) {
+    api.registerTrustedToolPolicy = (policy: (typeof policies)[number]) => {
+      if (options.trusted === "refused") throw new Error("policy id is not declared");
+      policies.push(policy);
+    };
   }
   const slots = options.slots ?? new Map();
   const handle = createToolRules(api, {
@@ -113,27 +129,72 @@ export function load(
     return out ?? { ok: false, error: { code: "NONE", message: "no response" } };
   }
 
-  /** Run the plugin's before_tool_call hook as the gateway would for one call. */
-  function before(
-    agentId: string | undefined,
-    toolName: string,
-    params: Json = {},
-    ids: { runId?: string; toolCallId?: string; sessionKey?: string } = {},
-  ): HookResult | undefined {
-    const hook = hooks.find((h) => h.name === "before_tool_call");
-    if (!hook) throw new Error("no before_tool_call hook");
+  type Ids = { runId?: string; toolCallId?: string; sessionKey?: string };
+  const callOf = (agentId: string | undefined, toolName: string, params: Json, ids: Ids) => {
     const runId = ids.runId ?? "run-1";
     const toolCallId = ids.toolCallId ?? "call-1";
-    return hook.fn(
-      { toolName, params, runId, toolCallId },
-      {
+    return {
+      event: { toolName, params, runId, toolCallId },
+      ctx: {
         toolName,
         ...(agentId ? { agentId } : {}),
         sessionKey: ids.sessionKey ?? `agent:${agentId ?? "none"}:main`,
         runId,
         toolCallId,
       },
-    ) as HookResult | undefined;
+    };
+  };
+  const hook = (name: string) => {
+    const found = hooks.find((h) => h.name === name);
+    if (!found) throw new Error(`no ${name} hook`);
+    return found;
+  };
+
+  /**
+   * Decide one call as the gateway would before asking: the trusted policies
+   * first, then, when none decided, the before_tool_call hooks.
+   */
+  function before(
+    agentId: string | undefined,
+    toolName: string,
+    params: Json = {},
+    ids: Ids = {},
+  ): HookResult | undefined {
+    const { event, ctx } = callOf(agentId, toolName, params, ids);
+    for (const policy of policies) {
+      const decided = policy.evaluate(event, ctx) as HookResult | undefined;
+      if (decided) return decided;
+    }
+    return hook("before_tool_call").fn(event, ctx) as HookResult | undefined;
+  }
+
+  /**
+   * A card answered: the answer to the plugin, then, for Allow once, the
+   * before_tool_call hooks the gateway runs after a trusted policy's card.
+   */
+  function answer(
+    card: HookResult | undefined,
+    decision: string,
+    agentId: string | undefined,
+    toolName: string,
+    params: Json = {},
+    ids: Ids = {},
+  ): HookResult | undefined {
+    if (!card?.requireApproval) throw new Error("no card to answer");
+    card.requireApproval.onResolution?.(decision);
+    if (decision !== "allow-once") return undefined;
+    const { event, ctx } = callOf(agentId, toolName, params, ids);
+    return hook("before_tool_call").fn(event, ctx) as HookResult | undefined;
+  }
+
+  /** A message written to a task, as the gateway tells before_message_write. */
+  function write(sessionKey: string, message: Json): void {
+    hook("before_message_write").fn({ message }, { sessionKey });
+  }
+
+  /** A run's model call, as the gateway tells model_call_started. */
+  function modelCall(runId: string, sessionKey: string): void {
+    hook("model_call_started").fn({ runId, sessionKey }, { runId, sessionKey });
   }
 
   /** Save a scope's rules as an admin would, reading its version first. */
@@ -149,12 +210,16 @@ export function load(
     handle,
     methods,
     hooks,
+    policies,
     services,
     events,
     warnings,
     infos,
     call,
     before,
+    answer,
+    write,
+    modelCall,
     save,
     stop: () => {
       services.forEach((service) => service.stop());

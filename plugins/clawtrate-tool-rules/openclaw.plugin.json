@@ -4,6 +4,7 @@
   "description": "What each bot may do with its tools: run without asking, ask a person first, or never. Holds only while it runs. Not made by or affiliated with OpenClaw.",
   "categories": ["developer-tools"],
   "activation": { "onStartup": true },
+  "contracts": { "trustedToolPolicies": ["rules"] },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

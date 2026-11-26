@@ -11,8 +11,10 @@ import plugin, {
   ALLOWED_DECISIONS,
   APPROVAL_TIMEOUT_MS,
   DESCRIPTION_MAX,
+  MEMORY_LIMIT,
   PLUGIN_VERSION,
   TITLE_MAX,
+  TURNED_OFF_REASON,
 } from "../index.js";
 import { RulesStore, serializeRules } from "../lib/store.js";
 import { load, running, tempState } from "./harness.ts";
@@ -56,9 +58,33 @@ function open(options: Parameters<typeof load>[0]) {
 const rulesFile = (stateDir: string) => join(stateDir, "clawtrate-tool-rules", "rules.json");
 
 describe("registration", () => {
-  it("registers one hook for every tool call, with no matcher and no conversation hook", () => {
+  it("decides every tool call by a trusted policy with no matcher, and needs no conversation hook", () => {
     const h = host();
-    expect(h.hooks.map((hook) => [hook.name, hook.opts])).toEqual([["before_tool_call", {}]]);
+    expect(h.policies.map((p) => [p.id, p.matcher])).toEqual([["rules", undefined]]);
+    // The manifest declares the policy, as the gateway asks of an installed plugin.
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "openclaw.plugin.json"), "utf8"),
+    );
+    expect(manifest.contracts).toEqual({ trustedToolPolicies: ["rules"] });
+    // None of these is a hook the gateway holds back without conversation access.
+    expect(h.hooks.map((hook) => [hook.name, hook.opts])).toEqual([
+      ["before_tool_call", {}],
+      ["before_message_write", {}],
+      ["model_call_started", {}],
+    ]);
+  });
+
+  it("decides in its hook where the gateway has no trusted policies, or refuses its own", async () => {
+    for (const trusted of [false, "refused"] as const) {
+      const h = host({ trusted });
+      expect(h.policies).toEqual([]);
+      await h.save("otto", [{ action: "never", tools: ["write"] }]);
+      expect(h.before("otto", "write", { path: "a" })?.block).toBe(true);
+      expect((await h.call("status")).payload?.hook).toMatchObject({ registered: true });
+      expect(h.warnings.some((w) => /did not take its tool policy/.test(w))).toBe(
+        trusted === "refused",
+      );
+    }
   });
 
   it("asks the gateway to hold get, status and decisions.list to read, and set to admin", () => {
@@ -122,7 +148,7 @@ describe("status says only what the plugin itself knows", () => {
   });
 
   it("does not claim a hook it could not register, or one whose service is not running", async () => {
-    const none = host({ on: false });
+    const none = host({ on: false, trusted: false });
     expect((await none.call("status")).payload?.hook).toEqual({
       registered: false,
       lastCallAt: null,
@@ -429,6 +455,8 @@ describe("the hook", () => {
     expect(APPROVAL_TIMEOUT_MS).toBe(600_000);
     expect(approval.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(ALLOWED_DECISIONS).not.toContain("allow-always");
+    // A trusted policy's card is not stamped by the gateway: it names its plugin itself.
+    expect(approval.pluginId).toBe("clawtrate-tool-rules");
     expect(asked.params).toBeUndefined();
     expect(asked.block).toBeUndefined();
   });
@@ -499,6 +527,249 @@ describe("the hook", () => {
     expect(h.before("otto", "write", { path: "/srv/workspaces/otto/notes/k" })).toBeUndefined();
     // Outside it the path is not read, so the Never applies.
     expect(h.before("otto", "write", { path: "/srv/workspaces/pip/notes/k" })?.block).toBe(true);
+  });
+});
+
+describe("a run another bot's message started (#606)", () => {
+  const PIP = "agent:pip:main";
+  const fromMarlow = {
+    role: "user",
+    content: "read your notes",
+    provenance: {
+      kind: "inter_session",
+      sourceSessionKey: "agent:marlow:main",
+      sourceTool: "sessions_send",
+    },
+  };
+  const fromPerson = { role: "user", content: "hello", provenance: { kind: "external_user" } };
+  const read = (h: ReturnType<typeof load>, runId: string) =>
+    h.before(
+      "pip",
+      "read",
+      { path: "AGENTS.md" },
+      { runId, sessionKey: PIP, toolCallId: `${runId}-c` },
+    );
+
+  it("refuses an Ask without a card, naming the bot, and records the ask as cancelled", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow);
+    h.modelCall("run-b", PIP);
+    const result = read(h, "run-b");
+    expect(result?.requireApproval).toBeUndefined();
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toMatch(
+      /^Refused by Clawtrate's rules plugin without asking anyone: pip's rule 'Ask first · read'.*started by a message from bot marlow\..*The call did not run\.$/,
+    );
+    expect(result!.blockReason!.length).toBeLessThanOrEqual(DESCRIPTION_MAX);
+    const [record] = (await h.call("decisions.list", { runId: "run-b" })).payload!
+      .records as Record<string, unknown>[];
+    expect([record?.decision, record?.answer]).toEqual(["ask", "cancelled"]);
+  });
+
+  it("refuses the fallback's ask and the lost rules' ask the same way, and still blocks a Never as a Never", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "never", tools: ["write"] }], true);
+    h.write(PIP, fromMarlow);
+    h.modelCall("run-b", PIP);
+    expect(read(h, "run-b")?.blockReason).toMatch(
+      /"Ask when nothing else decides" is on for pip, and this run was started by a message from bot marlow/,
+    );
+    const never = h.before("pip", "write", { path: "a" }, { runId: "run-b", sessionKey: PIP });
+    expect(never?.blockReason).toMatch(/^Blocked by Clawtrate's rules plugin: pip's rule/);
+    writeFileSync(rulesFile(h.stateDir), "{ broken");
+    const lost = open({ stateDir: h.stateDir });
+    lost.write(PIP, fromMarlow);
+    lost.modelCall("run-l", PIP);
+    expect(read(lost, "run-l")?.blockReason).toMatch(
+      /its rules could not be read, so it asks before every call, and this run was started by a message from bot marlow/,
+    );
+  });
+
+  it("asks in a run a person's message started, also after a bot's run in the same task", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow);
+    h.modelCall("run-b", PIP);
+    h.write(PIP, fromPerson);
+    h.modelCall("run-p", PIP);
+    expect(read(h, "run-p")?.requireApproval).toBeDefined();
+    // The bot's run stays a bot's run.
+    expect(read(h, "run-b")?.block).toBe(true);
+  });
+
+  it("refuses in a person's run once a bot's message reaches it", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromPerson);
+    h.modelCall("run-p", PIP);
+    h.modelCall("run-p", PIP);
+    h.write(PIP, fromMarlow);
+    expect(read(h, "run-p")?.blockReason).toMatch(/from bot marlow/);
+  });
+
+  it("goes by the task's latest message when the run made no model call it saw", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow);
+    expect(read(h, "run-x")?.block).toBe(true);
+    h.write(PIP, fromPerson);
+    expect(read(h, "run-y")?.requireApproval).toBeDefined();
+  });
+
+  it("names only a bot id the task's key gives in a bot id's form", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    for (const [key, words] of [
+      ["global", "another bot"],
+      ["agent:Marlow<b>:main", "another bot"],
+      [`agent:${"m".repeat(65)}:main`, "another bot"],
+      ["agent:otto-2:task", "bot otto-2"],
+    ] as const) {
+      h.write(PIP, { ...fromMarlow, provenance: { kind: "inter_session", sourceSessionKey: key } });
+      expect(read(h, `run-${key.length}`)?.blockReason).toContain(
+        `started by a message from ${words}.`,
+      );
+    }
+  });
+
+  it("keeps at most MEMORY_LIMIT tasks and runs, the oldest forgotten first", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow);
+    h.modelCall("run-b", PIP);
+    for (let i = 0; i < MEMORY_LIMIT; i += 1) {
+      h.write(`agent:pip:t${i}`, fromPerson);
+      h.modelCall(`run-${i}`, `agent:pip:t${i}`);
+    }
+    const origins = h.handle.shared.origins;
+    expect([origins.sessions.size, origins.runs.size, origins.current.size]).toEqual([
+      MEMORY_LIMIT,
+      MEMORY_LIMIT,
+      MEMORY_LIMIT,
+    ]);
+    // Forgotten: the run is not known, and neither is its task's message.
+    expect(read(h, "run-b")?.requireApproval).toBeDefined();
+  });
+});
+
+describe("a card answered after its rule changed (#606)", () => {
+  const ASK = { action: "ask", tools: ["write"], target: { kind: "path", pattern: "notes/**" } };
+  const call = [
+    "main",
+    "write",
+    { path: "notes/a.md" },
+    { runId: "run-1", toolCallId: "call-1" },
+  ] as const;
+
+  it("runs the call when the rule the card showed still asks, at the same version", async () => {
+    const h = host();
+    const saved = await h.save("main", [ASK]);
+    const card = h.before(...call);
+    // Another rule changes; the card's rule stays as it was.
+    const rules = (saved.payload!.rules as Record<string, unknown>[]).map((r) => ({ ...r }));
+    await h.save("main", [...rules, { action: "never", tools: ["exec"] }]);
+    expect(h.answer(card, "allow-once", ...call)).toBeUndefined();
+  });
+
+  it("refuses it when the rule now says Never, naming the rule, and records the refusal", async () => {
+    const h = host();
+    await h.save("main", [ASK]);
+    const card = h.before(...call);
+    await h.save("main", [{ action: "never", tools: ["write"] }]);
+    const result = h.answer(card, "allow-once", ...call);
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toMatch(
+      /^Refused by Clawtrate's rules plugin: the rules changed while the card waited, and main's rule 'Never · write', version 1 \(rule [0-9a-f]{12}\), now says Never\. The answer was for the rule the card showed\. The call did not run\.$/,
+    );
+    const records = (await h.call("decisions.list", { runId: "run-1" })).payload!.records as Record<
+      string,
+      unknown
+    >[];
+    expect(records.map((r) => [r.decision, r.answer])).toEqual([
+      ["block", null],
+      ["ask", "allow-once"],
+    ]);
+  });
+
+  it("refuses it when another Ask, or another version of the rule, now asks", async () => {
+    const h = host();
+    const saved = await h.save("main", [ASK]);
+    const id = (saved.payload!.rules as { id: string }[])[0]!.id;
+    const card = h.before(...call);
+    await h.save("main", [{ ...ASK, id, target: { kind: "path", pattern: "**" } }]);
+    expect(h.answer(card, "allow-once", ...call)?.blockReason).toMatch(
+      /version 2 .*asks first now/,
+    );
+    const fallback = host();
+    await fallback.save("main", [ASK]);
+    const second = fallback.before(...call);
+    await fallback.save("main", [], true);
+    expect(fallback.answer(second, "allow-once", ...call)?.blockReason).toMatch(
+      /"Ask when nothing else decides" is on for main now/,
+    );
+  });
+
+  it("runs it when the rules now let it run without asking", async () => {
+    for (const now of [[{ action: "allow", tools: ["write"] }], []]) {
+      const h = host();
+      await h.save("main", [ASK]);
+      const card = h.before(...call);
+      await h.save("main", now);
+      expect(h.answer(card, "allow-once", ...call)).toBeUndefined();
+    }
+  });
+
+  it("looks again only at the call whose card was answered Allow once, once", async () => {
+    const h = host();
+    await h.save("main", [ASK]);
+    const card = h.before(...call);
+    await h.save("main", [{ action: "never", tools: ["write"] }]);
+    expect(h.answer(card, "deny", ...call)).toBeUndefined();
+    // Not a call this plugin asked about: the hook leaves it alone.
+    const hook = h.hooks.find((x) => x.name === "before_tool_call")!;
+    expect(
+      hook.fn(
+        { toolName: "write", params: {}, runId: "run-9", toolCallId: "c" },
+        { agentId: "main" },
+      ),
+    ).toBeUndefined();
+    expect(h.handle.shared.approved.size).toBe(0);
+  });
+});
+
+describe("the plugin turned off while a run is under way (#606)", () => {
+  const OFF: [string, Record<string, unknown>][] = [
+    ["its entry", { entries: { "clawtrate-tool-rules": { enabled: false } } }],
+    ["plugins.enabled", { enabled: false }],
+    ["plugins.deny", { deny: ["clawtrate-tool-rules"] }],
+    ["an allow list without it", { allow: ["memory-core"] }],
+  ];
+  for (const [what, plugins] of OFF) {
+    it(`refuses every call of that run, by ${what}, but never ask_user`, async () => {
+      const config: Record<string, unknown> = {};
+      const h = host({ config });
+      await h.save("main", [{ action: "allow", tools: ["read"] }]);
+      config.plugins = plugins;
+      for (const tool of ["read", "write"]) {
+        expect(h.before("main", tool, { path: "a" })).toEqual({
+          block: true,
+          blockReason: TURNED_OFF_REASON,
+        });
+      }
+      expect(h.before("main", "ask_user")).toBeUndefined();
+    });
+  }
+
+  it("refuses a call whose card is answered after it was turned off", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", [{ action: "ask", tools: ["write"] }]);
+    const card = h.before("main", "write", { path: "a" });
+    config.plugins = { entries: { "clawtrate-tool-rules": { enabled: false } } };
+    expect(h.answer(card, "allow-once", "main", "write", { path: "a" })?.blockReason).toBe(
+      TURNED_OFF_REASON,
+    );
   });
 });
 
@@ -672,7 +943,7 @@ describe("status says whether rules are being enforced", () => {
       enforcing: "ask-every-call",
       matches: null,
     });
-    const without = host({ on: false });
+    const without = host({ on: false, trusted: false });
     await without.save("otto", [{ action: "never", tools: ["write"] }]);
     expect((await without.call("status")).payload).toMatchObject({
       rules: { state: "read" },
