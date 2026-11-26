@@ -3,6 +3,7 @@
 
 import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
 import { OpenClawUpdates } from "./openclaw-update.ts";
+import { DeviceApprovals, pairCode, type DeviceDecision } from "./device-approval.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
@@ -1975,6 +1976,7 @@ export class ClawtrateClient {
     readOnly: () => this.options.readOnly === true,
     bots: () => this.state.bots.map((bot) => ({ id: bot.id, name: bot.name })),
     readStatus: (botId, send) => this.accounts.readStatus(botId, send),
+    listDevices: () => this.deviceApprovals.listDevices(),
     latestTask: (botId) => {
       const tasks = this.state.tasksByBot[botId] ?? [];
       let latest: { key: string; at: number } | null = null;
@@ -1986,6 +1988,30 @@ export class ClawtrateClient {
     },
     deviceId: () => this.state.connection.deviceId,
     now: () => this.now(),
+  });
+  /** Waiting devices this admin connection can approve (`device-approval.ts`); its state is `deviceRequests`. */
+  private readonly deviceApprovals = new DeviceApprovals({
+    request: (method, params) => this.request(method, params),
+    // A setup connection publishes typed outcomes only, so it lists, approves and denies nothing,
+    // whichever path asks (a window's refresh included); its hello and events already skip it.
+    admin: () =>
+      this.holds(ADMIN_SCOPE) && !this.options.readOnly && !this.isSetup(this.settings?.url),
+    pairing: () => this.holds(PAIRING_SCOPE),
+    answered: (error) => error instanceof GatewayProtocolRequestError,
+    now: () => this.now(),
+    later: (run, ms) => {
+      const timer = setTimeout(run, ms);
+      return () => clearTimeout(timer);
+    },
+    get: () => this.state.deviceRequests,
+    set: (deviceRequests) => this.store.update((state) => ({ ...state, deviceRequests })),
+    random: (bytes) => {
+      const out = new Uint8Array(bytes);
+      const api = (globalThis as { crypto?: { getRandomValues?: (a: Uint8Array) => void } }).crypto;
+      if (api?.getRandomValues) api.getRandomValues(out);
+      else for (let i = 0; i < bytes; i += 1) out[i] = Math.floor(Math.random() * 256);
+      return out;
+    },
   });
   /**
    * Task lists being read, each its rows so far, already bounded: at most two,
@@ -6786,6 +6812,44 @@ export class ClawtrateClient {
     return this.openclawUpdates.release();
   }
 
+  // Approving a waiting device (`device-approval.ts`, setup-effortless.md §5) ---------------
+
+  /** The gateway's waiting devices, read again. */
+  readDeviceRequests(): Promise<void> {
+    return this.deviceApprovals.refresh();
+  }
+
+  /** A window takes the one request the host opens by itself: true for the first that asks. */
+  takeDevicePrompt(requestId: string): boolean {
+    return this.deviceApprovals.takePrompt(requestId);
+  }
+
+  /**
+   * The person picked `code` on the sheet that showed `scopes`, read on connection `listedOn`
+   * (`deviceRequests.listedOn`) of the gateway of `stamp`.
+   */
+  async approveDevice(
+    requestId: string,
+    code: string,
+    scopes: readonly string[],
+    listedOn: number,
+    stamp: GatewayStamp,
+  ): Promise<DeviceDecision> {
+    await this.requireSameGateway(stamp);
+    return this.deviceApprovals.approve(requestId, code, scopes, listedOn);
+  }
+
+  /** "I didn't start this" denies the request; "None of these match" sends nothing. */
+  async refuseDevice(
+    requestId: string,
+    why: "not-mine" | "none-match",
+    listedOn: number,
+    stamp: GatewayStamp,
+  ): Promise<DeviceDecision> {
+    await this.requireSameGateway(stamp);
+    return this.deviceApprovals.refuse(requestId, why, listedOn);
+  }
+
   /** Not now on a name card: kept on this device for that bot and that name. */
   /** Not now, with whether it answered the card shown now. */
   async declineBotName(
@@ -9264,6 +9328,7 @@ export class ClawtrateClient {
         this.routines.onClose();
         this.usage.onClose();
         this.openclawUpdates.onDisconnect();
+        this.deviceApprovals.onClose();
         const status = this.state.connection.status;
         // The host refused a socket of this gateway's route: its words, and the way on.
         const refused = this.routeRefusal(settings.url);
@@ -9358,6 +9423,7 @@ export class ClawtrateClient {
     this.accounts.reset();
     this.botNames.reset();
     this.openclawUpdates.reset();
+    this.deviceApprovals.reset();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
@@ -9416,6 +9482,7 @@ export class ClawtrateClient {
     this.accounts.onClose();
     this.routines.onClose();
     this.usage.onClose();
+    this.deviceApprovals.onClose();
     this.protocol?.stop();
     this.protocol = null;
     this.computer.connectionLost(options?.keepPendingAnswer);
@@ -9556,6 +9623,8 @@ export class ClawtrateClient {
           approveCommand: instructions.command,
           approveNote: instructions.note,
           requestedScopes: scopes,
+          // From this device's own key and the gateway's id for its request (`pairCode`).
+          code: this.identity ? pairCode(this.identity.publicKey, requestId) : null,
         },
       });
       // The request id stays the same while we retry, so keep trying quietly
@@ -9710,6 +9779,7 @@ export class ClawtrateClient {
       : null;
     this.voiceAdvertised = listed === null ? null : listed.includes(VOICE_GET);
     this.computer.hello(listed ?? []);
+    if (!this.isSetup(this.settings?.url)) this.deviceApprovals.onHello();
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;
@@ -9978,6 +10048,9 @@ export class ClawtrateClient {
       // it was setup's is published, if it was this connection's.
       const held = this.setupUpdate;
       if (held?.generation === generation) this.setConnection({ openclawUpdate: held.update });
+      // Waiting devices start as on a hello: with admin the list is read now, so a request
+      // already waiting is listed without an event.
+      this.deviceApprovals.onHello();
     }
     if (setup) this.setupUpdate = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
@@ -10706,6 +10779,12 @@ export class ClawtrateClient {
         this.setConnection({
           openclawUpdate: readOpenClawUpdate(asRecord(event.payload)?.updateAvailable),
         });
+        return;
+      case "device.pair.requested":
+      case "device.pair.resolved":
+      case "device.pair.changed":
+        if (!this.isSetup(this.settings?.url))
+          this.deviceApprovals.onEvent(event.event, event.payload);
         return;
       case "update.run.changed":
         if (!this.isSetup(this.settings?.url)) this.openclawUpdates.onRunChanged(event.payload);
