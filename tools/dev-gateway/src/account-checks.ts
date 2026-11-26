@@ -17,7 +17,14 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { profileHash, SCRIPTED_ACCOUNTS, credentialFor } from "./accounts.ts";
+import {
+  ACCOUNT_MODELS,
+  credentialFor,
+  grownModels,
+  LATER_MODELS,
+  profileHash,
+  SCRIPTED_ACCOUNTS,
+} from "./accounts.ts";
 import type { OperatorSession } from "./operator.ts";
 import type { FailureStatus, RequestRecord } from "./scripted-accounts.ts";
 import { MARKER_FILE } from "./state-guard.ts";
@@ -160,13 +167,13 @@ type Revision = { hash: string; configRevisionHash?: string; appliedConfigHash?:
 async function patchConfig(
   h: AccountHarness,
   patch: JsonRecord,
-  replacePaths: string[] = [],
+  replacePaths?: string[],
 ): Promise<void> {
   const before = await h.admin.request<Revision>("config.get", {});
   const patched = await h.admin.request<{ ok?: boolean }>("config.patch", {
     raw: JSON.stringify(patch),
     baseHash: before.hash,
-    ...(replacePaths.length > 0 ? { replacePaths } : {}),
+    ...(replacePaths ? { replacePaths } : {}),
   });
   expect(patched.ok === true, `config.patch was refused: ${JSON.stringify(patched).slice(0, 300)}`);
   const started = Date.now();
@@ -1131,6 +1138,49 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         rec(rec((await readConfig(h)).config.auth).profiles),
         configured,
         "the configured accounts are back as they were",
+      );
+    },
+  },
+  {
+    // #565: Refresh in the Model menu. The scripted providers are declared in the config, so a
+    // refresh asks none of them; a model added to a provider's entry is listed by the next one.
+    name: "a refresh lists a model the provider's entry gained, read-only, and asks no scripted provider",
+    rows: [20],
+    run: async (h) => {
+      const refresh = () =>
+        h.reader.request<JsonRecord>("models.list", {
+          agentId: "main",
+          provider: "acme",
+          refresh: true,
+        });
+      const ids = (answer: JsonRecord) =>
+        (Array.isArray(answer.models) ? answer.models : []).map((m) => rec(m).id);
+      const started = await refresh();
+      same(ids(started), [...ACCOUNT_MODELS.acme], "acme's models before");
+      same(
+        [started.providerOutcomes ?? null, started.refreshFailed ?? null],
+        [null, null],
+        "no provider asked again, and no failed refresh",
+      );
+      const path = "models.providers.acme.models";
+      try {
+        // Inside the try: a growth that half landed is put back too.
+        await patchConfig(h, { models: { providers: { acme: { models: grownModels("acme") } } } }, [
+          path,
+        ]);
+        const grown = await refresh();
+        same(ids(grown), [...ACCOUNT_MODELS.acme, LATER_MODELS.acme], "acme's models after");
+        same(grown.providerOutcomes ?? null, null, "still no provider asked again");
+      } finally {
+        await patchConfig(
+          h,
+          { models: { providers: { acme: { models: grownModels("acme").slice(0, -1) } } } },
+          [path],
+        );
+      }
+      same(ids(await refresh()), [...ACCOUNT_MODELS.acme], "acme's models once put back");
+      h.observe(
+        `refresh on a read-only connection: acme ${ids(started).join(", ")}; with ${String(LATER_MODELS.acme)} added to its entry, the next refresh lists it; no providerOutcomes`,
       );
     },
   },

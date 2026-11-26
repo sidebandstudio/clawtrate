@@ -9,6 +9,7 @@
 // one request each; no field of the state, no collection and no error message
 // holds them (`withoutSecret`).
 
+import { cleanLine } from "./gateway-names.ts";
 import { openClawAtLeast } from "./gateway-version.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import type { ReadStamp } from "./types.ts";
@@ -192,6 +193,88 @@ export type ModelList =
     }
   /** `unsupported`: the gateway refused `view: "all"`. */
   | { status: "unsupported" | "error"; error: string };
+
+/** The most new, or gone, models a refresh names; the rest are counted. */
+export const MAX_REFRESH_NAMES = 5;
+/** The longest model id a refresh names, cleaned to one line. */
+export const MAX_REFRESH_NAME_CHARS = 64;
+/** The longest reason a refresh gives when the gateway refused it or failed. */
+export const MAX_REFRESH_ERROR_CHARS = 200;
+/** How long Clawtrate waits for the gateway to look again before it says it didn't answer. */
+export const REFRESH_MODELS_MS = 45_000;
+/** The most entries of the config's model list for bots read for `modelAllowlist`. */
+export const MAX_ALLOWLIST_ENTRIES = 1024;
+
+export type RefreshOutcome = "ready" | "auth-rejected" | "unavailable" | null;
+
+/**
+ * What one Refresh of a provider's models found (`models.list {agentId, provider, refresh:
+ * true}`): the picker's rows for the provider before and after, compared, and what the gateway
+ * said of the provider. Given to the screen that asked and kept nowhere; the rows themselves go
+ * into the state's `models`.
+ */
+export type ModelRefresh =
+  | {
+      status: "done";
+      provider: string;
+      /** The first `MAX_REFRESH_NAMES` models the menu lists now and didn't before, cleaned. */
+      added: string[];
+      addedCount: number;
+      /** The first `MAX_REFRESH_NAMES` it listed before and doesn't now, cleaned. */
+      removed: string[];
+      removedCount: number;
+      /**
+       * Every model the menu showed at the press that the gateway no longer lists, as its ids: at
+       * most the menu's bound. Not a model a cut pushed out of the menu while the gateway still
+       * lists it.
+       */
+      removedIds: string[];
+      /**
+       * What the gateway reported for the provider (`providerOutcomes`): asked again and answered
+       * (`ready`), asked and refused the account (`auth-rejected`), asked and failed or timed out
+       * (`unavailable`), or not asked again (null): its list is the one the gateway already had.
+       */
+      outcome: RefreshOutcome;
+      /**
+       * Every model the gateway lists for the provider is one its config declares
+       * (`models.providers`): the config's list is the whole list.
+       */
+      configured: boolean;
+      /**
+       * The gateway checks OpenClaw's model list online every 6 hours (`models.catalogRefresh`);
+       * null when its config couldn't be read.
+       */
+      hostedList: boolean | null;
+      /**
+       * The menu showed the provider cut at its bound before: how many models the gateway listed
+       * then and lists now. Nothing is named new then, since the cut hid some.
+       */
+      counts: { before: number; now: number } | null;
+      /**
+       * The menu showed the provider whole before, and this refresh left some of its models out at
+       * the bound: how many the menu shows of the ones the gateway lists now.
+       */
+      cut: { shown: number; now: number } | null;
+      /** The gateway answered while still finding the provider's models (`pendingProviders`). */
+      partial: boolean;
+      /** The gateway's refresh of its catalogue failed (`refreshFailed`): try again. */
+      failed: boolean;
+    }
+  | { status: "error"; error: string };
+
+/**
+ * The models the gateway's config lets a bot use, as the Model menu needs it: null when nothing
+ * limits them. The bot's own `modelPolicy.allow`, else `agents.defaults.modelPolicy.allow`, else
+ * the old `agents.defaults.models` while the config is unmigrated. The gateway lists, and lets a
+ * task switch to, only what it names; with no wildcard in it, a bot's own model and the default
+ * can still be others, and with one they run on the first model it allows
+ * (docs/research/model-catalog.md, section 8). `whole` is the providers a `<provider>/*` entry
+ * leaves whole, which both versions read alike. Whether any entry is a wildcard depends on the
+ * version: `wildcards` as 2026.10.6 reads them (`<provider>/…/*`), `prefixWildcards` as
+ * 2026.11.10 does, which also reads a prefix (`openai/gpt-*`) and so finds every one 2026.10.6
+ * finds.
+ */
+export type ModelAllowlist = { whole: string[]; wildcards: boolean; prefixWildcards: boolean };
 
 /** The longest model id Clawtrate sends. */
 export const MAX_MODEL_ID_CHARS = 512;
@@ -468,6 +551,8 @@ export type AccountsState = {
   models: CatalogModel[];
   /** Providers whose picker rows were cut at `MAX_CATALOG_MODELS`, with how many it listed. */
   modelsCut: PickerCut[];
+  /** The config's model list as every bot's menu can say it (`readModelAllowlist`), or null. */
+  modelAllowlist: ModelAllowlist | null;
   bindings: BotBinding[];
   signIn: SignInState | null;
   creation: BotCreationState | null;
@@ -489,6 +574,7 @@ export const initialAccountsState: AccountsState = {
   keyProviders: [],
   models: [],
   modelsCut: [],
+  modelAllowlist: null,
   bindings: [],
   signIn: null,
   creation: null,
@@ -795,6 +881,204 @@ export function readProviderCatalog(
     total: rows.length,
     partial: pending || record?.refreshFailed === true,
   };
+}
+
+/** What a `models.list` answer's `providerOutcomes` says of one provider (`ModelRefresh`). */
+function outcomeOf(answer: unknown, provider: string): RefreshOutcome {
+  const outcomes = asRecord(answer)?.providerOutcomes;
+  const statuses = (Array.isArray(outcomes) ? outcomes : [])
+    .map(asRecord)
+    .filter((each) => each?.provider === provider)
+    .map((each) => each?.status);
+  // The list was asked again if any account's discovery answered.
+  if (statuses.includes("ready")) return "ready";
+  if (statuses.includes("auth-rejected")) return "auth-rejected";
+  return statuses.length > 0 ? "unavailable" : null;
+}
+
+/** Up to `MAX_REFRESH_NAMES` ids, each cleaned to one short line. */
+const named = (ids: string[]) =>
+  ids.slice(0, MAX_REFRESH_NAMES).map((id) => cleanLine(id, MAX_REFRESH_NAME_CHARS));
+
+/**
+ * One refresh's answer for a provider, against the ids the menu listed before: the rows it lists
+ * now (in the gateway's order) and what changed. `configured` is from the gateway's config.
+ */
+export function readModelRefresh(
+  answer: unknown,
+  provider: string,
+  before: readonly string[],
+  /** The provider's model ids its entry in the gateway's config declares. */
+  declared: ReadonlySet<string>,
+  /** The gateway checks OpenClaw's model list online (`models.catalogRefresh`), or unknown. */
+  hostedList: boolean | null,
+  /** The config's model list for the bot asked for limits the provider, so filters its rows. */
+  limited: boolean,
+): {
+  rows: CatalogModel[];
+  compare: (shown: readonly string[], cutBefore: number | null) => ModelRefresh;
+} {
+  const record = asRecord(answer);
+  const rows = modelRows(answer).filter((row) => row.provider === provider);
+  const pending = Array.isArray(record?.pendingProviders)
+    ? record.pendingProviders.includes(provider)
+    : false;
+  const outcome = outcomeOf(answer, provider);
+  // The config's list is the whole list only when every model the gateway lists is one it
+  // declares: otherwise OpenClaw's own or a plugin's are listed beside them. Rows a model list
+  // for bots filtered say nothing of that.
+  const configured = !limited && rows.length > 0 && rows.every((row) => declared.has(row.id));
+  return {
+    rows,
+    compare: (shown, cutBefore) => {
+      const was = new Set(before);
+      const listed = new Set(rows.map((row) => row.id));
+      // Gone only when the gateway no longer lists it, not when a cut no longer shows it; new only
+      // when the menu showed the provider whole before, so a cut can't make a model look new.
+      const added = cutBefore === null ? shown.filter((id) => !was.has(id)) : [];
+      const removed = [...was].filter((id) => !listed.has(id));
+      return {
+        status: "done",
+        provider,
+        added: named(added),
+        addedCount: added.length,
+        removed: named(removed),
+        removedCount: removed.length,
+        removedIds: removed,
+        counts: cutBefore === null ? null : { before: cutBefore, now: rows.length },
+        cut:
+          cutBefore === null && shown.length < rows.length
+            ? { shown: shown.length, now: rows.length }
+            : null,
+        outcome,
+        configured,
+        hostedList,
+        partial: pending,
+        failed: record?.refreshFailed === true,
+      };
+    },
+  };
+}
+
+/** Whether the gateway's config declares models for a provider (`models.providers.<id>.models`). */
+export function declaredModels(config: RawRecord | null, provider: string): Set<string> {
+  const root = asRecord(config?.config);
+  const entry = asRecord(asRecord(asRecord(root?.models)?.providers)?.[provider]);
+  const models = Array.isArray(entry?.models) ? entry.models.slice(0, MAX_PROVIDER_MODELS) : [];
+  return new Set(models.map((model) => str(asRecord(model)?.id)).filter((id) => id !== null));
+}
+
+/**
+ * The gateway checks OpenClaw's model list online, unless its config turns that off; null when the
+ * config couldn't be read, so nothing is said of it.
+ */
+export function checksHostedList(config: RawRecord | null): boolean | null {
+  if (config === null) return null;
+  const root = asRecord(config.config);
+  return asRecord(asRecord(root?.models)?.catalogRefresh)?.enabled !== false;
+}
+
+/** A wildcard entry: its provider, and whether it allows the provider whole. */
+type Wildcard = { provider: string; whole: boolean };
+
+/** At least one segment, each non-empty, without `*`, white space or a control character. */
+const validSegments = (segments: string[]) =>
+  segments.length >= 1 &&
+  // eslint-disable-next-line no-control-regex
+  segments.every((segment) => segment.length > 0 && !/[*\s\u0000-\u001f\u007f]/.test(segment));
+
+/**
+ * A wildcard as OpenClaw 2026.10.6 reads one (`parseModelPolicyWildcardRef`): segments split on
+ * `/` and trimmed, the last exactly `*`. It matches at a segment's end only.
+ */
+function segmentWildcard(key: string): Wildcard | null {
+  const segments = key
+    .trim()
+    .split("/")
+    .map((segment) => segment.trim());
+  if (segments.at(-1) !== "*" || !validSegments(segments.slice(0, -1))) return null;
+  return { provider: segments[0]!.toLowerCase(), whole: segments.length === 2 };
+}
+
+/**
+ * A wildcard as OpenClaw 2026.11.10 reads one (`parseModelPolicyWildcardRef`): it ends in `*`,
+ * the segments before the last are trimmed and valid, and the last may be a prefix
+ * (`openai/gpt-*`), which matches any model whose reference starts with it.
+ */
+function prefixWildcard(key: string): Wildcard | null {
+  const trimmed = key.trim();
+  if (!trimmed.endsWith("*")) return null;
+  const pieces = trimmed.slice(0, -1).split("/");
+  const last = (pieces.pop() ?? "").trimStart();
+  const before = pieces.map((piece) => piece.trim());
+  if (!validSegments(before) || (last !== "" && !validSegments([last]))) return null;
+  return { provider: before[0]!.toLowerCase(), whole: before.length === 1 && last === "" };
+}
+
+/**
+ * The config's model list for one bot (`ModelAllowlist`), as the gateway resolves it
+ * (`resolveConfiguredModelPolicyAllow`), with `botId` null for a bot with no entry of its own.
+ */
+export function effectiveAllowlist(
+  config: RawRecord | null,
+  botId: string | null,
+): ModelAllowlist | null {
+  const root = asRecord(config?.config);
+  const agents = asRecord(root?.agents);
+  const defaults = asRecord(agents?.defaults);
+  const own =
+    botId === null ? null : asRecord(asRecord(asRecord(agents?.entries)?.[botId])?.modelPolicy);
+  const policy = asRecord(defaults?.modelPolicy);
+  const migrated = asRecord(asRecord(root?.meta)?.migrations)?.modelPolicyAllowlist === true;
+  // The bot's own policy when it has an `allow`, then the default policy's; the old
+  // `agents.defaults.models` only while there is no default policy and the config hasn't been
+  // migrated, which any config write does.
+  let refs: unknown[] = [];
+  if (own && Object.hasOwn(own, "allow")) refs = Array.isArray(own.allow) ? own.allow : [];
+  else if (policy && Object.hasOwn(policy, "allow"))
+    refs = Array.isArray(policy.allow) ? policy.allow : [];
+  else if (!policy && !migrated) refs = Object.keys(asRecord(defaults?.models) ?? {});
+  const keys = refs
+    .slice(0, MAX_ALLOWLIST_ENTRIES)
+    .filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0)
+    .map((ref) => ref.trim());
+  // An empty list limits nothing.
+  if (keys.length === 0) return null;
+  // Only `<provider>/*` leaves a provider whole (both versions read it alike, spaces trimmed); a
+  // longer or prefix wildcard limits within it.
+  const whole = new Set<string>();
+  for (const key of keys) {
+    const wildcard = segmentWildcard(key);
+    if (wildcard?.whole) whole.add(wildcard.provider);
+  }
+  // A whole-provider entry the bounds below would drop would read as a limit the gateway never
+  // set: then nothing is said of the list.
+  const kept = [...whole].filter((provider) => provider.length <= MAX_PREF_ID_CHARS);
+  if (kept.length !== whole.size || kept.length > MAX_KEY_PROVIDERS) return null;
+  return {
+    whole: kept,
+    wildcards: keys.some((key) => segmentWildcard(key) !== null),
+    prefixWildcards: keys.some((key) => prefixWildcard(key) !== null),
+  };
+}
+
+/** Whether a bot's model list (`effectiveAllowlist`) limits a provider's models, so filters its rows. */
+export function limitsProvider(list: ModelAllowlist | null, provider: string): boolean {
+  return list !== null && !list.whole.includes(provider.toLowerCase());
+}
+
+/**
+ * The config's model list as every bot's Model menu can say it: only when no bot has a list of
+ * its own, so the default list is the one for each bot and for a new one; null otherwise, as
+ * which list applies to the menu shown isn't known there.
+ */
+export function readModelAllowlist(config: RawRecord | null): ModelAllowlist | null {
+  const entries = asRecord(asRecord(asRecord(config?.config)?.agents)?.entries);
+  const ownLists = Object.values(entries ?? {}).some((entry) => {
+    const policy = asRecord(asRecord(entry)?.modelPolicy);
+    return policy !== null && Object.hasOwn(policy, "allow");
+  });
+  return ownLists ? null : effectiveAllowlist(config, null);
 }
 
 /** Every model row of a `models.list` answer, in its order. */

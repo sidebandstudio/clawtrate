@@ -1154,6 +1154,7 @@ test("F-478: the Model menu is the gateway's picker, its unavailable models disa
     ["gpt-5.5", false, ""],
     ["gpt-5.5-mini", false, ""],
     ["gpt-5.5-codex", false, "Not available"],
+    ["Refresh", false, "Look for new models"],
     ["View more", false, ""],
     ["Use another model…", false, "Type its id"],
   ]);
@@ -1182,6 +1183,7 @@ test("F-478: the Model menu is the gateway's picker, its unavailable models disa
       ["gpt-5.5", false, ""],
       ["gpt-5.5-mini", false, ""],
       ["gpt-5.5-codex", false, "Not available"],
+      ["Refresh", false, "Look for new models"],
       ["gpt-5.4", false, ""],
       ["gpt-5.4-mini", false, ""],
       ["gpt-5.5-pro", false, ""],
@@ -1236,7 +1238,7 @@ test("F-478: View more that failed says so and tries again; a refused one isn't 
   await page.keyboard.press("Escape");
   await page.getByTestId("model-select").click();
   await expect(menu.getByRole("menuitemradio")).toHaveCount(3);
-  await expect(menu.getByRole("menuitem")).toHaveText([/^Use another model…/]);
+  await expect(menu.getByRole("menuitem")).toHaveText([/^Refresh/, /^Use another model…/]);
   await page.keyboard.press("Escape");
 
   await newBotOnWork(page, `${ADMIN}&catalog=big`);

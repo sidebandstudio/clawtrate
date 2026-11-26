@@ -35,6 +35,16 @@
 //   effort=none               the open bot keeps no effort
 //   openclaw=behind|beta      the gateway reports a newer OpenClaw than it runs: 2026.11.6, or
 //                             2026.11.10-beta.1 on the beta channel
+//   refresh=new|many|gone|pushed|asked|config|refused|unreached|pending|failed|cut|error|slow
+//                             what the Model menu's Refresh finds (#565): two new OpenAI models,
+//                             seven, one gone, one new that pushes a listed one past the bound, nothing new from a provider asked again, nothing
+//                             from one the gateway's config lists, a provider that refused the
+//                             account, one that didn't answer, one still being looked for, a
+//                             refresh the gateway says failed, a list cut at its bound that grew,
+//                             a gateway that didn't answer in time, or two new ones held until
+//                             releaseRefresh(); without it, nothing new from a provider the
+//                             gateway didn't ask again
+//   allowlist=1               the gateway's config names the models bots may use
 //   version=<version>         the OpenClaw version the gateway runs (default 2026.10.6), such as
 //                             2026.11.10, which changes a bot's account order only while stopped
 //   clear=<status>            how Unlock or Clear order ends (default cleared): refused, unanswered,
@@ -53,6 +63,7 @@ import {
   type CatalogModel,
   MAX_PROVIDER_MODELS,
   type ModelList,
+  type ModelRefresh,
   type BridgeCommand,
   type ClawtrateState,
   type GatewayAccount,
@@ -94,6 +105,10 @@ export type AccountParams = {
   noEffort: boolean;
   /** The gateway reports a newer OpenClaw than it runs: a stable release, or a beta. */
   openclaw: "behind" | "beta" | null;
+  /** What the Model menu's Refresh finds. */
+  refresh: string | null;
+  /** The gateway's config names the models bots may use (`agents.defaults.models`). */
+  allowlist: boolean;
   /** An update of OpenClaw under way or ended, or a gateway that can't update itself (F-589). */
   openclawRun: UpdateRunScene | null;
   /** The OpenClaw version the gateway runs, when the address names one. */
@@ -141,6 +156,8 @@ export function accountParams(params: URLSearchParams): AccountParams {
       params.get("openclaw") === "behind" || params.get("openclaw") === "beta"
         ? (params.get("openclaw") as "behind" | "beta")
         : null,
+    refresh: params.get("refresh"),
+    allowlist: params.get("allowlist") === "1",
     openclawRun: isUpdateRunScene(params.get("openclawRun"))
       ? (params.get("openclawRun") as UpdateRunScene)
       : null,
@@ -171,6 +188,8 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   model: null,
   noEffort: false,
   openclaw: null,
+  refresh: null,
+  allowlist: false,
   openclawRun: null,
   version: null,
   clear: null,
@@ -316,6 +335,9 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     readAt: now - READ_AGO,
     labels: params.access === "admin",
     defaultModel: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
+    modelAllowlist: params.allowlist
+      ? { whole: [], wildcards: false, prefixWildcards: false }
+      : null,
     mainShared: !params.kept,
     accounts,
     methods: [
@@ -572,6 +594,147 @@ function loadCatalog(
       (globalThis as unknown as { releaseCatalog: () => void }).releaseCatalog = () =>
         resolve(answer());
     else later(100, () => resolve(answer()));
+  });
+}
+
+/**
+ * Answer `refreshModels` as the engine does, in the state the address asks for: the rows it
+ * finds go into the accounts' models, and what changed is the command's result.
+ */
+function refreshCatalog(
+  command: Extract<BridgeCommand, { type: "refreshModels" }>,
+  params: AccountParams,
+  get: () => AccountsState,
+  put: (change: (a: AccountsState) => AccountsState) => void,
+  later: (ms: number, run: () => void) => void,
+): Promise<ModelRefresh> {
+  const { provider } = command;
+  const row = (id: string): CatalogModel => ({
+    provider,
+    id,
+    name: null,
+    available: true,
+    levels: ["low", "medium", "high"],
+    defaultLevel: "medium",
+  });
+  const kind = params.refresh ?? "none";
+  const nothing: ModelRefresh = {
+    status: "done",
+    provider,
+    added: [],
+    addedCount: 0,
+    removed: [],
+    removedCount: 0,
+    removedIds: [],
+    outcome: null,
+    configured: false,
+    hostedList: true,
+    counts: null,
+    cut: null,
+    partial: false,
+    failed: false,
+  };
+  const answer = (): ModelRefresh => {
+    switch (kind) {
+      case "new":
+      case "slow":
+      case "many": {
+        const ids =
+          kind === "many"
+            ? [
+                "gpt-6.2-sol",
+                "gpt-6.2-astra",
+                "gpt-6.2-luna",
+                "gpt-6.2-terra",
+                "gpt-6.2-nova",
+              ].concat(["gpt-6.2-mini", "gpt-6.2-nano"])
+            : ["gpt-6.2-sol", "gpt-6.2-astra"];
+        // As the engine does: the provider's rows replaced, and only what it lacked is new.
+        const had = new Set(
+          get()
+            .models.filter((m) => m.provider === provider)
+            .map((m) => m.id),
+        );
+        const added = ids.filter((id) => !had.has(id));
+        put((a) => ({
+          ...a,
+          models: [
+            ...a.models.filter((m) => m.provider !== provider || !ids.includes(m.id)),
+            ...ids.map(row),
+          ],
+        }));
+        return { ...nothing, added: added.slice(0, 5), addedCount: added.length, outcome: "ready" };
+      }
+      case "gone": {
+        // Gone once: a second refresh finds nothing more gone.
+        const had = get().models.some((m) => m.provider === provider && m.id === "gpt-5.5-mini");
+        put((a) => ({
+          ...a,
+          models: a.models.filter((m) => !(m.provider === provider && m.id === "gpt-5.5-mini")),
+        }));
+        return had
+          ? {
+              ...nothing,
+              removed: ["gpt-5.5-mini"],
+              removedCount: 1,
+              removedIds: ["gpt-5.5-mini"],
+              outcome: "ready",
+            }
+          : { ...nothing, outcome: "ready" };
+      }
+      case "pushed": {
+        // A new model first, and the list now past the bound: gpt-5.5-mini, still listed, is
+        // pushed out of the menu, and nothing is gone.
+        const ids = [
+          "gpt-6.2-sol",
+          ...get()
+            .models.filter((m) => m.provider === provider)
+            .map((m) => m.id),
+        ];
+        put((a) => ({
+          ...a,
+          models: [
+            ...a.models.filter((m) => m.provider !== provider),
+            ...ids.filter((id) => id !== "gpt-5.5-mini").map(row),
+          ],
+          modelsCut: [
+            ...a.modelsCut.filter((c) => c.provider !== provider),
+            { provider, total: ids.length },
+          ],
+        }));
+        return {
+          ...nothing,
+          added: ["gpt-6.2-sol"],
+          addedCount: 1,
+          cut: { shown: ids.length - 1, now: ids.length },
+          outcome: "ready",
+        };
+      }
+      case "asked":
+        return { ...nothing, outcome: "ready" };
+      case "config":
+        return { ...nothing, configured: true };
+      case "refused":
+        return { ...nothing, outcome: "auth-rejected" };
+      case "unreached":
+        return { ...nothing, outcome: "unavailable" };
+      case "pending":
+        return { ...nothing, partial: true };
+      case "failed":
+        return { ...nothing, failed: true };
+      case "cut":
+        return { ...nothing, outcome: "ready", counts: { before: 140, now: 141 } };
+      case "error":
+        return { status: "error", error: "The gateway didn't answer in time." };
+      default:
+        return nothing;
+    }
+  };
+  return new Promise((resolve) => {
+    if (kind === "slow")
+      (globalThis as unknown as { releaseRefresh: () => void }).releaseRefresh = () =>
+        resolve(answer());
+    else later(300, () => resolve(answer()));
   });
 }
 
@@ -877,6 +1040,8 @@ export function accountCommand(
         (globalThis as unknown as { releasePicker: () => void }).releasePicker = () =>
           put((a) => ({ ...a, models: fixtureAccounts(Date.now(), NO_ACCOUNT_PARAMS).models }));
       return loadCatalog(command, params, later);
+    case "refreshModels":
+      return refreshCatalog(command, params, accounts, put, later);
     case "refreshAccounts":
       pendingRead?.();
       pendingRead = null;
