@@ -17,6 +17,11 @@ import {
   verifyRefusal,
   wordsFor,
 } from "../src/index.ts";
+import { concat, Writer } from "../src/bytes.ts";
+import { hpkeSeal } from "../src/hpke.ts";
+import { signList } from "../src/keys.ts";
+import { LABEL, TAG } from "../src/labels.ts";
+import { signAdd } from "../src/list.ts";
 import {
   A_NONCE,
   addDevice,
@@ -328,6 +333,53 @@ describe("what N checks before it uses the card", () => {
         ),
       "card_mismatch",
     );
+  });
+
+  it("refuses, at N, a confirmation carrying a card the words didn't cover, or one the connector didn't sign", () => {
+    // What a member gone wrong could send: a confirmation it signs itself, sealing another card.
+    const world = makeWorld();
+    const member = memberOf(world, world.gatewayDevice.listKey);
+    const mac = makeDevice(2);
+    const run = runJoin(member, mac);
+    const transcript = run.reveal.subarray(run.reveal.length - 96, run.reveal.length - 64);
+    const { entry } = signAdd(member.key, world.state, mac.device, transcript);
+    const confirmWith = (card: Uint8Array) => {
+      const payload = new Writer()
+        .u32(0)
+        .fixed(fill(32, 0xe0), 32, "secret")
+        .bytes(card, 1, 4096, "card")
+        .finish();
+      const info = new Writer()
+        .label(TAG.deviceSeal)
+        .u8(1)
+        .fixed(CONTEXT.gatewayId, 16, "g")
+        .fixed(CONTEXT.accountId, 16, "a")
+        .fixed(transcript, 32, "t")
+        .finish();
+      const { enc, ciphertext } = hpkeSeal(
+        mac.device.sealKey.bytes,
+        info,
+        new Uint8Array(0),
+        payload,
+        SEAL_SEED,
+      );
+      const signed = new Writer()
+        .label(LABEL.joinTranscript)
+        .u8(4)
+        .fixed(CONTEXT.gatewayId, 16, "g")
+        .fixed(CONTEXT.accountId, 16, "a")
+        .fixed(transcript, 32, "t")
+        .bytes(entry, 1, 456, "entry")
+        .fixed(enc, 32, "enc")
+        .bytes(ciphertext, 17, 4096, "sealed")
+        .finish();
+      return concat(signed, signList(member.key, signed));
+    };
+    const finish = (confirm: Uint8Array) =>
+      joinFinish(mac, CONTEXT, N_NONCE, run.commit, run.answer, run.reveal, confirm);
+    expect(finish(confirmWith(world.card)).cardBytes).toEqual(world.card);
+    const newer = signCard(world.connector, { ...verifyCard(world.card), serial: 2 });
+    expectCode(() => finish(confirmWith(newer)), "card_mismatch");
   });
 
   it("keeps ListState immutable across a join", () => {
