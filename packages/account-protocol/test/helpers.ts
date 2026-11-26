@@ -113,7 +113,7 @@ export function makeWorld(
     tlsPin: fill(32, 0xd0),
     addresses: [
       { host: "windows-pc.local", port: 18790 },
-      { host: "fd00::20", port: 18790 },
+      { host: "windows-pc.example", port: 18790 },
     ],
     name: "Windows PC",
   });

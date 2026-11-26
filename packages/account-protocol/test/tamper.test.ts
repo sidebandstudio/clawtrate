@@ -207,7 +207,7 @@ describe("tampering with the list", () => {
         ["host", 16, ["malformed", "bad_signature"]],
         ["port", 2, SIGNED],
         ["host length", 2, ["malformed", "too_large"]],
-        ["host", 8, ["malformed", "bad_signature"]],
+        ["host", 18, ["malformed", "bad_signature"]],
         ["port", 2, SIGNED],
         ["name length", 2, ["malformed", "too_large", "bad_key"]],
         ["name", 10, ["malformed", "bad_signature"]],
