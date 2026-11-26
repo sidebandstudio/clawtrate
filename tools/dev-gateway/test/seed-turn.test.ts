@@ -31,6 +31,24 @@ const UNREACHABLE = new Error(
 }
 Gateway agent call connection closed; the Gateway may still be running this turn. Check \`openclaw gateway status\` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice.`,
 );
+/**
+ * A turn whose call timed out waiting for the gateway, as OpenClaw 2026.10.6's `agent` command
+ * words it (`formatGatewayAgentTransportLossHint`; 2026.11.10 words it the same).
+ */
+const TIMED_OUT = new Error(
+  `openclaw --profile clawtrate-dev-ios-1 agent --agent otto --session-key agent:otto:disk-space --message The media box says the disk is 94% full. What is eating the space? --thinking low --json failed:
+{
+  "ok": false,
+  "error": {
+    "type": "cli_error",
+    "message": "Gateway agent call timed out; the Gateway may still be running this turn (accepted run 0d37ee81-59c4-4792-b9b3-06fc7558ed07; use --timeout <seconds> to extend the CLI wait). Check \`openclaw gateway status\` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice."
+  }
+}`,
+);
+/** The same timeout before the gateway said it had accepted the run. */
+const TIMED_OUT_UNACCEPTED = new Error(
+  "openclaw agent failed:\nGateway agent call timed out; the Gateway may still be running this turn. Check `openclaw gateway status` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice.",
+);
 /** A request that reached the gateway and got no answer in time. */
 const NO_ANSWER = new Error(
   `openclaw agent failed:\n${JSON.stringify({ ok: false, error: { type: "gateway_transport_error", kind: "timeout", message: "gateway timeout after 60000ms" } })}`,
@@ -70,6 +88,13 @@ describe("which turn failures are the gateway not answering, and which never rea
     expect(isTurnTransportFailure(NO_ANSWER)).toBe(true);
     expect(neverReachedGateway(NO_ANSWER)).toBe(false);
     expect(isTurnTransportFailure(REFUSED)).toBe(false);
+  });
+
+  it("a turn's call that timed out is the gateway not answering, and reached it", () => {
+    for (const timedOut of [TIMED_OUT, TIMED_OUT_UNACCEPTED]) {
+      expect(isTurnTransportFailure(timedOut)).toBe(true);
+      expect(neverReachedGateway(timedOut)).toBe(false);
+    }
   });
 });
 
@@ -160,6 +185,19 @@ describe("a seed turn the gateway doesn't answer", () => {
   it("seen running once, then not there: not sent again, and fails when the waits end", async () => {
     expect(await run([UNREACHABLE], [[user(FIRST.prompt)], [], []])).toEqual({
       error: UNREACHABLE,
+      sent: 1,
+      read: 3,
+    });
+  });
+
+  it("timed out while the gateway runs it: its reply waited for in the history, never sent again", async () => {
+    expect(await run([TIMED_OUT], [[], [user(FIRST.prompt), working], finished()])).toEqual({
+      problem: null,
+      sent: 1,
+      read: 3,
+    });
+    expect(await run([TIMED_OUT_UNACCEPTED], [[], [], []])).toEqual({
+      error: TIMED_OUT_UNACCEPTED,
       sent: 1,
       read: 3,
     });

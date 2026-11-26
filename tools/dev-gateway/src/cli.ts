@@ -1950,12 +1950,18 @@ export async function retryOnTransport<T>(
 export function isTurnTransportFailure(error: unknown): boolean {
   if (isTransportFailure(error)) return true;
   const text = error instanceof Error ? error.message : String(error);
-  return /Gateway not reachable at |Gateway agent call connection closed/.test(text);
+  // OpenClaw 2026.10.6 adds "Gateway agent call timed out" or "… connection closed" to a turn's
+  // transport failure (`formatGatewayAgentTransportLossHint`); 2026.11.10 words it the same.
+  return /Gateway not reachable at |Gateway agent call (?:timed out|connection closed)/.test(text);
 }
 
-/** A failed call whose request never reached the gateway: it couldn't connect at all. */
+/**
+ * A failed call whose request never reached the gateway: it couldn't connect at all. A turn the
+ * gateway accepted, or whose call timed out waiting for it, reached it and may still run.
+ */
 export function neverReachedGateway(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
+  if (/Gateway agent call timed out|\(accepted run /.test(text)) return false;
   return /Gateway not reachable at |connect timeout|Opening handshake has timed out/.test(text);
 }
 
