@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sha256Hex, toBase64, utf8Bytes } from "../src/bytes.ts";
 import {
   DeviceApprovals,
+  MAX_COLLIDED,
   MAX_DEVICE_REQUESTS,
   PAIR_CODE_CHARS,
   PAIR_CODE_CHOICES,
@@ -59,7 +60,14 @@ const pairedOf = (row: Row, extra: Row = {}): Row => ({
 class Refusal extends Error {}
 
 /** A gateway that lists `pending` and `paired`, and records what it was asked. */
-function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } = {}) {
+type Options = {
+  admin?: boolean;
+  pairing?: boolean;
+  pending?: Row[];
+  /** Requests whose ids are listed here count as sharing one code. */
+  sameCode?: string[];
+};
+function setup(options: Options = {}) {
   const gw = { pending: options.pending ?? [], paired: [] as Row[] };
   const calls: string[] = [];
   const answers: Record<string, (params: Row) => unknown> = {};
@@ -104,6 +112,12 @@ function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } 
     get: () => state,
     set: (next) => (state = next),
     random: (n) => new Uint8Array(n).fill(7),
+    ...(options.sameCode
+      ? {
+          code: (key: string, id: string) =>
+            options.sameCode!.includes(id) ? "SAME-CODE" : pairCode(key, id),
+        }
+      : {}),
   });
   let now = 10_000;
   const settle = async () => {
@@ -128,7 +142,7 @@ function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } 
   };
 }
 
-async function listed(rows: Row[], options: { admin?: boolean } = {}) {
+async function listed(rows: Row[], options: Omit<Options, "pending"> = {}) {
   const t = setup({ ...options, pending: rows });
   t.engine.onHello();
   await t.settle();
@@ -246,6 +260,47 @@ describe("approving a waiting device", () => {
     ]);
     expect(decision).toEqual({ kind: "changed", what: ["access"] });
     expect(t.calls).toEqual(["device.pair.list"]);
+  });
+
+  it.each([
+    ["it now shares its code", (row: Row) => [row, { ...row, ts: 0 }]],
+    [
+      "more now wait than are shown",
+      (row: Row) => [
+        row,
+        ...Array.from({ length: 16 }, (_, i) => pendingRow(newKey(), { ts: 2000 + i })),
+      ],
+    ],
+  ])("approves nothing when, on the read before approving, %s", async (_, change) => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    expect(t.request(row.requestId as string).blocked).toBeNull();
+    t.gw.pending = change(row);
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
+    // The list it decided on is the one now shown.
+    expect(t.request(row.requestId as string)?.blocked ?? "hidden").not.toBeNull();
+  });
+
+  it("honours a newer block this connection published while it read again", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    let lists = 0;
+    t.answers["device.pair.list"] = async () => {
+      lists += 1;
+      if (lists === 1) {
+        // Another read on this connection lands first, and says the request now asks for more.
+        await t.engine.refresh();
+        return { pending: [row], paired: [] };
+      }
+      return { pending: [{ ...row, isRepair: true }], paired: [] };
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
   });
 
   it("says a request decided elsewhere or expired is no longer pending", async () => {
@@ -578,6 +633,46 @@ describe("the waiting requests", () => {
       kind: "not-allowed",
     });
     expect(t.request(machine.requestId as string).spent).toBe(false);
+  });
+
+  it("keeps a collision blocked for as long as either request waits, whichever survives", async () => {
+    for (const survivor of [0, 1]) {
+      const pair = [pendingRow(), pendingRow()];
+      const ids = pair.map((row) => row.requestId as string);
+      const t = await listed(pair, { sameCode: ids });
+      expect(t.state().requests.map((each) => each.blocked)).toEqual(["same-code", "same-code"]);
+      const kept = pair[survivor]!;
+      t.gw.pending = [kept];
+      await t.engine.refresh();
+      expect(t.request(kept.requestId as string).blocked).toBe("same-code");
+      expect(
+        await t.engine.approve(kept.requestId as string, codeOf(kept), [...FULL_SCOPES]),
+      ).toEqual({ kind: "not-allowed" });
+      // Deny, then the device asks again: a new id is a new request, with nothing against it.
+      expect(await t.engine.refuse(kept.requestId as string, "not-mine")).toEqual({
+        kind: "denied",
+      });
+      const again = { ...kept, requestId: `${kept.requestId as string}-again` };
+      t.gw.pending = [again];
+      await t.engine.refresh();
+      expect(t.request(again.requestId).blocked).toBeNull();
+    }
+  });
+
+  it("blocks every request once more collisions are seen than it keeps, until none waits", async () => {
+    const many = Array.from({ length: MAX_COLLIDED + 1 }, (_, i) =>
+      pendingRow(newKey(), { ts: i }),
+    );
+    const t = await listed(many, { sameCode: many.map((row) => row.requestId as string) });
+    const fresh = pendingRow(newKey(), { ts: 500 });
+    t.gw.pending = [fresh];
+    await t.engine.refresh();
+    expect(t.request(fresh.requestId as string).blocked).toBe("same-code");
+    t.gw.pending = [];
+    await t.engine.refresh();
+    t.gw.pending = [fresh];
+    await t.engine.refresh();
+    expect(t.request(fresh.requestId as string).blocked).toBeNull();
   });
 
   it("blocks two waiting requests that show the same code, one of them past the sixteen", async () => {

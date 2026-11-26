@@ -15,6 +15,8 @@ import { FULL_SCOPES } from "./scopes.ts";
 
 /** Requests kept and shown, newest first; past it, `omitted` counts the rest. */
 export const MAX_DEVICE_REQUESTS = 16;
+/** Requests remembered as having shared a code; past it, every request is blocked until none waits. */
+export const MAX_COLLIDED = 2 * MAX_DEVICE_REQUESTS;
 /** A reported name, platform or app, as shown, in characters. */
 export const MAX_REPORTED_CHARS = 64;
 /** The same as JSON: two units for a character past the basic plane, and the quotes. */
@@ -207,6 +209,11 @@ export type DeviceApprovalsContext = {
   set(state: DeviceRequestsState): void;
   /** Random bytes for the made-up codes. */
   random(bytes: number): Uint8Array;
+  /**
+   * The code collisions are counted by; `pairCode`, which makes the codes shown, unless a test
+   * needs two requests to share one (a real pair takes about 2^40 tries).
+   */
+  code?: (publicKey: string, requestId: string) => string | null;
 };
 
 const str = (value: unknown) => (typeof value === "string" && value.trim() !== "" ? value : null);
@@ -234,6 +241,8 @@ export function readDeviceRequest(
   spent: boolean,
   /** A block that comes from the other waiting requests, used when the row has none of its own. */
   among: DeviceRequestBlock | null = null,
+  /** Make its choices: only for a request that is shown and offers codes. */
+  withChoices = true,
 ): DeviceRequest | null {
   const r = asRecord(row) ?? {};
   const requestId = str(r.requestId);
@@ -267,7 +276,7 @@ export function readDeviceRequest(
     scopes: scopes.slice(0, 16).map((scope) => cleanLine(scope, MAX_REPORTED_CHARS)),
     at: typeof r.ts === "number" && Number.isFinite(r.ts) ? r.ts : 0,
     blocked,
-    choices: blocked ? [] : (codeChoices(publicKey, requestId, secret) ?? []),
+    choices: blocked || !withChoices ? [] : (codeChoices(publicKey, requestId, secret) ?? []),
     spent,
   };
 }
@@ -313,6 +322,13 @@ export class DeviceApprovals {
   private readonly spent = new Set<string>();
   /** Requests this host already opened by itself: each opens by itself once. */
   private readonly prompted = new Set<string>();
+  /**
+   * Requests this host has seen share a code with another: blocked for as long as each waits,
+   * even once the other is gone, so it takes Deny and Ask again. Past `MAX_COLLIDED`, `crowded`
+   * blocks every request until the gateway lists none.
+   */
+  private readonly collided = new Set<string>();
+  private crowded = false;
   /**
    * Until when this host opens no sheet by itself: five minutes after any refusal or wrong pick
    * here, whichever device asks next. The requests are still listed and can be opened.
@@ -369,6 +385,8 @@ export class DeviceApprovals {
     this.onClose();
     this.spent.clear();
     this.prompted.clear();
+    this.collided.clear();
+    this.crowded = false;
     this.quietUntil = -Infinity;
   }
 
@@ -473,38 +491,59 @@ export class DeviceApprovals {
     }
   }
 
-  private apply(rows: unknown[]): void {
-    // Every pending row's code, those past the sixteen included: a code two share blocks both.
-    const codeOf = (row: unknown) => {
-      const r = asRecord(row) ?? {};
-      const id = str(r.requestId);
-      const key = str(r.publicKey);
-      return id && key ? pairCode(key, id) : null;
-    };
-    const codes = rows.map(codeOf);
-    const all = rows
-      .map((row, i) => {
-        const id = str(asRecord(row)?.requestId);
-        const code = codes[i];
-        const shared = code !== null && codes.filter((each) => each === code).length > 1;
-        return readDeviceRequest(
-          row,
-          this.secret,
-          id !== null && this.spent.has(id),
-          shared ? "same-code" : null,
-        );
+  /**
+   * What one list read says, with the same rules for the list shown and for a decision: every
+   * valid request newest first, a code two share (the rows past the sixteen included, and any
+   * this host saw collide before) blocking each, and while more wait than are shown, none
+   * offering a pick. Choices are made only for the requests shown that offer codes.
+   */
+  private snapshot(rows: unknown[]): { all: DeviceRequest[]; requests: DeviceRequest[] } {
+    const parsed = rows
+      .map((row) => readDeviceRequest(row, this.secret, false, null, false))
+      .filter((request): request is DeviceRequest => request !== null);
+    const codeFor = this.ctx.code ?? pairCode;
+    const codeOf = (request: DeviceRequest) =>
+      request.publicKey === "" ? null : codeFor(request.publicKey, request.requestId);
+    const codes = parsed.map(codeOf);
+    const counts = new Map<string, number>();
+    for (const code of codes) if (code !== null) counts.set(code, (counts.get(code) ?? 0) + 1);
+    const ids = new Set(parsed.map((request) => request.requestId));
+    for (const id of this.collided) if (!ids.has(id)) this.collided.delete(id);
+    if (this.crowded && parsed.length === 0) this.crowded = false;
+    parsed.forEach((request, i) => {
+      const code = codes[i] ?? null;
+      if (code === null || (counts.get(code) ?? 0) < 2 || this.collided.has(request.requestId))
+        return;
+      if (this.collided.size >= MAX_COLLIDED) this.crowded = true;
+      else this.collided.add(request.requestId);
+    });
+    const all = parsed
+      .map((request) => {
+        const shared = this.crowded || this.collided.has(request.requestId);
+        return {
+          ...request,
+          spent: this.spent.has(request.requestId),
+          blocked: request.blocked ?? (shared ? ("same-code" as const) : null),
+        };
       })
-      .filter((request): request is DeviceRequest => request !== null)
       .sort((a, b) => b.at - a.at);
     // More waiting than shown: the person can't judge a set they can't see, so none is picked.
     const hidden = all.length > MAX_DEVICE_REQUESTS;
-    const requests = all
-      .slice(0, MAX_DEVICE_REQUESTS)
-      .map((request) =>
-        hidden && request.blocked === null
-          ? { ...request, blocked: "too-many" as const, choices: [] }
-          : request,
-      );
+    const requests = all.slice(0, MAX_DEVICE_REQUESTS).map((request) => {
+      const blocked = request.blocked ?? (hidden ? ("too-many" as const) : null);
+      return {
+        ...request,
+        blocked,
+        choices: blocked
+          ? []
+          : (codeChoices(request.publicKey, request.requestId, this.secret) ?? []),
+      };
+    });
+    return { all, requests };
+  }
+
+  private apply(rows: unknown[]): void {
+    const { all, requests } = this.snapshot(rows);
     // Every request still pending, shown or past the bound: a spent pick stays spent.
     const ids = new Set(all.map((request) => request.requestId));
     for (const id of this.spent) if (!ids.has(id)) this.spent.delete(id);
@@ -528,12 +567,10 @@ export class DeviceApprovals {
     return this.state.requests.find((request) => request.requestId === requestId) ?? null;
   }
 
-  /** The request's row read again from the gateway, or null when it isn't pending. */
-  private async readAgain(requestId: string): Promise<RawRecord | null> {
+  /** The whole pending list read again from the gateway, for a decision. */
+  private async readAgain(): Promise<unknown[]> {
     const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
-    const pending = Array.isArray(answer.pending) ? answer.pending : [];
-    return (pending.map((row) => asRecord(row) ?? {}).find((r) => r.requestId === requestId) ??
-      null) as RawRecord | null;
+    return Array.isArray(answer.pending) ? answer.pending : [];
   }
 
   private spend(requestId: string): void {
@@ -568,13 +605,21 @@ export class DeviceApprovals {
     // Each step goes on the connection the sheet was read on, or not at all.
     const same = this.here();
     try {
-      const row = await this.readAgain(requestId);
+      const rows = await this.readAgain();
       if (!same()) return { kind: "interrupted" };
+      const row = rows.map((each) => asRecord(each) ?? {}).find((r) => r.requestId === requestId);
       if (!row) return this.gone(same);
       const what = differences(shown, row);
       if (what.length > 0) {
         this.refreshOn(same);
         return { kind: "changed", what };
+      }
+      // The list as it is now, by the rules it is shown by: a code it now shares, a collision
+      // seen before, more waiting than are shown, or a newer block this connection published.
+      const now = this.snapshot(rows).requests.find((each) => each.requestId === requestId);
+      if (!now || now.blocked || this.shown(requestId)?.blocked) {
+        this.apply(rows);
+        return { kind: "not-allowed" };
       }
     } catch (error) {
       return { kind: "refused", message: errorText(error) };
