@@ -8,7 +8,7 @@
     - listitem "Pairing this Mac, waiting": Pairing this Mac
     - listitem "Loading your bots, waiting": Loading your bots
   - alert:
-    - paragraph: Clawtrate couldn't verify what is listening at port 18789. Nothing was sent to it. Use Advanced, or look again.
+    - paragraph: The program answering at port 18789 isn't the OpenClaw gateway these settings belong to. No credential was sent to it. Use Advanced, or look again.
   - button "Use Advanced"
   - button "Look again"
   - paragraph: Connecting

@@ -1,0 +1,6 @@
+- status
+- main:
+  - heading "Clawtrate" [level=1]
+  - paragraph: Your OpenClaw agents, orchestrated.
+  - heading "Looking for OpenClaw on this Mac" [level=2]
+  - paragraph: Looking for OpenClaw on this Mac
