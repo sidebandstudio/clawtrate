@@ -90,6 +90,16 @@ export function heldChoice(state: ChoicesState | undefined, id: ChoiceId): boole
   return state?.status === "ok" ? state.prefs?.on[id] : undefined;
 }
 
+/**
+ * The revision a write carries: above what the gateway holds and what this device shows. Past the
+ * largest safe number it starts again at 1: no device orders what it shows by it (they order by
+ * when they asked), so a revision written at the maximum can't stop a later write.
+ */
+export function nextRev(held: number, shown: number): number {
+  const rev = Math.max(held, shown) + 1;
+  return Number.isSafeInteger(rev) ? rev : 1;
+}
+
 /** Context: the gateway, on the connection the write is bound to. */
 export type ChoicesContext = { request: (method: string, params: unknown) => Promise<unknown> };
 
@@ -119,6 +129,8 @@ export async function writeChoices(
   ctx: ChoicesContext,
   change: ChoiceSet,
   mode: "set" | "fill",
+  /** The revision this device shows: a write goes above it, so a device that still shows an older one takes it too. */
+  shown = 0,
 ): Promise<ChoicesState> {
   for (let attempt = 0; attempt < CHOICES_WRITE_ATTEMPTS; attempt += 1) {
     const read = await readRaw(ctx);
@@ -130,10 +142,7 @@ export async function writeChoices(
       if (typeof change[name] === "boolean" && (mode === "set" || held[name] === undefined))
         on[name] = change[name];
     if (CHOICE_IDS.every((name) => on[name] === held[name])) return { status: "ok", prefs: from };
-    const rev = (from?.rev ?? 0) + 1;
-    // A revision readers would drop can't order anything: nothing is written.
-    if (!Number.isSafeInteger(rev)) throw new Error("These choices can't be changed any more.");
-    const next: ChoicesPrefs = { on, rev };
+    const next: ChoicesPrefs = { on, rev: nextRev(from?.rev ?? 0, shown) };
     if (utf8Length(JSON.stringify(next)) > MAX_CHOICES_BYTES)
       throw new Error("These choices are too large for the gateway to keep.");
     const result = asRecord(
@@ -146,5 +155,5 @@ export async function writeChoices(
     if (result?.status !== "conflict")
       throw new Error("This gateway keeps no preferences for this connection.");
   }
-  throw new Error("These choices kept changing on another device. Try again.");
+  throw new Error("Your gateway's preferences kept changing while this was saved.");
 }

@@ -11,7 +11,7 @@ import type { TaskActivity } from "./runs.ts";
 import type { StartTasks } from "./start-tasks.ts";
 import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
-import type { ChoicesState } from "./choices.ts";
+import type { ChoiceId, ChoicesState } from "./choices.ts";
 import type { SidebarState } from "./sidebar.ts";
 import type { ComputerState } from "./computer.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
@@ -632,6 +632,11 @@ export type ClawtrateState = {
    * (`choices.ts`). Absent where a host does not read them.
    */
   choices?: ChoicesState;
+  /**
+   * Choices turned on on this device that the gateway hasn't taken yet: sent after the next read
+   * on a connection that writes (`choices.ts`). Absent or empty when nothing waits.
+   */
+  choicesPending?: ChoiceId[];
   /**
    * The Work pane's Computer tab (`computer.ts`): whether the gateway has the
    * computer plugin, the latest control event of each bot's tab, and each

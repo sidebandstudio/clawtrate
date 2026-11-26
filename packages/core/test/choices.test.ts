@@ -19,11 +19,19 @@ import {
   CONNECTION_CHANGED,
 } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { mergeSidebars, parseSidebar, SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
+import { mergeSidebar, parseSidebar, SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
 import { enforceState } from "../src/state-bounds.ts";
 import { gatewayStamp, initialState } from "../src/types.ts";
 import { FAST, grantingGateway, URL_A, URL_B } from "./client-harness.ts";
-import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  GatewayError,
+  memoryStorage,
+  sleep,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 /** One gateway's per-user preferences: one user, the owner, for every paired device. */
 function prefsGateway(identity = "gateway-a") {
@@ -239,15 +247,19 @@ describe("F-601: choices follow the person to each device on one gateway", () =>
     await expect(b.client.setShowChannelChats(false, { stamp: b.stamp() })).rejects.toThrow(
       CHOICE_OFFLINE,
     );
-    // Turning one on while away shows it here, and sends nothing.
+    // Turning one on while away shows it here at once, and waits to be sent.
     const before = sets(fake).length;
     await b.client.setShowGatewayBot(true, { stamp: b.stamp() });
     expect(b.client.state.showGatewayBot).toBe(true);
+    expect(b.client.state.choicesPending).toEqual(["gatewayBot"]);
     expect(sets(fake)).toHaveLength(before);
     await a.client.setShowOtherToolSessions(true, { stamp: a.stamp() });
     expect(b.client.state.showOtherToolSessions).toBe(false);
     await b.client.retryNow();
     await until(() => b.client.state.showOtherToolSessions === true);
+    // Sent after the reconnect's read: the other device shows it too.
+    await until(() => a.client.state.showGatewayBot === true);
+    expect(b.client.state.choicesPending).toEqual([]);
     a.client.stop();
     b.client.stop();
   });
@@ -277,49 +289,6 @@ describe("F-601: choices follow the person to each device on one gateway", () =>
     const again = await device(fake, { own: { "show-channel-chats": "true" } });
     expect(sets(fake)).toHaveLength(writes);
     again.client.stop();
-  });
-
-  it("F-601: the first time, a device's own arrangement is merged into the gateway's by the stated rule", async () => {
-    const gatewayHeld = parseSidebar({
-      pins: ["main"],
-      hidden: ["pip"],
-      sections: [{ name: "Work", bots: ["otto"] }],
-      order: ["otto", "main"],
-      rev: 4,
-    });
-    const own = parseSidebar({
-      pins: ["marlow", "pip", "main"],
-      hidden: ["juno", "main"],
-      sections: [
-        { name: "Work", bots: ["otto", "marlow"] },
-        { name: "Home", bots: ["juno"] },
-      ],
-      order: ["juno", "otto"],
-    });
-    expect(mergeSidebars(gatewayHeld, own)).toEqual({
-      // The gateway's pins first; a bot hidden on the gateway isn't pinned from the device.
-      pins: ["main", "marlow"],
-      // A union, except a bot the gateway pins.
-      hidden: ["pip", "juno"],
-      sections: [
-        { name: "Work", bots: ["otto", "marlow"] },
-        { name: "Home", bots: ["juno"] },
-      ],
-      order: ["otto", "main", "juno"],
-      rev: 4,
-    });
-    const fake = prefsGateway();
-    fake.store[SIDEBAR_PREF_KEY] = gatewayHeld;
-    const b = await device(fake);
-    await until(() => b.client.state.sidebar?.status === "ok");
-    expect(await b.client.mergeSidebar(own, { stamp: b.stamp() })).toBe(true);
-    expect(parseSidebar(fake.store[SIDEBAR_PREF_KEY]).pins).toEqual(["main", "marlow"]);
-    expect(parseSidebar(fake.store[SIDEBAR_PREF_KEY]).rev).toBe(5);
-    // Nothing added: nothing written.
-    const writes = sets(fake).length;
-    expect(await b.client.mergeSidebar(own, { stamp: b.stamp() })).toBe(true);
-    expect(sets(fake)).toHaveLength(writes);
-    b.client.stop();
   });
 
   it("F-601: a read-only device reads and never writes, and asks for no access", async () => {
@@ -401,25 +370,237 @@ describe("F-601: choices follow the person to each device on one gateway", () =>
     client.stop();
   });
 
-  it("F-601: a device's pin of a bot the gateway places in a section isn't merged; a revision readers would drop is never written; a change read on another target keeps nothing", async () => {
-    const merged = mergeSidebars(
-      parseSidebar({ sections: [{ name: "Work", bots: ["otto"] }] }),
-      parseSidebar({ pins: ["otto", "pip"] }),
+  it("F-601: a value at the largest revision, a set the gateway refuses, and a writer racing every save each leave a press of Show on", async () => {
+    // At the largest revision: the write starts again at 1, and the other device takes it.
+    const top = prefsGateway();
+    top.store[CHOICES_PREF_KEY] = { on: {}, rev: Number.MAX_SAFE_INTEGER };
+    const a = await device(top);
+    const b = await device(top);
+    await a.client.setShowChannelChats(true, { stamp: a.stamp() });
+    expect(a.client.state.showChannelChats).toBe(true);
+    expect(parseChoices(top.store[CHOICES_PREF_KEY])).toEqual({
+      on: { channelChats: true },
+      rev: 1,
+    });
+    await until(() => b.client.state.showChannelChats === true);
+    // And "off" still goes through after it, on both.
+    await a.client.setShowChannelChats(false, { stamp: a.stamp() });
+    await until(() => b.client.state.showChannelChats === false);
+    a.client.stop();
+    b.client.stop();
+    for (const refuse of ["error", "conflict"] as const) {
+      const fake = prefsGateway();
+      const c = await device(fake);
+      fake.gateway.handlers["users.prefs.set"] = () => {
+        if (refuse === "conflict") return { status: "conflict" };
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: "users.prefs.set exceeds the 128-key profile limit (current count: 128)",
+        });
+      };
+      await c.client.setShowOtherToolSessions(true, { stamp: c.stamp() });
+      expect(c.client.state.showOtherToolSessions, refuse).toBe(true);
+      expect(c.storage.data.get("show-other-tool-sessions"), refuse).toBe("true");
+      expect(c.client.state.choicesPending, refuse).toEqual(["otherTools"]);
+      // The interface's switch, through the bridge: kept on there, answered "device".
+      await expect(
+        c.client.changeChoices({ commands: true }, { stamp: c.stamp() }),
+        refuse,
+      ).resolves.toBe("device");
+      c.client.stop();
+    }
+  });
+
+  it("F-601: after the gateway's preferences are reset, each device shows what it now holds, and a press changes what is shown", async () => {
+    const fake = prefsGateway();
+    fake.store[CHOICES_PREF_KEY] = { on: { channelChats: true, gatewayBot: true }, rev: 5 };
+    const b = await device(fake, { own: { "show-gateway-bot": "true" } });
+    expect(b.client.state.showChannelChats).toBe(true);
+    delete fake.store[CHOICES_PREF_KEY];
+    fake.gateway.emit("users.prefs.changed", { profileId: "owner", keys: [CHOICES_PREF_KEY] });
+    // The gateway's "on" is gone; this device's own stays.
+    await until(() => b.client.state.showChannelChats === false);
+    expect(b.client.state.showGatewayBot).toBe(true);
+    await b.client.setShowGatewayBot(false, { stamp: b.stamp() });
+    expect(b.client.state.showGatewayBot).toBe(false);
+    expect(parseChoices(fake.store[CHOICES_PREF_KEY]).on.gatewayBot).toBe(false);
+    // The rail's arrangement, reset the same way.
+    fake.store[SIDEBAR_PREF_KEY] = { pins: ["main"], sections: [], hidden: [], order: [], rev: 9 };
+    fake.gateway.emit("users.prefs.changed", { profileId: "owner", keys: [SIDEBAR_PREF_KEY] });
+    await until(() => b.client.state.sidebar?.prefs?.pins[0] === "main");
+    delete fake.store[SIDEBAR_PREF_KEY];
+    fake.gateway.emit("users.prefs.changed", { profileId: "owner", keys: [SIDEBAR_PREF_KEY] });
+    await until(() => b.client.state.sidebar?.prefs === null);
+    b.client.stop();
+  });
+
+  it("F-601: a switch turned on while away reaches the other devices on reconnect, also where the gateway held it off", async () => {
+    const fake = prefsGateway();
+    fake.store[CHOICES_PREF_KEY] = { on: { otherTools: false }, rev: 2 };
+    const a = await device(fake);
+    const b = await device(fake);
+    await b.client.suspend();
+    await until(() => b.client.state.connection.status !== "connected");
+    await b.client.setShowOtherToolSessions(true, { stamp: b.stamp() });
+    expect(b.client.state.showOtherToolSessions).toBe(true);
+    // Kept to send across a restart too.
+    expect(b.storage.data.get("choices-pending")).toContain("otherTools");
+    await b.client.retryNow();
+    await until(() => a.client.state.showOtherToolSessions === true);
+    expect(parseChoices(fake.store[CHOICES_PREF_KEY]).on.otherTools).toBe(true);
+    // Turned off again before it was sent: nothing of it is sent.
+    await b.client.suspend();
+    await until(() => b.client.state.connection.status !== "connected");
+    await b.client.setShowChannelChats(true, { stamp: b.stamp() });
+    await b.client.setShowChannelChats(false, { stamp: b.stamp() });
+    expect(b.client.state.choicesPending).toEqual([]);
+    const writes = sets(fake).length;
+    await b.client.retryNow();
+    await until(() => b.client.state.connection.status === "connected");
+    await until(() => b.client.state.choices?.status === "ok");
+    expect(parseChoices(fake.store[CHOICES_PREF_KEY]).on.channelChats).not.toBe(true);
+    expect(sets(fake).length).toBeLessThanOrEqual(writes + 1);
+    a.client.stop();
+    b.client.stop();
+  });
+
+  it("F-601: a read of the preferences that fails says nothing about what the gateway keeps, and an on pressed meanwhile is sent after a later read", async () => {
+    const fake = prefsGateway();
+    const get = fake.gateway.handlers["users.prefs.get"]!;
+    fake.gateway.handlers["users.prefs.get"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "timed out" });
+    };
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: INTERACTIVE_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+      }),
+    });
+    const client = new ClawtrateClient(testHost(fake.gateway, storage), {
+      ...FAST,
+      readAgainMs: 1,
+    });
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    await until(() => fake.gateway.calls("users.prefs.get").length >= 2);
+    await sleep(50);
+    expect(client.state.choices?.status).not.toBe("unavailable");
+    await client.setShowGatewayBot(true, { stamp: gatewayStamp(client.state.connection) });
+    expect(client.state.showGatewayBot).toBe(true);
+    expect(client.state.choicesPending).toEqual(["gatewayBot"]);
+    fake.gateway.handlers["users.prefs.get"] = get;
+    fake.gateway.emit("users.prefs.changed", { profileId: "owner", keys: [CHOICES_PREF_KEY] });
+    await until(() => parseChoices(fake.store[CHOICES_PREF_KEY]).on.gatewayBot === true);
+    client.stop();
+  });
+
+  it("F-601: what waited to be sent to one gateway is never sent to another", async () => {
+    const one = prefsGateway("gateway-a");
+    const two = prefsGateway("gateway-b");
+    const held = INTERACTIVE_SCOPES;
+    const record = JSON.stringify({ token: "device-token", grantedScopes: held, heldScopes: held });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: record,
+      [tokenKey(URL_B)]: record,
+    });
+    const host = {
+      ...testHost(one.gateway, storage),
+      createWebSocket: (url: string) => (url === URL_B ? two : one).gateway.createWebSocket(url),
+    };
+    const client = new ClawtrateClient(host, FAST);
+    await client.start();
+    await until(() => client.state.choices?.status === "ok");
+    one.gateway.handlers["users.prefs.set"] = () => ({ status: "conflict" });
+    // The interface's switch (its own value is the interface's, so only the queue could send it).
+    await client.changeChoices(
+      { commands: true },
+      { stamp: gatewayStamp(client.state.connection) },
     );
-    expect(merged.pins).toEqual(["pip"]);
-    expect(merged.sections).toEqual([{ name: "Work", bots: ["otto"] }]);
-    const ctx = (rev: number) => ({
-      request: async (method: string) =>
-        method === "users.prefs.get"
-          ? { status: "ok", entries: { [CHOICES_PREF_KEY]: { on: {}, rev } } }
-          : { status: "ok" },
+    expect(client.state.choicesPending).toEqual(["commands"]);
+    await client.connect({ url: URL_B });
+    await until(
+      () =>
+        client.state.connection.gatewayId === "gateway-b" && client.state.choices?.status === "ok",
+    );
+    await sleep(50);
+    expect(sets(two).some((params) => JSON.stringify(params).includes("commands"))).toBe(false);
+    expect(client.state.choicesPending).toEqual([]);
+    client.stop();
+  });
+
+  it("F-601: a device's own arrangement starts the gateway's only while it holds none; one the gateway holds is never merged into", async () => {
+    const own = parseSidebar({ pins: ["pip"], hidden: ["otto"], order: ["pip"] });
+    // The gateway holds one: nothing is written, whatever the device's copy says.
+    const fake = prefsGateway();
+    fake.store[SIDEBAR_PREF_KEY] = { pins: ["main"], sections: [], hidden: [], order: [], rev: 7 };
+    const b = await device(fake);
+    await until(() => b.client.state.sidebar?.prefs !== null);
+    expect(await b.client.mergeSidebar(own, { stamp: b.stamp() })).toBe(true);
+    expect(sets(fake)).toEqual([]);
+    expect(parseSidebar(fake.store[SIDEBAR_PREF_KEY])).toEqual({
+      pins: ["main"],
+      sections: [],
+      hidden: [],
+      order: [],
+      rev: 7,
     });
-    await expect(
-      writeChoices(ctx(Number.MAX_SAFE_INTEGER), { commands: true }, "set"),
-    ).rejects.toThrow("can't be changed");
-    await expect(writeChoices(ctx(7), { commands: true }, "set")).resolves.toMatchObject({
-      prefs: { rev: 8 },
+    b.client.stop();
+    // It holds none: the device's copy starts it, as it is.
+    const empty = prefsGateway();
+    const c = await device(empty);
+    expect(await c.client.mergeSidebar(own, { stamp: c.stamp() })).toBe(true);
+    expect(parseSidebar(empty.store[SIDEBAR_PREF_KEY])).toEqual({ ...own, rev: 1 });
+    // A second device, its own copy different: the gateway's stays.
+    const d = await device(empty);
+    expect(
+      await d.client.mergeSidebar(parseSidebar({ hidden: ["pip"] }), { stamp: d.stamp() }),
+    ).toBe(true);
+    expect(parseSidebar(empty.store[SIDEBAR_PREF_KEY]).hidden).toEqual(["otto"]);
+    c.client.stop();
+    d.client.stop();
+    // Two devices starting it at once: one copy wins, never a merge of both.
+    let first = true;
+    const ctx = {
+      request: async (method: string, params: unknown) => {
+        if (method === "users.prefs.get")
+          return first
+            ? { status: "ok", entries: {} }
+            : { status: "ok", entries: { [SIDEBAR_PREF_KEY]: { pins: ["main"], rev: 1 } } };
+        first = false;
+        expect((params as { expectedEntries: unknown }).expectedEntries).toEqual({
+          [SIDEBAR_PREF_KEY]: null,
+        });
+        return { status: "conflict" };
+      },
+    };
+    await expect(mergeSidebar(ctx, own)).resolves.toEqual({
+      status: "ok",
+      prefs: { pins: ["main"], sections: [], hidden: [], order: [], rev: 1 },
     });
+  });
+
+  it("F-601: a change this device's own storage can't keep changes nothing, here or on the gateway", async () => {
+    const fake = prefsGateway();
+    const b = await device(fake, { own: { "show-channel-chats": "true" } });
+    await until(() => parseChoices(fake.store[CHOICES_PREF_KEY]).on.channelChats === true);
+    const set = b.storage.set.bind(b.storage);
+    b.storage.set = async (key, value) => {
+      if (key === "show-channel-chats") throw new Error("disk full");
+      return set(key, value);
+    };
+    const before = sets(fake).length;
+    await expect(b.client.setShowChannelChats(false, { stamp: b.stamp() })).rejects.toThrow(
+      "disk full",
+    );
+    expect(b.client.state.showChannelChats).toBe(true);
+    expect(sets(fake)).toHaveLength(before);
+    b.client.stop();
+  });
+
+  it("F-601: a change read on another target keeps nothing", async () => {
     const fake = prefsGateway();
     fake.durable = false;
     const b = await device(fake);
@@ -430,28 +611,6 @@ describe("F-601: choices follow the person to each device on one gateway", () =>
     expect(b.client.state.showChannelChats).toBe(false);
     expect(b.storage.data.has("show-channel-chats")).toBe(false);
     b.client.stop();
-  });
-
-  it("F-601: when the gateway took a change and this device couldn't save its copy, the next start follows the gateway", async () => {
-    const fake = prefsGateway();
-    const b = await device(fake, { own: { "show-channel-chats": "true" } });
-    expect(b.client.state.showChannelChats).toBe(true);
-    const set = b.storage.set.bind(b.storage);
-    b.storage.set = async (key, value) => {
-      if (key === "show-channel-chats") throw new Error("disk full");
-      return set(key, value);
-    };
-    await b.client.setShowChannelChats(false, { stamp: b.stamp() });
-    expect(parseChoices(fake.store[CHOICES_PREF_KEY]).on.channelChats).toBe(false);
-    expect(b.client.state.showChannelChats).toBe(false);
-    b.client.stop();
-    // The same device started again, with the same storage.
-    b.storage.set = set;
-    const client = new ClawtrateClient(testHost(fake.gateway, b.storage), FAST);
-    await client.start();
-    await until(() => client.state.choices?.status === "ok");
-    expect(client.state.showChannelChats).toBe(false);
-    client.stop();
   });
 
   it("F-601: the bounds: only known choices, each a boolean; the state keeps them within its bound", async () => {

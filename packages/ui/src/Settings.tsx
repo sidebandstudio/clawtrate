@@ -12,6 +12,7 @@ import {
   type AccountsState,
   type Bot,
   type BotVoiceAnswer,
+  type ChoiceId,
   type GatewayStamp,
   type CheckInsState,
   type ConnectionState,
@@ -214,15 +215,23 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         setChannelError(failure instanceof Error ? failure.message : String(failure)),
     );
   };
-  // A gateway with roles set keeps no preferences for a paired device (#639): said in one line.
-  const perDevice =
-    state.connection.status === "connected" && state.choices?.status === "unavailable";
+  // Said once, where the choices live (#639): only on the gateway's own answer, never after a
+  // read that merely failed. Where it keeps them, they are the same for everyone who connects as
+  // the same user, which on a gateway without roles is everyone paired with it.
+  const perDevice = state.choices?.status === "unavailable";
+  const shared = state.choices?.status === "ok";
   return (
     <>
       {perDevice && (
         <p className="b-hint" data-testid="choices-per-device">
           This gateway doesn&apos;t keep choices for this connection, so the switches here apply to
           this device only.
+        </p>
+      )}
+      {shared && (
+        <p className="b-hint" data-testid="choices-shared">
+          These switches are the same on every device connected to this gateway, anyone else&apos;s
+          included. One you turn on here stays on here.
         </p>
       )}
       <DeviceSwitch
@@ -233,6 +242,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         value={commands}
         announce={announce}
       />
+      <ChoiceWaiting name="commands" />
       <DeviceSwitch
         id="show-thinking"
         label="Show thinking"
@@ -241,6 +251,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         value={thinking}
         announce={announce}
       />
+      <ChoiceWaiting name="thinking" />
       <div className="b-field channel-chats-field">
         <span id="channel-chats-label">Show external channel chats</span>
         <button
@@ -261,6 +272,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         it, which it does unless its <code>session.dmScope</code> setting gives each channel
         conversation its own session, those messages still appear there.
       </p>
+      <ChoiceWaiting name="channelChats" />
       {channelError && (
         <div className="form-error" role="alert">
           {channelError}
@@ -284,6 +296,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         with a bot stay out of the task list, its previews and its unread marks. A routine&apos;s
         runs open from Routines. One that is waiting for your approval or answer always shows.
       </p>
+      <ChoiceWaiting name="otherTools" />
       {otherToolsError && (
         <div className="form-error" role="alert">
           {otherToolsError}
@@ -291,6 +304,17 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
       )}
       <GatewayBotSwitch announce={announce} />
     </>
+  );
+}
+
+/** A choice turned on here that the gateway hasn't taken yet (`choicesPending`): said quietly. */
+function ChoiceWaiting({ name }: { name: ChoiceId }) {
+  const waiting = useClawtrateState().choicesPending?.includes(name) === true;
+  if (!waiting) return null;
+  return (
+    <p className="b-hint" data-testid={`choice-waiting-${name}`}>
+      On here. It reaches your other devices once your gateway takes it.
+    </p>
   );
 }
 
@@ -328,6 +352,7 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
         tools&apos; calls and scheduled runs that name no bot land on it. While you have another
         bot, it stays out of the sidebar unless it is waiting on you.
       </p>
+      <ChoiceWaiting name="gatewayBot" />
       {error && (
         <div className="form-error" role="alert">
           {error}

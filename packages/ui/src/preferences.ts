@@ -2,7 +2,13 @@
 // can be missing or throw (private windows, blocked site data), and the app must
 // work without it.
 
-import { gatewayStamp, shownChoice, type ChoiceId, type ChoiceSet } from "@clawtrate/core";
+import {
+  gatewayStamp,
+  shownChoice,
+  type ChoiceId,
+  type ChoiceSet,
+  type ClawtrateBridge,
+} from "@clawtrate/core";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useOptionalBridge } from "./bridge.tsx";
 
@@ -88,8 +94,6 @@ function deviceSwitch(
 ): () => [boolean, (shown: boolean) => Promise<void>] {
   const listeners = new Set<() => void>();
   let value: boolean | null = null;
-  /** The latest change asked: an older one answered later doesn't overwrite it. */
-  let asked = 0;
   const fromUrl = () => new URLSearchParams(globalThis.location?.search ?? "").get(key);
   const read = (): boolean => {
     if (value === null) value = (fromUrl() ?? readPreference(key)) === "show";
@@ -112,22 +116,33 @@ function deviceSwitch(
     );
     const url = fromUrl();
     const choose = useCallback(
-      async (next: boolean) => {
-        const mine = ++asked;
-        const state = bridge?.getState();
-        // Where the gateway keeps the person's choices, it hears of the change; a refusal changes nothing.
-        if (bridge && state?.choices?.status === "ok")
-          await bridge.invoke({
-            type: "changeChoices",
-            change: { [choice]: next },
-            stamp: gatewayStamp(state.connection),
-          });
-        if (mine === asked) keep(next);
-      },
+      (next: boolean) => pressSwitch(choice, next, keep, bridge),
       [bridge],
     );
     return [url === null ? shownChoice(choices, local, choice) : local, choose];
   };
+}
+
+/**
+ * A press of a conversation switch: kept on this device first, whatever the gateway answers, so
+ * the press always changes what this device keeps and an "on" shows at once. The engine then tells
+ * the gateway, and keeps an "on" it couldn't send for later; only an "off" the gateway still holds
+ * on for every device can be refused, and then it still shows by the gateway's "on".
+ */
+export async function pressSwitch(
+  choice: ChoiceId,
+  next: boolean,
+  keep: (next: boolean) => void,
+  bridge: Pick<ClawtrateBridge, "getState" | "invoke"> | null,
+): Promise<void> {
+  keep(next);
+  const state = bridge?.getState();
+  if (!bridge || !state || state.choices?.status === "unavailable") return;
+  await bridge.invoke({
+    type: "changeChoices",
+    change: { [choice]: next },
+    stamp: gatewayStamp(state.connection),
+  });
 }
 
 /** This device's own conversation switches, for the first-time merge: only those turned on here. */

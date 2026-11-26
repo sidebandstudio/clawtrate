@@ -520,6 +520,24 @@ const GATEWAY_BOT_KEY = "show-gateway-bot";
 /** A switch as the host keeps it: "true" or "false", else none chosen on this device. */
 const kept = (value: string | null): boolean | undefined =>
   value === "true" ? true : value === "false" ? false : undefined;
+/** Choices waiting to be sent, as the host keeps them; anything else reads as none. */
+function readPending(raw: string | null): {
+  for: string | null;
+  on: Partial<Record<ChoiceId, "set" | "fill">>;
+} {
+  const on: Partial<Record<ChoiceId, "set" | "fill">> = {};
+  let gateway: string | null = null;
+  try {
+    const record = asRecord(JSON.parse(raw ?? "{}")) ?? {};
+    const held = asRecord(record.on) ?? {};
+    for (const name of CHOICE_IDS)
+      if (held[name] === "set" || held[name] === "fill") on[name] = held[name];
+    if (typeof record.for === "string" && record.for.length <= MAX_ID_CHARS) gateway = record.for;
+  } catch {
+    // Damaged: nothing waits.
+  }
+  return { for: gateway, on };
+}
 const withoutUnset = (set: ChoiceSet): ChoiceSet => {
   const out: ChoiceSet = {};
   for (const name of CHOICE_IDS) if (typeof set[name] === "boolean") out[name] = set[name];
@@ -530,6 +548,11 @@ export type ChoiceOptions = { owner?: object; stamp?: GatewayStamp };
 /** Why a choice the gateway keeps isn't changed: the connection only reads. */
 export const CHOICE_READ_ONLY =
   "This was turned on for all your devices on your gateway, and this connection only reads, so it can't be turned off here.";
+/** Why an "off" the gateway holds on wasn't taken: the write failed. */
+export const CHOICE_NOT_KEPT =
+  "Your gateway didn't take this change, and it has this turned on for all your devices, so it still shows here. Try again in a moment.";
+/** Where the host keeps choices turned on here that the gateway hasn't taken yet. */
+const PENDING_CHOICES_KEY = "choices-pending";
 /** Why a choice the gateway keeps isn't changed: the gateway can't be reached now. */
 export const CHOICE_OFFLINE =
   "This was turned on for all your devices on your gateway, which can't be reached now, so it can't be turned off yet. Try again once it's back.";
@@ -1511,6 +1534,10 @@ export class ClawtrateClient {
    * fill the gateway's the first time this device writes there (`mergeChoices`).
    */
   private ownChoices: ChoiceSet = {};
+  /** Choices turned on here that the gateway hasn't taken yet (`setPending`), at most one each. */
+  private pendingChoices: Partial<Record<ChoiceId, "set" | "fill">> = {};
+  /** The gateway they were turned on for, by identity; null before it was known. */
+  private pendingFor: string | null = null;
   /** How often the person set each preference: a startup read begun before a change doesn't undo it. */
   private readonly preferenceSets = {
     turnLimit: 0,
@@ -2242,6 +2269,9 @@ export class ClawtrateClient {
           ),
         );
         const gatewayBot = kept(await this.host.storage.get(GATEWAY_BOT_KEY).catch(() => null));
+        const pending = readPending(
+          await this.host.storage.get(PENDING_CHOICES_KEY).catch(() => null),
+        );
         // A startup stopped while it read keeps nothing: the next one reads again. A preference
         // the person set meanwhile is newer than what was read.
         if (stops !== this.stops) return;
@@ -2260,6 +2290,15 @@ export class ClawtrateClient {
         if (names !== null && sets.gatewayNames === this.preferenceSets.gatewayNames)
           this.gatewayNames = names;
         this.ownChoices = withoutUnset({ ...this.ownChoices, ...read } as ChoiceSet);
+        // Changes made since the read are newer than what was read.
+        if (Object.keys(this.pendingChoices).length === 0) {
+          this.pendingChoices = pending.on;
+          this.pendingFor = pending.for;
+        }
+        this.store.update((state) => ({
+          ...state,
+          choicesPending: CHOICE_IDS.filter((name) => this.pendingChoices[name] !== undefined),
+        }));
         this.store.update((state) => ({
           ...state,
           turnLimitMinutes: this.turnLimitMs / 60_000,
@@ -8176,10 +8215,11 @@ export class ClawtrateClient {
   // The person's choices on the gateway (`choices.ts`; docs/decisions.md, "Your choices follow you")
 
   /**
-   * One list switch: on the gateway first when it keeps the person's choices, then kept here as
-   * this device's. A choice the gateway took stands although this device's copy, a cache then,
-   * couldn't be saved: the old copy is removed instead, so the next start follows the gateway and
-   * a stale "on" here can't outlive it. A choice only this device keeps is not taken unless saved.
+   * One list switch, kept on this device first, whatever the gateway answers (docs/decisions.md,
+   * "Your choices follow you"): the person's own press always changes what this device keeps. An
+   * "on" shows at once and is then sent as best it can be (`changeChoices`), never refused. An
+   * "off" is kept here first too; it is refused, in plain words, only where the gateway still holds
+   * it on for every device and can't be told now, since the gateway's "on" keeps it shown.
    */
   private async keepChoice(
     key: string,
@@ -8187,72 +8227,162 @@ export class ClawtrateClient {
     on: boolean,
     options: ChoiceOptions,
   ): Promise<void> {
-    const where = await this.changeChoices({ [name]: on }, options);
-    try {
-      await this.host.storage.set(key, String(on));
-    } catch (error) {
-      if (where !== "gateway") throw error;
-      this.logFailure("warn", "storage.set", error);
-      await this.host.storage.delete(key).catch(() => {});
-    }
+    // A change read on another target is refused before anything is kept, here or there.
+    if (options.stamp) this.requireSameTarget(options.stamp);
+    // Kept first: a choice this device's own storage could not keep is not taken (F-519, F-562).
+    await this.host.storage.set(key, String(on));
     this.preferenceSets[name] += 1;
     this.ownChoices = { ...this.ownChoices, [name]: on };
     this.applyChoices();
+    await this.changeChoices({ [name]: on }, options);
   }
 
   /**
-   * Change choices on the gateway too, once it keeps this user's preferences, and only from a
-   * connection that already writes (never asking for access), bound to the gateway the screen
-   * showed (`stamp`). The caller keeps each on this device as well. Answers `device` when nothing
-   * was sent: the gateway keeps no choices for this connection, or this connection can't write and
-   * the change shows only here. Turning off what the gateway holds on can't be done from a
-   * connection that doesn't write it, since the gateway's on would still show: refused, in plain
-   * words, for a connection that only reads and while the gateway can't be reached.
+   * Tell the gateway of a change of choices, once it keeps this user's preferences, and only from
+   * a connection that already writes (never asking for access), bound to the gateway the screen
+   * showed (`stamp`). The caller has kept the change on this device already. An "on" is never
+   * refused: one that can't be sent now (away, before the gateway's choices are read, or a write
+   * that failed) waits in `pendingChoices` and is sent after the next read. Answers whether the
+   * gateway has it. An "off" of a choice the gateway holds on is refused, in plain words, when it
+   * can't reach the gateway: the gateway's "on" keeps it shown on every device.
    */
   async changeChoices(
     change: ChoiceSet,
     options: ChoiceOptions = {},
   ): Promise<"gateway" | "device"> {
-    // A change read on another target is refused before anything is kept, here or there.
     if (options.stamp) this.requireSameTarget(options.stamp);
-    const held = this.state.choices;
-    if (held?.status !== "ok") return "device";
     const names = CHOICE_IDS.filter((name) => typeof change[name] === "boolean");
-    const stays = names.some((name) => change[name] === false && heldChoice(held, name) === true);
+    const ons = names.filter((name) => change[name] === true);
+    const offs = names.filter((name) => change[name] === false);
+    // An "off" is the latest word here: nothing of an older "on" waits to be sent.
+    this.setPending(offs, null);
+    const held = this.state.choices;
+    const stays = offs.some((name) => heldChoice(held, name) === true);
     const connected = this.state.connection.status === "connected";
-    if (!connected || this.options.readOnly || !this.holds(WRITE_SCOPE)) {
-      if (!stays) return "device";
-      throw new Error(connected ? CHOICE_READ_ONLY : CHOICE_OFFLINE);
+    const writes = !this.options.readOnly && this.holds(WRITE_SCOPE);
+    if (held?.status !== "ok" || !connected || !writes) {
+      // A connection that only reads never writes: its "on" stays this device's own.
+      if (!this.options.readOnly && held?.status !== "unavailable") this.setPending(ons, "set");
+      if (stays) throw new Error(connected ? CHOICE_READ_ONLY : CHOICE_OFFLINE);
+      return "device";
     }
     const generation = this.generation;
-    const ctx = await this.settleTaskWrite(options.owner ?? null, options.stamp);
-    const issued = ++this.choicesIssued;
-    const next = await writeChoices(ctx, withoutUnset(change), "set");
-    if (generation === this.generation) this.setChoices(next, issued);
-    return "gateway";
+    try {
+      const ctx = await this.settleTaskWrite(options.owner ?? null, options.stamp);
+      const issued = ++this.choicesIssued;
+      const next = await writeChoices(ctx, withoutUnset(change), "set", choicesRev(held.prefs));
+      if (generation === this.generation) this.setChoices(next, issued);
+      this.setPending(ons, null);
+      return "gateway";
+    } catch (error) {
+      if (error instanceof Error && error.message === CONNECTION_CHANGED) throw error;
+      this.logFailure("warn", "users.prefs.set", error);
+      this.setPending(ons, "set");
+      if (stays) throw new Error(CHOICE_NOT_KEPT, { cause: error });
+      return "device";
+    }
   }
 
   /**
    * The first-time merge (docs/decisions.md): this device's own choices, and `base` (the
    * interface's own), fill the ones the gateway holds none of; where it holds one, the gateway's
    * wins. Nothing to click and nothing asked: made only while the connection already writes, and
-   * nothing is sent when there is nothing to fill. A choice the gateway holds is never removed, so
-   * this fills each one at most once.
+   * nothing is sent when there is nothing to fill. A choice the gateway holds is never removed by
+   * it, so this fills each one at most once. The interface's own "on" that can't be sent now waits
+   * in `pendingChoices` (as a fill), so the interface needn't try again.
    */
   async mergeChoices(base: ChoiceSet = {}, options: ChoiceOptions = {}): Promise<void> {
+    const ons = CHOICE_IDS.filter((name) => base[name] === true);
     const held = this.state.choices;
-    if (held?.status !== "ok" || this.options.readOnly || !this.holds(WRITE_SCOPE)) return;
-    if (this.state.connection.status !== "connected") return;
+    if (held?.status !== "ok" || this.options.readOnly || !this.holds(WRITE_SCOPE)) {
+      if (!this.options.readOnly && held?.status !== "unavailable") this.setPending(ons, "fill");
+      return;
+    }
+    if (this.state.connection.status !== "connected") {
+      this.setPending(ons, "fill");
+      return;
+    }
     const fill = withoutUnset({ ...base, ...this.ownChoices });
     if (CHOICE_IDS.every((name) => fill[name] === undefined || held.prefs?.on[name] !== undefined))
       return;
     const generation = this.generation;
-    const ctx = options.stamp
-      ? await this.settleTaskWrite(options.owner ?? null, options.stamp)
-      : this.actionContext(options.owner ?? null, this.epoch);
-    const issued = ++this.choicesIssued;
-    const next = await writeChoices(ctx, fill, "fill");
-    if (generation === this.generation) this.setChoices(next, issued);
+    try {
+      const ctx = options.stamp
+        ? await this.settleTaskWrite(options.owner ?? null, options.stamp)
+        : this.actionContext(options.owner ?? null, this.epoch);
+      const issued = ++this.choicesIssued;
+      const next = await writeChoices(ctx, fill, "fill", choicesRev(held.prefs));
+      if (generation === this.generation) this.setChoices(next, issued);
+    } catch (error) {
+      this.setPending(
+        ons.filter((name) => this.pendingChoices[name] === undefined),
+        "fill",
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Choices turned on here that the gateway hasn't taken yet, each a "set" (the person's press) or
+   * a "fill" (the first-time merge); null removes them. Kept in the host's storage, so a restart
+   * while away keeps them; at most one per choice.
+   */
+  private setPending(names: readonly ChoiceId[], mode: "set" | "fill" | null): void {
+    let changed = false;
+    const here = this.state.connection.gatewayId;
+    // What waited for another gateway is never sent to this one.
+    if (mode !== null && here !== null && this.pendingFor !== null && this.pendingFor !== here) {
+      this.pendingChoices = {};
+      changed = true;
+    }
+    if (mode !== null && here !== null && this.pendingFor !== here) {
+      this.pendingFor = here;
+      changed = true;
+    }
+    const next = { ...this.pendingChoices };
+    for (const name of names) {
+      if (mode === null ? next[name] === undefined : next[name] === mode) continue;
+      if (mode === null) delete next[name];
+      else next[name] = mode;
+      changed = true;
+    }
+    if (!changed) return;
+    this.pendingChoices = next;
+    this.store.update((state) => ({
+      ...state,
+      choicesPending: CHOICE_IDS.filter((name) => next[name] !== undefined),
+    }));
+    void this.host.storage
+      .set(PENDING_CHOICES_KEY, JSON.stringify({ for: this.pendingFor, on: next }))
+      .catch((error: unknown) => this.logFailure("warn", "storage.set", error));
+  }
+
+  /** After a read on a connection that writes: what was turned on here and waits is sent now. */
+  private async sendPending(): Promise<void> {
+    const here = this.state.connection.gatewayId;
+    if (this.pendingFor !== null && here !== null && this.pendingFor !== here) {
+      this.setPending(CHOICE_IDS, null);
+      return;
+    }
+    const sets = CHOICE_IDS.filter((name) => this.pendingChoices[name] === "set");
+    const fills = CHOICE_IDS.filter((name) => this.pendingChoices[name] === "fill");
+    if (sets.length === 0 && fills.length === 0) return;
+    const held = this.state.choices;
+    if (held?.status !== "ok" || this.options.readOnly || !this.holds(WRITE_SCOPE)) return;
+    const generation = this.generation;
+    const ctx = this.actionContext(null, this.epoch);
+    for (const [names, mode] of [
+      [sets, "set"],
+      [fills, "fill"],
+    ] as const) {
+      if (names.length === 0) continue;
+      const issued = ++this.choicesIssued;
+      const change: ChoiceSet = Object.fromEntries(names.map((name) => [name, true]));
+      const next = await writeChoices(ctx, change, mode, choicesRev(this.state.choices?.prefs));
+      if (generation !== this.generation) return;
+      this.setChoices(next, issued);
+      this.setPending(names, null);
+    }
   }
 
   /** The device's own choices shown, as after a switch of gateway: none of another gateway's. */
@@ -8288,15 +8418,16 @@ export class ClawtrateClient {
     if (listed) this.publishTasks();
   }
 
-  /** Show choices unless newer ones are shown, ordered by their own revision (`setSidebar`). */
+  /**
+   * Show choices unless an answer to something asked later is shown already: ordered by when
+   * each read or write was asked, never by the value's revision, so a value the gateway answers
+   * after a reset (absent), or one written at the largest revision, replaces what was shown
+   * (`setSidebar`). A read asked during this device's own write that answers before it is
+   * replaced by the change event's read.
+   */
   private setChoices(choices: ChoicesState, issued: number): void {
-    const shown = this.state.choices;
-    if (choices.status === "ok" && shown?.status === "ok") {
-      const next = choicesRev(choices.prefs);
-      const now = choicesRev(shown.prefs);
-      if (next < now || (next === now && issued < this.choicesShown)) return;
-    }
-    this.choicesShown = Math.max(this.choicesShown, issued);
+    if (issued < this.choicesShown) return;
+    this.choicesShown = issued;
     this.store.update((state) => ({ ...state, choices }));
     this.applyChoices();
   }
@@ -11133,7 +11264,12 @@ export class ClawtrateClient {
     const generation = this.generation;
     // Asked now: a read asked after this write began outranks its answer when they tie.
     const issued = ++this.sidebarIssued;
-    const next = await changeSidebar(this.actionContext(options.owner ?? null), change, base);
+    const next = await changeSidebar(
+      this.actionContext(options.owner ?? null),
+      change,
+      base,
+      Math.max(0, sidebarRev(this.state.sidebar?.prefs)),
+    );
     // Shown only if nothing newer, by the arrangement's own revision, is shown already.
     if (generation === this.generation) this.setSidebar(next, issued);
   }
@@ -11174,19 +11310,14 @@ export class ClawtrateClient {
   }
 
   /**
-   * Show an arrangement unless a newer one is shown: answers are ordered by the revision the
-   * gateway holds with the arrangement (`SidebarPrefs.rev`), never by when they arrive, so a
-   * late read or an old write's acknowledgement never hides another device's later change.
+   * Show an arrangement unless an answer to something asked later is shown: ordered by when each
+   * read or write was asked, never by when it arrives, so a late read or an old write's
+   * acknowledgement never hides another device's later change. Not by the value's revision: a
+   * gateway whose preferences were reset answers none, and that replaces what was shown.
    */
   private setSidebar(sidebar: SidebarState, issued: number): void {
-    const shown = this.state.sidebar;
-    if (sidebar.status === "ok" && shown?.status === "ok") {
-      const next = sidebarRev(sidebar.prefs);
-      const now = sidebarRev(shown.prefs);
-      // A tie (the same revision, or values with none) goes to what was asked last.
-      if (next < now || (next === now && issued < this.sidebarShown)) return;
-    }
-    this.sidebarShown = Math.max(this.sidebarShown, issued);
+    if (issued < this.sidebarShown) return;
+    this.sidebarShown = issued;
     this.store.update((state) => ({ ...state, sidebar }));
   }
 
@@ -11212,6 +11343,7 @@ export class ClawtrateClient {
       );
       if (generation !== this.generation) return;
       if (result?.status !== "ok") {
+        // The gateway's own answer that it keeps no user for this connection.
         this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
         this.setChoices({ ...initialChoices, status: "unavailable" }, choicesIssued);
         return;
@@ -11220,13 +11352,18 @@ export class ClawtrateClient {
       this.setSidebar(sidebarFromEntries(entries), issued);
       this.setChoices(choicesFromEntries(entries), choicesIssued);
     } catch (error) {
+      // A read that failed after its tries says nothing about what the gateway keeps: the
+      // choices stay as they were (`unknown` before any answer), and the next connect or change
+      // event reads again. An "on" turned on meanwhile waits to be sent.
       this.logFailure("warn", "users.prefs.get", error);
       if (generation === this.generation && this.state.sidebar?.status !== "ok")
         this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
-      if (generation === this.generation && this.state.choices?.status !== "ok")
-        this.setChoices({ ...initialChoices, status: "unavailable" }, choicesIssued);
       return;
     }
+    if (epoch !== this.epoch) return;
+    await this.sendPending().catch((error: unknown) =>
+      this.logFailure("warn", "users.prefs.set", error),
+    );
     if (epoch !== this.epoch) return;
     await this.mergeChoices().catch((error: unknown) =>
       this.logFailure("warn", "users.prefs.set", error),

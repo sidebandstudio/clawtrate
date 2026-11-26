@@ -9,6 +9,7 @@
 // `no_durable_identity`, and the rail then keeps its arrangement per device.
 
 import { utf8Length } from "./encoding.ts";
+import { nextRev } from "./choices.ts";
 import { asRecord } from "./mapping.ts";
 
 export const SIDEBAR_PREF_KEY = "clawtrate.sidebar";
@@ -51,10 +52,10 @@ export type SidebarPrefs = {
   /** The manual order of the list. */
   order: string[];
   /**
-   * The arrangement's revision on the gateway: every write raises it by one under the
-   * compare-and-set, so it orders the values the gateway held. The gateway's protocol
-   * gives no version of a preference (`users.prefs.get` answers entries, and
-   * `users.prefs.changed` names keys), so the arrangement carries its own. Absent is 0.
+   * The arrangement's revision: every write raises it above what the gateway holds and what the
+   * writer shows (`nextRev`), so a value always changes when it is written. The gateway gives no
+   * version of a preference. Devices of this version order what they show by when they asked,
+   * not by it (a value at the largest revision, or a reset, can't stop a later one). Absent is 0.
    */
   rev?: number;
 };
@@ -202,78 +203,38 @@ export function applySidebarChange(prefs: SidebarPrefs, change: SidebarChange): 
   }
 }
 
-/**
- * A device's own arrangement merged into the gateway's, the first time the device writes there
- * (docs/decisions.md, "Your choices follow you"). The gateway's comes first and wins: a bot it
- * pins stays pinned, and its order and sections keep their places. Hidden is a union, except a
- * bot the gateway pins; the device's pins, order and section places are added after for bots the
- * gateway doesn't place. Within every bound; the gateway's `rev` is kept for the caller to raise.
- */
-export function mergeSidebars(gateway: SidebarPrefs, device: SidebarPrefs): SidebarPrefs {
-  const hidden = [
-    ...gateway.hidden,
-    ...device.hidden.filter((id) => !gateway.hidden.includes(id) && !gateway.pins.includes(id)),
-  ];
-  const sections = gateway.sections.map((section) => ({ ...section, bots: [...section.bots] }));
-  const placed = new Set(sections.flatMap((section) => section.bots));
-  const pins = [
-    ...gateway.pins,
-    ...device.pins.filter(
-      (id) => !gateway.pins.includes(id) && !hidden.includes(id) && !placed.has(id),
-    ),
-  ];
-  for (const section of device.sections) {
-    const bots = section.bots.filter((id) => !placed.has(id));
-    if (bots.length === 0) continue;
-    const same = sections.find((each) => each.name === section.name);
-    if (same) same.bots.push(...bots);
-    else if (sections.length < MAX_SIDEBAR_SECTIONS) sections.push({ name: section.name, bots });
-    else continue;
-    bots.forEach((id) => placed.add(id));
-  }
-  const order = [...gateway.order, ...device.order.filter((id) => !gateway.order.includes(id))];
-  return parseSidebar({ pins, sections, hidden, order, rev: gateway.rev });
-}
-
-const sameArrangement = (a: SidebarPrefs, b: SidebarPrefs) =>
-  JSON.stringify([a.pins, a.sections, a.hidden, a.order]) ===
-  JSON.stringify([b.pins, b.sections, b.hidden, b.order]);
+const emptyArrangement = (prefs: SidebarPrefs) =>
+  prefs.pins.length + prefs.hidden.length + prefs.order.length + prefs.sections.length === 0;
 
 /**
- * Merge this device's arrangement into the gateway's (`mergeSidebars`), with a compare-and-set
- * as for a change. Nothing is written when it adds nothing, or when the merged arrangement would
- * pass the gateway's bound: the gateway's then stays as it is. Answers what the gateway holds.
+ * The first time a writing device meets the gateway's arrangement (docs/decisions.md, "Your
+ * choices follow you"): this device's own copy starts the gateway's only while the gateway holds
+ * none. When the gateway already holds one, it wins and nothing is written: the device's copy is
+ * older than anything the person did on the gateway since, so it is never merged in. Within the
+ * gateway's bound, with a compare-and-set against "none". Answers what the gateway holds.
  */
 export async function mergeSidebar(
   ctx: Pick<SidebarContext, "request">,
   base: SidebarPrefs,
 ): Promise<SidebarState> {
   const device = parseSidebar(base);
-  for (let attempt = 0; attempt < SIDEBAR_WRITE_ATTEMPTS; attempt += 1) {
-    const read = await readRaw(ctx);
-    if (read.status !== "ok")
-      throw new Error("This gateway keeps no preferences for this connection.");
-    const held = read.raw === null || read.raw === undefined ? null : parseSidebar(read.raw);
-    const merged = mergeSidebars(held ?? parseSidebar({}), device);
-    if (
-      (held && sameArrangement(merged, held)) ||
-      (!held && sameArrangement(merged, parseSidebar({})))
-    )
-      return { status: "ok", prefs: held };
-    const next = { ...merged, rev: (held?.rev ?? 0) + 1 };
-    if (!Number.isSafeInteger(next.rev) || sidebarBytes(next) > MAX_SIDEBAR_BYTES)
-      return { status: "ok", prefs: held };
-    const result = asRecord(
-      await ctx.request("users.prefs.set", {
-        entries: { [SIDEBAR_PREF_KEY]: next },
-        expectedEntries: { [SIDEBAR_PREF_KEY]: read.raw ?? null },
-      }),
-    );
-    if (result?.status === "ok") return { status: "ok", prefs: next };
-    if (result?.status !== "conflict")
-      throw new Error("This gateway keeps no preferences for this connection.");
-  }
-  throw new Error("The arrangement kept changing on another device. Try again.");
+  const read = await readRaw(ctx);
+  if (read.status !== "ok")
+    throw new Error("This gateway keeps no preferences for this connection.");
+  const held = read.raw === null || read.raw === undefined ? null : parseSidebar(read.raw);
+  if (held !== null || emptyArrangement(device)) return { status: "ok", prefs: held };
+  const next = { ...device, rev: 1 };
+  if (sidebarBytes(next) > MAX_SIDEBAR_BYTES) return { status: "ok", prefs: null };
+  const result = asRecord(
+    await ctx.request("users.prefs.set", {
+      entries: { [SIDEBAR_PREF_KEY]: next },
+      expectedEntries: { [SIDEBAR_PREF_KEY]: null },
+    }),
+  );
+  if (result?.status === "ok") return { status: "ok", prefs: next };
+  // Another device started it meanwhile: the gateway's is the one now.
+  if (result?.status === "conflict") return readSidebar({ ...ctx, ensureWrite: async () => {} });
+  throw new Error("This gateway keeps no preferences for this connection.");
 }
 
 /** Context: the gateway, and the write tier for a change. */
@@ -321,6 +282,8 @@ export async function changeSidebar(
   ctx: SidebarContext,
   change: SidebarChange,
   base: SidebarPrefs | null,
+  /** The revision this device shows (`nextRev`). */
+  shownRev = 0,
 ): Promise<SidebarState> {
   await ctx.ensureWrite();
   for (let attempt = 0; attempt < SIDEBAR_WRITE_ATTEMPTS; attempt += 1) {
@@ -331,7 +294,10 @@ export async function changeSidebar(
       read.raw === null || read.raw === undefined
         ? parseSidebar(base ?? {})
         : parseSidebar(read.raw);
-    const next = { ...applySidebarChange(from, change), rev: (from.rev ?? 0) + 1 };
+    const next = {
+      ...applySidebarChange(from, change),
+      rev: nextRev(from.rev ?? 0, shownRev ?? 0),
+    };
     if (sidebarBytes(next) > MAX_SIDEBAR_BYTES)
       throw new SidebarFullError(
         "The gateway keeps at most 4,096 bytes of arrangement, and this change would pass that. Remove a section or shorten section names first.",

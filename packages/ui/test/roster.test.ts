@@ -1,11 +1,16 @@
 import type { Bot, Task } from "@clawtrate/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { initialState, type SidebarPrefs, type SidebarState } from "@clawtrate/core";
+import { pressSwitch } from "../src/preferences.ts";
 import {
   arrange,
+  hiddenWithUnread,
+  mirrorOf,
   moveInOrder,
   readRoster,
   rosterKey,
   rosterScope,
+  seedWanted,
   type RosterPrefs,
 } from "../src/roster.ts";
 
@@ -106,6 +111,133 @@ describe("F-031 F-266: the rail's order", () => {
   });
 });
 
+describe("F-601: the arrangement on the gateway and this device's copy", () => {
+  const ok = (prefs: SidebarPrefs | null): SidebarState => ({ status: "ok", prefs });
+  const own = prefs({ pinned: ["pip"], hidden: ["otto"] });
+
+  it("F-601: a device's own copy starts the gateway's only while it holds none, once, and only on a writing connection that is up", () => {
+    expect(seedWanted(own, ok(null), true, true)).toBe(true);
+    // The gateway holds one: never merged into, whatever the copy says.
+    expect(seedWanted(own, ok({ pins: [], hidden: [], sections: [], order: [] }), true, true)).toBe(
+      false,
+    );
+    // Once: a device that has met the gateway's (or started it) never starts it again, even after
+    // the gateway's preferences are cleared.
+    expect(seedWanted({ ...own, merged: true }, ok(null), true, true)).toBe(false);
+    // A reinstall or a cleared store has nothing of its own.
+    expect(seedWanted(prefs({}), ok(null), true, true)).toBe(false);
+    expect(seedWanted(own, ok(null), false, true)).toBe(false);
+    expect(seedWanted(own, ok(null), true, false)).toBe(false);
+    expect(seedWanted(own, { status: "unavailable", prefs: null }, true, true)).toBe(false);
+    expect(seedWanted(own, undefined, true, true)).toBe(false);
+  });
+
+  it("F-601: once the gateway holds an arrangement, this device's copy mirrors it: an older copy is dropped, its sort and its own shown bots kept", () => {
+    const stale = prefs({
+      pinned: ["pip"],
+      hidden: ["otto"],
+      sort: "name",
+      sections: [{ name: "Old", bots: ["marlow"] }],
+      shownHere: ["main"],
+    });
+    expect(
+      mirrorOf({ pins: ["main"], hidden: [], sections: [], order: ["otto"], rev: 3 }, stale),
+    ).toEqual({
+      pinned: ["main"],
+      hidden: [],
+      sort: "name",
+      manual: ["otto"],
+      sections: [],
+      shownHere: ["main"],
+      merged: true,
+    });
+  });
+
+  it("F-601: the merged mark is kept, read back, and only as a mark", () => {
+    const data = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => data.set(key, value),
+      removeItem: (key: string) => data.delete(key),
+    });
+    try {
+      const write = (scope: string, value: unknown) =>
+        data.set(`clawtrate.${rosterKey(scope)}`, JSON.stringify(value));
+      write("gateway:a1", { ...own, merged: true });
+      write("gateway:b2", own);
+      write("gateway:c3", { ...own, merged: "yes" });
+      expect(readRoster("gateway:a1").merged).toBe(true);
+      expect(seedWanted(readRoster("gateway:a1"), ok(null), true, true)).toBe(false);
+      // Another gateway's mark is its own: this one still starts its gateway's.
+      expect(readRoster("gateway:b2")).not.toHaveProperty("merged");
+      expect(seedWanted(readRoster("gateway:b2"), ok(null), true, true)).toBe(true);
+      expect(readRoster("gateway:c3")).not.toHaveProperty("merged");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("F-601 F-027: a hidden bot with something to act on is listed; one with something unread is counted on the fold; one shown here is listed", () => {
+    const task = (botId: string, change: Partial<Task>): Task => ({ ...at(botId, 5), ...change });
+    const hidden = prefs({ hidden: ["pip", "otto", "marlow", "main"] });
+    for (const status of ["waiting", "blocked"] as const) {
+      const arranged = arrange(BOTS, { ...TASKS, pip: [task("pip", { status })] }, hidden);
+      expect(names(arranged.list), status).toContain("Pip");
+    }
+    for (const status of ["failed", "done-with-failures", "done"] as const) {
+      const arranged = arrange(BOTS, { ...TASKS, pip: [task("pip", { status })] }, hidden);
+      expect(names(arranged.hidden), status).toContain("Pip");
+    }
+    // An unread reply, and a failed run's end, on hidden bots: counted on the fold.
+    const tasks = {
+      pip: [task("pip", { unread: true })],
+      otto: [task("otto", { status: "failed", unread: true })],
+      marlow: [task("marlow", { unread: true })],
+    };
+    const arranged = arrange(BOTS, tasks, hidden);
+    expect(hiddenWithUnread(arranged.hidden, tasks, {})).toBe(3);
+    // Read here already: not counted.
+    expect(hiddenWithUnread(arranged.hidden, tasks, { [tasks.marlow[0]!.key]: 5 })).toBe(2);
+    // Shown on this device although the gateway hides it.
+    expect(names(arrange(BOTS, TASKS, { ...hidden, shownHere: ["pip"] }).list)).toContain("Pip");
+  });
+});
+
+describe("F-601: a press of a conversation switch", () => {
+  it("F-601: is kept on this device first, so a gateway that refuses it can't stop an on, and a refused off is said", async () => {
+    const kept: boolean[] = [];
+    const state = { ...initialState, choices: { status: "ok" as const, prefs: null } };
+    const refusing = {
+      getState: () => state,
+      invoke: () => Promise.reject(new Error("refused")),
+    } as unknown as Parameters<typeof pressSwitch>[3];
+    await expect(pressSwitch("commands", false, (on) => kept.push(on), refusing)).rejects.toThrow(
+      "refused",
+    );
+    await pressSwitch("thinking", true, (on) => kept.push(on), null);
+    expect(kept).toEqual([false, true]);
+    // Kept before the gateway is asked, so an "on" shows whatever it answers.
+    let order: string[] = [];
+    const watching = {
+      getState: () => state,
+      invoke: () => {
+        order.push("sent");
+        return Promise.resolve({ kept: "device" });
+      },
+    } as unknown as Parameters<typeof pressSwitch>[3];
+    await pressSwitch("commands", true, () => order.push("kept"), watching);
+    expect(order).toEqual(["kept", "sent"]);
+    // Where the gateway keeps no choices for this connection, nothing is sent.
+    order = [];
+    const none = {
+      ...watching,
+      getState: () => ({ ...state, choices: { status: "unavailable" as const, prefs: null } }),
+    } as unknown as Parameters<typeof pressSwitch>[3];
+    await pressSwitch("commands", true, () => order.push("kept"), none);
+    expect(order).toEqual(["kept"]);
+  });
+});
+
 describe("each gateway's arrangement", () => {
   const data = new Map<string, string>();
   beforeEach(() => {
@@ -136,15 +268,6 @@ describe("each gateway's arrangement", () => {
       pinned: ["main"],
     });
     expect(readRoster(null)).toMatchObject({ pinned: [], hidden: [], sort: "recent" });
-  });
-
-  it("F-601: once merged into the gateway's, the device's arrangement says so, and only then", () => {
-    data.set(`clawtrate.${rosterKey("gateway:a1")}`, saved({ pinned: ["main"], merged: true }));
-    data.set(`clawtrate.${rosterKey("gateway:b2")}`, saved({ pinned: ["main"] }));
-    expect(readRoster("gateway:a1").merged).toBe(true);
-    expect(readRoster("gateway:b2")).not.toHaveProperty("merged");
-    data.set(`clawtrate.${rosterKey("gateway:c3")}`, JSON.stringify({ merged: "yes" }));
-    expect(readRoster("gateway:c3")).not.toHaveProperty("merged");
   });
 
   it("F-013 F-027 F-266: a gateway opened for the first time starts with no pins, nothing hidden and the default order, even when old state that names no gateway exists", () => {

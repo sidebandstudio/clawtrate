@@ -122,7 +122,7 @@ import {
   type SidebarSection,
   type SidebarState,
 } from "./sidebar.ts";
-import type { ChoicesPrefs, ChoiceSet, ChoicesState } from "./choices.ts";
+import { CHOICE_IDS, type ChoicesPrefs, type ChoiceSet, type ChoicesState } from "./choices.ts";
 import type { Digest } from "./bounds.ts";
 import {
   MAX_COMPUTER_PANES,
@@ -1368,6 +1368,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   retention: retentionAlarm,
   sidebar,
   choices,
+  choicesPending: list(CHOICE_IDS.length, ENUM),
   computer: COMPUTER,
   setup,
   checkIns: CHECK_INS,
