@@ -42,7 +42,7 @@ The prototype is [`prototype/main-bot.html`](prototype/main-bot.html): the auton
 | After setup the app opens on the bot list, or on "Make your first bot" for an unused implicit `main`. | The app opens on the Main Bot's chat. A Main Bot that has never been set up greets you, and a card asks its name and role.                                                                                                              |
 | New bot asks "Ask before acting" or "Run without routine approvals" each time, with nothing chosen.   | Setup asks once how bots run commands. New bot starts on that answer. Each bot can be changed later.                                                                                                                                    |
 | A bot can't change its own settings, except through shell commands.                                   | A bot asks, through Clawtrate's plugin, and you review the exact change and save it. On OpenClaw 2026.10.6 saving opens your own editor, filled with the proposed values (section 8). Clawtrate shows the result the gateway read back. |
-| Bots are created only in New bot.                                                                     | A bot you allowed can propose a new bot, its routines and changes to other bots. You confirm each.                                                                                                                                      |
+| Bots are created only in New bot.                                                                     | A bot can make a new bot, its routines and changes to other bots when you ask for them, shown with Undo ("Doing, not asking").                                                                                                          |
 | External agents can't see bots.                                                                       | An agent you allow can see bots and suggest changes through MCP, on this Mac, while Clawtrate is open. You can see what it did and remove its access at once.                                                                           |
 
 ## 2. The autonomy choice
@@ -58,7 +58,7 @@ One step, titled **"How should bots run commands?"**, with two cards. Each card 
 
 Under the cards, two lines and a link:
 
-- "Either way, a change you ask a bot for happens at once, and you can undo it." (The earlier line had each change confirmed with a click; under "Doing, not asking" this whole step is the command question of `doing-not-asking.md` section 3.)
+- "Either way, a change you ask a bot for happens at once, and you can undo it. Deleting something still asks first, and can't be undone." (The earlier line had each change confirmed with a click; under "Doing, not asking" this whole step is the command question of `doing-not-asking.md` section 3.)
 - "Clawtrate's limits cover changes made through Clawtrate. A command a bot runs can still change things on the computer running OpenClaw."
 - **What this means** opens a sheet:
   - "**Hands-off** runs a bot's commands without stopping for approval, as the computer's own user, where that computer's rules allow it. A command can change files and OpenClaw's own settings."
@@ -391,6 +391,8 @@ Or `refused`, with a reason the bot can act on: "Only bots you've allowed can as
 
 ## 7. Who may change what
 
+> Superseded by "Doing, not asking" in `docs/decisions.md`: who decides each change is `bots-in-clawtrate.md` (#669) section 3, and #493 rewrites this section. Kept below as the earlier design.
+
 | Caller                            | Itself  | Other bots                 | Create bots | See other bots    |
 | --------------------------------- | ------- | -------------------------- | ----------- | ----------------- |
 | A bot listed in `managers`        | propose | propose                    | propose     | yes               |
@@ -403,6 +405,8 @@ Or `refused`, with a reason the bot can act on: "Only bots you've allowed can as
 - **No tool changes `managers`, `newBots`, any tool policy, or this plugin's config.**
 
 ## 8. Proposals: how every change is authorized
+
+> Superseded by "Doing, not asking" in `docs/decisions.md`: no change from chat waits on a card except deleting and an account change; the outcomes are `bots-in-clawtrate.md` (#669) section 3, and its section 5 replaces the proposal cards below. #493 rewrites this section. Kept below as the earlier design.
 
 A change from chat is a **proposal**. It changes nothing until a person with admin decides, on a card that shows exactly what will be written, in the canonical form the gateway will store (a name's whitespace collapsed, R26; a file as its full text; a routine's schedule as normalized). The decision is bound to:
 

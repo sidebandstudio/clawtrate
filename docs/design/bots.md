@@ -642,20 +642,20 @@ The page's states: the catalogue loading (three grey rows, `aria-busy`); it fail
 
 ## 18. Turning T3 Code off
 
-Turning the switch off while no bot has T3 Code on simply hides everything again. Under "Doing, not asking" the same is true while some do: the switch hides it at once, and the line under it says what it did not do, with the other action beside it ("T3 Code is hidden for you. Otto still has it." and, with admin, **Turn off for Otto too**, which writes at once and offers Undo). The words below were the confirmation's; they become that line, by tier:
+Turning the switch off while no bot has T3 Code on simply hides everything again. Under "Doing, not asking" the same is true while some do: the switch hides it at once, and the line under it says what it did not do, with the other action beside it ("T3 Code is hidden for you. Otto still has it." and, with admin, **Turn off for Otto too**, which writes at once and offers Undo). By tier, the line under the switch:
 
-| This device may | The confirmation                                                                                                                                                                                                                                               | Its buttons                                                                   |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Send            | "Turn off T3 Code for you?" and "Otto has T3 Code on at the gateway, and keeps it: turning it off for Otto needs admin access. This only hides T3 Code in Clawtrate for you."                                                                                  | "Cancel", "Hide T3 Code"                                                      |
-| Administer      | "Turn off T3 Code?" and "Otto has T3 Code on. Bots are shared: turning it off for Otto turns it off for everyone who uses Otto, and Otto loses the T3 Code tools and Clawtrate's skill. The T3 Code server and its sign-in stay on the gateway for next time." | "Cancel", "Only hide it" (default), "Turn off for Otto too" (`--danger-soft`) |
+| This device may | The line                                                                                                                                                                      | Its action                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Send            | "T3 Code is hidden for you. Otto has T3 Code on at the gateway, and keeps it: turning it off for Otto needs admin access."                                                    | **Show T3 Code** (Undo)                     |
+| Administer      | "T3 Code is hidden for you. Otto still has it; bots are shared, so turning it off for Otto turns it off for everyone who uses Otto. The T3 Code server and its sign-in stay." | **Turn off for Otto too**, **Show T3 Code** |
 
-"Turn off for Otto too" writes the denies and removes the skills for those bots in one `config.patch`, then reads the configuration back:
+"Turn off for Otto too" writes the denies and removes the skills for those bots in one `config.patch`, then reads the configuration back. Hiding has already happened either way; what the line then says:
 
-| The write                          | Then                                                                                                                        |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Accepted, and the read-back agrees | The switch is off; those bots have T3 Code off; announced                                                                   |
-| Refused                            | The switch stays on, and the section says "Couldn't turn off T3 Code for Otto: <reason>. Nothing changed." with "Try again" |
-| The read-back shows a bot still on | The switch stays on, and that bot is named: "T3 Code is still on for Pip." with "Try again for Pip"                         |
+| The write                          | Then                                                                                                            |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Accepted, and the read-back agrees | "T3 Code is off for Otto. · Undo", which writes back Otto's earlier denies and skills exactly                   |
+| Refused                            | "Couldn't turn off T3 Code for Otto: <reason>. It is still on for Otto, and hidden for you." with **Try again** |
+| The read-back shows a bot still on | "T3 Code is still on for Pip." with **Try again for Pip**                                                       |
 
 Turning the integration on again shows the server and its sign-in as they were. Messaged T3 Code cards already in transcripts stay.
 
