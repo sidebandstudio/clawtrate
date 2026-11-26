@@ -12,7 +12,12 @@ import type {
   SetupRefusal,
   SetupState,
 } from "@clawtrate/core";
-import { OLDEST_OPENCLAW_VERSION, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
+import {
+  OLDEST_OPENCLAW_VERSION,
+  PROOF_REFUSAL_LINES,
+  TESTED_OPENCLAW_VERSION,
+  type ProofRefusalKind,
+} from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
@@ -305,11 +310,23 @@ const CANT_TELL: Record<string, string> = {
     "Clawtrate can't use OpenClaw's settings on this Mac to connect by itself. Use Advanced.",
 };
 
+/** Which fact local connect's proof refused, when the host said (`ProofRefusalKind`). */
+const proofKind = (reason: string | null): ProofRefusalKind | null =>
+  reason !== null && Object.hasOwn(PROOF_REFUSAL_LINES, reason)
+    ? (reason as ProofRefusalKind)
+    : null;
+
+/** What local connect's proof refused, in its own words, at this port. */
+function refusalWords(reason: string | null, port: number | null): string {
+  const kind = proofKind(reason);
+  return kind
+    ? PROOF_REFUSAL_LINES[kind](port)
+    : `Clawtrate couldn't verify what is listening at port ${port}.`;
+}
+
 /** Why local connect didn't offer a gateway that answered: nothing was sent to it. */
 const unverifiedWords = (look: SetupLook) =>
-  look.reason === "version"
-    ? "This version of OpenClaw is one Clawtrate can't check yet, so it doesn't connect to it by itself. Use Advanced, or look again."
-    : `Clawtrate couldn't verify what is listening at port ${look.port}, so it doesn't connect to it by itself. Use Advanced, or look again.`;
+  `${refusalWords(look.reason, look.port)} Clawtrate doesn't connect to it by itself. Use Advanced, or look again.`;
 
 /** The found card and actions for each result of the look (§6). */
 function LookResult({
@@ -566,7 +583,7 @@ const FAILURES: Record<
   },
   unverified: {
     lead: "",
-    text: () => "Nothing was sent to it. Use Advanced, or look again.",
+    text: () => "No credential was sent to it. Use Advanced, or look again.",
     next: "advanced",
     step: 0,
   },
@@ -729,7 +746,7 @@ export function SetupFlow({
         <Title id="setup-title">On this computer</Title>
         <Found mark={<WarnIcon />} tone="warn" heading="Looking on this computer is off here">
           <Lede>
-            {`This run can only look in a sandbox. ${PRODUCT_NAME} couldn't use this sandbox because ${REFUSED[setup.failure.reason ?? "file"]} Use Advanced.`}
+            {`This run can only look in a sandbox. ${PRODUCT_NAME} couldn't use this sandbox because ${REFUSED[(setup.failure.reason as SetupRefusal | null) ?? "file"]} Use Advanced.`}
           </Lede>
           <Actions>
             <Primary onClick={advanced}>Use Advanced</Primary>
@@ -747,7 +764,7 @@ export function SetupFlow({
       failure?.kind === "unreachable"
         ? `Nothing answered on port ${failure.port}.`
         : failure?.kind === "unverified"
-          ? `Clawtrate couldn't verify what is listening at port ${failure.port}.`
+          ? refusalWords(failure.reason, failure.port)
           : (copy?.lead ?? "");
     body = (
       <>

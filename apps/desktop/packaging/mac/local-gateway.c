@@ -13,15 +13,16 @@
 // `read` writes "ok\n" followed by the file's bytes. `prove` writes
 // "proved <pid> <start> <arch> <sha256> <lock bytes> <package bytes>\n", then
 // the profile's gateway lock and the module's package.json, for the host to
-// check. Either may instead write one line "refused <why>\n".
+// check. When the holder maps no OpenClaw native module, <arch> is "none", the
+// hash "-" and the package empty; when it maps one whose file can't be matched
+// to the mapping or hashed, the hash is "-". Either command may instead write
+// one line "refused <why>\n".
 #define __STDC_WANT_LIB_EXT1__ 1
 #include <CommonCrypto/CommonDigest.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libproc.h>
-#include <mach-o/fat.h>
-#include <mach-o/loader.h>
 #include <membership.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -334,22 +335,6 @@ static int holdsFile(pid_t pid, const struct stat *file) {
     return holds;
 }
 
-/** The program the kernel says the process runs is a Mach-O file named `node`. */
-static int runsNode(pid_t pid) {
-    char path[PROC_PIDPATHINFO_MAXSIZE];
-    if (proc_pidpath(pid, path, sizeof path) <= 0) return 0;
-    const char *name = strrchr(path, '/');
-    if (!name || strcmp(name, "/node") != 0) return 0;
-    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
-    struct stat st;
-    uint32_t magic = 0;
-    int node = fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
-               read(fd, &magic, sizeof magic) == sizeof magic &&
-               (magic == MH_MAGIC_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64);
-    if (fd >= 0) close(fd);
-    return node;
-}
-
 /** The SHA-256 of the open file, as lowercase hex. */
 static const char *hashFile(int fd, char hex[65]) {
     CC_SHA256_CTX context;
@@ -375,9 +360,11 @@ static const char *hashFile(int fd, char hex[65]) {
  * OpenClaw's native module, as the process maps it: a region backed by
  * `<root>/node_modules/@openclaw/fs-safe-darwin-<arch>/fs-safe-native.node`,
  * opened here without following a link and matched to that region by device
- * and inode, then hashed. `root` is the package that depends on it.
+ * and inode, then hashed. `root` is the package that depends on it. Whether
+ * such a region was found; its hash is "-" when its file isn't the mapped one
+ * or couldn't be read.
  */
-static const char *mappedModule(pid_t pid, char root[PATH_MAX], const char **arch, char hex[65]) {
+static int mappedModule(pid_t pid, char root[PATH_MAX], const char **arch, char hex[65]) {
     static const char marker[] = "/node_modules/@openclaw/fs-safe-darwin-";
     struct proc_regionwithpathinfo region;
     uint64_t address = 0;
@@ -402,15 +389,16 @@ static const char *mappedModule(pid_t pid, char root[PATH_MAX], const char **arc
                     ? "module"
                     : hashFile(fd, hex);
             if (fd >= 0) close(fd);
+            if (why) strcpy(hex, "-");
             memcpy(root, path, (size_t)(at - path));
             root[at - path] = '\0';
-            return why;
+            return 1;
         }
         uint64_t next = region.prp_prinfo.pri_address + region.prp_prinfo.pri_size;
         if (next <= address) break;
         address = next;
     }
-    return "module";
+    return 0;
 }
 
 /** A small file's bytes, read without following its last link; the caller frees them. */
@@ -473,12 +461,13 @@ static const char *profileFiles(int home, const char *folderName, struct stat *l
  * Checks (e) and (f) for the connection the host opened from <local port> to
  * <port>. Of the connection's holders, all this account's, the first that
  * passes (f) is written out with the facts the host checks: its start time,
- * the module's architecture and hash, the lock and the package.json. (f) runs
- * in this order: the same process the scan saw, then the profile's gateway
- * lock and state database held open, which opens nothing; only then the
- * program it runs and its mapped module, which are opened and read; last,
- * the same process again. So a process that isn't this profile's gateway has
- * nothing of its opened here, and a PID taken over midway is refused.
+ * the lock, and OpenClaw's native module with its package.json when it maps
+ * one (evidence the host holds to its pins). (f) runs in this order: the same
+ * process the scan saw, then the profile's gateway lock and state database
+ * held open, which opens nothing; only then its mapped module, which is opened
+ * and read; last, the same process again. So a process that isn't this
+ * profile's gateway has nothing of its opened here, and a PID taken over
+ * midway is refused.
  */
 static int prove(int home, int privateHome, const char *folderName, int port, int localPort) {
     static char lockBytes[LOCK_LIMIT + 1];
@@ -496,21 +485,29 @@ static int prove(int home, int privateHome, const char *folderName, int port, in
         const char *arch = NULL, *because = sameProcess(found[i], starts[i], &info);
         if (!because) because = holdsFile(found[i], &lock) ? NULL : "lock";
         if (!because) because = holdsFile(found[i], &database) ? NULL : "state";
-        if (!because) because = runsNode(found[i]) ? NULL : "node";
-        if (!because) because = mappedModule(found[i], root, &arch, hex);
+        // The module, when the holder maps one, and the package that depends on it.
+        int module = !because && mappedModule(found[i], root, &arch, hex);
         char *package = NULL;
         size_t packageLength = 0;
-        snprintf(packagePath, sizeof packagePath, "%s/package.json", because ? "" : root);
-        if (!because) because = readSmall(packagePath, PACKAGE_LIMIT, &package, &packageLength);
+        if (module) {
+            snprintf(packagePath, sizeof packagePath, "%s/package.json", root);
+            if (readSmall(packagePath, PACKAGE_LIMIT, &package, &packageLength)) {
+                free(package);
+                package = NULL;
+                packageLength = 0;
+            }
+        }
         // And still that process, so every fact above is about the one the scan saw.
         if (!because) because = sameProcess(found[i], starts[i] + PROVE_LATE_SKEW, &info);
         if (!because) {
             int written =
                 printf("proved %d %llu %s %s %zu %zu\n", found[i],
-                       (unsigned long long)info.pbi_start_tvsec, arch, hex, lockLength,
-                       packageLength) > 0 &&
+                       (unsigned long long)info.pbi_start_tvsec, module ? arch : "none",
+                       module ? hex : "-", lockLength, packageLength) > 0 &&
                 fwrite(lockBytes, 1, lockLength, stdout) == lockLength &&
-                fwrite(package, 1, packageLength, stdout) == packageLength && fflush(stdout) == 0;
+                (packageLength == 0 ||
+                 fwrite(package, 1, packageLength, stdout) == packageLength) &&
+                fflush(stdout) == 0;
             free(package);
             return written ? 0 : 1;
         }

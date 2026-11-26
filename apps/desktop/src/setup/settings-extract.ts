@@ -6,7 +6,7 @@
 
 import JSON5 from "json5";
 import { lexSettings } from "./settings-lexer.ts";
-import { OPENCLAW_DEFAULT_PORT } from "./world.ts";
+import { CLAWTRATE_PROFILE_DEFAULT_PORT, OPENCLAW_DEFAULT_PORT } from "./world.ts";
 
 /** The canonical profiles the reader looks at. */
 export type SettingsProfile = "default" | "clawtrate";
@@ -53,7 +53,7 @@ export const TOKEN_MAX_BYTES = 4096;
  */
 export const DEFAULT_PORTS: Record<SettingsProfile, number> = {
   default: OPENCLAW_DEFAULT_PORT,
-  clawtrate: 22768,
+  clawtrate: CLAWTRATE_PROFILE_DEFAULT_PORT,
 };
 
 /** OpenClaw's display markers, which are never credentials (`isRedactedSecretValue`). */
@@ -82,7 +82,7 @@ const PLACEHOLDERS = new Set([
 const ENV_SHORTHAND = /^\$[A-Z][A-Z0-9_]{0,127}$/;
 
 // eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 type TokenRefusal = "placeholder" | "redacted" | "indirect" | "empty" | "long" | "control";
 

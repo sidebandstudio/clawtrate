@@ -239,6 +239,8 @@ describe("what is taken from the settings", () => {
     ["a newline inside", `"abc\\ndef"`, "control"],
     ["DEL", `"abc\\u007fdef"`, "control"],
     ["a C1 control", `"abc\\u0085def"`, "control"],
+    ["a line separator", `"abc\\u2028def"`, "control"],
+    ["a paragraph separator", `"abc\\u2029def"`, "control"],
   ])("refuses %s as the token", (_, value, why) => {
     expect(extract(tokenAuth(`{ token: ${value} }`))).toEqual(refused("credential", why));
   });

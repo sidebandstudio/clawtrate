@@ -705,7 +705,18 @@ export const ROUTE_IDENTITY_CHANGED = "ROUTE_IDENTITY_CHANGED";
 export type ProvedRoute = {
   createSocket: WebSocketFactory;
   verify: (signal: AbortSignal) => Promise<boolean>;
+  /**
+   * Why the host's last proof of one of these sockets refused it, in fixed words for the
+   * person (`PROOF_REFUSAL_LINES`), or null when none did since the last that passed. A
+   * connection whose socket was refused stops with these words, rather than retrying.
+   */
+  refusal?: () => string | null;
 };
+
+/** A gateway saved with a proved route, reached at its address typed under Advanced. */
+export const LOCAL_ROUTE_ONLY = "LOCAL_ROUTE_ONLY";
+/** The way on from a refused proof, said with its words. */
+const LOCAL_WAY_ON = "Choose This computer to connect to it again, or use Advanced.";
 
 export type ConnectOptions = { url: string; token?: string | null };
 
@@ -983,6 +994,8 @@ export type SetupEndpointCheck = {
    * but the send follows it. Failing sends nothing, as `verify` failing does.
    */
   prove?: (signal: AbortSignal) => Promise<boolean>;
+  /** Why the host's proof last refused one of `createSocket`'s sockets (`ProvedRoute.refusal`). */
+  refusal?: () => string | null;
   /**
    * The host's name for the route `createSocket` proves (local connect's profile folder),
    * saved with the gateway (`ConnectionSettings.route`): once setup ends, and after a
@@ -1008,6 +1021,7 @@ function setupCheckFor(url: string, setup: SetupEndpointCheck) {
     ...(setup.consent ? { consent: setup.consent } : {}),
     ...(setup.createSocket ? { createSocket: setup.createSocket } : {}),
     ...(setup.prove ? { prove: setup.prove } : {}),
+    ...(setup.refusal ? { refusal: setup.refusal } : {}),
   };
 }
 
@@ -1348,6 +1362,8 @@ export class ClawtrateClient {
     createSocket?: WebSocketFactory;
     /** The far end of `createSocket`'s latest socket proved again, last before its credential. */
     prove?: (signal: AbortSignal) => Promise<boolean>;
+    /** Why the host's proof last refused one of `createSocket`'s sockets. */
+    refusal?: () => string | null;
   } | null = null;
   /**
    * A connection the host's setup opened, from its first socket through its
@@ -8322,7 +8338,11 @@ export class ClawtrateClient {
     // host's own socket here.
     const provedSocket =
       proved && this.setupCheck?.createSocket
-        ? { createSocket: this.setupCheck.createSocket, prove: this.setupCheck.prove }
+        ? {
+            createSocket: this.setupCheck.createSocket,
+            prove: this.setupCheck.prove,
+            refusal: this.setupCheck.refusal,
+          }
         : undefined;
     const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
@@ -8475,7 +8495,7 @@ export class ClawtrateClient {
         // The setup's own proved sockets, with their last proof, retries after its check ended
         // included; else, for a gateway saved with a route, the host's proved route.
         const own = check?.createSocket
-          ? { createSocket: check.createSocket, prove: check.prove }
+          ? { createSocket: check.createSocket, prove: check.prove, refusal: check.refusal }
           : provedSocket;
         const fromRoute = own ? null : route;
         // A gateway set up through local connect opens no socket the host can't prove.
@@ -8487,13 +8507,18 @@ export class ClawtrateClient {
               error: {
                 code: "LOCAL_UNVERIFIED",
                 message: `Clawtrate couldn't verify what is listening at ${hostOf(settings.url)}.`,
-                hint: null,
+                hint: LOCAL_WAY_ON,
               },
             });
           throw new Error("this gateway's sockets can't be proved");
         }
         try {
           const create = own?.createSocket ?? (fromRoute ? fromRoute.createSocket : undefined);
+          // Whose proof speaks for this connection's sockets, should one refuse them.
+          this.socketRefusal = {
+            url: settings.url,
+            refusal: own?.refusal ?? (fromRoute ? fromRoute.refusal : undefined) ?? null,
+          };
           socket = create ? create(settings.url) : this.host.createWebSocket(settings.url);
         } catch (error) {
           // A setup socket that couldn't start is a terminal path: its code goes.
@@ -8584,9 +8609,10 @@ export class ClawtrateClient {
             status: "error",
             retryAt: null,
             error: {
-              code: "LOCAL_UNVERIFIED",
-              message: `Clawtrate couldn't verify what is listening at ${hostOf(settings.url)}.`,
-              hint: null,
+              code: LOCAL_ROUTE_ONLY,
+              message:
+                "This device is paired with the OpenClaw on this Mac through This computer, so it doesn't use that pairing at a typed address. Nothing was sent.",
+              hint: "Choose This computer to connect to it.",
             },
           });
           throw new Error("this device's token goes only through the route it was saved over");
@@ -9042,6 +9068,8 @@ export class ClawtrateClient {
           context.plan,
         ),
       resolveClose: (context) => {
+        // A socket of a saved route that the host's proof refused: not retried (onClose).
+        if (this.routeRefusal(settings.url)) return { retry: false, notify: true };
         // A setup connection that ended before its hello is not retried and its code is
         // forgotten, unless the gateway is waiting for its owner to approve this device.
         const setup = this.tokenGate?.generation === generation;
@@ -9071,6 +9099,16 @@ export class ClawtrateClient {
         this.usage.onClose();
         this.openclawUpdates.onDisconnect();
         const status = this.state.connection.status;
+        // The host refused a socket of this gateway's route: its words, and the way on.
+        const refused = this.routeRefusal(settings.url);
+        if (refused) {
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            error: { code: "LOCAL_UNVERIFIED", message: refused, hint: LOCAL_WAY_ON },
+          });
+          return;
+        }
         if (status !== "pairing" && this.tokenGate?.generation === generation) {
           // The setup connection ended before its hello: its code is forgotten and it stops.
           this.setupCode = null;
@@ -9550,6 +9588,15 @@ export class ClawtrateClient {
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
     if (current()) this.settleReadStamps(id);
   }
+
+  /** The host's words for why it refused the latest socket of this gateway's route: setup's or saved. */
+  private routeRefusal(url: string): string | null {
+    const sockets = this.socketRefusal;
+    return sockets?.url === url ? (sockets.refusal?.() ?? null) : null;
+  }
+
+  /** The proof that speaks for the sockets the current connection opens (`routeRefusal`). */
+  private socketRefusal: { url: string; refusal: (() => string | null) | null } | null = null;
 
   /**
    * A gateway saved with a proved route is the gateway that route first reported

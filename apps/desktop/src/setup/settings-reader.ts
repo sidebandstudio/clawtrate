@@ -32,7 +32,13 @@ import {
   systemTempRoots,
   within,
 } from "./sandbox.ts";
-import { accountHome, packagedApp, SANDBOX_MARKERS, SetupRefusedError } from "./world.ts";
+import {
+  accountHome,
+  packagedApp,
+  SANDBOX_MARKERS,
+  SANDBOX_SWITCHES,
+  SetupRefusedError,
+} from "./world.ts";
 
 export const SETTINGS_LIMIT = 1024 * 1024;
 /** The helper's deadline, and the parse worker's. */
@@ -154,9 +160,15 @@ export function guardHome(
   env: NodeJS.ProcessEnv = process.env,
   accountHomeOf: () => string | null = accountHome,
   packaged: () => boolean = packagedApp,
+  argv: readonly string[] = process.argv,
 ): HomeIdentity | null {
   const real = accountHomeOf();
-  if (sandboxed === false && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) {
+  // A marker variable, or a switch that marks a driven app, makes a run sandboxed whatever
+  // its caller says (as `mustSandbox`).
+  const driven = SANDBOX_SWITCHES.some((name) =>
+    argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`)),
+  );
+  if (sandboxed === false && !driven && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) {
     if (!packaged() || real === null || home !== resolve(real)) throw new SetupRefusedError("home");
     return null;
   }

@@ -17,6 +17,7 @@ import {
   SETUP_ENDPOINT_CHANGED,
   SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
+  PROOF_REFUSAL_LINES,
   type ClawtrateClient,
   type ClawtrateState,
   type SetupFailure,
@@ -25,6 +26,7 @@ import {
 } from "@clawtrate/core";
 import { proveFor, provedSockets, type LocalConnect } from "./local-connect.ts";
 import { lookLocally, readToken, type LocalFound } from "./local-look.ts";
+import { refusalKind, type ProveRefusal } from "./local-prove.ts";
 import { boundedFileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { ProgramResult } from "./programs.ts";
@@ -604,17 +606,21 @@ export class SetupController implements SetupHost {
       await this.letGo();
       if (!current()) return;
       // The first socket that isn't proved, at its dial or before its credential, ends this
-      // attempt: nothing went on it, and setup's connection is closed.
-      const unverified = (why: string) => {
+      // attempt: nothing went on it, and setup's connection is closed. Once setup is done, a
+      // refused socket is the client's to say (`refusal`): the connection stays the person's.
+      let latest: ProveRefusal | null = null;
+      const unverified = (why: ProveRefusal) => {
+        latest = why;
         this.log(`couldn't verify what is listening at port ${found.port} (${why})`);
-        if (!current() || this.state.phase === "failed") return;
+        if (!current() || this.state.phase === "failed" || this.state.phase === "done") return;
         this.stopWatching();
         void this.closeOwned();
-        this.fail({ kind: "unverified", port: found.port });
+        this.fail({ kind: "unverified", port: found.port, reason: refusalKind(why) });
       };
       const proveOne = proveFor(local, found.folder, found.port, unverified);
       const prove = async (localPort: number) => {
         const proved = await proveOne(localPort);
+        if (proved) latest = null;
         if (proved && current() && this.state.step === 0) this.publish({ ...this.state, step: 1 });
         return proved;
       };
@@ -630,6 +636,8 @@ export class SetupController implements SetupHost {
           prove: provedWhile(current, sockets.verify),
           route: found.folder,
           consent,
+          refusal: () =>
+            latest === null ? null : PROOF_REFUSAL_LINES[refusalKind(latest)](found.port),
         },
       );
     } catch (error) {

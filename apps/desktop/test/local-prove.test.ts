@@ -101,7 +101,7 @@ const options = (path: string, localPort: number, more: Partial<ProveOptions> = 
 const refused = (why: string) => ({ proved: false, why });
 
 describe.skipIf(platform !== "darwin")("the proof, against listeners of the test's own", () => {
-  it("F-492: a same-account holder is refused by the profile's files first, then by its module", async () => {
+  it("F-492: a same-account holder is refused by the profile's files first, then by the lock", async () => {
     const { localPort, end } = await connection(port);
     const at = home();
     try {
@@ -110,8 +110,8 @@ describe.skipIf(platform !== "darwin")("the proof, against listeners of the test
       expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("lock"));
       const files = held(at).map((file) => openSync(file, "r"));
       try {
-        // Holding them, it runs Node, but maps no OpenClaw module.
-        expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("module"));
+        // Holding them, it maps no OpenClaw module, so it stands on the lock, which doesn't name it.
+        expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("named"));
       } finally {
         for (const fd of files) closeSync(fd);
       }
@@ -141,7 +141,7 @@ describe.skipIf(platform !== "darwin")("the proof, against listeners of the test
     }
   }, 15_000);
 
-  it("refuses a holder of this account's that isn't Node", async () => {
+  it("refuses a holder of this account's that isn't Node and that the lock doesn't name", async () => {
     const at = home();
     // A Perl listener holding the profile's lock and database open, so the program is reached.
     const perl = spawn(
@@ -161,7 +161,7 @@ describe.skipIf(platform !== "darwin")("the proof, against listeners of the test
       const { localPort, end } = await connection(listening);
       try {
         const proof = await proveLocalGateway(options(at, localPort, { port: listening }));
-        expect(proof).toEqual(refused("node"));
+        expect(proof).toEqual(refused("named"));
       } finally {
         end();
       }
@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
     const at = home();
     const files = held(at).map((file) => openSync(file, "r"));
     try {
-      expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("module"));
+      expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("named"));
       expect(await proveLocalGateway(options(at, localPort, { helper: skewed }))).toEqual(
         refused("holder"),
       );
@@ -364,15 +364,19 @@ function answer(facts: {
   arch?: string;
   sha256?: string;
   lock?: object | string;
-  pkg?: object;
+  /** The module's package.json, or null for none (a holder mapping no module). */
+  pkg?: object | null;
   extra?: string;
 }): Buffer {
   const lock = Buffer.from(
     typeof facts.lock === "string" ? facts.lock : JSON.stringify(facts.lock ?? {}),
   );
-  const pkg = Buffer.from(
-    JSON.stringify(facts.pkg ?? { name: "openclaw", version: PINNED_OPENCLAW_VERSION }),
-  );
+  const pkg =
+    facts.pkg === null
+      ? Buffer.alloc(0)
+      : Buffer.from(
+          JSON.stringify(facts.pkg ?? { name: "openclaw", version: PINNED_OPENCLAW_VERSION }),
+        );
   const header = `proved ${facts.pid ?? 4242} ${facts.start ?? 1795410457} ${facts.arch ?? "arm64"} ${
     facts.sha256 ?? FS_SAFE_NATIVE_SHA256["darwin-arm64"]
   } ${lock.length} ${pkg.length}\n`;
@@ -448,21 +452,58 @@ describe.skipIf(platform !== "darwin")(
       }
     });
 
-    it("refuses a module that isn't the pinned one", async () => {
+    it("refuses a pinned version's module that isn't its own", async () => {
       const at = path();
       const lock = named(at);
       expect(await prove(at, answer({ lock, sha256: "0".repeat(64) }))).toEqual(refused("pin"));
       // The other architecture's module, with this one's hash.
       expect(await prove(at, answer({ lock, arch: "x64" }))).toEqual(refused("pin"));
-      for (const pkg of [
-        { name: "openclaw", version: "2026.10.5" },
-        { name: "openclaw", version: "2026.11.11" },
-        { name: "not-openclaw", version: PINNED_OPENCLAW_VERSION },
-        {},
-      ])
-        expect(await prove(at, answer({ lock, pkg })), JSON.stringify(pkg)).toEqual(
-          refused("package"),
-        );
+      // A mapped module whose file wasn't the mapped one, or couldn't be read.
+      expect(await prove(at, answer({ lock, sha256: "-" }))).toEqual(refused("pin"));
+    });
+
+    it("proves an OpenClaw without pins on every other fact, and refuses it when one is undone", async () => {
+      const at = path();
+      // A newer version, an install laid out otherwise (the module's package isn't OpenClaw's),
+      // and a holder that maps no module at all (another runtime).
+      const unpinned = [
+        { pkg: { name: "openclaw", version: "2026.11.11" }, sha256: "0".repeat(64) },
+        { pkg: { name: "openclaw", version: "2026.12.1" }, sha256: "-" },
+        { pkg: { name: "not-openclaw", version: PINNED_OPENCLAW_VERSION }, sha256: "0".repeat(64) },
+        { pkg: {}, sha256: "0".repeat(64) },
+        { pkg: null, arch: "none", sha256: "-" },
+      ];
+      for (const facts of unpinned) {
+        const label = JSON.stringify(facts);
+        expect(await prove(at, answer({ lock: named(at), ...facts })), label).toEqual({
+          proved: true,
+        });
+        // The lock must still name this holder, in every field.
+        for (const more of [
+          { pid: 4243 },
+          { role: "agent-embedded" },
+          { port: port + 7 },
+          { stateDir: join(at, ".openclaw") },
+          { startTime: 1795410459 },
+        ])
+          expect(
+            await prove(at, answer({ lock: named(at, more), ...facts })),
+            `${label} ${JSON.stringify(more)}`,
+          ).toEqual(refused("named"));
+      }
+      // And the helper's own refusals of the other facts stand for it, as for any holder.
+      for (const why of ["holder", "account", "lock", "state"])
+        expect(await prove(at, `refused ${why}\n`), why).toEqual(refused(why));
+      // "none" carries no hash and no package.
+      expect(await prove(at, answer({ lock: named(at), arch: "none", sha256: "-" }))).toEqual(
+        refused("helper"),
+      );
+      expect(
+        await prove(
+          at,
+          answer({ lock: named(at), arch: "none", pkg: null, sha256: "0".repeat(64) }),
+        ),
+      ).toEqual(refused("helper"));
     });
 
     it("refuses a holder the lock doesn't name, in every field", async () => {
