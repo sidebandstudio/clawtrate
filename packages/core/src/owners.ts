@@ -58,7 +58,7 @@ import {
   MAX_SAVE_BYTES,
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
-import { MAX_ROUTINE_UPDATES } from "./routines.ts";
+import { MAX_ROUTINE_READS, MAX_ROUTINE_UPDATES } from "./routines.ts";
 import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import {
   MAX_COMPUTER_PANES,
@@ -348,6 +348,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
+  // Jobs read again after a `cron` event carried only their summary (OpenClaw 2026.11.10).
+  "routines.reads": { max: MAX_ROUTINE_READS, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
   "fileTransfers.held": {

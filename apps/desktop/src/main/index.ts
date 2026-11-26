@@ -404,11 +404,8 @@ async function main(): Promise<void> {
         KEYCHAIN_CHECK,
         hasSwitch(MOCK_KEYCHAIN_SWITCH),
       )
-        ? {
-            secretBox: safeStorageBox(safeStorage, process.platform),
-            // With the Keychain, a first pairing over a protected address asks for full control.
-            fullAccess: true,
-          }
+        ? // With the Keychain, a first pairing over a protected address asks for full control.
+          { secretBox: safeStorageBox(safeStorage, process.platform) }
         : {}),
       // A sandboxed or refused start (every development build and automated run) has no
       // development gateway, doesn't auto-connect and never resumes a saved gateway.

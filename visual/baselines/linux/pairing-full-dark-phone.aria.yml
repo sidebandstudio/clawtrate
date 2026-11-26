@@ -1,0 +1,25 @@
+- status
+- main:
+  - img "Clawtrate"
+  - region "Approve this device":
+    - heading "Approve this device" [level=2]
+    - paragraph: gateway.example has not seen this device before. Approve it once on the gateway's machine and Clawtrate connects by itself.
+    - paragraph: On the computer running OpenClaw, open OpenClaw's page (http://127.0.0.1 and the gateway's port), go to Settings › Devices and approve this device. If that page asks to approve the browser first, or that computer has no browser, run this there instead.
+    - code: openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55
+    - button "Copy approve command"
+    - status
+    - list "Setting up":
+      - listitem: Connected to gateway.example
+      - listitem:
+        - status: Waiting for approval, checking again in 4s
+      - listitem: Load bots
+    - list "This device asks to":
+      - listitem: Read bots, tasks and conversations
+      - listitem: Send messages and stop runs
+      - listitem: Decide what a bot asks to run
+      - listitem: Answer a bot's questions
+      - listitem: Change the gateway's settings and accounts, install plugins, and run commands on its computer
+      - listitem: Approve and remove other devices
+    - button "Check now"
+    - button "Use another gateway"
+  - paragraph: Request 5d2a90c4 · this device a41c9e02 · Web preview 0.1.0
