@@ -85,8 +85,12 @@ export function localPortAllowed(
   );
 }
 
-/** Proves the far end of the host's connection from this local port; false sends nothing. */
-export type ProveSocket = (localPort: number) => Promise<boolean>;
+/**
+ * Proves the far end of the host's connection from this local port; false sends nothing.
+ * `live` says whether that socket is still its WebSocket's latest: a refusal of one that was
+ * replaced meanwhile speaks for nothing, and isn't told.
+ */
+export type ProveSocket = (localPort: number, live?: () => boolean) => Promise<boolean>;
 
 /** How long the proof waits before asking once more, after finding no holder of this account's. */
 export const HOLDER_RETRY_MS = 750;
@@ -120,14 +124,15 @@ export function proveFor(
   port: number,
   refused: (why: ProveRefusal) => void = () => {},
 ): ProveSocket {
-  return async (localPort) => {
+  return async (localPort, live = () => true) => {
     const ask = () => proveLocalGateway({ ...local, folder, identity, port, localPort });
     let proof = await ask();
-    if (!proof.proved && proof.why === "holder") {
+    if (!proof.proved && proof.why === "holder" && live()) {
       await new Promise((done) => setTimeout(done, HOLDER_RETRY_MS));
       proof = await ask();
     }
-    if (!proof.proved) refused(proof.why);
+    // A socket replaced while it was proved: its refusal ends nothing and isn't the route's.
+    if (!proof.proved && live()) refused(proof.why);
     return proof.proved;
   };
 }
@@ -153,9 +158,9 @@ export function provedRouteFor(
       latest = why;
       refused(why);
     });
-    const sockets = provedSockets(port, async (localPort) => {
-      const proved = await prove(localPort);
-      if (proved) latest = null;
+    const sockets = provedSockets(port, async (localPort, live = () => true) => {
+      const proved = await prove(localPort, live);
+      if (proved && live()) latest = null;
       return proved;
     });
     return {
@@ -234,7 +239,7 @@ export function provedSockets(port: number, prove: ProveSocket): ProvedSockets {
       socket.once("error", () => settle(false));
       socket.once("close", () => settle(false));
       socket.once("connect", () => {
-        prove(socket.localPort!).then(settle, () => settle(false));
+        prove(socket.localPort!, () => current === slot).then(settle, () => settle(false));
       });
     };
   return {
@@ -256,7 +261,7 @@ export function provedSockets(port: number, prove: ProveSocket): ProvedSockets {
       const slot = current;
       const socket = slot?.socket;
       if (!slot || !socket || socket.destroyed || signal.aborted) return false;
-      const proved = await prove(socket.localPort!).catch(() => false);
+      const proved = await prove(socket.localPort!, () => current === slot).catch(() => false);
       return (
         proved && !signal.aborted && current === slot && slot.socket === socket && !socket.destroyed
       );

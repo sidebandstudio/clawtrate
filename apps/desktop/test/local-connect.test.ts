@@ -3,13 +3,23 @@
 // writes a byte, and hands that same socket to the WebSocket. A stand-in proof
 // and a listener of the test's own on loopback; no OpenClaw and no gateway.
 
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
+import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { deferred, until } from "../../../packages/core/test/fake-gateway.ts";
+import { PROOF_REFUSAL_LINES } from "@clawtrate/core";
 import { provedWhile } from "../src/setup/controller.ts";
 import {
   localConnectFor,
@@ -17,6 +27,7 @@ import {
   provedSockets,
   sendableCloseCode,
 } from "../src/setup/local-connect.ts";
+import { refusalKind } from "../src/setup/local-prove.ts";
 
 const servers: { close(): void }[] = [];
 afterEach(() => {
@@ -207,6 +218,63 @@ describe("local connect's connector", () => {
     first.close();
     second.close();
   });
+
+  it.skipIf(process.platform !== "darwin")(
+    "a replaced socket's refusal, after its wait for a holder, is no refusal of the route",
+    { timeout: 20_000 },
+    async () => {
+      const listener = await counting();
+      const home = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-replaced-")));
+      chmodSync(home, 0o700);
+      // A stand-in helper: the first socket it is asked about waits a second and finds no
+      // holder; any other socket is refused at once as not the profile's gateway.
+      const helper = join(home, "helper");
+      writeFileSync(
+        helper,
+        [
+          "#!/bin/sh",
+          `first=$(/bin/cat "${home}/first" 2>/dev/null)`,
+          `[ -n "$first" ] || { echo "$4" > "${home}/first"; first=$4; }`,
+          `echo "$4" >> "${home}/asked"`,
+          "if [ \"$4\" = \"$first\" ]; then /bin/sleep 1; printf 'refused holder\\n'; else printf 'refused lock\\n'; fi",
+          "",
+        ].join("\n"),
+        { mode: 0o700 },
+      );
+      const asked = () => {
+        try {
+          return readFileSync(join(home, "asked"), "utf8").trim().split("\n").length;
+        } catch {
+          return 0;
+        }
+      };
+      const told: string[] = [];
+      const port = listener.port;
+      const sockets = provedRouteFor({ home, helper, platform: "darwin", sandboxed: true }, (why) =>
+        told.push(why),
+      )(`ws://127.0.0.1:${port}`, ".openclaw@1:1")!;
+      try {
+        const url = `ws://127.0.0.1:${port}`;
+        const first = sockets.createSocket(url);
+        first.onerror = () => {};
+        await until(() => asked() === 1, 5_000);
+        // The protocol's retry, while the first socket's proof still runs.
+        const second = sockets.createSocket(url);
+        second.onerror = () => {};
+        await until(() => told.length > 0, 5_000);
+        // Past the first socket's answer, its wait for a holder and a second ask.
+        await new Promise((done) => setTimeout(done, 3_000));
+        // Only the replacement's refusal is told, and it is the route's words.
+        expect(told).toEqual(["lock"]);
+        expect(sockets.refusal?.()).toBe(PROOF_REFUSAL_LINES[refusalKind("lock")](port));
+        expect(listener.bytes()).toBe(0);
+        first.close();
+        second.close();
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("gives the client proved sockets for one loopback endpoint's exact address alone", () => {
     const routes = provedRouteFor({

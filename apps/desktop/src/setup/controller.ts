@@ -640,9 +640,9 @@ export class SetupController implements SetupHost {
         this.fail({ kind: "unverified", port: found.port, reason: refusalKind(why) });
       };
       const proveOne = proveFor(local, found, found.port, unverified);
-      const prove = async (localPort: number) => {
-        const proved = await proveOne(localPort);
-        if (proved) latest = null;
+      const prove = async (localPort: number, live: () => boolean = () => true) => {
+        const proved = await proveOne(localPort, live);
+        if (proved && live()) latest = null;
         if (proved && current() && this.state.step === 0) this.publish({ ...this.state, step: 1 });
         return proved;
       };
@@ -650,12 +650,15 @@ export class SetupController implements SetupHost {
       const client = this.options.client;
       const selection = client.nextSelection();
       this.owned = { attempt, url: found.url, selection };
-      this.watch(attempt, found.url, found.port, selection, true);
+      // From the first paired hello the connection is the person's (`watch`): its later sockets'
+      // last check is their own, no longer this attempt's, which Back or a new look ends.
+      let kept = false;
+      this.watch(attempt, found.url, found.port, selection, true, () => (kept = true));
       await client.connect(
         { url: found.url, token: token.reveal() },
         {
           createSocket: sockets.createWebSocket,
-          prove: provedWhile(current, sockets.verify),
+          prove: provedWhile(() => current() || kept, sockets.verify),
           route: routeOf(found),
           consent,
           refusal: () =>
@@ -752,6 +755,7 @@ export class SetupController implements SetupHost {
     port: number,
     selection: number,
     local = false,
+    kept: () => void = () => {},
   ): void {
     this.stopWatching();
     let seen = false;
@@ -797,7 +801,10 @@ export class SetupController implements SetupHost {
         // With local connect, the first paired hello saved this gateway in place of the earlier
         // one (core's `replacing`): from here the connection is the person's choice, kept. Back or
         // a new look while its bots load leaves it as it is; it is no longer setup's to close.
-        if (local) this.owned = null;
+        if (local) {
+          this.owned = null;
+          kept();
+        }
         // Ready only for this selection's own read: one left from an earlier selection of the
         // same address isn't this connection's.
         if (discovery.status === "ready" && this.options.client.readyFor(selection)) {
@@ -816,10 +823,11 @@ export class SetupController implements SetupHost {
       // Local connect's first socket ended before the gateway answered (`UNREACHABLE`): what the
       // settings file says isn't how the gateway there listens now (it stopped, or runs on
       // settings changed since it started, TLS for one). Not retried for ever behind
-      // Connecting: the attempt ends with Advanced and a look again.
+      // Connecting: the attempt ends with Advanced and a look again. A connection at the address
+      // whose bots are still shown says `reconnecting` for the same.
       if (
         local &&
-        connection.status === "connecting" &&
+        (connection.status === "connecting" || connection.status === "reconnecting") &&
         connection.error?.code === "UNREACHABLE" &&
         this.state.phase === "connecting"
       ) {

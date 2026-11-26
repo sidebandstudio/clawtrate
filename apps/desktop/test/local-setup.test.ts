@@ -714,6 +714,43 @@ describe.skipIf(!mac)(
       }
     });
 
+    it("F-602: a default profile on OpenClaw's default port is passed over, undialled, and Clawtrate's own profile is still looked at", async () => {
+      const home = newHome();
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      // The default profile names OpenClaw's default port, which a sandboxed run never dials.
+      settingsFile(home, ".openclaw", tokenSettings(18789, "a-gateway-token"));
+      settingsFile(home, ".openclaw-clawtrate", tokenSettings(server.port, "a-gateway-token"));
+      proofFile(
+        home,
+        ".openclaw-clawtrate",
+        provedAnswer(home, ".openclaw-clawtrate", server.port),
+      );
+      const local: LocalConnect = {
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+      };
+      const { client, setup } = localApp(local);
+      try {
+        await setup.look();
+        expect(setup.current.phase).toBe("found");
+        expect(setup.current.look).toMatchObject({
+          outcome: "running",
+          profile: "clawtrate",
+          port: server.port,
+        });
+        // One proof, of Clawtrate's own profile's port: the default profile's was never asked.
+        const commands = readFileSync(join(home, "commands"), "utf8").trim().split("\n");
+        expect(commands.filter((command) => command === "prove-private")).toHaveLength(1);
+      } finally {
+        client.stop();
+        await server.close();
+      }
+    });
+
     it("F-602: asks once more when the first proof found no holder, as a busy gateway can't yet show one", async () => {
       const home = newHome();
       const gateway = silentGateway();
@@ -1123,6 +1160,49 @@ describe.skipIf(!mac)(
       }
     });
 
+    it("F-602: Use This computer, then Connect at the same address with the bots kept, and nothing answers: Connect fails with its ways on, and isn't retried", async () => {
+      const run = await refusedThenStaged("replaced");
+      const statuses: string[] = [];
+      const stop = run.app.client.store.subscribe((state) => {
+        const { status } = state.connection;
+        if (statuses.at(-1) !== status) statuses.push(status);
+      });
+      // Something of the test's own on the same port now: it accepts and ends every connection
+      // before anything answers.
+      let accepted = 0;
+      const ender = createServer((socket) => {
+        accepted += 1;
+        socket.destroy();
+      });
+      try {
+        await run.press();
+        expect(run.app.setup.current.look).toMatchObject({ outcome: "running" });
+        // The bots the earlier connection read are still shown: a new connection at the same
+        // address with them is `reconnecting`, not `connecting`.
+        expect(run.app.client.state.bots.length).toBeGreaterThan(0);
+        await run.server.close();
+        await new Promise<void>((done) => ender.listen(run.server.port, "127.0.0.1", done));
+        statuses.length = 0;
+        await run.session.apply({ type: "setupConnect" });
+        await until(() => run.app.setup.current.phase === "failed", 60_000);
+        expect(run.app.setup.current.failure).toMatchObject({
+          kind: "unanswered",
+          port: run.server.port,
+        });
+        expect(statuses).toContain("reconnecting");
+        // Not retried behind Connecting: no further connection after a second.
+        await sleep(500);
+        const tries = accepted;
+        expect(tries).toBeGreaterThan(0);
+        await sleep(1_000);
+        expect(accepted).toBe(tries);
+      } finally {
+        stop();
+        run.app.client.stop();
+        await new Promise((done) => ender.close(done));
+      }
+    });
+
     /**
      * After a refused reconnect, Use This computer finds a second gateway of this account's
      * (the settings name another port now), and Connect pairs with it: its first paired hello
@@ -1195,6 +1275,50 @@ describe.skipIf(!mac)(
           await run.second.server.close();
         }
       });
+
+    it("F-602: Use This computer, Connect to another gateway, Back while its bots load, then its socket drops: the saved gateway comes back", async () => {
+      const gateway = silentGateway();
+      const listing = deferred<unknown>();
+      gateway.handlers["agents.list"] = () => listing.promise;
+      const run = await secondGateway("lock", gateway);
+      try {
+        await run.press();
+        await run.session.apply({ type: "setupConnect" });
+        await until(() => run.app.client.state.connection.status === "connected", 60_000);
+        let saved = await run.app.client.savedSettings();
+        for (let waited = 0; saved?.url !== run.second.url && waited < 15_000; waited += 50) {
+          await sleep(50);
+          saved = await run.app.client.savedSettings();
+        }
+        expect(run.app.client.state.discovery.status).toBe("loading");
+        // Back, as the Connecting screen's Back sends it: the connection is the person's now.
+        await run.session.apply({ type: "setupCancel" });
+        await until(() => run.app.setup.current.phase === "found", 15_000);
+        // Its socket drops before the bots were read; the retry's socket is checked and its
+        // credential, this device's token, goes, and the bots are read on it.
+        const connects = gateway.connects.length;
+        gateway.dropAll();
+        listing.resolve({
+          defaultId: "main",
+          agents: [{ id: "main", identity: { name: "Juniper" } }],
+        });
+        await until(() => gateway.connects.length > connects, 60_000);
+        await until(
+          () =>
+            run.app.client.state.connection.status === "connected" &&
+            run.app.client.state.discovery.status === "ready",
+          60_000,
+        );
+        expect(run.app.client.state.connection.gatewayUrl).toBe(run.second.url);
+        const hello = gateway.connects.at(-1) as { auth?: { deviceToken?: string } };
+        expect(hello.auth?.deviceToken).toBe("device-token-from-pairing");
+        expect(await run.app.client.savedSettings()).toMatchObject({ url: run.second.url });
+      } finally {
+        run.app.client.stop();
+        await run.server.close();
+        await run.second.server.close();
+      }
+    });
 
     it("F-602: Use This computer, Connect to a gateway that asks its owner, then Use another gateway: the earlier gateway is selected again, with its ways on", async () => {
       const gateway = new FakeGateway();

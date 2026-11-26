@@ -9764,7 +9764,8 @@ export class ClawtrateClient {
 
   private confirmGatewayIdentity(id: string | null, current: () => boolean): void {
     if (id === null || !current()) return;
-    this.bindRouteIdentity(id, current);
+    // A route that answers as another gateway is stopped, and that identity isn't published.
+    if (this.bindRouteIdentity(id, current) === "changed") return;
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
@@ -9792,41 +9793,79 @@ export class ClawtrateClient {
    * reports another identity later has this device's token for it dropped and its connection
    * closed, and the route isn't used again until this device pairs there again.
    */
-  private bindRouteIdentity(id: string, current: () => boolean): void {
+  private bindRouteIdentity(id: string, current: () => boolean): "changed" | void {
     const settings = this.settings;
     const deviceId = this.state.connection.deviceId;
     if (settings?.route === undefined || settings.gatewayId === id) return;
     const { url, route } = settings;
+    // Known here to be another gateway: stopped now, before anything is awaited or published.
+    if (settings.gatewayId !== undefined) {
+      this.stopChangedRoute(url);
+      void this.changeConnection(() => this.dropRouteToken(url, deviceId));
+      return "changed";
+    }
     void this.changeConnection(async () => {
       const now = this.settings;
       if (!current() || now?.url !== url || now.route !== route) return;
-      if (now.gatewayId === undefined) {
-        // From the record as it is now: another client on this store may have changed it.
-        const saved = await this.savedSettings();
-        if (!current() || saved?.url !== url || saved.route !== route) return;
+      // Decided from the record as it is now: another client on this store may have saved the
+      // route's identity since this one read it.
+      const saved = await this.savedSettings();
+      if (!current() || saved?.url !== url || saved.route !== route) return;
+      const bound = now.gatewayId ?? saved.gatewayId;
+      if (bound === undefined) {
         await this.writeRecord({ ...saved, gatewayId: id });
         if (this.settings === now) this.settings = { ...now, gatewayId: id };
         return;
       }
-      if (now.gatewayId === id) return;
-      if (deviceId) {
-        const key = this.tokenKey(url, deviceId, "operator");
-        await this.host.storage.delete(key);
-        this.writes.grants.set(key, null);
-      }
-      this.endEligibility(url);
-      this.close();
-      this.setConnection({
-        status: "error",
-        retryAt: null,
-        error: {
-          code: ROUTE_IDENTITY_CHANGED,
-          message:
-            "Another OpenClaw gateway answers on this computer now, so Clawtrate removed this device's pairing for it. Connect again to pair with it.",
-          hint: null,
-        },
-      });
+      if (this.settings === now) this.settings = { ...now, gatewayId: bound };
+      if (bound === id) return;
+      this.stopChangedRoute(url);
+      await this.dropRouteToken(url, deviceId);
     }).catch(() => this.log("warn", "Could not check which gateway answers on this route."));
+  }
+
+  /**
+   * The route answers as another gateway than the one it is saved with: the connection stops
+   * and its eligibility ends, before this device's token for it is dropped (`dropRouteToken`).
+   */
+  private stopChangedRoute(url: string): void {
+    this.endEligibility(url);
+    this.close();
+    this.setConnection({
+      status: "error",
+      retryAt: null,
+      error: {
+        code: ROUTE_IDENTITY_CHANGED,
+        message:
+          "Another OpenClaw gateway answers on this computer now, so Clawtrate removed this device's pairing for it. Connect again to pair with it.",
+        hint: null,
+      },
+    });
+  }
+
+  /**
+   * This device's token for a changed route, dropped once the connection has stopped. One that
+   * couldn't be dropped is said, and the next hello on the route stops it and tries again.
+   */
+  private async dropRouteToken(url: string, deviceId: string | null): Promise<void> {
+    if (!deviceId) return;
+    const key = this.tokenKey(url, deviceId, "operator");
+    this.writes.grants.set(key, null);
+    try {
+      await this.host.storage.delete(key);
+    } catch {
+      this.log("warn", "Could not remove this device's pairing for a route that changed gateway.");
+      const { connection } = this.state;
+      if (connection.gatewayUrl === url && connection.error?.code === ROUTE_IDENTITY_CHANGED)
+        this.setConnection({
+          error: {
+            code: ROUTE_IDENTITY_CHANGED,
+            message:
+              "Another OpenClaw gateway answers on this computer now, and Clawtrate couldn't remove this device's pairing for it. Connect again to try again.",
+            hint: null,
+          },
+        });
+    }
   }
 
   /**
