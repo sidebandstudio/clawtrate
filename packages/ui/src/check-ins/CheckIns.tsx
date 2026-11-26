@@ -10,6 +10,10 @@
 // the section, not the dialog, so admin that drops and returns finds it again,
 // for the same gateway, by its identity, and bot only. A save's outcome is
 // shown only in the dialog whose draft made it (`checkIns.save.id`).
+//
+// A gateway that keeps check-ins as routines (OpenClaw 2026.11.10, `model`
+// "routines") has no setting here to read or change: each block says so and
+// leads to the bot's routines, and nothing opens the dialog.
 
 import {
   cannotKeep,
@@ -32,6 +36,7 @@ import { clock } from "../bots/words.ts";
 import type { SectionView } from "../bots/AccountsSection.tsx";
 import { draftToSave, openDraft, rebase, type Draft } from "./draft.ts";
 import {
+  AS_ROUTINES,
   choiceWords,
   promptKind,
   DEFAULT_PROMPT,
@@ -57,6 +62,7 @@ export function useCheckInsSection({
   info,
   announce,
   toNav,
+  openRoutines = null,
 }: {
   /** The section is the one shown: entering it, and the connection coming back, read again. */
   active: boolean;
@@ -66,12 +72,15 @@ export function useCheckInsSection({
   info: HostInfo;
   announce: (text: string) => void;
   toNav: ReactNode;
+  /** Opens a bot's routines; null where they are already shown. */
+  openRoutines?: ((botId: string) => void) | null;
 }): SectionView {
   const bridge = useBridge();
   const [draft, setDraft] = useState<Draft | null>(null);
   const granted = useGranted(connection);
   const admin = connection.canAdmin;
   const connected = connection.status === "connected";
+  const asRoutines = checkIns?.model === "routines";
   const refresh = () => void bridge.send({ type: "refreshCheckIns" }).catch(() => {});
   // The bots are listed after the connection is: a reconnect reads again once they arrive.
   const roster = bots.map((bot) => bot.id).join("\n");
@@ -84,7 +93,11 @@ export function useCheckInsSection({
   const editingBot = bots.find((bot) => bot.id === draft?.botId);
   // A draft belongs to where it was read, the gateway and the host's target; no other shows it.
   const draftHere =
-    draft !== null && connected && sameStamp(draft.stamp, checkIns?.stamp) && editingBot;
+    draft !== null &&
+    connected &&
+    !asRoutines &&
+    sameStamp(draft.stamp, checkIns?.stamp) &&
+    editingBot;
 
   const edit = (bot: Bot) => {
     const next = checkIns && openDraft(checkIns, bot.id);
@@ -152,8 +165,8 @@ export function useCheckInsSection({
                 <div className="ci-head">
                   <Avatar bot={bot} className="ci-avatar" />
                   <h4 id={`ci-${bot.id}`}>{bot.name}</h4>
-                  <span className="ci-summary">{summary(job)}</span>
-                  {admin && (
+                  {!asRoutines && <span className="ci-summary">{summary(job)}</span>}
+                  {admin && !asRoutines && (
                     <button
                       type="button"
                       className="button"
@@ -166,9 +179,28 @@ export function useCheckInsSection({
                     </button>
                   )}
                 </div>
-                <p data-testid="check-in-text">
-                  {sentence(bot.name, job, checkIns.settings, checkIns.defaults)}
-                </p>
+                {asRoutines ? (
+                  <p data-testid="check-in-text">
+                    {AS_ROUTINES}
+                    {openRoutines && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          className="link-button"
+                          data-testid="check-in-routines"
+                          onClick={() => openRoutines(bot.id)}
+                        >
+                          {bot.name}'s routines
+                        </button>
+                      </>
+                    )}
+                  </p>
+                ) : (
+                  <p data-testid="check-in-text">
+                    {sentence(bot.name, job, checkIns.settings, checkIns.defaults)}
+                  </p>
+                )}
                 {next && <p className="ci-faint">{next}</p>}
               </section>
             );
@@ -204,7 +236,7 @@ export function useCheckInsSection({
     ),
     foot: granted ? (
       <GrantedBar />
-    ) : admin ? null : (
+    ) : admin || asRoutines ? null : (
       <AdminBar connection={connection} info={info} need="Changing check-ins needs admin access." />
     ),
   };
