@@ -24,7 +24,7 @@ import { FakeGateway, helloOk, sleep, until } from "../../../packages/core/test/
 import { localGatewayBuild } from "../packaging/config.ts";
 import { SetupController } from "../src/setup/controller.ts";
 import { localPortAllowed, provedRouteFor, type LocalConnect } from "../src/setup/local-connect.ts";
-import { PROVED_OPENCLAW } from "../src/setup/openclaw-pins.ts";
+import { OPENCLAW_PINS } from "../src/setup/openclaw-pins.ts";
 import { HeldToken } from "../src/setup/settings-reader.ts";
 import { SetupRefusedError } from "../src/setup/world.ts";
 import {
@@ -74,7 +74,10 @@ const box: SecretBox = {
 /**
  * A stand-in for the native helper: answers each command and profile folder from the files the
  * test writes in `dir` (`answer-<command>-<folder>`, and `.once` for one answer only), else
- * "absent", and notes that it ran.
+ * "absent", and notes that it ran. As the helper does, a read reports the profile folder's
+ * identity, here the one in `identity-<folder>` ("1 1" until `replaceFolder`), and a proof
+ * given another identity than the folder's is refused as "replaced" before anything else. With
+ * `after-<command>-<folder>`, the folder is replaced just after that command's next answer.
  */
 function standInHelper(dir: string): string {
   const path = join(dir, "stand-in-helper");
@@ -85,14 +88,33 @@ function standInHelper(dir: string): string {
       `: > "${dir}/ran"`,
       `echo "$1" >> "${dir}/commands"`,
       `f="${dir}/answer-$1-$2"`,
-      'if [ -f "$f.once" ]; then /bin/cat "$f.once"; /bin/rm -f "$f.once"; exit 0; fi',
-      '[ -f "$f" ] && exec /bin/cat "$f"',
-      "printf 'refused absent\\n'",
+      `id="1 1"; [ -f "${dir}/identity-$2" ] && id=$(/bin/cat "${dir}/identity-$2")`,
+      'case "$1" in prove*) [ "$5 $6" = "$id" ] || { printf \'refused replaced\\n\'; exit 0; };; esac',
+      "answer() {",
+      '  first=$(/usr/bin/head -n 1 "$1")',
+      '  case "$first" in ok) printf \'ok %s\\n\' "$id"; /usr/bin/tail -n +2 "$1";; *) /bin/cat "$1";; esac',
+      "}",
+      'if [ -f "$f.once" ]; then answer "$f.once"; /bin/rm -f "$f.once"',
+      'elif [ -f "$f" ]; then answer "$f"',
+      "else printf 'refused absent\\n'; fi",
+      `a="${dir}/after-$1-$2"; [ -f "$a" ] && /bin/mv "$a" "${dir}/identity-$2"`,
+      "exit 0",
       "",
     ].join("\n"),
     { mode: 0o700 },
   );
   return path;
+}
+
+let replacements = 0;
+/**
+ * Another private profile folder at the same path, as the stand-in reports it from now on, or
+ * just after its next answer to `after`. Its identity, as a route names it.
+ */
+function replaceFolder(dir: string, folder: string, after?: string): string {
+  const ino = (replacements += 1) + 1;
+  writeFileSync(join(dir, after ? `after-${after}-${folder}` : `identity-${folder}`), `1 ${ino}`);
+  return `1:${ino}`;
 }
 
 /** The settings file the stand-in reads for a profile, or a refusal of the helper's. */
@@ -138,7 +160,7 @@ function provedAnswer(
       ? "-"
       : module === "wrong"
         ? "0".repeat(64)
-        : (PROVED_OPENCLAW[version]?.["darwin-arm64"] ?? "1".repeat(64));
+        : (OPENCLAW_PINS[version]?.["darwin-arm64"] ?? "1".repeat(64));
   const header = `proved 4242 1795410457 ${module === "none" ? "none" : "arm64"} ${sha} ${lock.length} ${pkg.length}\n`;
   return Buffer.concat([Buffer.from(header), lock, pkg]);
 }
@@ -187,8 +209,8 @@ function silentGateway(): FakeGateway {
  * box) or without, whose saved route reopens only through local connect, and setup with local
  * connect on. Its own socket factory refuses: every socket is local connect's.
  */
-function localApp(local: LocalConnect, options: { secure?: boolean } = {}) {
-  const dataDir = mkdtempSync(join(scratch, "app-"));
+function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: string } = {}) {
+  const dataDir = options.dataDir ?? mkdtempSync(join(scratch, "app-"));
   const host = createNodeHost({
     dataDir,
     client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
@@ -266,7 +288,7 @@ describe.skipIf(!mac)(
         expect(saved).toMatchObject({
           url: `ws://127.0.0.1:${server.port}`,
           token: null,
-          route: ".openclaw",
+          route: ".openclaw@1:1",
           gatewayId: "gateway-identity-1",
         });
         for (const file of [STATE_FILE, "credentials.bin"])
@@ -434,6 +456,22 @@ describe.skipIf(!mac)(
           },
           look: { outcome: "cant-tell", reason: "settings" },
         },
+        // TLS on: local connect dials `ws://` only, so there is nothing to offer, and its port is
+        // never dialled or proved, though a gateway that would pass listens there.
+        {
+          settings: {
+            ".openclaw": {
+              gateway: {
+                mode: "local",
+                port: listening.port,
+                tls: { enabled: true },
+                auth: { mode: "token", token: "a-gateway-token" },
+              },
+            },
+          },
+          proof: (home) => provedAnswer(home, ".openclaw", listening.port),
+          look: { outcome: "cant-tell", reason: "tls", port: null },
+        },
         // A settings file another account could change, or a link: the helper refuses it.
         {
           settings: { ".openclaw": "refused mode\n" },
@@ -507,6 +545,8 @@ describe.skipIf(!mac)(
             expect(setup.current.phase, label).toBe("found");
             expect(setup.current.look, label).toMatchObject(entry.look);
             expect(JSON.stringify(setup.current), label).not.toContain("a-gateway-token");
+            if (entry.look.reason === "tls")
+              expect(readFileSync(join(home, "commands"), "utf8"), label).not.toContain("prove");
             if (entry.look.outcome !== "running")
               await expect(setup.connect(), label).rejects.toThrow("nothing to connect to");
           } finally {
@@ -529,11 +569,23 @@ describe.skipIf(!mac)(
       const unsandboxed = { ...sandbox, sandboxed: false };
       expect(localPortAllowed(unsandboxed, 18789)).toBe(false);
       expect(localPortAllowed(unsandboxed, 22768)).toBe(false);
-      expect(provedRouteFor(unsandboxed)("ws://127.0.0.1:18789", ".openclaw")).toBe(null);
+      expect(provedRouteFor(unsandboxed)("ws://127.0.0.1:18789", ".openclaw@1:1")).toBe(null);
       // Only a person's own launch dials them.
       expect(localPortAllowed(unsandboxed, 18789, () => true)).toBe(true);
       expect(localPortAllowed(sandbox, 18789, () => true)).toBe(false);
-      expect(provedRouteFor(sandbox)("ws://127.0.0.1:18789", ".openclaw")).toBe(null);
+      expect(provedRouteFor(sandbox)("ws://127.0.0.1:18789", ".openclaw@1:1")).toBe(null);
+      // And a route that doesn't name a profile folder with its identity is never proved.
+      for (const route of [
+        ".openclaw",
+        ".openclaw@",
+        ".openclaw@1",
+        "openclaw@1:1",
+        ".openclaw@1:1@2:2",
+      ])
+        expect(provedRouteFor(sandbox)("ws://127.0.0.1:19940", route), route).toBe(null);
+      expect(provedRouteFor(sandbox)("ws://127.0.0.1:19940", ".openclaw-clawtrate@1:1")).not.toBe(
+        null,
+      );
       // A `clawtrate` profile whose settings name no port falls back to its default, 22768: the
       // look refuses before it dials, and never asks the helper for a proof.
       const home = newHome();
@@ -625,9 +677,173 @@ describe.skipIf(!mac)(
         // The connection stays the person's: setup is over, and the gateway stays saved.
         expect(setup.current.phase).toBe("done");
         expect(client.state.connection.status).toBe("error");
-        expect(await client.savedSettings()).toMatchObject({ route: ".openclaw" });
+        expect(await client.savedSettings()).toMatchObject({ route: ".openclaw@1:1" });
       } finally {
         client.stop();
+        await server.close();
+      }
+    });
+
+    /** A home whose `.openclaw` profile names `port` and whose gateway the proof passes. */
+    function provedHome(port: number) {
+      const home = newHome();
+      const local: LocalConnect = {
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+      };
+      settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+      proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", port));
+      return { home, local };
+    }
+    const proofs = (home: string) =>
+      readFileSync(join(home, "commands"), "utf8").split("prove-private").length - 1;
+
+    it("F-492: a profile folder replaced between the look's read and its proof isn't offered, and its listener gets nothing", async () => {
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const { home, local } = provedHome(server.port);
+      const { client, setup } = localApp(local);
+      try {
+        await client.start({ resume: false });
+        // Another valid private profile at the same path, with the same port, once the look
+        // has read the settings: its own lock and database would pass every other check.
+        replaceFolder(home, ".openclaw", "read-private");
+        await setup.look();
+        expect(setup.current.look).toMatchObject({
+          outcome: "unverified",
+          reason: "replaced",
+          port: server.port,
+        });
+        expect(gateway.sockets).toHaveLength(0);
+        expect(gateway.connects).toHaveLength(0);
+      } finally {
+        client.stop();
+        await server.close();
+      }
+    });
+
+    it("F-492: Connect reads no token from a profile folder replaced since the look, and proves nothing", async () => {
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const { home, local } = provedHome(server.port);
+      const { client, setup } = localApp(local);
+      try {
+        await client.start({ resume: false });
+        await setup.look();
+        expect(setup.current.look?.outcome).toBe("running");
+        const proved = proofs(home);
+        replaceFolder(home, ".openclaw");
+        await setup.connect();
+        expect(setup.current).toMatchObject({ phase: "failed", failure: { kind: "changed" } });
+        await sleep(300);
+        expect(proofs(home)).toBe(proved);
+        expect(gateway.sockets).toHaveLength(0);
+      } finally {
+        client.stop();
+        await server.close();
+      }
+    });
+
+    it("F-492: a profile folder replaced between Connect's read of the token and a socket's proof gets nothing", async () => {
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const { home, local } = provedHome(server.port);
+      const { client, setup } = localApp(local);
+      try {
+        await client.start({ resume: false });
+        await setup.look();
+        replaceFolder(home, ".openclaw", "read-private");
+        await setup.connect();
+        await until(() => setup.current.phase === "failed", 60_000);
+        expect(setup.current.failure).toMatchObject({ kind: "unverified", reason: "replaced" });
+        await sleep(500);
+        // No upgrade reached the server, so no frame and no credential.
+        expect(gateway.sockets).toHaveLength(0);
+        expect(gateway.connects).toHaveLength(0);
+      } finally {
+        client.stop();
+        await server.close();
+      }
+    });
+
+    it("F-492: a profile folder replaced between a socket's first proof and its last sends no credential", async () => {
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const { home, local } = provedHome(server.port);
+      const { client, setup } = localApp(local);
+      try {
+        await client.start({ resume: false });
+        await setup.look();
+        // The look's proof is behind it: the folder is replaced after Connect's dial is proved.
+        replaceFolder(home, ".openclaw", "prove-private");
+        await setup.connect();
+        await until(() => setup.current.phase === "failed", 60_000);
+        expect(setup.current.failure).toMatchObject({ kind: "unverified", reason: "replaced" });
+        await sleep(500);
+        expect(gateway.sockets.length).toBeGreaterThanOrEqual(1);
+        expect(gateway.connects).toHaveLength(0);
+      } finally {
+        client.stop();
+        await server.close();
+      }
+    });
+
+    it("F-492: a reconnect to a profile folder replaced since sends nothing, also after a restart; a fresh look and Connect pair with the new one", async () => {
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const { home, local } = provedHome(server.port);
+      const first = localApp(local);
+      let app = first;
+      const refusedAt = async (client: ClawtrateClient, sockets: number) => {
+        await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED", 60_000);
+        expect(client.state.connection.error).toMatchObject({
+          message: PROOF_REFUSAL_LINES.replaced(server.port),
+          hint: "Choose This computer to connect to it again, or use Advanced.",
+        });
+        await sleep(1_000);
+        // Not a byte on a socket of the replacement's: refused at the dial, and not retried.
+        expect(gateway.sockets).toHaveLength(sockets);
+        expect(gateway.connects).toHaveLength(1);
+        expect(await client.savedSettings()).toMatchObject({ route: ".openclaw@1:1" });
+      };
+      try {
+        await app.client.start({ resume: false });
+        await app.setup.look();
+        await app.setup.connect();
+        await until(() => app.setup.current.phase === "done", 60_000);
+        expect(gateway.connects).toHaveLength(1);
+        const sockets = gateway.sockets.length;
+        const replaced = replaceFolder(home, ".openclaw");
+        gateway.dropAll();
+        await refusedAt(app.client, sockets);
+        // After a restart, the saved route's own proof: the folder it names isn't there.
+        app.client.stop();
+        app = localApp(local, { dataDir: first.dataDir });
+        await app.client.start();
+        await refusedAt(app.client, sockets);
+        // Only the person's look and Connect reach it, as a new pairing with its own token.
+        await app.setup.look();
+        expect(app.setup.current.look?.outcome).toBe("running");
+        await app.setup.connect();
+        await until(() => app.client.state.connection.status === "connected", 60_000);
+        expect(gateway.connects).toHaveLength(2);
+        const hello = gateway.connects[1] as { auth?: { token?: string } };
+        expect(hello.auth?.token).toBe("a-gateway-token");
+        let saved = await app.client.savedSettings();
+        for (
+          let waited = 0;
+          saved?.route !== `.openclaw@${replaced}` && waited < 15_000;
+          waited += 50
+        ) {
+          await sleep(50);
+          saved = await app.client.savedSettings();
+        }
+        expect(saved?.route).toBe(`.openclaw@${replaced}`);
+      } finally {
+        app.client.stop();
         await server.close();
       }
     });

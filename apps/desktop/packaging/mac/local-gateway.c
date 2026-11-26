@@ -8,10 +8,13 @@
 //
 //   ClawtrateLocalGateway read <profile folder> <file>          (fd 3: the home folder)
 //   ClawtrateLocalGateway read-private <profile folder> <file>  (a sandboxed run's home)
-//   ClawtrateLocalGateway prove <profile folder> <port> <local port>
-//   ClawtrateLocalGateway prove-private <profile folder> <port> <local port>
+//   ClawtrateLocalGateway prove <profile folder> <port> <local port> <device> <inode>
+//   ClawtrateLocalGateway prove-private <profile folder> <port> <local port> <device> <inode>
 //
-// `read` writes "ok\n" followed by the file's bytes. `prove` writes
+// `read` writes "ok <device> <inode>\n", the profile folder's identity as it
+// was opened, followed by the file's bytes. `prove` refuses ("replaced") a
+// profile folder whose device and inode aren't the ones it is given, the
+// identity the read reported, before it looks at any process; otherwise it writes
 // "proved <pid> <start> <arch> <sha256> <lock bytes> <package bytes>\n", then
 // the profile's gateway lock and the module's package.json, for the host to
 // check. When the holder maps no OpenClaw native module, <arch> is "none", the
@@ -187,14 +190,19 @@ static int openFile(int folder, const char *name, off_t limit, const char **why)
     return *why ? -1 : file;
 }
 
-/** The file's bytes, or why not; on success the caller owns and wipes the buffer. */
+/**
+ * The file's bytes, and the identity of the profile folder it was read from,
+ * or why not; on success the caller owns and wipes the buffer.
+ */
 static const char *readSettings(int home, int privateHome, const char *folderName,
-                                const char *fileName, char **buffer, size_t *length) {
+                                const char *fileName, struct stat *identity, char **buffer,
+                                size_t *length) {
     *buffer = NULL;
     *length = 0;
     const char *why = checkHome(home, privateHome);
     if (why) return why;
     int folder = openFolder(home, folderName, &why);
+    if (!why && fstat(folder, identity) != 0) why = "failed";
     int file = why ? -1 : openFile(folder, fileName, SETTINGS_LIMIT, &why);
     if (folder >= 0) close(folder);
     if (!why) *buffer = malloc(SETTINGS_LIMIT + 1);
@@ -206,6 +214,17 @@ static const char *readSettings(int home, int privateHome, const char *folderNam
         *buffer = NULL;
     }
     return why;
+}
+
+/** A device or inode number as the host writes it: plain decimal, no leading zero. */
+static int numberArg(const char *text, unsigned long long *value) {
+    size_t length = strlen(text);
+    if (length == 0 || length > 20 || (text[0] == '0' && length > 1)) return 0;
+    for (const char *c = text; *c; ++c)
+        if (*c < '0' || *c > '9') return 0;
+    errno = 0;
+    *value = strtoull(text, NULL, 10);
+    return errno == 0;
 }
 
 /** A port as the host writes it: 1 to 65535 in plain decimal. */
@@ -418,18 +437,30 @@ static const char *missing(const char *why, const char *as) {
     return why && strcmp(why, "absent") == 0 ? as : why;
 }
 
+/** The folder identity the host was given: the one its read of the settings reported. */
+typedef struct {
+    unsigned long long dev, ino;
+} FolderIdentity;
+
 /**
  * The profile's gateway lock, read and identified, and the state database,
- * identified. A profile whose gateway isn't running has no lock, and may have
- * no database yet.
+ * identified, in the profile folder the read reported: a folder at that path
+ * with another device or inode is "replaced". A profile whose gateway isn't
+ * running has no lock, and may have no database yet.
  */
-static const char *profileFiles(int home, const char *folderName, struct stat *lock,
-                                struct stat *database, char *lockBytes, size_t *lockLength) {
+static const char *profileFiles(int home, const char *folderName, const FolderIdentity *expected,
+                                struct stat *lock, struct stat *database, char *lockBytes,
+                                size_t *lockLength) {
     char ownLock[32];
     snprintf(ownLock, sizeof ownLock, "openclaw-%u", (unsigned)geteuid());
     const char *names[] = {"tmp", ownLock};
     const char *why = NULL;
     int folder = openFolder(home, folderName, &why);
+    struct stat opened;
+    if (!why && fstat(folder, &opened) != 0) why = "failed";
+    if (!why && ((unsigned long long)opened.st_dev != expected->dev ||
+                 (unsigned long long)opened.st_ino != expected->ino))
+        why = "replaced";
     int state = why ? -1 : openFolder(folder, "state", &why);
     if (folder >= 0) why = missing(why, "state");
     int base = folder, lockFile = -1, file = -1;
@@ -470,12 +501,14 @@ static const char *profileFiles(int home, const char *folderName, struct stat *l
  * profile's gateway has nothing of its opened here, and a PID taken over
  * midway is refused.
  */
-static int prove(int home, int privateHome, const char *folderName, int port, int localPort) {
+static int prove(int home, int privateHome, const char *folderName, const FolderIdentity *expected,
+                 int port, int localPort) {
     static char lockBytes[LOCK_LIMIT + 1];
     size_t lockLength = 0;
     struct stat lock, database;
     const char *why = checkHome(home, privateHome);
-    if (!why) why = profileFiles(home, folderName, &lock, &database, lockBytes, &lockLength);
+    if (!why)
+        why = profileFiles(home, folderName, expected, &lock, &database, lockBytes, &lockLength);
     pid_t found[MAX_HOLDERS];
     uint64_t starts[MAX_HOLDERS];
     int count = why ? 0 : holders(port, localPort, found, starts, &why);
@@ -521,10 +554,13 @@ static int prove(int home, int privateHome, const char *folderName, int port, in
 int main(int argc, char **argv) {
     const char *command = argc > 1 ? argv[1] : "";
     int privateHome = strcmp(command, "read-private") == 0 || strcmp(command, "prove-private") == 0;
-    if ((strcmp(command, "prove") == 0 || strcmp(command, "prove-private") == 0) && argc == 5) {
+    if ((strcmp(command, "prove") == 0 || strcmp(command, "prove-private") == 0) && argc == 7) {
         int port = portArg(argv[3]), localPort = portArg(argv[4]);
-        if (!component(argv[2]) || !port || !localPort || port == localPort) return 2;
-        int status = prove(3, privateHome, argv[2], port, localPort);
+        FolderIdentity expected;
+        if (!component(argv[2]) || !port || !localPort || port == localPort ||
+            !numberArg(argv[5], &expected.dev) || !numberArg(argv[6], &expected.ino))
+            return 2;
+        int status = prove(3, privateHome, argv[2], &expected, port, localPort);
         close(3);
         return status;
     }
@@ -533,11 +569,13 @@ int main(int argc, char **argv) {
         return 2;
     char *buffer;
     size_t length;
-    const char *why = readSettings(3, privateHome, argv[2], argv[3], &buffer, &length);
+    struct stat identity;
+    const char *why = readSettings(3, privateHome, argv[2], argv[3], &identity, &buffer, &length);
     close(3);
     if (why) return refuse(why);
-    int written = fputs("ok\n", stdout) >= 0 && fwrite(buffer, 1, length, stdout) == length &&
-                  fflush(stdout) == 0;
+    int written = printf("ok %llu %llu\n", (unsigned long long)identity.st_dev,
+                         (unsigned long long)identity.st_ino) > 0 &&
+                  fwrite(buffer, 1, length, stdout) == length && fflush(stdout) == 0;
     memset_s(buffer, SETTINGS_LIMIT + 1, 0, SETTINGS_LIMIT + 1);
     free(buffer);
     return written ? 0 : 1;

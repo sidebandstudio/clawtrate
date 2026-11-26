@@ -29,17 +29,18 @@ export const FS_SAFE_1110_SHA256: Readonly<Record<string, string>> = {
 };
 
 /**
- * Every OpenClaw version local connect proves, by the version its own
- * `package.json` gives, with that version's module pins. Any other version is
- * refused (`package`), and a module that isn't its version's own (`pin`).
+ * Every pinned OpenClaw version, by the version its own `package.json` gives,
+ * with that version's module pins. A holder mapping a module in a package that
+ * names one of these must map that version's own (`pin`); any other holder
+ * stands on the proof's other checks (local-prove.ts).
  */
-export const PROVED_OPENCLAW: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+export const OPENCLAW_PINS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   [PINNED_OPENCLAW_VERSION]: FS_SAFE_NATIVE_SHA256,
   "2026.11.10": FS_SAFE_1110_SHA256,
 };
 
-/** The `@openclaw/fs-safe` each proved version depends on exactly, whose modules those are. */
-export const PROVED_FS_SAFE: Readonly<Record<string, string>> = {
+/** The `@openclaw/fs-safe` each pinned version depends on exactly, whose modules those are. */
+export const PINNED_FS_SAFE: Readonly<Record<string, string>> = {
   [PINNED_OPENCLAW_VERSION]: PINNED_FS_SAFE_VERSION,
   "2026.11.10": "0.27.1",
 };

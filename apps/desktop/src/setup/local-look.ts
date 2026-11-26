@@ -3,11 +3,19 @@
 // the bounded reader, and the port it names proved on one socket of the look's
 // own, which sends nothing and is closed at once. No OpenClaw program runs. The
 // token the reader finds is dropped here, unused; Connect reads it afresh
-// (`readToken`) and holds it for its one attempt.
+// (`readToken`) and holds it for its one attempt. The profile folder's identity
+// as the look read its settings (`FolderIdentity`) goes with what it found to
+// every later step: the look's proof, Connect's read of the token, both proofs
+// of each of its sockets, and the route the gateway is saved with.
 
 import { connect as dial } from "node:net";
 import type { SetupLook } from "@clawtrate/core";
-import { localPortAllowed, proveFor, type LocalConnect } from "./local-connect.ts";
+import {
+  localPortAllowed,
+  proveFor,
+  type LocalConnect,
+  type ProfileFolder,
+} from "./local-connect.ts";
 import { refusalKind, type ProveRefusal } from "./local-prove.ts";
 import type { SettingsProfile } from "./settings-extract.ts";
 import {
@@ -18,8 +26,11 @@ import {
 } from "./settings-reader.ts";
 import { SetupRefusedError } from "./world.ts";
 
-/** What the look found that Connect may pair with: a profile's folder and its port. */
-export type LocalFound = { profile: SettingsProfile; folder: string; port: number; url: string };
+/**
+ * What the look found that Connect may pair with: a profile's folder, with its identity as the
+ * look read its settings, and its port.
+ */
+export type LocalFound = ProfileFolder & { profile: SettingsProfile; port: number; url: string };
 
 export type LocalReport = { look: SetupLook; found: LocalFound | null };
 
@@ -45,10 +56,10 @@ type Probe = { kind: "stopped" } | { kind: "proved" } | { kind: "refused"; why: 
 
 /**
  * One socket to the port, opened and proved, with nothing written to it, and
- * closed: whether anything listens there, and whether it is this profile's
- * gateway. A discovery hint only: Connect proves its own sockets again.
+ * closed: whether anything listens there, and whether it matches this profile.
+ * A discovery hint only: Connect proves its own sockets again.
  */
-async function probe(local: LocalConnect, folder: string, port: number): Promise<Probe> {
+async function probe(local: LocalConnect, folder: ProfileFolder, port: number): Promise<Probe> {
   const socket = dial({ host: "127.0.0.1", port });
   try {
     const open = await new Promise<boolean>((done) => {
@@ -70,9 +81,14 @@ async function probe(local: LocalConnect, folder: string, port: number): Promise
   }
 }
 
-/** A refusal of the settings, as the card says it: another sign-in, or settings it can't use. */
+/**
+ * A refusal of the settings, as the card says it: another sign-in, TLS on (local connect dials
+ * plain `ws://` only, so there is no Connect to offer), or settings it can't use.
+ */
 function settingsLook(outcome: Exclude<SettingsOutcome, { kind: "found" }>): SetupLook | null {
   if (outcome.kind === "refused" && outcome.reason === "absent") return null;
+  if (outcome.reason === "address" && outcome.why === "tls")
+    return { ...empty, outcome: "cant-tell", reason: "tls" };
   if (
     outcome.reason === "credential" &&
     (outcome.why === "auth-mode" || outcome.why === "password")
@@ -83,9 +99,9 @@ function settingsLook(outcome: Exclude<SettingsOutcome, { kind: "found" }>): Set
 
 /**
  * The look: each profile's settings, in the reader's order (the default first);
- * the first one proved is offered. Otherwise what came closest, in this order:
- * a gateway that answered but wasn't proved, one that isn't running, settings
- * that can't be used, none at all. Throws the reader's `SetupRefusedError`.
+ * the first whose socket matches its profile is offered. Otherwise what came
+ * closest, in this order: a port that answered but didn't match, one where
+ * nothing listens, settings that can't be used, none at all. Throws the reader's `SetupRefusedError`.
  */
 export async function lookLocally(
   local: LocalConnect,
@@ -108,7 +124,7 @@ export async function lookLocally(
       if (look) keep(3, look);
       continue;
     }
-    const folder = folderOf(profile);
+    const folder = { folder: folderOf(profile), identity: outcome.identity };
     const { port } = outcome;
     // Outside a person's app, never OpenClaw's default ports, before any socket is opened.
     if (!localPortAllowed(local, port)) throw new SetupRefusedError("state");
@@ -119,7 +135,7 @@ export async function lookLocally(
       const url = `ws://127.0.0.1:${port}`;
       return {
         look: { ...facts, outcome: "running", access: "new" },
-        found: { profile, folder, port, url },
+        found: { profile, ...folder, port, url },
       };
     }
     if (result.kind === "stopped") keep(2, { ...facts, outcome: "stopped" });
@@ -137,8 +153,9 @@ export async function lookLocally(
 
 /**
  * Connect's own read of the token for what the look found: afresh, for that
- * profile only, and only while its settings still name the same port. Every
- * other token read is dropped. Null when they changed.
+ * profile only, only while its settings still name the same port, and only
+ * from the same profile folder, by device and inode. Every other token read is
+ * dropped. Null when any of them changed.
  */
 export async function readToken(
   local: LocalConnect,
@@ -149,7 +166,12 @@ export async function readToken(
   let held: HeldToken | null = null;
   for (const { profile, outcome } of read) {
     if (outcome.kind !== "found") continue;
-    if (profile === found.profile && outcome.port === found.port) held = outcome.token;
+    if (
+      profile === found.profile &&
+      outcome.port === found.port &&
+      outcome.identity === found.identity
+    )
+      held = outcome.token;
     else outcome.token.drop();
   }
   if (held && !localPortAllowed(local, found.port)) {

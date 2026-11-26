@@ -8754,7 +8754,7 @@ export class ClawtrateClient {
             error: {
               code: LOCAL_ROUTE_ONLY,
               message:
-                "This device is paired with the OpenClaw on this Mac through This computer, so it doesn't use that pairing at a typed address. No credential was sent.",
+                "This device is paired for This computer, so it doesn't use that pairing at a typed address. No credential was sent.",
               hint: "Choose This computer to connect to it.",
             },
           });
@@ -11672,6 +11672,11 @@ export class ClawtrateClient {
     if (typeof parsed.token !== "string") return null;
     if (!includeRejected && this.writes.rejected.get(key)?.has(parsed.token.trim())) return null;
     const route = typeof parsed.route === "string" ? { route: parsed.route } : {};
+    // A token saved over another proved route than the one the settings name now (local
+    // connect's profile folder, replaced since and found again) is that route's gateway's, not
+    // this one's: it is never this route's, and this route's first pairing replaces it.
+    const now = this.settings?.url === url ? this.settings.route : undefined;
+    if (route.route !== undefined && now !== undefined && route.route !== now) return null;
     if (parsed.fullGrant === true) {
       const held = Array.isArray(parsed.heldScopes)
         ? FULL_SCOPES.filter((scope) => parsed.heldScopes!.includes(scope))

@@ -355,6 +355,7 @@ const CANT_TELL: Record<string, string> = {
     "This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.",
   settings:
     "Clawtrate can't use OpenClaw's settings on this Mac to connect by itself. Use Advanced.",
+  tls: "This Mac's OpenClaw uses a secure address. Use Advanced to connect with its address.",
 };
 
 /** Which fact local connect's proof refused, when the host said (`ProofRefusalKind`). */

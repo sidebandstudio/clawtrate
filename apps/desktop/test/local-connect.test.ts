@@ -156,7 +156,9 @@ describe("local connect's connector", () => {
       `wss://127.0.0.1:${listener.port}`,
       `ws://127.0.0.1:${listener.port}/elsewhere`,
     ])
-      expect(() => sockets.createWebSocket(url), url).toThrow(/only go to OpenClaw/);
+      expect(() => sockets.createWebSocket(url), url).toThrow(
+        /may only go to ws:\/\/127\.0\.0\.1 at the port OpenClaw.s settings name/,
+      );
     expect(asked).toBe(0);
     expect(listener.peers).toEqual([]);
   });
@@ -213,7 +215,7 @@ describe("local connect's connector", () => {
       platform: "darwin",
       sandboxed: true,
     });
-    expect(routes("ws://127.0.0.1:19417", ".openclaw")).not.toBeNull();
+    expect(routes("ws://127.0.0.1:19417", ".openclaw@1:1")).not.toBeNull();
     for (const url of [
       "ws://localhost:19417",
       "wss://127.0.0.1:19417",
@@ -224,7 +226,7 @@ describe("local connect's connector", () => {
       "ws://127.0.0.1:65536",
       "ws://127.0.0.1",
     ])
-      expect(routes(url, ".openclaw"), url).toBeNull();
+      expect(routes(url, ".openclaw@1:1"), url).toBeNull();
   });
 
   it("proves a setup socket last for its attempt alone: a Back during the proof sends nothing", async () => {

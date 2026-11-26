@@ -12,7 +12,9 @@ import {
   openSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -22,6 +24,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { localGatewayBuild } from "../packaging/config.ts";
 import { proveLocalGateway, type ProveOptions } from "../src/setup/local-prove.ts";
+import { openSettingsFile } from "../src/setup/settings-reader.ts";
 import {
   FS_SAFE_1110_SHA256,
   FS_SAFE_NATIVE_SHA256,
@@ -88,9 +91,20 @@ async function connection(to: number): Promise<{ localPort: number; end: () => v
   return { localPort: socket.localPort!, end: () => socket.destroy() };
 }
 
+/** A profile folder's identity, as the settings reader reports it; "1:1" where there is none. */
+function identityOf(path: string, folder = FOLDER): string {
+  try {
+    const { dev, ino } = statSync(join(path, folder), { bigint: true });
+    return `${dev}:${ino}`;
+  } catch {
+    return "1:1";
+  }
+}
+
 const options = (path: string, localPort: number, more: Partial<ProveOptions> = {}) => ({
   home: path,
   folder: FOLDER,
+  identity: identityOf(path, more.folder),
   port,
   localPort,
   platform,
@@ -339,8 +353,55 @@ int main(int argc, char **argv) {
     }
   });
 
+  it("refuses a profile folder replaced since its settings were read, before it looks at any process", async () => {
+    const { localPort, end } = await connection(port);
+    const at = home();
+    const settings = join(at, FOLDER, "openclaw.json");
+    writeFileSync(settings, "{}", { mode: 0o600 });
+    // The identity the reader reports for the folder it read the settings from.
+    const read = await openSettingsFile({
+      home: at,
+      folder: FOLDER,
+      file: "openclaw.json",
+      platform,
+      helper,
+      sandboxed: true,
+    });
+    if (read.kind !== "read") throw new Error(`settings not read: ${JSON.stringify(read)}`);
+    expect(read.identity).toBe(identityOf(at));
+    const hold = (path: string) => held(path).map((file) => openSync(file, "r"));
+    let files = hold(at);
+    try {
+      // The same folder: the proof goes on past it, to the lock, which doesn't name this process.
+      expect(await proveLocalGateway(options(at, localPort, { identity: read.identity }))).toEqual(
+        refused("named"),
+      );
+      // Another private profile put at the same path, with its own lock and database, held
+      // open by the same holder: refused for the folder, whatever its files say.
+      for (const fd of files) closeSync(fd);
+      renameSync(join(at, FOLDER), join(at, "earlier"));
+      const other = home();
+      renameSync(join(other, FOLDER), join(at, FOLDER));
+      files = hold(at);
+      expect(await proveLocalGateway(options(at, localPort, { identity: read.identity }))).toEqual(
+        refused("replaced"),
+      );
+      // Nothing was written to the holder's end of the connection.
+      expect(accepted.every((socket) => socket.bytesRead === 0)).toBe(true);
+      // The replacement checked as itself goes on to the lock, as the first did.
+      expect(await proveLocalGateway(options(at, localPort))).toEqual(refused("named"));
+    } finally {
+      for (const fd of files) closeSync(fd);
+      end();
+    }
+  });
+
   it("refuses what it can't use before it opens anything", async () => {
     const path = home();
+    for (const identity of ["", "1", "1:", ":1", "01:1", "1:1:1", "a:1", `1:${"9".repeat(21)}`])
+      expect(await proveLocalGateway(options(path, 1, { identity })), identity).toEqual(
+        refused("path"),
+      );
     expect(await proveLocalGateway(options(path, port))).toEqual(refused("path"));
     expect(await proveLocalGateway(options(path, 0))).toEqual(refused("path"));
     for (const folder of ["..", ".openclaw/../x", "openclaw", ".openclaw-A", ""])
@@ -525,7 +586,17 @@ describe.skipIf(platform !== "darwin")(
 
     it("takes the helper's own refusals, and nothing else it says", async () => {
       const at = path();
-      for (const why of ["holder", "account", "node", "module", "lock", "state", "denied", "acl"])
+      for (const why of [
+        "holder",
+        "account",
+        "node",
+        "module",
+        "lock",
+        "state",
+        "replaced",
+        "denied",
+        "acl",
+      ])
         expect(await prove(at, `refused ${why}\n`), why).toEqual(refused(why));
       for (const output of [
         "refused helper\n",

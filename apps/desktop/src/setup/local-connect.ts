@@ -5,9 +5,10 @@
 // proves it again just before the frame that carries a credential. Every
 // WebSocket gets an agent and a socket of its own, so a retry or a reconnect
 // is dialled and proved afresh, and a socket that isn't proved carries no byte.
-// A gateway set up this way is saved with its profile folder as its route, and
+// A gateway set up this way is saved with its profile folder, and that
+// folder's identity as its settings were read, as its route (`routeOf`), and
 // `provedRouteFor` gives the client its sockets after setup, and after a
-// restart, the same way.
+// restart, the same way: a folder replaced since is refused.
 //
 // Only a person's packaged Mac app turns it on (apps/desktop/src/main/index.ts),
 // with the account's own home. Every other run has no default home
@@ -16,7 +17,13 @@
 import { connect as dial, type Socket } from "node:net";
 import { PROOF_REFUSAL_LINES, type ProvedRoute, type WebSocketLike } from "@clawtrate/core";
 import { Agent, WebSocket } from "undici";
-import { proveLocalGateway, refusalKind, type ProveRefusal } from "./local-prove.ts";
+import {
+  FOLDER_IDENTITY,
+  proveLocalGateway,
+  refusalKind,
+  type FolderIdentity,
+  type ProveRefusal,
+} from "./local-prove.ts";
 import {
   accountHome,
   CLAWTRATE_PROFILE_DEFAULT_PORT,
@@ -84,6 +91,24 @@ export type ProveSocket = (localPort: number) => Promise<boolean>;
 /** How long the proof waits before asking once more, after finding no holder of this account's. */
 export const HOLDER_RETRY_MS = 750;
 
+/** A profile folder by its name under the home and its identity as its settings were read. */
+export type ProfileFolder = { folder: string; identity: FolderIdentity };
+
+/** The route a gateway set up through local connect is saved with: its profile folder. */
+export const routeOf = ({ folder, identity }: ProfileFolder) => `${folder}@${identity}`;
+
+/** A saved route's profile folder, or null for a route of any other form. */
+export function routeFolder(route: string): ProfileFolder | null {
+  const at = route.lastIndexOf("@");
+  const folder = route.slice(0, at);
+  const identity = route.slice(at + 1);
+  return at > 0 &&
+    /^\.openclaw(-[a-z0-9][a-z0-9-]{0,63})?$/.test(folder) &&
+    FOLDER_IDENTITY.test(identity)
+    ? { folder, identity }
+    : null;
+}
+
 /**
  * The proof of one profile's gateway at `port`, its refusals told to `refused` in fixed words.
  * A gateway under load may not have taken the connection into its table within the helper's
@@ -91,12 +116,12 @@ export const HOLDER_RETRY_MS = 750;
  */
 export function proveFor(
   local: LocalConnect,
-  folder: string,
+  { folder, identity }: ProfileFolder,
   port: number,
   refused: (why: ProveRefusal) => void = () => {},
 ): ProveSocket {
   return async (localPort) => {
-    const ask = () => proveLocalGateway({ ...local, folder, port, localPort });
+    const ask = () => proveLocalGateway({ ...local, folder, identity, port, localPort });
     let proof = await ask();
     if (!proof.proved && proof.why === "holder") {
       await new Promise((done) => setTimeout(done, HOLDER_RETRY_MS));
@@ -110,8 +135,9 @@ export function proveFor(
 /**
  * The client's sockets for a gateway saved with a local connect route
  * (`ClientOptions.localConnect`): only `ws://127.0.0.1:<port>`, proved as the
- * profile folder `route` in the home local connect names. Anything else is null,
- * and the client opens nothing for it.
+ * profile folder `route` names, with the identity it had when the gateway was
+ * set up, in the home local connect names. Anything else is null, and the
+ * client opens nothing for it.
  */
 export function provedRouteFor(
   local: LocalConnect,
@@ -119,10 +145,11 @@ export function provedRouteFor(
 ): (url: string, route: string) => ProvedRoute | null {
   return (url, route) => {
     const port = Number(/^ws:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/.exec(url)?.[1]);
-    if (!localPortAllowed(local, port)) return null;
+    const profile = routeFolder(route);
+    if (!profile || !localPortAllowed(local, port)) return null;
     // The latest refusal since a proof last passed, for the client's words (`ProvedRoute.refusal`).
     let latest: ProveRefusal | null = null;
-    const prove = proveFor(local, route, port, (why) => {
+    const prove = proveFor(local, profile, port, (why) => {
       latest = why;
       refused(why);
     });
@@ -181,7 +208,12 @@ export function provedSockets(port: number, prove: ProveSocket): ProvedSockets {
         slot.dialled ||
         current !== slot
       ) {
-        callback(new Error("This connection may only go to OpenClaw on this computer."), null);
+        callback(
+          new Error(
+            "This connection may only go to ws://127.0.0.1 at the port OpenClaw's settings name.",
+          ),
+          null,
+        );
         return;
       }
       slot.dialled = true;
@@ -208,7 +240,9 @@ export function provedSockets(port: number, prove: ProveSocket): ProvedSockets {
   return {
     createWebSocket(url) {
       if (url !== `ws://127.0.0.1:${port}`)
-        throw new Error("This connection may only go to OpenClaw on this computer.");
+        throw new Error(
+          "This connection may only go to ws://127.0.0.1 at the port OpenClaw's settings name.",
+        );
       const slot: Slot = { dialled: false, socket: null };
       current = slot;
       const agent = new Agent({ connections: 1, connect: connectFor(slot) });

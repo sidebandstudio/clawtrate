@@ -24,7 +24,7 @@ import {
   type SetupHost,
   type SetupState,
 } from "@clawtrate/core";
-import { proveFor, provedSockets, type LocalConnect } from "./local-connect.ts";
+import { proveFor, provedSockets, routeOf, type LocalConnect } from "./local-connect.ts";
 import { lookLocally, readToken, type LocalFound } from "./local-look.ts";
 import { refusalKind, type ProveRefusal } from "./local-prove.ts";
 import { boundedFileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
@@ -594,7 +594,8 @@ export class SetupController implements SetupHost {
    * copy once the client has it. Every socket is dialled here and proved before
    * its first byte and again just before its credential; the first that isn't
    * ends the attempt, with nothing sent. The gateway is saved with its profile's
-   * folder as its route, never as a typed address.
+   * folder and that folder's identity as its route (`routeOf`), never as a typed
+   * address.
    */
   private async connectLocally(local: LocalConnect & { worker: URL }): Promise<void> {
     const found = this.localFound;
@@ -633,7 +634,7 @@ export class SetupController implements SetupHost {
         void this.closeOwned();
         this.fail({ kind: "unverified", port: found.port, reason: refusalKind(why) });
       };
-      const proveOne = proveFor(local, found.folder, found.port, unverified);
+      const proveOne = proveFor(local, found, found.port, unverified);
       const prove = async (localPort: number) => {
         const proved = await proveOne(localPort);
         if (proved) latest = null;
@@ -650,7 +651,7 @@ export class SetupController implements SetupHost {
         {
           createSocket: sockets.createWebSocket,
           prove: provedWhile(current, sockets.verify),
-          route: found.folder,
+          route: routeOf(found),
           consent,
           refusal: () =>
             latest === null ? null : PROOF_REFUSAL_LINES[refusalKind(latest)](found.port),

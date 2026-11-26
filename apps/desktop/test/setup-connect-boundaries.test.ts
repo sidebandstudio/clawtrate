@@ -19,6 +19,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { connect, createServer } from "node:net";
@@ -49,7 +50,9 @@ import {
   proveFor,
   provedRouteFor,
   provedSockets,
+  routeOf,
   type LocalConnect,
+  type ProfileFolder,
 } from "../src/setup/local-connect.ts";
 import { proveLocalGateway } from "../src/setup/local-prove.ts";
 import type { Opened } from "../src/setup/sandbox.ts";
@@ -523,6 +526,12 @@ function profileFiles(home: string, folder: string, lock: object) {
   writeFileSync(join(home, folder, "state", "openclaw.sqlite"), "", { mode: 0o600 });
 }
 
+/** A profile folder in a home, with its identity as the settings reader reports it. */
+function profileOf(home: string, folder = FOLDER): ProfileFolder {
+  const { dev, ino } = statSync(join(home, folder), { bigint: true });
+  return { folder, identity: `${dev}:${ino}` };
+}
+
 describe.skipIf(!mac)("local connect's send gate, with a listener of the test's own", () => {
   it("F-492: a gateway saved with its route gets no byte from a restart when a listener that isn't OpenClaw holds its port", async () => {
     let bytes = 0;
@@ -540,7 +549,11 @@ describe.skipIf(!mac)("local connect's send gate, with a listener of the test's 
     profileFiles(home, ".openclaw", { pid: process.pid, role: "gateway", port });
     // As a gateway set up through local connect is saved: its route, and this device's token.
     const storage = memoryStorage({
-      connection: JSON.stringify({ url, token: null, route: ".openclaw" }),
+      connection: JSON.stringify({
+        url,
+        token: null,
+        route: routeOf(profileOf(home, ".openclaw")),
+      }),
       [tokenKey(url)]: READ_TOKEN,
     });
     const gateway = new FakeGateway();
@@ -575,7 +588,7 @@ function provedClient(gateway: DevGateway, port: number, refused: string[]) {
   const local: LocalConnect = { home: gateway.home, helper, platform, sandboxed: true };
   const sockets = provedSockets(
     port,
-    proveFor(local, FOLDER, port, (why) => refused.push(why)),
+    proveFor(local, profileOf(gateway.home), port, (why) => refused.push(why)),
   );
   const host = createNodeHost({
     dataDir: mkdtempSync(join(scratch, "app-")),
@@ -586,11 +599,14 @@ function provedClient(gateway: DevGateway, port: number, refused: string[]) {
     { reconnect: { initialMs: 50, maxMs: 200 } },
   );
   provedRoutes.set(client, sockets);
+  gatewayHomes.set(client, gateway.home);
   return client;
 }
 
 /** Each `provedClient`'s own proved sockets, for a connection that takes local connect's route. */
 const provedRoutes = new WeakMap<ClawtrateClient, ReturnType<typeof provedSockets>>();
+/** Each `provedClient`'s gateway home, whose profile folder its route names. */
+const gatewayHomes = new WeakMap<ClawtrateClient, string>();
 
 /**
  * Connects as setup's local connect will: every socket from the proved route, each proved again
@@ -605,7 +621,7 @@ function connectProved(client: ClawtrateClient, url: string, token: string) {
     {
       createSocket: sockets.createWebSocket,
       prove: sockets.verify,
-      route: FOLDER,
+      route: routeOf(profileOf(gatewayHomes.get(client)!)),
       consent: () => true,
     },
   );
@@ -638,7 +654,10 @@ async function routedClient(gateway: DevGateway, token: string) {
     client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
   });
   const url = `ws://127.0.0.1:${gateway.port}`;
-  await host.storage.set("connection", JSON.stringify({ url, token, route: FOLDER }));
+  await host.storage.set(
+    "connection",
+    JSON.stringify({ url, token, route: routeOf(profileOf(gateway.home)) }),
+  );
   const client = new ClawtrateClient(
     {
       ...host,
@@ -693,7 +712,7 @@ describe.skipIf(!BIN || !mac)(
         const started = Date.now();
         const proof = await proveLocalGateway({
           home: gateway.home,
-          folder: FOLDER,
+          ...profileOf(gateway.home),
           port: gateway.port,
           localPort: socket.localPort!,
           platform,
@@ -716,7 +735,7 @@ describe.skipIf(!BIN || !mac)(
       try {
         const options = {
           home: gateway.home,
-          folder: FOLDER,
+          ...profileOf(gateway.home),
           port: gateway.port,
           localPort: socket.localPort!,
           platform,
