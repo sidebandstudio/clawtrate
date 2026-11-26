@@ -96,6 +96,17 @@ function StoppedSteps({
   );
 }
 
+/**
+ * `gateway stop` and `start` act on the gateway's service: with none installed, stop does nothing
+ * and start fails (OpenClaw's `docs/cli/gateway/service.md`).
+ */
+const UNMANAGED_HINT = (
+  <>
+    These stop and start the gateway's service. If you run the gateway yourself, with{" "}
+    <code>openclaw gateway run</code>, stop it and start it again where it runs instead.
+  </>
+);
+
 type View = "main" | "account" | "change" | "connect" | "runs" | "memory";
 
 export function BotSettings({
@@ -834,11 +845,14 @@ export function BotSettings({
             clear it on the gateway's machine{stopped ? `. ${STOPPED_WHY}` : ":"}
           </p>
           {stopped ? (
-            <StoppedSteps
-              cli={cli}
-              command={unlockCommand(cli, bot.id, provider)}
-              label="Copy clear command"
-            />
+            <>
+              <StoppedSteps
+                cli={cli}
+                command={unlockCommand(cli, bot.id, provider)}
+                label="Copy clear command"
+              />
+              <p>{UNMANAGED_HINT}</p>
+            </>
           ) : (
             <CommandBlock
               command={unlockCommand(cli, bot.id, provider)}
@@ -1054,8 +1068,8 @@ export function BotSettings({
                 label="Copy unlock command"
               />
               <p className="b-hint">
-                Clawtrate sees the change when the gateway is back. {name} then follows the
-                gateway's other orders.
+                {UNMANAGED_HINT} Clawtrate sees the change when the gateway is back. {name} then
+                follows the gateway's other orders.
               </p>
             </>
           ) : (
@@ -1113,7 +1127,7 @@ export function BotSettings({
                 onCopied={() => setWatching(true)}
               />,
               <p className="b-hint" key="back">
-                Clawtrate reads the lock from the gateway when it is back.
+                {UNMANAGED_HINT} Clawtrate reads the lock from the gateway when it is back.
               </p>,
             ]
           : [
@@ -1160,7 +1174,7 @@ export function BotSettings({
                 onCopied={() => setWatching(true)}
               />,
               <p className="b-hint" key="back">
-                Clawtrate reads the lock from the gateway when it is back.
+                {UNMANAGED_HINT} Clawtrate reads the lock from the gateway when it is back.
               </p>,
             ]
           : [

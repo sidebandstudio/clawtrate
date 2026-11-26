@@ -453,8 +453,11 @@ test("F-490: on OpenClaw 2026.11.10 the lock, the unlock and the clear are the g
     /^Then run:openclaw models auth order set --provider openai --agent otto openai:work$/,
     /^Start the gateway again:openclaw gateway start$/,
   ]);
+  // The steps act on the gateway's service; one run by hand is stopped and started where it runs.
   await expect(
-    page.getByText("Clawtrate reads the lock from the gateway when it is back."),
+    page.getByText(
+      "These stop and start the gateway's service. If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead. Clawtrate reads the lock from the gateway when it is back.",
+    ),
   ).toBeVisible();
   // Copying the order command starts the watch, as before; copying stop or start doesn't.
   await steps.getByRole("button", { name: "Copy stop command" }).click();
@@ -490,6 +493,9 @@ test("F-490: on OpenClaw 2026.11.10 the lock, the unlock and the clear are the g
     "openclaw models auth order clear --provider openai --agent otto",
     "openclaw gateway start",
   ]);
+  await expect(page.getByTestId("retained-order")).toContainText(
+    "If you run the gateway yourself, with openclaw gateway run, stop it and start it again where it runs instead.",
+  );
 
   // On 2026.10.6 the same page keeps the one command.
   await openFixture(
