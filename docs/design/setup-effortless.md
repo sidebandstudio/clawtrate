@@ -8,9 +8,7 @@ This version takes in two independent reviews and the product owner's decision o
 
 ## Why the earlier decision is superseded
 
-The product owner decided this:
-
-> "You have my OK. This is important to me. Approvals are genuine nightmare and defeat the entire purpose of this."
+The product owner decided that repeated approvals defeat the purpose of the app, and gave this design the go-ahead to avoid them.
 
 So two things change on purpose:
 
@@ -86,7 +84,7 @@ The rules that stay:
   | `operator.admin`     | Change gateway configuration, plugins or accounts, manage high-risk operations, and open the gateway terminal where allowed. Satisfies every operator scope, including pairing events. |
   | `operator.pairing`   | Receive pairing events and use pairing methods within the gateway's caller, device, role and scope rules. A pairing-only device token can't approve or remove another device.          |
 
-- **Clawtrate's ladder today**, with full access off (#318 added the six behind `ClientOptions.fullAccess`, which no shipped host sets), has three sources:
+- **Clawtrate's ladder before 2026-11-25**, with full access off (#318 added the six behind `ClientOptions.fullAccess`; the owner's decision of 2026-11-25 removed that switch, `docs/decisions.md`), has three sources:
   - Every connect asks for `operator.read` alone. That comes from `REQUESTED_SCOPES` in `packages/core/src/client.ts`, and `normalizeHeldScopes` in `packages/core/src/scopes.ts` drops admin and pairing.
   - Each later tier is a separate `device.scopes.requestUpgrade`, from the composer and cards, from `bots/parts.tsx` and from `machines/Machines.tsx`.
   - That request always waits, even on loopback (`<openclaw>/dist/devices-mOg4_HQd.mjs` lines 37-110).
@@ -389,7 +387,7 @@ An earlier version of this section had the approver type a 16-character code and
 - **Who files a request.** A connect is authenticated before pairing is considered (`rejectUnauthorized`, `message-handler-CRCo2VX0.mjs` lines 1263-1269). In token or password mode that means the shared secret, a setup code (`device.pair.setupCode`, admin, 10 minutes) or a device token. So a stranger's request comes from someone holding the shared secret, a code made for someone else, or, in other auth modes, a trusted proxy's identity header or no secret at all.
 - **The code check is still needed.** The shared secret is on every computer it was ever typed into and in the gateway's settings file. A code is a bearer pass for its 10 minutes. A device's name is whatever it reports. And the person may have two requests waiting, theirs and someone else's. Only the code tells them apart.
 - **What a request id binds.** A request is refreshed under the same id only when its public key, browser origin and role are unchanged and its roles and scopes stay within the existing set; a refresh keeps the existing roles and scopes (`canRefreshPendingDevicePairingRequest` and `refreshPendingDevicePairingRequest`, 2026.10.6 `device-pairing-core.worker-B-kYFMQS.mjs` lines 240-274; 2026.11.10 `device-pairing-core.worker-CXQtJOvQ.mjs`). Anything else deletes the device's pending request and makes a new id (lines 279-324), broadcast to the old id as `device.pair.resolved` `rejected`. Only reported fields and `remoteIp` move under one id. A browser origin is recorded only for OpenClaw's browser copilot client, so a Clawtrate request never has one (`resolveGatewayWsBrowserOrigin`, `ws-origin-policy-sYiBryoo.mjs` lines 148-156).
-- **Who decides.** `device.pair.approve` and `device.pair.reject` on a connection with `operator.admin` decide any request; the approver must hold every scope it grants, which admin does (`devices-mOg4_HQd.mjs` lines 355-365; `device-pairing-core.worker-B-kYFMQS.mjs` lines 127-143). A device-token connection without admin lists and decides only its own request (lines 303 and 341-354). So the six Clawtrate holds after a full pairing approve a request for the six or for fewer, and a read-and-pairing device approves nobody.
+- **Who decides.** `device.pair.approve` and `device.pair.reject` on a connection with `operator.admin` decide any request; the approver must hold every scope it grants, which admin does (`devices-mOg4_HQd.mjs` lines 355-365; `device-pairing-core.worker-B-kYFMQS.mjs` lines 127-143). A device-token connection without admin lists and decides only its own request (lines 303 and 341-354). So the six, which a first pairing asks for where it is safe (secure storage, writes allowed and a protected route, §2), approve a request for the six or for fewer; a device paired with less, or a read-and-pairing device, approves nobody.
 - **Who is told.** `device.pair.requested` and `device.pair.resolved` go to connections holding `operator.pairing`, which admin satisfies (`EVENT_SCOPE_GUARDS`, `server-start-D6vaUNGz.mjs` lines 4309-4311; 2026.11.10 `gateway-prewarm.js`). `requested` is sent for a new request, not a refresh (`message-handler-CRCo2VX0.mjs` line 2141).
 - **The waiting device.** Every connect answers `PAIRING_REQUIRED` with its request id (line 2180), and Clawtrate retries every 3 seconds (§4). After an approval the next connect is let in, so its screen moves on by itself. A rejection deletes the request and revokes the device's setup codes (`rejectDevicePairingInWorker`, lines 327-341). A device connecting with the shared token then files a new id on its next connect, and Clawtrate says "This request is no longer pending."; one that came with a setup code is refused it (`AUTH_BOOTSTRAP_TOKEN_INVALID`), which also stops its retries (§4). A request lives 5 minutes from its last refresh (`DEVICE_PAIRING_PENDING_TTL_MS`, `device-pairing-identity-D438fF14.mjs` line 602), so it doesn't expire while the device retries.
 - **No bound.** Neither version caps pending device requests or rate-limits filing them, beyond one per device id and the five minutes; twenty keys make twenty requests. (2026.11.10's cap of 32 applies only to its own browser pairing requests.)
@@ -408,6 +406,7 @@ An earlier version of this section had the approver type a 16-character code and
 - **Only a connection with admin**, on a host that allows writes, lists requests (`device.pair.list`, read on each hello, once for a burst of events at most once a second, and every 30 seconds while any wait) and decides them.
 - **One sheet per app host.** It opens by itself only for the only waiting request, once, in the window that has focus. More than one waiting is one quiet line in the rail, "3 devices are asking to use this gateway.", with Review.
 - **A connection with pairing but no admin** shows a notice: "A device is asking to connect. Approve it in Clawtrate on a device with full control."
+- **A connection with read alone** receives no pairing events and shows nothing.
 - **Settings, Gateway, "Devices asking"** lists them, newest first, each opening the same sheet. At most 16 are kept; past that, "4 more are waiting." A flood of requests is a list, never a stack of sheets.
 
 ### The sheet
@@ -517,7 +516,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
    > "A device starts read-only: every `connect` requests exactly `operator.read` … `operator.admin` and the narrower `operator.sessions.*` scopes are never requested."
 
-   Replacement: "**Scopes, once, at the first pairing.** A first pairing asks for `operator.read`, `operator.write`, `operator.approvals`, `operator.questions`, `operator.admin` and `operator.pairing`, after the consent line, because the product owner decided approvals defeat the purpose ("Approvals are genuine nightmare and defeat the entire purpose of this."). The gateway's confirmed grant is the limit, and a reconnect asks for exactly that. A narrower grant is kept and reported, and nothing asks again by itself. The narrower `operator.sessions.*` scopes are never requested."
+   Replacement: "**Scopes, once, at the first pairing.** A first pairing asks for `operator.read`, `operator.write`, `operator.approvals`, `operator.questions`, `operator.admin` and `operator.pairing`, after the consent line, because the product owner decided that repeated approvals defeat the purpose. The gateway's confirmed grant is the limit, and a reconnect asks for exactly that. A narrower grant is kept and reported, and nothing asks again by itself. The narrower `operator.sessions.*` scopes are never requested."
 
 2. **Requested is not granted**:
 
@@ -529,7 +528,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
    > "On `PAIRING_REQUIRED` it shows the request id and an approve command chosen by the host"
 
-   Replacement: "…it shows this device's 16-character code, the scopes asked for, and three ways to approve: Clawtrate on another admin device, OpenClaw's Control UI, and last the approve command chosen by the host."
+   Replacement: "…it shows this device's code (§5), the scopes asked for, and three ways to approve: picking that code in Clawtrate on a device with full control, OpenClaw's Control UI, and last the approve command chosen by the host."
 
 4. **What the look runs, and when it runs nothing**:
 
@@ -585,7 +584,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
     Replacement: "a setup code gives the device what it asks for, up to the code's ceiling: all six for a full code; read, write, approvals and questions for a limited one."
 
-**The change to `AGENTS.md`, approved by the product owner.** It was made in setup PR 1 (#318), not in this design. It replaced "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." Because #318 puts full access behind a flag that is off, `AGENTS.md` now reads:
+**The change to `AGENTS.md`, approved by the product owner.** It was made in setup PR 1 (#318), not in this design, and replaced again on 2026-11-25 (`docs/decisions.md`, "One pairing, with everything"), when the six became the default. It replaced "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." Because #318 put full access behind a flag that was off, `AGENTS.md` read, until 2026-11-25:
 
 > "First pairings request read access by default. Ask once for the six standard operator scopes (read, write, approvals, questions, admin and pairing) only when the person starts an eligible first pairing and the host allows writes, reports secure credential storage and has full-access pairing enabled. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway."
 
