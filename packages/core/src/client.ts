@@ -321,6 +321,7 @@ import {
   writeGatewayNames,
   type GatewayNames,
 } from "./gateway-names.ts";
+import { openClawAtLeast } from "./gateway-version.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -6357,6 +6358,14 @@ export class ClawtrateClient {
   }
 
   /**
+   * The gateway writes a system event it wakes a task with as its own user row's text
+   * (`mapHistory`'s `gatewayEvents`): OpenClaw 2026.11.10, by its reported version.
+   */
+  private writesEvents(): boolean {
+    return openClawAtLeast(this.state.connection.serverVersion, 2026, 11, 10);
+  }
+
+  /**
    * A history item whole, as the gateway has it now, returned without being
    * kept: the way to read text cut to its bound (`TranscriptItem.cut`).
    */
@@ -6365,9 +6374,10 @@ export class ClawtrateClient {
     // The length needed is not known here: the most the gateway gives. An item it still cut says so.
     const history = await this.readHistoryWhole(key, MAX_HISTORY_READ_CHARS);
     return (
-      mapHistory(history?.messages, { startedAt: startedTaskSince(history) }).find(
-        (item) => item.id === itemId,
-      ) ?? null
+      mapHistory(history?.messages, {
+        startedAt: startedTaskSince(history),
+        gatewayEvents: this.writesEvents(),
+      }).find((item) => item.id === itemId) ?? null
     );
   }
 
@@ -10273,7 +10283,10 @@ export class ClawtrateClient {
           this.keepSentPictures(message);
       }
       const activity = markUnconfirmed(reconciled);
-      const items = mapHistory(messages, { startedAt: startedTaskSince(history) });
+      const items = mapHistory(messages, {
+        startedAt: startedTaskSince(history),
+        gatewayEvents: this.writesEvents(),
+      });
       this.sentSources.set(key, sentSources(messages));
       const rebuilt: Transcript = {
         ...current,

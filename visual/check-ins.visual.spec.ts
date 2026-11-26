@@ -2,7 +2,8 @@
 // baselines, in light and dark at 1440, 1100 and 800 px and at phone width:
 // Settings → Check-ins with and without admin, with the scheduler off, and
 // the dialog in each choice, with the default bot's note, a custom prompt's
-// note, and a save refused, in conflict or not confirmed. The fixture's check-ins are made
+// note, and a save refused, in conflict or not confirmed; and on an OpenClaw that keeps
+// check-ins as routines, read-only with a link to each bot's. The fixture's check-ins are made
 // up (apps/desktop/src/fixture/check-ins.ts).
 import { test, type Page } from "@playwright/test";
 import { checkIns } from "./check-ins-helpers.ts";
@@ -29,6 +30,7 @@ const SCENES: Scene[] = [
   { name: "checkins-read", query: `scene=main&${OTTO_DISK}&access=read`, ready: checkIns },
   { name: "checkins-scheduler-off", query: `${ADMIN}&scheduler=off`, ready: checkIns },
   { name: "checkins-mixed", query: `${ADMIN}&checkins=every`, ready: checkIns },
+  { name: "checkins-routines", query: `${ADMIN}&checkins=routines`, ready: checkIns },
   { name: "checkins-dialog-asneeded", query: ADMIN, ready: dialog("Juniper") },
   {
     name: "checkins-dialog-daily",
