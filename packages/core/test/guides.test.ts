@@ -701,6 +701,10 @@ describe("the switch and the rows' changes", () => {
       // While off, its row still has the section, with Remove, to try again.
       const [folder] = await readGuideFolders(files.request, offRecord());
       expect(folder?.state, change.action).toBe("current");
+      // A second device, whose history read succeeds, finds the section still there.
+      files.prefs.failSets = false;
+      await applyGuidesChange(files.request, null, { action: "auto" });
+      expect(files.store.get("pip"), change.action).toBe(withSection(BOT_FILE));
     }
     // A gateway that keeps no preferences for this connection has no history to record into.
     const none = fakeFiles({ pip: withSection(BOT_FILE) });
@@ -1407,15 +1411,21 @@ describe("the guides in the client", () => {
       const set = storage.set.bind(storage);
       storage.set = (key: string, value: string) =>
         key === GUIDES_DEFAULT_KEY ? Promise.reject(new Error("disk full")) : set(key, value);
+      // The change's own list and the read-back's fail with different words, so neither stands
+      // in for the other.
+      let lists = 0;
       gateway.handlers["agents.list"] = () => {
-        throw new Error("agents.list failed");
+        lists += 1;
+        throw new Error(lists === 1 ? "the change's list failed" : "the read-back's list failed");
       };
-      await expect(
-        client.changeBotGuides({ action: "switch", on: false }, shown.stamp),
-      ).rejects.toThrow(GUIDES_DEFAULT_NOT_SAVED);
-      await expect(
-        client.changeBotGuides({ action: "switch", on: false }, shown.stamp),
-      ).rejects.toThrow("agents.list failed");
+      const failed = await client
+        .changeBotGuides({ action: "switch", on: false }, shown.stamp)
+        .then(
+          () => null,
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        );
+      expect(failed).toContain(GUIDES_DEFAULT_NOT_SAVED);
+      expect(failed).toContain("the change's list failed");
       expect(recordIn(storage)).toEqual({ on: false, bots: [] });
     } finally {
       client.stop();
