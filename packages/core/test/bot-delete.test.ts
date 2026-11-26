@@ -122,6 +122,7 @@ function gateway(agents: Agent[] = BOTS) {
     },
     admin: () => admin,
     wanted: () => wanted,
+    sending: () => {},
     deleted: (id) => confirmed.push(id),
   };
   return {
@@ -982,6 +983,185 @@ describe("deleting a bot: one gateway, one connection", () => {
       );
       client.stop();
     });
+
+  /** Lists `listed` from now on, and has the client read the list again. */
+  const relist = (fake: ReturnType<typeof grantingGateway>, listed: Json[], unknown: string) => {
+    fake.handlers["sessions.list"] = () => ({ sessions: listed, hasMore: false });
+    fake.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: listed, hasMore: false },
+    });
+    // A change to a task the client hasn't listed is read with the whole list.
+    fake.emit("sessions.changed", { sessionKey: unknown, updatedAt: 7 });
+  };
+
+  it("F-557: pictures sent before their tasks were listed go by the bot the list then places each task under", async () => {
+    const { client, fake } = await adminClient();
+    const UNPREFIXED = "webchat:direct:u1";
+    const MISNAMED = "agent:pip:for-marlow";
+    const rows = new Map<string, unknown[]>();
+    const ids = new Map<string, string>();
+    fake.handlers["chat.history"] = (params) => ({
+      messages: rows.get((params as Json).sessionKey as string) ?? [],
+    });
+    const png = solidPng(8, 8, [10, 120, 200]);
+    const picture = {
+      type: "image",
+      mimeType: "image/png",
+      fileName: "shot.png",
+      content: toBase64(png),
+    };
+    // Opened and sent in before any list names them: the bot noted is the key's, or none.
+    for (const task of [UNPREFIXED, MISNAMED]) {
+      client.openSession(task);
+      await until(() => client.state.transcripts[task]?.status === "ready");
+      const id = client.sendMessage(task, "look", { attachments: [picture] });
+      ids.set(task, id);
+      await until(() => client.state.transcripts[task]!.outbox[0]?.status === "sent");
+      rows.set(task, [sentRow(id, "look", [SHOT])]);
+      fake.emit("sessions.changed", { sessionKey: task, phase: "message", updatedAt: 6 });
+      await until(() => client.state.transcripts[task]!.outbox.length === 0);
+    }
+    expect(client.keptPictureBytes).toBe(2 * png.length);
+    relist(
+      fake,
+      [
+        { key: UNPREFIXED, agentId: "pip", updatedAt: 5 },
+        { key: MISNAMED, agentId: "marlow", updatedAt: 4 },
+      ],
+      UNPREFIXED,
+    );
+    await until(() => (client.state.tasksByBot.marlow ?? []).some((each) => each.key === MISNAMED));
+    const read = await client.readBotDelete("pip");
+    const outcome = await client.deleteBot({
+      botId: "pip",
+      stamp: read.stamp,
+      deleteFiles: false,
+      reviewed: reviewOf(read),
+      typed: "Pip",
+    });
+    expect(outcome.kind).toBe("answered");
+    expect(client.keptPictureBytes).toBe(png.length);
+    expect(await client.readSentPicture(UNPREFIXED, `${ids.get(UNPREFIXED)}:user`, 0)).toEqual({
+      status: "cannot-load",
+    });
+    expect((await client.readSentPicture(MISNAMED, `${ids.get(MISNAMED)}:user`, 0)).status).toBe(
+      "content",
+    );
+    client.stop();
+  });
+
+  it("F-050: a message queued in a task listed under another bot stays queued when the bot its key names is deleted", async () => {
+    const { client, fake } = await adminClient();
+    const MISNAMED = "agent:pip:for-marlow";
+    relist(fake, [{ key: MISNAMED, agentId: "marlow", updatedAt: 4 }], MISNAMED);
+    await until(() => (client.state.tasksByBot.marlow ?? []).some((each) => each.key === MISNAMED));
+    client.openSession(MISNAMED);
+    await until(() => client.state.transcripts[MISNAMED]?.status === "ready");
+    client.sendMessage(MISNAMED, "Take your time");
+    const transcript = () => client.state.transcripts[MISNAMED]!;
+    await until(
+      () => transcript().runs[0]?.bound === true && transcript().runs[0]?.state === "running",
+    );
+    const png = solidPng(8, 8, [10, 120, 200]);
+    client.sendMessage(MISNAMED, "Then this", {
+      mode: "queue",
+      attachments: [
+        { type: "image", mimeType: "image/png", fileName: "shot.png", content: toBase64(png) },
+      ],
+    });
+    await until(() => transcript().outbox[1]?.status === "queued");
+    const read = await client.readBotDelete("pip");
+    const outcome = await client.deleteBot({
+      botId: "pip",
+      stamp: read.stamp,
+      deleteFiles: false,
+      reviewed: reviewOf(read),
+      typed: "Pip",
+    });
+    expect(outcome.kind).toBe("answered");
+    expect(transcript().outbox[1]).toMatchObject({ status: "queued", text: "Then this" });
+    client.stop();
+  });
+
+  it("F-050: a task the list moves to another bot while the delete reads the bots keeps its queued message", async () => {
+    const { client, fake } = await adminClient();
+    const MOVED = "agent:marlow:move";
+    relist(fake, [{ key: MOVED, agentId: "pip", updatedAt: 4 }], MOVED);
+    await until(() => (client.state.tasksByBot.pip ?? []).some((each) => each.key === MOVED));
+    client.openSession(MOVED);
+    await until(() => client.state.transcripts[MOVED]?.status === "ready");
+    client.sendMessage(MOVED, "Take your time");
+    const transcript = () => client.state.transcripts[MOVED]!;
+    await until(
+      () => transcript().runs[0]?.bound === true && transcript().runs[0]?.state === "running",
+    );
+    client.sendMessage(MOVED, "Then this", { mode: "queue" });
+    await until(() => transcript().outbox[1]?.status === "queued");
+    const read = await client.readBotDelete("pip");
+    // The delete's own read of the bots is held, and meanwhile the list moves the task to Marlow.
+    const roster = fake.handlers["agents.list"]!;
+    const held = deferred<void>();
+    let holding = true;
+    fake.handlers["agents.list"] = async (params) => {
+      if (holding) {
+        holding = false;
+        await held.promise;
+      }
+      return roster(params);
+    };
+    const asked = fake.calls("agents.list").length;
+    const deleting = client.deleteBot({
+      botId: "pip",
+      stamp: read.stamp,
+      deleteFiles: false,
+      reviewed: reviewOf(read),
+      typed: "Pip",
+    });
+    await until(() => fake.calls("agents.list").length > asked);
+    fake.emit("sessions.changed", { sessionKey: MOVED, agentId: "marlow", updatedAt: 9 });
+    await until(() => (client.state.tasksByBot.marlow ?? []).some((each) => each.key === MOVED));
+    held.resolve();
+    expect((await deleting).kind).toBe("answered");
+    expect(transcript().outbox[1]).toMatchObject({ status: "queued", text: "Then this" });
+    client.stop();
+  });
+
+  it("F-557: a picture whose task the list no longer places under a bot goes by the bot noted when it was sent", async () => {
+    const { client, fake } = await adminClient();
+    const UNPREFIXED = "webchat:direct:u1";
+    relist(fake, [{ key: UNPREFIXED, agentId: "pip", updatedAt: 5 }], UNPREFIXED);
+    await until(() => (client.state.tasksByBot.pip ?? []).some((each) => each.key === UNPREFIXED));
+    let history: unknown[] = [];
+    fake.handlers["chat.history"] = () => ({ messages: history });
+    const png = solidPng(8, 8, [10, 120, 200]);
+    client.openSession(UNPREFIXED);
+    await until(() => client.state.transcripts[UNPREFIXED]?.status === "ready");
+    const id = client.sendMessage(UNPREFIXED, "look", {
+      attachments: [
+        { type: "image", mimeType: "image/png", fileName: "shot.png", content: toBase64(png) },
+      ],
+    });
+    await until(() => client.state.transcripts[UNPREFIXED]!.outbox[0]?.status === "sent");
+    history = [sentRow(id, "look", [SHOT])];
+    fake.emit("sessions.changed", { sessionKey: UNPREFIXED, phase: "message", updatedAt: 6 });
+    await until(() => client.state.transcripts[UNPREFIXED]!.outbox.length === 0);
+    expect(client.keptPictureBytes).toBe(png.length);
+    // The gateway keeps the row but no longer names its bot, so the rail can't place it.
+    fake.emit("sessions.changed", { sessionKey: UNPREFIXED, agentId: null, updatedAt: 8 });
+    await until(() => !(client.state.tasksByBot.pip ?? []).some((each) => each.key === UNPREFIXED));
+    const read = await client.readBotDelete("pip");
+    const outcome = await client.deleteBot({
+      botId: "pip",
+      stamp: read.stamp,
+      deleteFiles: false,
+      reviewed: reviewOf(read),
+      typed: "Pip",
+    });
+    expect(outcome.kind).toBe("answered");
+    expect(client.keptPictureBytes).toBe(0);
+    client.stop();
+  });
 
   it("F-050: a dialog read on one gateway sends nothing once the host reaches another", async () => {
     const { client, fake, switchTo } = await adminClient();
