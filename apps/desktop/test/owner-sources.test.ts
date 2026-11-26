@@ -316,6 +316,12 @@ const ALLOWED: Record<string, string> = {
     "one call; one sentence per instructions file it changed, returned to the caller",
   "packages/core/src/guides.ts:applyGuidesChange>onList":
     "one call; the bot ids of the one agents.list it read, dropped when it returns",
+  "packages/core/src/guides.ts:applyGuidesChange>kept":
+    "one call; the bot ids of the one agents.list it read and the record's, returned in the record",
+  "packages/core/src/guides.ts:applyGuidesChange>refused":
+    "one call; a reason per bot of the one agents.list it read, returned in the record",
+  "packages/core/src/guides.ts:applyGuidesChange>missing":
+    "one call; the folders of the one agents.list it read, returned to the caller",
 };
 
 describe("the source keeps no collection outside the registry", () => {
