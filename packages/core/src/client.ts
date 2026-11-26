@@ -9239,6 +9239,7 @@ export class ClawtrateClient {
     this.accounts.onClose();
     this.routines.onClose();
     this.usage.onClose();
+    this.deviceApprovals.onClose();
     this.protocol?.stop();
     this.protocol = null;
     this.computer.connectionLost(options?.keepPendingAnswer);
