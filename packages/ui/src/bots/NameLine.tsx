@@ -8,6 +8,7 @@ import {
   type Bot,
   type NameLine as Line,
   type NameRecordChange,
+  shownChanges,
 } from "@clawtrate/core";
 import { useState } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
@@ -19,6 +20,14 @@ const SOURCE: Record<string, string> = {
   file: " after reading a file",
   tool: " after a tool's output",
 };
+
+/**
+ * What an undone line adds after "Back to …": that the name isn't used again, or, when Undo's
+ * record couldn't be kept on the gateway, the engine's warning instead of that promise.
+ */
+export function undoneNote(line: Pick<Line, "to" | "error">): string {
+  return line.error ?? `${line.to} isn't used again unless you rename it yourself.`;
+}
 
 /** What the line says, by what happened; `from` and `to` are plain text, shown isolated. */
 function words(line: Line) {
@@ -45,7 +54,7 @@ function words(line: Line) {
     case "undone":
       return (
         <>
-          Back to {from}. {to} isn't used again unless you rename it yourself.
+          Back to {from}. {undoneNote(line)}
         </>
       );
     case "failed":
@@ -63,6 +72,11 @@ function words(line: Line) {
         <>
           {from} wrote a new name for itself, {to}, but it was already renamed 3 times today, so its
           name stays {from}.
+        </>
+      ) : line.reason === "full" ? (
+        <>
+          {from} wrote a new name for itself, {to}, but too many bots were renamed on this gateway
+          today for Clawtrate to keep count, so its name stays {from}.
         </>
       ) : line.reason === "no-admin" ? (
         <>
@@ -148,7 +162,8 @@ export function NameChanges({ bot }: { bot: Bot }) {
   const now = useNow(!!state.botNameRecord?.changes.some((each) => each.bot === bot.id));
   const record = state.botNameRecord;
   const changes = record?.changes ?? [];
-  const mine = changes.filter((each) => each.bot === bot.id);
+  // Only renames the bot list confirmed, and Undos: a claim that never landed isn't a rename.
+  const mine = shownChanges(changes).filter((each) => each.bot === bot.id);
   if (!record || mine.length === 0) return null;
   const undo = async (change: NameRecordChange) => {
     setProblem(null);

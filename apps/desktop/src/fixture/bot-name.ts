@@ -202,6 +202,7 @@ export function botNameScene(
               run,
               asked: line.asked,
               source: line.source,
+              done: at,
               ...(renamed ? {} : { undone: at + 60 * SECOND }),
             },
           ],

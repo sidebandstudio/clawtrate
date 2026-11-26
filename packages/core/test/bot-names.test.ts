@@ -384,6 +384,26 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     }
   });
 
+  it("F-552: a claim keeps every bot's count for today and drops other days'", async () => {
+    const gw = gateway();
+    const others = Array.from({ length: 8 }, (_, n) => ({
+      bot: `other-${n}`,
+      day: dayOf(NOW),
+      n: 1,
+    }));
+    gw.state.record = {
+      rev: 1,
+      changes: [],
+      declined: [],
+      counts: [{ bot: "old", day: "2026-01-01", n: 2 }, ...others],
+    };
+    await device(gw).engine.afterRun("pip", "agent:pip:main", "run-1");
+    expect(parseNameRecord(gw.state.record, NOW).counts).toEqual([
+      ...others,
+      { bot: "pip", day: dayOf(NOW), n: 1 },
+    ]);
+  });
+
   it("F-552: a rename is listed in the bot's settings only once the bot list confirmed it", async () => {
     const gw = gateway();
     const me = device(gw);
