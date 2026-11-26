@@ -657,6 +657,18 @@ test("F-474: a sign-in that is refused says so, and what the gateway now has", a
   await page.keyboard.press("Escape");
 });
 
+/**
+ * The tool's lock or unlock, then the app reconnected. From OpenClaw 2026.10.10 the tool stops the
+ * gateway and starts it again, as its owner does. This development host connects only to an
+ * instance it can prove is running, so it stops retrying while the gateway is stopped; Retry opens
+ * the connection again once the gateway is back. On 2026.10.6 the connection never dropped, and
+ * Retry only reads again.
+ */
+async function toolOrder(...args: string[]): Promise<void> {
+  devGateway(INSTANCE, ...args);
+  await hostCommand({ type: "retry" });
+}
+
 /** Second's Account page, in the Work pane's Settings tab. */
 async function accountPage() {
   await botRow("Second").click();
@@ -682,9 +694,8 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
   );
   await expect(settings.getByTestId("evidence")).toContainText("Not locked. Checked at");
   await shots("account-page-bound");
-  devGateway(INSTANCE, "lock", "--agent", "second", "--provider", "acme", "acme:home");
-  // From OpenClaw 2026.10.10 the tool's lock stops the gateway and starts it again, as its owner
-  // does: Check now is offered once Clawtrate has reconnected.
+  await toolOrder("lock", "--agent", "second", "--provider", "acme", "acme:home");
+  // Check now is offered once Clawtrate has reconnected.
   const checkNow = settings.getByRole("button", { name: "Check now" });
   await expect(checkNow).toBeEnabled({ timeout: 180_000 });
   await checkNow.click();
@@ -697,7 +708,7 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
   await page.getByRole("button", { name: "Back to settings" }).click();
   await expect(page.getByTestId("account-word")).toHaveText("Locked");
   // Unlocked on the gateway: Bound again, and the page says the lock is gone.
-  devGateway(INSTANCE, "unlock", "--agent", "second", "--provider", "acme");
+  await toolOrder("unlock", "--agent", "second", "--provider", "acme");
   await page.getByRole("button", { name: /^Account: / }).click();
   await expect(checkNow).toBeEnabled({ timeout: 180_000 });
   await checkNow.click();
@@ -709,10 +720,9 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
 
 test("F-473: changing a locked bot to another account of its provider shows the lock out of date", async () => {
   test.setTimeout(480_000);
-  devGateway(INSTANCE, "lock", "--agent", "second", "--provider", "acme", "acme:home");
+  await toolOrder("lock", "--agent", "second", "--provider", "acme", "acme:home");
   const settings = await accountPage();
-  // From OpenClaw 2026.10.10 the tool's lock stops the gateway and starts it again, as its owner
-  // does: Check now is offered once Clawtrate has reconnected.
+  // Check now is offered once Clawtrate has reconnected.
   const checkNow = settings.getByRole("button", { name: "Check now" });
   await expect(checkNow).toBeEnabled({ timeout: 180_000 });
   await checkNow.click();
@@ -738,7 +748,7 @@ test("F-473: changing a locked bot to another account of its provider shows the 
   });
   // The gateway still keeps the old one-account order: the next run goes to the new account first.
   expect((await view("second", "acme"))?.profileOrder).toEqual(["acme:home"]);
-  devGateway(INSTANCE, "unlock", "--agent", "second", "--provider", "acme");
+  await toolOrder("unlock", "--agent", "second", "--provider", "acme");
 });
 
 test("F-490: a bot whose model on the gateway lists fallbacks, or lost its account, is reported with the way to correct it", async () => {
@@ -908,7 +918,7 @@ test("F-476 F-490: a locked bot whose account answers 401, 402 or 429 fails the 
         entries: { [bot]: { model: { primary: `acme/dev-1@${account}`, fallbacks: [] } } },
       },
     });
-    devGateway(INSTANCE, "lock", "--agent", bot, "--provider", "acme", account);
+    await toolOrder("lock", "--agent", bot, "--provider", "acme", account);
     expect((await view(bot, "acme"))?.profileOrder).toEqual([account]);
     await scripted("/scripted/accounts/fail", { account, status });
     const session = `agent:${bot}:fence-${status}`;
@@ -935,5 +945,5 @@ test("F-476 F-490: a locked bot whose account answers 401, 402 or 429 fails the 
     "Locked. Fence's ordinary runs use Acme acme:fence429 only",
     { timeout: 30_000 },
   );
-  devGateway(INSTANCE, "unlock", "--agent", bot, "--provider", "acme");
+  await toolOrder("unlock", "--agent", bot, "--provider", "acme");
 });
