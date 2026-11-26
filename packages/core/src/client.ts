@@ -1479,6 +1479,12 @@ export class ClawtrateClient {
   /** A setup's gateway and the choice number from when the person chose it. */
   private setupChosen: { url: string; choice: number } | null = null;
   /**
+   * A Connect over a proved route (local connect) not yet paired: it replaces the saved gateway
+   * only at its first paired hello. Until then the record is the earlier gateway's, `previous`
+   * here, which a Disconnect of this attempt selects again instead of forgetting anything.
+   */
+  private replacing: { url: string; previous: ConnectionSettings | null } | null = null;
+  /**
    * While `start` reads the saved settings. A Disconnect, Suspend or Retry sent meanwhile waits
    * for `read`, settled once they are in `settings` or with the error that stopped the read, so
    * it acts on the saved gateway; `start` waits for those `commands` before it opens anything.
@@ -2360,12 +2366,21 @@ export class ClawtrateClient {
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       const token = options.token?.trim() || null;
       const switched = this.settings?.url !== url;
-      // Over a proved route, the gateway is saved with that route, and so is its token.
-      await this.saveChoice({
-        url,
-        token,
-        ...(setup.createSocket && setup.route !== undefined ? { route: setup.route } : {}),
-      });
+      const routed = setup.createSocket !== undefined && setup.route !== undefined;
+      // Over a proved route, the gateway is saved with that route, and so is its token. It is
+      // saved only once this device is paired there (its first hello): until then the saved
+      // gateway stays as it was, and a Connect that fails or is let go selects it again.
+      const chosen = { url, token, ...(routed ? { route: setup.route } : {}) };
+      if (routed) {
+        this.replacing = { url, previous: this.replacing?.previous ?? this.settings };
+        this.settings = chosen;
+        const choice = ++this.writes.choices;
+        this.writes.chosen = choice;
+        this.setupChosen = { url, choice };
+      } else {
+        this.replacing = null;
+        await this.saveChoice(chosen);
+      }
       this.writes.retiredShared.delete(url);
       // The selection changes only once this choice was valid and saved: a refused one leaves
       // the connection that stays open its own, and its attempt as it was.
@@ -2520,7 +2535,12 @@ export class ClawtrateClient {
       // since is that client's, and stays, even for this gateway.
       const saved = await this.readSavedSettings(stops);
       if (!this.settings || stops !== this.stops) return;
-      if (saved === null || this.recordSeen(saved)) {
+      // A Connect over a proved route that isn't paired yet saved nothing: the record is the
+      // earlier gateway's, and stays, and that gateway is selected again (below).
+      const replacing = this.replacing;
+      this.replacing = null;
+      if (replacing) this.writes.chosen = ++this.writes.choices;
+      else if (saved === null || this.recordSeen(saved)) {
         await this.forgetRecord();
         // A real deletion (not Back on an empty store) is a choice that blocks older setup saves.
         if (saved !== null) this.writes.chosen = ++this.writes.choices;
@@ -2540,6 +2560,10 @@ export class ClawtrateClient {
       this.retained.clear();
       this.forgetGatewayState();
       this.target += 1;
+      // The earlier gateway, still saved: selected again, as it is after a start that doesn't
+      // resume, for Reconnect to open.
+      const previous = replacing?.previous && saved?.url === replacing.previous.url ? saved : null;
+      this.settings = previous;
       this.store.set({
         ...initialState,
         turnLimitMinutes: this.turnLimitMs / 60_000,
@@ -2550,6 +2574,7 @@ export class ClawtrateClient {
           ...initialConnectionState,
           deviceId: this.identity?.deviceId ?? null,
           target: this.target,
+          ...(previous ? { status: "disconnected" as const, gatewayUrl: previous.url } : {}),
         },
       });
     });
@@ -9150,6 +9175,16 @@ export class ClawtrateClient {
           const paired =
             (await this.loadToken(settings.url, identity.deviceId, "operator")) !== null;
           if (!paired || !live()) return;
+          // A Connect over a proved route replaces the saved gateway now, paired, and saves no
+          // copy of the token it was paired with: the record was the earlier gateway's until here.
+          if (this.replacing?.url === settings.url && current.route !== undefined) {
+            const choice = this.setupMaySave(settings.url);
+            if (choice === null) return;
+            await this.saveChoice({ ...current, token: null }, choice);
+            this.replacing = null;
+            if (this.typedAttempt?.url === settings.url) this.typedAttempt = null;
+            return;
+          }
           try {
             // Read at the moment of the write: another client on this store may have saved a
             // different gateway, forgotten this one or changed its record since. Only this

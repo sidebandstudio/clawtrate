@@ -31,6 +31,7 @@ import { FullControlConsent } from "./FullControl.tsx";
 import { gatewayLabel, gatewayTitle } from "./format.ts";
 import { BackIcon, CheckIcon, CopyIcon } from "./icons.tsx";
 import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
+import { thisComputer, type StageThisComputer } from "./this-computer.ts";
 
 export const PRODUCT_NAME = "Clawtrate";
 export const SLOGAN = "Your OpenClaw agents, orchestrated.";
@@ -611,6 +612,8 @@ export function ConnectScreen({
   setup,
   mismatch = null,
   inert = false,
+  staged,
+  onStage,
 }: {
   connection: ConnectionState;
   discovery: DiscoveryState;
@@ -621,6 +624,9 @@ export function ConnectScreen({
   mismatch?: ConnectionError | null;
   /** Set while Settings covers the screen. */
   inert?: boolean;
+  /** The app's staged look on this computer (`this-computer.ts`): shown here, bots or not. */
+  staged?: boolean;
+  onStage?: StageThisComputer;
 }) {
   const pairing = connection.status === "pairing" && connection.pairing;
   const host = `${info.kind === "web" ? "Web preview" : "Desktop"} ${info.version}`;
@@ -630,20 +636,23 @@ export function ConnectScreen({
   // A setup the host has under way (another window, or a reload) opens where it stands; a look the
   // host started by itself (local connect, at start) opens on the first screen, which offers a
   // gateway it found and proved.
+  const [ownStage, setOwnStage] = useState(false);
+  const isStaged = staged ?? ownStage;
+  const stage = onStage ?? setOwnStage;
   const [view, setView] = useState<SetupView>(() =>
-    setup && setup.phase !== "idle" && !setup.unasked ? "here" : "first",
+    isStaged || (setup && setup.phase !== "idle" && !setup.unasked) ? "here" : "first",
   );
   const command = useCommand();
-  const { forget, failure: thisComputerFailure } = useForget();
-  // This computer, from the address form: the gateway typed there is let go, keeping this
-  // device's pairing, and the look on this computer starts.
-  const thisComputer = () => {
-    const url = connection.gatewayUrl;
-    void (url ? forget(url) : Promise.resolve(true)).then((gone) => {
-      if (!gone) return;
-      setView("here");
-      void command({ type: "setupLook" });
-    });
+  // This computer, from the address form: a staged look. The saved gateway stays selected, with
+  // this form, until a Connect on the new offer replaces it; Back returns here.
+  const stageLook = () => {
+    setView("here");
+    void thisComputer(command, stage);
+  };
+  // Leaving the staged look, by Back or Advanced, returns to the saved gateway's form.
+  const onView = (next: SetupView) => {
+    if (isStaged && (next === "first" || next === "advanced")) stage(false);
+    setView(next);
   };
   const setupOwns =
     setup !== undefined &&
@@ -663,7 +672,7 @@ export function ConnectScreen({
   const showSetup =
     info.setup !== undefined &&
     setup !== undefined &&
-    (setupOwns || (noGateway && view !== "advanced"));
+    (setupOwns || ((noGateway || isStaged) && view !== "advanced"));
   // Advanced: the address-and-token form as it was, with Back to the first question.
   const advancedBack =
     info.setup !== undefined && view === "advanced" && noGateway ? () => setView("first") : null;
@@ -708,7 +717,7 @@ export function ConnectScreen({
         ) : showSetup ? (
           <SetupFlow
             view={view === "advanced" ? "here" : view}
-            onView={setView}
+            onView={onView}
             setup={setup!}
             connection={connection}
             info={info}
@@ -740,13 +749,8 @@ export function ConnectScreen({
               <ConnectForm
                 connection={connection}
                 info={info}
-                onThisComputer={info.setup?.local === true ? thisComputer : undefined}
+                onThisComputer={info.setup?.local === true ? stageLook : undefined}
               />
-            )}
-            {thisComputerFailure && (
-              <div className="form-error" role="alert" data-testid="forget-problem">
-                {thisComputerFailure}
-              </div>
             )}
             <p className="connect-foot">
               {connection.deviceId

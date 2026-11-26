@@ -2,7 +2,7 @@
 // (docs/design/setup.md §3 to §7, setup-effortless.md §3) matches its approved
 // baseline, in light and dark, at 1440 px and the phone; the first screen, a
 // found gateway, Connect's steps and the first screen of a person's Mac app
-// with its gateway found and proved at 1100 and 800 px too.
+// with its gateway found and matched to its profile at 1100 and 800 px too.
 import { test } from "@playwright/test";
 import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
@@ -36,11 +36,12 @@ const STATES = [
   "cant-run",
   "endpoint",
   "bots",
-  // A person's Mac app, with local connect: the first screen with its gateway proved, a gateway
-  // it couldn't prove, and a Connect whose socket wasn't proved.
+  // A person's Mac app, with local connect: the first screen with its gateway matched, a gateway
+  // it couldn't match, a profile with TLS on, and a Connect whose socket didn't pass the check.
   "local-first",
   "local-waiting",
   "local-unverified",
+  "local-tls",
   "local-failed",
 ];
 const EVERY_WIDTH = new Set(["first", "found", "connecting", "local-first"]);

@@ -15,6 +15,10 @@ const sent = (page: Page) =>
     ).clawtrateFixture.sent.map((command) => command.type),
   );
 
+/** The commands about the gateway and setup alone: the app behind them sends its own. */
+const gatewaySent = async (page: Page) =>
+  (await sent(page)).filter((type) => /^(setup|connect|disconnect|retry|suspend)/.test(type));
+
 const rows = (page: Page) =>
   page.getByRole("list", { name: "Where does OpenClaw run?" }).getByRole("button");
 
@@ -425,14 +429,14 @@ test("F-493: from the keyboard, Advanced puts focus in the address field, and Ba
   await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeFocused();
 });
 
-test("F-602: on a Mac whose OpenClaw the host proved, the first screen offers it first: one Connect, nothing to type", async ({
+test("F-602: on a Mac whose OpenClaw profile the host matched, the first screen offers it first: one Connect, nothing to type", async ({
   page,
 }) => {
   await openFixture(page, "setup=local-first", "light");
-  const title = page.getByRole("heading", { name: "OpenClaw is running on this Mac" });
+  const title = page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" });
   await expect(title).toBeVisible();
   await expect(page.locator("[aria-live=polite]").last()).toHaveText(
-    "OpenClaw is running on this Mac",
+    "Found your OpenClaw settings on this Mac",
   );
   await expect(page.getByTestId("full-control-consent")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toHaveCount(0);
@@ -511,11 +515,11 @@ test("F-602: a gateway offered within the first screen's wait stays offered afte
   await openFixture(page, "setup=local-start", "light");
   const connect = page.getByRole("button", { name: "Connect", exact: true });
   await connect.waitFor();
-  // The fixture's host proved the gateway at 1 s; the wait would have ended at 3 s.
+  // The fixture's host matched the gateway at 1 s; the wait would have ended at 3 s.
   await page.waitForTimeout(3_200);
   await expect(connect).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "OpenClaw is running on this Mac" }),
+    page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toHaveCount(0);
 });
@@ -531,6 +535,55 @@ for (const key of ["Enter", "Space"])
     expect(await sent(page)).toEqual([]);
     // The new screen's title took focus, not Connect.
     await expect(
-      page.getByRole("heading", { name: "OpenClaw is running on this Mac" }),
+      page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
     ).toBeFocused();
   });
+
+test("F-602: Use This computer on the form stages a look; Back returns to the saved gateway, with its ways on", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-refused", "light");
+  const thisComputer = page.getByRole("button", { name: "Use This computer" });
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  await thisComputer.click();
+  // The look, over the saved gateway: nothing forgotten (no "disconnect" goes).
+  await expect(
+    page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
+  ).toBeVisible();
+  expect(await sent(page)).toEqual(["setupLook"]);
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  await expect(thisComputer).toBeVisible();
+  await page.getByRole("button", { name: "Try again" }).click();
+  expect(await sent(page)).toEqual(["setupLook", "setupReset", "retry"]);
+});
+
+test("F-602: Use This computer in Settings stages a look over the app; Back returns to it, and Connect there replaces the gateway", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-refused-bots", "light");
+  await expect(page.getByTestId("bot-list")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Gateway", exact: true }).click();
+  await settings.getByRole("button", { name: "Use This computer" }).click();
+  await expect(settings).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
+  ).toBeVisible();
+  expect(await gatewaySent(page)).toEqual(["setupLook"]);
+  // Back: the app, with the saved gateway, and nothing forgotten.
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("bot-list")).toBeVisible();
+  expect(await gatewaySent(page)).toEqual(["setupLook", "setupReset"]);
+  // Again, and Connect: only that replaces the gateway, and the app opens on it.
+  await page.keyboard.press("ControlOrMeta+,");
+  await settings.getByRole("button", { name: "Gateway", exact: true }).click();
+  await settings.getByRole("button", { name: "Use This computer" }).click();
+  const connect = page.getByRole("button", { name: "Connect", exact: true });
+  await connect.waitFor();
+  await page.waitForTimeout(600);
+  await connect.click();
+  await expect(page.getByTestId("bot-list")).toBeVisible();
+  expect(await gatewaySent(page)).toEqual(["setupLook", "setupReset", "setupLook", "setupConnect"]);
+});

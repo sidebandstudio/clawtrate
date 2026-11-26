@@ -17,7 +17,14 @@ import {
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
@@ -44,6 +51,7 @@ import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayTitle } from "./format.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 import { useForget } from "./forget.ts";
+import { thisComputer, ThisComputerStage } from "./this-computer.ts";
 import { BackIcon, ChevronIcon, CloseIcon, ExternalIcon } from "./icons.tsx";
 
 // The width below which a section replaces the list instead of sitting beside it (bots.css).
@@ -859,6 +867,7 @@ export function Settings({
     dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus();
   };
   const { forget, failure: forgetProblem } = useForget();
+  const stageThisComputer = useContext(ThisComputerStage);
   const updateLine = useUpdateLinkLine();
   const gatewayUrl = connection.gatewayUrl;
   const state = gatewayState(connection);
@@ -1146,12 +1155,10 @@ export function Settings({
             type="button"
             className="button"
             onClick={() => {
-              // As Use another gateway, then the look on this computer starts at once.
-              void forget(gatewayUrl).then((forgotten) => {
-                if (!forgotten) return;
-                onClose();
-                void send({ type: "setupLook" });
-              });
+              // A staged look on this computer, on the connection screen: this gateway stays
+              // saved and selected until a Connect there replaces it, and Back returns here.
+              onClose();
+              void thisComputer(send, stageThisComputer ?? (() => {}));
             }}
           >
             Use This computer

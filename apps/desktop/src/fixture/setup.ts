@@ -114,12 +114,30 @@ export const SETUP_STATES: Record<string, SetupState> = {
     reason: "not-gateway",
     access: null,
   }),
+  // Settings that turn TLS on: local connect dials `ws://` only, so the way on is Advanced.
+  "local-tls": looked({ ...localLook, outcome: "cant-tell", reason: "tls", access: null }),
   "local-failed": {
     ...looked({ ...localLook }),
     phase: "failed",
     failure: { kind: "unverified", exitCode: null, port: 18789, reason: "not-gateway" },
   },
+  // Set up through This computer, then its reconnect refused by the check
+  // (`REFUSED_RECONNECT`): with no bots kept, and with them (`-bots`, in the app behind it).
+  "local-refused": { ...looked({ ...localLook }), phase: "done", step: 2 },
+  "local-refused-bots": { ...looked({ ...localLook }), phase: "done", step: 2 },
 };
+
+/** The connection of the `local-refused` scenes: the saved gateway's reconnect, refused. */
+export const REFUSED_RECONNECT = {
+  status: "error",
+  retryAt: null,
+  error: {
+    code: "LOCAL_UNVERIFIED",
+    message:
+      "Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile.",
+    hint: "Choose This computer to connect to it again, or use Advanced.",
+  },
+} as const;
 
 /** What a scene's host publishes later, timed from when the interface first listens. */
 export const SETUP_STEPS: Record<string, Array<{ after: number; setup: SetupState }>> = {

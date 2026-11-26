@@ -93,7 +93,14 @@ import {
   withComputerRuns,
   type ComputerParams,
 } from "./computer.ts";
-import { isSetupState, setupCommand, setupInfo, SETUP_STATES, SETUP_STEPS } from "./setup.ts";
+import {
+  isSetupState,
+  REFUSED_RECONNECT,
+  setupCommand,
+  setupInfo,
+  SETUP_STATES,
+  SETUP_STEPS,
+} from "./setup.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { voiceCommands, type VoiceParams } from "./voice.ts";
@@ -676,7 +683,18 @@ export function createFixtureBridge(
       change: (state: ClawtrateState) => ({ ...state, setup }),
     })),
   ];
-  const initial = setupName ? { ...sceneInitial, setup: SETUP_STATES[setupName]! } : sceneInitial;
+  // The `local-refused` scenes: a gateway saved through This computer, whose reconnect was
+  // refused, with the app behind it (`-bots`) or nothing kept.
+  const refused = setupName?.startsWith("local-refused") === true;
+  const base = setupName === "local-refused-bots" ? loaded(now) : sceneInitial;
+  const initial = setupName
+    ? {
+        ...(refused
+          ? withConnection(base, { ...REFUSED_RECONNECT, gatewayUrl: GATEWAY_URL })
+          : base),
+        setup: SETUP_STATES[setupName]!,
+      }
+    : sceneInitial;
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);

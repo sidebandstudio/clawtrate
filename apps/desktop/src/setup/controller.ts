@@ -620,8 +620,8 @@ export class SetupController implements SetupHost {
       token = await readToken(local, local.worker, found);
       if (!current()) return;
       if (!token) return this.fail({ kind: "changed" });
-      await this.letGo();
-      if (!current()) return;
+      // The earlier gateway isn't let go: the client replaces it only once this device is
+      // paired here, and selects it again if this attempt fails or is let go.
       // The first socket that isn't proved, at its dial or before its credential, ends this
       // attempt: nothing went on it, and setup's connection is closed. Once setup is done, a
       // refused socket is the client's to say (`refusal`): the connection stays the person's.
@@ -768,6 +768,9 @@ export class SetupController implements SetupHost {
         // same address isn't this connection's.
         if (discovery.status === "ready" && this.options.client.readyFor(selection)) {
           this.stopWatching();
+          // Setup is over: the connection is the person's, and no later look, Back or Connect
+          // of setup's closes it or forgets its gateway.
+          this.owned = null;
           this.publish({ ...this.state, phase: "done", step: 2 });
         } else if (discovery.status === "error") {
           // Connected, but the bots weren't read: that is what the screen says. A retry

@@ -16,11 +16,18 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClawtrateClient, FULL_SCOPES, PROOF_REFUSAL_LINES, type SetupLook } from "@clawtrate/core";
+import {
+  ClawtrateClient,
+  createBridgeSession,
+  FULL_SCOPES,
+  PROOF_REFUSAL_LINES,
+  type SetupLook,
+} from "@clawtrate/core";
 import { createNodeHost, STATE_FILE, type SecretBox } from "@clawtrate/core/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { FakeGateway, helloOk, sleep, until } from "../../../packages/core/test/fake-gateway.ts";
+import { leaveLook, thisComputer } from "../../../packages/ui/src/this-computer.ts";
 import { localGatewayBuild } from "../packaging/config.ts";
 import { SetupController } from "../src/setup/controller.ts";
 import { localPortAllowed, provedRouteFor, type LocalConnect } from "../src/setup/local-connect.ts";
@@ -845,6 +852,149 @@ describe.skipIf(!mac)(
       } finally {
         app.client.stop();
         await server.close();
+      }
+    });
+
+    /**
+     * "Use This computer" after a reconnect the check refused, as both of its buttons run it (the
+     * connection screen's form and Settings, Gateway: `this-computer.ts`), through the host's
+     * bridge, as the app sends it: setup done, then its gateway's reconnect refused.
+     */
+    async function refusedThenStaged(why: "lock" | "replaced") {
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const { home, local } = provedHome(server.port);
+      const app = localApp(local);
+      const session = createBridgeSession(app.client, { setup: app.setup });
+      await app.client.start({ resume: false });
+      await app.setup.look();
+      await app.setup.connect();
+      await until(() => app.setup.current.phase === "done", 60_000);
+      const url = `ws://127.0.0.1:${server.port}`;
+      const replaced = why === "replaced" ? replaceFolder(home, ".openclaw") : null;
+      if (why === "lock") proofFile(home, ".openclaw", "refused lock\n");
+      gateway.dropAll();
+      await until(() => app.client.state.connection.error?.code === "LOCAL_UNVERIFIED", 60_000);
+      const record = await app.client.savedSettings();
+      expect(record).toMatchObject({ url, route: ".openclaw@1:1" });
+      expect(await app.client.hasDeviceToken(url)).toBe(true);
+      let staged = false;
+      const press = () =>
+        thisComputer(
+          (command) => session.apply(command),
+          (on) => (staged = on),
+        );
+      return {
+        gateway,
+        server,
+        home,
+        app,
+        session,
+        url,
+        record,
+        replaced,
+        press,
+        staged: () => staged,
+      };
+    }
+
+    it("F-602: Use This computer, a look that finds nothing to offer, then Back: the saved gateway stays, and Reconnect works", async () => {
+      const run = await refusedThenStaged("lock");
+      try {
+        await run.press();
+        expect(run.staged()).toBe(true);
+        expect(run.app.setup.current.look).toMatchObject({ outcome: "unverified" });
+        // Nothing was forgotten by the look: the record and this device's pairing, in the store.
+        expect(await run.app.client.savedSettings()).toEqual(run.record);
+        // Back, as the look's Back sends it.
+        await run.session.apply(leaveLook(run.app.setup.current));
+        expect(await run.app.client.savedSettings()).toEqual(run.record);
+        expect(await run.app.client.hasDeviceToken(run.url)).toBe(true);
+        expect(run.app.client.state.connection.gatewayUrl).toBe(run.url);
+        // Reconnect, once the check passes again: the same gateway, by its saved route.
+        proofFile(run.home, ".openclaw", provedAnswer(run.home, ".openclaw", run.server.port));
+        await run.session.apply({ type: "retry" });
+        await until(() => run.app.client.state.connection.status === "connected", 60_000);
+        expect(await run.app.client.savedSettings()).toMatchObject({ route: ".openclaw@1:1" });
+      } finally {
+        run.app.client.stop();
+        await run.server.close();
+      }
+    });
+
+    it("F-602: Use This computer, then Connect on the new offer: the saved gateway is replaced only once it connected", async () => {
+      const run = await refusedThenStaged("replaced");
+      try {
+        await run.press();
+        expect(run.app.setup.current.look).toMatchObject({ outcome: "running" });
+        expect(await run.app.client.savedSettings()).toEqual(run.record);
+        // What the store holds as the new gateway's first frame arrives: still the earlier one.
+        let atFrame: Promise<unknown> | null = null;
+        const reply = run.gateway.connectReply;
+        run.gateway.connectReply = (params, url) => {
+          atFrame ??= run.app.client.savedSettings();
+          return reply(params, url);
+        };
+        await run.session.apply({ type: "setupConnect" });
+        await until(() => run.app.client.state.connection.status === "connected", 60_000);
+        expect(await atFrame).toEqual(run.record);
+        let saved = await run.app.client.savedSettings();
+        for (let waited = 0; saved?.route === run.record?.route && waited < 15_000; waited += 50) {
+          await sleep(50);
+          saved = await run.app.client.savedSettings();
+        }
+        expect(saved).toMatchObject({
+          url: run.url,
+          route: `.openclaw@${run.replaced}`,
+          token: null,
+        });
+      } finally {
+        run.app.client.stop();
+        await run.server.close();
+      }
+    });
+
+    it("F-602: Use This computer, then a Connect that fails: the saved gateway stays, selected, with its ways on", async () => {
+      const run = await refusedThenStaged("replaced");
+      try {
+        // The new folder's gateway is matched by the look, and refused at Connect's dial.
+        proofFile(run.home, ".openclaw", "refused lock\n");
+        proofFile(
+          run.home,
+          ".openclaw",
+          provedAnswer(run.home, ".openclaw", run.server.port),
+          true,
+        );
+        await run.press();
+        expect(run.app.setup.current.look).toMatchObject({ outcome: "running" });
+        const frames = run.gateway.connects.length;
+        await run.session.apply({ type: "setupConnect" });
+        await until(() => run.app.setup.current.phase === "failed", 60_000);
+        await sleep(500);
+        expect(run.gateway.connects).toHaveLength(frames);
+        // The store kept the earlier gateway through the attempt.
+        expect(await run.app.client.savedSettings()).toEqual(run.record);
+        // Back from the failed Connect, as its Back sends it: the earlier gateway is selected
+        // again, with this device's pairing there, so Try again reconnects it (here refused
+        // again: its folder was replaced).
+        await run.session.apply({ type: "setupCancel" });
+        await until(() => run.app.client.state.connection.status === "disconnected", 15_000);
+        expect(run.app.client.state.connection).toMatchObject({ gatewayUrl: run.url });
+        expect(await run.app.client.savedSettings()).toEqual(run.record);
+        expect(await run.app.client.hasDeviceToken(run.url)).toBe(true);
+        const asked = readFileSync(join(run.home, "commands"), "utf8").split("prove").length;
+        await run.session.apply({ type: "retry" });
+        await until(
+          () => run.app.client.state.connection.error?.code === "LOCAL_UNVERIFIED",
+          60_000,
+        );
+        expect(
+          readFileSync(join(run.home, "commands"), "utf8").split("prove").length,
+        ).toBeGreaterThan(asked);
+        expect(await run.app.client.savedSettings()).toEqual(run.record);
+      } finally {
+        run.app.client.stop();
+        await run.server.close();
       }
     });
 

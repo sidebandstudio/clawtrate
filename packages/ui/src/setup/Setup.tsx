@@ -23,6 +23,7 @@ import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
 import { CommandLine, PRODUCT_NAME, SLOGAN } from "../ConnectScreen.tsx";
 import { FullControlConsent } from "../FullControl.tsx";
+import { leaveLook } from "../this-computer.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -294,9 +295,14 @@ const LOCAL_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
   paired: "This device is already paired with it. Clawtrate connects with that pairing.",
 };
 
+/** The heading of the offer local connect makes, and the line under it: what its check found. */
+export const LOCAL_FOUND_HEADING = "Found your OpenClaw settings on this Mac";
+export const LOCAL_FOUND_LINE = "What is listening at the port they name matches them.";
+
 /**
- * This computer's gateway, proved by the host (local connect): Connect is the one step, with
- * the consent line above it where this device asks for full control.
+ * This computer's gateway, its socket matched to this account's OpenClaw profile by the host
+ * (local connect): Connect is the one step, with the consent line above it where this device
+ * asks for full control.
  */
 function LocalConnect({
   look,
@@ -322,6 +328,7 @@ function LocalConnect({
   };
   return (
     <>
+      <Lede>{LOCAL_FOUND_LINE}</Lede>
       {asksFull && <FullControlConsent />}
       <Actions>
         <Primary onClick={connect}>Connect</Primary>
@@ -400,7 +407,7 @@ function LookResult({
     case "running":
       if (offer.local)
         return (
-          <Found mark={<CheckIcon />} tone="ok" heading="OpenClaw is running on this Mac">
+          <Found mark={<CheckIcon />} tone="ok" heading={LOCAL_FOUND_HEADING}>
             <LocalConnect look={look} full={full} />
           </Found>
         );
@@ -525,7 +532,12 @@ function LookResult({
         <Found
           mark={<WarnIcon />}
           tone="warn"
-          heading="Clawtrate couldn't tell what is on this computer"
+          heading={
+            // TLS on: the settings were read, and local connect has no Connect for them.
+            look.reason === "tls"
+              ? "OpenClaw settings found"
+              : "Clawtrate couldn't tell what is on this computer"
+          }
         >
           <Lede>{CANT_TELL[look.reason ?? "shape"]}</Lede>
           <Actions>
@@ -701,7 +713,7 @@ export const CONNECT_ARM_MS = 500;
  */
 export const START_WAIT_MS = 3_000;
 
-/** The look's result the first screen offers by itself: this computer's gateway, proved. */
+/** The look's result the first screen offers by itself: this computer's gateway, matched to its profile. */
 const offeredHere = (offer: NonNullable<HostInfo["setup"]>, setup: SetupState) =>
   offer.local === true &&
   setup.unasked &&
@@ -741,7 +753,7 @@ export function SetupFlow({
   // most START_WAIT_MS. Nothing that grants anything appears where another control was: once the
   // question is on screen, a gateway found later is offered only after This computer.
   // The first screen's wait for the host's own look at start, resolved exactly once: to the
-  // offer, when the look proved a gateway in time, or to the question, at its end or after
+  // offer, when the look matched a gateway to its profile in time, or to the question, at its end or after
   // START_WAIT_MS, whichever comes first. The timer ends with the wait, so an offer shown in
   // time stays; and once the question is shown, no offer takes its place.
   const [initial, setInitial] = useState<"waiting" | "offer" | "question">(() =>
@@ -782,8 +794,7 @@ export function SetupFlow({
   }, [key]);
 
   const toFirst = () => {
-    if (view === "here")
-      void send({ type: setup.phase === "looking" ? "setupCancel" : "setupReset" });
+    if (view === "here") void send(leaveLook(setup));
     onView("first");
   };
   const lookHere = () => {
@@ -967,8 +978,9 @@ function WaitingHere() {
 }
 
 /**
- * The first screen when the host's own look found OpenClaw running on this Mac and proved it
- * (local connect): that gateway first, with Connect, and the other ways below it.
+ * The first screen when the host's own look found OpenClaw's settings on this Mac and matched
+ * what listens at their port to that profile (local connect): that gateway first, with Connect,
+ * and the other ways below it.
  */
 function FoundHere({
   look,
@@ -991,7 +1003,7 @@ function FoundHere({
         <p>{SLOGAN}</p>
       </header>
       <h2 className="s-title s-question" id="setup-title" tabIndex={-1} data-s-title>
-        OpenClaw is running on this Mac
+        {LOCAL_FOUND_HEADING}
       </h2>
       {/* Connect goes on to its steps on the screen for this computer. */}
       <LocalConnect look={look} full={full} onConnect={onConnect} />

@@ -1,5 +1,5 @@
 // "This computer" with local connect (docs/design/setup-effortless.md §3): the first screen offers
-// a gateway the host found and proved by itself, with Connect and the full-control line and
+// a gateway the host found and matched to this account's OpenClaw profile by itself, with Connect and the full-control line and
 // nothing else to read; no address, token or command is shown; and what the look couldn't prove
 // is said plainly, with the way on (Advanced).
 import {
@@ -22,6 +22,7 @@ const escape = (text: string) => text.replaceAll("'", "&#x27;");
 import { ConnectScreen } from "../src/ConnectScreen.tsx";
 import { gatewayProblem, thisComputerWayOn } from "../src/Settings.tsx";
 import { CONSENT_LINE } from "../src/FullControl.tsx";
+import { LOCAL_FOUND_HEADING, LOCAL_FOUND_LINE } from "../src/setup/Setup.tsx";
 
 const PORT = 19940;
 const local = (full = true): HostInfo => ({
@@ -76,10 +77,13 @@ function nothingToType(html: string) {
   expect(html).not.toMatch(/read-only/i);
 }
 
-describe("the first screen on a Mac whose OpenClaw the host found and proved", () => {
+describe("the first screen on a Mac whose OpenClaw profile the host found and matched", () => {
   it("F-602: offers this computer first: its heading, the full-control line and Connect", () => {
     const html = render(local(), found({}, true));
-    expect(html).toContain("OpenClaw is running on this Mac");
+    expect(html).toContain(LOCAL_FOUND_HEADING);
+    // One plain line under it: what the check found, and no more.
+    expect(html).toContain(`<p class="s-lede">${LOCAL_FOUND_LINE}</p>`);
+    expect(html).not.toMatch(/is running|is OpenClaw|proved/);
     expect(html).toContain(CONSENT_LINE);
     expect(html).toMatch(/<button[^>]*data-variant="primary"[^>]*>Connect<\/button>/);
     expect(html).toContain("Another computer");
@@ -87,7 +91,7 @@ describe("the first screen on a Mac whose OpenClaw the host found and proved", (
     expect(html).not.toContain("Where does OpenClaw run?");
     // The heading is the screen's title: focused when it appears, and announced.
     expect(html).toMatch(
-      /<h2[^>]*id="setup-title"[^>]*data-s-title[^>]*>OpenClaw is running on this Mac/,
+      /<h2[^>]*id="setup-title"[^>]*data-s-title[^>]*>Found your OpenClaw settings on this Mac</,
     );
     nothingToType(html);
   });
@@ -113,7 +117,7 @@ describe("the first screen on a Mac whose OpenClaw the host found and proved", (
     expect(html).not.toContain("Where does OpenClaw run?");
   });
 
-  it("when the host found nothing it proved, is the first question", () => {
+  it("when the host matched nothing, is the first question", () => {
     for (const setup of [
       found({ outcome: "unverified", access: null }, true),
       found({ outcome: "not-found", access: null }, true),
@@ -128,7 +132,9 @@ describe("the first screen on a Mac whose OpenClaw the host found and proved", (
 describe("the card for this computer, after This computer", () => {
   it("is the same one step", () => {
     const html = render(local(), found());
-    expect(html).toContain("OpenClaw is running on this Mac");
+    expect(html).toContain(LOCAL_FOUND_HEADING);
+    expect(html).toContain(LOCAL_FOUND_LINE);
+    expect(html).not.toMatch(/is running|is OpenClaw|proved/);
     expect(html).toContain(CONSENT_LINE);
     expect(html).toMatch(/>Connect<\/button>/);
     nothingToType(html);
@@ -155,6 +161,20 @@ describe("the card for this computer, after This computer", () => {
     }
   });
 
+  it("F-602: a profile with TLS on gets the Advanced path, with why, and no Connect", () => {
+    const html = render(local(), found({ outcome: "cant-tell", reason: "tls", access: null }));
+    expect(html).toContain("OpenClaw settings found");
+    expect(html).toContain(
+      escape(
+        "This Mac's OpenClaw uses a secure address. Use Advanced to connect with its address.",
+      ),
+    );
+    expect(html).toContain(">Use Advanced</button>");
+    expect(html).not.toMatch(/>Connect<\/button>/);
+    expect(html).not.toContain(LOCAL_FOUND_HEADING);
+    nothingToType(html);
+  });
+
   it("says when OpenClaw's settings can't be used, and when nothing answers", () => {
     const settings = render(
       local(),
@@ -166,7 +186,7 @@ describe("the card for this computer, after This computer", () => {
     expect(stopped).not.toContain("Installed program");
   });
 
-  it("a Connect whose socket wasn't proved says what failed, and that no credential was sent", () => {
+  it("a Connect whose socket didn't pass the check says what failed, and that no credential was sent", () => {
     const html = render(local(), {
       ...found(),
       phase: "failed",
@@ -184,7 +204,7 @@ describe("the card for this computer, after This computer", () => {
       found({ version: "2026.10.6", listens: "loopback", service: "none" }),
     );
     expect(html).toContain("Connect read-only");
-    expect(html).not.toContain("OpenClaw is running on this Mac");
+    expect(html).not.toContain(LOCAL_FOUND_HEADING);
   });
 });
 
@@ -279,5 +299,39 @@ describe("a reconnect refused after setup finished", () => {
         setup: { look: true, pair: true, platform: "darwin" },
       }),
     ).toBe(false);
+  });
+
+  it("F-602: Use This computer stages its look over the saved gateway, whose form comes back once it is let go", () => {
+    const screen = (staged: boolean, setup: SetupState) =>
+      renderToStaticMarkup(
+        createElement(BridgeProvider, {
+          bridge: { info: local() } as ClawtrateBridge,
+          children: createElement(ConnectScreen, {
+            info: local(),
+            setup,
+            connection,
+            discovery: initialState.discovery,
+            staged,
+            onStage: () => {},
+          }),
+        }),
+      );
+    // Staged: the look, then what it found, each with Back, over the saved gateway.
+    const looking = screen(true, { ...initialSetupState, phase: "looking" });
+    expect(looking).toContain("Looking on this computer");
+    expect(looking).not.toContain(">Try again</button>");
+    const unmatched = screen(
+      true,
+      found({ outcome: "unverified", reason: "holder", access: null }),
+    );
+    expect(unmatched).toContain("OpenClaw settings found");
+    expect(unmatched).toContain("Back</button>");
+    const offered = screen(true, found());
+    expect(offered).toContain(LOCAL_FOUND_HEADING);
+    // Let go (Back): the saved gateway's form, with both of its ways on.
+    const back = screen(false, initialSetupState);
+    expect(back).toContain(escape(refusal));
+    expect(back).toContain(">Try again</button>");
+    expect(back).toContain(">Use This computer</button>");
   });
 });
