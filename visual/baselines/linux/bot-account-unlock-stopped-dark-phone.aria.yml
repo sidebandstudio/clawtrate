@@ -93,10 +93,14 @@
     - button "Check now"
     - group:
       - text: Unlock
-      - paragraph: "This version of OpenClaw changes a bot's account order only while the gateway is stopped. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway. On the gateway's machine:"
+      - paragraph: "This version of OpenClaw changes a bot's account order only while the gateway is stopped. Stopping it gives work under way up to about five minutes to finish, then stops what is left. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway. On the gateway's machine:"
+      - paragraph:
+        - text: These steps stop and start the gateway's service. If you run the gateway yourself, with
+        - code: openclaw gateway run
+        - text: ", stop it and start it again where it runs instead."
       - list:
         - listitem:
-          - paragraph: "Stop the gateway, and wait until it has stopped:"
+          - paragraph: "Stop the gateway, and wait until it has stopped; this can take a few minutes:"
           - code: openclaw gateway stop
           - button "Copy stop command"
           - status
@@ -106,14 +110,11 @@
           - button "Copy unlock command"
           - status
         - listitem:
-          - paragraph: "Start the gateway again:"
+          - paragraph: "Start the gateway again, even if the command above failed:"
           - code: openclaw gateway start
           - button "Copy start command"
           - status
-      - paragraph:
-        - text: These stop and start the gateway's service. If you run the gateway yourself, with
-        - code: openclaw gateway run
-        - text: ", stop it and start it again where it runs instead. Clawtrate sees the change when the gateway is back. Otto then follows the gateway's other orders."
+      - paragraph: Clawtrate sees the change when the gateway is back. Otto then follows the gateway's other orders.
     - group: What a lock doesn't cover
     - button "Change account"
   - status

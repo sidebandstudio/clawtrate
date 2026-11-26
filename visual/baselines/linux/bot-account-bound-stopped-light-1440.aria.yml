@@ -142,10 +142,14 @@
     - definition: Connected
     - paragraph: Bound. Otto runs on OpenAI · Work. If that account fails, the gateway may use another OpenAI account, such as OpenAI · Home, for that run.
     - heading "Lock to this account" [level=4]
-    - paragraph: "To keep this bot on this account alone, change its order on the gateway's machine. A sign-in can also leave a bot limited to one account; Clawtrate shows the limit it finds, however it was made. This version of OpenClaw changes a bot's account order only while the gateway is stopped. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway. On the gateway's machine:"
+    - paragraph: "To keep this bot on this account alone, change its order on the gateway's machine. A sign-in can also leave a bot limited to one account; Clawtrate shows the limit it finds, however it was made. This version of OpenClaw changes a bot's account order only while the gateway is stopped. Stopping it gives work under way up to about five minutes to finish, then stops what is left. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway. On the gateway's machine:"
+    - paragraph:
+      - text: These steps stop and start the gateway's service. If you run the gateway yourself, with
+      - code: openclaw gateway run
+      - text: ", stop it and start it again where it runs instead."
     - list:
       - listitem:
-        - paragraph: "Stop the gateway, and wait until it has stopped:"
+        - paragraph: "Stop the gateway, and wait until it has stopped; this can take a few minutes:"
         - code: openclaw gateway stop
         - button "Copy stop command"
         - status
@@ -155,14 +159,11 @@
         - button "Copy lock command"
         - status
       - listitem:
-        - paragraph: "Start the gateway again:"
+        - paragraph: "Start the gateway again, even if the command above failed:"
         - code: openclaw gateway start
         - button "Copy start command"
         - status
-    - paragraph:
-      - text: These stop and start the gateway's service. If you run the gateway yourself, with
-      - code: openclaw gateway run
-      - text: ", stop it and start it again where it runs instead. Clawtrate reads the lock from the gateway when it is back."
+    - paragraph: Clawtrate reads the lock from the gateway when it is back.
     - status: Not locked. Checked at 5:40 PM.
     - button "Check now"
     - paragraph: "What this cannot see: if OpenAI · Work is pausing after a failure, a run can start on another OpenAI account without leaving a record Clawtrate can read."
