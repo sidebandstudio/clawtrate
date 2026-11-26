@@ -432,6 +432,28 @@ describe("F-601: choices follow the person to each device on one gateway", () =>
     b.client.stop();
   });
 
+  it("F-601: when the gateway took a change and this device couldn't save its copy, the next start follows the gateway", async () => {
+    const fake = prefsGateway();
+    const b = await device(fake, { own: { "show-channel-chats": "true" } });
+    expect(b.client.state.showChannelChats).toBe(true);
+    const set = b.storage.set.bind(b.storage);
+    b.storage.set = async (key, value) => {
+      if (key === "show-channel-chats") throw new Error("disk full");
+      return set(key, value);
+    };
+    await b.client.setShowChannelChats(false, { stamp: b.stamp() });
+    expect(parseChoices(fake.store[CHOICES_PREF_KEY]).on.channelChats).toBe(false);
+    expect(b.client.state.showChannelChats).toBe(false);
+    b.client.stop();
+    // The same device started again, with the same storage.
+    b.storage.set = set;
+    const client = new ClawtrateClient(testHost(fake.gateway, b.storage), FAST);
+    await client.start();
+    await until(() => client.state.choices?.status === "ok");
+    expect(client.state.showChannelChats).toBe(false);
+    client.stop();
+  });
+
   it("F-601: the bounds: only known choices, each a boolean; the state keeps them within its bound", async () => {
     expect(
       parseChoices({

@@ -296,6 +296,17 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     expect(run.resets).toContainEqual(expect.stringContaining(`e2e-${run.record.run}-skills`));
   });
 
+  it("recovers the two-device check's own instance: stops its host, removes its folders and record, and resets it", () => {
+    const host = liveProcess();
+    const run = aRun(deadProcess(), host);
+    run.record.instances.push({ name: `e2e-${run.record.run}-follow`, runId: newRunId() });
+    saveRecord(run.records, run.record);
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(processState(host.pid, host.identity, processIdentity)).toBe("dead");
+    expect(run.gone()).toBe(true);
+    expect(run.resets).toContainEqual(expect.stringContaining(`e2e-${run.record.run}-follow`));
+  });
+
   it("leaves alone a record that names instances other than its run's own", () => {
     const run = aRun(deadProcess());
     run.record.instances.push({ name: "review", runId: newRunId() });

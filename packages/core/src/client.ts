@@ -8178,7 +8178,8 @@ export class ClawtrateClient {
   /**
    * One list switch: on the gateway first when it keeps the person's choices, then kept here as
    * this device's. A choice the gateway took stands although this device's copy, a cache then,
-   * couldn't be saved; a choice only this device keeps is not taken unless it is saved.
+   * couldn't be saved: the old copy is removed instead, so the next start follows the gateway and
+   * a stale "on" here can't outlive it. A choice only this device keeps is not taken unless saved.
    */
   private async keepChoice(
     key: string,
@@ -8192,6 +8193,7 @@ export class ClawtrateClient {
     } catch (error) {
       if (where !== "gateway") throw error;
       this.logFailure("warn", "storage.set", error);
+      await this.host.storage.delete(key).catch(() => {});
     }
     this.preferenceSets[name] += 1;
     this.ownChoices = { ...this.ownChoices, [name]: on };

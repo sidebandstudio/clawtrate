@@ -612,8 +612,8 @@ export type ClawtrateState = {
   voiceChanges?: number;
   /**
    * "Show sessions from other tools": whether `tasksByBot` lists sessions an API client, a
-   * scheduled run or another tool opened with a bot (`Task.otherTool`). Off by default; as
-   * `showChannelChats`, the gateway's choice once it holds one.
+   * scheduled run or another tool opened with a bot (`Task.otherTool`). Off by default; on by
+   * the same rule as `showChannelChats`.
    */
   showOtherToolSessions?: boolean;
   /**

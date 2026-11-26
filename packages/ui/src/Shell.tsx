@@ -138,20 +138,31 @@ export function Shell({
       : null;
   const mergedFor = useRef<string | null>(null);
   const mergeTarget = state.connection.target;
-  // A merge that failed is tried again, three times at most, each after twice the wait.
-  const [mergeRetry, setMergeRetry] = useState(0);
+  // A merge that failed is tried again, three times at most per gateway, each after twice the
+  // wait; a wait still pending when the gateway or the connection changes is dropped.
+  const [mergeRetry, setMergeRetry] = useState<{ gateway: string; n: number } | null>(null);
+  const mergeTries = mergeRetry !== null && mergeRetry.gateway === mergeFor ? mergeRetry.n : 0;
   useEffect(() => {
     if (mergeFor === null || mergedFor.current === mergeFor) return;
     mergedFor.current = mergeFor;
     const base = ownChoices();
     if (Object.keys(base).length === 0) return;
     const stamp = { gatewayId: mergeFor, target: mergeTarget };
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     send({ type: "mergeChoices", base, stamp }).catch(() => {
-      if (mergedFor.current !== mergeFor) return;
-      mergedFor.current = null;
-      if (mergeRetry < 3) setTimeout(() => setMergeRetry(mergeRetry + 1), 2_000 * 2 ** mergeRetry);
+      if (mergedFor.current === mergeFor) mergedFor.current = null;
+      if (cancelled || mergeTries >= 3) return;
+      timer = setTimeout(
+        () => setMergeRetry({ gateway: mergeFor, n: mergeTries + 1 }),
+        2_000 * 2 ** mergeTries,
+      );
     });
-  }, [mergeFor, mergeTarget, mergeRetry, send]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mergeFor, mergeTarget, mergeTries, send]);
 
   // When access arrives, the strip says so for four seconds; the conversation announces it.
   const [tier, setTier] = useState(interactive);

@@ -8,17 +8,18 @@
 // merges that into the gateway's choices with nothing to click, and the first device shows it. A choice turned on on one shows on the other; turned off where it was
 // turned on, it goes off on the other, whose own was never on. A pin on one is a pin on the other.
 //
-// The instance is recorded in a run record of this file's own before it starts, as
-// e2e/gateway-bot.spec.ts does, so a run killed outright is cleaned up by the next `pnpm e2e`.
+// The instance, each preview host by its PID and each host's folder are recorded in run records
+// of this file's own before they start, so a run killed outright is cleaned up by the next
+// `pnpm e2e`.
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STATE_FILE } from "../packages/core/src/node/secure.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
-import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -34,13 +35,16 @@ const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 const RUN = randomBytes(4).toString("hex");
 const MINE = `e2e-${RUN}-follow`;
-const record: RunRecord = {
-  run: RUN,
+const newRecord = (run: string): RunRecord => ({
+  run,
   runner: { pid: process.pid, identity: "" },
   instances: [],
   host: null,
   dirs: [],
-};
+});
+/** The instance and the first host; the second host has a record of its own. */
+const record = newRecord(RUN);
+const second = newRecord(randomBytes(4).toString("hex"));
 const cli = (...args: string[]) =>
   execFileSync(process.execPath, [CLI, ...args], {
     cwd: ROOT,
@@ -50,20 +54,39 @@ const cli = (...args: string[]) =>
     stdio: ["ignore", "inherit", "inherit"],
   });
 
-type Host = { child: ChildProcess; data: string };
+type Host = { child: ChildProcess; data: string; record: RunRecord };
 const hosts: Host[] = [];
 const contexts: Array<{ close(): Promise<void> }> = [];
 
-/** A device: a preview host of its own on this file's instance, paired, with `own` in its storage. */
-async function device(browser: Browser, own: Record<string, string> = {}): Promise<Page> {
+/**
+ * A device: a preview host of its own on this file's instance, paired, with `own` in its storage,
+ * and write access asked as a person asks it. Each host is in a run record of its own (a record
+ * holds one host): its folder and PID are written before its gate opens, so a run killed outright
+ * is cleaned up by the next `pnpm e2e`. The first host's record is the instance's too.
+ */
+async function device(
+  browser: Browser,
+  record: RunRecord,
+  own: Record<string, string> = {},
+): Promise<Page> {
   const data = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}follow-`));
-  // Recorded before the host starts, so the next run removes it if this one is killed outright.
+  record.runner.identity = ownIdentity();
   record.dirs.push(data);
+  record.hostPending = true;
   saveRecord(RECORDS, record);
   if (Object.keys(own).length > 0)
     writeFileSync(join(data, STATE_FILE), `${JSON.stringify(own, null, 2)}\n`, { mode: 0o600 });
   const started = startHost(MINE, STATIC, data);
-  hosts.push({ child: started.host, data });
+  const found = processIdentity(started.host.pid!);
+  if (found.state !== "alive") {
+    started.url.catch(() => {});
+    started.gated.abort();
+    throw new Error("could not record the preview host");
+  }
+  record.host = { pid: started.host.pid!, identity: found.identity };
+  delete record.hostPending;
+  saveRecord(RECORDS, record);
+  hosts.push({ child: started.host, data, record });
   started.gated.release();
   const url = await started.url;
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -116,13 +139,12 @@ async function shown(page: Page, name: string): Promise<string | null> {
 test.afterAll(async () => {
   test.setTimeout(120_000);
   for (const context of contexts) await context.close().catch(() => {});
-  for (const host of hosts) {
-    await stopChild(host.child).catch(() => host.child.kill("SIGKILL"));
-    rmSync(host.data, { recursive: true, force: true });
-  }
-  if (record.instances.length === 0) return;
-  const problems = cleanUp(RECORDS, record, (name, runId) =>
-    cli("reset", "--run-id", runId, "--instance", name),
+  for (const host of hosts) await stopChild(host.child).catch(() => host.child.kill("SIGKILL"));
+  // Each record's host stopped by its PID, its folder removed, then the instance reset.
+  const problems = [second, record].flatMap((each) =>
+    each.host || each.instances.length > 0 || each.dirs.length > 0
+      ? cleanUp(RECORDS, each, (name, runId) => cli("reset", "--run-id", runId, "--instance", name))
+      : [],
   );
   expect(problems).toEqual([]);
 });
@@ -155,11 +177,11 @@ test("F-601: two devices on one gateway: a choice and a pin made on one show on 
   ]);
   expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
 
-  const one = await device(browser);
+  const one = await device(browser, record);
   expect(await shown(one, "Show sessions from other tools")).toBe("false");
   expect(await shown(one, "Show thinking")).toBe("false");
   // The second device turned "Show sessions from other tools" on of its own before it paired.
-  const two = await device(browser, { "show-other-tool-sessions": "true" });
+  const two = await device(browser, second, { "show-other-tool-sessions": "true" });
   expect(await shown(two, "Show sessions from other tools")).toBe("true");
   // Merged in the first time, with nothing clicked: the first device shows it too.
   await expect

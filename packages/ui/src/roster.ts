@@ -308,18 +308,23 @@ export function useRoster(
       ? current.scope
       : null;
   const merging = useRef<string | null>(null);
-  // A merge that failed is tried again, three times at most, each after twice the wait.
-  const [retry, setRetry] = useState(0);
+  // A merge that failed is tried again, three times at most per gateway, each after twice the
+  // wait; a wait still pending when the gateway or the connection changes is dropped.
+  const [retry, setRetry] = useState<{ scope: string; n: number } | null>(null);
+  const tries = retry !== null && retry.scope === mergeScope ? retry.n : 0;
   useEffect(() => {
     const merge = latest.current.sync?.merge;
     if (mergeScope === null || merging.current === mergeScope || !merge) return;
     merging.current = mergeScope;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const done = () => {
       if (merging.current === mergeScope) merging.current = null;
     };
     const failed = () => {
       done();
-      if (retry < 3) setTimeout(() => setRetry(retry + 1), 2_000 * 2 ** retry);
+      if (cancelled || tries >= 3) return;
+      timer = setTimeout(() => setRetry({ scope: mergeScope, n: tries + 1 }), 2_000 * 2 ** tries);
     };
     merge(toSidebar(latest.current.local)).then((merged) => {
       done();
@@ -331,7 +336,11 @@ export function useRoster(
         return { scope: now.scope, prefs: next };
       });
     }, failed);
-  }, [mergeScope, retry]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mergeScope, tries]);
 
   /** Apply a change where the arrangement lives. Read-only, on the gateway's: nothing to do. */
   const apply = useCallback(
