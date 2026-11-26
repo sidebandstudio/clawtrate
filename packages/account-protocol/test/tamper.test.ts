@@ -27,7 +27,6 @@ import {
   signRestore,
   signSessionRequest,
   verifyCard,
-  verifyList,
   verifyRefusal,
   verifySessionRequest,
   type AccountProtocolErrorCode as Code,

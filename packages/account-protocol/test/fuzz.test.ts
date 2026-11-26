@@ -32,7 +32,6 @@ import {
   signRemoval,
   signSessionRequest,
   verifyCard,
-  verifyList,
   verifyRefusal,
   verifySessionRequest,
 } from "../src/index.ts";

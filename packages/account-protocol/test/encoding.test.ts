@@ -36,7 +36,6 @@ import {
   signCard,
   signGenesis,
   signSessionRequest,
-  verifyList,
   verifySessionRequest,
 } from "../src/index.ts";
 import {

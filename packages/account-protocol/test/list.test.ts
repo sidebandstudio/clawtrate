@@ -27,7 +27,6 @@ import {
   signRemovalNotice,
   signRemovalOnGatewayMachine,
   signRestore,
-  verifyList,
   type DeviceRecord,
   type JoiningDevice,
   type ListState,
