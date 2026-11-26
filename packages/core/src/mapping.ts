@@ -842,7 +842,8 @@ export function mapHistory(
         const runId = str(info.runId);
         const pictures = assistantPictures(message.content);
         const files = assistantFiles(message.content);
-        const prompt = pictures.length > 0 ? imagePrompt(pictureDelivery(message, runId), items) : null;
+        const prompt =
+          pictures.length > 0 ? imagePrompt(pictureDelivery(message, runId), items) : null;
         for (const picture of pictures) picture.prompt = prompt;
         if (runId !== null && runId === precedingRun) {
           for (const user of pendingUsers) user.steered = true;

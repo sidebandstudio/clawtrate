@@ -1224,7 +1224,13 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
     ];
   };
   const itemTool = (seq: number, id: string, phase: string): Frame =>
-    A("run-1", seq, "item", { itemId: `tool:${id}`, toolCallId: id, name: "ls", kind: "tool", phase });
+    A("run-1", seq, "item", {
+      itemId: `tool:${id}`,
+      toolCallId: id,
+      name: "ls",
+      kind: "tool",
+      phase,
+    });
   const tool = (seq: number, id: string, phase: string): Frame =>
     A("run-1", seq, "tool", {
       toolCallId: id,
@@ -1250,8 +1256,13 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
 
   it("F-088: the text streaming when a call starts is the text beside that call, and the answer after it is the reply", () => {
     const run = only(
-      play([start, ...said(2, "s:1", BESIDE), ...call(4, "c1"), ...said(8, "s:2", ANSWER), ...end(10)])
-        .activity,
+      play([
+        start,
+        ...said(2, "s:1", BESIDE),
+        ...call(4, "c1"),
+        ...said(8, "s:2", ANSWER),
+        ...end(10),
+      ]).activity,
     );
     expect(run.preambles).toEqual([{ id: "s:1", text: BESIDE, ended: true, beforeCall: "c1" }]);
     expect(run.text).toBe(ANSWER);
@@ -1309,11 +1320,25 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
   });
 
   it("F-088: a call with no text before it, or after text already placed, adds none", () => {
-    expect(only(play([start, ...call(2, "c1"), ...said(6, "s:2", ANSWER)]).activity).preambles).toBe(
-      undefined,
-    );
+    expect(
+      only(play([start, ...call(2, "c1"), ...said(6, "s:2", ANSWER)]).activity).preambles,
+    ).toBe(undefined);
     const blank = only(play([start, ...said(2, "s:1", "  \n"), ...call(4, "c1")]).activity);
     expect(blank.preambles).toBe(undefined);
+  });
+
+  it("F-088: only a call's first start places text: its later events, a repeated start included, leave the text streaming after it as the reply", () => {
+    const run = only(
+      play([
+        start,
+        itemTool(2, "c1", "start"),
+        ...said(3, "s:2", ANSWER),
+        tool(5, "c1", "start"),
+        itemTool(6, "c1", "end"),
+      ]).activity,
+    );
+    expect(run.preambles).toBe(undefined);
+    expect(run.text).toBe(ANSWER);
   });
 
   it("F-088: on 2026.10.6, whose preamble item holds the text, nothing is added", () => {
@@ -1346,7 +1371,9 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
       { id: "commentary-0-a1", text: BESIDE, ended: true, beforeCall: "c1" },
     ]);
     // `#think #steps` on 2026.10.6: the text is only in the item.
-    const quiet = only(play([start, preamble(2, "update"), preamble(3, "end"), ...call(4, "c1")]).activity);
+    const quiet = only(
+      play([start, preamble(2, "update"), preamble(3, "end"), ...call(4, "c1")]).activity,
+    );
     expect(quiet.preambles).toEqual([
       { id: "commentary-0-a1", text: BESIDE, ended: true, beforeCall: "c1" },
     ]);
@@ -1357,7 +1384,12 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
       play([
         start,
         ...said(2, "s:1", `${BESIDE} [[reply_to_current]]`),
-        A("run-1", 4, "item", { kind: "preamble", phase: "end", progressText: BESIDE, itemId: "p" }),
+        A("run-1", 4, "item", {
+          kind: "preamble",
+          phase: "end",
+          progressText: BESIDE,
+          itemId: "p",
+        }),
         ...call(5, "c1"),
       ]).activity,
     );
@@ -1366,20 +1398,13 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
 
   it("F-088: text with no item id, or from the chat stream alone, stays the run's text", () => {
     const bare = only(
-      play([
-        start,
-        A("run-1", 2, "assistant", { text: BESIDE, delta: BESIDE }),
-        ...call(3, "c1"),
-      ]).activity,
+      play([start, A("run-1", 2, "assistant", { text: BESIDE, delta: BESIDE }), ...call(3, "c1")])
+        .activity,
     );
     expect(bare.preambles).toBe(undefined);
     expect(bare.text).toBe(BESIDE);
     const chatOnly = only(
-      play([
-        start,
-        C("run-1", 2, "delta", {}, BESIDE),
-        itemTool(3, "c1", "start"),
-      ]).activity,
+      play([start, C("run-1", 2, "delta", {}, BESIDE), itemTool(3, "c1", "start")]).activity,
     );
     expect(chatOnly.preambles).toBe(undefined);
     expect(chatOnly.text).toBe(BESIDE);
