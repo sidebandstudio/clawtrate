@@ -80,11 +80,21 @@ describe("registration", () => {
       expect(h.policies).toEqual([]);
       await h.save("otto", [{ action: "never", tools: ["write"] }]);
       expect(h.before("otto", "write", { path: "a" })?.block).toBe(true);
-      expect((await h.call("status")).payload?.hook).toMatchObject({ registered: true });
-      expect(h.warnings.some((w) => /did not take its tool policy/.test(w))).toBe(
-        trusted === "refused",
-      );
+      // An Ask, and its card's answer, by the hook alone.
+      await h.save("otto", [{ action: "ask", tools: ["read"] }]);
+      expect(h.before("otto", "read", { path: "a" })?.requireApproval).toBeDefined();
+      expect((await h.call("status")).payload?.hook).toMatchObject({
+        registered: true,
+        decidedBy: "hook",
+      });
     }
+  });
+
+  it("says the policy decided where the gateway ran it", async () => {
+    const h = host();
+    expect((await h.call("status")).payload?.hook).toMatchObject({ decidedBy: null });
+    h.before("otto", "read", { path: "a" });
+    expect((await h.call("status")).payload?.hook).toMatchObject({ decidedBy: "policy" });
   });
 
   it("asks the gateway to hold get, status and decisions.list to read, and set to admin", () => {
@@ -128,7 +138,7 @@ describe("status says only what the plugin itself knows", () => {
         rulesSchema: 1,
         rules: { state: "none" },
         enforcing: "nothing",
-        hook: { registered: true, lastCallAt: null },
+        hook: { registered: true, lastCallAt: null, decidedBy: null },
         matches: { tools: [], fallback: [], exempt: ["ask_user"] },
         cardDetails: { mode: "full", because: "no-forwarding" },
         decisions: { state: "kept", setAside: [] },
@@ -139,7 +149,7 @@ describe("status says only what the plugin itself knows", () => {
     now = 2000;
     h.before("pip", "read", { path: "a" });
     const after = (await h.call("status")).payload!;
-    expect(after.hook).toEqual({ registered: true, lastCallAt: 2000 });
+    expect(after.hook).toEqual({ registered: true, lastCallAt: 2000, decidedBy: "policy" });
     expect(after.matches).toEqual({
       tools: ["coder__deploy_*", "edit", "write"],
       fallback: ["otto"],
@@ -152,6 +162,7 @@ describe("status says only what the plugin itself knows", () => {
     expect((await none.call("status")).payload?.hook).toEqual({
       registered: false,
       lastCallAt: null,
+      decidedBy: null,
     });
     const stopped = host();
     stopped.stop();
@@ -598,22 +609,63 @@ describe("a run another bot's message started (#606)", () => {
     expect(read(h, "run-b")?.block).toBe(true);
   });
 
-  it("refuses in a person's run once a bot's message reaches it", async () => {
+  it("hands a bot's message waiting behind a person's run to the next run, not to a later person's message", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    // A person's run is busy; Marlow's message waits, then a person's message waits after it.
     h.write(PIP, fromPerson);
-    h.modelCall("run-p", PIP);
-    h.modelCall("run-p", PIP);
+    h.modelCall("run-p1", PIP);
     h.write(PIP, fromMarlow);
-    expect(read(h, "run-p")?.blockReason).toMatch(/from bot marlow/);
+    h.write(PIP, fromPerson);
+    // The person's busy run keeps its cards: the waiting message did not start it.
+    expect(read(h, "run-p1")?.requireApproval).toBeDefined();
+    // The next run is Marlow's message's, whatever was written after it.
+    h.modelCall("run-m", PIP);
+    expect(read(h, "run-m")?.blockReason).toMatch(/from bot marlow\./);
+    // The one after is the person's.
+    h.modelCall("run-p2", PIP);
+    expect(read(h, "run-p2")?.requireApproval).toBeDefined();
   });
 
-  it("goes by the task's latest message when the run made no model call it saw", async () => {
+  it("takes a run of this bot's own task's message as that task's run stands, and an unknown one as a bot's", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    const SUB = "agent:pip:subagent:s1";
+    const back = (source: string) => ({
+      role: "user",
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey: source,
+        sourceTool: "subagent_announce",
+      },
+    });
+    // A person's hand-off: its report back starts a person's run.
+    h.write(SUB, fromPerson);
+    h.modelCall("run-s", SUB);
+    h.write(PIP, back(SUB));
+    h.modelCall("run-back", PIP);
+    expect(read(h, "run-back")?.requireApproval).toBeDefined();
+    // A hand-off Marlow's message started stays Marlow's.
+    const SUB2 = "agent:pip:subagent:s2";
+    h.write(SUB2, fromMarlow);
+    h.modelCall("run-s2", SUB2);
+    h.write(PIP, back(SUB2));
+    h.modelCall("run-back2", PIP);
+    expect(read(h, "run-back2")?.blockReason).toMatch(/from bot marlow\./);
+    // A task of its own the plugin knows nothing of counts as a bot's: this one.
+    h.write(PIP, back("agent:pip:subagent:unknown"));
+    h.modelCall("run-back3", PIP);
+    expect(read(h, "run-back3")?.blockReason).toMatch(/from bot pip\./);
+  });
+
+  it("with no model call seen, a waiting bot's message decides before the latest message", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
     h.write(PIP, fromMarlow);
-    expect(read(h, "run-x")?.block).toBe(true);
     h.write(PIP, fromPerson);
+    expect(read(h, "run-x")?.block).toBe(true);
+    // Once a run took it, the latest message decides.
+    h.modelCall("run-m", PIP);
     expect(read(h, "run-y")?.requireApproval).toBeDefined();
   });
 
@@ -627,13 +679,14 @@ describe("a run another bot's message started (#606)", () => {
       ["agent:otto-2:task", "bot otto-2"],
     ] as const) {
       h.write(PIP, { ...fromMarlow, provenance: { kind: "inter_session", sourceSessionKey: key } });
+      h.modelCall(`run-${key.length}`, PIP);
       expect(read(h, `run-${key.length}`)?.blockReason).toContain(
         `started by a message from ${words}.`,
       );
     }
   });
 
-  it("keeps at most MEMORY_LIMIT tasks and runs, the oldest forgotten first", async () => {
+  it("past MEMORY_LIMIT lets a person's entries go first, and a bot's run it let go still counts as a bot's", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
     h.write(PIP, fromMarlow);
@@ -648,8 +701,20 @@ describe("a run another bot's message started (#606)", () => {
       MEMORY_LIMIT,
       MEMORY_LIMIT,
     ]);
-    // Forgotten: the run is not known, and neither is its task's message.
-    expect(read(h, "run-b")?.requireApproval).toBeDefined();
+    // Marlow's run outlived a thousand people's, and a person's message since does not change it.
+    expect(origins.runs.get("run-b")).toEqual({ bot: "marlow" });
+    h.write(PIP, fromPerson);
+    h.modelCall("run-b", PIP);
+    expect(read(h, "run-b")?.blockReason).toMatch(/from bot marlow\./);
+    // With only bots' runs left, the oldest is let go and kept among the forgotten.
+    for (let i = 0; i < MEMORY_LIMIT; i += 1) {
+      h.write(`agent:pip:b${i}`, fromMarlow);
+      h.modelCall(`run-bot-${i}`, `agent:pip:b${i}`);
+    }
+    expect(origins.runs.has("run-b")).toBe(false);
+    expect(origins.forgotten.size).toBeLessThanOrEqual(MEMORY_LIMIT);
+    h.modelCall("run-b", PIP);
+    expect(read(h, "run-b")?.blockReason).toMatch(/from bot marlow\./);
   });
 });
 
@@ -726,16 +791,75 @@ describe("a card answered after its rule changed (#606)", () => {
     const card = h.before(...call);
     await h.save("main", [{ action: "never", tools: ["write"] }]);
     expect(h.answer(card, "deny", ...call)).toBeUndefined();
-    // Not a call this plugin asked about: the hook leaves it alone.
+    expect(h.handle.shared.approved.size).toBe(0);
+    // A call the policy decided, then let run: the hook leaves it alone.
+    await h.save("main", [{ action: "allow", tools: ["write"] }]);
+    const free = ["main", "write", { path: "x" }, { runId: "run-2", toolCallId: "c2" }] as const;
+    expect(h.before(...free)).toBeUndefined();
     const hook = h.hooks.find((x) => x.name === "before_tool_call")!;
+    expect(
+      hook.fn(
+        { toolName: "write", params: { path: "x" }, runId: "run-2", toolCallId: "c2" },
+        { agentId: "main" },
+      ),
+    ).toBeUndefined();
+    // A call the policy never saw, the hook decides itself.
+    await h.save("main", [{ action: "never", tools: ["write"] }]);
     expect(
       hook.fn(
         { toolName: "write", params: {}, runId: "run-9", toolCallId: "c" },
         { agentId: "main" },
       ),
-    ).toBeUndefined();
-    expect(h.handle.shared.approved.size).toBe(0);
+    ).toMatchObject({ block: true });
   });
+});
+
+describe("a gateway setting changed while a card waits (#606)", () => {
+  const call = [
+    "main",
+    "write",
+    { path: "notes/a.md" },
+    { runId: "run-1", toolCallId: "call-1" },
+  ] as const;
+  const DENIES: [string, Record<string, unknown>, boolean][] = [
+    [
+      "this bot's deny list names the tool",
+      { agents: { entries: { main: { tools: { deny: ["write"] } } } } },
+      true,
+    ],
+    ["the gateway's deny list holds it by a group", { tools: { deny: ["group:fs"] } }, true],
+    ["the gateway's deny list matches it by a pattern", { tools: { deny: ["wr*"] } }, true],
+    [
+      "another tool is denied to this bot",
+      { agents: { entries: { main: { tools: { deny: ["web_search"] } } } } },
+      false,
+    ],
+    [
+      "the tool is denied to another bot",
+      { agents: { entries: { pip: { tools: { deny: ["write"] } } } } },
+      false,
+    ],
+    ["an unrelated setting changed", { ui: { seamColor: "#000000" } }, false],
+  ];
+  for (const [what, change, refused] of DENIES) {
+    it(`${refused ? "refuses Allow once" : "lets Allow once stand"} when ${what}`, async () => {
+      const config: Record<string, unknown> = {};
+      const h = host({ config });
+      await h.save("main", [{ action: "ask", tools: ["write"] }]);
+      const card = h.before(...call);
+      Object.assign(config, change);
+      const result = h.answer(card, "allow-once", ...call);
+      if (!refused) return expect(result).toBeUndefined();
+      expect(result).toEqual({
+        block: true,
+        blockReason:
+          "Refused by Clawtrate's rules plugin: the gateway's settings now deny write to this bot, a change made while the card waited. The answer was for a call they allowed. The call did not run.",
+      });
+      const [record] = (await h.call("decisions.list", { runId: "run-1" })).payload!
+        .records as Record<string, unknown>[];
+      expect([record?.decision, record?.source]).toEqual(["block", { kind: "gateway-deny" }]);
+    });
+  }
 });
 
 describe("the plugin turned off while a run is under way (#606)", () => {
@@ -948,7 +1072,7 @@ describe("status says whether rules are being enforced", () => {
     expect((await without.call("status")).payload).toMatchObject({
       rules: { state: "read" },
       enforcing: "not-enforced",
-      hook: { registered: false, lastCallAt: null },
+      hook: { registered: false, lastCallAt: null, decidedBy: null },
     });
   });
 });

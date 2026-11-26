@@ -75,6 +75,20 @@ export function configuredAgents(config) {
   return out;
 }
 
+/**
+ * Whether a deny list of the config names `tool` for `agent`: the gateway's
+ * own `tools.deny` or the bot's, by name, alias, `*`, a pattern, or a group
+ * this check knows. An explicit deny always wins in the gateway, so this only
+ * ever tightens.
+ */
+export function explicitlyDenied(config, agent, tool) {
+  const global = rec(rec(config).tools);
+  const own = rec(rec(agent).tools);
+  return [list(global.deny), list(own.deny)].some((deny) =>
+    deny?.some((entry) => covers(entry, tool)),
+  );
+}
+
 /** Whether the config surely keeps `tool` from `agent`: denied, or left out of an allow list. */
 export function surelyDenied(config, agent, tool) {
   const global = rec(rec(config).tools);

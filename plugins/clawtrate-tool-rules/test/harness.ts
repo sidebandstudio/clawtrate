@@ -42,7 +42,9 @@ export function tempState() {
  * folder; `slots` the process-wide state (fresh per host unless shared);
  * `on: false` leaves the hook API out, as a load without hooks would;
  * `trusted: false` leaves out trusted tool policies, as a host without them
- * would, and `trusted: "refused"` refuses the registration.
+ * would, and `trusted: "refused"` takes the registration and never runs it,
+ * as OpenClaw does (with a diagnostic, no throw) for a plugin not explicitly
+ * enabled.
  */
 export function load(
   options: {
@@ -96,8 +98,7 @@ export function load(
   }
   if (options.trusted !== false) {
     api.registerTrustedToolPolicy = (policy: (typeof policies)[number]) => {
-      if (options.trusted === "refused") throw new Error("policy id is not declared");
-      policies.push(policy);
+      if (options.trusted !== "refused") policies.push(policy);
     };
   }
   const slots = options.slots ?? new Map();

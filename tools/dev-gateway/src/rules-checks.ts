@@ -74,6 +74,8 @@ const GATEWAY_UNAVAILABLE = "Plugin approval required (gateway unavailable)";
 const DENIED = "Denied by user. The tool call did not run.";
 /** The plugin's refusal of an Ask in a run another bot's message started. */
 const BOT_RUN_REFUSAL = "Refused by Clawtrate's rules plugin without asking anyone:";
+/** The plugin's refusal of a call whose tool the bot's settings came to deny while its card waited. */
+const DENIED_WHILE_WAITING = "the gateway's settings now deny write to this bot";
 /** The plugin's refusal of a call whose card was answered after its rule changed. */
 const CHANGED_WHILE_WAITING = "the rules changed while the card waited";
 /**
@@ -1126,53 +1128,62 @@ export const RULES_CHECKS: RulesCheck[] = [
     },
   },
   {
-    name: "a gateway setting changed while a card waits: the card's rule still holds, so Allow once runs the call where the gateway lets it",
+    name: "a gateway setting changed while a card waits: a new deny of the tool for this bot refuses Allow once; another change lets it stand where the gateway does",
     covers: ["#write"],
     async run(ctx, world) {
       const original = await botEntry(ctx, BOT);
-      await save(ctx, BOT, [askWrite()]);
-      const key = await task(ctx, world, BOT, "waiting-config");
-      const since = marks(ctx);
-      const runId = await start(ctx, key, "#write");
-      const card = await cardFor(ctx, runId, since.interactive);
-      // The deny is undone however the check ends.
-      const run = await withConfig(
-        ctx,
-        () =>
-          patchConfig(ctx, {
-            agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
-          }),
-        async () => {
-          if (
-            await configHolds(ctx, (config) => rec(entryOf(config, BOT).tools).deny === undefined)
-          ) {
-            return;
-          }
-          await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
-            `agents.entries.${BOT}.tools.deny`,
-          ]);
-        },
-        async () => {
-          expect(
-            (await waitingCards(ctx.clients.interactive)).includes(card.id),
-            "the card was no longer listed after the config change",
-          );
-          await resolve(ctx, card.id, "allow-once");
-          return finish(ctx, runId);
-        },
-      );
-      const write = run.calls[0];
-      if (shape().version === "2026.10.6") {
-        // 2026.10.6 binds a waiting approval to the gateway's config as it was and fails the
-        // call after any config change (`Approval requester authority changed`): stricter than
-        // the rule asks, and the gateway's own, which the plugin cannot loosen.
-        expect(
-          write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
-          `after a config change: ${show(run.calls)}`,
+      for (const denied of ["web_search", "write"] as const) {
+        await save(ctx, BOT, [askWrite()]);
+        const key = await task(ctx, world, BOT, `waiting-config-${denied}`);
+        const since = marks(ctx);
+        const runId = await start(ctx, key, "#write");
+        const card = await cardFor(ctx, runId, since.interactive);
+        // The deny is undone however the check ends.
+        const run = await withConfig(
+          ctx,
+          () =>
+            patchConfig(ctx, {
+              agents: { entries: { [BOT]: { tools: { deny: [denied] } } } },
+            }),
+          async () => {
+            if (
+              await configHolds(ctx, (config) => rec(entryOf(config, BOT).tools).deny === undefined)
+            ) {
+              return;
+            }
+            await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
+              `agents.entries.${BOT}.tools.deny`,
+            ]);
+          },
+          async () => {
+            expect(
+              (await waitingCards(ctx.clients.interactive)).includes(card.id),
+              `the card was no longer listed after denying ${denied}`,
+            );
+            await resolve(ctx, card.id, "allow-once");
+            return finish(ctx, runId);
+          },
         );
-      } else {
-        // Newer versions keep the approval: the rule the card showed is unchanged, so it stands.
-        expect(ranOk(write), `after a config change: ${show(run.calls)}`);
+        const write = run.calls[0];
+        if (shape().version === "2026.10.6") {
+          // 2026.10.6 binds a waiting approval to the gateway's config as it was and fails the
+          // call after any config change (`Approval requester authority changed`): stricter than
+          // the rule asks, and the gateway's own, which the plugin cannot loosen.
+          expect(
+            write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
+            `after denying ${denied}: ${show(run.calls)}`,
+          );
+        } else if (denied === "write") {
+          // Newer versions keep the approval through a config change; the plugin refuses a
+          // call whose tool the bot's deny list came to name while the card waited.
+          expect(
+            write?.isError && write.text.includes(DENIED_WHILE_WAITING),
+            `after denying write: ${show(run.calls)}`,
+          );
+        } else {
+          // Another tool's deny changes nothing the card was about: the answer stands.
+          expect(ranOk(write), `after denying web_search: ${show(run.calls)}`);
+        }
       }
       same(await botEntry(ctx, BOT), original, "Juniper's settings once the deny is removed again");
       await pluginRunning(ctx);
@@ -1300,6 +1311,96 @@ export const RULES_CHECKS: RulesCheck[] = [
         text.includes(BOT_RUN_REFUSAL) && text.includes("started by a message from bot marlow."),
         `Pip's read result: ${text.slice(0, 300)}`,
       );
+    },
+  },
+  {
+    name: "a bot's message waiting behind a person's run, with a person's message after it, still starts a run that asks no one",
+    covers: ["#slow-tool", "#message-read", "#read"],
+    async run(ctx, world) {
+      // The gateway writes a waiting message when it is queued, not when its run starts, so the
+      // run Marlow's message starts is not the latest message's: the plugin hands it Marlow's.
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      const PIP_MAIN = "agent:pip:main";
+      world.keys.add(PIP_MAIN);
+      for (const op of Object.values(ctx.clients)) {
+        await op.request("sessions.messages.subscribe", { key: PIP_MAIN }).catch(() => {});
+      }
+      const since = marks(ctx);
+      const toolStart = (runId: string, name?: string) => (e: GatewayEvent) =>
+        e.event === "agent" &&
+        rec(e.payload).runId === runId &&
+        rec(e.payload).stream === "tool" &&
+        rec(rec(e.payload).data).phase === "start" &&
+        (name === undefined || rec(rec(e.payload).data).name === name);
+      // A person's run keeps Pip busy.
+      const busy = await start(ctx, PIP_MAIN, "#slow-tool 20");
+      await ctx.clients.interactive.waitFor(
+        "Pip's slow tool",
+        toolStart(busy),
+        60_000,
+        since.interactive,
+      );
+      // Marlow's message to Pip waits behind it; a person's message to Pip waits after that.
+      const marlowKey = await task(ctx, world, "marlow", "queued-read");
+      const marlowRun = await start(ctx, marlowKey, "#message-read");
+      await ctx.clients.interactive.waitFor(
+        "Marlow's send",
+        toolStart(marlowRun, "sessions_send"),
+        60_000,
+        since.interactive,
+      );
+      await sleep(3000);
+      await start(ctx, PIP_MAIN, "#read");
+      // The person's later message is the person's: its read asks the person's device, which
+      // denies it as it comes. (A card for a run a bot's message started never reaches that
+      // device; Marlow's send waits for Pip's reply, so the card is answered meanwhile.)
+      const personCard = ctx.clients.interactive
+        .waitFor(
+          "the card of the person's later message",
+          (e) => e.event === REQUESTED && rec(rec(e.payload).request).sessionKey === PIP_MAIN,
+          180_000,
+          since.interactive,
+        )
+        .then(async (card) => {
+          await resolve(ctx, String(rec(card.payload).id), "deny");
+          return rec(rec(card.payload).request);
+        });
+      // Its failure is reported where it is awaited, not as an unhandled rejection meanwhile.
+      personCard.catch(() => undefined);
+      const send = (await finish(ctx, marlowRun, 180_000)).calls[0];
+      const recipientRunId = send?.details.runId;
+      expect(
+        ranOk(send) && typeof recipientRunId === "string" && recipientRunId.length > 0,
+        `Marlow's send named no run: ${show(send)}`,
+      );
+      expect(
+        (await personCard).runId !== recipientRunId,
+        "the person's device received a card for the run Marlow's message started",
+      );
+      const record = await eventually(
+        "the decision record of Marlow's run in Pip's task",
+        async () =>
+          (await decisionsOf(ctx, { agentId: "pip", runId: recipientRunId, limit: 5 })).find(
+            (r) => r.tool === "read",
+          ),
+      );
+      same(cardsSeen(ctx, since, recipientRunId), [], "who received a card for Marlow's run");
+      same([record.decision, record.answer], ["ask", "cancelled"], "Marlow's run's read");
+      const text = await eventually("the read result of Marlow's run", async () => {
+        const history = answered(
+          await call(ctx.clients.admin, "chat.history", { sessionKey: PIP_MAIN, limit: 40 }),
+          "Pip's main task",
+        );
+        const mine = ((history.messages ?? []) as JsonRecord[]).find(
+          (m) => m.role === "toolResult" && isResultOfCall(m, record.callId),
+        );
+        return mine ? JSON.stringify(mine.content ?? "") : undefined;
+      });
+      expect(
+        text.includes(BOT_RUN_REFUSAL) && text.includes("started by a message from bot marlow."),
+        `the read result of Marlow's run: ${text.slice(0, 300)}`,
+      );
+      await finish(ctx, busy);
     },
   },
   {
