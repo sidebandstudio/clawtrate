@@ -362,6 +362,9 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(limited([], "2026.11.6")).toBeNull();
     expect(limited([], "2027.1.1")).toBeNull();
     expect(limited([], null)).toBeNull();
+    // Read as the app reads a gateway's version everywhere (`openClawAtLeast`): exactly that one.
+    expect(limited([], "v2026.10.6")).toBe(line);
+    expect(limited([], "2026.10.60")).toBeNull();
     // With a wildcard in the list, a bot set to a model it doesn't name runs on one it names.
     const wild =
       "The gateway's config names which of OpenAI's models it lists and lets a task switch to; a bot set to another model runs on one it names.";

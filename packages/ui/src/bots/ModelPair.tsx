@@ -15,6 +15,7 @@ import {
   initialOpenClawUpdate,
   MAX_MODEL_ID_CHARS,
   modelIdProblem,
+  openClawAtLeast,
   type AccountsState,
   type CatalogModel,
   type ClawtrateState,
@@ -376,7 +377,21 @@ export function noteBelow(
  * bot's own model or the default only when it has a wildcard, which makes them run on a model it
  * names (docs/research/model-catalog.md, section 8).
  */
-export const MODEL_LIMIT_VERSIONS: readonly string[] = ["2026.10.6", "2026.11.10"];
+export const MODEL_LIMIT_VERSIONS: readonly (readonly [number, number, number])[] = [
+  [2026, 10, 6],
+  [2026, 11, 10],
+];
+
+/** The gateway reports exactly this OpenClaw version, read as `openClawAtLeast` reads one. */
+function isOpenClaw(
+  version: string | null,
+  [year, month, patch]: readonly [number, number, number],
+) {
+  return (
+    openClawAtLeast(version, year, month, patch) &&
+    !openClawAtLeast(version, year, month, patch + 1)
+  );
+}
 
 /**
  * Whether the config's model list has a wildcard, as the version the gateway reports reads one:
@@ -387,7 +402,7 @@ function hasWildcards(
   list: NonNullable<AccountsState["modelAllowlist"]>,
   serverVersion: string | null,
 ): boolean {
-  return serverVersion === "2026.10.6" ? list.wildcards : list.prefixWildcards;
+  return isOpenClaw(serverVersion, [2026, 10, 6]) ? list.wildcards : list.prefixWildcards;
 }
 
 /** The config's model list has a wildcard and limits the provider: a model it doesn't name won't run. */
@@ -412,7 +427,7 @@ export function allowlistLine(
 ): string | null {
   const list = accounts.modelAllowlist;
   if (list === null || list.whole.includes(provider)) return null;
-  if (serverVersion === null || !MODEL_LIMIT_VERSIONS.includes(serverVersion)) return null;
+  if (!MODEL_LIMIT_VERSIONS.some((each) => isOpenClaw(serverVersion, each))) return null;
   const who = providerName(provider);
   // With any wildcard in the list, a bot set to a model it doesn't name runs on the first one it
   // allows; without one, it runs on its own (docs/research/model-catalog.md, section 8).
