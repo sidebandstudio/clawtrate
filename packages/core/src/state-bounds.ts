@@ -15,7 +15,7 @@ import {
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import {
   MAX_DEVICE_REQUESTS,
-  MAX_REPORTED_CHARS,
+  MAX_REPORTED_JSON_CHARS,
   PAIR_CODE_CHOICES,
   type DeviceRequest,
   type DeviceRequestsState,
@@ -824,7 +824,7 @@ const openclawUpdating = object<OpenClawUpdateState>()({
   held: object<NonNullable<OpenClawUpdateState["held"]>>()({ gatewayId: ID, to: NAME }),
 });
 /** Waiting devices (`device-approval.ts`). */
-const reported = text(MAX_REPORTED_CHARS);
+const reported = text(MAX_REPORTED_JSON_CHARS);
 export const DEVICE_REQUESTS: Bound = object<DeviceRequestsState>()({
   access: ENUM,
   requests: list(

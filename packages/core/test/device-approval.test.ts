@@ -12,6 +12,8 @@ import {
   type DeviceRequestsState,
 } from "../src/device-approval.ts";
 import { FULL_SCOPES } from "../src/scopes.ts";
+import { enforceState } from "../src/state-bounds.ts";
+import { initialState } from "../src/types.ts";
 
 let keys = 0;
 /**
@@ -63,6 +65,7 @@ function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } 
   const answers: Record<string, (params: Row) => unknown> = {};
   let state: DeviceRequestsState | undefined;
   const timers: Array<() => void> = [];
+  const delays = new Map<() => void, number>();
   let admin = options.admin ?? true;
   const engine = new DeviceApprovals({
     request: async (method, params) => {
@@ -93,8 +96,9 @@ function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } 
     pairing: () => options.pairing ?? admin,
     answered: (error) => error instanceof Refusal,
     now: () => now,
-    later: (run) => {
+    later: (run, ms) => {
       timers.push(run);
+      delays.set(run, ms);
       return () => void timers.splice(timers.indexOf(run), 1);
     },
     get: () => state,
@@ -112,6 +116,8 @@ function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } 
     engine,
     state: () => state!,
     request: (id: string) => state!.requests.find((each) => each.requestId === id)!,
+    /** The delays of the timers still set. */
+    delays: () => timers.map((run) => delays.get(run)),
     fire: async () => {
       while (timers.length > 0) timers.shift()!();
       await settle();
@@ -356,6 +362,54 @@ describe("approving a waiting device", () => {
   });
 });
 
+describe("a connection that changes during a decision", () => {
+  it("approves nothing when it changes while the request is read again", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.list"] = () => {
+      t.engine.onHello();
+      return { pending: [row], paired: [] };
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "interrupted",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
+  });
+
+  it("removes nothing when it changes while the paired device is read", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    let lists = 0;
+    t.answers["device.pair.list"] = () => {
+      lists += 1;
+      // The second read is the paired device's, after the approval.
+      if (lists === 2) t.engine.onHello();
+      return {
+        pending: lists === 1 ? [row] : [],
+        paired: lists === 1 ? [] : [pairedOf(row, { scopes: ["operator.admin"] })],
+      };
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "unknown",
+    });
+    expect(t.calls).not.toContain("device.pair.remove");
+  });
+
+  it("checks and removes nothing on another connection than the approval's", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.approve"] = () => {
+      t.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+      t.engine.onHello();
+      return {};
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "unknown",
+    });
+    expect(t.calls).not.toContain("device.pair.remove");
+  });
+});
+
 describe("the waiting requests", () => {
   it("keeps the newest sixteen of twenty, counts the rest, and opens none by itself", async () => {
     const rows = Array.from({ length: 20 }, (_, i) => pendingRow(newKey(), { ts: i }));
@@ -394,6 +448,41 @@ describe("the waiting requests", () => {
     expect(t.state().prompt).toBe("req-again");
   });
 
+  it("brings the 30-second read forward for an event", async () => {
+    const t = await listed([pendingRow()]);
+    expect(t.delays()).toEqual([30_000]);
+    t.advance(5_000);
+    t.engine.onEvent("device.pair.requested", { requestId: "new" });
+    expect(t.delays()).toEqual([0]);
+  });
+
+  it("keeps a pick spent while its request is past the sixteen shown", async () => {
+    const old = pendingRow(newKey(), { ts: 0 });
+    const t = await listed([old]);
+    expect(await t.engine.refuse(old.requestId as string, "none-match")).toEqual({
+      kind: "none-match",
+    });
+    t.gw.pending = [
+      old,
+      ...Array.from({ length: 16 }, (_, i) => pendingRow(newKey(), { ts: i + 1 })),
+    ];
+    await t.engine.refresh();
+    expect(t.state().omitted).toBe(1);
+    t.gw.pending = [old];
+    await t.engine.refresh();
+    expect(t.request(old.requestId as string).spent).toBe(true);
+  });
+
+  it("keeps what a device reports whole in the state, up to its bound", async () => {
+    const origin = `https://${"\u{1F600}".repeat(56)}`;
+    const t = await listed([
+      pendingRow(newKey(), { browserOrigin: origin, displayName: "a".repeat(64) }),
+    ]);
+    const kept = enforceState({ ...initialState, deviceRequests: t.state() }).deviceRequests!;
+    expect(kept.requests[0]!.origin).toBe(origin);
+    expect(kept.requests[0]!.name).toBe("a".repeat(64));
+  });
+
   it("reads a burst of events once", async () => {
     const t = await listed([]);
     for (let i = 0; i < 5; i += 1)
@@ -426,8 +515,9 @@ describe("the waiting requests", () => {
     expect(t.state()).toMatchObject({ access: "notice", noticed: 2, requests: [] });
     t.engine.onEvent("device.pair.resolved", { requestId: "a" });
     expect(t.state().noticed).toBe(1);
+    // The notice ends when its five minutes are up, with no event needed.
     t.advance(5 * 60_000);
-    t.engine.onEvent("device.pair.resolved", { requestId: "c" });
+    await t.fire();
     expect(t.state()).toMatchObject({ access: "none", noticed: 0 });
     expect(t.calls).toEqual([]);
   });

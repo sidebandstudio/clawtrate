@@ -15,8 +15,10 @@ import { FULL_SCOPES } from "./scopes.ts";
 
 /** Requests kept and shown, newest first; past it, `omitted` counts the rest. */
 export const MAX_DEVICE_REQUESTS = 16;
-/** A reported name, platform or app, as shown. */
+/** A reported name, platform or app, as shown, in characters. */
 export const MAX_REPORTED_CHARS = 64;
+/** The same as JSON: two units for a character past the basic plane, and the quotes. */
+export const MAX_REPORTED_JSON_CHARS = 2 * MAX_REPORTED_CHARS + 2;
 /** Codes offered for one request: its own and the made-up ones. */
 export const PAIR_CODE_CHOICES = 4;
 /** Characters in a code: 5 bytes of SHA-256, 40 bits, in Crockford's Base32. */
@@ -172,6 +174,8 @@ export type DeviceDecision =
   | { kind: "refused"; message: string }
   /** The answer was lost: what the gateway did isn't known. */
   | { kind: "unknown" }
+  /** The connection changed before the approval was sent: nothing was approved. */
+  | { kind: "interrupted" }
   /** Not offered here: not admin, a read-only host, or a blocked request. */
   | { kind: "not-allowed" };
 
@@ -305,7 +309,11 @@ export class DeviceApprovals {
   private reading = false;
   private again = false;
   private cancelRead: (() => void) | null = null;
+  /** When the scheduled read is due. */
+  private readDue = Infinity;
   private lastReadAt = -Infinity;
+  /** Ends the earliest notice when its five minutes are up, with no event needed. */
+  private cancelNotice: (() => void) | null = null;
 
   constructor(ctx: DeviceApprovalsContext) {
     this.ctx = ctx;
@@ -324,7 +332,7 @@ export class DeviceApprovals {
   onHello(): void {
     this.epoch += 1;
     this.clearTimer();
-    this.noticed.clear();
+    this.clearNotices();
     const admin = this.ctx.admin();
     this.ctx.set({ ...initialDeviceRequests, access: admin ? "admin" : "none" });
     if (admin) void this.read();
@@ -336,7 +344,7 @@ export class DeviceApprovals {
     this.clearTimer();
     this.reading = false;
     this.again = false;
-    this.noticed.clear();
+    this.clearNotices();
     if (this.ctx.get()) this.ctx.set(initialDeviceRequests);
   }
 
@@ -357,13 +365,29 @@ export class DeviceApprovals {
     if (!this.ctx.pairing()) return;
     const requestId = str(asRecord(payload)?.requestId);
     if (!requestId || requestId.length > 128) return;
-    const now = this.ctx.now();
-    for (const [id, until] of this.noticed) if (until <= now) this.noticed.delete(id);
     if (event === "device.pair.requested") {
       if (this.noticed.size >= MAX_DEVICE_REQUESTS && !this.noticed.has(requestId)) return;
-      this.noticed.set(requestId, now + NOTICE_MS);
+      this.noticed.set(requestId, this.ctx.now() + NOTICE_MS);
     } else if (event === "device.pair.resolved") this.noticed.delete(requestId);
+    this.notice();
+  }
+
+  /** The notices that haven't ended, published; the earliest end is timed. */
+  private notice(): void {
+    this.cancelNotice?.();
+    this.cancelNotice = null;
+    const now = this.ctx.now();
+    for (const [id, until] of this.noticed) if (until <= now) this.noticed.delete(id);
     this.patch({ access: this.noticed.size > 0 ? "notice" : "none", noticed: this.noticed.size });
+    if (this.noticed.size === 0) return;
+    const next = Math.min(...this.noticed.values());
+    this.cancelNotice = this.ctx.later(() => this.notice(), Math.max(next - now, 0));
+  }
+
+  private clearNotices(): void {
+    this.cancelNotice?.();
+    this.cancelNotice = null;
+    this.noticed.clear();
   }
 
   /** Read the list now, or once the read under way ends. */
@@ -382,20 +406,28 @@ export class DeviceApprovals {
   private clearTimer(): void {
     this.cancelRead?.();
     this.cancelRead = null;
+    this.readDue = Infinity;
   }
 
-  /** One read for a burst of events, at most one each `READ_GAP_MS`. */
+  /**
+   * One read for a burst of events, at most one each `READ_GAP_MS`. An event brings a later
+   * scheduled read (the 30-second one) forward; it never puts one back.
+   */
   private schedule(ms = 0): void {
     if (this.reading) {
       this.again = true;
       return;
     }
-    if (this.cancelRead) return;
-    const wait = Math.max(ms, this.lastReadAt + READ_GAP_MS - this.ctx.now(), 0);
+    const now = this.ctx.now();
+    const due = Math.max(now + ms, this.lastReadAt + READ_GAP_MS);
+    if (this.cancelRead && this.readDue <= due) return;
+    this.clearTimer();
+    this.readDue = due;
     this.cancelRead = this.ctx.later(() => {
       this.cancelRead = null;
+      this.readDue = Infinity;
       void this.read();
-    }, wait);
+    }, due - now);
   }
 
   private async read(): Promise<void> {
@@ -434,7 +466,8 @@ export class DeviceApprovals {
       .filter((request): request is DeviceRequest => request !== null)
       .sort((a, b) => b.at - a.at);
     const requests = all.slice(0, MAX_DEVICE_REQUESTS);
-    const ids = new Set(requests.map((request) => request.requestId));
+    // Every request still pending, shown or past the bound: a spent pick stays spent.
+    const ids = new Set(all.map((request) => request.requestId));
     for (const id of this.spent) if (!ids.has(id)) this.spent.delete(id);
     for (const id of this.prompted) if (!ids.has(id)) this.prompted.delete(id);
     const now = this.ctx.now();
@@ -495,8 +528,12 @@ export class DeviceApprovals {
       return { kind: "wrong-code" };
     }
     if (!sameSet(scopes, shown.scopes)) return { kind: "changed", what: ["access"] };
+    // Each step goes on the connection the sheet was read on, or not at all.
+    const epoch = this.epoch;
+    const same = () => epoch === this.epoch;
     try {
       const row = await this.readAgain(requestId);
+      if (!same()) return { kind: "interrupted" };
       if (!row) return this.gone();
       const what = differences(shown, row);
       if (what.length > 0) {
@@ -509,16 +546,19 @@ export class DeviceApprovals {
     try {
       await this.ctx.request("device.pair.approve", { requestId });
     } catch (error) {
-      if (!this.ctx.answered(error)) return this.afterLost(shown);
+      if (!this.ctx.answered(error)) return this.afterLost(shown, same);
       if (unknownRequest(error)) return this.gone();
       void this.read();
       return { kind: "refused", message: errorText(error) };
     }
-    return this.check(shown);
+    return this.check(shown, same);
   }
 
-  /** After the approval's answer: the paired device is exactly what was shown, or it is removed. */
-  private async check(shown: DeviceRequest): Promise<DeviceDecision> {
+  /**
+   * After the approval's answer: the paired device is exactly what was shown, or it is removed.
+   * On another connection than the approval's, nothing is read or removed: unknown.
+   */
+  private async check(shown: DeviceRequest, same: () => boolean): Promise<DeviceDecision> {
     let device: RawRecord | null;
     try {
       device = await this.readPaired(shown.deviceId);
@@ -527,11 +567,18 @@ export class DeviceApprovals {
     } finally {
       void this.read();
     }
+    if (!same()) return { kind: "unknown" };
     // Approved, but not listed as paired: what the gateway holds isn't known.
     if (!device) return { kind: "unknown" };
     const what = pairedDifferences(shown, device);
     if (what.length === 0) return { kind: "approved", deviceId: shown.deviceId };
     try {
+      if (!same())
+        return {
+          kind: "undo-failed",
+          what,
+          message: "The connection changed before Clawtrate could remove it.",
+        };
       await this.ctx.request("device.pair.remove", { deviceId: shown.deviceId });
       if (await this.readPaired(shown.deviceId))
         return { kind: "undo-failed", what, message: "The gateway still lists the device." };
@@ -549,9 +596,9 @@ export class DeviceApprovals {
   }
 
   /** The approval's answer was lost: read what the gateway did, and check it as for an answer. */
-  private async afterLost(shown: DeviceRequest): Promise<DeviceDecision> {
+  private async afterLost(shown: DeviceRequest, same: () => boolean): Promise<DeviceDecision> {
     try {
-      if (await this.readPaired(shown.deviceId)) return this.check(shown);
+      if (same() && (await this.readPaired(shown.deviceId))) return this.check(shown, same);
     } catch {
       // Not readable either: unknown.
     }

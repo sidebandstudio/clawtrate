@@ -4,8 +4,6 @@
   - region "Approve this device":
     - heading "Approve this device" [level=2]
     - paragraph: 127.0.0.1:18789 has not seen this device before. Approve it once on the gateway's machine and Clawtrate connects by itself.
-    - paragraph: "This device's code: K 7 Q F, 2 M X A"
-    - paragraph: "Or approve it with one click: open Clawtrate on a device that already has full control of this gateway and pick this code there."
     - paragraph: The gateway's owner runs this on the gateway's machine.
     - code: openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55
     - button "Copy approve command"
