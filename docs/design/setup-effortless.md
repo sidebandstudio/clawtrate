@@ -430,7 +430,7 @@ An earlier version of this section had the approver type a 16-character code and
 - **Afterwards.** The app reads the paired device. Its key, its roles (exactly `operator`), its scopes and its one live operator token's scopes must be exactly what was shown. Then: "Approved. The device connects in a moment." If any differs, the app removes the pairing at once (`device.pair.remove`) and says what differed; if the removal fails, it says so and where to remove it.
 - **An answer that was lost** is read back the same way: a paired device is checked as above; otherwise "Clawtrate didn't get the gateway's answer, so it can't say whether the device was approved."
 - **Another code** approves nothing: "That isn't this request's code, so nothing was approved." That request takes no other pick on this device. "Deny it" lets the device ask again.
-- **"None of these match"** sends nothing: "Nothing was approved." "Deny it" follows.
+- **"None of these match"**, offered only where codes are, sends nothing: "Nothing was approved." "Deny it" follows.
 - **"I didn't start this"** calls `device.pair.reject`: "Denied. The device can ask again."
 - **After a denial** a device on the shared token learns of it on its next connect, which files one more request as it stops (§4). That request is listed, and the five quiet minutes above keep it from opening the sheet by itself.
 - **Several windows and hosts.** Each decision reads the list again, so another window's or host's decision, an expiry or a supersession ends as "no longer pending". The app never names who decided.

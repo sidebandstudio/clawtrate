@@ -461,6 +461,25 @@ describe("a connection that changes during a decision", () => {
     expect(readsAfter(t, "device.pair.remove")).toEqual([]);
   });
 
+  it("adds no read of its own to a new admin connection, whose hello reads its list once", async () => {
+    for (const step of ["device.pair.approve", "device.pair.reject"] as const) {
+      const row = pendingRow();
+      const t = await listed([row]);
+      t.answers[step] = () => {
+        t.gw.pending = [];
+        t.gw.paired = step === "device.pair.approve" ? [pairedOf(row)] : [];
+        t.engine.onHello();
+        return {};
+      };
+      const id = row.requestId as string;
+      if (step === "device.pair.approve") await t.engine.approve(id, codeOf(row), [...FULL_SCOPES]);
+      else await t.engine.refuse(id, "not-mine");
+      await t.settle();
+      // The hello's own read, and nothing the stale decision asked for.
+      expect(readsAfter(t, step)).toEqual(["device.pair.list"]);
+    }
+  });
+
   it("checks and removes nothing on another connection than the approval's", async () => {
     const row = pendingRow();
     const t = await listed([row]);
@@ -545,6 +564,20 @@ describe("the waiting requests", () => {
     expect(t.state().omitted).toBe(0);
     expect(t.state().requests.every((each) => each.blocked === null)).toBe(true);
     expect(t.calls).not.toContain("device.pair.approve");
+  });
+
+  it("takes no None of these match on a blocked request, whatever its reason", async () => {
+    const spent = Array.from({ length: 16 }, (_, i) => pendingRow(newKey(), { ts: i }));
+    const t = await listed(spent);
+    for (const row of spent) await t.engine.refuse(row.requestId as string, "none-match");
+    const machine = pendingRow(newKey(), { ts: 100, role: "node", roles: ["node"] });
+    t.gw.pending = [...spent, machine];
+    await t.engine.refresh();
+    expect(t.request(machine.requestId as string).blocked).toBe("not-operator");
+    expect(await t.engine.refuse(machine.requestId as string, "none-match")).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.request(machine.requestId as string).spent).toBe(false);
   });
 
   it("blocks two waiting requests that show the same code, one of them past the sixteen", async () => {

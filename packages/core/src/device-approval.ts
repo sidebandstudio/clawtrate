@@ -566,15 +566,14 @@ export class DeviceApprovals {
     }
     if (!sameSet(scopes, shown.scopes)) return { kind: "changed", what: ["access"] };
     // Each step goes on the connection the sheet was read on, or not at all.
-    const epoch = this.epoch;
-    const same = () => epoch === this.epoch;
+    const same = this.here();
     try {
       const row = await this.readAgain(requestId);
       if (!same()) return { kind: "interrupted" };
-      if (!row) return this.gone();
+      if (!row) return this.gone(same);
       const what = differences(shown, row);
       if (what.length > 0) {
-        void this.read();
+        this.refreshOn(same);
         return { kind: "changed", what };
       }
     } catch (error) {
@@ -584,8 +583,8 @@ export class DeviceApprovals {
       await this.ctx.request("device.pair.approve", { requestId });
     } catch (error) {
       if (!this.ctx.answered(error)) return this.afterLost(shown, same);
-      if (unknownRequest(error)) return this.gone();
-      void this.read();
+      if (unknownRequest(error)) return this.gone(same);
+      this.refreshOn(same);
       return { kind: "refused", message: errorText(error) };
     }
     return this.check(shown, same);
@@ -602,7 +601,7 @@ export class DeviceApprovals {
     } catch {
       return { kind: "unknown" };
     } finally {
-      void this.read();
+      this.refreshOn(same);
     }
     // Another connection, or approved but not listed as paired: what the gateway holds isn't known.
     const device = read?.device;
@@ -668,9 +667,23 @@ export class DeviceApprovals {
     if (this.state.prompt !== null) this.patch({ prompt: null });
   }
 
-  private gone(): DeviceDecision {
-    void this.read();
+  private gone(same: () => boolean): DeviceDecision {
+    this.refreshOn(same);
     return { kind: "gone" };
+  }
+
+  /**
+   * A list read after a decision's step, on that decision's connection only: a new connection
+   * reads its own list on its hello, and a stale decision adds nothing to it.
+   */
+  private refreshOn(same: () => boolean): void {
+    if (same()) void this.read();
+  }
+
+  /** A guard on the connection this moment is on. */
+  private here(): () => boolean {
+    const epoch = this.epoch;
+    return () => epoch === this.epoch;
   }
 
   /** "I didn't start this" (`device.pair.reject`) or "None of these match" (nothing sent). */
@@ -679,19 +692,22 @@ export class DeviceApprovals {
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
     if (why === "none-match") {
-      if (shown.blocked === "too-many") return { kind: "not-allowed" };
+      // Only a request offering codes takes this pick: a blocked one (too many waiting, or a
+      // reason of its own) is denied or left, so spent picks stay within the requests shown.
+      if (shown.blocked !== null) return { kind: "not-allowed" };
       this.quiet();
       this.spend(requestId);
       return { kind: "none-match" };
     }
+    const same = this.here();
     try {
       this.quiet();
       await this.ctx.request("device.pair.reject", { requestId });
-      void this.read();
+      this.refreshOn(same);
       return { kind: "denied" };
     } catch (error) {
       if (!this.ctx.answered(error)) return { kind: "unknown" };
-      if (unknownRequest(error)) return this.gone();
+      if (unknownRequest(error)) return this.gone(same);
       return { kind: "refused", message: errorText(error) };
     }
   }
