@@ -10,13 +10,13 @@ import {
 } from "../src/cli.ts";
 import type { OpenclawRunner, RunResult } from "../src/env.ts";
 
-/** `approvals get` under load, as the command printed it (the state folder's path shortened). */
+/** `approvals get` under load, as the command printed it, with a neutral state folder path. */
 const UNREACHABLE = `openclaw --profile clawtrate-dev-turnseed approvals get --json failed:
 {
   "ok": false,
   "error": {
     "type": "cli_error",
-    "message": "Gateway owning /home/runner/.openclaw-clawtrate-dev-turnseed on local port 19660 could not complete exec.approvals.get for default exec approvals: Gateway not reachable at ws://127.0.0.1:19660 (ETIMEDOUT).\\nStart it with \`openclaw gateway run\` or check \`openclaw gateway status\`."
+    "message": "Gateway owning /state/exec-check on local port 19660 could not complete exec.approvals.get for default exec approvals: Gateway not reachable at ws://127.0.0.1:19660 (ETIMEDOUT).\\nStart it with \`openclaw gateway run\` or check \`openclaw gateway status\`."
   }
 }`;
 
