@@ -1899,6 +1899,12 @@ button.reaction {
 
 /* A system event the gateway woke a task with (#637): the same quiet line, its text kept as
    written, line breaks included. */
+.gateway-event-note {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
 .gateway-event-text {
   margin: 0;
   overflow-wrap: anywhere;

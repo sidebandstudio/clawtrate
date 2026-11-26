@@ -4,7 +4,8 @@
 // "nothing to say", and adds nothing to the task. On 2026.11.10 it is an ordinary turn whose
 // history keeps the event as a user row with `provenance.kind: "internal_system"`, then the bot's
 // answer. Either way the event's words never show in the person's bubble: on 2026.11.10 the row
-// is the gateway's quiet line, with the event's text one step away.
+// is the gateway's quiet line, with the event's text one step away. A look-alike, the same mark on
+// a row a write client had `agent` write, never gets the event's text on either version.
 import { expect, test, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { instanceForm, openInstance } from "../tools/dev-gateway/src/cli.ts";
@@ -131,12 +132,39 @@ test("#637: a system event the gateway wakes a task with is the gateway's line, 
       await expect(line.locator("p.event-line")).toHaveText("The gateway started a turn by itself");
       const text = line.getByText(event, { exact: true });
       await expect(text).toBeHidden();
-      await line.getByText("Event text").click();
+      await line.getByText("Text that came with it").click();
       await expect(text).toBeVisible();
+      await expect(
+        line.getByText(
+          "Written by whatever started this turn (a command, a bot or another app), not by the gateway or Clawtrate.",
+        ),
+      ).toBeVisible();
       await expect(transcript.locator('.msg[data-role="assistant"] .bubble')).toHaveCount(2, {
         timeout: 60_000,
       });
     }
+    // A look-alike: a client with write access has `agent` write the same mark on a row of its own.
+    // It isn't the gateway's event: on either version it is the plain line, its words never shown
+    // as the event's text.
+    const lookalike = `Exec completed (e2e-lookalike-${suffix}, code 0) :: sent through agent`;
+    const replies = transcript.locator('.msg[data-role="assistant"] .bubble');
+    const before = await replies.count();
+    await gatewayCall("agent", {
+      agentId: "otto",
+      sessionKey: key,
+      message: lookalike,
+      idempotencyKey: `lookalike-${suffix}`,
+      inputProvenance: { kind: "internal_system", sourceTool: "cron" },
+    });
+    await expect(replies).toHaveCount(before + 1, { timeout: 60_000 });
+    await expect(
+      transcript
+        .locator("p.event-line")
+        .filter({ hasText: /^The gateway started a turn by itself$/ }),
+    ).toHaveCount(form.heartbeat ? 1 : 2);
+    await expect(line).toHaveCount(form.heartbeat ? 0 : 1);
+    await expect(line.filter({ hasText: lookalike })).toHaveCount(0);
+    await expect(yours.filter({ hasText: lookalike })).toHaveCount(0);
     // Never in the person's bubble, on either version: the only message of theirs is their own.
     await expect(yours).toHaveCount(1);
     await expect(yours).toHaveText(/#text/);

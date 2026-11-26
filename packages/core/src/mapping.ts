@@ -596,6 +596,9 @@ const SYSTEM_ROW_TEXT: Record<string, string> = {
  * `internal_system` (OpenClaw 2026.10.6 and 2026.11.10, `input-provenance`). It shows
  * as a line saying what the gateway did. The restart recovery's prompt names a
  * restart the gateway believes happened; the line says only that it resumed a turn.
+ * On 2026.11.10 that recovery is a session event of its own, `source: "restart"`, whose
+ * text is the gateway's prompt to the bot (`session-restart-resume.ts`); on 2026.10.6 a
+ * `restart` event is the restart sentinel's queued message, which keeps today's line.
  * `event` is the row's text when it is a system event the gateway woke the task with
  * (`mapHistory`'s `gatewayEvents`, `isSessionEventRow`), not its own prompt to the bot.
  */
@@ -605,7 +608,8 @@ function gatewayTurn(
 ): { line: string; event: string | null } | null {
   const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
   if (provenance?.kind !== "internal_system") return null;
-  if (str(provenance.sourceTool)?.toLowerCase() === "main_session_restart_recovery")
+  const source = str(provenance.sourceTool)?.toLowerCase();
+  if (source === "main_session_restart_recovery" || (events && source === "restart"))
     return { line: "The gateway resumed an earlier turn by itself", event: null };
   return {
     line: "The gateway started a turn by itself",

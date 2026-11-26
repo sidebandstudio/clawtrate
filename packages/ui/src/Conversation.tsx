@@ -55,7 +55,7 @@ import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
-import { GatewayEventLine } from "./GatewayEventLine.tsx";
+import { SystemLine } from "./GatewayEventLine.tsx";
 import { UpdateLine } from "./UpdateLine.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
@@ -466,12 +466,8 @@ function TranscriptView({
             line={updateLine}
             {...(item.messageId ? { messageId: item.messageId } : {})}
           />
-        ) : item.gatewayEvent ? (
-          <GatewayEventLine item={item} />
         ) : item.role === "system" ? (
-          <p className="event-line" data-side="center">
-            {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
-          </p>
+          <SystemLine item={item} />
         ) : live.echoes.has(item.id) ? null : (
           <Turn
             taskKey={task.key}

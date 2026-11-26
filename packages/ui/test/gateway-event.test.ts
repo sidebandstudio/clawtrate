@@ -1,6 +1,7 @@
 // #637: a system event the gateway woke a task with, on a gateway that writes the event as its
 // own row (OpenClaw 2026.11.10): the gateway's quiet line, with the event's text behind a
-// disclosure that names no author, and none of a person's or a bot's message parts. The mounted
+// disclosure that says the words aren't the gateway's or Clawtrate's own, and none of a person's
+// or a bot's message parts. The mounted
 // conversation is checked in visual/gateway-event.visual.spec.ts. Rows have the fields a
 // development instance of 2026.11.10 returned, with made-up ids.
 
@@ -8,7 +9,7 @@ import { mapHistory } from "@clawtrate/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { GatewayEventLine } from "../src/GatewayEventLine.tsx";
+import { GatewayEventLine, SystemLine } from "../src/GatewayEventLine.tsx";
 
 const row = (text: string) => ({
   role: "user",
@@ -31,13 +32,17 @@ const markupOf = (text: string) => {
 };
 
 describe("#637: the gateway's event line", () => {
-  it("says the gateway started a turn, once, with the event's text behind a disclosure that names no author", () => {
+  it("says the gateway started a turn, once, with the event's text behind a disclosure that says the words aren't the gateway's or Clawtrate's", () => {
     const markup = markupOf("Exec completed (b7d41c2e, code 0, 12s): the command you ran finished");
     expect(markup).toMatch(
       /^<div class="update-line" data-testid="gateway-event"><p class="event-line" data-side="center">The gateway started a turn by itself<\/p>/,
     );
     expect(markup).toMatch(
-      /<details class="event-details"><summary class="event-line" data-side="center">Event text<svg[^>]*aria-hidden="true"/,
+      /<details class="event-details"><summary class="event-line" data-side="center">Text that came with it<svg[^>]*aria-hidden="true"/,
+    );
+    // Before the words, always: whatever started the turn wrote them, not the gateway or Clawtrate.
+    expect(markup).toContain(
+      '<div class="card event-body"><p class="gateway-event-note">Written by whatever started this turn (a command, a bot or another app), not by the gateway or Clawtrate.</p><p class="gateway-event-text">',
     );
     expect(markup).toContain(
       '<p class="gateway-event-text">Exec completed (b7d41c2e, code 0, 12s): the command you ran finished</p>',
@@ -56,5 +61,28 @@ describe("#637: the gateway's event line", () => {
     expect(markup).toContain(
       "&lt;img src=x onerror=alert(1)&gt; **bold**\n[link](https://example.com)",
     );
+  });
+});
+
+describe("#637: a system item in the conversation (SystemLine)", () => {
+  it("is the gateway's event line when the item carries an event's text", () => {
+    const [item] = mapHistory([row("Exec completed (b7d41c2e, code 0, 12s): done")], {
+      gatewayEvents: true,
+    });
+    const markup = renderToStaticMarkup(createElement(SystemLine, { item: item! }));
+    expect(markup).toContain('data-testid="gateway-event"');
+    expect(markup).toContain("Exec completed (b7d41c2e, code 0, 12s): done");
+  });
+
+  it("is the plain line alone otherwise, on 2026.10.6 and for a row without the event's shape", () => {
+    for (const item of [
+      mapHistory([row("Exec completed (b7d41c2e, code 0, 12s): done")])[0]!,
+      mapHistory([{ ...row("typed by a client"), idempotencyKey: "other:user" }], {
+        gatewayEvents: true,
+      })[0]!,
+    ])
+      expect(renderToStaticMarkup(createElement(SystemLine, { item }))).toBe(
+        '<p class="event-line" data-side="center">The gateway started a turn by itself</p>',
+      );
   });
 });

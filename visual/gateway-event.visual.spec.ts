@@ -105,7 +105,7 @@ for (const size of [WIDE, PHONE]) {
         ).toHaveCount(0);
         await settle(page);
         await expect(page).toHaveScreenshot(`gateway-event-${theme}-${size.name}.png`);
-        await line(page).getByText("Event text").click();
+        await line(page).getByText("Text that came with it").click();
         await expect(line(page).getByText(/^Exec completed \(5e1f9a3b/)).toBeVisible();
         await settle(page);
         await expect(page).toHaveScreenshot(`gateway-event-open-${theme}-${size.name}.png`);

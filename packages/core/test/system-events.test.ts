@@ -95,6 +95,28 @@ describe("on a gateway that writes the event as its row (2026.11.10)", () => {
     });
   });
 
+  it("a restart resume, 2026.11.10's own event, is the resumed line with its prompt unshown", () => {
+    // 2026.11.10 resumes a task after a restart through the session event path
+    // (`session-restart-resume.ts`: `source: "restart"`), the text its prompt to the bot.
+    const resume = eventRow(
+      "Note: The previous agent run was interrupted. Review the transcript and current state, then continue the unfinished work in light of the latest user message.\n\nThe Gateway restarted while you were working. Resume your work.",
+      "restart",
+    );
+    const expected = {
+      id: "ev-1:0",
+      role: "system",
+      timestamp: 1_800_000_000_000,
+      blocks: [{ kind: "text", text: "The gateway resumed an earlier turn by itself" }],
+      model: null,
+    };
+    expect(mapHistory([resume], { gatewayEvents: true })[0]).toEqual(expected);
+    // On 2026.10.6 a `restart` event is the restart sentinel's message: today's line, unchanged.
+    expect(mapHistory([resume])[0]).toEqual({
+      ...expected,
+      blocks: [{ kind: "text", text: LINE }],
+    });
+  });
+
   it("an event with no text left is the line alone", () => {
     for (const content of ["", "  \n\u0007 ", [], [{ type: "image", data: "x" }]]) {
       const [item] = mapHistory([eventRow(content)], { gatewayEvents: true });
