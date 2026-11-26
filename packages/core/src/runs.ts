@@ -16,6 +16,7 @@ import {
 import { projectArgs, projectDetails } from "./actions.ts";
 import { asRecord, liveTextFromChatMessage, type RawRecord } from "./mapping.ts";
 import { filePathsOf } from "./file-paths.ts";
+import { startSeen } from "./not-run.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
   MAX_CLOSED_CARDS_PER_RUN,
@@ -392,6 +393,16 @@ export type RunError = {
    * history).
    */
   raw?: RunErrorRaw;
+  /**
+   * The gateway failed the run's message before any run of it started: its history keeps a
+   * "run-failed-before-reply" row for it (`not-run.ts`).
+   */
+  beforeReply?: true;
+  /**
+   * The gateway marked the end as one not to show (`suppressErrorNotice`, OpenClaw 2026.11.10),
+   * as it does for a turn it started itself that the bot answered quietly (#680).
+   */
+  quiet?: true;
 };
 
 /** What a failed run's Raw holds (F-301). */
@@ -428,6 +439,14 @@ export type Run = {
   messageId: string | null;
   /** The transcript item (the user's message) the run belongs under, once known. */
   anchorItemId: string | null;
+  /**
+   * `anchorItemId` is the person's message the run is known to have started from: the message
+   * that started it from another task, the row the gateway keyed `<runId>:user`, or this client's
+   * own sent message. Otherwise it is only where the run is drawn (the latest message before its
+   * first row), which never decides what Try again sends, and never survives a history merge
+   * (#686).
+   */
+  anchorKeyed?: true;
   /** Latest preparation phase from `chat` status or `agent` run_status events. */
   phase: string | null;
   model: string | null;
@@ -484,6 +503,18 @@ export type Run = {
    * gateway's lifecycle reported: no duration is read from it.
    */
   endFromRows?: boolean;
+  /**
+   * History holds an assistant row of this run: the gateway ran it, whatever this client saw
+   * of its events. Kept through every history merge (`not-run.ts`).
+   */
+  ranInHistory?: true;
+  /**
+   * An event of the run said it started where none of its other fields keeps it: one that came
+   * after the run's end (a lifecycle error saying the provider started, after the `chat` error), or
+   * an attempt's error saying the provider started. Evidence that a run started is kept whatever
+   * order it came in (`not-run.ts`, #686).
+   */
+  startSaid?: true;
   /**
    * The anchor the run's next reasoning block is numbered from: `t.<toolCallId>`
    * of the latest tool call, `c` when a history window began inside the run
@@ -1605,7 +1636,13 @@ export function registerRunAlias(
  * built from history only): a user row keyed `<send id>:user` (OpenClaw 2026.10.6) followed
  * by rows under a run id the page has not shown before. A steer's user row is followed by
  * the rows of the run it was sent into, which came before it, and an ordinary turn's by
- * rows under the send's own id: neither pairs.
+ * rows under the send's own id: neither pairs. Nor does a failure's row, whose place proves nothing.
+ *
+ * A place pairs only when no other message on the page could own those rows: every earlier send
+ * on it has rows of its own (or joined a run as a steer), and no message with no key is still
+ * without rows after it. Two quick sends can put the first one's reply after the second's prompt:
+ * that reply is then paired by a key or the gateway's own pairing, or by nothing, never by its
+ * place (#686).
  */
 export function historyQueuePairs(
   messages: unknown,
@@ -1613,6 +1650,10 @@ export function historyQueuePairs(
   const pairs: Array<[string, string]> = [];
   // Run ids the page has shown so far, sends and their rows alike.
   const seen = new Set<string>();
+  // Sends on the page with no rows of their own yet, and whether a message with no key has no rows
+  // after it yet.
+  const waiting = new Set<string>();
+  let unkeyed = false;
   let sendId: string | null = null;
   for (const entry of Array.isArray(messages) ? messages : []) {
     const message = asRecord(entry);
@@ -1620,13 +1661,31 @@ export function historyQueuePairs(
     if (message.role === "user") {
       const key = rowIdempotencyKey(message);
       sendId = key?.endsWith(":user") ? key.slice(0, -":user".length) : null;
-      if (sendId) seen.add(sendId);
+      if (sendId) {
+        seen.add(sendId);
+        waiting.add(sendId);
+      } else unkeyed = true;
       continue;
     }
     const runId = str(meta(message).runId);
     if (!runId) continue;
-    if (sendId && runId !== sendId && !seen.has(runId)) pairs.push([runId, sendId]);
+    // A failure's row never pairs by its place: a later message may sit between the send and it,
+    // and the failure, with its Try again, would then belong to that one. Only a key, or a pairing
+    // the gateway names (`sessions.changed` `clientRunId`), gives a failure its message (#686).
+    const failure =
+      (message.role === "custom" && message.customType === RUN_FAILED_BEFORE_REPLY) ||
+      str(message.stopReason) === "error";
+    const alone = !unkeyed && waiting.size === 1;
+    if (sendId && runId !== sendId && !seen.has(runId) && !failure && alone) {
+      pairs.push([runId, sendId]);
+      waiting.delete(sendId);
+    }
+    // A send followed at once by rows of a run shown before is a steer into it: no run of its own.
+    if (sendId && seen.has(runId)) waiting.delete(sendId);
+    waiting.delete(runId);
     seen.add(runId);
+    // Rows came after a message with no key: they are its own, or it joined their run.
+    unkeyed = false;
     sendId = null;
   }
   return pairs;
@@ -1809,7 +1868,12 @@ export function applyQuestionRequested(
   if (existing && existing.status !== "pending") return activity;
   if (!existing && questionSettled(activity, id)) return activity;
   const known = runId ? findRun(activity, runId) : undefined;
-  if (known && isTerminal(known.state)) return activity;
+  // An ended run takes no question; that one was asked still says it started.
+  if (known && isTerminal(known.state))
+    return noteLateStart(activity, known, (run) => ({
+      ...run,
+      pendingCards: [...run.pendingCards, { id, kind: "question", since: null }],
+    }));
   if (
     !existing &&
     activity.questions.filter((question) => question.status === "pending").length >=
@@ -2099,7 +2163,14 @@ export function applyChatEvent(
   if (existing && isTerminal(existing.state)) {
     // An end this client only inferred gives way to the end the gateway sends.
     const ends = state === "final" || state === "aborted" || state === "error";
-    if (existing.outcomeKnown || !ends) return activity;
+    if (existing.outcomeKnown || !ends) {
+      // Reply text after the end still says the run started.
+      const text =
+        state === "delta" || state === "final"
+          ? (projectedText ?? contentText(asRecord(payload.message)?.content))
+          : "";
+      return noteLateStart(activity, existing, (run) => ({ ...run, text: text || run.text }));
+    }
     activity = replaceRun(activity, reopenInferred(existing));
   }
   let next = ensureRun(activity, runId, ctx);
@@ -2129,6 +2200,7 @@ export function applyChatEvent(
           message: str(payload.errorMessage) ?? "The run failed.",
           kind: str(payload.errorKind),
           raw: rawEvent(ctx, run.id, "chat-event", payload),
+          ...(payload.suppressErrorNotice === true ? { quiet: true as const } : {}),
         });
       default:
         return run;
@@ -2158,23 +2230,8 @@ export function applyAgentEvent(
   // not taken as loss; loss is the connection-level frame gap.
   if (existing && seq !== null && existing.lastSeq !== null && seq <= existing.lastSeq)
     return { activity };
-  const replacement = stream === "tool" && data.phase === "result" && data.replace === true;
-  if (existing && isTerminal(existing.state) && !replacement) {
-    // An end this client only inferred gives way to the end the gateway sends.
-    const ends = stream === "lifecycle" && (data.phase === "end" || data.phase === "error");
-    if (existing.outcomeKnown || !ends) return { activity };
-    activity = replaceRun(activity, reopenInferred(existing));
-  }
-
-  let next = ensureRun(activity, runId, ctx);
   const ts = num(payload.ts) ?? ctx.now;
-  next = updateRun(next, runId, (run) => {
-    if (seq !== null && (run.lastSeq === null || seq > run.lastSeq)) run = { ...run, lastSeq: seq };
-    // The model answered again: a retry it was waiting on is over.
-    if (run.retry && (stream === "assistant" || stream === "thinking" || stream === "tool")) {
-      const { retry: _over, ...rest } = run;
-      run = rest;
-    }
+  const apply = (run: Run, ctx: EngineContext): Run => {
     switch (stream) {
       case "lifecycle":
         return applyLifecycle(run, data, ts, ctx);
@@ -2203,8 +2260,44 @@ export function applyAgentEvent(
       default:
         return run;
     }
+  };
+  const replacement = stream === "tool" && data.phase === "result" && data.replace === true;
+  if (existing && isTerminal(existing.state) && !replacement) {
+    // An end this client only inferred gives way to the end the gateway sends.
+    const ends = stream === "lifecycle" && (data.phase === "end" || data.phase === "error");
+    if (existing.outcomeKnown || !ends)
+      return {
+        activity: noteLateStart(activity, existing, (run) =>
+          apply(run, { ...ctx, raw: new RawTable() }),
+        ),
+      };
+    activity = replaceRun(activity, reopenInferred(existing));
+  }
+
+  let next = ensureRun(activity, runId, ctx);
+  next = updateRun(next, runId, (run) => {
+    if (seq !== null && (run.lastSeq === null || seq > run.lastSeq)) run = { ...run, lastSeq: seq };
+    // The model answered again: a retry it was waiting on is over.
+    if (run.retry && (stream === "assistant" || stream === "thinking" || stream === "tool")) {
+      const { retry: _over, ...rest } = run;
+      run = rest;
+    }
+    return apply(run, ctx);
   });
   return { activity: next };
+}
+
+/**
+ * An event an ended run takes nothing more from may still show the run started (`startSeen`): a
+ * lifecycle error saying the provider started, arriving after the `chat` error, or a step, reply
+ * text, a preamble or a card arriving after the end. The run keeps that (`startSaid`): evidence
+ * that it started is never lost to the order events came in (#686). The event is tried on a copy,
+ * as if the run were still going, with a raw table of its own, so nothing else of it is kept.
+ */
+function noteLateStart(activity: TaskActivity, run: Run, apply: (run: Run) => Run): TaskActivity {
+  if (run.startSaid || startSeen(run)) return activity;
+  if (!startSeen(apply({ ...run, state: "running" }))) return activity;
+  return replaceRun(activity, { ...run, startSaid: true });
 }
 
 function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
@@ -2260,6 +2353,8 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
         return {
           ...run,
           attemptErrors: [...run.attemptErrors, message].slice(-MAX_ATTEMPT_ERRORS),
+          // The attempt reached the provider: the run started, whatever ends it.
+          ...(data.providerStarted === true ? { startSaid: true as const } : {}),
         };
       }
       run = { ...run, ending: endingOf(data, run.ending) };
@@ -2394,6 +2489,7 @@ function terminalFromLifecycle(
           message: message ?? "The run failed.",
           kind: reason,
           raw: rawEvent(ctx, run.id, "lifecycle-data", data),
+          ...(data.suppressErrorNotice === true ? { quiet: true as const } : {}),
         },
         at,
       );
@@ -2779,6 +2875,13 @@ export function throughRunAliases(
   return { messages: rows, inFlight: flight ? { ...inFlight, runId: flight } : inFlight };
 }
 
+/**
+ * The `customType` of the row the gateway keeps in history for a message it failed before any run
+ * of it started (OpenClaw 2026.10.6 and 2026.11.10): `content` says so, with the reason on
+ * 2026.10.6; 2026.11.10 also sends it as `openclawRunError.summary`, often without the reason.
+ */
+export const RUN_FAILED_BEFORE_REPLY = "run-failed-before-reply";
+
 /** The display id `mapHistory` gives a row, so runs can anchor to transcript items. */
 export function historyItemId(message: RawRecord, index: number): string {
   return `${str(meta(message).id) ?? `row-${index}`}:${index}`;
@@ -2818,6 +2921,15 @@ export function runsFromHistory(
    * it started (OpenClaw 2026.10.6), not as a user row.
    */
   const startedBy = new Map<string, string>();
+  /**
+   * The user row the gateway keyed for each run, by run id: its idempotency key
+   * `${runId}:user`, or the bare key. A row by position only
+   * (the latest user row before the run's first row) is not this: two quick sends put a
+   * later message there (#686).
+   */
+  const keyedBy = new Map<string, string>();
+  /** Runs the gateway failed before any of them started, with what it kept of why. */
+  const beforeReply = new Map<string, string>();
   const rows = Array.isArray(messages) ? messages : [];
   const first = asRecord(rows[0]);
   const cutRunId =
@@ -2830,6 +2942,10 @@ export function runsFromHistory(
     if (!message) return;
     if (message.role === "user") {
       anchor = historyItemId(message, index);
+      // A steer's row is keyed by the steer's own id, never by the run it joined.
+      const key = rowIdempotencyKey(message);
+      const keyed = key?.endsWith(":user") ? key.slice(0, -":user".length) : key;
+      if (keyed && !keyedBy.has(keyed)) keyedBy.set(keyed, anchor);
       return;
     }
     const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
@@ -2842,7 +2958,21 @@ export function runsFromHistory(
     // The gateway's injected aborted-partial row names its run in `openclawAbort`.
     const runId = str(meta(message).runId) ?? str(asRecord(message.openclawAbort)?.runId);
     if (!runId) return;
+    // The gateway's record of a message it failed before any run of it started, and its words.
+    // One the gateway keeps hidden (`display: false`, for an end it marks not to show) isn't one.
+    if (
+      message.role === "custom" &&
+      message.customType === RUN_FAILED_BEFORE_REPLY &&
+      message.display !== false
+    ) {
+      const summary = str(asRecord(message.openclawRunError)?.summary);
+      beforeReply.set(
+        runId,
+        summary ?? (typeof message.content === "string" ? message.content : ""),
+      );
+    }
     const at = rowTime(message);
+    const keyedAnchor = startedBy.get(runId) ?? keyedBy.get(runId);
     let run =
       runs.get(runId) ??
       newRun(
@@ -2851,7 +2981,8 @@ export function runsFromHistory(
           state: "running",
           origin: "history",
           bound: true,
-          anchorItemId: startedBy.get(runId) ?? anchor,
+          anchorItemId: keyedAnchor ?? anchor,
+          ...(keyedAnchor ? { anchorKeyed: true as const } : {}),
           reasoningAnchor: runId === cutRunId ? "c" : null,
         },
         at,
@@ -2978,7 +3109,8 @@ export function runsFromHistory(
               state: "running",
               origin: "history",
               bound: true,
-              anchorItemId: anchor,
+              anchorItemId: keyedBy.get(inFlightRunId) ?? anchor,
+              ...(keyedBy.has(inFlightRunId) ? { anchorKeyed: true as const } : {}),
               reportedStartAt: num(snapshot?.startedAt),
             },
             num(snapshot?.startedAt),
@@ -3010,7 +3142,8 @@ export function runsFromHistory(
 
   // The newest run of the rows; the queued turn the gateway reports in flight is not one of them.
   const newest = [...runs.keys()].filter((id) => id !== inFlightRunId).at(-1);
-  return [...runs.values()].map((built) => {
+  return [...runs.values()].map((each) => {
+    const built: Run = lastAssistant.has(each.id) ? { ...each, ranInHistory: true } : each;
     if (built.id === inFlightRunId) return built;
     const lastRow = lastAssistant.get(built.id);
     const lastStop = str(lastRow?.stopReason);
@@ -3019,17 +3152,32 @@ export function runsFromHistory(
       lastStop === "length" ||
       lastStop === "aborted" ||
       lastStop === "error" ||
-      asRecord(lastRow?.openclawAbort)?.aborted === true;
+      asRecord(lastRow?.openclawAbort)?.aborted === true ||
+      (beforeReply.has(built.id) && !lastRow);
     // The newest run, its rows stopping short of an end, while the gateway has a turn of the
     // task in flight or queued: the gateway has not said it ended (it may wait on an approval
     // or a question, with a steer queued behind it). It stays open until its end is said.
     if (options.busy && built.id === newest && !endShown) return built;
-    // Its end is its last row's time, not one its lifecycle reported.
-    const run: Run = { ...built, endFromRows: true };
-    const last = lastAssistant.get(run.id);
+    const last = lastAssistant.get(built.id);
     const stopReason = str(last?.stopReason);
-    if (stopReason === "aborted" || asRecord(last?.openclawAbort)?.aborted === true) {
+    // Its end is its last row's time, not one its lifecycle reported. A failure sits only under
+    // the message its run is known to have started from: a row by position may be a later
+    // message, already answered, and Try again would send that one again. With no such row the
+    // failure has no message (`anchorItemId` null), and is said to be for an earlier one.
+    const stopped = stopReason === "aborted" || asRecord(last?.openclawAbort)?.aborted === true;
+    const failed = !stopped && ((beforeReply.has(built.id) && !last) || stopReason === "error");
+    const run: Run = {
+      ...built,
+      endFromRows: true,
+      ...(failed ? { anchorItemId: startedBy.get(built.id) ?? keyedBy.get(built.id) ?? null } : {}),
+    };
+    if (stopped) {
       return finishRun(run, "stopped", ctx, null, run.endedAt);
+    }
+    const notRun = beforeReply.get(run.id);
+    if (notRun !== undefined && !last) {
+      const message = notRun.trim() || "The run failed.";
+      return finishRun(run, "failed", ctx, { message, kind: null, beforeReply: true }, run.endedAt);
     }
     if (stopReason === "error") {
       // The gateway writes the failure as the run's last row; its text is the error itself.
@@ -3276,10 +3424,22 @@ export function mergeHistoryRuns(
       ...(omittedToolsAtEnd || current.omittedToolsAtEnd !== undefined
         ? { omittedToolsAtEnd }
         : {}),
-      anchorItemId: fromRun.anchorItemId ?? current.anchorItemId,
+      // A keyed anchor wins; else history's own placement, now. A position this client or an earlier
+      // read assigned never survives the merge: it was only where to draw the run (#686).
+      ...(fromRun.anchorKeyed
+        ? { anchorItemId: fromRun.anchorItemId, anchorKeyed: true as const }
+        : current.anchorKeyed
+          ? { anchorItemId: current.anchorItemId, anchorKeyed: true as const }
+          : { anchorItemId: fromRun.anchorItemId }),
       model: current.model ?? fromRun.model,
       ...mergedAnchor(current, fromRun, steps),
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
+      // A row of the run in history is the gateway's word that it ran: kept once seen.
+      ...(fromRun.ranInHistory || current.ranInHistory ? { ranInHistory: true as const } : {}),
+      // History's word that the gateway failed it before running it stays with the live error.
+      ...(fromRun.error?.beforeReply && current.error && !current.error.beforeReply
+        ? { error: { ...current.error, beforeReply: true as const } }
+        : {}),
     };
     // An end this client only inferred gives way to the end history establishes.
     if (isTerminal(fromRun.state) && fromRun.outcomeKnown) run = reopenInferred(run);
@@ -3643,7 +3803,15 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
   if (outbox.length === activity.outbox.length) return activity;
   const runs = activity.runs.map((run) => {
     const anchor = run.messageId ? anchors.get(run.messageId) : undefined;
-    return anchor ? { ...run, messageId: null, anchorItemId: run.anchorItemId ?? anchor } : run;
+    // This client's own message, matched by its key or the gateway's sequence number: keyed.
+    return anchor
+      ? {
+          ...run,
+          messageId: null,
+          anchorItemId: run.anchorKeyed ? run.anchorItemId : anchor,
+          anchorKeyed: true as const,
+        }
+      : run;
   });
   return { ...activity, outbox, runs };
 }
