@@ -4473,16 +4473,21 @@ export class ClawtrateClient {
         if (!now || now.steer === "withdrawn") throw error;
         // A question opened meanwhile holds the resend, as it holds any send: the gateway would
         // take a plain message as its answer. It goes, without the marker, once the question
-        // settles; the refused frame started nothing.
+        // settles. The refused frame started nothing, so the message's own local run goes too:
+        // the release queues it a run, or steers it into the gateway's. A run the person asked
+        // to stop keeps the path below, where the resend's answer names it and it is aborted.
         const current = this.state.transcripts[key];
-        const currentRun = current ? activeRun(current) : undefined;
-        if (current && questionPending(current, currentRun)) {
+        const own = current ? findRun(current, messageId) : undefined;
+        const kept =
+          current && own?.state !== "stopping" ? dropUnboundRun(current, messageId) : null;
+        const keptRun = kept ? activeRun(kept) : undefined;
+        if (kept && questionPending(kept, keptRun)) {
           this.updateActivity(key, (activity) =>
-            updateMessage(activity, messageId, {
+            updateMessage(dropUnboundRun(activity, messageId), messageId, {
               status: "held",
               unmarked: true,
               leftAt: null,
-              runId: currentRun?.id ?? null,
+              runId: keptRun?.id ?? null,
             }),
           );
           return HELD_FOR_QUESTION;

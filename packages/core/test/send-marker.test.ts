@@ -255,6 +255,37 @@ describe("a refusal of the marker", () => {
     client.stop();
   });
 
+  it("a held resend of a message that starts its own run leaves no run of its own behind", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () =>
+      sends(gateway).length === 1 ? answer.promise : { runId: "run-2", status: "started" };
+    const id = client.sendMessage(KEY, "cancel");
+    await until(() => sends(gateway).length === 1);
+    expect(transcript().runs.some((run) => run.id === id)).toBe(true);
+    // Another run asks a question while the marked frame waits.
+    gateway.emit("agent", agentEvent("run-z", 1, "lifecycle", { phase: "start" }, KEY));
+    gateway.emit("question.requested", questionRecord("ask_1", "run-z"));
+    await until(() => transcript().runs.some((run) => run.state === "waiting"));
+    answer.reject(refusal(ORDINARY_ONLY));
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "held");
+    // The refused frame started nothing: no run is left under the message's id.
+    expect(transcript().runs.some((run) => run.id === id)).toBe(false);
+    // The asking run ends, and its question with it: nothing is running now.
+    gateway.emit("agent", agentEvent("run-z", 2, "lifecycle", { phase: "end" }, KEY));
+    await until(() => sends(gateway).length === 2);
+    // It starts a run of its own, as a message sent now would, never a steer into a run the
+    // gateway never started.
+    expect(
+      sends(gateway).map((p) => [p.message, p.idempotencyKey, p.queueMode, "workContext" in p]),
+    ).toEqual([
+      ["cancel", id, "followup", true],
+      ["cancel", id, "followup", false],
+    ]);
+    client.stop();
+  });
+
   it("any other refusal is sent once and shown as before", async () => {
     const { client, gateway, transcript } = await openTask();
     answering(gateway, ["budget exhausted"]);
