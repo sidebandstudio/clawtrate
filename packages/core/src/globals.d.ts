@@ -7,6 +7,8 @@ declare function clearTimeout(handle: unknown): void;
 /** Ends a request that waits (a sign-in's next step) when it is cancelled or its connection goes. */
 declare class AbortSignal {
   readonly aborted: boolean;
+  addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener(type: "abort", listener: () => void): void;
 }
 declare class AbortController {
   readonly signal: AbortSignal;

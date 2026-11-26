@@ -18,7 +18,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openInstance } from "../tools/dev-gateway/src/cli.ts";
+import { instanceForm, openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { scriptedFinalText } from "../tools/dev-gateway/src/scenario-check.ts";
 import { newRunId, ownIdentity, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
@@ -228,7 +228,22 @@ test.afterAll(async () => {
 test("F-560: a real skill note shows in the default conversation and as the bot's preview", async () => {
   test.setTimeout(300_000);
   const key = `agent:main:skill-note-${Date.now()}`;
-  await gatewayCall("chat.send", { sessionKey: key, message: "#learn", idempotencyKey: key });
+  const send = { sessionKey: key, message: "#learn", idempotencyKey: key };
+  if (instanceForm(openInstance(INSTANCE)).reviewsCliTurns) await gatewayCall("chat.send", send);
+  else {
+    // 2026.11.10 reviews only a turn an admin connection sent (#609), not one the CLI sent.
+    const op = await openOperator(
+      openInstance(INSTANCE),
+      "Clawtrate skill note check",
+      ["operator.admin", "operator.read", "operator.write"],
+      [],
+    );
+    try {
+      await op.request("chat.send", send);
+    } finally {
+      await op.close();
+    }
+  }
 
   // The person reads the bot's reply, then goes to another bot before the review ends.
   await botRow("main").click();
