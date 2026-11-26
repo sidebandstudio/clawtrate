@@ -534,16 +534,32 @@ export class AccountsEngine {
         },
       })),
     );
+    const seq = this.nextSeq();
     try {
-      await this.readOrder(botId, before, ctx);
+      await this.readOrder(botId, before, ctx, seq);
     } catch (error) {
-      ctx.update((a) =>
-        this.patchBinding(a, botId, (b) => ({
-          ...b,
-          evidence: { ...b.evidence, status: "failed", error: this.scrub(errorText(error)) },
-        })),
-      );
+      this.readFailed(ctx, botId, seq, "failed", this.scrub(errorText(error)));
     }
+  }
+
+  /**
+   * A read that failed, or that the gateway answered as unavailable: said on the binding, unless a
+   * read begun after it has been shown since. The last confirmation stands, with its time.
+   */
+  private readFailed(
+    ctx: AccountsContext,
+    botId: string,
+    seq: number,
+    status: "failed" | "unavailable",
+    error: string,
+  ): void {
+    ctx.update((a) =>
+      this.patchBinding(a, botId, (b) =>
+        b.evidence.readSeq !== null && b.evidence.readSeq > seq
+          ? b
+          : { ...b, evidence: { ...b.evidence, status, error } },
+      ),
+    );
   }
 
   /**
@@ -565,13 +581,7 @@ export class AccountsEngine {
     ]);
     const view = readBotView(answer);
     if (view.unavailable) {
-      const reason = view.unavailable;
-      ctx.update((a) =>
-        this.patchBinding(a, botId, (b) => ({
-          ...b,
-          evidence: { ...b.evidence, status: "unavailable", error: reason },
-        })),
-      );
+      this.readFailed(ctx, botId, seq, "unavailable", view.unavailable);
       return null;
     }
     const entry = asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
@@ -719,21 +729,20 @@ export class AccountsEngine {
       // Its number and time are the ones the line and the announcement name, one each.
       after = await this.readOrder(botId, before, ctx, afterSeq, afterAt);
     } catch (error) {
-      // As Check now says a failed read: the last confirmation stands, with its time.
-      ctx.update((a) =>
-        this.patchBinding(a, botId, (b) => ({
-          ...b,
-          evidence: { ...b.evidence, status: "failed", error: this.scrub(errorText(error)) },
-        })),
-      );
+      // As Check now says a failed read.
+      this.readFailed(ctx, botId, afterSeq, "failed", this.scrub(errorText(error)));
     }
     // The gateway's read decides before its answer does: a refusal whose order is gone is cleared.
     if (clearedIn(after)) {
       checkedSeq = afterSeq;
       checkedAt = afterAt;
-      // The person's own unlock: not a lock lost, so no "The lock is gone" for it.
+      // The person's own unlock: not a lock lost, so no "The lock is gone" for it, and no lock to
+      // remember either, so a later read that fails doesn't bring "Locked, as of …" back.
       ctx.update((a) =>
-        this.patchBinding(a, botId, (b) => ({ ...b, evidence: { ...b.evidence, lostAt: null } })),
+        this.patchBinding(a, botId, (b) => ({
+          ...b,
+          evidence: { ...b.evidence, lostAt: null, lastMatchAt: null },
+        })),
       );
       publish({ status: "cleared", error: null });
     } else if (refused !== null) publish({ status: "refused", error: refused });

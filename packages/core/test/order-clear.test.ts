@@ -379,6 +379,48 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     client.stop();
   });
 
+  it("an older Check now that fails after the press says nothing over the press's read", async () => {
+    const { client, fake, accounts, press } = await locked();
+    // Check now begins first, and its order read is held, then fails.
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const held = deferred<void>();
+    let holding = true;
+    fake.gateway.handlers["models.authStatus"] = async (params) => {
+      if (holding) {
+        holding = false;
+        await held.promise;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "slow, then down" });
+      }
+      return status(params);
+    };
+    const restore = fixedClock();
+    try {
+      const older = client.checkLock("otto");
+      await until(() => !holding);
+      await press();
+      expect(accountWord(otto(accounts()))).toBe("bound");
+      held.resolve();
+      await older;
+      expect(otto(accounts()).evidence.status).toBe("none");
+      expect(accountWord(otto(accounts()))).toBe("bound");
+      expect(shown(accounts().clear!, otto(accounts()))).toBe("cleared");
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("a later Check now that fails after the person's unlock keeps it unlocked, not 'Locked, as of'", async () => {
+    const { client, fake, accounts, press } = await locked();
+    await press();
+    expect(accountWord(otto(accounts()))).toBe("bound");
+    fake.failStatusFor = "otto";
+    await client.checkLock("otto");
+    expect(otto(accounts()).evidence.status).toBe("failed");
+    expect(accountWord(otto(accounts()))).toBe("bound");
+    client.stop();
+  });
+
   it("an accounts load begun before the press that answers last never puts the order back either", async () => {
     const { client, fake, accounts, press } = await locked();
     const get = fake.gateway.handlers["config.get"]!;
