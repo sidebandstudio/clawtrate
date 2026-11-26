@@ -174,6 +174,47 @@ describe("F-588: Refresh in the Model menu", () => {
     client.stop();
   });
 
+  it("F-588: an account read whose config read fails still waits for its other reads before a refresh asks", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    const config = fake.gateway.handlers["config.get"]!;
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const held = deferred<void>();
+    let refuse = true;
+    fake.gateway.handlers["config.get"] = (params) => {
+      if (!refuse) return config(params);
+      refuse = false;
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "config refused" });
+    };
+    fake.gateway.handlers["models.authStatus"] = (params) =>
+      held.promise.then(() => status(params));
+    const reading = client.refreshAccounts().catch(() => {});
+    const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
+    await settle();
+    await settle();
+    // The account read's config read failed, and its bots' account reads are still out.
+    expect(fake.gateway.calls("models.list").filter((c) => (c as Json).refresh)).toEqual([]);
+    held.resolve();
+    await reading;
+    await refreshing;
+    expect(fake.gateway.calls("models.list").filter((c) => (c as Json).refresh)).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-588: without the gateway's config, whether it checks OpenClaw's list online is unknown", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    fake.gateway.handlers["config.get"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "config refused" });
+    };
+    expect(await client.refreshModels("acme", stampOn("gateway-a", client))).toMatchObject({
+      status: "done",
+      hostedList: null,
+      configured: false,
+    });
+    client.stop();
+  });
+
   it("F-588: a provider the gateway couldn't ask, with the gateway's reason; one account that answered is enough", async () => {
     const fake = new AccountsGateway();
     const { client } = await accountsClient({ gateway: fake });
@@ -379,10 +420,15 @@ describe("F-588: Refresh in the Model menu", () => {
     const fake = new AccountsGateway();
     const { client } = await accountsClient({ gateway: fake });
     const held = deferred<void>();
+    const entered = deferred<void>();
     const config = fake.gateway.handlers["config.get"]!;
-    fake.gateway.handlers["config.get"] = (params) => held.promise.then(() => config(params));
+    fake.gateway.handlers["config.get"] = (params) => {
+      entered.resolve();
+      return held.promise.then(() => config(params));
+    };
     const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
-    await until(() => fake.gateway.calls("config.get").length > 0);
+    // The refresh's own config read is out, and held, before Create is pressed.
+    await entered.promise;
     const creating = client.createBot({
       name: "Early",
       account: null,
@@ -548,7 +594,7 @@ describe("F-588: Refresh, the engine alone", () => {
    * The engine on the fake gateway with a connection the test moves: its stamp, and whether a
    * refresh's `models.list` answer is held until the test lets it through.
    */
-  function engineOn(fake: AccountsGateway) {
+  function engineOn(fake: AccountsGateway, refreshMs?: number) {
     let state: AccountsState = initialAccountsState;
     // Requests here go straight to the handlers, so the refresh's is noted as it is asked.
     const list = fake.gateway.handlers["models.list"]!;
@@ -558,8 +604,20 @@ describe("F-588: Refresh, the engine alone", () => {
     };
     let stamp: ReadStamp = { gatewayId: "gateway-a", target: 1, connectedAt: 1 };
     const engine = new AccountsEngine({
-      request: (method, params) =>
-        Promise.resolve().then(() => fake.gateway.handlers[method]!(params)),
+      // A request with a time limit is given up on after it, as a client's is.
+      request: (method, params, options) => {
+        const answer = Promise.resolve().then(() => fake.gateway.handlers[method]!(params));
+        const ms = options?.timeoutMs;
+        if (ms === undefined) return answer;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        return Promise.race([
+          answer,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${method} timed out`)), ms);
+          }),
+        ]).finally(() => clearTimeout(timer));
+      },
+      ...(refreshMs === undefined ? {} : { refreshMs }),
       get: () => state,
       update: (change) => {
         state = change(state);
@@ -610,6 +668,27 @@ describe("F-588: Refresh, the engine alone", () => {
     expect(on.state().models.some((m) => m.id === "dev-9")).toBe(false);
   });
 
+  it("F-588: one deadline from the press covers the whole refresh: nothing is asked once it has passed", async () => {
+    const fake = new AccountsGateway();
+    refreshAsked = false;
+    const on = engineOn(fake, 150);
+    await on.engine.load();
+    const config = fake.gateway.handlers["config.get"]!;
+    const late = { status: "error", error: "The gateway didn't answer in time." };
+    // The refresh's config read takes longer than the whole press may.
+    const held = deferred<void>();
+    fake.gateway.handlers["config.get"] = (params) => held.promise.then(() => config(params));
+    expect(await on.engine.refreshModels("acme", press)).toEqual(late);
+    expect(on.asked()).toBe(false);
+    // An account read that takes longer than the whole press: the refresh asks nothing after it.
+    const loading = on.engine.load();
+    expect(await on.engine.refreshModels("acme", press)).toEqual(late);
+    held.resolve();
+    await loading;
+    await settle();
+    expect(on.asked()).toBe(false);
+  });
+
   it("F-588: rows go only into the menu read on the same gateway: one read on another meanwhile is left alone", async () => {
     const fake = new AccountsGateway();
     refreshAsked = false;
@@ -653,7 +732,7 @@ describe("F-588: the gateway config's model list for bots", () => {
     },
   });
   const legacy = { "acme/dev-1": {}, "globex/dev-1": {} };
-  const none = { whole: [], wildcards: false };
+  const none = { whole: [], wildcards: false, prefixWildcards: false };
 
   it("F-588: the old agents.defaults.models limits only while the config is unmigrated and has no default policy", () => {
     expect(readModelAllowlist(config({ legacy }))).toEqual(none);
@@ -667,7 +746,7 @@ describe("F-588: the gateway config's model list for bots", () => {
         readModelAllowlist(
           config({ policy: { allow: ["acme/dev-1", "globex/*"] }, legacy, migrated }),
         ),
-      ).toEqual({ whole: ["globex"], wildcards: true });
+      ).toEqual({ whole: ["globex"], wildcards: true, prefixWildcards: true });
       expect(readModelAllowlist(config({ policy: { allow: [] }, legacy, migrated }))).toBeNull();
     }
     expect(readModelAllowlist(config({ migrated: true }))).toBeNull();
@@ -678,7 +757,7 @@ describe("F-588: the gateway config's model list for bots", () => {
     const policy = { allow: ["acme/dev-1"] };
     expect(
       effectiveAllowlist(config({ policy, own: { allow: ["acme/*"] }, migrated: true }), "main"),
-    ).toEqual({ whole: ["acme"], wildcards: true });
+    ).toEqual({ whole: ["acme"], wildcards: true, prefixWildcards: true });
     expect(
       effectiveAllowlist(config({ policy, own: { allow: [] }, migrated: true }), "main"),
     ).toBeNull();
@@ -712,17 +791,36 @@ describe("F-588: the gateway config's model list for bots", () => {
       readModelAllowlist(
         config({ policy: { allow: ["*", "*/*", "openrouter/anthropic/*", "acme/*"] } }),
       ),
-    ).toEqual({ whole: ["acme"], wildcards: true });
+    ).toEqual({ whole: ["acme"], wildcards: true, prefixWildcards: true });
+    // Both versions trim each segment, so a space before the `*` still allows the provider whole.
+    expect(
+      readModelAllowlist(config({ policy: { allow: ["openai/ *", "Acme /*", "globex / *"] } })),
+    ).toEqual({
+      whole: ["openai", "acme", "globex"],
+      wildcards: true,
+      prefixWildcards: true,
+    });
   });
 
-  it("F-588: wildcards are entries OpenClaw reads as one, and only those", () => {
-    const read = (allow: string[]) =>
-      readModelAllowlist(config({ policy: { allow }, migrated: true }))?.wildcards;
-    expect(read(["acme/dev-1", "globex/dev-1"])).toBe(false);
-    expect(read(["acme/dev-1", "globex/*"])).toBe(true);
-    expect(read(["openrouter/anthropic/*"])).toBe(true);
-    // Not wildcards to OpenClaw: no provider before it, or a `*` that isn't a whole last segment.
-    expect(read(["acme/dev-1", "*", "*/*", "acme/dev-*", "/*"])).toBe(false);
+  it("F-588: wildcards are read as each version reads them: 2026.11.10 also reads a prefix", () => {
+    const read = (allow: string[]) => {
+      const list = readModelAllowlist(config({ policy: { allow }, migrated: true }));
+      return [list?.wildcards, list?.prefixWildcards];
+    };
+    expect(read(["acme/dev-1", "globex/dev-1"])).toEqual([false, false]);
+    expect(read(["acme/dev-1", "globex/*"])).toEqual([true, true]);
+    expect(read(["openrouter/anthropic/*"])).toEqual([true, true]);
+    // A prefix: an exact name to 2026.10.6, a wildcard to 2026.11.10, which doesn't allow the
+    // provider whole.
+    expect(read(["openai/gpt-*"])).toEqual([false, true]);
+    expect(read(["acme/dev-1", "acme/ dev-*"])).toEqual([false, true]);
+    expect(readModelAllowlist(config({ policy: { allow: ["openai/gpt-*"] } }))?.whole).toEqual([]);
+    // Not wildcards to either: no provider before it, a `*` inside a segment, or white space in
+    // the prefix.
+    expect(read(["acme/dev-1", "*", "*/*", "/*", "acme/*/x", "acme/dev *"])).toEqual([
+      false,
+      false,
+    ]);
   });
 
   it("F-588: it is read with the accounts, for the default bot", async () => {
@@ -732,7 +830,11 @@ describe("F-588: the gateway config's model list for bots", () => {
       modelPolicy: { allow: ["acme/dev-1"] },
     };
     const { client, accounts } = await accountsClient({ gateway: fake });
-    expect(accounts().modelAllowlist).toEqual({ whole: [], wildcards: false });
+    expect(accounts().modelAllowlist).toEqual({
+      whole: [],
+      wildcards: false,
+      prefixWildcards: false,
+    });
     client.stop();
   });
 });

@@ -30,13 +30,22 @@ export type MenuEntry =
     }
   | { kind: "head"; title: string; lines: string[] }
   | { kind: "label"; text: string }
+  | {
+      kind: "line";
+      text: string;
+      /** A small item on the line that shows or hides more text under it (`panel`). */
+      more?: { label: string; open: boolean; panel: string; onToggle: () => void };
+    }
+  /** Text under a `line`, as wide as the menu; its item is described by it while it shows. */
+  | { kind: "panel"; id: string; lines: string[] }
   | { kind: "rule" };
 
 /**
  * A menu: role `menu` with `menuitem`s and `menuitemradio`s. It opens with focus
  * on the checked item, or else the first. Up and Down move and wrap, Home and
  * End go to the ends, Enter or Space chooses. Escape closes it and asks for
- * focus to return to the trigger; Tab and a click outside close it.
+ * focus to return to the trigger, unless `onEscape` takes it first (a panel
+ * that closes); Tab and a click outside close it.
  */
 export function Menu({
   label,
@@ -46,6 +55,7 @@ export function Menu({
   style,
   trigger,
   focusAt,
+  onEscape,
 }: {
   label: string;
   entries: MenuEntry[];
@@ -57,6 +67,8 @@ export function Menu({
   trigger?: HTMLElement | null;
   /** When set or changed, focus moves to the item at this index: after items are added in place. */
   focusAt?: number;
+  /** Escape goes here first; true when it was taken, and the menu stays open. */
+  onEscape?: () => boolean;
 }) {
   const ref = useRef<HTMLUListElement>(null);
 
@@ -132,7 +144,7 @@ export function Menu({
     else if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      onClose(true);
+      if (!onEscape?.()) onClose(true);
       return;
     } else if (event.key === "Tab") {
       onClose(false);
@@ -168,6 +180,34 @@ export function Menu({
             return (
               <li key={index} className="menu-label" role="presentation">
                 {entry.text}
+              </li>
+            );
+          case "line":
+            return (
+              <li key={index} className="menu-line" role="none">
+                <span>{entry.text}</span>
+                {entry.more && (
+                  <button
+                    type="button"
+                    className="menu-item menu-more"
+                    role="menuitem"
+                    aria-expanded={entry.more.open}
+                    aria-controls={entry.more.panel}
+                    aria-describedby={entry.more.open ? entry.more.panel : undefined}
+                    tabIndex={-1}
+                    onClick={entry.more.onToggle}
+                  >
+                    {entry.more.label}
+                  </button>
+                )}
+              </li>
+            );
+          case "panel":
+            return (
+              <li key={index} id={entry.id} className="menu-panel" role="none">
+                {entry.lines.map((line) => (
+                  <p key={line}>{line}</p>
+                ))}
               </li>
             );
           case "rule":

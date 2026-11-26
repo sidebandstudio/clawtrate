@@ -310,7 +310,9 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     readAt: now - READ_AGO,
     labels: params.access === "admin",
     defaultModel: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
-    modelAllowlist: params.allowlist ? { whole: [], wildcards: false } : null,
+    modelAllowlist: params.allowlist
+      ? { whole: [], wildcards: false, prefixWildcards: false }
+      : null,
     mainShared: !params.kept,
     accounts,
     methods: [

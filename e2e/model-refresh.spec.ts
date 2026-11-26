@@ -157,8 +157,9 @@ test("F-588: a refresh after the provider gained a model names it and lists it; 
   test.setTimeout(120_000);
   const menu = await acmeMenu();
   await expect(menu.getByRole("menuitemradio", { name: LATER })).toHaveCount(0);
-  await acmeModels(grownModels("acme"));
   try {
+    // Inside the try: a growth that half landed, or whose wait failed, is put back too.
+    await acmeModels(grownModels("acme"));
     // Nothing reads the list again until the press.
     await expect(menu.getByRole("menuitemradio", { name: LATER })).toHaveCount(0);
     await menu.getByRole("menuitem", { name: "Refresh" }).click();

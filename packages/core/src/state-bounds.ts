@@ -1130,6 +1130,7 @@ const pickerCut = object<PickerCut>()({ provider: ID, total: NUMBER });
 const modelAllowlist = object<ModelAllowlist>()({
   whole: list(MAX_KEY_PROVIDERS, ID),
   wildcards: FLAG,
+  prefixWildcards: FLAG,
 });
 const storedOrder = object<StoredOrder>()({
   ids: list(MAX_ORDER_IDS, ID),

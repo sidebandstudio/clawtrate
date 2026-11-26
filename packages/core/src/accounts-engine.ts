@@ -93,6 +93,8 @@ export type AccountsContext = {
    * (`readAgain`, with the client's waits).
    */
   readAgain<T>(read: () => Promise<T>, current: () => boolean): Promise<T>;
+  /** How long a Refresh may take from the press, whole: `REFRESH_MODELS_MS` unless a test sets it. */
+  refreshMs?: number;
   get(): AccountsState;
   update(change: (accounts: AccountsState) => AccountsState): void;
   /** The bots the client lists: ids, names, which is the default, and their pictures. */
@@ -291,11 +293,21 @@ export class AccountsEngine {
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
     try {
       const bots = ctx.bots();
+      // Every read asked is answered before the account read ends, a failed one too: a Refresh
+      // waiting for it never asks the picker beside a read still out (#565).
+      let failure: { error: unknown } | null = null;
+      const settle = <T>(read: Promise<T>) =>
+        read.catch((error: unknown) => {
+          failure ??= { error };
+          return null;
+        });
       const [config, views, prefs] = await Promise.all([
-        ctx.readAgain(() => ctx.request("config.get", {}), current).then(asRecord),
-        this.readViews(bots.map((bot) => bot.id)),
+        settle(ctx.readAgain(() => ctx.request("config.get", {}), current).then(asRecord)),
+        settle(this.readViews(bots.map((bot) => bot.id))),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
       ]);
+      if (failure) throw (failure as { error: unknown }).error;
+      if (views === null) return;
       // Checked before the preferences are read: another gateway's must never refill the maps
       // the reset cleared.
       if (resets !== this.resets) return;
@@ -427,9 +439,27 @@ export class AccountsEngine {
     const pressed = ctx.get();
     const before = pressed.models.filter((m) => m.provider === provider).map((m) => m.id);
     const cutBefore = pressed.modelsCut.find((c) => c.provider === provider)?.total ?? null;
+    // One deadline for the whole press: the wait for an account read, the config read and the
+    // gateway's look share it, and nothing is asked once it has passed.
+    const deadline = Date.now() + (ctx.refreshMs ?? REFRESH_MODELS_MS);
+    const left = () => deadline - Date.now();
+    const late: ModelRefresh = { status: "error", error: "The gateway didn't answer in time." };
     // An account read under way finishes first: the gateway refuses the picker beside it.
     const loading = this.loading;
-    if (loading) await loading.catch(() => {});
+    if (loading) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = await Promise.race([
+        loading.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, left()));
+        }),
+      ]);
+      clearTimeout(timer);
+      if (!done) return late;
+    }
     const resets = this.resets;
     const readOn = ctx.readStamp();
     const gone = () => {
@@ -452,12 +482,16 @@ export class AccountsEngine {
     try {
       // The config says whether the gateway declares the provider's models, and which models
       // its list for bots names; asked first, as the picker is never asked beside it.
-      config = await ctx.request("config.get", {}).then(asRecord, () => null);
+      if (left() <= 0) return late;
+      config = await ctx
+        .request("config.get", {}, { timeoutMs: left() })
+        .then(asRecord, () => null);
       if (gone()) throw new Error(MODELS_GATEWAY_CHANGED);
+      if (left() <= 0) return late;
       const asked = ctx.request(
         "models.list",
         { agentId: defaultBot, provider, refresh: true },
-        { timeoutMs: REFRESH_MODELS_MS },
+        { timeoutMs: left() },
       );
       answer = await asked;
     } catch (error) {

@@ -1,8 +1,9 @@
 // Refresh in the Model menu (#565, docs/design/bots.md section 9): a person's
 // press asks the gateway to look for the provider's models again, the row says
 // it is looking and can't be pressed twice, and one line says what changed or
-// why nothing did, said once to a screen reader while focus stays in the menu.
-// The fixture's answers are held until the check lets them through.
+// the most specific reason nothing did, said once to a screen reader while focus
+// stays in the menu. Every other sentence is one step away, behind a small item
+// on that line. The fixture's answers are held until the check lets them through.
 import type { Page } from "@playwright/test";
 import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 import { test } from "@playwright/test";
@@ -35,6 +36,9 @@ const announcements = (page: Page) =>
 
 const menu = (page: Page) => page.getByRole("menu", { name: "Model" });
 const refreshRow = (page: Page) => menu(page).getByRole("menuitem", { name: "Refresh" });
+const why = (page: Page) => menu(page).getByRole("menuitem", { name: "Why", exact: true });
+/** The text under the line, once "Why" shows it. */
+const panel = (page: Page) => menu(page).locator(".menu-panel");
 
 /** Refresh pressed from the keyboard, so no pointer rests on a row. */
 async function press(page: Page) {
@@ -100,26 +104,72 @@ test.describe("F-588: Refresh in the Model menu", () => {
       ["refused", "Nothing new. The gateway couldn't ask OpenAI: OpenAI refused the account."],
       ["unreached", "Nothing new. The gateway couldn't get an answer from OpenAI."],
       ["pending", "Nothing new yet. The gateway is still looking for OpenAI's models."],
-      ["failed", "Nothing new. The gateway's refresh failed. Try Refresh again."],
+      ["failed", "Nothing new. The gateway's refresh failed: try Refresh again."],
       ["cut", "OpenAI lists 141 models now (140 before)."],
       ["error", "Couldn't refresh: The gateway didn't answer in time."],
-      [
-        "none",
-        "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours. To use a model that isn't listed, choose Use another model and type its id.",
-      ],
-      [
-        "none&openclaw=behind",
-        "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours. OpenClaw 2026.11.6 is out: see the note below. To use a model that isn't listed, choose Use another model and type its id.",
-      ],
+      ["none", "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had."],
     ];
     for (const [refresh, words] of cases) {
       await openMenu(page, `${SETTINGS}&refresh=${refresh}`);
       await refreshRow(page).click();
       await expect(menu(page).getByText(words, { exact: true }), refresh).toBeVisible();
+      // These have nothing more to say.
+      if (refresh !== "none") await expect(why(page), refresh).toHaveCount(0);
+      await page.keyboard.press("Escape");
+    }
+    // The rest of "nothing new" is one step away, the note under the menu included.
+    const online =
+      "Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours.";
+    const typeIt = "To use a model that isn't listed, choose Use another model and type its id.";
+    for (const [query, more] of [
+      ["", [online, typeIt]],
+      ["&openclaw=behind", [online, "OpenClaw 2026.11.6 is out: see the note below.", typeIt]],
+    ] as const) {
+      await openMenu(page, `${SETTINGS}&refresh=none${query}`);
+      await refreshRow(page).click();
+      await expect(panel(page)).toHaveCount(0);
+      await why(page).click();
+      await expect(panel(page).locator("p")).toHaveText([...more]);
+      await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
     }
     // The note the line points to is the one under the menu.
     await expect(page.getByTestId("openclaw-update")).toBeVisible();
+  });
+
+  test("F-588: Why opens the rest by keyboard, is not said again, keeps focus, and Escape closes it before the menu", async ({
+    page,
+  }) => {
+    await openMenu(page, `${SETTINGS}&refresh=none`);
+    await recordAnnouncements(page);
+    await press(page);
+    const line = "Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had.";
+    await expect(menu(page).getByText(line, { exact: true })).toBeVisible();
+    await expect(refreshRow(page)).toBeFocused();
+    // The next item after Refresh is Why, on the line.
+    await page.keyboard.press("ArrowDown");
+    await expect(why(page)).toBeFocused();
+    await expect(why(page)).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("Enter");
+    await expect(why(page)).toHaveAttribute("aria-expanded", "true");
+    await expect(why(page)).toBeFocused();
+    await expect(panel(page)).toBeVisible();
+    // Read with the item it belongs to, and never into the announcer.
+    await expect(why(page)).toHaveAccessibleDescription(/^Lists that come with OpenClaw/);
+    await page.waitForTimeout(200);
+    expect(await announcements(page)).toEqual([line]);
+    // Escape closes the panel first, then the menu.
+    await page.keyboard.press("Escape");
+    await expect(panel(page)).toHaveCount(0);
+    await expect(menu(page)).toBeVisible();
+    await expect(why(page)).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu(page)).toHaveCount(0);
+    await expect(page.getByTestId("model-select")).toBeFocused();
+    // Opened again: the line, with the panel closed.
+    await page.getByTestId("model-select").click();
+    await expect(menu(page).getByText(line, { exact: true })).toBeVisible();
+    await expect(panel(page)).toHaveCount(0);
   });
 
   test("F-588: when the gateway's config names the models bots may use, the menu says so, and only then", async ({
@@ -128,17 +178,33 @@ test.describe("F-588: Refresh in the Model menu", () => {
     const words =
       "The gateway's config names which of OpenAI's models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.";
     await openMenu(page, `${SETTINGS}&allowlist=1`);
-    await expect(menu(page).getByText(words)).toBeVisible();
+    // At rest the menu has no paragraph.
+    await expect(menu(page).getByText(words)).toHaveCount(0);
+    await expect(menu(page).locator(".menu-line, .menu-panel")).toHaveCount(0);
     await recordAnnouncements(page);
     await refreshRow(page).click();
-    // Nothing new: said with the reason the list may be short.
-    await expect
-      .poll(() => announcements(page))
-      .toEqual([
-        `Nothing new. The gateway didn't ask OpenAI again, so its list is the one it had. Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours. To use a model that isn't listed, choose Use another model and type its id. ${words}`,
-      ]);
+    // Nothing new: the list is the reason a model may not be there, so the line gives it.
+    await expect.poll(() => announcements(page)).toEqual([`Nothing new. ${words}`]);
+    await why(page).click();
+    await expect(panel(page).locator("p").first()).toHaveText(
+      "The gateway didn't ask OpenAI again, so its list is the one it had.",
+    );
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    // Something new: the list is one step away.
+    await openMenu(page, `${SETTINGS}&allowlist=1&refresh=new`);
+    await refreshRow(page).click();
+    await expect(
+      menu(page).getByText("New: gpt-6.2-sol and gpt-6.2-astra.", { exact: true }),
+    ).toBeVisible();
+    await expect(menu(page).getByText(words)).toHaveCount(0);
+    await menu(page).getByRole("menuitem", { name: "More", exact: true }).click();
+    await expect(panel(page).locator("p")).toHaveText([words]);
+    await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
     await openMenu(page, SETTINGS);
+    await refreshRow(page).click();
+    await why(page).click();
     await expect(menu(page).getByText(words)).toHaveCount(0);
   });
 
@@ -188,6 +254,7 @@ test.describe("F-588: Refresh in the Model menu", () => {
   }) => {
     await openMenu(page, `${SETTINGS}&openclaw=behind&openclawRun=running`);
     await refreshRow(page).click();
+    await why(page).click();
     await expect(
       menu(page).getByText(/The note below says where the OpenClaw update stands\./),
     ).toBeVisible();
@@ -201,6 +268,7 @@ test.describe("F-588: Refresh in the Model menu", () => {
     // Held: the note says an update may be under way.
     await openMenu(page, `${SETTINGS}&openclaw=behind&openclawRun=held`);
     await refreshRow(page).click();
+    await why(page).click();
     await expect(
       menu(page).getByText(/The note below says where the OpenClaw update stands\./),
     ).toBeVisible();
@@ -209,6 +277,7 @@ test.describe("F-588: Refresh in the Model menu", () => {
     // Failed: the note names the newer version again, and so does the result.
     await openMenu(page, `${SETTINGS}&openclaw=behind&openclawRun=failed`);
     await refreshRow(page).click();
+    await why(page).click();
     await expect(
       menu(page).getByText(/OpenClaw 2026\.11\.6 is out: see the note below\./),
     ).toBeVisible();
@@ -218,6 +287,7 @@ test.describe("F-588: Refresh in the Model menu", () => {
     await openMenu(page, SETTINGS);
     await refreshRow(page).click();
     await expect(menu(page).getByText(/^Nothing new\./)).toBeVisible();
+    await why(page).click();
     await expect(menu(page).getByText(/note below/)).toHaveCount(0);
     await expect(page.getByTestId("openclaw-update")).toHaveCount(0);
   });
@@ -255,6 +325,16 @@ for (const size of [WIDE, PHONE]) {
         await expect(menu(page).getByText(/^Nothing new\./)).toBeVisible();
         await settle(page);
         await expect(page).toHaveScreenshot(`model-refresh-nothing-${theme}-${size.name}.png`);
+      });
+
+      test("F-588: the Model menu with why nothing new was found open", async ({ page }) => {
+        await openMenu(page, `${SETTINGS}&openclaw=behind&allowlist=1`, theme);
+        await press(page);
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("Enter");
+        await expect(panel(page)).toBeVisible();
+        await settle(page);
+        await expect(page).toHaveScreenshot(`model-refresh-why-${theme}-${size.name}.png`);
       });
     });
   }

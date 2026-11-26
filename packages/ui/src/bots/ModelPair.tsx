@@ -211,41 +211,133 @@ export function refreshWords(
   /** A typed model id runs as typed: false under a model list with a wildcard that limits it. */
   typedRuns = true,
 ): string {
-  if (result.status === "error") return `Couldn't refresh: ${result.error}`;
-  const said: string[] = [];
-  if (result.addedCount > 0) said.push(`New: ${namesLine(result.added, result.addedCount)}.`);
+  const said = refreshSentences(result, who, update, updating, typedRuns);
+  return [...said.found, ...said.reasons.map((reason) => reason.text)].join(" ");
+}
+
+/** What one sentence of a Refresh's result says, to choose the one the first line gives. */
+export type ReasonKind =
+  | "failed"
+  | "auth"
+  | "unavailable"
+  | "pending"
+  | "limits"
+  | "configured"
+  | "same"
+  | "notAsked"
+  | "lists"
+  | "note"
+  | "typed";
+
+/** Every sentence of a Refresh's result (`refreshWords`): what was found, then why. */
+export type RefreshSaid = {
+  found: string[];
+  /** Nothing was found new or gone: the first line may give one reason. */
+  nothingNew: boolean;
+  reasons: { kind: ReasonKind; text: string }[];
+};
+
+export function refreshSentences(
+  result: ModelRefresh,
+  who: string,
+  update: OpenClawUpdate | null,
+  updating = false,
+  typedRuns = true,
+): RefreshSaid {
+  if (result.status === "error")
+    return { found: [`Couldn't refresh: ${result.error}`], nothingNew: false, reasons: [] };
+  const found: string[] = [];
+  const reasons: RefreshSaid["reasons"] = [];
+  const say = (kind: ReasonKind, text: string) => reasons.push({ kind, text });
+  if (result.addedCount > 0) found.push(`New: ${namesLine(result.added, result.addedCount)}.`);
   if (result.counts && result.counts.now !== result.counts.before)
-    said.push(
+    found.push(
       `${who} lists ${count(result.counts.now)} models now (${count(result.counts.before)} before).`,
     );
   if (result.removedCount > 0)
-    said.push(`No longer listed: ${namesLine(result.removed, result.removedCount)}.`);
-  const changed = said.length > 0;
-  if (!changed) said.push(result.partial ? "Nothing new yet." : "Nothing new.");
+    found.push(`No longer listed: ${namesLine(result.removed, result.removedCount)}.`);
+  const changed = found.length > 0;
+  // A list the menu showed cut, with as many models as before, may have changed past the cut:
+  // only its count is known.
+  if (!changed)
+    found.push(
+      result.counts
+        ? `${who} lists ${count(result.counts.now)} models, as before.`
+        : result.partial
+          ? "Nothing new yet."
+          : "Nothing new.",
+    );
   if (result.outcome === "auth-rejected")
-    said.push(`The gateway couldn't ask ${who}: ${who} refused the account.`);
+    say("auth", `The gateway couldn't ask ${who}: ${who} refused the account.`);
   else if (result.outcome === "unavailable")
-    said.push(`The gateway couldn't get an answer from ${who}.`);
-  if (result.failed) said.push("The gateway's refresh failed. Try Refresh again.");
-  else if (result.partial) said.push(`The gateway is still looking for ${who}'s models.`);
+    say("unavailable", `The gateway couldn't get an answer from ${who}.`);
+  if (result.failed) say("failed", "The gateway's refresh failed: try Refresh again.");
+  else if (result.partial) say("pending", `The gateway is still looking for ${who}'s models.`);
   else if (!changed && result.outcome === "ready")
-    said.push(`The gateway asked ${who} again, and its list is the same.`);
+    say(
+      "same",
+      result.counts
+        ? `The gateway asked ${who} again.`
+        : `The gateway asked ${who} again, and its list is the same.`,
+    );
   else if (!changed && result.outcome === null) {
-    if (result.configured) said.push(`${who}'s models are the ones the gateway's config lists.`);
+    if (result.configured)
+      say("configured", `${who}'s models are the ones the gateway's config lists.`);
     else {
-      said.push(
-        `The gateway didn't ask ${who} again, so its list is the one it had.`,
-        result.hostedList
-          ? "Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours."
-          : "Lists that come with OpenClaw get newer models from a newer OpenClaw.",
-      );
-      if (updating) said.push("The note below says where the OpenClaw update stands.");
-      else if (update) said.push(`OpenClaw ${update.latest} is out: see the note below.`);
+      say("notAsked", `The gateway didn't ask ${who} again, so its list is the one it had.`);
+      // Said only from a config read: without one, whether the gateway checks the list online
+      // isn't known.
+      if (result.hostedList !== null)
+        say(
+          "lists",
+          result.hostedList
+            ? "Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours."
+            : "Lists that come with OpenClaw get newer models from a newer OpenClaw.",
+        );
+      if (updating) say("note", "The note below says where the OpenClaw update stands.");
+      else if (update) say("note", `OpenClaw ${update.latest} is out: see the note below.`);
       if (typedRuns)
-        said.push("To use a model that isn't listed, choose Use another model and type its id.");
+        say("typed", "To use a model that isn't listed, choose Use another model and type its id.");
     }
   }
-  return said.join(" ");
+  return { found, nothingNew: !changed, reasons };
+}
+
+/**
+ * The reasons the first line may give when nothing new was found, most specific first: the
+ * gateway's own failure, then a provider it couldn't ask, then one it is still asking, then the
+ * config's list that keeps models out, then the config as the whole list, then a provider asked
+ * with the same answer, then one not asked. The rest are one step away.
+ */
+export const FIRST_REASONS: readonly ReasonKind[] = [
+  "failed",
+  "auth",
+  "unavailable",
+  "pending",
+  "limits",
+  "configured",
+  "same",
+  "notAsked",
+];
+
+/**
+ * What the menu shows of a Refresh (#565): one line, what was found and, when nothing new was,
+ * the single most specific reason (`FIRST_REASONS`); and every other sentence, the config's model
+ * list included (`limits`), one step away behind `label`.
+ */
+export function refreshLines(
+  said: RefreshSaid,
+  limits: string | null,
+): { line: string; more: string[]; label: string } {
+  const pool = [...said.reasons, ...(limits ? [{ kind: "limits" as const, text: limits }] : [])];
+  const first = said.nothingNew
+    ? FIRST_REASONS.map((kind) => pool.find((reason) => reason.kind === kind)).find(Boolean)
+    : undefined;
+  return {
+    line: [...said.found, ...(first ? [first.text] : [])].join(" "),
+    more: pool.filter((reason) => reason !== first).map((reason) => reason.text),
+    label: said.nothingNew ? "Why" : "More",
+  };
 }
 
 /**
@@ -273,10 +365,26 @@ export function noteBelow(
  */
 export const MODEL_LIMIT_VERSIONS: readonly string[] = ["2026.10.6", "2026.11.10"];
 
+/**
+ * Whether the config's model list has a wildcard, as the version the gateway reports reads one:
+ * 2026.10.6 only `<provider>/…/*`, 2026.11.10 also a prefix (`openai/gpt-*`). On any other
+ * version, as the broader of the two reads it.
+ */
+function hasWildcards(
+  list: NonNullable<AccountsState["modelAllowlist"]>,
+  serverVersion: string | null,
+): boolean {
+  return serverVersion === "2026.10.6" ? list.wildcards : list.prefixWildcards;
+}
+
 /** The config's model list has a wildcard and limits the provider: a model it doesn't name won't run. */
-export function wildcardLimits(accounts: AccountsState, provider: string): boolean {
+export function wildcardLimits(
+  accounts: AccountsState,
+  provider: string,
+  serverVersion: string | null,
+): boolean {
   const list = accounts.modelAllowlist;
-  return list !== null && list.wildcards && !list.whole.includes(provider);
+  return list !== null && hasWildcards(list, serverVersion) && !list.whole.includes(provider);
 }
 
 /**
@@ -295,7 +403,7 @@ export function allowlistLine(
   const who = providerName(provider);
   // With any wildcard in the list, a bot set to a model it doesn't name runs on the first one it
   // allows; without one, it runs on its own (docs/research/model-catalog.md, section 8).
-  return list.wildcards
+  return hasWildcards(list, serverVersion)
     ? `The gateway's config names which of ${who}'s models it lists and lets a task switch to; a bot set to another model runs on one it names.`
     : `The gateway's config names which of ${who}'s models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.`;
 }
@@ -365,22 +473,23 @@ export function ModelPair({
   // an update stands, or nothing. The result points to it only as it is.
   const state = useClawtrateState();
   const note = noteBelow(state, updateRun, update);
-  const foundWords =
+  // What a Refresh found: one line under the row, the rest behind "Why". Nothing before a
+  // press, so the menu at rest has no paragraph; the config's model list is said with a result.
+  const shownResult =
     found && found.status !== "looking"
-      ? refreshWords(
-          found,
-          who,
-          note?.offer ? update : null,
-          note !== null && !note.offer,
-          !wildcardLimits(accounts, provider),
+      ? refreshLines(
+          refreshSentences(
+            found,
+            who,
+            note?.offer ? update : null,
+            note !== null && !note.offer,
+            !wildcardLimits(accounts, provider, state.connection.serverVersion),
+          ),
+          allowlistLine(accounts, provider, state.connection.serverVersion),
         )
       : null;
-  const limits = allowlistLine(accounts, provider, state.connection.serverVersion);
-  // What a Refresh found is said once, politely, when it arrives; focus stays where it was.
-  const said =
-    foundWords !== null && limits && found?.status === "done" && found.addedCount === 0
-      ? `${foundWords} ${limits}`
-      : foundWords;
+  // The first line is said once, politely, when it arrives; focus stays where it was.
+  const said = shownResult?.line ?? null;
 
   // The field for a model id typed in (section 9), and the last id it chose.
   const [typing, setTyping] = useState(false);
@@ -402,10 +511,7 @@ export function ModelPair({
     );
     if (!row || !pairRef.current?.contains(document.activeElement)) return;
     row.focus();
-    let below = row.closest("li")?.nextElementSibling;
-    while (below?.nextElementSibling?.classList.contains("menu-label"))
-      below = below.nextElementSibling;
-    below?.scrollIntoView?.({ block: "nearest" });
+    row.closest("li")?.nextElementSibling?.scrollIntoView?.({ block: "nearest" });
   }, [found, said, announce]);
   // On a phone the field and its buttons can open below the fold.
   useEffect(() => {
@@ -451,7 +557,14 @@ export function ModelPair({
     label: "Refresh",
     note: looking ? "Looking…" : "Look for new models",
     ...(looking ? { disabled: true } : {}),
-    lines: [...(limits ? [limits] : []), ...(foundWords ? [foundWords] : [])],
+    ...(shownResult
+      ? {
+          line: shownResult.line,
+          ...(shownResult.more.length > 0
+            ? { more: { label: shownResult.label, lines: shownResult.more } }
+            : {}),
+        }
+      : {}),
     onSelect: () => list.lookAgain(),
   });
   let section: SelectSection | undefined;

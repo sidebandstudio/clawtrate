@@ -14,12 +14,17 @@ import {
   type OpenClawUpdate,
   type UpdateRunView,
 } from "@clawtrate/core";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { Menu } from "../src/Menu.tsx";
 import {
   allowlistLine,
   heldKey,
   modelMenu,
   noteBelow,
+  refreshLines,
+  refreshSentences,
   refreshWords,
   wildcardLimits,
 } from "../src/bots/ModelPair.tsx";
@@ -158,6 +163,127 @@ describe("F-588: Refresh in the Model menu", () => {
     );
   });
 
+  it("F-588: a list cut at its bound with as many models as before says only its count, never that it is the same", () => {
+    expect(
+      refreshWords(
+        done({ outcome: "ready", counts: { before: 140, now: 140 } }),
+        "OpenRouter",
+        null,
+      ),
+    ).toBe("OpenRouter lists 140 models, as before. The gateway asked OpenRouter again.");
+  });
+
+  it("F-588: without the gateway's config nothing is said of its online model list", () => {
+    const words = refreshWords(done({ hostedList: null }), "OpenAI", null);
+    expect(words).toContain("The gateway didn't ask OpenAI again");
+    expect(words).not.toContain("Lists that come with OpenClaw");
+  });
+
+  it("F-588: the menu's line is what was found and, when nothing new was, the most specific reason; the rest is one step away", () => {
+    const limits =
+      "The gateway's config names which of OpenAI's models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.";
+    const lines = (change: Partial<ModelRefresh>, list: string | null = null, typed = true) =>
+      refreshLines(refreshSentences(done(change), "OpenAI", update, false, typed), list);
+    // Found something: the line says it, and the rest is behind "More".
+    expect(lines({ added: ["a"], addedCount: 1, outcome: "unavailable" }, limits)).toEqual({
+      line: "New: a.",
+      more: ["The gateway couldn't get an answer from OpenAI.", limits],
+      label: "More",
+    });
+    expect(lines({ added: ["a"], addedCount: 1 })).toEqual({
+      line: "New: a.",
+      more: [],
+      label: "More",
+    });
+    // Nothing new: one reason, in the order of preference, the rest behind "Why".
+    const notAsked = "The gateway didn't ask OpenAI again, so its list is the one it had.";
+    const online =
+      "Lists that come with OpenClaw get newer models from a newer OpenClaw, and from OpenClaw's model list online, which the gateway checks every 6 hours.";
+    const out = "OpenClaw 2026.11.6 is out: see the note below.";
+    const typeIt = "To use a model that isn't listed, choose Use another model and type its id.";
+    expect(lines({})).toEqual({
+      line: `Nothing new. ${notAsked}`,
+      more: [online, out, typeIt],
+      label: "Why",
+    });
+    // The config's list keeps models out: it is the reason, ahead of "not asked again".
+    expect(lines({}, limits)).toEqual({
+      line: `Nothing new. ${limits}`,
+      more: [notAsked, online, out, typeIt],
+      label: "Why",
+    });
+    expect(lines({ outcome: "ready" }, limits).line).toBe(`Nothing new. ${limits}`);
+    expect(lines({ outcome: "ready" }).line).toBe(
+      "Nothing new. The gateway asked OpenAI again, and its list is the same.",
+    );
+    expect(lines({ configured: true }).line).toBe(
+      "Nothing new. OpenAI's models are the ones the gateway's config lists.",
+    );
+    // A failure, a refused account or no answer comes before the config's list.
+    expect(lines({ failed: true }, limits).line).toBe(
+      "Nothing new. The gateway's refresh failed: try Refresh again.",
+    );
+    expect(lines({ outcome: "auth-rejected" }, limits)).toEqual({
+      line: "Nothing new. The gateway couldn't ask OpenAI: OpenAI refused the account.",
+      more: [limits],
+      label: "Why",
+    });
+    expect(lines({ outcome: "unavailable", partial: true }, limits)).toEqual({
+      line: "Nothing new yet. The gateway couldn't get an answer from OpenAI.",
+      more: ["The gateway is still looking for OpenAI's models.", limits],
+      label: "Why",
+    });
+    expect(lines({ partial: true }, limits).line).toBe(
+      "Nothing new yet. The gateway is still looking for OpenAI's models.",
+    );
+    // A refresh the gateway refused: its reason alone, with the config's list behind "More".
+    expect(
+      refreshLines(
+        refreshSentences({ status: "error", error: "Model catalog is not ready." }, "OpenAI", null),
+        limits,
+      ),
+    ).toEqual({
+      line: "Couldn't refresh: Model catalog is not ready.",
+      more: [limits],
+      label: "More",
+    });
+    // Every sentence is in the line or the panel, once.
+    const said = refreshSentences(done(), "OpenAI", update);
+    const shown = refreshLines(said, limits);
+    expect([shown.line, ...shown.more].join(" ").length).toBe(
+      [refreshWords(done(), "OpenAI", update), limits].join(" ").length,
+    );
+  });
+
+  it("F-588: the line's small item says what it opens, and the panel is plain text in the menu, outside any live region", () => {
+    const render = (open: boolean) =>
+      renderToStaticMarkup(
+        createElement(Menu, {
+          label: "Model",
+          onClose: () => {},
+          entries: [
+            { kind: "item", label: "Refresh", note: "Look for new models", onSelect: () => {} },
+            {
+              kind: "line",
+              text: "Nothing new.",
+              more: { label: "Why", open, panel: "why-1", onToggle: () => {} },
+            },
+            ...(open ? [{ kind: "panel" as const, id: "why-1", lines: ["One.", "Two."] }] : []),
+          ],
+        }),
+      );
+    const closed = render(false);
+    expect(closed).toContain('role="menuitem" aria-expanded="false" aria-controls="why-1"');
+    expect(closed).not.toContain("aria-describedby");
+    expect(closed).not.toContain("One.");
+    const open = render(true);
+    expect(open).toContain('aria-expanded="true" aria-controls="why-1" aria-describedby="why-1"');
+    expect(open).toContain(
+      '<li id="why-1" class="menu-panel" role="none"><p>One.</p><p>Two.</p></li>',
+    );
+    expect(open).not.toMatch(/aria-live|role="status"|role="alert"/);
+  });
+
   it("F-588: a provider the gateway couldn't ask, with the gateway's reason, and a refresh that failed", () => {
     expect(refreshWords(done({ outcome: "auth-rejected" }), "OpenAI", update)).toBe(
       "Nothing new. The gateway couldn't ask OpenAI: OpenAI refused the account.",
@@ -170,7 +296,7 @@ describe("F-588: Refresh in the Model menu", () => {
     );
     // A refresh the gateway says failed is said as one, never as still looking.
     expect(refreshWords(done({ failed: true }), "OpenAI", update)).toBe(
-      "Nothing new. The gateway's refresh failed. Try Refresh again.",
+      "Nothing new. The gateway's refresh failed: try Refresh again.",
     );
     expect(
       refreshWords(
@@ -186,9 +312,13 @@ describe("F-588: Refresh in the Model menu", () => {
       whole: string[] | null,
       version: string | null = "2026.10.6",
       wildcards = false,
+      prefixWildcards = wildcards,
     ) =>
       allowlistLine(
-        { ...initialAccountsState, modelAllowlist: whole === null ? null : { whole, wildcards } },
+        {
+          ...initialAccountsState,
+          modelAllowlist: whole === null ? null : { whole, wildcards, prefixWildcards },
+        },
         "openai",
         version,
       );
@@ -209,18 +339,29 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(limited([], "2026.11.10", true)).toBe(wild);
     expect(limited(["openai"], "2026.10.6", true)).toBeNull();
     expect(limited([], "2026.11.6", true)).toBeNull();
+    // A prefix entry (`openai/gpt-*`) is an exact name to 2026.10.6 and a wildcard to 2026.11.10.
+    expect(limited(["anthropic"], "2026.10.6", false, true)).toBe(line);
+    expect(limited(["anthropic"], "2026.11.10", false, true)).toBe(wild);
   });
 
   it("F-588: under a model list with a wildcard that limits the provider, nothing offers a typed model id", () => {
     const typeIt = "To use a model that isn't listed, choose Use another model and type its id.";
-    const at = (modelAllowlist: { whole: string[]; wildcards: boolean } | null) => ({
+    const at = (whole: string[], wildcards: boolean, prefixWildcards = wildcards) => ({
       ...initialAccountsState,
-      modelAllowlist,
+      modelAllowlist: { whole, wildcards, prefixWildcards },
     });
-    expect(wildcardLimits(at(null), "openai")).toBe(false);
-    expect(wildcardLimits(at({ whole: [], wildcards: false }), "openai")).toBe(false);
-    expect(wildcardLimits(at({ whole: ["anthropic"], wildcards: true }), "openai")).toBe(true);
-    expect(wildcardLimits(at({ whole: ["openai"], wildcards: true }), "openai")).toBe(false);
+    for (const version of ["2026.10.6", "2026.11.10", "2027.1.1", null]) {
+      expect(wildcardLimits(initialAccountsState, "openai", version)).toBe(false);
+      expect(wildcardLimits(at([], false), "openai", version)).toBe(false);
+      expect(wildcardLimits(at(["anthropic"], true), "openai", version)).toBe(true);
+      expect(wildcardLimits(at(["openai"], true), "openai", version)).toBe(false);
+    }
+    // A prefix entry: an exact name to 2026.10.6, a wildcard to 2026.11.10; on any other version
+    // the broader reading leaves the typed id out.
+    expect(wildcardLimits(at([], false, true), "openai", "2026.10.6")).toBe(false);
+    expect(wildcardLimits(at([], false, true), "openai", "2026.11.10")).toBe(true);
+    expect(wildcardLimits(at([], false, true), "openai", "2027.1.1")).toBe(true);
+    expect(wildcardLimits(at([], false, true), "openai", null)).toBe(true);
     const nothing: ModelRefresh = {
       status: "done",
       provider: "openai",

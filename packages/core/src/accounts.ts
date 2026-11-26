@@ -233,8 +233,11 @@ export type ModelRefresh =
        * (`models.providers`): the config's list is the whole list.
        */
       configured: boolean;
-      /** The gateway checks OpenClaw's model list online every 6 hours (`models.catalogRefresh`). */
-      hostedList: boolean;
+      /**
+       * The gateway checks OpenClaw's model list online every 6 hours (`models.catalogRefresh`);
+       * null when its config couldn't be read.
+       */
+      hostedList: boolean | null;
       /**
        * The menu showed the provider cut at its bound before: how many models the gateway listed
        * then and lists now. Nothing is named new then, since the cut hid some.
@@ -254,9 +257,12 @@ export type ModelRefresh =
  * task switch to, only what it names; with no wildcard in it, a bot's own model and the default
  * can still be others, and with one they run on the first model it allows
  * (docs/research/model-catalog.md, section 8). `whole` is the providers a `<provider>/*` entry
- * leaves whole; `wildcards` is whether any entry is a wildcard as OpenClaw reads one.
+ * leaves whole, which both versions read alike. Whether any entry is a wildcard depends on the
+ * version: `wildcards` as 2026.10.6 reads them (`<provider>/…/*`), `prefixWildcards` as
+ * 2026.11.10 does, which also reads a prefix (`openai/gpt-*`) and so finds every one 2026.10.6
+ * finds.
  */
-export type ModelAllowlist = { whole: string[]; wildcards: boolean };
+export type ModelAllowlist = { whole: string[]; wildcards: boolean; prefixWildcards: boolean };
 
 /** The longest model id Clawtrate sends. */
 export const MAX_MODEL_ID_CHARS = 512;
@@ -844,8 +850,8 @@ export function readModelRefresh(
   before: readonly string[],
   /** The provider's model ids its entry in the gateway's config declares. */
   declared: ReadonlySet<string>,
-  /** The gateway checks OpenClaw's model list online (`models.catalogRefresh`). */
-  hostedList: boolean,
+  /** The gateway checks OpenClaw's model list online (`models.catalogRefresh`), or unknown. */
+  hostedList: boolean | null,
   /** The config's model list for the bot asked for limits the provider, so filters its rows. */
   limited: boolean,
 ): {
@@ -897,23 +903,51 @@ export function declaredModels(config: RawRecord | null, provider: string): Set<
   return new Set(models.map((model) => str(asRecord(model)?.id)).filter((id) => id !== null));
 }
 
-/** The gateway checks OpenClaw's model list online, unless its config turns that off. */
-export function checksHostedList(config: RawRecord | null): boolean {
-  const root = asRecord(config?.config);
+/**
+ * The gateway checks OpenClaw's model list online, unless its config turns that off; null when the
+ * config couldn't be read, so nothing is said of it.
+ */
+export function checksHostedList(config: RawRecord | null): boolean | null {
+  if (config === null) return null;
+  const root = asRecord(config.config);
   return asRecord(asRecord(root?.models)?.catalogRefresh)?.enabled !== false;
 }
 
-/** A wildcard entry as OpenClaw reads one (`parseModelPolicyWildcardRef`): `<segment>/…/*`. */
-function isWildcard(key: string): boolean {
-  const segments = key.split("/").map((segment) => segment.trim());
-  return (
-    segments.length >= 2 &&
-    segments.at(-1) === "*" &&
-    segments
-      .slice(0, -1)
-      // eslint-disable-next-line no-control-regex
-      .every((segment) => segment.length > 0 && !/[*\s\u0000-\u001f\u007f]/.test(segment))
-  );
+/** A wildcard entry: its provider, and whether it allows the provider whole. */
+type Wildcard = { provider: string; whole: boolean };
+
+/** At least one segment, each non-empty, without `*`, white space or a control character. */
+const validSegments = (segments: string[]) =>
+  segments.length >= 1 &&
+  // eslint-disable-next-line no-control-regex
+  segments.every((segment) => segment.length > 0 && !/[*\s\u0000-\u001f\u007f]/.test(segment));
+
+/**
+ * A wildcard as OpenClaw 2026.10.6 reads one (`parseModelPolicyWildcardRef`): segments split on
+ * `/` and trimmed, the last exactly `*`. It matches at a segment's end only.
+ */
+function segmentWildcard(key: string): Wildcard | null {
+  const segments = key
+    .trim()
+    .split("/")
+    .map((segment) => segment.trim());
+  if (segments.at(-1) !== "*" || !validSegments(segments.slice(0, -1))) return null;
+  return { provider: segments[0]!.toLowerCase(), whole: segments.length === 2 };
+}
+
+/**
+ * A wildcard as OpenClaw 2026.11.10 reads one (`parseModelPolicyWildcardRef`): it ends in `*`,
+ * the segments before the last are trimmed and valid, and the last may be a prefix
+ * (`openai/gpt-*`), which matches any model whose reference starts with it.
+ */
+function prefixWildcard(key: string): Wildcard | null {
+  const trimmed = key.trim();
+  if (!trimmed.endsWith("*")) return null;
+  const pieces = trimmed.slice(0, -1).split("/");
+  const last = (pieces.pop() ?? "").trimStart();
+  const before = pieces.map((piece) => piece.trim());
+  if (!validSegments(before) || (last !== "" && !validSegments([last]))) return null;
+  return { provider: before[0]!.toLowerCase(), whole: before.length === 1 && last === "" };
 }
 
 /**
@@ -945,17 +979,19 @@ export function effectiveAllowlist(
     .map((ref) => ref.trim());
   // An empty list limits nothing.
   if (keys.length === 0) return null;
+  // Only `<provider>/*` leaves a provider whole (both versions read it alike, spaces trimmed); a
+  // longer or prefix wildcard limits within it.
   const whole = new Set<string>();
   for (const key of keys) {
-    // Only `<provider>/*` leaves a provider whole; a longer wildcard limits within it.
-    const match = /^([^/*\s]+)\/\*$/.exec(key);
-    if (match) whole.add(match[1]!.toLowerCase());
+    const wildcard = segmentWildcard(key);
+    if (wildcard?.whole) whole.add(wildcard.provider);
   }
   return {
     whole: [...whole]
       .filter((provider) => provider.length <= MAX_PREF_ID_CHARS)
       .slice(0, MAX_KEY_PROVIDERS),
-    wildcards: keys.some(isWildcard),
+    wildcards: keys.some((key) => segmentWildcard(key) !== null),
+    prefixWildcards: keys.some((key) => prefixWildcard(key) !== null),
   };
 }
 
