@@ -58,7 +58,7 @@ One step, titled **"How should bots run commands?"**, with two cards. Each card 
 
 Under the cards, two lines and a link:
 
-- "Either way, a change you ask a bot for happens at once, and you can undo it. Deleting something still asks first, and can't be undone." (The earlier line had each change confirmed with a click; under "Doing, not asking" this whole step is the command question of `doing-not-asking.md` section 3.)
+- "Either way, a change you ask a bot for happens at once, and you can undo it, unless it is destructive. Deleting something and changing the account a bot runs on still ask first, once." (The earlier line had each change confirmed with a click; under "Doing, not asking" this whole step is the command question of `doing-not-asking.md` section 3.)
 - "Clawtrate's limits cover changes made through Clawtrate. A command a bot runs can still change things on the computer running OpenClaw."
 - **What this means** opens a sheet:
   - "**Hands-off** runs a bot's commands without stopping for approval, as the computer's own user, where that computer's rules allow it. A command can change files and OpenClaw's own settings."
