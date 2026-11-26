@@ -394,11 +394,14 @@ An earlier version of this section had the approver type a 16-character code and
 
 ### The code
 
-- **The waiting device's code** is 8 characters of Crockford's Base32 over the first 40 bits of SHA-256 of a fixed label and the raw 32-byte Ed25519 public key, in two groups: `K7QF-2MXA` (`pairCode` in `packages/core/src/device-approval.ts`). The approving device computes the same from the key the gateway lists, and checks that the device id is that key's hash.
-- **The choices** are the request's own code and three others, sorted. The others are SHA-256 over 32 random bytes the app makes once, the key and a counter, so the same key gets the same choices each time the sheet opens, and looking again gives nothing away. They never equal the request's code or each other. Sorting puts the real code at a uniformly random place, and nothing in the form tells it apart.
+- **A request's code** is 8 characters of Crockford's Base32 over the first 40 bits of SHA-256 of a fixed label, the raw 32-byte Ed25519 public key and the gateway's id for that request, in two groups: `K7QF-2MXA` (`pairCode` in `packages/core/src/device-approval.ts`, one function for both sides).
+  - The gateway makes the id with `randomUUID()` when it files the request (2026.10.6 `device-pairing-core.worker-B-kYFMQS.mjs` line 293; 2026.11.10 the same function in `device-pairing-core.worker-CXQtJOvQ.mjs`) and gives it to the waiting device as `details.requestId` of its `PAIRING_REQUIRED` answer (`buildPairingConnectErrorDetails`, `message-handler-CRCo2VX0.mjs` line 2180; 2026.11.10 `message-handler-BWGnyhL-.mjs` line 40). The approving device reads it from `device.pair.list`, and checks that the device id is the key's hash.
+  - So the code can't be computed before the request exists, and a new request (after a denial, an expiry or a change) has a new code. A device's key alone is permanent and public, so a code from the key alone could be matched offline, ahead of time.
+- **The choices** are the request's own code and three others, sorted. The others are SHA-256 over 32 random bytes the app makes once, the key, the id and a counter, so a request gets the same choices each time the sheet opens, and looking again gives nothing away. They never equal the request's code or each other. Sorting puts the real code at a uniformly random place, and nothing in the form tells it apart.
+- **Two waiting requests with the same code** (once in 2^40 for a pair, by chance) are both blocked, the rows past the sixteen included: neither is picked, and the sheet says to deny both and ask again from the new device.
 - **The numbers.**
-  - A stranger's key shows the same code as the person's own device once in 2^40, about 1 in 1.1 trillion. Comparing only the first group, once in 2^20, about 1 in a million.
-  - Making a key whose code matches a code the attacker has seen takes about 2^40 tries, on the order of a hundred core-days, against a request that waits ten minutes at most.
+  - Another request shows the same code as the person's own once in 2^40, about 1 in 1.1 trillion; comparing only the first group, once in 2^20, about 1 in a million.
+  - Matching a code someone has seen needs a new request at the gateway for each try, about 2^40 of them, each a round trip with the gateway's credential; and a match is blocked anyway, since both requests then show it.
   - A pick made without looking approves a stranger's request one time in 4 among the codes, or one in 6 among every choice, and only once: a wrong pick takes no second pick for that request on this device.
 
 ### Who sees it
@@ -408,6 +411,8 @@ An earlier version of this section had the approver type a 16-character code and
 - **A connection with pairing but no admin** shows a notice: "A device is asking to connect. Approve it in Clawtrate on a device with full control."
 - **A connection with read alone** receives no pairing events and shows nothing.
 - **Settings, Gateway, "Devices asking"** lists them, newest first, each opening the same sheet. At most 16 are kept; past that, "4 more are waiting." A flood of requests is a list, never a stack of sheets.
+- **While more wait than are shown**, none takes a pick: the person can't judge a set they can't see. Each says too many devices are asking, and Deny clears them into view.
+- **After any refusal or wrong pick** on this host, no sheet opens by itself for five minutes, whichever device asks next; the requests are still listed and can be opened. So a stream of new keys can't put sheet after sheet in front of the person.
 
 ### The sheet
 
@@ -424,10 +429,10 @@ An earlier version of this section had the approver type a 16-character code and
 - **The request's own code.** The app reads `device.pair.list` again. If the request is gone: "This request is no longer pending." If its key, device id, roles, scopes or origin differ from what was shown, or it became a repair: nothing is approved, and the sheet says what changed. Otherwise `device.pair.approve {requestId}`. An "unknown requestId" answer is "no longer pending"; any other refusal is said as the gateway said it.
 - **Afterwards.** The app reads the paired device. Its key, its roles (exactly `operator`), its scopes and its one live operator token's scopes must be exactly what was shown. Then: "Approved. The device connects in a moment." If any differs, the app removes the pairing at once (`device.pair.remove`) and says what differed; if the removal fails, it says so and where to remove it.
 - **An answer that was lost** is read back the same way: a paired device is checked as above; otherwise "Clawtrate didn't get the gateway's answer, so it can't say whether the device was approved."
-- **Another code** approves nothing: "That isn't this request's code, so nothing was approved." That request takes no other pick on this device. "Deny it" lets the device ask again. While sixteen requests whose pick approved nothing still wait, no other request takes a pick on this device, so none goes unrecorded.
+- **Another code** approves nothing: "That isn't this request's code, so nothing was approved." That request takes no other pick on this device. "Deny it" lets the device ask again.
 - **"None of these match"** sends nothing: "Nothing was approved." "Deny it" follows.
 - **"I didn't start this"** calls `device.pair.reject`: "Denied. The device can ask again."
-- **After a denial** a device on the shared token learns of it on its next connect, which files one more request as it stops (§4). That request is listed, but for five minutes a request from that device doesn't open the sheet by itself on this host.
+- **After a denial** a device on the shared token learns of it on its next connect, which files one more request as it stops (§4). That request is listed, and the five quiet minutes above keep it from opening the sheet by itself.
 - **Several windows and hosts.** Each decision reads the list again, so another window's or host's decision, an expiry or a supersession ends as "no longer pending". The app never names who decided.
 - **One connection.** Every read and write of a decision goes on the connection the sheet was read on. If it changes before the approval is sent, nothing is approved; after, nothing more is read or removed there, and the result is "not known".
 

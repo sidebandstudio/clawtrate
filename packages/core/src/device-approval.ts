@@ -31,7 +31,7 @@ export const READ_GAP_MS = 1_000;
 export const REREAD_MS = 30_000;
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const CODE_DOMAIN = utf8Bytes("clawtrate pairing code v1\n");
+const CODE_DOMAIN = utf8Bytes("clawtrate pairing code v2\n");
 
 /** The raw 32-byte Ed25519 key of a base64url `publicKey`, or null. */
 export function rawPublicKey(publicKey: string): Uint8Array | null {
@@ -66,13 +66,19 @@ const concat = (...parts: Uint8Array[]) => {
 };
 
 /**
- * A device's pairing code: the first 40 bits of SHA-256 over a fixed label and its raw public
- * key, as `ABCD-EFGH`. The waiting device shows its own; the approving device computes the same
- * from the key the gateway lists. Null for a key that isn't a raw Ed25519 key in base64url.
+ * A request's pairing code: the first 40 bits of SHA-256 over a fixed label, the device's raw
+ * public key and the gateway's id for the request, as `ABCD-EFGH`. The gateway makes the id
+ * (`randomUUID()`) when it files the request and hands it to the waiting device in its
+ * `PAIRING_REQUIRED` answer (`details.requestId`); the approving device reads it from
+ * `device.pair.list`. So the code can't be known before the request exists, and a new request
+ * has a new code: matching a code someone has seen takes a request filed at the gateway per
+ * try. The waiting device and the approving one both call this. Null for a key that isn't a
+ * raw Ed25519 key in base64url, or no id.
  */
-export function pairCode(publicKey: string): string | null {
+export function pairCode(publicKey: string, requestId: string): string | null {
   const raw = rawPublicKey(publicKey);
-  return raw ? crockford(hex(sha256Hex(concat(CODE_DOMAIN, raw)))) : null;
+  if (!raw || requestId === "") return null;
+  return crockford(hex(sha256Hex(concat(CODE_DOMAIN, raw, utf8Bytes(`\n${requestId}`)))));
 }
 
 /** A code read one character at a time, for a screen reader: "A B C D, E F G H". */
@@ -84,17 +90,21 @@ export const spokenCode = (code: string) =>
 
 /**
  * The codes offered for a request: its own and `PAIR_CODE_CHOICES - 1` others, in sorted order.
- * The others come from SHA-256 over `secret` (this engine's own random bytes), the key and a
- * counter, so the same key gets the same choices each time the sheet opens and repeated looks
+ * The others come from SHA-256 over `secret` (this engine's own random bytes), the key, the id
+ * and a counter, so a request gets the same choices each time the sheet opens and repeated looks
  * give nothing away; each differs from the request's own code and from each other.
  */
-export function codeChoices(publicKey: string, secret: Uint8Array): string[] | null {
-  const own = pairCode(publicKey);
+export function codeChoices(
+  publicKey: string,
+  requestId: string,
+  secret: Uint8Array,
+): string[] | null {
+  const own = pairCode(publicKey, requestId);
   const raw = rawPublicKey(publicKey);
   if (!own || !raw) return null;
   const codes = new Set([own]);
   for (let i = 0; codes.size < PAIR_CODE_CHOICES; i += 1)
-    codes.add(crockford(hex(sha256Hex(concat(secret, raw, utf8Bytes(String(i)))))));
+    codes.add(crockford(hex(sha256Hex(concat(secret, raw, utf8Bytes(`\n${requestId}\n${i}`))))));
   return [...codes].sort();
 }
 
@@ -107,7 +117,11 @@ export type DeviceRequestBlock =
   /** It asks for a scope outside the six Clawtrate can name. */
   | "unknown-scope"
   /** Its key isn't a raw Ed25519 key, or its device id isn't that key's hash. */
-  | "bad-key";
+  | "bad-key"
+  /** Another waiting request shows the same code: neither is picked; deny both and ask again. */
+  | "same-code"
+  /** More requests wait than are shown: none is picked until the hidden ones are cleared. */
+  | "too-many";
 
 /** A pending request as the gateway listed it, cleaned and bounded. */
 export type DeviceRequest = {
@@ -218,6 +232,8 @@ export function readDeviceRequest(
   row: unknown,
   secret: Uint8Array,
   spent: boolean,
+  /** A block that comes from the other waiting requests, used when the row has none of its own. */
+  among: DeviceRequestBlock | null = null,
 ): DeviceRequest | null {
   const r = asRecord(row) ?? {};
   const requestId = str(r.requestId);
@@ -237,7 +253,7 @@ export function readDeviceRequest(
           ? "repair"
           : scopes.some((scope) => !FULL_SCOPES.includes(scope))
             ? "unknown-scope"
-            : null;
+            : among;
   return {
     requestId,
     deviceId,
@@ -251,7 +267,7 @@ export function readDeviceRequest(
     scopes: scopes.slice(0, 16).map((scope) => cleanLine(scope, MAX_REPORTED_CHARS)),
     at: typeof r.ts === "number" && Number.isFinite(r.ts) ? r.ts : 0,
     blocked,
-    choices: blocked ? [] : (codeChoices(publicKey, secret) ?? []),
+    choices: blocked ? [] : (codeChoices(publicKey, requestId, secret) ?? []),
     spent,
   };
 }
@@ -298,10 +314,10 @@ export class DeviceApprovals {
   /** Requests this host already opened by itself: each opens by itself once. */
   private readonly prompted = new Set<string>();
   /**
-   * Devices denied here, with when that ends: the retry that learns of a denial files one more
-   * request (§4), which is listed but not opened by itself again.
+   * Until when this host opens no sheet by itself: five minutes after any refusal or wrong pick
+   * here, whichever device asks next. The requests are still listed and can be opened.
    */
-  private readonly denied = new Map<string, number>();
+  private quietUntil = -Infinity;
   /** Requests seen asking without admin, with when the notice of each ends. */
   private readonly noticed = new Map<string, number>();
   /** Moves on with each connection: a read begun before changes nothing. */
@@ -353,7 +369,7 @@ export class DeviceApprovals {
     this.onClose();
     this.spent.clear();
     this.prompted.clear();
-    this.denied.clear();
+    this.quietUntil = -Infinity;
   }
 
   /** `device.pair.requested`, `device.pair.resolved` and `device.pair.changed`. */
@@ -458,20 +474,41 @@ export class DeviceApprovals {
   }
 
   private apply(rows: unknown[]): void {
+    // Every pending row's code, those past the sixteen included: a code two share blocks both.
+    const codeOf = (row: unknown) => {
+      const r = asRecord(row) ?? {};
+      const id = str(r.requestId);
+      const key = str(r.publicKey);
+      return id && key ? pairCode(key, id) : null;
+    };
+    const codes = rows.map(codeOf);
     const all = rows
-      .map((row) => {
+      .map((row, i) => {
         const id = str(asRecord(row)?.requestId);
-        return readDeviceRequest(row, this.secret, id !== null && this.spent.has(id));
+        const code = codes[i];
+        const shared = code !== null && codes.filter((each) => each === code).length > 1;
+        return readDeviceRequest(
+          row,
+          this.secret,
+          id !== null && this.spent.has(id),
+          shared ? "same-code" : null,
+        );
       })
       .filter((request): request is DeviceRequest => request !== null)
       .sort((a, b) => b.at - a.at);
-    const requests = all.slice(0, MAX_DEVICE_REQUESTS);
+    // More waiting than shown: the person can't judge a set they can't see, so none is picked.
+    const hidden = all.length > MAX_DEVICE_REQUESTS;
+    const requests = all
+      .slice(0, MAX_DEVICE_REQUESTS)
+      .map((request) =>
+        hidden && request.blocked === null
+          ? { ...request, blocked: "too-many" as const, choices: [] }
+          : request,
+      );
     // Every request still pending, shown or past the bound: a spent pick stays spent.
     const ids = new Set(all.map((request) => request.requestId));
     for (const id of this.spent) if (!ids.has(id)) this.spent.delete(id);
     for (const id of this.prompted) if (!ids.has(id)) this.prompted.delete(id);
-    const now = this.ctx.now();
-    for (const [id, until] of this.denied) if (until <= now) this.denied.delete(id);
     const only = all.length === 1 ? requests[0]! : null;
     this.ctx.set({
       access: "admin",
@@ -480,7 +517,7 @@ export class DeviceApprovals {
       noticed: 0,
       // More than one waiting is a quiet badge, never a stack of sheets.
       prompt:
-        only && !this.prompted.has(only.requestId) && !this.denied.has(only.deviceId)
+        only && !this.prompted.has(only.requestId) && this.ctx.now() >= this.quietUntil
           ? only.requestId
           : null,
       error: null,
@@ -497,14 +534,6 @@ export class DeviceApprovals {
     const pending = Array.isArray(answer.pending) ? answer.pending : [];
     return (pending.map((row) => asRecord(row) ?? {}).find((r) => r.requestId === requestId) ??
       null) as RawRecord | null;
-  }
-
-  /**
-   * No pick for a request this host can't record a pick for: with sixteen spent requests still
-   * waiting, a new wrong pick would go unrecorded and allow a second, so none is taken.
-   */
-  private full(requestId: string): boolean {
-    return !this.spent.has(requestId) && this.spent.size >= MAX_DEVICE_REQUESTS;
   }
 
   private spend(requestId: string): void {
@@ -528,9 +557,10 @@ export class DeviceApprovals {
     const shown = this.shown(requestId);
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
-    if (shown.blocked || shown.spent || this.full(requestId) || !shown.choices.includes(code))
+    if (shown.blocked || shown.spent || !shown.choices.includes(code))
       return { kind: "not-allowed" };
-    if (code !== pairCode(shown.publicKey)) {
+    if (code !== pairCode(shown.publicKey, shown.requestId)) {
+      this.quiet();
       this.spend(requestId);
       return { kind: "wrong-code" };
     }
@@ -632,6 +662,12 @@ export class DeviceApprovals {
     return { kind: "unknown" };
   }
 
+  /** A refusal or a wrong pick: no sheet opens by itself for five minutes, for any device. */
+  private quiet(): void {
+    this.quietUntil = this.ctx.now() + NOTICE_MS;
+    if (this.state.prompt !== null) this.patch({ prompt: null });
+  }
+
   private gone(): DeviceDecision {
     void this.read();
     return { kind: "gone" };
@@ -643,14 +679,14 @@ export class DeviceApprovals {
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
     if (why === "none-match") {
-      if (this.full(requestId)) return { kind: "not-allowed" };
+      if (shown.blocked === "too-many") return { kind: "not-allowed" };
+      this.quiet();
       this.spend(requestId);
       return { kind: "none-match" };
     }
     try {
+      this.quiet();
       await this.ctx.request("device.pair.reject", { requestId });
-      if (this.denied.size < MAX_DEVICE_REQUESTS)
-        this.denied.set(shown.deviceId, this.ctx.now() + NOTICE_MS);
       void this.read();
       return { kind: "denied" };
     } catch (error) {

@@ -9397,8 +9397,8 @@ export class ClawtrateClient {
           approveCommand: instructions.command,
           approveNote: instructions.note,
           requestedScopes: scopes,
-          // Made from this device's own key: an admin device picks it (`device-approval.ts`).
-          code: this.identity ? pairCode(this.identity.publicKey) : null,
+          // From this device's own key and the gateway's id for its request (`pairCode`).
+          code: this.identity ? pairCode(this.identity.publicKey, requestId) : null,
         },
       });
       // The request id stays the same while we retry, so keep trying quietly

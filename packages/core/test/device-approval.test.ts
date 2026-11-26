@@ -135,17 +135,27 @@ async function listed(rows: Row[], options: { admin?: boolean } = {}) {
   return t;
 }
 
-const codeOf = (row: Row) => pairCode(row.publicKey as string)!;
+const codeOf = (row: Row) => pairCode(row.publicKey as string, row.requestId as string)!;
 const wrongOf = (t: Awaited<ReturnType<typeof listed>>, row: Row) =>
   t.request(row.requestId as string).choices.find((code) => code !== codeOf(row))!;
 
 describe("the pairing code", () => {
-  it("is the same on the waiting device and the approving one for the same key", () => {
+  it("is the same on the waiting device and the approving one for the same key and request", () => {
     const key = newKey();
-    expect(pairCode(key.publicKey)).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
-    expect(pairCode(key.publicKey)).toBe(pairCode(String(key.publicKey)));
-    expect(pairCode(newKey().publicKey)).not.toBe(pairCode(key.publicKey));
-    expect(pairCode("not a key")).toBeNull();
+    const code = pairCode(key.publicKey, "req-1");
+    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
+    expect(pairCode(String(key.publicKey), "req-1")).toBe(code);
+    expect(pairCode(newKey().publicKey, "req-1")).not.toBe(code);
+    expect(pairCode("not a key", "req-1")).toBeNull();
+    expect(pairCode(key.publicKey, "")).toBeNull();
+  });
+
+  it("changes with the gateway's request id, so it can't be known before the request exists", () => {
+    const key = newKey();
+    const codes = new Set(
+      Array.from({ length: 50 }, (_, i) => pairCode(key.publicKey, `req-${i}`)),
+    );
+    expect(codes.size).toBe(50);
   });
 
   it("is 40 bits: a stranger's key matches a given code once in 2^40, about 1.1 trillion", () => {
@@ -159,14 +169,14 @@ describe("the pairing code", () => {
     const secret = new Uint8Array(32).fill(3);
     for (let i = 0; i < 200; i += 1) {
       const key = newKey();
-      const choices = codeChoices(key.publicKey, secret)!;
+      const choices = codeChoices(key.publicKey, "req-1", secret)!;
       expect(choices).toHaveLength(PAIR_CODE_CHOICES);
       expect(new Set(choices).size).toBe(PAIR_CODE_CHOICES);
-      expect(choices.filter((code) => code === pairCode(key.publicKey))).toHaveLength(1);
+      expect(choices.filter((code) => code === pairCode(key.publicKey, "req-1"))).toHaveLength(1);
       expect(choices).toEqual([...choices].sort());
       // The same key gets the same choices; another engine's bytes give others.
-      expect(codeChoices(key.publicKey, secret)).toEqual(choices);
-      expect(codeChoices(key.publicKey, new Uint8Array(32))).not.toEqual(choices);
+      expect(codeChoices(key.publicKey, "req-1", secret)).toEqual(choices);
+      expect(codeChoices(key.publicKey, "req-1", new Uint8Array(32))).not.toEqual(choices);
     }
   });
 
@@ -512,26 +522,52 @@ describe("the waiting requests", () => {
     expect(t.delays()).toEqual([0]);
   });
 
-  it("takes no pick once sixteen spent requests still wait, so none goes unrecorded", async () => {
-    const spent = Array.from({ length: 16 }, (_, i) => pendingRow(newKey(), { ts: i }));
-    const t = await listed(spent);
-    for (const row of spent)
-      expect(await t.engine.refuse(row.requestId as string, "none-match")).toEqual({
-        kind: "none-match",
-      });
-    const fresh = pendingRow(newKey(), { ts: 100 });
-    t.gw.pending = [...spent, fresh];
+  it("takes no pick while more requests wait than are shown, and says so", async () => {
+    const rows = Array.from({ length: 17 }, (_, i) => pendingRow(newKey(), { ts: i }));
+    const t = await listed(rows);
+    expect(t.state().omitted).toBe(1);
+    for (const shown of t.state().requests) {
+      expect(shown.blocked).toBe("too-many");
+      expect(shown.choices).toEqual([]);
+    }
+    const newest = rows[16]!;
+    expect(
+      await t.engine.approve(newest.requestId as string, codeOf(newest), [...FULL_SCOPES]),
+    ).toEqual({ kind: "not-allowed" });
+    expect(await t.engine.refuse(newest.requestId as string, "none-match")).toEqual({
+      kind: "not-allowed",
+    });
+    // Denying is how the hidden ones come into view.
+    expect(await t.engine.refuse(newest.requestId as string, "not-mine")).toEqual({
+      kind: "denied",
+    });
     await t.engine.refresh();
-    const id = fresh.requestId as string;
-    expect(t.state().requests.map((each) => each.requestId)).toContain(id);
-    expect(await t.engine.approve(id, wrongOf(t, fresh), [...FULL_SCOPES])).toEqual({
-      kind: "not-allowed",
-    });
-    expect(await t.engine.approve(id, codeOf(fresh), [...FULL_SCOPES])).toEqual({
-      kind: "not-allowed",
-    });
-    expect(await t.engine.refuse(id, "none-match")).toEqual({ kind: "not-allowed" });
+    expect(t.state().omitted).toBe(0);
+    expect(t.state().requests.every((each) => each.blocked === null)).toBe(true);
     expect(t.calls).not.toContain("device.pair.approve");
+  });
+
+  it("blocks two waiting requests that show the same code, one of them past the sixteen", async () => {
+    const twin = pendingRow(newKey(), { ts: 100 });
+    const rows = [
+      twin,
+      ...Array.from({ length: 15 }, (_, i) => pendingRow(newKey(), { ts: 50 + i })),
+      // The same key and id again, oldest: it shows the same code, and is past the sixteen.
+      { ...twin, ts: 0 },
+    ];
+    const t = await listed(rows);
+    expect(t.state().omitted).toBe(1);
+    const shown = t.state().requests.find((each) => each.at === 100)!;
+    expect(shown.blocked).toBe("same-code");
+    expect(shown.choices).toEqual([]);
+    expect(
+      await t.engine.approve(twin.requestId as string, codeOf(twin), [...FULL_SCOPES]),
+    ).toEqual({
+      kind: "not-allowed",
+    });
+    t.gw.pending = [twin, { ...twin, ts: 0 }];
+    await t.engine.refresh();
+    expect(t.state().requests.map((each) => each.blocked)).toEqual(["same-code", "same-code"]);
   });
 
   it("keeps a pick spent while its request is past the sixteen shown", async () => {
@@ -559,6 +595,26 @@ describe("the waiting requests", () => {
     const kept = enforceState({ ...initialState, deviceRequests: t.state() }).deviceRequests!;
     expect(kept.requests[0]!.origin).toBe(origin);
     expect(kept.requests[0]!.name).toBe("a".repeat(64));
+  });
+
+  it("opens no sheet by itself for any device for five minutes after a refusal or a wrong pick", async () => {
+    for (const refusal of ["not-mine", "none-match", "wrong"] as const) {
+      const first = pendingRow();
+      const t = await listed([first]);
+      const id = first.requestId as string;
+      if (refusal === "wrong") await t.engine.approve(id, wrongOf(t, first), [...FULL_SCOPES]);
+      else await t.engine.refuse(id, refusal);
+      expect(t.state().prompt).toBeNull();
+      // Another key's request, the only one waiting: listed, not opened by itself.
+      const next = pendingRow();
+      t.gw.pending = [next];
+      await t.engine.refresh();
+      expect(t.state().requests.map((each) => each.requestId)).toEqual([next.requestId]);
+      expect(t.state().prompt).toBeNull();
+      t.advance(5 * 60_000);
+      await t.engine.refresh();
+      expect(t.state().prompt).toBe(next.requestId);
+    }
   });
 
   it("reads a burst of events once", async () => {
