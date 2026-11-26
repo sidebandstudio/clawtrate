@@ -1145,6 +1145,8 @@ const lockEvidence = object<LockEvidence>()({
   lastMatchAt: NUMBER,
   lostAt: NUMBER,
   readSeq: NUMBER,
+  attemptSeq: NUMBER,
+  readGateway: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const binding = object<BotBinding>()({

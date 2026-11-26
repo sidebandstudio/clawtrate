@@ -334,6 +334,8 @@ export class AccountsEngine {
         now.connectedAt === readOn.connectedAt
           ? { ...readOn, gatewayId: now.gatewayId }
           : readOn;
+      // The gateway each bot's order was read from: known only on the connection it began on.
+      const gateway = answeredBy(readOn, now);
       ctx.update((a) => {
         // The catalog is kept only for the same gateway, named on both reads: one read on
         // another (an answer at the same address after a reconnect) is never shown beside this
@@ -341,7 +343,7 @@ export class AccountsEngine {
         const same =
           read.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === read.gatewayId;
         return settleClear({
-          ...this.compose(a, config, views, same ? a.models : [], at, startedAt, seq),
+          ...this.compose(a, config, views, same ? a.models : [], at, startedAt, seq, gateway),
           ...(same ? {} : { modelsCut: initialAccountsState.modelsCut }),
           readOn: read,
         });
@@ -615,6 +617,7 @@ export class AccountsEngine {
     at: number,
     startedAt: number = at,
     seq: number | null = null,
+    gateway: string | null = null,
   ): AccountsState {
     const root = asRecord(config?.config) ?? {};
     const agents = asRecord(root.agents) ?? {};
@@ -626,8 +629,9 @@ export class AccountsEngine {
     const anyView = views.get("main") ?? [...views.values()][0];
     const bindings = [...views.keys()].map((botId) => {
       const before = previous.bindings.find((each) => each.botId === botId);
-      // A bot's order read since these reads began, by Check now or a press, stays as it was read.
-      if (seq !== null && before?.evidence.readSeq != null && before.evidence.readSeq > seq)
+      // A bot's order read since these reads began, by Check now or a press, stays as it was read,
+      // and so does a failure of one begun since.
+      if (seq !== null && before?.evidence.attemptSeq != null && before.evidence.attemptSeq > seq)
         return before;
       return this.binding(
         botId,
@@ -636,6 +640,7 @@ export class AccountsEngine {
         before,
         startedAt,
         seq,
+        gateway,
       );
     });
     return {
@@ -663,6 +668,7 @@ export class AccountsEngine {
     before: BotBinding | undefined,
     at: number,
     seq: number | null = null,
+    gateway: string | null = null,
   ): BotBinding {
     // An account counts for a bot only if that bot's own view lists it: one another bot keeps is not its.
     const listed = new Set(view.profiles.map((profile) => profile.id));
@@ -695,6 +701,7 @@ export class AccountsEngine {
         base.account !== null && listed.has(base.account),
         at,
         seq,
+        gateway,
       ),
       // Clawtrate set this bot's account (its own record says so) and the gateway's model has no
       // explicit fallback list: the empty list it writes did not land, then or since a restart.
@@ -731,7 +738,8 @@ export class AccountsEngine {
 
   /**
    * A read that failed, or that the gateway answered as unavailable: said on the binding, unless a
-   * read begun after it has been shown since. The last confirmation stands, with its time.
+   * read begun after it has been applied since, shown or failed. The last confirmation stands, with
+   * its time, and the failure's number keeps any read begun before it from publishing over it.
    */
   private readFailed(
     ctx: AccountsContext,
@@ -742,18 +750,19 @@ export class AccountsEngine {
   ): void {
     ctx.update((a) =>
       this.patchBinding(a, botId, (b) =>
-        b.evidence.readSeq !== null && b.evidence.readSeq > seq
+        b.evidence.attemptSeq !== null && b.evidence.attemptSeq > seq
           ? b
-          : { ...b, evidence: { ...b.evidence, status, error } },
+          : { ...b, evidence: { ...b.evidence, status, error, attemptSeq: seq } },
       ),
     );
   }
 
   /**
    * One read of a bot's order and model, published as its binding, stamped with when it began.
-   * An older read that answers after a newer one has published publishes nothing: what the page
-   * shows is never older than what it showed. Returns the bot's view, or null when the gateway
-   * says its account status is unavailable (said on the binding).
+   * An older read that answers after a newer one has published or failed publishes nothing: what
+   * the page shows is never older than what it showed. Returns the bot's view, or null when the
+   * gateway says its account status is unavailable (said on the binding). An answer with no
+   * account status in it throws (`NO_ACCOUNT_STATUS`): it is a failed read, never an empty order.
    */
   private async readOrder(
     botId: string,
@@ -762,6 +771,7 @@ export class AccountsEngine {
     seq: number = this.nextSeq(),
     at: number = ctx.now(),
   ): Promise<BotView | null> {
+    const on = ctx.readStamp();
     const [answer, config] = await Promise.all([
       ctx.request("models.authStatus", { agentId: botId, refresh: true }),
       ctx.request("config.get", {}).then(asRecord),
@@ -772,10 +782,11 @@ export class AccountsEngine {
       return null;
     }
     const entry = asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
+    const gateway = answeredBy(on, ctx.readStamp());
     ctx.update((a) => {
       const current = a.bindings.find((each) => each.botId === botId) ?? before;
-      if (current.evidence.readSeq !== null && current.evidence.readSeq > seq) return a;
-      const next = this.binding(botId, entry, view, current, at, seq);
+      if (current.evidence.attemptSeq !== null && current.evidence.attemptSeq > seq) return a;
+      const next = this.binding(botId, entry, view, current, at, seq, gateway);
       return settleClear({
         ...a,
         bindings: a.bindings.map((each) => (each.botId === botId ? next : each)),
@@ -836,23 +847,27 @@ export class AccountsEngine {
     const publish = (patch: Pick<OrderClear, "status" | "error">) => {
       if (!live()) return;
       const error = patch.error === null ? null : this.scrub(patch.error).slice(0, 400);
-      base.update((a) => ({
-        ...a,
-        clear: {
-          id,
-          gatewayId,
-          botId,
-          provider,
-          kind,
-          account,
-          ...patch,
-          error,
-          at: base.now(),
-          sentSeq,
-          checkedSeq,
-          checkedAt,
-        },
-      }));
+      // An unsure ending meets the newest read the page shows in the same update: one begun since
+      // the send that finds the order gone settles it, and the bot's evidence with it.
+      base.update((a) =>
+        settleClear({
+          ...a,
+          clear: {
+            id,
+            gatewayId,
+            botId,
+            provider,
+            kind,
+            account,
+            ...patch,
+            error,
+            at: base.now(),
+            sentSeq,
+            checkedSeq,
+            checkedAt,
+          },
+        }),
+      );
     };
     const { ctx: checked, check } = this.checked(beforeSend);
     const ctx: AccountsContext = {
@@ -2540,11 +2555,22 @@ export class AccountsEngine {
 }
 
 /**
- * An Unlock or Clear that ended unsure (`unanswered`, `unread`, `kept`), settled by the read just
- * published when that read began after its send and finds no stored order for its provider: the
- * press becomes `cleared` with that read's number and time, and the bot's evidence forgets the lock
- * at once, so the page never shows "Unlocked" beside "The lock is gone". A change with no press
- * behind it keeps its warning.
+ * The gateway a read was answered by: the identity its connection named, when the read ended on
+ * the connection it began on; null when that identity wasn't known, or the connection changed.
+ */
+function answeredBy(began: ReadStamp, ended: ReadStamp): string | null {
+  if (ended.target !== began.target || ended.connectedAt !== began.connectedAt) return null;
+  if (began.gatewayId !== null && ended.gatewayId !== began.gatewayId) return null;
+  return ended.gatewayId;
+}
+
+/**
+ * An Unlock or Clear that ended unsure (`unanswered`, `unread`, `kept`), settled by the read the
+ * page shows when that read began after its send, was answered by the gateway the press was sent
+ * to, and finds no stored order for its provider: the press becomes `cleared` with that read's
+ * number and time, and the bot's evidence forgets the lock at once, so the page never shows
+ * "Unlocked" beside "The lock is gone". A change with no press behind it keeps its warning, and a
+ * read of a gateway not yet named, or of another, settles nothing.
  */
 function settleClear(a: AccountsState): AccountsState {
   const clear = a.clear;
@@ -2560,6 +2586,8 @@ function settleClear(a: AccountsState): AccountsState {
     !binding ||
     seq === null ||
     seq <= clear.sentSeq ||
+    clear.gatewayId === null ||
+    binding.evidence.readGateway !== clear.gatewayId ||
     binding.provider !== clear.provider ||
     binding.order?.stored === true
   )

@@ -179,6 +179,11 @@ export class AccountsGateway {
   /** Fail `models.authStatus` for this bot. */
   failStatusFor: string | null = null;
   /**
+   * Answer `models.authStatus` for this bot with `answer` in place of its status: no payload at
+   * all (`undefined`), or a record with no `providers` list.
+   */
+  blankStatus: { agentId: string; answer: unknown } | null = null;
+  /**
    * `models.authOrderSet` with no account ids, as OpenClaw 2026.10.6 and 2026.11.10 take it: the
    * bot's stored order for the provider goes. This runs in its place when set: a refusal, an
    * answer held, or an answer that leaves the order as it was.
@@ -331,6 +336,7 @@ export class AccountsGateway {
       const { agentId } = params as { agentId: string };
       if (agentId === this.failStatusFor)
         throw new GatewayError({ code: "UNAVAILABLE", message: "status unavailable" });
+      if (agentId === this.blankStatus?.agentId) return this.blankStatus.answer;
       if (this.unavailable)
         return { providers: [], unavailable: { code: "PREPARED_MODEL_AUTH_UNAVAILABLE" } };
       return this.status(agentId);

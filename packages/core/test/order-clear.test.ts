@@ -11,6 +11,7 @@ import {
   accountWord,
   clearShown,
   initialAccountsState,
+  NO_ACCOUNT_STATUS,
   ORDER_CLEAR_WAIT_MS,
   type AccountsState,
   type BotBinding,
@@ -607,6 +608,323 @@ describe("F-592: Unlock and Clear, over the connection", () => {
   });
 });
 
+describe("F-592: an answer with no account status proves nothing", () => {
+  // The gateway always sends `providers`, an empty list included: an answer without it is no read.
+  for (const [shape, answer] of [
+    ["no payload", undefined],
+    ["a record with no providers list", { ts: 1 }],
+  ] as const) {
+    it(`the read after the press gets ${shape}: unread, never Unlocked`, async () => {
+      const { client, fake, accounts, press } = await locked();
+      fake.orderSet = (params) => {
+        delete fake.orders.otto;
+        fake.blankStatus = { agentId: "otto", answer };
+        return { provider: params.provider, profileIds: null };
+      };
+      await press();
+      expect(accounts().clear?.status).toBe("unread");
+      expect(shown(accounts().clear!, otto(accounts()))).toBe("unread");
+      expect(otto(accounts()).evidence).toMatchObject({
+        status: "failed",
+        error: NO_ACCOUNT_STATUS,
+      });
+      expect(accountWord(otto(accounts()))).toBe("locked");
+      // A Check now that gets the same answer settles nothing either.
+      await client.checkLock("otto");
+      expect(accounts().clear?.status).toBe("unread");
+      expect(shown(accounts().clear!, otto(accounts()))).toBe("unread");
+      // The gateway's own read, once it gives one, decides.
+      fake.blankStatus = null;
+      await client.checkLock("otto");
+      expect(shown(accounts().clear!, otto(accounts()))).toBe("cleared");
+      client.stop();
+    });
+
+    it(`the read before the send gets ${shape}: nothing is sent`, async () => {
+      const { client, fake, accounts, press } = await locked();
+      fake.blankStatus = { agentId: "otto", answer };
+      await press();
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(accounts().clear).toMatchObject({ status: "unsent", error: NO_ACCOUNT_STATUS });
+      client.stop();
+    });
+
+    it(`an accounts load that gets ${shape}: an error, never a bot with no order`, async () => {
+      const { client, fake, accounts } = await locked();
+      fake.blankStatus = { agentId: "otto", answer };
+      await client.refreshAccounts();
+      expect(accounts().status).toBe("error");
+      expect(accounts().error).toContain(NO_ACCOUNT_STATUS);
+      expect(otto(accounts()).order).toMatchObject({ ids: ["acme:work"], stored: true });
+      expect(accountWord(otto(accounts()))).toBe("locked");
+      client.stop();
+    });
+  }
+});
+
+describe("F-592: reads ordered by when each began, a failure included", () => {
+  it("an older Check now that answers after a newer one failed publishes nothing over the failure", async () => {
+    const { client, fake, accounts } = await locked();
+    // The older Check now's config answer is held; its status answer is already in.
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let holding = true;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (holding) {
+        holding = false;
+        await held.promise;
+      }
+      return answer;
+    };
+    const restore = fixedClock();
+    try {
+      const older = client.checkLock("otto");
+      await until(() => !holding);
+      fake.failStatusFor = "otto";
+      await client.checkLock("otto");
+      expect(otto(accounts()).evidence).toMatchObject({ status: "failed" });
+      const failed = otto(accounts()).evidence;
+      held.resolve();
+      await older;
+      expect(otto(accounts()).evidence).toEqual(failed);
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("an accounts load begun before a Check now that failed publishes nothing over the failure", async () => {
+    const { client, fake, accounts } = await locked();
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let holding = true;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (holding) {
+        holding = false;
+        await held.promise;
+      }
+      return answer;
+    };
+    const restore = fixedClock();
+    try {
+      const load = client.refreshAccounts();
+      await until(() => !holding && fake.gateway.calls("models.authStatus").length > 0);
+      fake.failStatusFor = "otto";
+      await client.checkLock("otto");
+      const failed = otto(accounts()).evidence;
+      expect(failed.status).toBe("failed");
+      held.resolve();
+      await load;
+      expect(otto(accounts()).evidence).toEqual(failed);
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+});
+
+describe("F-592: a press settled by the gateway's newest read", () => {
+  it("a Check now that finds the order gone while the press's read is slow: the press ends cleared, no 'The lock is gone'", async () => {
+    const { client, fake, accounts, press } = await locked();
+    // The gateway answers yes but the order is still there at the press's read; its config held.
+    fake.orderSet = (params) => ({ provider: params.provider, profileIds: null });
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let holding = false;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (!holding && fake.gateway.calls("models.authOrderSet").length > 0) {
+        holding = true;
+        await held.promise;
+      }
+      return answer;
+    };
+    const pressed = press();
+    await until(() => holding);
+    // Gone by the time of a newer read.
+    delete fake.orders.otto;
+    await client.checkLock("otto");
+    expect(otto(accounts()).order).toBeNull();
+    held.resolve();
+    await pressed;
+    expect(accounts().clear).toMatchObject({
+      status: "cleared",
+      checkedSeq: otto(accounts()).evidence.readSeq,
+    });
+    expect(otto(accounts()).evidence).toMatchObject({ lostAt: null, lastMatchAt: null });
+    expect(shown(accounts().clear!, otto(accounts()))).toBe("cleared");
+    client.stop();
+  });
+
+  it("a newer read that still finds the order keeps the press unsure and its lock evidence", async () => {
+    const { client, fake, accounts, press } = await locked();
+    fake.orderSet = (params) => ({ provider: params.provider, profileIds: null });
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let holding = false;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (!holding && fake.gateway.calls("models.authOrderSet").length > 0) {
+        holding = true;
+        await held.promise;
+      }
+      return answer;
+    };
+    const pressed = press();
+    await until(() => holding);
+    await client.checkLock("otto");
+    const evidence = otto(accounts()).evidence;
+    held.resolve();
+    await pressed;
+    expect(accounts().clear?.status).toBe("kept");
+    expect(otto(accounts()).evidence).toEqual(evidence);
+    expect(accountWord(otto(accounts()))).toBe("locked");
+    client.stop();
+  });
+});
+
+describe("F-592: a press settled only by a read of its own gateway", () => {
+  it("a read while the gateway is unnamed, or of another one, settles nothing; the same gateway's does", async () => {
+    let state: AccountsState = {
+      ...initialAccountsState,
+      status: "ready",
+      bindings: [
+        {
+          botId: "otto",
+          primary: "acme/dev-1@acme:work",
+          provider: "acme",
+          model: "dev-1",
+          account: "acme:work",
+          mode: "account",
+          fallbacks: [],
+          suffixLost: false,
+          accountMissing: false,
+          effort: null,
+          order: { ids: ["acme:work"], stored: true, configured: null },
+          evidence: {
+            status: "matched",
+            checkedAt: 1,
+            lastMatchAt: 1,
+            lostAt: null,
+            readSeq: null,
+            attemptSeq: null,
+            readGateway: null,
+            error: null,
+          },
+          fallbacksUnwritten: false,
+        },
+      ],
+    };
+    let stored = true;
+    let stamp = { gatewayId: "gateway-a" as string | null, target: 1, connectedAt: 1 };
+    const ctx = {
+      request: async (method: string) => {
+        if (method === "models.authStatus")
+          return {
+            providers: [
+              {
+                provider: "acme",
+                profiles: [{ profileId: "acme:work", type: "api_key", source: "inherited" }],
+                ...(stored ? { profileOrder: ["acme:work"], profileOrderStored: true } : {}),
+              },
+            ],
+          };
+        if (method === "config.get")
+          return {
+            config: {
+              agents: {
+                entries: { otto: { model: { primary: "acme/dev-1@acme:work", fallbacks: [] } } },
+              },
+            },
+          };
+        // Its answer lost; the order still there at the read after.
+        if (method === "models.authOrderSet") throw new Error("gateway request timeout");
+        throw new Error(`unexpected ${method}`);
+      },
+      get: () => state,
+      update: (change: (a: AccountsState) => AccountsState) => {
+        state = change(state);
+      },
+      connected: () => true,
+      admin: () => true,
+      gatewayNow: () => stamp.gatewayId,
+      readStamp: () => stamp,
+      now: () => 10,
+      log: () => {},
+    } as unknown as AccountsContext;
+    const engine = new AccountsEngine(ctx);
+    await engine.clearOrder("press-0001", "otto", "acme", "acme:work", "unlock");
+    expect(state.clear).toMatchObject({ gatewayId: "gateway-a", status: "unanswered" });
+    // The order goes; the connection comes back at the same address, its gateway not yet named.
+    stored = false;
+    stamp = { gatewayId: null, target: 1, connectedAt: 2 };
+    await engine.checkLock("otto");
+    expect(state.bindings[0]!.order).toBeNull();
+    expect(state.clear?.status).toBe("unanswered");
+    expect(shown(state.clear!, state.bindings[0]!)).toBe("unanswered");
+    // Another gateway named on it: still nothing of the press.
+    stamp = { gatewayId: "gateway-b", target: 1, connectedAt: 3 };
+    await engine.checkLock("otto");
+    expect(state.clear?.status).toBe("unanswered");
+    expect(shown(state.clear!, state.bindings[0]!)).toBe("unanswered");
+    // The gateway it was sent to, after a reconnect: its read settles the press.
+    stamp = { gatewayId: "gateway-a", target: 1, connectedAt: 4 };
+    await engine.checkLock("otto");
+    expect(state.clear).toMatchObject({
+      status: "cleared",
+      checkedSeq: state.bindings[0]!.evidence.readSeq,
+    });
+    expect(shown(state.clear!, state.bindings[0]!)).toBe("cleared");
+  });
+
+  it("a read on a connection that changed while it was out is no read of the press's gateway", () => {
+    const clear: OrderClear = {
+      id: "press-0001",
+      gatewayId: "gateway-a",
+      botId: "otto",
+      provider: "acme",
+      kind: "unlock",
+      account: "acme:work",
+      status: "unread",
+      error: null,
+      at: 1,
+      sentSeq: 1,
+      checkedSeq: null,
+      checkedAt: null,
+    };
+    const gone = (readGateway: string | null): BotBinding => ({
+      botId: "otto",
+      primary: "acme/dev-1@acme:work",
+      provider: "acme",
+      model: "dev-1",
+      account: "acme:work",
+      mode: "account",
+      fallbacks: [],
+      suffixLost: false,
+      accountMissing: false,
+      effort: null,
+      order: null,
+      evidence: {
+        status: "none",
+        checkedAt: 2,
+        lastMatchAt: null,
+        lostAt: null,
+        readSeq: 2,
+        attemptSeq: 2,
+        readGateway,
+        error: null,
+      },
+      fallbacksUnwritten: false,
+    });
+    expect(shown(clear, gone("gateway-a"))).toBe("cleared");
+    expect(shown(clear, gone(null))).toBe("unread");
+    expect(shown(clear, gone("gateway-b"))).toBe("unread");
+    expect(shown({ ...clear, gatewayId: null }, gone(null))).toBe("unread");
+  });
+});
+
 describe("F-592: a press bound to the gateway and the bot on screen", () => {
   async function twoGateways() {
     const a = new AccountsGateway();
@@ -821,6 +1139,8 @@ describe("F-592: the answer's wait", () => {
             lastMatchAt: 1,
             lostAt: null,
             readSeq: null,
+            attemptSeq: null,
+            readGateway: null,
             error: null,
           },
           fallbacksUnwritten: false,
@@ -864,6 +1184,7 @@ describe("F-592: the answer's wait", () => {
       connected: () => true,
       admin: () => true,
       gatewayNow: () => "gateway-a",
+      readStamp: () => ({ gatewayId: "gateway-a", target: 1, connectedAt: 1 }),
       now: () => 10,
       log: () => {},
     } as unknown as AccountsContext;
@@ -877,7 +1198,10 @@ describe("F-592: the answer's wait", () => {
     const fresh = (a: AccountsState): AccountsState => ({
       ...a,
       clear: null,
-      bindings: a.bindings.map((b) => ({ ...b, evidence: { ...b.evidence, readSeq: null } })),
+      bindings: a.bindings.map((b) => ({
+        ...b,
+        evidence: { ...b.evidence, readSeq: null, attemptSeq: null },
+      })),
     });
     state = fresh(state);
     const engine2 = new AccountsEngine({

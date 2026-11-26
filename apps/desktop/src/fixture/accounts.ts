@@ -235,6 +235,8 @@ const evidence = (patch: Partial<LockEvidence>): LockEvidence => ({
   lastMatchAt: null,
   lostAt: null,
   readSeq: null,
+  attemptSeq: null,
+  readGateway: null,
   error: null,
   ...patch,
 });
@@ -1621,6 +1623,8 @@ export function accountCommand(
                     lostAt: null,
                     // The press's own read, as the engine numbers it (`clearShown`).
                     readSeq: 2,
+                    attemptSeq: 2,
+                    readGateway: asked,
                   },
                 }
               : b,

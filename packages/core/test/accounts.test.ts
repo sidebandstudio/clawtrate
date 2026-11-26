@@ -1769,6 +1769,23 @@ describe("sign-ins, through the gateway's own methods", () => {
     client.stop();
   });
 
+  for (const [shape, answer] of [
+    ["no payload", undefined],
+    ["a record with no providers list", { ts: 1 }],
+  ] as const)
+    it(`a sign-in whose read afterwards gets ${shape} is unverified, never refreshed`, async () => {
+      const { client, fake, accounts } = await accountsClient();
+      await client.startSignIn(CHOICES.device, null);
+      fake.blankStatus = { agentId: "main", answer };
+      fake.answerDevice();
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn).toMatchObject({
+        stage: "unverified",
+        result: { readFailed: true, added: [] },
+      });
+      client.stop();
+    });
+
   it("a sign-in that finishes with no new account is refreshed, not connected", async () => {
     const fake = new AccountsGateway();
     fake.nextEnding = { outcome: "approve", account: "work" };

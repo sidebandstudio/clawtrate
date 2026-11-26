@@ -340,6 +340,16 @@ export type LockEvidence = {
    * clock, which can give two of them the same millisecond.
    */
   readSeq: number | null;
+  /**
+   * The newest read begun that has been applied here, one that failed included (`readSeq` of a
+   * read shown, or of a failure said): a read begun before it publishes nothing.
+   */
+  attemptSeq: number | null;
+  /**
+   * The gateway the read that gave this evidence was answered by, as its connection named it;
+   * null when that wasn't known. Only a read of the gateway a press was sent to settles it.
+   */
+  readGateway: string | null;
   error: string | null;
 };
 
@@ -588,6 +598,8 @@ export const unreadEvidence: LockEvidence = {
   lastMatchAt: null,
   lostAt: null,
   readSeq: null,
+  attemptSeq: null,
+  readGateway: null,
   error: null,
 };
 
@@ -686,8 +698,21 @@ export function unavailableReason(answer: unknown): string | null {
   return (code ?? "unavailable").slice(0, 128);
 }
 
+/**
+ * Said when a `models.authStatus` answer is no record, or a record without its `providers` list:
+ * the gateway always sends that list, an empty one included, so such an answer is no reading.
+ */
+export const NO_ACCOUNT_STATUS = "The gateway's answer carried no account status for the bot.";
+
+/**
+ * One bot's `models.authStatus` answer. An answer that says it is unavailable is read as such;
+ * one with no record or no `providers` list throws `NO_ACCOUNT_STATUS`, so it is never read as a
+ * bot with no accounts and no order.
+ */
 export function readBotView(answer: unknown): BotView {
+  const unavailable = unavailableReason(answer);
   const record = asRecord(answer) ?? {};
+  if (unavailable === null && !Array.isArray(record.providers)) throw new Error(NO_ACCOUNT_STATUS);
   const profiles: ViewProfile[] = [];
   const orders: Record<string, StoredOrder> = {};
   const keyed = new Set<string>();
@@ -735,7 +760,7 @@ export function readBotView(answer: unknown): BotView {
     orders,
     keyed: [...keyed],
     capabilities,
-    unavailable: unavailableReason(answer),
+    unavailable,
   };
 }
 
@@ -1144,6 +1169,7 @@ export function evaluateOrder(
   accountListed: boolean,
   at: number,
   seq: number | null = null,
+  gateway: string | null = null,
 ): LockEvidence {
   let status: LockEvidence["status"];
   const ids = order?.ids ?? [];
@@ -1169,6 +1195,8 @@ export function evaluateOrder(
     lastMatchAt: matched ? at : previous.lastMatchAt,
     lostAt: matched ? null : wasMatched ? at : previous.lostAt,
     readSeq: seq,
+    attemptSeq: seq,
+    readGateway: gateway,
     error: null,
   };
 }
@@ -1203,7 +1231,7 @@ export function retainedOrder(binding: BotBinding): string | null {
  * What an Unlock or Clear is shown as now, from the gateway's reads of the bot, ordered by when
  * each began (`readSeq`, never the clock): as it ended, with the time of the read that settled it.
  * An unsure ending (`unanswered`, `unread`, `kept`) becomes `cleared` when a read begun after the
- * send finds no stored order for its provider. A `cleared` one is shown no more (null) once a read
+ * send, answered by the gateway the press was sent to, finds no stored order for its provider. A `cleared` one is shown no more (null) once a read
  * begun after its own finds a stored order there again: the line never says the order is gone
  * above a page that shows it.
  */
@@ -1220,7 +1248,16 @@ export function clearShown(
       : { status: "cleared", checkedAt: clear.checkedAt };
   const unsure =
     clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
-  if (unsure && same && !stored && seq !== null && clear.sentSeq !== null && seq > clear.sentSeq)
+  const gateway = clear.gatewayId !== null && binding.evidence.readGateway === clear.gatewayId;
+  if (
+    unsure &&
+    gateway &&
+    same &&
+    !stored &&
+    seq !== null &&
+    clear.sentSeq !== null &&
+    seq > clear.sentSeq
+  )
     return { status: "cleared", checkedAt: binding.evidence.checkedAt };
   return { status: clear.status, checkedAt: null };
 }
