@@ -578,7 +578,7 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("settings changed in place to TLS off while the gateway still serves TLS: Connect fails with its ways on, and nothing is sent", async () => {
+    it("settings changed in place to TLS off while the gateway still serves TLS: Connect fails with its ways on, and isn't retried", async () => {
       // What the reader knows is the settings file; the gateway runs on what it loaded when it
       // started. A file edited to TLS off since then names a listener that still speaks TLS.
       const home = newHome();
