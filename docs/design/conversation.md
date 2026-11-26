@@ -445,7 +445,7 @@ Reasoning has no card. Its text is never on screen until the person opens it. Wi
 
 ### 7.6 Text beside a tool call
 
-Text the model writes in the same message as a tool call does not come on the reply stream. It arrives as an `item` of kind `preamble`, its text in `progressText`, with phases `update` and `end`. It is the bot narrating its work ("Reading last night's log first."), so it is shown as one of the bot's ordinary bubbles, placed directly before the card of the call it came with. Its updates replace its text in place; it has no caret once its item ends. It ends a column of cards and breaks a fold, like any bubble. It is not reasoning and is never hidden.
+Text the model writes in the same message as a tool call does not come on the reply stream. It arrives as an `item` of kind `preamble`, its text in `progressText`, with phases `update` and `end`. OpenClaw 2026.11.10 sends no such item: the text comes on the reply stream as an item of its own, and as its call starts it is taken as the text beside that call. It is the bot narrating its work ("Reading last night's log first."), so it is shown as one of the bot's ordinary bubbles, placed directly before the card of the call it came with. Its updates replace its text in place; it has no caret once its item ends. It ends a column of cards and breaks a fold, like any bubble. It is not reasoning and is never hidden.
 
 ### 7.7 The run line
 
