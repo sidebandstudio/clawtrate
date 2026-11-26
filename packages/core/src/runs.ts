@@ -495,6 +495,11 @@ export type Run = {
    */
   endFromRows?: boolean;
   /**
+   * History holds an assistant row of this run: the gateway ran it, whatever this client saw
+   * of its events. Kept through every history merge (`not-run.ts`).
+   */
+  ranInHistory?: true;
+  /**
    * The anchor the run's next reasoning block is numbered from: `t.<toolCallId>`
    * of the latest tool call, `c` when a history window began inside the run
    * so its start is not visible, or null for the run's start.
@@ -3027,7 +3032,8 @@ export function runsFromHistory(
 
   // The newest run of the rows; the queued turn the gateway reports in flight is not one of them.
   const newest = [...runs.keys()].filter((id) => id !== inFlightRunId).at(-1);
-  return [...runs.values()].map((built) => {
+  return [...runs.values()].map((each) => {
+    const built: Run = lastAssistant.has(each.id) ? { ...each, ranInHistory: true } : each;
     if (built.id === inFlightRunId) return built;
     const lastRow = lastAssistant.get(built.id);
     const lastStop = str(lastRow?.stopReason);
@@ -3303,6 +3309,8 @@ export function mergeHistoryRuns(
       model: current.model ?? fromRun.model,
       ...mergedAnchor(current, fromRun, steps),
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
+      // A row of the run in history is the gateway's word that it ran: kept once seen.
+      ...(fromRun.ranInHistory || current.ranInHistory ? { ranInHistory: true as const } : {}),
     };
     // An end this client only inferred gives way to the end history establishes.
     if (isTerminal(fromRun.state) && fromRun.outcomeKnown) run = reopenInferred(run);

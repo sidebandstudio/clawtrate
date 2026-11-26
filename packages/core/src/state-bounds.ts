@@ -423,6 +423,7 @@ export const RUN: Bound = flagged<Run>()({
   omittedTools: NUMBER,
   omittedToolsAtEnd: NUMBER,
   endFromRows: FLAG,
+  ranInHistory: FLAG,
   preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
   nextReasoning: NUMBER,

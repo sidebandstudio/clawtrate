@@ -106,12 +106,16 @@ function kindOf(text: string): NotRunKind {
  * so only the gateway's row counts for it.
  */
 export function neverRan(
-  run: Pick<Run, "state" | "error" | "origin" | "reportedStartAt" | "steps" | "text">,
+  run: Pick<
+    Run,
+    "state" | "error" | "origin" | "reportedStartAt" | "steps" | "text" | "ranInHistory"
+  >,
 ): boolean {
   if (run.state !== "failed" || run.error?.quiet === true) return false;
   if (run.error?.beforeReply === true) return true;
   return (
     run.origin !== "history" &&
+    run.ranInHistory !== true &&
     run.reportedStartAt === null &&
     run.steps.length === 0 &&
     run.text === ""
@@ -129,6 +133,8 @@ export function neverStarted(run: Run): boolean {
     !run.outcomeKnown &&
     run.origin === "local" &&
     run.bound &&
+    // History holds a row of it (a reply whose events this client missed): it ran.
+    run.ranInHistory !== true &&
     run.reportedStartAt === null &&
     run.steps.length === 0 &&
     run.text === ""

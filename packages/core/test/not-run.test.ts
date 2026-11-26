@@ -255,6 +255,59 @@ describe("a message the gateway fails before any run of it (#663)", () => {
   });
 });
 
+describe("never under a message that was answered", () => {
+  /** A reply of the run in history, as the gateway writes one, with no stop reason of its own. */
+  const replyRow = (runId: string) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "Here it is." }],
+    timestamp: T0 + 500,
+    __openclaw: { id: `a-${runId}`, seq: 2, runId },
+  });
+
+  it("a reply whose events this client missed: the run ran, so no 'didn't start a run' line", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    const { client, transcript } = await openTask({ gateway });
+    const id = client.sendMessage(KEY, "hello");
+    await until(() => transcript().runs[0]?.bound === true);
+    // No event of the run reached this client; history has its reply, with nothing in flight.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(id), replyRow(id)],
+      hasMore: false,
+    });
+    gateway.emit("session.message", { sessionKey: KEY, messageSeq: 2 });
+    await until(() => transcript().runs[0]?.state === "completed");
+    const run = transcript().runs[0]!;
+    expect(run).toMatchObject({ origin: "local", reportedStartAt: null, text: "" });
+    expect(run.ranInHistory).toBe(true);
+    expect(neverStarted(run)).toBe(false);
+    client.stop();
+  });
+
+  it("a failure with no start seen, whose run history shows replied: not one the gateway couldn't run", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    const { client, transcript } = await openTask({ gateway });
+    const id = client.sendMessage(KEY, "hello");
+    await until(() => transcript().runs[0]?.bound === true);
+    gateway.emit("chat", {
+      runId: id,
+      sessionKey: KEY,
+      seq: 9,
+      state: "error",
+      errorMessage: "boom",
+    });
+    await until(() => transcript().runs[0]?.state === "failed");
+    expect(neverRan(transcript().runs[0]!)).toBe(true);
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(id), replyRow(id)],
+      hasMore: false,
+    });
+    gateway.emit("session.message", { sessionKey: KEY, messageSeq: 2 });
+    await until(() => transcript().runs[0]?.ranInHistory === true);
+    expect(neverRan(transcript().runs[0]!)).toBe(false);
+    client.stop();
+  });
+});
+
 describe("a task's mark is its latest run's outcome (#664)", () => {
   it("2026.10.6: a later success clears the failed mark at once, by the live rows alone", async () => {
     const gateway = gatewayWith([
@@ -552,6 +605,18 @@ describe("the rules underneath", () => {
     );
     expect(index.failedAt(KEY)).not.toBeNull();
     expect(index.failedAt(OTHER)).toBeNull();
+  });
+
+  it("a run's own chat end ends it, so a later message failed before running still marks the task", () => {
+    const index = new WaitingIndex();
+    index.onAgent(
+      { sessionKey: KEY, runId: "r1", stream: "lifecycle", ts: 1_000, data: { phase: "start" } },
+      1_000,
+    );
+    // Its final, and no lifecycle end ever arrives.
+    index.onChat({ sessionKey: KEY, runId: "r1", state: "final" }, 1_500);
+    expect(index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(2_000);
   });
 
   it("an older run's late chat end says nothing while a newer run of the task is going", () => {
