@@ -245,17 +245,18 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
     client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
     ...(options.secure === false ? {} : { secretBox: box }),
   });
-  // Every value the client asks the host to keep, as it hands it over: before the host seals
-  // its credentials record, where a search of the file on disk can't see into it.
-  const stored = new Map<string, string>();
+  // Every write the client asks the host to make, in order (a delete as `null`), as it hands it
+  // over: before the host seals its credentials record, where a search of the file on disk can't
+  // see into it. A value later overwritten or deleted is still here.
+  const writes: { key: string; value: string | null }[] = [];
   const storage = {
     get: (key: string) => host.storage.get(key),
     delete: async (key: string) => {
-      stored.delete(key);
+      writes.push({ key, value: null });
       await host.storage.delete(key);
     },
     set: async (key: string, value: string) => {
-      stored.set(key, value);
+      writes.push({ key, value });
       await host.storage.set(key, value);
     },
   };
@@ -279,7 +280,7 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
     log: (line) => lines.push(line),
     localConnect: { ...local, worker: WORKER },
   });
-  return { client, setup, dialog, lines, dataDir, stored };
+  return { client, setup, dialog, lines, dataDir, writes };
 }
 
 describe.skipIf(!mac)(
@@ -301,7 +302,7 @@ describe.skipIf(!mac)(
       };
       settingsFile(home, ".openclaw", tokenSettings(server.port, "token-as-the-look-read-it"));
       proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", server.port));
-      const { client, setup, dialog, dataDir, stored } = localApp(local);
+      const { client, setup, dialog, dataDir, writes } = localApp(local);
       const drops = vi.spyOn(HeldToken.prototype, "drop");
       try {
         await client.start({ resume: false });
@@ -336,10 +337,29 @@ describe.skipIf(!mac)(
           gatewayId: "gateway-identity-1",
         });
         expect(readFileSync(join(dataDir, STATE_FILE), "latin1")).not.toContain("token-at-connect");
-        // The credentials record is sealed on disk: what went into it is checked as it was given.
-        const kept = [...stored.values()];
-        expect(kept.some((value) => value.includes("device-token-from-pairing"))).toBe(true);
-        for (const value of kept) expect(value).not.toContain("token-at-connect");
+        // The credentials record is sealed on disk: what went into it is checked as it was given,
+        // every write in order. Nothing is saved before the first paired hello; then the device
+        // token, the gateway with its route and no token, and the same with its identity.
+        const credentials = writes
+          .filter(({ key }) => key === "connection" || key.startsWith("deviceToken:"))
+          .map(({ key, value }) => ({
+            key: key.startsWith("deviceToken:") ? "deviceToken" : key,
+            value: value === null ? null : (JSON.parse(value) as unknown),
+          }));
+        const route = { url: `ws://127.0.0.1:${server.port}`, token: null, route: ".openclaw@1:1" };
+        expect(credentials).toEqual([
+          {
+            key: "deviceToken",
+            value: expect.objectContaining({ token: "device-token-from-pairing" }),
+          },
+          { key: "connection", value: route },
+          { key: "connection", value: { ...route, gatewayId: "gateway-identity-1" } },
+        ]);
+        // No write of any key, overwritten since or not, carried either token the settings held.
+        for (const { value } of writes) {
+          expect(value ?? "").not.toContain("token-at-connect");
+          expect(value ?? "").not.toContain("token-as-the-look-read-it");
+        }
         // And the client holds no copy once the device token is saved.
         const inside = client as unknown as {
           typedAttempt: unknown;
