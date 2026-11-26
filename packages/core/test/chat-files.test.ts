@@ -424,7 +424,7 @@ describe("F-115: the preview of a task whose last message is only a file", () =>
 
 describe("F-115: a file a bot attaches, read", () => {
   const BYTES = Uint8Array.from("%PDF-1.4\nthe two reviews\n%%EOF\n", (char) => char.charCodeAt(0));
-  const ISSUED = `${outgoing(PDF)}?mediaTicket=v1.eyJzY29wZSI6Im1hbmFnZWQifQ.wvFYVx-PH9Ic`;
+  const ISSUED = `${outgoing(PDF)}?mediaTicket=v1.eyJzY29wZSI6Im1hbmFnZWQifQ.wvFYVx-PH9Ic0Rq3n8dJt2LmWbYk5sAeUoCiGzXhT1v`;
 
   function response(status: number, headers: Record<string, string>, body: Uint8Array) {
     let done = false;
@@ -485,6 +485,24 @@ describe("F-115: a file a bot attaches, read", () => {
     });
     expect(gateway.calls("artifacts.download")).toEqual([{ sessionKey: KEY, artifactId: PDF }]);
     expect(fetched).toEqual([`http://${new URL(URL_A).host}${ISSUED}`]);
+    client.stop();
+  });
+
+  it("F-115: a download in OpenClaw 2026.11.10's form, a grant on the connection, is read the same way, its ticket's encoded slash sent as issued", async () => {
+    const newer = `${outgoing(PDF)}?mediaTicket=6f1c2a9e-3b7d-4e58-a0c4-9d2e81f7b630%2FQm9vay1yZXZpZXdzLWdyYW50LXRva2VuLWZvci10ZXM`;
+    const fetched: string[] = [];
+    const { client } = await open(
+      async (url) => {
+        fetched.push(url);
+        return response(200, { "content-type": "application/pdf" }, BYTES);
+      },
+      () => ({ url: newer, expiresAt: new Date(Date.now() + 300_000).toISOString() }),
+    );
+    expect(await client.readChatFile(KEY, PDF)).toMatchObject({
+      status: "content",
+      bytes: BYTES.length,
+    });
+    expect(fetched).toEqual([`http://${new URL(URL_A).host}${newer}`]);
     client.stop();
   });
 

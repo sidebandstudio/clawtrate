@@ -13,6 +13,7 @@ import {
   decisionText,
   endDecision,
   endReadback,
+  defaultApprovalInstructions,
   FULL_SCOPES,
   initialState,
   MAX_RAW_ENTRY_CHARS,
@@ -149,6 +150,7 @@ export const SCENES = [
   "offline-unreachable",
   "offline-down",
   "connect-full",
+  "pairing-full",
   "access-narrowed",
   "access-offer",
   ...LIVE_SCENES,
@@ -229,7 +231,11 @@ function pairing(): ClawtrateState {
         deviceId: DEVICE_ID,
         message: "pairing required",
         approveCommand: "openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
-        approveNote: "The gateway's owner runs this on the gateway's machine.",
+        // The words a real host shows for this address, from core.
+        approveNote: defaultApprovalInstructions(
+          GATEWAY_URL,
+          "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
+        ).note,
         requestedScopes: ["operator.read"],
       },
     },
@@ -335,6 +341,24 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
         initial: withConnection(idle(), { gatewayUrl: "wss://gateway.example" }),
         steps: [],
       };
+    // A first pairing at a secure address, waiting for the owner's one approval of all six.
+    case "pairing-full": {
+      const waiting = pairing();
+      return {
+        initial: withConnection(waiting, {
+          gatewayUrl: "wss://gateway.example",
+          pairing: {
+            ...waiting.connection.pairing!,
+            approveNote: defaultApprovalInstructions(
+              "wss://gateway.example",
+              waiting.connection.pairing!.requestId,
+            ).note,
+            requestedScopes: [...FULL_SCOPES],
+          },
+        }),
+        steps: [],
+      };
+    }
     // A full pairing the gateway granted read alone (§8).
     case "access-narrowed":
       return {
@@ -1334,6 +1358,7 @@ export function createFixtureBridge(
       : name === "access-pinned"
         ? { ...FIXTURE_INFO, readOnly: true }
         : name === "connect-full" ||
+            name === "pairing-full" ||
             name === "access-narrowed" ||
             name === "access-offer" ||
             options.fullPairing

@@ -33,13 +33,33 @@ export function protectedGatewayUrl(raw: string): boolean {
   if (url.protocol !== "wss:") return false;
   // An address with a user name, password or fragment can't be used (§4).
   if (url.username || url.password || url.hash) return false;
-  const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (host === "" || host === "localhost" || host.endsWith(".localhost")) return false;
+  return !loopbackHost(url.hostname);
+}
+
+/** Whether a parsed host name is this computer's: loopback or unspecified, in any spelling. */
+function loopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "" || host === "localhost" || host.endsWith(".localhost")) return true;
   // The URL parser writes every IPv4 form (decimal, hex, short) as a dotted quad.
-  if (/^(127|0)\.\d+\.\d+\.\d+$/.test(host)) return false;
+  if (/^(127|0)\.\d+\.\d+\.\d+$/.test(host)) return true;
   // IPv6 loopback and unspecified, and IPv4-mapped loopback, as the parser writes them.
-  if (/^\[(::1?|::ffff:(7f[0-9a-f]{2}|0{1,4}):[0-9a-f]{1,4})\]$/.test(host)) return false;
-  return true;
+  return /^\[(::1?|::ffff:(7f[0-9a-f]{2}|0{1,4}):[0-9a-f]{1,4})\]$/.test(host);
+}
+
+/**
+ * Whether this address is plain `ws://` to another computer, where the gateway token and the
+ * conversation would cross the network unencrypted: the form warns before any token goes
+ * (docs/decisions.md, 2026-11-25), and a first pairing there asks for read. A malformed
+ * address, and a loopback one, are not.
+ */
+export function plainRemoteGatewayUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return false;
+  }
+  return url.protocol === "ws:" && !loopbackHost(url.hostname);
 }
 
 /**

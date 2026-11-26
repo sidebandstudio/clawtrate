@@ -8,3 +8,4 @@ started-task.spec.ts
 work-files.spec.ts
 bot-delete.spec.ts
 ui-bot-files.spec.ts
+first-run-approvals.spec.ts

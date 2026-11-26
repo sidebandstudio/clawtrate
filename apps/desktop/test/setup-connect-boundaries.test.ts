@@ -670,7 +670,7 @@ function provedClient(gateway: DevGateway, port: number, refused: string[]) {
   });
   const client = new ClawtrateClient(
     { ...host, createWebSocket: sockets.createWebSocket, secureCredentials: async () => true },
-    { reconnect: { initialMs: 50, maxMs: 200 }, fullAccess: true },
+    { reconnect: { initialMs: 50, maxMs: 200 } },
   );
   provedRoutes.set(client, sockets);
   return client;
@@ -736,7 +736,6 @@ async function routedClient(gateway: DevGateway, token: string) {
     },
     {
       reconnect: { initialMs: 50, maxMs: 200 },
-      fullAccess: true,
       localConnect: (at, route) => {
         const sockets = routes(at, route)!;
         return {
