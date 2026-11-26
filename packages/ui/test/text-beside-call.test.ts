@@ -339,9 +339,10 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(started).not.toContain('data-testid="live-turn"');
   });
 
-  it("on 2026.10.6, an answer the person read stays when a steer's text comes only as a preamble item", () => {
+  it("on 2026.10.6, an answer the person read stays the reply when a steer's text comes only as a preamble item, through each call it starts", () => {
     // A text-only answer, then a steer: the gateway asks the model again, and its text beside the
-    // next call comes only as a preamble item. That item is not the answer's.
+    // next calls comes only as a preamble item. That item is not the answer's, and neither call
+    // of that message moves the answer beside itself.
     const note = "Now checking the cache.";
     const preamble = (phase: string): [string, Record<string, unknown>] => [
       "item",
@@ -357,9 +358,14 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     for (const html of [
       draw(transcriptOf(before)),
       draw(transcriptOf([...before, ...call("c2")])),
+      draw(transcriptOf([...before, ...call("c2"), ...call("c3")])),
     ]) {
       expect(count(html, "The logs are clean.")).toBe(1);
       expect(count(html, note)).toBe(1);
+      // Still the reply, where it was read: not moved beside either call.
+      const reply = html.slice(html.indexOf('data-testid="live-turn"'));
+      expect(html).toContain('data-testid="live-turn"');
+      expect(reply).toContain("The logs are clean.");
     }
   });
 

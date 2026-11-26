@@ -457,8 +457,8 @@ export type Run = {
   textItemId: string | null;
   /**
    * `textItemId` is an earlier message's: the gateway started another message after it (its
-   * `lifecycle` `model` event, sent at each message's start). A preamble item of a later message
-   * (2026.10.6) never takes it.
+   * `lifecycle` `model` event, sent at each message's start). No call of a later message places it
+   * beside itself, nor does that message's preamble item take it.
    */
   textEarlier?: true;
   /** True once the gateway reported the reply complete. */
@@ -2829,16 +2829,14 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
  */
 function textBesideCall(run: Run): Run {
   const itemId = run.textItemId;
-  // An item id comes only with the `assistant` stream's text, never the chat stream's.
-  if (itemId === null || !run.text.trim() || textPlaced(run)) return run;
+  // An item id comes only with the `assistant` stream's text, never the chat stream's. An earlier
+  // message's text (`textEarlier`) is never placed beside a later message's call, at any of its
+  // calls: it stays the reply, where it was read.
+  if (itemId === null || run.textEarlier || !run.text.trim() || textPlaced(run)) return run;
   const list = run.preambles ?? [];
   const waiting = list.findLastIndex((p) => p.beforeCall === null);
-  // The waiting item holds its own message's text: it takes the stream's item only when that is
-  // the same message's, never an earlier one's (`textEarlier`), whose text then stays the reply.
   if (waiting !== -1)
-    return run.textEarlier
-      ? run
-      : { ...run, preambles: list.map((p, i) => (i === waiting ? { ...p, item: itemId } : p)) };
+    return { ...run, preambles: list.map((p, i) => (i === waiting ? { ...p, item: itemId } : p)) };
   const next: Preamble = {
     id: itemId,
     item: itemId,

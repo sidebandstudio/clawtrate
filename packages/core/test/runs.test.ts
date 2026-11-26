@@ -1425,14 +1425,22 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
       { id: "commentary-0-b2", text: "Now the cache.", ended: true, beforeCall: "c2" },
     ]);
     expect(commentary.text).toBe(ANSWER);
-    // With no preamble item, the earlier text is placed before the later call, as before: kept
-    // where it was read, not left to history.
-    const bare = only(
-      play([start, ...said(2, "s:1", ANSWER), model(4), ...call(6, "c2")]).activity,
+    // A message that starts two calls: neither moves the earlier text beside itself.
+    const two = only(
+      play([start, ...said(2, "s:1", ANSWER), model(4), note, ...call(6, "c2"), ...call(10, "c3")])
+        .activity,
     );
-    expect(bare.preambles).toEqual([
-      { id: "s:1", item: "s:1", text: ANSWER, ended: true, beforeCall: "c2" },
+    expect(two.preambles).toEqual([
+      { id: "commentary-0-b2", text: "Now the cache.", ended: true, beforeCall: "c2" },
     ]);
+    expect(two.text).toBe(ANSWER);
+    // With no preamble item, the earlier text stays the reply too.
+    const bare = only(
+      play([start, ...said(2, "s:1", ANSWER), model(4), ...call(6, "c2"), ...call(10, "c3")])
+        .activity,
+    );
+    expect(bare.preambles).toBe(undefined);
+    expect(bare.text).toBe(ANSWER);
     // The next message's own text is that message's again, and is placed beside its call.
     const next = only(
       play([
