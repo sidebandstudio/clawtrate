@@ -182,8 +182,11 @@ describe("secrets stay inside", () => {
       ListSecret.fromBytes(seed, 0),
     ]) {
       const shown = `${inspect(secret, { showHidden: true, depth: 5 })} ${JSON.stringify(secret)} ${String(secret)}`;
-      expect(shown).not.toContain(seedHex);
-      expect(shown).not.toContain("60, 60, 60, 60");
+      const compact = shown.replace(/\s/g, "");
+      expect(compact).not.toContain(seedHex);
+      expect(compact).not.toContain("60,60,60,60");
+      expect(compact).not.toContain('"0":60');
+      for (const value of Object.values(secret)) expect(value).not.toEqual(seed);
     }
   });
 
