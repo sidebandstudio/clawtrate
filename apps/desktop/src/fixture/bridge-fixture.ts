@@ -276,6 +276,7 @@ const deviceRequests = (change: Partial<DeviceRequestsState>): DeviceRequestsSta
   noticed: 0,
   prompt: null,
   error: null,
+  listedOn: 1,
   ...change,
 });
 
@@ -702,6 +703,11 @@ export function createFixtureBridge(
     guides?: string | null;
     /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
     fullPairing?: boolean;
+    /**
+     * What the right code's approval ends as (`?device=`): approved unless `unknown` (the answer
+     * was lost), `undone` or `undo-failed` (the paired device had other access).
+     */
+    device?: string | null;
     /** A name given to the fixture gateway on this device (`?gatewayName=`). */
     gatewayName?: string | null;
     /**
@@ -955,6 +961,10 @@ export function createFixtureBridge(
     if (searched) {
       sent.push(command);
       return searched;
+    }
+    if (command.type === "readDeviceRequests") {
+      sent.push(command);
+      return;
     }
     const checkIn = checkInCommand(command, () => state, set);
     if (checkIn) {
@@ -1402,6 +1412,64 @@ export function createFixtureBridge(
     }
   }
 
+  /** Requests a decision is under way for: another decision on one is not allowed (`device-approval.ts`). */
+  const deciding = new Set<string>();
+  /**
+   * A decision as the host's engine makes it, answered after a deferred step so a test can hold
+   * it: a list from another connection, a blocked request or one being decided is not allowed; a
+   * wrong code spends the request; an approval or a denial ends it.
+   */
+  function decideDevice(
+    command: Extract<BridgeCommand, { type: "approveDevice" | "refuseDevice" }>,
+  ): Promise<DeviceDecision> {
+    const listed = state.deviceRequests;
+    const shown = listed?.requests.find((each) => each.requestId === command.requestId);
+    if (!listed || listed.access !== "admin" || command.listedOn !== listed.listedOn)
+      return Promise.resolve({ kind: "not-allowed" });
+    if (!shown) return Promise.resolve({ kind: "gone" });
+    if (deciding.has(shown.requestId)) return Promise.resolve({ kind: "not-allowed" });
+    const pick = command.type === "approveDevice" || command.why === "none-match";
+    if (pick && (shown.blocked !== null || shown.spent))
+      return Promise.resolve({ kind: "not-allowed" });
+    const right = command.type === "approveDevice" && command.code === DEVICE_CODE;
+    const decision: DeviceDecision =
+      command.type === "refuseDevice"
+        ? command.why === "not-mine"
+          ? { kind: "denied" }
+          : { kind: "none-match" }
+        : !right
+          ? { kind: "wrong-code" }
+          : options.device === "unknown"
+            ? { kind: "unknown" }
+            : options.device === "undone"
+              ? { kind: "undone", what: ["access"] }
+              : options.device === "undo-failed"
+                ? { kind: "undo-failed", what: ["access"], message: "The gateway is busy." }
+                : { kind: "approved", deviceId: shown.deviceId };
+    deciding.add(shown.requestId);
+    return new Promise((resolve) =>
+      timers.deferred(() => {
+        deciding.delete(shown.requestId);
+        const now = state.deviceRequests!;
+        const ends = ["approved", "undone", "undo-failed", "denied"].includes(decision.kind);
+        set({
+          ...state,
+          deviceRequests: {
+            ...now,
+            requests: ends
+              ? now.requests.filter((each) => each.requestId !== shown.requestId)
+              : now.requests.map((each) =>
+                  each.requestId === shown.requestId && decision.kind !== "unknown"
+                    ? { ...each, spent: true }
+                    : each,
+                ),
+          },
+        });
+        resolve(decision);
+      }, 0),
+    );
+  }
+
   async function answer<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>> {
     switch (command.type) {
       case "readApprovalText": {
@@ -1441,15 +1509,7 @@ export function createFixtureBridge(
       case "approveDevice":
       case "refuseDevice": {
         sent.push({ ...command });
-        const decision: DeviceDecision =
-          command.type === "approveDevice"
-            ? command.code === DEVICE_CODE
-              ? { kind: "approved", deviceId: deviceRequest(1).deviceId }
-              : { kind: "wrong-code" }
-            : command.why === "not-mine"
-              ? { kind: "denied" }
-              : { kind: "none-match" };
-        return decision as BridgeResultFor<C>;
+        return decideDevice(command) as Promise<BridgeResultFor<C>>;
       }
       default:
         // The live scenes answer their own commands (takeBackMessage, sendAgain, sendMessage).

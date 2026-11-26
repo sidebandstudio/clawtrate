@@ -18,11 +18,14 @@ import { describe, expect, it } from "vitest";
 import { BridgeProvider } from "../src/bridge.tsx";
 import {
   ALLOWED_WORDS,
+  DECIDING_WORDS,
   decisionWords,
+  DeviceRequestBody,
   DeviceRequestView,
   DeviceRequestsList,
   DevicesAsking,
   NOTICE_WITHOUT_ADMIN,
+  REREAD_WORDS,
 } from "../src/DeviceApproval.tsx";
 
 const info: HostInfo = { kind: "desktop", version: "test", devGateway: null };
@@ -177,6 +180,84 @@ describe("the sheet", () => {
   });
 });
 
+describe("a decision under way", () => {
+  const body = (props: Partial<Parameters<typeof DeviceRequestBody>[0]>) =>
+    render(
+      createElement(DeviceRequestBody, {
+        gateway: "gateway.example",
+        request: request(),
+        result: null,
+        pending: null,
+        onDecide: () => {},
+        onClose: () => {},
+        ...props,
+      }),
+      {},
+    );
+  /** The decision buttons that can't be pressed now, by their accessible name. */
+  const held = (html: string) =>
+    [...html.matchAll(/<button([^>]*)>(.*?)<\/button>/g)]
+      .filter(([, attributes]) => attributes!.includes('aria-disabled="true"'))
+      .map(([, attributes, text]) => /aria-label="([^"]*)"/.exec(attributes!)?.[1] ?? text!);
+
+  it("F-550: holds every decision on the request while one is under way, and says so", () => {
+    const html = body({ pending: { type: "approveDevice", code: "K7QF-2MXA" } });
+    expect(html).toContain(DECIDING_WORDS);
+    expect(held(html)).toEqual([
+      "I didn't start this",
+      "None of these match",
+      "Code 4 C 7 R, M Z 2 D",
+      "Code 9 H 3 K, T Q 8 B",
+      "Code K 7 Q F, 2 M X A",
+      "Code W X 5 N, 0 P J 6",
+    ]);
+    // The pick under way is marked as the one pressed; Not now stays.
+    expect(html).toMatch(/aria-pressed="true"[^>]*data-code="K7QF-2MXA"/);
+    expect(html).toContain('aria-busy="true"');
+    // Deny after a pick that approved nothing waits too.
+    const deny = body({
+      request: request({ spent: true }),
+      pending: { type: "refuseDevice", why: "not-mine" },
+    });
+    expect(held(deny)).toEqual(["Deny it"]);
+    expect(deny).toContain(DECIDING_WORDS);
+    // Nothing under way: nothing is held and nothing says it is being decided.
+    const idle = body({});
+    expect(held(idle)).toEqual([]);
+    expect(idle).not.toContain(DECIDING_WORDS);
+  });
+
+  it("F-550: after a decision that wasn't allowed, says nothing was decided and the list was read again", () => {
+    const html = body({ reread: true });
+    expect(html).toContain(REREAD_WORDS);
+    // The request as it is now takes a pick again.
+    expect(buttons(html)).toContain("Code K 7 Q F, 2 M X A");
+    expect(body({ reread: true, result: { kind: "gone" } })).not.toContain(REREAD_WORDS);
+  });
+
+  it("F-550: says each way an approval can end without a plain approval", () => {
+    for (const [result, words] of [
+      [
+        { kind: "unknown" },
+        "Clawtrate didn't get the gateway's answer, so it can't say whether the device was approved.",
+      ],
+      [
+        { kind: "undone", what: ["access"] },
+        "Clawtrate removed that pairing at once. Nothing stays approved.",
+      ],
+      [
+        { kind: "undo-failed", what: ["access"], message: "busy." },
+        "Clawtrate couldn't remove it: busy. Remove it in Settings, Machines.",
+      ],
+    ] as Array<[DeviceDecision, string]>) {
+      const html = body({ result });
+      expect(html).toContain(words);
+      expect(html).not.toContain("Approved.");
+      expect(buttons(html)).toEqual(["Close"]);
+    }
+  });
+});
+
 describe("where waiting requests show", () => {
   it("F-550: a connection without admin shows only the notice", () => {
     const html = render(createElement(DevicesAsking, { onReview: () => {} }), {
@@ -198,6 +279,42 @@ describe("where waiting requests show", () => {
     expect(html).toContain("3 devices are asking to use this gateway.");
     expect(buttons(html)).toEqual(["Review"]);
     expect(render(createElement(DevicesAsking, { onReview: () => {} }), {})).toBe("");
+  });
+
+  it("F-550: a setup connection lists and shows nothing", () => {
+    // The engine publishes no list on a setup connection: access stays "none".
+    // Even a list left from before shows nothing once access is "none".
+    const setup = { access: "none" as const, requests: [request()] };
+    expect(render(createElement(DevicesAsking, { onReview: () => {} }), setup)).toBe("");
+    expect(render(createElement(DeviceRequestsList), setup)).toBe("");
+  });
+
+  it("F-550: a request the quiet minutes keep from opening by itself is still listed", () => {
+    // After a refusal or wrong pick the host offers no prompt; the request stays in the rail
+    // and in Settings, Gateway.
+    const quiet = { requests: [request()], prompt: null };
+    expect(render(createElement(DevicesAsking, { onReview: () => {} }), quiet)).toContain(
+      "A device is asking to use this gateway.",
+    );
+    expect(render(createElement(DeviceRequestsList), quiet)).toContain(
+      "Clawtrate Desktop (reported)",
+    );
+  });
+
+  it("F-550: after failed reads, keeps the last list and says it is from the last read that worked", () => {
+    const html = render(createElement(DeviceRequestsList), {
+      requests: [request()],
+      error: "The gateway didn't answer.",
+    });
+    expect(html).toContain("Clawtrate Desktop (reported)");
+    expect(html).toContain(
+      "Clawtrate couldn't read the waiting devices: The gateway didn't answer. What is listed here is from the last read that worked.",
+    );
+    const none = render(createElement(DeviceRequestsList), { error: "The gateway didn't answer." });
+    expect(none).toContain(
+      "Clawtrate couldn't read the waiting devices: The gateway didn't answer.",
+    );
+    expect(none).not.toContain("last read that worked");
   });
 
   it("F-550: Settings, Gateway lists each request and counts those past the bound", () => {

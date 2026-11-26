@@ -10,7 +10,7 @@ import {
   type DeviceRequest,
   type DeviceRequestBlock,
 } from "@clawtrate/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
 import { gatewayLabel } from "./format.ts";
@@ -43,6 +43,15 @@ const BLOCKED_WORDS: Record<DeviceRequestBlock, string> = {
 };
 
 const listWords = (what: string[]) => what.join(" and ");
+
+/** A decision on this request is under way: no other is taken until it ends. */
+export const DECIDING_WORDS =
+  "Deciding this request. Nothing else can be picked for it until it ends.";
+/** A decision came back not-allowed: nothing was decided, and the list was read again. */
+export const REREAD_WORDS =
+  "Nothing was approved or denied. Clawtrate read the waiting devices again; this is the request as it is now.";
+export const SPENT_WORDS =
+  "A pick on this device already approved nothing for this request. Deny it, then ask again from the waiting device.";
 
 /** What a decision did, in a sentence that is true of it. */
 export function decisionWords(decision: DeviceDecision): string {
@@ -91,7 +100,19 @@ export function DeviceRequestSheet(props: { requestId: string; onClose: () => vo
   );
 }
 
-/** What the sheet shows, and its decisions. */
+/** A request as the sheet showed it, with the connection whose list it came from. */
+type Seen = { request: DeviceRequest; listedOn: number };
+
+type Pick =
+  | { type: "approveDevice"; code: string }
+  | { type: "refuseDevice"; why: "not-mine" | "none-match" };
+
+/**
+ * What the sheet shows, and its decisions. The request is kept as it was shown, with the list it
+ * came from, and every decision carries that list back. A decision that comes back not-allowed
+ * (its list is from an earlier connection, or the request is blocked or being decided) changed
+ * nothing: the list is read again and the sheet shows the request as it is now.
+ */
 export function DeviceRequestView({
   requestId,
   onClose,
@@ -101,75 +122,154 @@ export function DeviceRequestView({
 }) {
   const { connection, deviceRequests } = useClawtrateState();
   const bridge = useBridge();
-  const live = deviceRequests?.requests.find((each) => each.requestId === requestId) ?? null;
-  const [shown] = useState<DeviceRequest | null>(live);
+  const send = useCommand();
+  const admin = deviceRequests?.access === "admin";
+  const listedOn = deviceRequests?.listedOn ?? 0;
+  const live = admin
+    ? (deviceRequests.requests.find((each) => each.requestId === requestId) ?? null)
+    : null;
+  // Null after a not-allowed answer: the sheet follows the list until the next pick.
+  const [seen, setSeen] = useState<Seen | null>(() => (live ? { request: live, listedOn } : null));
+  const [reread, setReread] = useState(false);
   const [stamp] = useState(() => gatewayStamp(connection));
-  const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<DeviceDecision | null>(shown ? null : { kind: "gone" });
+  const [pending, setPending] = useState<Pick | null>(null);
+  const [outcome, setOutcome] = useState<DeviceDecision | null>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (outcome) closeRef.current?.focus();
   }, [outcome]);
-  const decide = (
-    command:
-      | { type: "approveDevice"; code: string }
-      | { type: "refuseDevice"; why: "not-mine" | "none-match" },
-  ) => {
-    if (busy || !shown) return;
-    setBusy(true);
+  const current: Seen | null = seen ?? (live ? { request: live, listedOn } : null);
+  // The list it came from still lists it: what it can take now (a block, a spent pick) is the
+  // list's. A list from another connection says nothing about it.
+  const fresh = current !== null && current.listedOn === listedOn;
+  const request: DeviceRequest | null =
+    current && fresh && live
+      ? { ...current.request, blocked: live.blocked, spent: live.spent, choices: live.choices }
+      : (current?.request ?? null);
+  // Taken before the first await, so a second press in the same moment sends nothing.
+  const inFlight = useRef(false);
+  const decide = (pick: Pick) => {
+    if (inFlight.current || !current) return;
+    inFlight.current = true;
+    setPending(pick);
+    setSeen(current);
+    setReread(false);
     const sent =
-      command.type === "approveDevice"
-        ? bridge.invoke({ ...command, requestId, scopes: shown.scopes, stamp })
-        : bridge.invoke({ ...command, requestId, stamp });
+      pick.type === "approveDevice"
+        ? bridge.invoke({
+            ...pick,
+            requestId,
+            scopes: current.request.scopes,
+            listedOn: current.listedOn,
+            stamp,
+          })
+        : bridge.invoke({ ...pick, requestId, listedOn: current.listedOn, stamp });
     sent
-      .then(setOutcome, (error: unknown) =>
-        setOutcome({
-          kind: "refused",
-          message: error instanceof Error ? error.message : String(error),
-        }),
+      .then(
+        (decision) => {
+          if (decision.kind !== "not-allowed") return setOutcome(decision);
+          // Nothing was decided: read the list again and show the request as it is now.
+          setOutcome(null);
+          setSeen(null);
+          setReread(true);
+          titleRef.current?.focus();
+          void send({ type: "readDeviceRequests" }).catch(() => {});
+        },
+        (error: unknown) =>
+          setOutcome({
+            kind: "refused",
+            message: error instanceof Error ? error.message : String(error),
+          }),
       )
-      .finally(() => setBusy(false));
+      .finally(() => {
+        inFlight.current = false;
+        setPending(null);
+      });
   };
-  // Decided elsewhere or gone while open, before any pick here.
-  const ended = !outcome && !busy && shown && !live;
-  const result = outcome ?? (ended ? ({ kind: "gone" } as const) : null);
+  // Decided elsewhere or gone while open, by the list it came from, before any pick here.
+  const ended = !outcome && !pending && (current === null || (fresh && admin && !live));
+  const result: DeviceDecision | null =
+    outcome ?? (ended ? (admin ? { kind: "gone" } : { kind: "not-allowed" }) : null);
+  return (
+    <DeviceRequestBody
+      gateway={gatewayLabel(connection.gatewayUrl)}
+      request={request}
+      result={result}
+      pending={pending}
+      reread={reread}
+      onDecide={decide}
+      onClose={onClose}
+      titleRef={titleRef}
+      closeRef={closeRef}
+    />
+  );
+}
+
+/** The sheet's content for what it shows: a request, an outcome, or a decision under way. */
+export function DeviceRequestBody({
+  gateway,
+  request,
+  result,
+  pending,
+  reread = false,
+  onDecide,
+  onClose,
+  titleRef,
+  closeRef,
+}: {
+  gateway: string;
+  request: DeviceRequest | null;
+  result: DeviceDecision | null;
+  /** The decision under way: every decision on this request waits for it. */
+  pending: Pick | null;
+  /** A decision came back not-allowed and the list was read again. */
+  reread?: boolean;
+  onDecide: (pick: Pick) => void;
+  onClose: () => void;
+  titleRef?: RefObject<HTMLHeadingElement | null>;
+  closeRef?: RefObject<HTMLButtonElement | null>;
+}) {
+  const busy = pending !== null;
+  const press = (pick: Pick) => () => {
+    if (!busy) onDecide(pick);
+  };
   const canDeny =
     result?.kind === "wrong-code" ||
     result?.kind === "none-match" ||
-    (!result && shown?.spent === true);
+    (!result && request?.spent === true);
   return (
     <div className="b-confirm device-ask">
-      <h2 id="device-ask-title" tabIndex={-1}>
+      <h2 id="device-ask-title" tabIndex={-1} ref={titleRef}>
         A device is asking to use this gateway
       </h2>
       <p id="device-ask-lede">
-        {gatewayLabel(connection.gatewayUrl)}. Approve it only if you started it on a device you can
-        see.
+        {gateway}. Approve it only if you started it on a device you can see.
       </p>
-      {shown && (
+      {request && (
         <>
           <dl className="device-facts">
             <div>
               <dt>It says it is</dt>
-              <dd>{reported(shown.name, "No name given")}</dd>
+              <dd>{reported(request.name, "No name given")}</dd>
             </div>
             <div>
               <dt>Platform and app</dt>
               <dd>
                 {reported(
-                  [shown.platform, shown.app].filter(Boolean).join(" · ") || null,
+                  [request.platform, request.app].filter(Boolean).join(" · ") || null,
                   "Not given",
                 )}
               </dd>
             </div>
             <div>
               <dt>Seen by the gateway</dt>
-              <dd>{shown.remoteIp ? `From ${shown.remoteIp}` : "Address not reported"}</dd>
+              <dd>{request.remoteIp ? `From ${request.remoteIp}` : "Address not reported"}</dd>
             </div>
-            {shown.origin && (
+            {request.origin && (
               <div>
                 <dt>Web page</dt>
-                <dd>{reported(shown.origin, "")}</dd>
+                <dd>{reported(request.origin, "")}</dd>
               </div>
             )}
           </dl>
@@ -177,25 +277,36 @@ export function DeviceRequestView({
             It would be allowed to
           </p>
           <ul className="device-allowed" aria-labelledby="device-allowed">
-            {shown.scopes.map((scope) => (
+            {request.scopes.map((scope) => (
               <li key={scope}>{ALLOWED_WORDS[scope] ?? scope}</li>
             ))}
           </ul>
         </>
       )}
+      {reread && !result && (
+        <p className="device-outcome" role="status" data-testid="device-reread">
+          {REREAD_WORDS}
+        </p>
+      )}
+      {busy && (
+        <p className="device-outcome" role="status" data-testid="device-deciding">
+          {DECIDING_WORDS}
+        </p>
+      )}
       {result ? (
         <p className="device-outcome" role="status" data-testid="device-outcome">
           {decisionWords(result)}
         </p>
-      ) : shown?.blocked ? (
-        <p className="device-outcome">{BLOCKED_WORDS[shown.blocked]}</p>
-      ) : shown?.spent ? (
-        <p className="device-outcome">
-          A pick on this device already approved nothing for this request. Deny it, then ask again
-          from the waiting device.
+      ) : request?.blocked ? (
+        <p className="device-outcome" data-testid="device-blocked">
+          {BLOCKED_WORDS[request.blocked]}
+        </p>
+      ) : request?.spent ? (
+        <p className="device-outcome" data-testid="device-spent">
+          {SPENT_WORDS}
         </p>
       ) : (
-        shown && (
+        request && (
           <fieldset className="device-pick" aria-busy={busy || undefined}>
             <legend>Which code does the waiting device show?</legend>
             <div className="device-refusals">
@@ -203,7 +314,7 @@ export function DeviceRequestView({
                 type="button"
                 className="button"
                 aria-disabled={busy || undefined}
-                onClick={() => decide({ type: "refuseDevice", why: "not-mine" })}
+                onClick={press({ type: "refuseDevice", why: "not-mine" })}
               >
                 I didn't start this
               </button>
@@ -211,21 +322,24 @@ export function DeviceRequestView({
                 type="button"
                 className="button"
                 aria-disabled={busy || undefined}
-                onClick={() => decide({ type: "refuseDevice", why: "none-match" })}
+                onClick={press({ type: "refuseDevice", why: "none-match" })}
               >
                 None of these match
               </button>
             </div>
             <div className="device-codes">
-              {shown.choices.map((code) => (
+              {request.choices.map((code) => (
                 <button
                   key={code}
                   type="button"
                   className="button device-code"
                   aria-label={`Code ${spokenCode(code)}`}
                   aria-disabled={busy || undefined}
+                  aria-pressed={
+                    pending?.type === "approveDevice" && pending.code === code ? true : undefined
+                  }
                   data-code={code}
-                  onClick={() => decide({ type: "approveDevice", code })}
+                  onClick={press({ type: "approveDevice", code })}
                 >
                   {code}
                 </button>
@@ -235,15 +349,15 @@ export function DeviceRequestView({
         )
       )}
       <div className="b-actions">
-        {(canDeny || (shown?.blocked && !result)) && (
+        {(canDeny || (request?.blocked && !result)) && (
           <button
             type="button"
             className="button"
             data-tone="danger"
             aria-disabled={busy || undefined}
-            onClick={() => decide({ type: "refuseDevice", why: "not-mine" })}
+            onClick={press({ type: "refuseDevice", why: "not-mine" })}
           >
-            {shown?.blocked ? "I didn't start this" : "Deny it"}
+            {request?.blocked && !result ? "I didn't start this" : "Deny it"}
           </button>
         )}
         <button
@@ -366,6 +480,7 @@ function DeviceRequestRows({ onOpen }: { onOpen: (requestId: string) => void }) 
       {error && (
         <p className="form-error" role="alert">
           Clawtrate couldn't read the waiting devices: {error}
+          {requests.length > 0 && " What is listed here is from the last read that worked."}
         </p>
       )}
     </section>
