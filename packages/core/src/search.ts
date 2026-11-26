@@ -8,6 +8,7 @@
 import { cutText } from "./bounds.ts";
 import { establishFolder } from "./files.ts";
 import { asRecord, botIdFromSessionKey, type RawRecord } from "./mapping.ts";
+import { snippetWithoutMarker } from "./send-marker.ts";
 import { MAX_ID_CHARS } from "./state-bounds.ts";
 import { MAX_TASK_LABEL_CHARS } from "./task-actions.ts";
 
@@ -41,7 +42,10 @@ export type MessageHit = {
   botId: string;
   role: "user" | "assistant";
   timestamp: number | null;
-  /** As the gateway sent it, with no marks: the reply gives no matching ranges. */
+  /**
+   * As the gateway sent it, with no marks: the reply gives no matching ranges. A person's
+   * message without the marker Clawtrate sends it with (`personSnippet`).
+   */
   snippet: string;
 };
 
@@ -123,7 +127,7 @@ export async function searchMessages(
       limit: MESSAGE_SEARCH_LIMIT,
     }),
   );
-  const found = readMessageSearch(reply);
+  const found = readMessageSearch(reply, query);
   if (!hidden) return found;
   // The gateway sends the row of each session its matches came from (`sessions`, at most 25).
   const rows = new Map<string, RawRecord>();
@@ -141,7 +145,24 @@ export async function searchMessages(
   return { ...found, hits, titles };
 }
 
-export function readMessageSearch(reply: RawRecord | null): MessageSearch {
+/**
+ * The gateway indexes the model's copy of a person's message, so a message sent from Clawtrate
+ * is found and shown with the marker after its words (`send-marker.ts`). The person's view is
+ * their words alone: the marker comes off the snippet, and a hit that matched only the marker
+ * (no word of the query left in what they wrote) is left out.
+ */
+function personSnippet(snippet: string, query: string): string | null {
+  const { text, cut } = snippetWithoutMarker(snippet);
+  if (!cut) return snippet;
+  const shown = text.toLowerCase();
+  const words = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length > 0);
+  return shown.replace(/[\s…]/gu, "") && words.some((word) => shown.includes(word)) ? text : null;
+}
+
+export function readMessageSearch(reply: RawRecord | null, query = ""): MessageSearch {
   const hits: MessageHit[] = [];
   for (const raw of Array.isArray(reply?.results) ? reply.results : []) {
     const row = asRecord(raw);
@@ -150,6 +171,9 @@ export function readMessageSearch(reply: RawRecord | null): MessageSearch {
     const botId = sessionKey ? botIdFromSessionKey(sessionKey) : null;
     const role = row?.role === "user" || row?.role === "assistant" ? row.role : null;
     if (!row || !sessionKey || !messageId || !botId || !role) continue;
+    const sent = typeof row.snippet === "string" ? row.snippet : "";
+    const snippet = role === "user" ? personSnippet(sent, query) : sent;
+    if (snippet === null) continue;
     hits.push({
       sessionKey,
       sessionId: exactId(row.sessionId),
@@ -157,7 +181,7 @@ export function readMessageSearch(reply: RawRecord | null): MessageSearch {
       botId,
       role,
       timestamp: num(row.timestamp),
-      snippet: cutText(typeof row.snippet === "string" ? row.snippet : "", MAX_SNIPPET_CHARS),
+      snippet: cutText(snippet, MAX_SNIPPET_CHARS),
     });
     if (hits.length === MESSAGE_SEARCH_LIMIT) break;
   }

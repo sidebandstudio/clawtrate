@@ -74,9 +74,22 @@ async function pairedDevice(browser: Browser, name: string): Promise<Page> {
 
 const botRow = (on: Page, name: string) =>
   on.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${name}\\b`) });
-const openTask = async (on: Page) => {
-  await botRow(on, "Marlow").first().click();
-  await on.getByTestId("task").filter({ hasText: TITLE }).first().click();
+/** Marlow's task list, opened and shown in full, as the rail shows it to a person. */
+async function unfoldMarlow(on: Page): Promise<void> {
+  const row = botRow(on, "Marlow").first();
+  await row.click();
+  if ((await row.getAttribute("aria-expanded")) === "false") {
+    await row.focus();
+    await on.keyboard.press("ArrowRight");
+  }
+  const showAll = on
+    .getByRole("list", { name: "Marlow's tasks" })
+    .getByRole("button", { name: /^Show all/ });
+  if (await showAll.count()) await showAll.click();
+}
+const openTask = async (on: Page, key = KEY) => {
+  await unfoldMarlow(on);
+  await on.locator(`.task[data-key="${key}"]`).click({ timeout: 30_000 });
 };
 const userMessages = (on: Page) => on.locator('.msg[data-role="user"]');
 
@@ -310,7 +323,7 @@ test("#666: a task's first message: a New task's carries the marker, Start as ne
   made.add(apart);
   await expect.poll(() => modelCopy(apart), { timeout: 60_000 }).toContain(started);
   expect(await modelCopy(apart)).not.toContain(WORK_CONTEXT_LINE);
-  await page.locator(`.task[data-key="${apart}"]`).click();
+  await openTask(page, apart);
   await expect(userMessages(page).filter({ hasText: started })).toHaveCount(1, { timeout: 30_000 });
   expect((await userMessages(page).filter({ hasText: started }).innerText()).trim()).toBe(started);
   await expectNoMarker(page);

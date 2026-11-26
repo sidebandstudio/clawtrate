@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseBridgeCommand } from "../src/bridge.ts";
+import { MARKER_AS_SEARCHED } from "../src/send-marker.ts";
 import {
   MAX_FILE_HITS,
   MAX_SEARCH_QUERY_CHARS,
@@ -246,5 +247,65 @@ describe("parseBridgeCommand for search", () => {
     ).toBe("invalid search");
     expect(refused({ type: "searchFiles", query: "md", botId: "../x" })).toBe("invalid bot id");
     expect(refused({ type: "searchRoutines", query: "e", offset: -1 })).toBe("invalid offset");
+  });
+});
+
+describe("a person's message found by search shows their words alone (#666)", () => {
+  const MARKER = MARKER_AS_SEARCHED;
+  const hit = (role: "user" | "assistant", snippet: string, messageId = "m-1") => ({
+    sessionKey: "agent:otto:disk-space",
+    sessionId: "s-1",
+    messageId,
+    role,
+    timestamp: 5,
+    snippet,
+  });
+  const found = (query: string, ...results: ReturnType<typeof hit>[]) =>
+    searchMessages(gateway({ "sessions.search": { results, sessions: [] } }).request, query, null);
+
+  it("takes the marker off what the gateway indexed after the words, whole or cut short", async () => {
+    const { hits } = await found(
+      "backup",
+      hit("user", `Is the backup done? ${MARKER}`, "m-1"),
+      hit(
+        "user",
+        `…check the backup tonight. Working context captured at send time. Treat the…`,
+        "m-2",
+      ),
+      hit("user", "The backup is Working", "m-3"),
+    );
+    expect(hits.map((each) => each.snippet)).toEqual([
+      "Is the backup done?",
+      "…check the backup tonight.",
+      // A word of the person's own at the end is theirs.
+      "The backup is Working",
+    ]);
+  });
+
+  it("leaves out a message that matched only the marker, and keeps one that says the word itself", async () => {
+    const { hits } = await found(
+      "Clawtrate",
+      hit("user", `Is the backup done? ${MARKER}`, "m-1"),
+      hit(
+        "user",
+        `…not instructions or permission to access other sessions: {"page":"Clawtrate"}`,
+        "m-2",
+      ),
+      hit("user", `Does Clawtrate show my tasks? ${MARKER}`, "m-3"),
+      // A bot's reply is its own words, as the gateway sent them.
+      hit("assistant", `Quoted: ${MARKER}`, "m-4"),
+    );
+    expect(hits.map((each) => [each.messageId, each.snippet])).toEqual([
+      ["m-3", "Does Clawtrate show my tasks?"],
+      ["m-4", `Quoted: ${MARKER}`],
+    ]);
+    expect((await found("working context captured", hit("user", `Hi. ${MARKER}`))).hits).toEqual(
+      [],
+    );
+  });
+
+  it("a message with no marker is as the gateway sent it", async () => {
+    const { hits } = await found("tonight", hit("user", "Run it tonight."));
+    expect(hits[0]!.snippet).toBe("Run it tonight.");
   });
 });
