@@ -103,7 +103,7 @@ describe("the card for this computer, after This computer", () => {
     });
     expect(html).toContain(escape(PROOF_REFUSAL_LINES.holder(PORT)));
     expect(html).toContain("No credential was sent to it. Use Advanced, or look again.");
-    expect(html).toContain("Checking it&#x27;s OpenClaw on this Mac");
+    expect(html).toContain("Checking it matches OpenClaw&#x27;s settings");
   });
 
   it("without local connect, the card is as it was", () => {
@@ -114,5 +114,21 @@ describe("the card for this computer, after This computer", () => {
     );
     expect(html).toContain("Connect read-only");
     expect(html).not.toContain("OpenClaw is running on this Mac");
+  });
+});
+
+describe("the words of a refusal", () => {
+  it("say which check failed, and never what program holds the port", () => {
+    expect(PROOF_REFUSAL_LINES.holder(PORT)).toBe(
+      `Clawtrate couldn't confirm who holds the connection at port ${PORT}.`,
+    );
+    expect(PROOF_REFUSAL_LINES["not-gateway"](PORT)).toBe(
+      `Clawtrate couldn't match what is listening at port ${PORT} to this account's OpenClaw profile.`,
+    );
+    expect(PROOF_REFUSAL_LINES["not-published"](PORT)).toBe(
+      `Clawtrate couldn't check this version's module for what is listening at port ${PORT}.`,
+    );
+    for (const line of Object.values(PROOF_REFUSAL_LINES).map((words) => words(PORT)))
+      expect(line).not.toMatch(/isn't the OpenClaw|isn't the copy|is OpenClaw|another gateway/);
   });
 });

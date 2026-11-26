@@ -621,8 +621,8 @@ const CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
 };
 /** And with local connect (setup-effortless.md §3). */
 const LOCAL_CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
-  new: ["Checking it's OpenClaw on this Mac", "Pairing this Mac", "Loading your bots"],
-  paired: ["Checking it's OpenClaw on this Mac", "Connecting this Mac", "Loading your bots"],
+  new: ["Checking it matches OpenClaw's settings", "Pairing this Mac", "Loading your bots"],
+  paired: ["Checking it matches OpenClaw's settings", "Connecting this Mac", "Loading your bots"],
 };
 
 /** Why a run that must look in a sandbox couldn't use the one it was given, in words. */
@@ -634,7 +634,7 @@ const REFUSED: Record<SetupRefusal, string> = {
   pairing: "it pairs only in its pairing scenario.",
 };
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
-const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it's OpenClaw on this Mac"];
+const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it matches OpenClaw's settings"];
 
 /** A screen's identity, so that a new one takes focus and is announced. */
 function screenKey(view: SetupView, setup: SetupState): string {

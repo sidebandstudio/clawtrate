@@ -698,9 +698,11 @@ export type ConnectionSettings = {
 export const ROUTE_IDENTITY_CHANGED = "ROUTE_IDENTITY_CHANGED";
 
 /**
- * Sockets the host proves itself (local connect, docs/design/setup-effortless.md
- * §3): each one's far end before its first byte, and again, by `verify`, just
- * before its credential. `verify` is about the latest socket `createSocket` made.
+ * Sockets the host checks itself (local connect, docs/design/setup-effortless.md
+ * §3): that each one's far end matches this account's OpenClaw profile, before its
+ * first byte, and again, by `verify`, just before its credential. `verify` is about
+ * the latest socket `createSocket` made. What that check establishes, and what it
+ * doesn't: docs/decisions.md, "Local connect's proof".
  */
 export type ProvedRoute = {
   createSocket: WebSocketFactory;
@@ -8627,7 +8629,7 @@ export class ClawtrateClient {
             error: {
               code: LOCAL_ROUTE_ONLY,
               message:
-                "This device is paired with the OpenClaw on this Mac through This computer, so it doesn't use that pairing at a typed address. Nothing was sent.",
+                "This device is paired with the OpenClaw on this Mac through This computer, so it doesn't use that pairing at a typed address. No credential was sent.",
               hint: "Choose This computer to connect to it.",
             },
           });

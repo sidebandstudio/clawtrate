@@ -253,7 +253,9 @@ describe("a gateway set up through local connect", () => {
       // Said as it is: the pairing belongs to This computer, and that is the way to it.
       await until(() => client.state.connection.error?.code === LOCAL_ROUTE_ONLY);
       expect(client.state.connection.error).toMatchObject({
-        message: expect.stringContaining("through This computer") as unknown,
+        message: expect.stringMatching(
+          /through This computer.*No credential was sent\.$/,
+        ) as unknown,
         hint: "Choose This computer to connect to it.",
       });
       await sleep(100);

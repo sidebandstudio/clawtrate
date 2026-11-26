@@ -32,13 +32,7 @@ import {
   systemTempRoots,
   within,
 } from "./sandbox.ts";
-import {
-  accountHome,
-  packagedApp,
-  SANDBOX_MARKERS,
-  SANDBOX_SWITCHES,
-  SetupRefusedError,
-} from "./world.ts";
+import { accountHome, packagedApp, personsLaunch, SetupRefusedError } from "./world.ts";
 
 export const SETTINGS_LIMIT = 1024 * 1024;
 /** The helper's deadline, and the parse worker's. */
@@ -164,11 +158,8 @@ export function guardHome(
 ): HomeIdentity | null {
   const real = accountHomeOf();
   // A marker variable, or a switch that marks a driven app, makes a run sandboxed whatever
-  // its caller says (as `mustSandbox`).
-  const driven = SANDBOX_SWITCHES.some((name) =>
-    argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`)),
-  );
-  if (sandboxed === false && !driven && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) {
+  // its caller says; a production run outside a packaged app is refused (`personsLaunch`).
+  if (sandboxed === false && personsLaunch(env, argv, () => true)) {
     if (!packaged() || real === null || home !== resolve(real)) throw new SetupRefusedError("home");
     return null;
   }

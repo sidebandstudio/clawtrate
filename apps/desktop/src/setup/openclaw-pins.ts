@@ -1,5 +1,6 @@
 // OpenClaw's own native module, pinned (docs/design/setup-effortless.md §3,
-// check (f)). OpenClaw 2026.10.6 depends on exactly `@openclaw/fs-safe@0.25.0`
+// check (f)): a consistency check where the app has a pin, which authenticates
+// nothing (docs/decisions.md, "Local connect's proof"). OpenClaw 2026.10.6 depends on exactly `@openclaw/fs-safe@0.25.0`
 // and its per-platform packages, 2026.11.10 on exactly `@openclaw/fs-safe@0.27.1`
 // (each `package.json`'s `dependencies` and `optionalDependencies`). Each module is ad-hoc signed with no team,
 // so its code signature proves nothing; the SHA-256 of

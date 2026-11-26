@@ -1,6 +1,7 @@
 // Reads OpenClaw's settings file for the host (docs/design/setup-effortless.md
-// §3, "The settings reader"), and proves who holds the far end of one of the
-// host's loopback sockets (§3, "The send gate", checks (e) and (f)). It walks
+// §3, "The settings reader"), and reports who holds the far end of one of the
+// host's loopback sockets and whether it matches this account's OpenClaw
+// profile (§3, "The send gate", checks (e) and (f)). It walks
 // from the home folder the host opened, checked and passed as descriptor 3,
 // by held descriptors, follows no link and checks what it opened. It never
 // writes, repairs or runs anything.

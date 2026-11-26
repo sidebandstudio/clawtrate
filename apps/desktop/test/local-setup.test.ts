@@ -524,7 +524,15 @@ describe.skipIf(!mac)(
       expect(localPortAllowed(sandbox, 18789)).toBe(false);
       expect(localPortAllowed(sandbox, 22768)).toBe(false);
       expect(localPortAllowed(sandbox, 19940)).toBe(true);
-      expect(localPortAllowed({ ...sandbox, sandboxed: false }, 18789)).toBe(true);
+      // A caller that says it isn't sandboxed, in a launch that isn't a person's (this test runner,
+      // a development build): refused all the same, from the same classification as the home rule.
+      const unsandboxed = { ...sandbox, sandboxed: false };
+      expect(localPortAllowed(unsandboxed, 18789)).toBe(false);
+      expect(localPortAllowed(unsandboxed, 22768)).toBe(false);
+      expect(provedRouteFor(unsandboxed)("ws://127.0.0.1:18789", ".openclaw")).toBe(null);
+      // Only a person's own launch dials them.
+      expect(localPortAllowed(unsandboxed, 18789, () => true)).toBe(true);
+      expect(localPortAllowed(sandbox, 18789, () => true)).toBe(false);
       expect(provedRouteFor(sandbox)("ws://127.0.0.1:18789", ".openclaw")).toBe(null);
       // A `clawtrate` profile whose settings name no port falls back to its default, 22768: the
       // look refuses before it dials, and never asks the helper for a proof.

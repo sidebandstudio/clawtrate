@@ -194,6 +194,26 @@ export function packagedApp(
 }
 
 /**
+ * Whether this process is a person's own launch: a packaged app's (`packagedApp`), with no
+ * sandbox marker variable and no switch that marks a driven app, as `mustSandbox` decides
+ * from the same lists. The home rule and local connect's ports both follow it, whatever a
+ * caller's options say.
+ */
+export function personsLaunch(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+  packaged: () => boolean = packagedApp,
+): boolean {
+  return (
+    packaged() &&
+    !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key)) &&
+    !SANDBOX_SWITCHES.some((name) =>
+      argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`)),
+    )
+  );
+}
+
+/**
  * The real home folder, from the account, never from an environment a test
  * may have changed. Null when the account can't be read: the caller refuses.
  */

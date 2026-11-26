@@ -1,6 +1,9 @@
 // The send gate with TLS off (docs/design/setup-effortless.md §3, "The send
 // gate"): before anything is written to a loopback socket the host opened to
-// OpenClaw's port, prove who holds its far end.
+// OpenClaw's port, check who holds its far end, and that it matches this
+// account's OpenClaw profile. It doesn't establish which program is running;
+// what it defends against, and what it doesn't, is docs/decisions.md, "Local
+// connect's proof".
 //
 // (e) Every process holding the server end of exactly this connection is a
 //     process of this account, and at least one is found.
@@ -8,11 +11,12 @@
 //     holds this profile's gateway lock and state database open, and is the
 //     process that lock names, with role gateway, this port, this state folder
 //     and its start time.
-// And the pin: where that holder maps OpenClaw's own native module in a package
-// that is OpenClaw of a version pinned in openclaw-pins.ts, the module must be
-// that version's own, by SHA-256. A version without pins (a newer OpenClaw), an
-// install laid out otherwise (a folder install, pnpm, Bun) or no module mapped
-// is proved by (e) and (f) alone, none of which is dropped.
+// And the pin, a consistency check that authenticates nothing: where that
+// holder maps a file laid out as OpenClaw's native module in a package whose
+// package.json names a version pinned in openclaw-pins.ts, the module must be
+// that version's own, by SHA-256. Every other holder (a newer OpenClaw, an
+// install laid out otherwise, no module mapped) stands on (e) and (f) alone,
+// none of which is dropped.
 //
 // On macOS the native helper reads the kernel's facts (libproc). Linux's walk
 // through /proc is setup PR 2a-3's, so nothing is proved there yet. A missing
