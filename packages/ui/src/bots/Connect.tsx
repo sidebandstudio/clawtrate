@@ -18,6 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { screenStamp, shownStamp } from "../stamp.ts";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
 import { recall, remember } from "./memory.ts";
 import { AdminBar, CodeBlock, Note, Result, Wait } from "./parts.tsx";
@@ -90,6 +91,8 @@ export function useConnect({
 }): ConnectView {
   const bridge = useBridge();
   const admin = connection.canAdmin;
+  // Where Connect opened: a key typed here goes only to that gateway.
+  const [openedOn] = useState(() => accounts.readOn ?? shownStamp(connection));
   // Done: the sign-in that finished is let go, so the component opens afresh next time.
   const finish = (account: string | null) => {
     remember(LABEL_KEPT, null);
@@ -121,6 +124,8 @@ export function useConnect({
   const keyRef = useRef<HTMLInputElement>(null);
   const pasteRef = useRef<HTMLInputElement>(null);
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
+  // Why the last Disconnect of a sign-in's account was refused, said under it.
+  const [dropError, setDropError] = useState<string | null>(null);
 
   // A sign-in that finished moves on to its label; one that found no new account says so.
   const stage = signIn?.stage ?? null;
@@ -253,6 +258,7 @@ export function useConnect({
           provider: keyProvider,
           key,
           botId: forBot,
+          stamp: await screenStamp(bridge, openedOn),
         });
         if (!kp?.method) {
           // Saved only when the read after it shows the account; otherwise it says so.
@@ -1044,6 +1050,15 @@ export function useConnect({
     );
   }
 
+  if (dropError && !confirmDrop)
+    body = (
+      <>
+        {body}
+        <p className="b-field-error" role="alert" data-testid="drop-error">
+          {dropError}
+        </p>
+      </>
+    );
   if (confirmDrop) {
     body = (
       <>
@@ -1071,7 +1086,12 @@ export function useConnect({
               onClick={() => {
                 const id = confirmDrop;
                 setConfirmDrop(null);
-                void bridge.send({ type: "disconnectAccount", profileId: id }).catch(() => {});
+                setDropError(null);
+                void screenStamp(bridge, openedOn)
+                  .then((stamp) => bridge.send({ type: "disconnectAccount", profileId: id, stamp }))
+                  .catch((error: unknown) =>
+                    setDropError(error instanceof Error ? error.message : String(error)),
+                  );
               }}
             >
               Disconnect

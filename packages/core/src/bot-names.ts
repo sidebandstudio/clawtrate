@@ -13,7 +13,13 @@
 
 import type { KeyValueStore } from "./host.ts";
 import { asRecord } from "./mapping.ts";
-import { sameStamp, type Bot, type GatewayStamp, type NameProposal } from "./types.ts";
+import {
+  CONNECTION_CHANGED_AFTER_SEND,
+  sameStamp,
+  type Bot,
+  type GatewayStamp,
+  type NameProposal,
+} from "./types.ts";
 
 /** A name as long as New bot's Name field takes. */
 export const MAX_BOT_NAME_CHARS = 40;
@@ -178,8 +184,11 @@ export class BotNames {
       }
       const raw = identityName(content);
       const name = raw === null ? null : plainName(raw);
-      const declined = name !== null && (await this.declined(botId, name));
+      if (name !== null) await this.loadDeclines();
       if (stale()) return;
+      // Looked up after the last wait, with none before the card is drawn: a Not now that
+      // landed meanwhile is already in memory.
+      const declined = name !== null && this.isDeclined(botId, name);
       const now = this.ctx.bots().find((each) => each.id === botId);
       // A name the bot already has, longer than a card's, is not a new one cut short.
       if (!now || name === null || name === now.name || name === plainName(now.name) || declined)
@@ -268,8 +277,10 @@ export class BotNames {
     } catch {
       // Shown below: the list did not confirm it.
     }
-    // Sent before a reset: it reached the gateway it was for, and leaves the cards of the next alone.
-    if (epoch !== this.epoch) return;
+    // Sent before a reset: it reached the gateway it was for, and leaves the cards of the next
+    // alone, but nothing confirmed it, so it isn't reported as done.
+    // A Rename sent, and the connection gone to another gateway before its read-back.
+    if (epoch !== this.epoch) throw new Error(CONNECTION_CHANGED_AFTER_SEND);
     // Claimed only once the gateway's own list shows it.
     if (this.ctx.bots().find((each) => each.id === botId)?.name === name) return this.drop(botId);
     const unconfirmed = `Rename was sent, but the gateway's bot list doesn't show ${name} yet.`;
@@ -294,9 +305,12 @@ export class BotNames {
       return;
     }
     try {
-      const config = asRecord(await this.ctx.request("config.get", {}));
-      const entry = asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId];
-      const picture = asRecord(asRecord(entry)?.identity)?.avatar;
+      const configPicture = async () => {
+        const config = asRecord(await this.ctx.request("config.get", {}));
+        const entry = asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId];
+        return asRecord(asRecord(entry)?.identity)?.avatar;
+      };
+      const picture = await configPicture();
       if (epoch !== this.epoch || typeof picture !== "string" || !picture.startsWith("data:"))
         return;
       const file = asRecord(
@@ -314,6 +328,9 @@ export class BotNames {
         .filter((line) => line.replace(/\r?\n$/, "") !== `- Avatar: ${picture}`)
         .join("");
       if (kept === content) return;
+      // Read again just before the write: a picture taken out of the config meanwhile lives only
+      // in the file now, and its line stays. The gateway offers no precondition on the config.
+      if ((await configPicture()) !== picture || epoch !== this.epoch) return;
       await this.ctx.request("agents.files.set", {
         agentId: botId,
         name: "IDENTITY.md",
@@ -329,21 +346,28 @@ export class BotNames {
 
   /**
    * Not now: kept on this device for this bot and this name, only when it answers the card shown
-   * now. A late answer to an earlier card changes nothing, so it can't replace a later Not now.
+   * now, and whether it did. A late answer to an earlier card changes nothing, so it can't
+   * replace a later Not now.
    */
-  async decline(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
-    const open = this.proposals.get(botId);
-    if (open?.name !== name || open.status === "renaming" || !sameStamp(open.stamp, stamp)) return;
-    this.drop(botId);
-    const gateway = this.ctx.gateway();
-    if (!gateway) return;
-    const write = this.declining.then(() => this.keepDecline(gateway, botId, name));
-    this.declining = write.catch(() => {});
-    await write;
-  }
-
-  private async keepDecline(gateway: string, botId: string, name: string): Promise<void> {
-    const declines = { ...(await this.loadDeclines()) };
+  async decline(botId: string, name: string, stamp: GatewayStamp): Promise<boolean> {
+    const answers = () => {
+      const open = this.proposals.get(botId);
+      return open?.name === name && open.status !== "renaming" && sameStamp(open.stamp, stamp);
+    };
+    if (!answers()) return false;
+    // Kept for the gateway that drew the card, as Rename is bound to it: its stamp names one, or
+    // it wouldn't answer. A connection that now answers as another gateway doesn't take it over.
+    const gateway = stamp.gatewayId!;
+    // The card stays up while what is kept is read; then the Not now is in memory before the
+    // card goes, so a run that ends meanwhile doesn't bring the card back. Awaited only when not
+    // read yet: a card is drawn only once they are, and a wait here would let a Rename sent just
+    // after this Not now take the card first (#512). After a wait, the card is looked at again.
+    if (this.declines === null) {
+      await this.loadDeclines();
+      if (!answers()) return false;
+    }
+    // Changed as they are now, after the read, so two at once both keep their names.
+    const declines = { ...this.declines };
     const key = declineKey(gateway, botId);
     delete declines[key];
     declines[key] = name;
@@ -351,8 +375,17 @@ export class BotNames {
     for (const old of keys.slice(0, Math.max(0, keys.length - MAX_NAME_DECLINES)))
       delete declines[old];
     this.declines = declines;
+    this.drop(botId);
+    const write = this.declining.then(() => this.keepDeclines());
+    this.declining = write.catch(() => {});
+    await write;
+    return true;
+  }
+
+  /** What is in memory, kept on the device: the latest, whichever Not now asked for it. */
+  private async keepDeclines(): Promise<void> {
     try {
-      await this.ctx.storage.set(NAME_DECLINES_KEY, JSON.stringify(declines));
+      await this.ctx.storage.set(NAME_DECLINES_KEY, JSON.stringify(this.declines ?? {}));
     } catch (error) {
       this.ctx.log(`could not keep Not now: ${errorText(error)}`);
     }
@@ -391,10 +424,10 @@ export class BotNames {
     this.ctx.publish([...this.proposals.values()]);
   }
 
-  private async declined(botId: string, name: string): Promise<boolean> {
+  /** Whether Not now is kept for this bot and name, as far as the declines read so far say. */
+  private isDeclined(botId: string, name: string): boolean {
     const gateway = this.ctx.gateway();
-    if (!gateway) return false;
-    return (await this.loadDeclines())[declineKey(gateway, botId)] === name;
+    return gateway !== null && this.declines?.[declineKey(gateway, botId)] === name;
   }
 
   private async loadDeclines(): Promise<Declines> {

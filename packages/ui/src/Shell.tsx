@@ -1,7 +1,11 @@
 import {
   isActive,
+  listedTasks as listedTasksOf,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
+  tasksWithFilePreviews,
+  tasksWithoutUpdateNotices,
+  updateNoticeScope,
   type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
@@ -10,7 +14,7 @@ import {
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
@@ -24,12 +28,20 @@ import { Rail } from "./Rail.tsx";
 import { summarize, useSelection } from "./selection.ts";
 import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
-import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
+import {
+  liveFlags,
+  refreshNoteShown,
+  StatusStrip,
+  stripFor,
+  useSyncPhase,
+} from "./StatusStrip.tsx";
+import { updatingHere, updatingStripWords } from "./bots/update-words.ts";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import { FullControlOffer } from "./FullControl.tsx";
+import { BotGuidesOffer } from "./BotGuides.tsx";
 import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
@@ -76,10 +88,9 @@ export function Shell({
   bubbles,
   onBubbles,
   onUnreadCount,
-  updateEntry,
+  railTop,
   onOpenSettings,
   inert = false,
-  onCaughtUp,
 }: {
   state: ClawtrateState;
   info: HostInfo;
@@ -88,12 +99,11 @@ export function Shell({
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
-  updateEntry: boolean;
+  /** The brand and the update button the one-pane layout shows at the top of the rail. */
+  railTop?: ReactNode;
   onOpenSettings: (section?: SettingsSection) => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
-  /** Whether the open task has caught up since the latest connect: until then work is last seen. */
-  onCaughtUp?: (caughtUp: boolean) => void;
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
@@ -313,9 +323,26 @@ export function Shell({
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePanel, drawerKeys, setPanel, deletingOpen]);
 
+  const [commandsShown] = useShowCommands();
+  const { tasksByBot, transcripts } = state;
+  const { updated, mainKey } = updateNoticeScope(state);
+  const gatewayId = state.connection.gatewayId;
+  // The rail's preview of a task whose history ends with a bot's message that is only files reads
+  // as their names (F-115); one whose history ends with the gateway's update line shows what came
+  // before it (F-590).
+  const listedTasks = useMemo(
+    () =>
+      tasksWithFilePreviews(
+        tasksWithoutUpdateNotices(tasksByBot, transcripts, { updated, gatewayId, mainKey }),
+        transcripts,
+      ),
+    [tasksByBot, transcripts, updated, gatewayId, mainKey],
+  );
+
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
+  // Only tasks of the bots the sidebar lists (F-562): a count always has something to open.
   const unread = unreadCount(
-    state.tasksByBot,
+    listedTasksOf(state, selection.kept),
     selection.unreadSeen,
     conversationVisible ? (task?.key ?? null) : null,
   );
@@ -619,7 +646,6 @@ export function Shell({
   // The way between a step and its file (work-pane.md, section 10).
   const runs = transcript?.runs;
   // Without commands shown, a running turn's steps join the chat when it ends (conversation.md, 7.11).
-  const [commandsShown] = useShowCommands();
   const notInChat = useCallback(
     (callId: string) =>
       !commandsShown &&
@@ -738,15 +764,15 @@ export function Shell({
     [runs, backShown, goBackToFile, setPanel, setWorkTab],
   );
   const phase = useSyncPhase(state, taskKey);
-  // Connected is not caught up: until bots, tasks and the open task have
-  // loaded again after a drop, what is on screen is last seen.
-  const caughtUp = state.connection.status === "connected" && phase !== "dropped";
-  useEffect(() => {
-    onCaughtUp?.(caughtUp);
-  }, [caughtUp, onCaughtUp]);
+  // Connected is not caught up: until the open task has loaded again after a
+  // drop, its live work is last seen. That says nothing about the connection.
+  const { connected: online, current } = liveFlags(state, phase, taskKey);
   // Access arriving reconnects with the new grant: "Access granted" is the
   // news then, unless something failed.
   const connectionStrip = stripFor(state, phase, taskKey);
+  // OpenClaw updating on this gateway, as the update engine knows it: the strip, the footer and
+  // the conversation's announcement say so (#590).
+  const updating = updatingHere(state);
   const strip =
     granted && connectionStrip?.tone !== "danger"
       ? {
@@ -827,8 +853,8 @@ export function Shell({
         inert={inert}
       >
         <Rail
-          bots={state.bots}
-          tasksByBot={state.tasksByBot}
+          bots={selection.listed}
+          tasksByBot={listedTasks}
           discovery={state.discovery}
           connection={state.connection}
           catchingUp={catchingUp}
@@ -840,10 +866,18 @@ export function Shell({
           onTheme={onTheme}
           bubbles={bubbles}
           onBubbles={onBubbles}
-          updateEntry={updateEntry}
+          top={railTop}
+          notice={
+            interactive && !info.readOnly ? (
+              <BotGuidesOffer onReview={() => onOpenSettings("conversation")} />
+            ) : null
+          }
           onOpenSettings={onOpenSettings}
+          updating={updating}
+          settingsKeys={mac ? "⌘," : "Ctrl+,"}
           onNewBot={interactive ? openNewBot : null}
           routines={state.routines.routines}
+          showRoutineRuns={state.showOtherToolSessions === true}
           routinesOpen={routinesOpen}
           onOpenRoutines={() => openRoutines(ROUTINES_HOME)}
           onOpenRoutineRun={(id, runAt) =>
@@ -896,16 +930,17 @@ export function Shell({
                       />
                     )
                   }
-                  refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+                  refreshNote={refreshNoteShown(state, phase, transcript)}
                   interactive={interactive}
                   connection={state.connection}
                   info={info}
                   granted={granted}
-                  online={state.connection.status === "connected"}
-                  caughtUp={caughtUp}
+                  online={online}
+                  current={current}
                   toggleRef={toggleRef}
                   inert={drawerOpen || inert}
                   onShowComputer={showComputer}
+                  updatingWords={updating ? updatingStripWords(updating).text : null}
                 />
               </WorkLinksContext.Provider>
             </OpenTaskContext.Provider>
@@ -967,6 +1002,7 @@ export function Shell({
         {searchOpen && (
           <SearchPalette
             state={state}
+            kept={selection.kept}
             mac={mac}
             onOpen={openFromSearch}
             onClose={() => closePalette(true)}
@@ -997,8 +1033,13 @@ export function Shell({
             onClose={(deleted) => {
               setDeleting(null);
               // The rail already follows the gateway's list; the app lands on the Main Bot's latest
-              // task, or the Main Bot alone when it has none.
-              const main = state.bots.find((each) => each.isDefault) ?? state.bots[0];
+              // task, or the Main Bot alone when it has none. While the gateway's own bot is out of
+              // view (F-562), on the first other bot the rail lists, or on it once it is the only one.
+              const kept = selection.listed.filter((each) => each.id !== deleting.id);
+              const main =
+                kept.find((each) => each.isDefault) ??
+                kept[0] ??
+                state.bots.find((each) => each.isDefault);
               if (deleted && main) {
                 // The Work drawer closes first, so the conversation behind it can take focus.
                 if (drawerOpen) setPanel(false);

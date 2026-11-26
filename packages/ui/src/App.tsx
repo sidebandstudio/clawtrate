@@ -7,8 +7,9 @@ import { screenFor, setupHolds } from "./screen.ts";
 import { restartWaitingMessages } from "./update-restart.ts";
 import { Settings, type SettingsSection } from "./Settings.tsx";
 import { useDesktopUpdateSnapshot } from "./update-reading.ts";
-import { showUpdateFooter } from "./Updates.tsx";
 import { Shell } from "./Shell.tsx";
+import { OpenOpenClawUpdates } from "./bots/UpdateOpenClaw.tsx";
+import { Brand, TitleBar, UpdateAnnouncer, UpdateButton } from "./TitleBar.tsx";
 
 /**
  * Touch sizes when the primary pointer is coarse, and reduced motion when the
@@ -34,6 +35,13 @@ function useInputAndMotion() {
 /** The first control on the screen, for when focus has nowhere else to go. */
 const FIRST_CONTROL = ".app :is(input, button, [tabindex='0']):not([disabled], [tabindex='-1'])";
 
+/** The first of those that is shown and not behind a dialog: the title bar's are hidden on a phone. */
+function firstControl(): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>(FIRST_CONTROL)].find(
+    (el) => el.getClientRects().length > 0 && !el.closest("[inert]"),
+  );
+}
+
 /**
  * The connection screen is for connecting and pairing. Once a gateway has
  * delivered anything, the shell stays mounted through reconnects, keeping
@@ -51,6 +59,7 @@ export function App({
   const { desktopUpdates } = useBridge();
   const updated = useDesktopUpdateSnapshot(desktopUpdates);
   const [openSection, setOpenSection] = useState<SettingsSection | null>(null);
+  const [atOpenClaw, setAtOpenClaw] = useState(false);
   useInputAndMotion();
   // The theme applies on every screen; the gateway menu in the shell changes it.
   const [theme, setTheme] = useTheme();
@@ -58,8 +67,9 @@ export function App({
   // Settings opens over either screen, with Cmd/Ctrl+, or from the gateway menu.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsOpener = useRef<HTMLElement | null>(null);
-  const openSettings = useCallback((section?: SettingsSection) => {
+  const openSettings = useCallback((section?: SettingsSection, openClaw = false) => {
     setOpenSection(section ?? null);
+    setAtOpenClaw(openClaw);
     const active = document.activeElement as HTMLElement | null;
     settingsOpener.current = active && active !== document.body ? active : null;
     setSettingsOpen(true);
@@ -74,11 +84,11 @@ export function App({
       // first control on the screen now showing.
       else {
         const gateway =
-          opener?.classList.contains("update-entry") &&
-          [...document.querySelectorAll<HTMLElement>(".rail-status,.gateway-pill")].find(
+          opener?.classList.contains("update-button") &&
+          [...document.querySelectorAll<HTMLElement>(".gateway-pill")].find(
             (el) => el.getClientRects().length,
           );
-        (gateway || document.querySelector<HTMLElement>(FIRST_CONTROL))?.focus();
+        (gateway || firstControl())?.focus();
       }
     });
   }, []);
@@ -108,15 +118,28 @@ export function App({
     if (shown.current === screen) return;
     shown.current = screen;
     if (document.activeElement && document.activeElement !== document.body) return;
-    document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
+    firstControl()?.focus();
   }, [screen]);
   // One flag for the whole window: while the connection is anything but
-  // connected, and after a reconnect until the open task has caught up,
-  // nothing that stands for the gateway's work moves; it is last seen.
-  const [caughtUp, setCaughtUp] = useState(true);
-  const lost = status !== "connected" || !caughtUp;
+  // connected, nothing that stands for the gateway's work moves; it is last
+  // seen. A load still being tried, or one that failed, is not a lost
+  // connection (#592).
+  const lost = status !== "connected";
+  const waitingMessages = restartWaitingMessages(state);
+  const openUpdates = () => openSettings("updates");
+  // A newer OpenClaw's line, in a bot's settings or near the Model menu, links here (#590).
+  const openOpenClawUpdates = useCallback(() => openSettings("updates", true), [openSettings]);
   return (
     <div className="app" data-connection={lost ? "lost" : undefined}>
+      {screen === "shell" && (
+        <TitleBar
+          reading={updated}
+          waitingMessages={waitingMessages}
+          onOpenUpdates={openUpdates}
+          inert={settingsOpen}
+        />
+      )}
+      <UpdateAnnouncer reading={updated} />
       {settingsOpen && (
         <Settings
           connection={state.connection}
@@ -124,26 +147,38 @@ export function App({
           accounts={state.accounts}
           checkIns={state.checkIns}
           bots={state.bots}
-          waitingMessages={restartWaitingMessages(state)}
+          waitingMessages={waitingMessages}
           updateReading={updated}
           initialSection={openSection}
+          atOpenClaw={atOpenClaw}
           onClose={closeSettings}
         />
       )}
       {screen === "shell" ? (
-        <Shell
-          state={state}
-          info={info}
-          theme={theme}
-          onTheme={setTheme}
-          bubbles={bubbles}
-          onBubbles={setBubbles}
-          onUnreadCount={onUnreadCount}
-          updateEntry={showUpdateFooter(updated.snapshot, updated.pending)}
-          onOpenSettings={openSettings}
-          inert={settingsOpen}
-          onCaughtUp={setCaughtUp}
-        />
+        <OpenOpenClawUpdates.Provider value={openOpenClawUpdates}>
+          <Shell
+            state={state}
+            info={info}
+            theme={theme}
+            onTheme={setTheme}
+            bubbles={bubbles}
+            onBubbles={setBubbles}
+            onUnreadCount={onUnreadCount}
+            railTop={
+              <>
+                <Brand reading={updated} />
+                <UpdateButton
+                  reading={updated}
+                  waitingMessages={waitingMessages}
+                  onOpenUpdates={openUpdates}
+                  round
+                />
+              </>
+            }
+            onOpenSettings={openSettings}
+            inert={settingsOpen}
+          />
+        </OpenOpenClawUpdates.Provider>
       ) : (
         <ConnectScreen
           connection={state.connection}

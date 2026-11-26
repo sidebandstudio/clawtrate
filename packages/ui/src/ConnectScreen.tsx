@@ -21,7 +21,7 @@ import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { useForget } from "./forget.ts";
 import { FullControlConsent } from "./FullControl.tsx";
-import { gatewayLabel } from "./format.ts";
+import { gatewayLabel, gatewayTitle } from "./format.ts";
 import { BackIcon, CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
 import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
 
@@ -97,7 +97,10 @@ function SetupSteps({
   /** While pairing, the step says what it is waiting for. */
   pairingText?: ReactNode;
 }) {
-  const gateway = gatewayLabel(connection.gatewayUrl);
+  // Pairing is a trust decision, and a name is kept by address alone: a different gateway at a
+  // remembered address would carry it. The address stays beside the name.
+  const address = gatewayLabel(connection.gatewayUrl);
+  const gateway = connection.gatewayName ? `${connection.gatewayName} (${address})` : address;
   const pairing = connection.status === "pairing";
   const reached = pairing || loadingBots;
   const steps: Array<{ state: StepState; label: ReactNode; waiting?: boolean }> = [
@@ -420,7 +423,7 @@ function ProtocolNotice({
   const gatewayUrl = connection.gatewayUrl;
   const protocol = error.protocol;
   const retrying = connection.status === "connecting" || connection.status === "reconnecting";
-  const gateway = gatewayLabel(connection.gatewayUrl);
+  const gateway = gatewayTitle(connection);
   return (
     <section className="panel" aria-labelledby="protocol-title" data-testid="protocol-notice">
       <h2 id="protocol-title">This gateway speaks another protocol</h2>

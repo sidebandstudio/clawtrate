@@ -16,6 +16,7 @@ import {
   applySidebarChange,
   emptyActivity,
   INTERACTIVE_SCOPES,
+  isOtherToolSession,
   parseSidebar,
   type ArchivedTask,
   type BridgeCommand,
@@ -165,6 +166,16 @@ function initialArchive(now: number): Map<string, ArchivedTask[]> {
           preview: "Flushed it; lookups are fast again.",
           archivedAt: now - 9 * 24 * 60 * MINUTE,
           updatedAt: now - 10 * 24 * 60 * MINUTE,
+        },
+        {
+          // An API client's session, listed only with "Show sessions from other tools" on (F-563).
+          key: "agent:otto:openai-user:backup-script",
+          botId: "otto",
+          sessionId: "otto-backup-script",
+          title: "Backup script report",
+          preview: "All volumes copied.",
+          archivedAt: now - 12 * 24 * 60 * MINUTE,
+          updatedAt: now - 13 * 24 * 60 * MINUTE,
         },
       ],
     ],
@@ -387,7 +398,14 @@ export function railCommands(
           });
         });
       case "listArchived":
-        return later(() => ({ tasks: archive.get(command.botId) ?? [], more: false }));
+        return later(() => ({
+          // As the client lists them: another tool's session only when those are shown.
+          tasks: (archive.get(command.botId) ?? []).filter(
+            (each) =>
+              get().showOtherToolSessions === true || !isOtherToolSession({ key: each.key }),
+          ),
+          more: false,
+        }));
       case "changeSidebar":
         return later(() => {
           const state = get();

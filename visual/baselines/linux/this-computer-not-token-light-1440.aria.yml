@@ -1,0 +1,9 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "This gateway uses another way to sign in" [level=3]
+  - paragraph: Clawtrate connects by itself only to gateways that use a token. Use Advanced.
+  - paragraph:
+    - button "Advanced"
+  - paragraph: On this computer

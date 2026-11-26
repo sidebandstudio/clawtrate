@@ -10,6 +10,7 @@ import type {
   McpCallCard,
   Run,
   StepRaw,
+  Task,
 } from "@clawtrate/core";
 import { useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { Avatar } from "../Avatar.tsx";
@@ -47,7 +48,7 @@ import {
 import type { StepRawState } from "./useCards.ts";
 
 /** A bot for an avatar: the listed one, or one drawn from its id. */
-function botFor(bots: Bot[], id: string | null, name: string): Bot {
+export function botFor(bots: Bot[], id: string | null, name: string): Bot {
   return (
     bots.find((bot) => bot.id === id) ?? {
       id: id ?? name,
@@ -99,7 +100,7 @@ function resultOf(raw: StepRaw | null): unknown {
 }
 
 /** Raw for a call card: the call's tool, arguments and result as the gateway sent them. */
-function callRaw(
+export function callRaw(
   read: StepRawState,
   step: { toolName: string | null; startedAt: number | null; endedAt: number | null },
   ids: Array<{ label: string; value: string | null }>,
@@ -192,11 +193,17 @@ function recipientPhrase(
 
 export function BotMessageCardView({
   card,
+  task = null,
   read,
   related,
   partial,
 }: {
   card: BotMessageCard;
+  /**
+   * The task the result's session key names, when this connection's list holds it as started from
+   * this conversation: a follow-up to the bot's own task reads "Sent to <title>" and opens it (F-587).
+   */
+  task?: Task | null;
   read: StepRawState;
   /** Every message between the two bots that this task holds, oldest first, for "Show full exchange". */
   related: Array<{ id: string; who: Bot; verb: string; text: string; at: number | null }>;
@@ -274,6 +281,9 @@ export function BotMessageCardView({
     card.recipient.sessionKey !== null &&
     recipient.id !== null &&
     env.openTask !== null;
+  // A follow-up to a task the bot started names that task, not the bot.
+  const verb = task ? "Sent to" : "Messaged";
+  const target = task ? task.title : recipient.name;
 
   return (
     <details
@@ -285,11 +295,11 @@ export function BotMessageCardView({
       id={domId}
       data-testid="messaged-card"
     >
-      <summary aria-label={`Messaged ${recipient.name}: ${first} ${word}.`} title={first}>
-        <span className="messaged-verb">Messaged</span>
+      <summary aria-label={`${verb} ${target}: ${first} ${word}.`} title={first}>
+        <span className="messaged-verb">{verb}</span>
         <span className="messaged-who">
           <Avatar bot={recipientBot} />
-          {recipient.name}
+          {target}
         </span>
         <span className="messaged-first">{first}</span>
         <StateWord state={key} lost={lost} />
@@ -363,18 +373,21 @@ export function BotMessageCardView({
               Show the approval
             </button>
           )}
-          {canOpen && (
+          {(canOpen || (task && env.openTask)) && (
             <button
               type="button"
               className="link-button"
-              aria-label={`Open this message in ${recipient.name}'s task`}
+              aria-label={
+                task ? `Open ${task.title}` : `Open this message in ${recipient.name}'s task`
+              }
               onClick={(event) => {
                 rememberReturn(env.taskKey, env.bot?.id ?? null, domId, event.currentTarget);
                 arriveAt(card.recipient.sessionKey!, card.recipientRunId);
-                env.openTask!(recipient.id!, card.recipient.sessionKey!);
+                if (task) env.openTask!(task.botId, task.key);
+                else env.openTask!(recipient.id!, card.recipient.sessionKey!);
               }}
             >
-              Open in {recipient.name}
+              {task ? `Open ${task.title}` : `Open in ${recipient.name}`}
             </button>
           )}
           {related.some((each) => each.id !== card.id && each.id !== `${card.id}:reply`) && (

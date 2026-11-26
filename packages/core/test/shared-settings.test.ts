@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
-import { FAST, URL_A, URL_B } from "./client-harness.ts";
+import { FAST, ONCE, URL_A, URL_B } from "./client-harness.ts";
 import type { KeyValueStore } from "../src/host.ts";
 import {
   deferred,
@@ -246,6 +246,36 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     }
   });
 
+  it("F-457: a Retry stopped while it reads its device token doesn't hold another client's Disconnect", async () => {
+    const storage = memoryStorage({ connection: JSON.stringify({ url: URL_A, token: null }) });
+    let armed = false;
+    const hold = holdRead(storage, tokenKey(URL_A), () => armed);
+    const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+    const other = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+    try {
+      await client.start({ resume: "disconnected" });
+      await other.start({ resume: "disconnected" });
+      armed = true;
+      const retrying = client.retryNow();
+      await until(hold.waiting);
+      client.stop();
+      await retrying;
+      // The other client's Disconnect goes through while that read is still out.
+      let forgotten = false;
+      const forgetting = other.disconnect().then(() => (forgotten = true));
+      await until(() => forgotten);
+      expect(saved(storage)).toBeNull();
+      hold.release();
+      await forgetting;
+      await sleep(30);
+      expect(saved(storage)).toBeNull();
+    } finally {
+      hold.release();
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("a typed token ending after another client saved gateway B leaves B saved", async () => {
     const storage = memoryStorage();
     const gateway = new FakeGateway();
@@ -449,14 +479,19 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     });
     const closed = new FakeGateway();
     closed.refuseConnections = true;
-    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    // Both clients are this device at A on one store: a socket this one opened while the other
+    // pairs would leave the other's hello unsaved, and the shared token kept. It tries once.
+    const client = new ClawtrateClient(testHost(closed, storage), ONCE);
     const other = new ClawtrateClient(testHost(pairingGateway("issued-A"), storage), FAST);
     try {
       await client.start();
+      await until(() => client.state.connection.retryAt !== null);
       // The other client pairs, which drops the shared token.
       await other.start();
       await until(() => other.state.connection.status === "connected");
-      await until(() => saved(storage)?.token === null);
+      // Its hello is reported once its token is saved and the shared token dropped.
+      expect(closed.sockets).toHaveLength(1);
+      expect(saved(storage)?.token).toBeNull();
       await client.suspend();
       expect(saved(storage)).toEqual({ url: URL_A, token: null, suspended: true });
     } finally {
@@ -715,14 +750,19 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     });
     const closed = new FakeGateway();
     closed.refuseConnections = true;
-    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    // Both clients are this device at A on one store: a socket this one opened while the other
+    // pairs would leave the other's hello unsaved, and the shared token kept. It tries once.
+    const client = new ClawtrateClient(testHost(closed, storage), ONCE);
     const other = new ClawtrateClient(testHost(pairingGateway("issued-A"), storage), FAST);
     try {
       await client.start();
+      await until(() => client.state.connection.retryAt !== null);
       // The other client pairs, which drops the shared token, and then chooses B.
       await other.start();
       await until(() => other.state.connection.status === "connected");
-      await until(() => saved(storage)?.token === null);
+      // Its hello is reported once its token is saved and the shared token dropped.
+      expect(closed.sockets).toHaveLength(1);
+      expect(saved(storage)?.token).toBeNull();
       await client.suspend();
       await other.connect({ url: URL_B });
       await client.retryNow();
@@ -802,14 +842,19 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     });
     const closed = new FakeGateway();
     closed.refuseConnections = true;
-    const client = new ClawtrateClient(testHost(closed, storage), FAST);
+    // Both clients are this device at A on one store: a socket this one opened while the other
+    // pairs would leave the other's hello unsaved, and the shared token kept. It tries once.
+    const client = new ClawtrateClient(testHost(closed, storage), ONCE);
     const other = new ClawtrateClient(testHost(pairingGateway("issued-A"), storage), FAST);
     try {
       await client.start();
+      await until(() => client.state.connection.retryAt !== null);
       // The other client pairs, which drops the shared token, and then chooses B.
       await other.start();
       await until(() => other.state.connection.status === "connected");
-      await until(() => saved(storage)?.token === null);
+      // Its hello is reported once its token is saved and the shared token dropped.
+      expect(closed.sockets).toHaveLength(1);
+      expect(saved(storage)?.token).toBeNull();
       await other.connect({ url: URL_B });
       await client.suspend();
       await client.retryNow();

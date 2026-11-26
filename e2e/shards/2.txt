@@ -1,0 +1,11 @@
+# CI's second e2e shard: see 1.txt.
+accounts.spec.ts
+machines.spec.ts
+check-ins.spec.ts
+scenarios.spec.ts
+usage-budgets.spec.ts
+routines.spec.ts
+setup.spec.ts
+turns.engine.spec.ts
+channel-chats.spec.ts
+gateway-restart.spec.ts

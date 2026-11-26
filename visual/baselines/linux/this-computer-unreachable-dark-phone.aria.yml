@@ -1,0 +1,13 @@
+- status
+- main:
+  - button "Back"
+  - heading "Connecting" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Making a one-time code, done": Making a one-time code
+    - listitem "Requesting read access, failed": Requesting read access
+    - listitem "Loading your bots, waiting": Loading your bots
+  - alert:
+    - paragraph: Nothing answered on port 18789. The gateway may have just stopped.
+  - button "Look again"
+  - paragraph: Connecting

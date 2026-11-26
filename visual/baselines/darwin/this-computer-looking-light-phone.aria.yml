@@ -1,9 +1,0 @@
-- main:
-  - button "Back"
-  - heading "Looking on this computer" [level=2]
-  - paragraph: Checking its version
-  - list "Steps":
-    - listitem "Finding OpenClaw, done": Finding OpenClaw
-    - listitem "Checking its version, running": Checking its version
-    - listitem "Asking the gateway, waiting": Asking the gateway
-  - paragraph: Looking on this computer

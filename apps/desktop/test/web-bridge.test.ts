@@ -447,42 +447,63 @@ describe("slow viewers (one snapshot per viewer beyond what its socket accepted)
   });
 
   it("holds at most one unaccepted snapshot for a real paused viewer, and drops it after the drain time", async () => {
-    const drain = 400;
+    const drain = 1_000;
     const { base, store } = await host({}, { snapshotDrainTimeoutMs: drain });
-    // What the host writes to its sockets, counted where it writes them.
+    // What the host writes to its sockets, counted where it writes them, and what its socket to the
+    // viewer still holds unwritten.
     const written: string[] = [];
+    let hostBuffered = () => 0;
     const send = WebSocket.prototype.send;
     WebSocket.prototype.send = function (this: WebSocket, data: unknown, ...rest: unknown[]) {
-      if (typeof data === "string" && data.startsWith('{"type":"state"')) written.push(data);
+      if (typeof data === "string" && data.startsWith('{"type":"state"')) {
+        written.push(data);
+        hostBuffered = () => this.bufferedAmount;
+      }
       return (send as (...args: unknown[]) => void).call(this, data, ...rest);
     } as typeof send;
     const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
       headers: { cookie: `${ACCESS_COOKIE}=${TOKEN}`, origin: base },
     });
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     try {
       await once(socket, "message");
       // Anything the viewer receives once it stops reading would be a snapshot left to flush.
       let delivered = 0;
       socket.on("message", () => (delivered += 1));
+      const closed = once(socket, "close") as Promise<[number, Buffer]>;
       // The viewer stops reading.
       (socket as unknown as { _socket: { pause(): void } })._socket.pause();
       const big = "x".repeat(8 * 1024 * 1024);
-      for (let i = 0; i < 10; i += 1) {
-        store.update(() => state(`${i}:${big}`));
-        await new Promise((resolve) => setTimeout(resolve, 25));
+      let update = 0;
+      // The kernel's buffers take what they can of a paused viewer's snapshots, and a snapshot they
+      // took all of is accepted: the host writes the next. Write until one stays unaccepted.
+      const stuck = () => hostBuffered() > 0;
+      for (let tries = 0; tries < 40; tries += 1) {
+        store.update(() => state(`${(update += 1)}:${big}`));
+        await sleep(25);
+        if (stuck()) {
+          await sleep(100);
+          if (stuck()) break;
+        }
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(stuck()).toBe(true);
+      const accepted = written.length - 1;
+      for (let i = 0; i < 10; i += 1) {
+        store.update(() => state(`${(update += 1)}:${big}`));
+        await sleep(25);
+      }
+      await sleep(50);
       // One written and not accepted; the newer ones wait as one reference, not as copies.
-      expect(written).toHaveLength(1);
-      const closed = once(socket, "close") as Promise<[number, Buffer]>;
-      await new Promise((resolve) => setTimeout(resolve, drain + 200));
+      expect(written).toHaveLength(accepted + 1);
+      await sleep(drain + 200);
       (socket as unknown as { _socket: { resume(): void } })._socket.resume();
       const [code] = await closed;
-      expect(written).toHaveLength(1);
-      // Dropped with what it left buffered: no close frame (1006), and nothing flushed to it after.
-      // A graceful close would deliver the buffered snapshot and then a 1013 close frame.
+      expect(written).toHaveLength(accepted + 1);
+      // Dropped with what it left buffered: no close frame (1006), and the unaccepted snapshot is
+      // never flushed to it. Only the ones the kernel had already taken arrive. A graceful close
+      // would deliver the buffered snapshot too, and then a 1013 close frame.
       expect(code).toBe(1006);
-      expect(delivered).toBe(0);
+      expect(delivered).toBe(accepted);
     } finally {
       WebSocket.prototype.send = send;
       socket.terminate();

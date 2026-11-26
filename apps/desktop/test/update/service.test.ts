@@ -13,7 +13,7 @@ import { checkFeedAddress } from "../../src/main/update/address.ts";
 import { symlinkSync, statSync, readFileSync } from "node:fs";
 import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { UpdateEngine } from "../../src/main/update/engine.ts";
 import { DesktopUpdateService } from "../../src/main/update/service.ts";
 import { bytes, feedFor, feedServer, json, payload, tempDir, type FeedServer } from "./harness.ts";
@@ -206,6 +206,50 @@ it("reports the running version when the selected track offers an older build", 
   ).toMatchObject({
     runningVersion: "2.0.0-beta.20261102.1",
     state: { kind: "nothing-newer" },
+  });
+});
+it("F-559: a Beta build, dated or three-numbered, takes the next Beta build and never an older one", async () => {
+  const beta = { stable: null, nightly: server.origin + "/nightly" };
+  const check = async (version: string, offered: string) => {
+    server.route("/nightly", json(document(offered, "nightly")));
+    const service = await start({ version, feeds: beta });
+    expect(service.get()).toMatchObject({ runningTrack: "nightly", selectedTrack: "nightly" });
+    return (await service.check("nightly", service.get().revision)).snapshot.state;
+  };
+  // Old to new, new to new, old to old.
+  for (const [version, offered] of [
+    ["0.1.1-beta.20261124.2", "0.2.0"],
+    ["0.2.0", "0.2.1"],
+    ["0.1.1-beta.20261124.1", "0.1.1-beta.20261124.2"],
+  ] as const)
+    expect(await check(version, offered), `${version} to ${offered}`).toMatchObject({
+      kind: "offered",
+      version: offered,
+    });
+  // Never the same build or an older one.
+  for (const [version, offered] of [
+    ["0.2.0", "0.2.0"],
+    ["0.2.0", "0.1.1-beta.20261124.2"],
+    ["0.2.1", "0.2.0"],
+    ["0.1.1-beta.20261124.2", "0.1.1-beta.20261124.2"],
+    ["0.1.1-beta.20261124.2", "0.1.1-beta.20261124.1"],
+  ] as const)
+    expect(await check(version, offered), `${version} to ${offered}`).toEqual({
+      kind: "nothing-newer",
+    });
+  // A three-numbered build with a Stable feed is still a Stable build, as before.
+  for (const feeds of [
+    { stable: server.origin + "/stable", nightly: server.origin + "/nightly" },
+    { stable: server.origin + "/stable", nightly: null },
+  ])
+    expect((await start({ version: "0.2.0", feeds })).get()).toMatchObject({
+      runningTrack: "stable",
+      selectedTrack: "stable",
+    });
+  // A dated build is a Beta build whatever feeds it has.
+  expect((await start({ version: "0.1.1-beta.20261124.2" })).get()).toMatchObject({
+    runningTrack: "nightly",
+    selectedTrack: "nightly",
   });
 });
 it("describes a single source, development copies and invalid running versions", async () => {
@@ -776,10 +820,10 @@ it("bounds the packaged and displayed hostname to 253 characters", async () => {
   expect(server.requests).toEqual([]);
 });
 
-it("a nightly-only build stays idle and checks only its one configured source", async () => {
+it("F-559: a nightly-only build is a Beta build, stays idle and checks only its one configured source", async () => {
   const service = await start({ feeds: { stable: null, nightly: server.origin + "/nightly" } });
   expect(service.get()).toMatchObject({
-    runningTrack: "stable",
+    runningTrack: "nightly",
     selectedTrack: "nightly",
     tracks: [{ track: "nightly", source: "127.0.0.1" }],
   });
@@ -789,7 +833,7 @@ it("a nightly-only build stays idle and checks only its one configured source", 
   expect(checked).toMatchObject({
     outcome: "accepted",
     snapshot: {
-      runningTrack: "stable",
+      runningTrack: "nightly",
       selectedTrack: "nightly",
       lastCheck: { track: "nightly", readAt: expect.stringMatching(/Z$/) },
       state: { kind: "offered" },
@@ -1381,93 +1425,101 @@ it("records a storage-blocked check separately from a startup storage notice", a
   });
   expect(feedRequests()).toEqual(["/stable"]);
 });
-it.skipIf(process.platform === "win32")(
+// One test per scenario, so each has a whole test's time to itself (#632). They share the one
+// stand-in updater, as the app has one: its late-error listener is added once.
+describe.skipIf(process.platform === "win32")(
   "a native refusal cannot publish handed-to-system before update-downloaded",
-  async () => {
+  () => {
     const updater = Object.assign(new EventEmitter(), {
       setFeedURL: vi.fn(),
       checkForUpdates: vi.fn(),
       quitAndInstall: vi.fn(),
     });
-    vi.doMock("electron", () => ({ autoUpdater: updater }));
+    beforeAll(() => {
+      vi.doMock("electron", () => ({ autoUpdater: updater }));
+    });
+    afterAll(() => {
+      vi.doUnmock("electron");
+    });
     // The stand-in updater reads what Squirrel would: the feed, then perhaps the archive.
     async function read(feed: string, archive: boolean) {
       const { url } = (await (await fetch(feed)).json()) as { url: string };
       if (archive) await (await fetch(url)).arrayBuffer();
     }
-    try {
-      for (const scenario of [
-        "feed-error",
-        "throw",
-        "error-after-feed",
-        "deadline",
-        "error-after-archive",
-        "deadline-after-archive",
-        "ready",
-      ] as const) {
-        let feed = "";
-        updater.setFeedURL.mockImplementation(({ url }: { url: string }) => {
-          feed = url;
-          if (scenario === "feed-error") updater.emit("error", Error("refused"));
+    it.each([
+      "feed-error",
+      "throw",
+      "error-after-feed",
+      "deadline",
+      "error-after-archive",
+      "deadline-after-archive",
+      "ready",
+    ] as const)("%s", async (scenario) => {
+      let feed = "";
+      updater.setFeedURL.mockImplementation(({ url }: { url: string }) => {
+        feed = url;
+        if (scenario === "feed-error") updater.emit("error", Error("refused"));
+      });
+      updater.checkForUpdates.mockClear().mockImplementation(() => {
+        if (scenario === "throw") throw Error("refused");
+        if (scenario === "ready") updater.emit("update-downloaded");
+        if (scenario === "error-after-feed" || scenario === "error-after-archive")
+          void read(feed, scenario === "error-after-archive").then(() =>
+            // Squirrel's read-only volume check fails here, before the archive request.
+            updater.emit("error", Error("refused")),
+          );
+        if (scenario === "deadline-after-archive") void read(feed, true);
+      });
+      updater.quitAndInstall.mockImplementation(() => {
+        updater.emit("error", Error("late"));
+      });
+      // With nothing to read first, the deadline can pass at once; after the archive it must
+      // leave the stand-in time to read it, which takes milliseconds here.
+      const deadline = scenario === "deadline" ? 1 : 1000;
+      const installer = macInstaller("arm64", async () => null, undefined, deadline);
+      const states: string[] = [];
+      const service = await start({ installer, changed: (s) => states.push(s.state.kind) });
+      const id = await offer(service);
+      await service.download(id);
+      const result = (await service.restart(id)).snapshot.state;
+      if (scenario === "feed-error") expect(updater.checkForUpdates).not.toHaveBeenCalled();
+      if (
+        scenario === "feed-error" ||
+        scenario === "throw" ||
+        scenario === "error-after-feed" ||
+        scenario === "deadline"
+      ) {
+        // No archive was served, so nothing can have been staged: the person can check again.
+        expect(result).toEqual({
+          kind: "handoff-failed",
+          version: "1.1.0",
+          reason: scenario === "deadline" ? "installer-failed" : "mac-updater-refused",
         });
-        updater.checkForUpdates.mockClear().mockImplementation(() => {
-          if (scenario === "throw") throw Error("refused");
-          if (scenario === "ready") updater.emit("update-downloaded");
-          if (scenario === "error-after-feed" || scenario === "error-after-archive")
-            void read(feed, scenario === "error-after-archive").then(() =>
-              // Squirrel's read-only volume check fails here, before the archive request.
-              updater.emit("error", Error("refused")),
-            );
-          if (scenario === "deadline-after-archive") void read(feed, true);
+        expect((await service.restart(id)).outcome).toBe("stale");
+        expect((await service.chooseTrack("nightly")).outcome).toBe("accepted");
+        expect((await service.chooseTrack("stable")).outcome).toBe("accepted");
+        const again = await offer(service);
+        expect((await service.download(again)).snapshot.state).toMatchObject({
+          kind: "verified",
+          offerId: again,
         });
-        updater.quitAndInstall.mockImplementation(() => {
-          updater.emit("error", Error("late"));
+      } else {
+        expect(result).toEqual({
+          kind: scenario === "ready" ? "handed-to-system" : "handoff-unconfirmed",
+          offerId: id,
+          version: "1.1.0",
         });
-        const installer = macInstaller("arm64", async () => null, undefined, 1000);
-        const states: string[] = [];
-        const service = await start({ installer, changed: (s) => states.push(s.state.kind) });
-        const id = await offer(service);
-        await service.download(id);
-        const result = (await service.restart(id)).snapshot.state;
-        if (scenario === "feed-error") expect(updater.checkForUpdates).not.toHaveBeenCalled();
-        if (
-          scenario === "feed-error" ||
-          scenario === "throw" ||
-          scenario === "error-after-feed" ||
-          scenario === "deadline"
-        ) {
-          // No archive was served, so nothing can have been staged: the person can check again.
-          expect(result).toEqual({
-            kind: "handoff-failed",
-            version: "1.1.0",
-            reason: scenario === "deadline" ? "installer-failed" : "mac-updater-refused",
-          });
-          expect((await service.restart(id)).outcome).toBe("stale");
-          expect((await service.chooseTrack("nightly")).outcome).toBe("accepted");
-          expect((await service.chooseTrack("stable")).outcome).toBe("accepted");
-          const again = await offer(service);
-          expect((await service.download(again)).snapshot.state).toMatchObject({
-            kind: "verified",
-            offerId: again,
-          });
-        } else {
-          expect(result).toEqual({
-            kind: scenario === "ready" ? "handed-to-system" : "handoff-unconfirmed",
-            offerId: id,
-            version: "1.1.0",
-          });
-          expect((await service.restart(id)).outcome).toBe("busy");
-          expect((await service.check("stable", service.get().revision)).outcome).toBe("busy");
-          expect((await service.chooseTrack("nightly")).outcome).toBe("busy");
-          expect((await service.download(id)).outcome).toBe("busy");
-        }
-        expect(states.includes("handed-to-system")).toBe(scenario === "ready");
-        expect(updater.listenerCount("error")).toBe(1);
-        service.shutdown();
+        expect((await service.restart(id)).outcome).toBe("busy");
+        expect((await service.check("stable", service.get().revision)).outcome).toBe("busy");
+        expect((await service.chooseTrack("nightly")).outcome).toBe("busy");
+        expect((await service.download(id)).outcome).toBe("busy");
       }
-    } finally {
-      vi.doUnmock("electron");
-    }
+      expect(states.includes("handed-to-system")).toBe(scenario === "ready");
+      // The handoff leaves no listener of its own: only the late-error one, once a handoff got
+      // as far as the updater (a deadline of 1 ms can pass before it does).
+      expect(updater.listeners("error").length).toBeLessThanOrEqual(1);
+      service.shutdown();
+    });
   },
 );
 
@@ -1985,4 +2037,21 @@ it("F-554: the lists arriving after a check never make the next Check stale", as
   const again = await service.check("stable", shown);
   expect(again.outcome).toBe("accepted");
   expect(server.requests.filter((path) => path === "/stable")).toHaveLength(2);
+});
+it("F-561: reports the build's own date and commit, for support, and nothing it doesn't carry", async () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  expect((await start({ releaseDate: "2026-12-01T10:00:00.000Z", commit })).get().build).toEqual({
+    releaseDate: "2026-12-01T10:00:00.000Z",
+    commit,
+  });
+  expect((await start({ releaseDate: "2026-12-01T10:00:00.000Z" })).get().build).toEqual({
+    releaseDate: "2026-12-01T10:00:00.000Z",
+    commit: null,
+  });
+  expect((await start({ commit: "not a commit" })).get()).not.toHaveProperty("build");
+  expect((await start()).get()).not.toHaveProperty("build");
+  // It stays through a check.
+  const service = await start({ commit });
+  await service.check(service.get().selectedTrack, service.get().revision);
+  expect(service.get().build).toEqual({ releaseDate: null, commit });
 });

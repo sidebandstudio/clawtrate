@@ -15,6 +15,7 @@ import {
   cleanupLine,
 } from "./update-restart.ts";
 import { ChevronIcon, WarnIcon } from "./icons.tsx";
+import { versionLabel } from "./version-label.ts";
 import "./styles/updates.css";
 
 const names = { stable: "Stable", nightly: "Beta" };
@@ -65,6 +66,8 @@ function updateRow(
   const { state } = s;
   const source = sourceFor(s);
   const unavailable = capabilityLine(s);
+  /** An offered build's version, on the track the check read (F-561). */
+  const offered = (version: string) => versionLabel(version, s.selectedTrack);
   if (unavailable || !source) return { line: unavailable ?? capabilities["not-configured"] };
   if (pending) return { line: "Not checked yet." };
   switch (state.kind) {
@@ -85,7 +88,7 @@ function updateRow(
           s.runningTrack &&
           s.runningVersion &&
           s.selectedTrack !== s.runningTrack
-            ? `No newer ${names[s.selectedTrack]} build was offered. Clawtrate ${s.runningVersion} is still running.`
+            ? `No newer ${names[s.selectedTrack]} build was offered. Clawtrate ${versionLabel(s.runningVersion, s.runningTrack)} is still running.`
             : "No newer version was offered for this build by its update source." +
               (time ? ` Checked at ${time}.` : ""),
         action: "Check for Updates",
@@ -93,19 +96,19 @@ function updateRow(
     }
     case "offered":
       return {
-        line: `Clawtrate ${state.version} is offered by the update source.`,
+        line: `Clawtrate ${offered(state.version)} is offered by the update source.`,
         action: downloadBlocked(s.install) ? "Check for Updates" : "Download",
       };
     case "downloading":
       if (state.received >= state.expected)
-        return { line: `Checking the downloaded update for Clawtrate ${state.version}…` };
+        return { line: `Checking the downloaded update for Clawtrate ${offered(state.version)}…` };
       return {
-        line: `Downloading Clawtrate ${state.version}… ${state.received.toLocaleString()} of ${state.expected.toLocaleString()} bytes`,
+        line: `Downloading Clawtrate ${offered(state.version)}… ${state.received.toLocaleString()} of ${state.expected.toLocaleString()} bytes`,
       };
     case "preparing":
-      return { line: `Preparing Clawtrate ${state.version} for restart…` };
+      return { line: `Preparing Clawtrate ${offered(state.version)} for restart…` };
     case "handing-off":
-      return { line: `Handing Clawtrate ${state.version} to the system updater…` };
+      return { line: `Handing Clawtrate ${offered(state.version)} to the system updater…` };
     case "handed-to-system":
       return {
         line: "Clawtrate handed the update to the macOS updater. After restart, Clawtrate reports the version that is running.",
@@ -124,11 +127,11 @@ function updateRow(
         return { line: refusalLine(s.install.reason), action: "Check for Updates" };
       if (restartCapability(s))
         return {
-          line: `Clawtrate ${state.version} is downloaded, and its size and checksum match the update source. Ready to install.`,
+          line: `Clawtrate ${offered(state.version)} is downloaded, and its size and checksum match the update source. Ready to install.`,
           action: "Restart to Update",
         };
       return {
-        line: `Clawtrate ${state.version} is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.`,
+        line: `Clawtrate ${offered(state.version)} is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.`,
       };
     case "failed":
       if (state.stage === "preferences")
@@ -252,6 +255,34 @@ function WhatsNew({
   );
 }
 
+/** The running build's date and commit, for support (F-561), closed until opened. */
+function BuildDetails({ build }: { build: NonNullable<DesktopUpdateSnapshot["build"]> }) {
+  return (
+    <details className="b-disclosure build-details" data-testid="build-details">
+      <summary>
+        <ChevronIcon />
+        Build details
+      </summary>
+      <dl className="facts">
+        {build.releaseDate && (
+          <div>
+            <dt>Built</dt>
+            <dd className="b-wrap-value">{build.releaseDate.slice(0, 16).replace("T", " ")} UTC</dd>
+          </div>
+        )}
+        {build.commit && (
+          <div>
+            <dt>Commit</dt>
+            <dd className="b-wrap-value">
+              <code>{build.commit}</code>
+            </dd>
+          </div>
+        )}
+      </dl>
+    </details>
+  );
+}
+
 export function Updates({
   snapshot: s,
   pending,
@@ -329,7 +360,7 @@ export function Updates({
     s.selectedTrack === s.lastAttempt?.track &&
     (state.kind === "not-checked" ||
       (state.kind === "failed" && state.reason === "invalid-version"))
-      ? attemptLine(s.lastAttempt)
+      ? attemptLine(s.lastAttempt, s.runningTrack)
       : null;
   const saving = s.pendingTrack
     ? `Saving ${names[s.pendingTrack]} as the update track…`
@@ -337,7 +368,7 @@ export function Updates({
       ? "Changing the update track…"
       : null;
   const announcement = downloading
-    ? `Downloading Clawtrate ${state.version}… ${Math.floor((10 * state.received) / state.expected) * 10}%`
+    ? `Downloading Clawtrate ${versionLabel(state.version, s.selectedTrack)}… ${Math.floor((10 * state.received) / state.expected) * 10}%`
     : line;
   return (
     <div className="updates-section">
@@ -360,14 +391,17 @@ export function Updates({
           <div>
             <dt>Version</dt>
             <dd className="b-wrap-value">
-              Clawtrate {s.runningVersion}
-              {s.runningTrack && (
-                <p className="b-hint">This copy is a {names[s.runningTrack]} build.</p>
-              )}
+              Clawtrate {versionLabel(s.runningVersion, s.runningTrack)}
+              {/* A label that names Beta already needs no line saying so. */}
+              {s.runningTrack &&
+                versionLabel(s.runningVersion, s.runningTrack) === s.runningVersion && (
+                  <p className="b-hint">This copy is a {names[s.runningTrack]} build.</p>
+                )}
             </dd>
           </div>
         </dl>
       )}
+      {s.build && <BuildDetails build={s.build} />}
       {s.whatsNew?.running && (
         <WhatsNew title="What's new in this build" lines={s.whatsNew.running} />
       )}
@@ -423,7 +457,7 @@ export function Updates({
               {line}
               {downloading && (
                 <progress
-                  aria-label={`Downloading Clawtrate ${state.version}`}
+                  aria-label={`Downloading Clawtrate ${versionLabel(state.version, s.selectedTrack)}`}
                   value={state.received}
                   max={state.expected}
                 />
@@ -461,7 +495,7 @@ export function Updates({
             {action !== "Restart to Update" && (
               <p id="update-source" className="b-hint update-source">
                 {action === "Download" && state.kind === "offered"
-                  ? `Downloads Clawtrate ${state.version}, only when you choose to.`
+                  ? `Downloads Clawtrate ${versionLabel(state.version, s.selectedTrack)}, only when you choose to.`
                   : `Checks ${source} for a newer build, only when you choose to.`}
               </p>
             )}
@@ -472,7 +506,7 @@ export function Updates({
       {s.whatsNew?.coming.map((build, index) => (
         <WhatsNew
           key={build.version}
-          title={`What's new in ${build.version}`}
+          title={`What's new in ${versionLabel(build.version, s.selectedTrack)}`}
           lines={build.items}
           open={index === 0}
         />
@@ -482,7 +516,7 @@ export function Updates({
           fallbackFocus={result}
           title="Restart to update?"
           action="Restart"
-          text={`Restart asks Clawtrate to install version ${state.version} and reopen.${capability.completesOnQuit ? " If macOS stages the update, it can install the next time Clawtrate quits." : ""}`}
+          text={`Restart asks Clawtrate to install version ${versionLabel(state.version, s.selectedTrack)} and reopen.${capability.completesOnQuit ? " If macOS stages the update, it can install the next time Clawtrate quits." : ""}`}
           details={waitingMessages}
           onCancel={() => setConfirmId(null)}
           onAction={() => {

@@ -246,7 +246,7 @@ Two containers carry the layout, so the same rules serve a narrow window, a spli
 ### Structure
 
 ```
-rail-top        search and new, top right; the left part drags the window
+rail-top        search and new, top right; the left part drags the window (the one-pane layout leads with the brand)
 bot-list
   pin-grid      pinned bots as large tiles, three per row (when any are pinned)
   pin-tasks     the grid's one task block: its owner's name, then that bot's tasks
@@ -255,10 +255,10 @@ bot-list
     bot
     bot-toggle  folds or unfolds the tasks without opening the bot
     task-list
-rail-footer     the gateway: a status dot, its name, its state; opens the gateway menu
+rail-footer     the gateway: a status dot, its name, its address or state; opens the gateway menu. Then the Settings gear
 ```
 
-There is no product name in the rail and no heading above the bots.
+There is no heading above the bots. The product's mark and name are in the title row above the shell, or at the start of `.rail-top` in the one-pane layout ([titlebar.md](titlebar.md)).
 
 **Order.** Bots keep the order the shell has today: the gateway's default bot first, then the gateway's order. They are not re-sorted by activity, so a row never moves while it is being read. Tasks under a bot are ordered by latest activity, newest first, which is also what the shell does today. A sort control for bots (recent activity, name, manual) belongs to the later sidebar flow; when it lands, "recent activity" becomes its default.
 
@@ -369,18 +369,19 @@ Both are `.menu` surfaces, 232 px wide, `--bg-raised` with `--shadow-pop`, radiu
 
 ### Footer and the gateway menu
 
-One row: a status dot, the gateway's name (14/500) with its state under it (12, faint). The dot is `--accent-line` when connected, `--warn` and pulsing while connecting or reconnecting, `--danger` when the gateway cannot be reached. The row reports the gateway's presence and nothing else. It always agrees with the status strip about the connection (section 11); a task that failed to sync is the strip's news, and leaves this dot green because the gateway is connected.
+One row: a status dot, the gateway's name (14/500) with a second line under it (12, faint), then the Settings gear, a 32 px icon button. The name is the one given on this device, or else the address; the second line is the address while a named gateway is connected, and the state otherwise ([titlebar.md](titlebar.md), section 4). The dot is `--accent-line` when connected, `--warn` and pulsing while connecting or reconnecting, `--danger` when the gateway cannot be reached. The row reports the gateway's presence and nothing else. It always agrees with the status strip about the connection (section 11); a task that failed to sync is the strip's news, and leaves this dot green because the gateway is connected.
 
 The row is a menu button. It opens the **gateway menu**, which replaces the shell's theme and disconnect icon buttons until Settings exists:
 
-| Part       | Content                                                                                                                   |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Head       | The gateway's name; under it the state, the address and, when known, the gateway's version                                |
-| Theme      | Three radio items: "Match the system", "Light", "Dark". Dark carries the note "The default". The current one has a check. |
-| Disconnect | One item in `--danger`. It disconnects and returns to the connection screen.                                              |
+| Part       | Content                                                                                                                     |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Head       | The gateway's name; under it the state, the address and, when known, the gateway's version                                  |
+| Rename     | "Rename gateway…", or "Name this gateway…" with no name: a dialog that names it on this device ([titlebar.md](titlebar.md)) |
+| Theme      | Three radio items: "Match the system", "Light", "Dark". Dark carries the note "The default". The current one has a check.   |
+| Disconnect | One item in `--danger`. It disconnects and returns to the connection screen.                                                |
 
-- Surface: `.menu`, 256 px, `--bg-raised` with `--shadow-pop`, radius 14, items 34 px (44 on touch). It opens upward from the row. In the one-pane layout it opens downward from the round button at the top left, which carries the same status dot.
-- Keyboard: Enter, Space, Up or Down on either trigger (the footer row, or the round button in the one-pane layout) opens it and puts focus on the checked theme. Inside, Up and Down move between items, wrapping; Home and End go to the ends; Enter or Space chooses. Escape closes it and returns focus to the trigger that opened it; Tab or a click outside closes it.
+- Surface: `.menu`, 256 px, `--bg-raised` with `--shadow-pop`, radius 14, items 34 px (44 on touch). It opens upward from the row, in the one-pane layout too.
+- Keyboard: Enter, Space, Up or Down on the footer row opens it and puts focus on the checked theme. Inside, Up and Down move between items, wrapping; Home and End go to the ends; Enter or Space chooses. Escape closes it and returns focus to the trigger that opened it; Tab or a click outside closes it.
 - Roles: `menu`, with `menuitemradio` for the themes and `menuitem` for Disconnect; the row has `aria-haspopup="menu"` and `aria-expanded`. The row's accessible name carries the state: "Home gateway, connected. Open the gateway menu."
 
 ## 8. The conversation
@@ -535,14 +536,14 @@ The shell stays mounted with its cached content when the connection drops. One c
 
 **Where transcript text may appear.** While the strip shows, the transcript is masked from the conversation's top edge: fully transparent down to 90 px (the strip's foot plus a 2 px gap), then fading in over 8 px, fully visible from 98 px. No part of a message is visible at the strip's height or above it, to its left and right included. Without the strip, text fades out under the title pill as section 8 describes. At rest the first line starts at 98 px in both cases, so the mask only ever hides text that the reader has scrolled up.
 
-| State                                       | The strip's dot   | Words                                                                                                      | Action                       | In the app, it comes from                                                                                      |
-| ------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Reconnecting                                | `--warn`, pulsing | **Reconnecting in 4s** · showing saved messages ("Reconnecting…" when there is no countdown)               | Retry now                    | The connection is reconnecting or connecting while the shell is mounted; the seconds are the host's retry time |
-| Cannot reach the gateway                    | `--danger`        | **Can't reach <gateway>** · the host's error message when it gives one, otherwise "showing saved messages" | Retry now                    | The connection is in its error state                                                                           |
-| Connected, fetching what was missed         | `--warn`, pulsing | **Connected** · catching up                                                                                | none                         | The connection has returned and the gateway's bots and tasks are loading again                                 |
-| Caught up                                   | `--accent-line`   | **Synced** (with "· 3 new in this task" only when the count is known)                                      | none; leaves after 4 seconds | That load finishing. Shown only after a drop, never on first load.                                             |
-| The open task failed to sync                | `--danger`        | **Couldn't sync this task**                                                                                | Try again                    | After a drop, the open task's transcript failed to reload and its saved messages are still shown               |
-| The gateway's bots and tasks failed to load | `--danger`        | The gateway's message, or "Could not load this gateway's bots and tasks."                                  | Retry now                    | Discovery failed while connected                                                                               |
+| State                                       | The strip's dot   | Words                                                                                                          | Action                                                                        | In the app, it comes from                                                                                                           |
+| ------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Reconnecting                                | `--warn`, pulsing | **Reconnecting in 4s** · showing saved messages ("Reconnecting…" when there is no countdown)                   | Retry now                                                                     | The connection is reconnecting or connecting while the shell is mounted; the seconds are the host's retry time                      |
+| Cannot reach the gateway                    | `--danger`        | **Can't reach <gateway>** · the host's error message when it gives one, otherwise "showing saved messages"     | Retry now                                                                     | The connection is in its error state                                                                                                |
+| Connected, fetching what was missed         | `--warn`, pulsing | **Connected** · catching up                                                                                    | none                                                                          | The connection has returned and the gateway's bots and tasks are loading again                                                      |
+| Caught up                                   | `--accent-line`   | **Synced** (with "· 3 new in this task" only when the count is known)                                          | none; leaves after 4 seconds                                                  | That load finishing. Shown only after a drop, never on first load.                                                                  |
+| The open task failed to sync                | `--danger`        | **Couldn't sync this task**, with "· Live updates for this task couldn't be started." when that is what failed | Try again                                                                     | After a drop, the open task's transcript failed to reload, or its live updates didn't start, and its saved messages are still shown |
+| The gateway's bots and tasks failed to load | `--danger`        | **Couldn't load bots and tasks**, with "· The gateway wasn't ready." only when its answers said so             | Gateway's message (when it gave one; its chevron alone on a phone), Retry now | Discovery failed while connected, after the reads it may answer if asked again were asked again                                     |
 
 - **The strip's dot is the strip's own.** It takes the tone of the row above, not the gateway's presence. The rail's footer dot is the gateway's presence. The two agree whenever the news is about the connection (the first four rows). In the fifth row they differ on purpose: the gateway is connected, so the footer is green, and one task failed, so the strip is red.
 - The first part of each line is the state and always shows in full, with the action. The part after the middle dot is an explanation in `--text-muted`; it is the only part that shortens, and on a narrow column it shortens to nothing. The whole line is the strip's tooltip.
@@ -557,7 +558,7 @@ The shell stays mounted with its cached content when the connection drops. One c
 
 **One pane (a window narrower than 688).** The rail is the list and the main pane is the detail.
 
-- The list fills the width. The footer row is replaced by a round button at the top left: the Settings icon with the connection dot on it, which opens the gateway menu. Search and New stay top right.
+- The list fills the width. The footer row and its gear stay at the foot of the list. The top band starts with the mark, the Beta pill on a Beta build and the round update button; Routines, Sort, Search and New stay top right.
 - Rows are 68 px with 44 px avatars; task rows are 44 px; text is one step larger (17 px names and messages).
 - Tasks unfold in place, as in section 7. A pinned tile with several tasks gives the pin grid's one block to its bot when tapped and folds it when tapped again; the block's label says whose tasks they are (section 7, "Pinned bots").
 - A bot's menu opens with touch and hold. "+" opens the same menu as on the desktop.
@@ -575,6 +576,8 @@ The shell stays mounted with its cached content when the connection drops. One c
 | A task's chat     | The conversation                                                                            | The bot's task list |
 
 Tapping a bot opens its task list, tapping a task opens its chat, Back returns to the task list, and Back again returns to Home. This holds for every bot, whatever its number of tasks. The narrow desktop window keeps the single unfolding list described above, because there the rail and its tasks are one pane.
+
+**iPhone Duo.** Folded, the outer display shows the three screens as above. Unfolded, the inner display shows two panes from the same route: the list (Home, or the bot's task list once a bot is open) and the chat. With the fold upright, each fills its side of the fold; with the fold across the screen, the list is a column of 280 to 360 points and a hairline divides it from the chat. With no task open, the chat pane says "No chat open". The open task's row has the selected background. Back in the chat closes it, and Back in the list returns to Home. Folding shows the open chat alone, with Back to the bot's tasks.
 
 ## 13. Accessibility
 

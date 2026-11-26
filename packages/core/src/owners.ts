@@ -26,6 +26,11 @@ import {
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_PENDING_ATTACHMENTS } from "./attachments.ts";
 import { jsonLength, worstCase } from "./bounds.ts";
 import {
+  MAX_GATEWAY_NAME_CHARS,
+  MAX_GATEWAY_NAMES,
+  MAX_NAMED_ADDRESS_CHARS,
+} from "./gateway-names.ts";
+import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
@@ -35,13 +40,17 @@ import {
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
+  MAX_DEFERRED_STOPS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
+  MAX_PICTURE_READS,
+  MAX_READ_BACK_PICTURES,
   MAX_SENT_PICTURE_MESSAGES,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
+import { MAX_INBOUND_REF_CHARS, MAX_SENT_SOURCES } from "./mapping.ts";
 import { ADMIN_SCOPES } from "./scopes.ts";
 import {
   MAX_FILE_TRANSFERS,
@@ -130,6 +139,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "listings.*": { max: MAX_LISTED_TASKS, each: ROW, row: null, opaque: "`SESSION_ROW`" },
   // Per followed task: keys and small values.
   openSessions: { max: T, each: ID + N, row: "bookkeeping" },
+  // Bots removed while one task read is out, at most the bot list's own cap; cleared as the next read starts.
+  removedDuringRead: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  // The last whole roster's ids, kept while there are at most `MAX_BOTS`; dropped as the connection closes.
+  lastRosterIds: { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   retained: { max: T, each: ID, row: "bookkeeping" },
   incarnations: { max: T, each: ID + N, row: "bookkeeping" },
   loads: { max: T, each: ID + SHORT, row: "bookkeeping" },
@@ -145,6 +158,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Computer Stops whose first abort waits for the gateway to name the run: task and run ids, and
   // the task's opening that asked (an empty object); gone once sent, settled or withdrawn.
   unsentStops: { max: T * MAX_RUN_LIST, each: 2 * ID + 1, row: "bookkeeping" },
+  // An archive's or a delete's Stop of a run not named yet: task and run ids, and the action's
+  // connection check; kept while its run is stopping, and never past the bound.
+  deferredStops: { max: MAX_DEFERRED_STOPS, each: 2 * ID + 1, row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
@@ -246,10 +262,16 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   accessWaiters: { max: MAX_ACCESS_WAITERS, each: SHORT, row: "bookkeeping" },
   // The scopes a device-access request keeps: those of the admin tier the connection held.
   heldBase: { max: ADMIN_SCOPES.length, each: SHORT, row: "bookkeeping" },
+  // The names given to gateways on this device (`gateway-names.ts`): an address and a name each.
+  gatewayNames: {
+    max: MAX_GATEWAY_NAMES,
+    each: MAX_NAMED_ADDRESS_CHARS + 2 * MAX_GATEWAY_NAME_CHARS + N,
+    row: "bookkeeping",
+  },
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
-    each: 2 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
+    each: 3 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },
   "attachmentContent.*.files": {
@@ -261,7 +283,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
   sentPictures: {
     max: MAX_SENT_PICTURE_MESSAGES,
-    each: 3 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
+    each: 4 * ID + SHORT + N + MAX_ATTACHMENTS_PER_MESSAGE * (N + MAX_FILE_NAME_CHARS),
     row: "outboxFiles",
   },
   "sentPictures.*.files": {
@@ -270,6 +292,22 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: null,
     opaque: "picture content, counted in `outboxFiles`",
   },
+  // Pictures read back from the gateway, kept to show: their content is in `outboxFiles`'s budget.
+  readBackPictures: {
+    max: MAX_READ_BACK_PICTURES,
+    each: 4 * ID + 2 * N + SHORT,
+    row: "outboxFiles",
+    opaque: "picture content, counted in `outboxFiles`",
+  },
+  // Pictures being read back, under way or waiting their turn: each its task's key, its bot and a flag.
+  pictureReadsInFlight: { max: MAX_PICTURE_READS, each: 2 * ID + SHORT, row: "bookkeeping" },
+  // Each followed task's references to its person's newest files, by row key and place.
+  sentSources: {
+    max: T,
+    each: ID + MAX_SENT_SOURCES * (2 * MAX_INBOUND_REF_CHARS + N),
+    row: "bookkeeping",
+  },
+  "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Settings reads a stop ends: connection commands run one at a time, each with one read.
@@ -354,6 +392,11 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "botNames.declines":
     "Not now as read from the host's storage, at most `MAX_NAME_DECLINES` names, each bounded when read",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
+  "openclawUpdates.ctx": "the client's own functions, handed to the OpenClaw update engine",
+  "openclawUpdates.lookFor":
+    "one lost press's gateway identity and time, at most one, read on the next hello",
+  "openclawUpdates.refused":
+    "the gateway's one refusal of a press with no run: a reason code and its bounded sentence",
 };
 
 /** The class of each client property whose own collections are named under it. */
@@ -367,6 +410,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   routines: "RoutinesEngine",
   usage: "UsageEngine",
   botNames: "BotNames",
+  openclawUpdates: "OpenClawUpdates",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
   computer: "ComputerViews",

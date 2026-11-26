@@ -2604,7 +2604,8 @@ const ARG_KEYS: Record<string, true> = Object.fromEntries(
     "id requestId to channelId guildId userId name query pattern messageId action request " +
     "mobileAction confirmed job jobId plan markdown objective status label task agentId ids " +
     "target sessionKey sessionId message channel conversationRef questions prompt text count " +
-    "maxResults from lines limit timeoutSeconds pages extractMode maxChars coordinate edits content"
+    "maxResults from lines limit timeoutSeconds pages extractMode maxChars coordinate edits content " +
+    "visible"
   )
     .split(" ")
     .map((key) => [key, true]),

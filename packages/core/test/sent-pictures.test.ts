@@ -1,7 +1,7 @@
-// A picture a person sends shows in their own message (#451). Clawtrate doesn't
-// load a person's picture from the gateway (#469), so the preview
-// comes from the copy this app sent, while the task stays open; history names
-// each file so another device can say what was sent.
+// A picture a person sends shows in their own message (#451), from the copy this
+// app sent, kept across reopening the task; history names each file so another
+// device can say what was sent. These connect at a loopback address, where no
+// picture is read back from the gateway (#469: own-picture-from-gateway.test.ts).
 
 import { describe, expect, it } from "vitest";
 import { fromBase64, toBase64, utf8Bytes } from "../src/bytes.ts";
@@ -14,7 +14,7 @@ import {
 import { mapHistory } from "../src/mapping.ts";
 import { MAX_PICTURE_BYTES, type SentPictureRead } from "../src/pictures.ts";
 import { KEY, openTask } from "./client-harness.ts";
-import { until } from "./fake-gateway.ts";
+import { sleep, until } from "./fake-gateway.ts";
 import { FIRST, NOTES, SECOND, SHOT, sentRow, solidPng } from "./sent-attachments-rows.ts";
 
 const RED = solidPng(48, 32, [220, 40, 40]);
@@ -141,12 +141,124 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     client.openSession(OTHER);
     await until(() => client.state.transcripts[OTHER]?.items.length === 1);
     const asked = gateway.requests.length;
-    expect(await client.readSentPicture(OTHER, `${id}:user`, 0)).toEqual({ status: "not-kept" });
+    expect(await client.readSentPicture(OTHER, `${id}:user`, 0)).toEqual({ status: "cannot-load" });
     expect(gateway.requests.length).toBe(asked);
     expect(gateway.calls("artifacts.download")).toEqual([]);
     // Nor on another gateway: a Disconnect lets every kept picture go.
     await client.disconnect();
     expect(client.keptPictureBytes).toBe(0);
+    client.stop();
+  });
+
+  it("F-557: still shows when its task is opened again on this device, after its last viewer closed it (#509)", async () => {
+    const { client, gateway, confirm, history } = await task();
+    const id = client.sendMessage(KEY, "can u add this to my calendar?", {
+      attachments: [picture(RED, "shot.png")],
+    });
+    await confirm([sentRow(id, "can u add this to my calendar?", [SHOT])]);
+    // The person moves to another task, or the page reloads: the last viewer lets this one go.
+    client.closeSession(KEY);
+    await until(() => !client.state.transcripts[KEY]);
+    const reads = gateway.calls("chat.history").length;
+    client.openSession(KEY);
+    await until(
+      () =>
+        gateway.calls("chat.history").length > reads &&
+        client.state.transcripts[KEY]?.status === "ready",
+    );
+    expect(history()).toHaveLength(1);
+    const item = client.state.transcripts[KEY]!.items[0]!;
+    expect(bytesOf(client, await client.readSentPicture(KEY, item.idempotencyKey!, 0))).toEqual(
+      new Uint8Array(RED),
+    );
+    expect(gateway.calls("artifacts.download")).toEqual([]);
+    client.stop();
+  });
+
+  /** A sent picture, confirmed, in `KEY`, and the gateway answering a delete or archive of it. */
+  async function keptInTask() {
+    const opened = await task();
+    const { client, gateway, confirm } = opened;
+    gateway.handlers["sessions.describe"] = () => ({ session: { key: KEY, sessionId: "s-1" } });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    gateway.handlers["sessions.delete"] = () => ({ ok: true, deleted: true });
+    const id = client.sendMessage(KEY, "look", { attachments: [picture(RED, "shot.png")] });
+    await confirm([sentRow(id, "look", [SHOT])]);
+    expect(client.keptPictureBytes).toBe(RED.length);
+    return { ...opened, id };
+  }
+
+  it("F-557: deleting the task from this app lets its pictures go", async () => {
+    const { client, gateway, id } = await keptInTask();
+    await client.deleteTask(KEY);
+    expect(gateway.calls("sessions.delete")).toHaveLength(1);
+    expect(client.keptPictureBytes).toBe(0);
+    expect(await client.readSentPicture(KEY, `${id}:user`, 0)).toEqual({ status: "cannot-load" });
+    client.stop();
+  });
+
+  it("F-557: a task deleted elsewhere lets its pictures go, once the gateway says so", async () => {
+    const { client, gateway } = await keptInTask();
+    gateway.emit("sessions.changed", { sessionKey: KEY, reason: "deleted" });
+    await until(() => client.keptPictureBytes === 0);
+    client.stop();
+  });
+
+  it("F-557: archiving the task keeps its pictures, so they show when it is opened or restored", async () => {
+    const { client, gateway, id } = await keptInTask();
+    await client.archiveTask(KEY);
+    gateway.emit("sessions.changed", { sessionKey: KEY, archived: true, updatedAt: 3 });
+    await sleep(50);
+    expect(gateway.calls("sessions.patch")).toHaveLength(1);
+    expect(client.keptPictureBytes).toBe(RED.length);
+    expect((await client.readSentPicture(KEY, `${id}:user`, 0)).status).toBe("content");
+    client.stop();
+  });
+
+  /** A sent picture in `KEY` whose history read is held: `release` answers it with the message. */
+  async function heldConfirm() {
+    const opened = await task();
+    const { client, gateway } = opened;
+    gateway.handlers["sessions.describe"] = () => ({ session: { key: KEY, sessionId: "s-1" } });
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    gateway.handlers["sessions.delete"] = () => ({ ok: true, deleted: true });
+    const id = client.sendMessage(KEY, "look", { attachments: [picture(RED, "shot.png")] });
+    await until(() => opened.transcript().outbox[0]?.status === "sent");
+    let answer!: (rows: unknown[]) => void;
+    const held = new Promise<unknown[]>((resolve) => (answer = resolve));
+    gateway.handlers["chat.history"] = async () => ({ messages: await held });
+    const asked = gateway.calls("chat.history").length;
+    gateway.emit("sessions.changed", { sessionKey: KEY, phase: "message", updatedAt: 2 });
+    await until(() => gateway.calls("chat.history").length > asked);
+    const release = async () => {
+      answer([sentRow(id, "look", [SHOT])]);
+      await sleep(50);
+    };
+    return { ...opened, release };
+  }
+
+  it("F-557: a history read asked before the task was deleted here keeps nothing when it answers after", async () => {
+    const { client, release } = await heldConfirm();
+    await client.deleteTask(KEY);
+    await release();
+    expect(client.keptPictureBytes).toBe(0);
+    client.stop();
+  });
+
+  it("F-557: a history read asked before the gateway reported the task deleted keeps nothing when it answers after", async () => {
+    const { client, gateway, release } = await heldConfirm();
+    gateway.emit("sessions.changed", { sessionKey: KEY, reason: "deleted" });
+    await sleep(20);
+    await release();
+    expect(client.keptPictureBytes).toBe(0);
+    client.stop();
+  });
+
+  it("F-557: a history read asked before the task was archived still keeps its pictures", async () => {
+    const { client, release } = await heldConfirm();
+    await client.archiveTask(KEY);
+    await release();
+    expect(client.keptPictureBytes).toBe(RED.length);
     client.stop();
   });
 
@@ -158,7 +270,7 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     await confirm([sentRow(id, "two pictures", [FIRST, NOTES, SECOND])]);
     const key = `${id}:user`;
     expect(bytesOf(client, await client.readSentPicture(KEY, key, 0))).toEqual(new Uint8Array(RED));
-    expect(await client.readSentPicture(KEY, key, 1)).toEqual({ status: "not-kept" });
+    expect(await client.readSentPicture(KEY, key, 1)).toEqual({ status: "cannot-load" });
     expect(bytesOf(client, await client.readSentPicture(KEY, key, 2))).toEqual(
       new Uint8Array(BLUE),
     );
@@ -186,8 +298,8 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     await confirm([sentRow(id, "these", [SHOT, SHOT, SHOT])]);
     // None is kept: bytes that aren't the picture they are named as are never drawn.
     expect(client.keptPictureBytes).toBe(0);
-    expect(await client.readSentPicture(KEY, `${id}:user`, 0)).toEqual({ status: "not-kept" });
-    expect(await client.readSentPicture(KEY, `${id}:user`, 1)).toEqual({ status: "not-kept" });
+    expect(await client.readSentPicture(KEY, `${id}:user`, 0)).toEqual({ status: "cannot-load" });
+    expect(await client.readSentPicture(KEY, `${id}:user`, 1)).toEqual({ status: "cannot-load" });
     // The mislabelled one is still a file on your message, not a picture said to be elsewhere.
     expect(await client.readSentPicture(KEY, `${id}:user`, 2)).toEqual({ status: "not-a-picture" });
     client.stop();
@@ -202,7 +314,7 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     client.stop();
   });
 
-  it("F-557: kept pictures go when the task closes, and give way to files still to be sent", async () => {
+  it("F-557: kept pictures give way to files still to be sent", async () => {
     const { client, gateway, confirm } = await task();
     const id = client.sendMessage(KEY, "look", { attachments: [picture(RED, "shot.png")] });
     await confirm([sentRow(id, "look", [SHOT])]);
@@ -214,11 +326,11 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     expect(client.keptPictureBytes).toBe(RED.length);
     client.sendMessage(KEY, "bigger", { attachments: [blob(half - 2)] });
     expect(client.keptPictureBytes).toBe(0);
-    expect(await client.readSentPicture(KEY, `${id}:user`, 0)).toEqual({ status: "not-kept" });
+    expect(await client.readSentPicture(KEY, `${id}:user`, 0)).toEqual({ status: "cannot-load" });
     client.stop();
   });
 
-  it(`F-557: at most ${MAX_SENT_PICTURE_MESSAGES} messages' pictures are kept, the oldest giving way, and none once the task is closed`, async () => {
+  it(`F-557: at most ${MAX_SENT_PICTURE_MESSAGES} messages' pictures are kept, the oldest giving way, and closing the task keeps them`, async () => {
     const { client, confirm } = await task();
     const rows: unknown[] = [];
     const ids: string[] = [];
@@ -229,10 +341,12 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
       await confirm([...rows]);
     }
     expect(client.keptPictureBytes).toBe(MAX_SENT_PICTURE_MESSAGES * RED.length);
-    expect(await client.readSentPicture(KEY, `${ids[0]}:user`, 0)).toEqual({ status: "not-kept" });
+    expect(await client.readSentPicture(KEY, `${ids[0]}:user`, 0)).toEqual({
+      status: "cannot-load",
+    });
     expect((await client.readSentPicture(KEY, `${ids.at(-1)}:user`, 0)).status).toBe("content");
     client.closeSession(KEY);
-    expect(client.keptPictureBytes).toBe(0);
+    expect(client.keptPictureBytes).toBe(MAX_SENT_PICTURE_MESSAGES * RED.length);
     client.stop();
   }, 30_000);
 });

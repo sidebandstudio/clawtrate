@@ -1,0 +1,13 @@
+- status
+- main:
+  - button "Back"
+  - heading "Connecting" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Making a one-time code, done": Making a one-time code
+    - listitem "Requesting read access, done": Requesting read access
+    - listitem "Loading your bots, failed": Loading your bots
+  - alert:
+    - paragraph: Connected, but Clawtrate couldn't read your bots. Try again, or go back.
+  - button "Try again"
+  - paragraph: Connecting

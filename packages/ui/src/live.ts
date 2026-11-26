@@ -11,6 +11,7 @@ import {
   lineOf,
   phraseCall,
   readingContextOf,
+  START_TASK_TOOL,
   type ActionCall,
   type ReadingContext,
   activeRun,
@@ -62,10 +63,17 @@ export function actionPhrase(call: ActionCall, ctx: ReadingContext = {}): string
   return line.outcome === "review" ? actionWords.PHRASES.reviewing : line.running;
 }
 
-/** A call drawn as a Messaged or T3 Code card, which stays in view with commands hidden (7.11). */
+/**
+ * A call drawn as a Messaged, T3 Code or "Started a task" card, which stays in view with commands
+ * hidden (7.11). A start is a card only when it asked for a task the person sees.
+ */
 function hasCardInView(call: ActionCall, ctx: ReadingContext): boolean {
   const { kind } = kindOf(call, ctx);
-  return kind === "message" || kind === "t3";
+  return (
+    kind === "message" ||
+    kind === "t3" ||
+    (call.name === START_TASK_TOOL && call.args.visible === true)
+  );
 }
 
 /** Status phases the gateway reports while no step runs (section 5). */
@@ -114,13 +122,20 @@ export function liveThought(run: Run): string | null {
 /**
  * The status line of a run that is running, waiting or stopping: one phrase
  * and the avatar's state, by the table in section 5. While the connection is
- * lost it stops and says what was last seen.
+ * lost it stops and says what was last seen; back on the connection, until the
+ * open task has reloaded, it stays last seen without saying anything about the
+ * connection.
  */
 export function statusLineFor(
   run: Run,
   transcript: Transcript,
   options: {
     connected: boolean;
+    /**
+     * What this task shows is this connection's: false from a reconnect until the open task
+     * has reloaded (or failed to). Defaults to true.
+     */
+    current?: boolean;
     interactive: boolean;
     reading?: ReadingContext | undefined;
     /** "Show commands" is off: the phrase says the kind of work (7.11). */
@@ -200,12 +215,19 @@ export function statusLineFor(
   // "Show thinking" decides the thinking under the line, with commands shown or hidden (7.11).
   view.thought =
     options.thinking && view.state === "thinking" && view.tone === "live" ? liveThought(run) : null;
-  if (!options.connected) {
+  if (!options.connected || options.current === false) {
     const last = view.phrase.replace(/…$/, "");
+    const seen = `Last seen ${last.charAt(0).toLowerCase()}${last.slice(1)}`;
     return {
       state: "blocked",
       badge: "blocked",
-      phrase: `Reconnecting. Last seen ${last.charAt(0).toLowerCase()}${last.slice(1)}`,
+      // Connected: still loading again, or its reload or live updates failed (the strip or the
+      // conversation says which); never a word about the connection then.
+      phrase: !options.connected
+        ? `Reconnecting. ${seen}`
+        : transcript.status === "error"
+          ? seen
+          : `Catching up. ${seen}`,
       tone: "muted",
       startedAt: null,
       callId: view.callId,

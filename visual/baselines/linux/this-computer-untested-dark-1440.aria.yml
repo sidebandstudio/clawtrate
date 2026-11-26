@@ -1,0 +1,18 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "OpenClaw is running" [level=3]
+  - term: Version
+  - definition: 2026.9.37
+  - term: Profile
+  - definition: default
+  - term: Listens
+  - definition: Configured for loopback
+  - term: Service
+  - definition: LaunchAgent
+  - status:
+    - paragraph: OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to try connecting.
+  - button "Use Advanced"
+  - group: How to update
+  - paragraph: On this computer

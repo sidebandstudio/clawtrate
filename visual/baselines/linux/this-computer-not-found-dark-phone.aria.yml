@@ -1,0 +1,12 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Clawtrate didn't find OpenClaw here" [level=3]
+  - paragraph: Setting OpenClaw up from Clawtrate isn't in this version. Install it with OpenClaw's own instructions, then look again.
+  - button "Look again"
+  - button "It runs on another computer"
+  - paragraph:
+    - link "OpenClaw's own install instructions":
+      - /url: https://docs.openclaw.ai/install
+  - paragraph: On this computer

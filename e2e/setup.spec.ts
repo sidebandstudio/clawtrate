@@ -30,7 +30,7 @@ import { writeSandbox } from "./setup-sandbox.ts";
 import type { Scenario } from "../apps/desktop/src/setup/sandbox.ts";
 import { openInstance, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
-import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const DESKTOP = join(ROOT, "apps/desktop");
@@ -197,9 +197,8 @@ test.beforeAll(async () => {
   ELECTRON = electronBinary();
   if (ELECTRON === null) throw new Error("Electron's binary is missing: run pnpm install with it");
   // Recorded before anything starts, so a killed run is cleaned up by the next one.
-  const self = processIdentity(process.pid);
-  if (self.state !== "alive") throw new Error("could not determine this process's start time");
-  record.runner.identity = self.identity;
+  const self = ownIdentity();
+  record.runner.identity = self;
   DIR = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
   record.dirs.push(DIR);
   const runId = newRunId();

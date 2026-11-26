@@ -1,10 +1,19 @@
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 export type MenuEntry =
   | {
       kind: "item";
       label: string;
       onSelect: () => void;
+      /** Shown, reachable, and announced as unavailable; choosing it does nothing. */
+      disabled?: boolean;
       tone?: "danger";
       icon?: ReactNode;
       hint?: string;
@@ -36,6 +45,7 @@ export function Menu({
   className,
   style,
   trigger,
+  focusAt,
 }: {
   label: string;
   entries: MenuEntry[];
@@ -45,16 +55,63 @@ export function Menu({
   style?: CSSProperties;
   /** Clicks on the trigger are the trigger's own; they do not count as outside. */
   trigger?: HTMLElement | null;
+  /** When set or changed, focus moves to the item at this index: after items are added in place. */
+  focusAt?: number;
 }) {
   const ref = useRef<HTMLUListElement>(null);
+
+  // Whether the menu had focus: true when focus lands in it, false when focus lands on anything
+  // else. A focused row that is removed moves focus to the page with no focus event, so this still
+  // says the menu had it; Tab from there to another control lands focus outside and clears it.
+  const hasFocus = useRef(false);
+  useLayoutEffect(() => {
+    const menu = ref.current;
+    const onFocusIn = (event: FocusEvent) => {
+      hasFocus.current = menu?.contains(event.target as Node) ?? false;
+    };
+    document.addEventListener("focusin", onFocusIn, true);
+    return () => document.removeEventListener("focusin", onFocusIn, true);
+  }, []);
+  // The menu may move focus only if it had it and focus is still in it or lost to the page: a
+  // menu never takes focus from another control, whatever happened to its rows first.
+  const mayMoveFocus = () => {
+    const active = document.activeElement;
+    return (
+      hasFocus.current &&
+      (!active || active === document.body || (ref.current?.contains(active) ?? false))
+    );
+  };
+
+  // Both focus moves run as the entries change, in the same task, so a key pressed straight after
+  // (Escape) finds focus in the menu.
+  useLayoutEffect(() => {
+    if (focusAt === undefined || !mayMoveFocus()) return;
+    ref.current?.querySelectorAll<HTMLElement>(".menu-item")[focusAt]?.focus();
+  }, [focusAt]);
+
+  // A focused row that went away (its entries changed in place) leaves focus in the menu.
+  useLayoutEffect(() => {
+    const menu = ref.current;
+    if (!menu || !mayMoveFocus() || menu.contains(document.activeElement)) return;
+    (
+      menu.querySelector<HTMLElement>('[aria-checked="true"]') ??
+      menu.querySelector<HTMLElement>(".menu-item")
+    )?.focus();
+  }, [entries]);
+
+  // Once, on opening: a parent's re-render can pass a new `onClose` or `trigger`, and never moves
+  // focus inside an open menu.
+  useEffect(() => {
+    const menu = ref.current;
+    (
+      menu?.querySelector<HTMLElement>('[aria-checked="true"]') ??
+      menu?.querySelector<HTMLElement>(".menu-item")
+    )?.focus();
+  }, []);
 
   useEffect(() => {
     const menu = ref.current;
     if (!menu) return;
-    const first =
-      menu.querySelector<HTMLElement>('[aria-checked="true"]') ??
-      menu.querySelector<HTMLElement>(".menu-item");
-    first?.focus();
     const onPointer = (event: PointerEvent) => {
       const target = event.target as Node;
       if (menu.contains(target) || trigger?.contains(target)) return;
@@ -149,10 +206,11 @@ export function Menu({
                   className="menu-item"
                   role="menuitem"
                   data-tone={entry.tone}
+                  aria-disabled={entry.disabled || undefined}
                   aria-label={entry.note ? entry.label : undefined}
                   aria-description={entry.note}
                   tabIndex={-1}
-                  onClick={entry.onSelect}
+                  onClick={entry.disabled ? undefined : entry.onSelect}
                 >
                   {entry.icon}
                   {entry.note ? (

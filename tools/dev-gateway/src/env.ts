@@ -15,6 +15,8 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { OPENCLAW_VERSION, openclawProgram, type Program } from "./pinned.ts";
+import type { OpenclawVersion } from "./versions.ts";
 import {
   DEFAULT_GATEWAY_PORT,
   DEFAULT_PROVIDER_PORT,
@@ -123,8 +125,6 @@ export function providerEnv(
     : { ...passthrough(source), SCRIPTED_PROVIDER_PORT: String(port) };
 }
 
-const OPENCLAW_BIN = process.env.OPENCLAW_BIN ?? "openclaw";
-
 /** The instance's profile options first; callers may never choose a profile themselves. */
 export function guardArgs(args: string[], instance: string | null = null): string[] {
   if (
@@ -157,6 +157,7 @@ export type RunnerOptions = {
   stateDir: string;
   /** The tool's run file, with the run id and PIDs `start` recorded. */
   runFile: string;
+  /** A stand-in OpenClaw program, for tests, taken as the pin; otherwise pinned.ts finds one. */
   bin?: string;
   spawnImpl?: typeof spawn;
   spawnSyncImpl?: typeof spawnSync;
@@ -176,7 +177,7 @@ export class OpenclawRunner {
   readonly instance: string | null;
   readonly stateDir: string;
   readonly runFile: string;
-  private readonly bin: string;
+  private program: Program | null;
   private readonly spawnImpl: typeof spawn;
   private readonly spawnSyncImpl: typeof spawnSync;
   private readonly identify: Identify;
@@ -186,11 +187,24 @@ export class OpenclawRunner {
     this.instance = options.instance ?? null;
     this.stateDir = options.stateDir;
     this.runFile = options.runFile;
-    this.bin = options.bin ?? OPENCLAW_BIN;
+    this.program = options.bin
+      ? { command: options.bin, args: [], version: OPENCLAW_VERSION }
+      : null;
     this.spawnImpl = options.spawnImpl ?? spawn;
     this.spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
     this.identify = options.identify ?? processIdentity;
     this.checkout = options.checkout ?? CHECKOUT_DIR;
+  }
+
+  /** The OpenClaw program and its leading arguments: the pinned copy unless one was given. */
+  private openclaw(): Program {
+    this.program ??= openclawProgram();
+    return this.program;
+  }
+
+  /** The OpenClaw version this runner's program is, which the gateway it starts runs. */
+  openclawVersion(): OpenclawVersion {
+    return this.openclaw().version;
   }
 
   /** Why OpenClaw must not run now, or null. */
@@ -234,7 +248,8 @@ export class OpenclawRunner {
   /** Run an OpenClaw CLI command and wait for it. `input` is written to its stdin. */
   runSync(args: string[], options: { input?: string } = {}): RunResult {
     this.assertAllowed();
-    const result = this.spawnSyncImpl(this.bin, guardArgs(args, this.instance), {
+    const { command, args: lead } = this.openclaw();
+    const result = this.spawnSyncImpl(command, [...lead, ...guardArgs(args, this.instance)], {
       ...this.baseOptions(),
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
@@ -248,7 +263,8 @@ export class OpenclawRunner {
   run(args: string[]): Promise<RunResult> {
     return new Promise((resolve, reject) => {
       this.assertAllowed();
-      const child = this.spawnImpl(this.bin, guardArgs(args, this.instance), {
+      const { command, args: lead } = this.openclaw();
+      const child = this.spawnImpl(command, [...lead, ...guardArgs(args, this.instance)], {
         ...this.baseOptions(),
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -264,7 +280,8 @@ export class OpenclawRunner {
   /** Start a long-running OpenClaw process detached from this one, behind a gate (`gatedSpawn`). */
   spawnGated(args: string[], options: SpawnOptions): Gated {
     this.assertAllowed();
-    return gatedSpawn(this.spawnImpl, this.bin, guardArgs(args, this.instance), {
+    const { command, args: lead } = this.openclaw();
+    return gatedSpawn(this.spawnImpl, command, [...lead, ...guardArgs(args, this.instance)], {
       ...options,
       ...this.baseOptions(),
       detached: true,
@@ -282,7 +299,8 @@ export class OpenclawRunner {
     if (typeof dir !== "string" || !dir.startsWith(`${this.stateDir}/`)) {
       throw new SpawnRefusedError("the node's state folder must be inside the instance's");
     }
-    return gatedSpawn(this.spawnImpl, this.bin, guardArgs(args, this.instance), {
+    const { command, args: lead } = this.openclaw();
+    return gatedSpawn(this.spawnImpl, command, [...lead, ...guardArgs(args, this.instance)], {
       ...options,
       cwd: dir,
       env: { ...base.env, ...env },

@@ -8,6 +8,7 @@
 import {
   ADMIN_SCOPES,
   gatewayStamp,
+  sameStamp,
   mapHistory,
   RawTable,
   runsFromHistory,
@@ -175,19 +176,40 @@ export function botNameScene(
   };
 }
 
-/** Rename names the bot as the gateway's bot list then would; Not now drops the card. */
+/**
+ * Rename names the bot as the gateway's bot list then would; Not now drops the card. Both answer
+ * only the card open now, from this connection, as the engine does: Rename is refused otherwise,
+ * and Not now says it declined only then.
+ */
 export function botNameCommand(
   command: BridgeCommand,
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
-): Promise<void> | undefined {
+): Promise<unknown> | undefined {
   if (command.type !== "acceptBotName" && command.type !== "declineBotName") return undefined;
   const state = get();
   const botNames = (state.botNames ?? []).filter((each) => each.botId !== command.botId);
+  const open = (state.botNames ?? []).find((each) => each.botId === command.botId);
+  const stamp = gatewayStamp(state.connection);
   if (command.type === "declineBotName") {
-    set({ ...state, botNames });
-    return Promise.resolve();
+    // As the engine decides: the open card's name, not being renamed, and stamps that match and
+    // name a gateway (`sameStamp`), the card's and this connection's.
+    const declined =
+      open?.name === command.name &&
+      open.status !== "renaming" &&
+      sameStamp(open.stamp, command.stamp) &&
+      sameStamp(stamp, command.stamp);
+    if (declined) set({ ...state, botNames });
+    return Promise.resolve({ declined });
   }
+  // Rename, in the engine's order and words: the open card with this name, not already being
+  // renamed, then the card's stamp and this connection's.
+  if (open?.name !== command.name || open.status === "renaming")
+    return Promise.reject(new Error("That name is no longer waiting for you."));
+  if (!sameStamp(open.stamp, command.stamp) || !sameStamp(stamp, command.stamp))
+    return Promise.reject(
+      new Error("This name was found on another gateway, so nothing was sent."),
+    );
   set({
     ...state,
     bots: state.bots.map((bot) =>

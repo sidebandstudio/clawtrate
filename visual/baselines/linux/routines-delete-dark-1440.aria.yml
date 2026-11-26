@@ -1,0 +1,105 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
+      - list "Otto's tasks":
+        - listitem:
+          - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
+        - listitem:
+          - button "Disk almost full on the media box"
+        - listitem:
+          - button "Disk space watch, routine run": Disk space watch
+        - listitem:
+          - button "Weekly backup check, unread": Weekly backup check
+        - listitem:
+          - button "Nightly backup check, routine run, failed": Nightly backup check
+        - listitem:
+          - button "Certificate renewal warning"
+        - listitem:
+          - button "Show all 16"
+        - listitem:
+          - button "New task"
+        - listitem:
+          - button "Archived"
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research, primary bot":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
+    - listitem:
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
+      - list "Marlow's tasks":
+        - listitem:
+          - button "Morning digest, routine run": Morning digest
+    - listitem:
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
+  - status
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
+- main "Routines":
+  - button "Back to routines"
+  - heading "Morning digest" [level=1]
+  - paragraph: Marlow
+  - button "Run now"
+  - button "Pause"
+  - button "Edit"
+  - button "More"
+  - status: Runs weekdays at 8:00 AM, New York.
+  - heading "Instruction" [level=3]
+  - paragraph: Summarise the notes I added yesterday, and list anything I need to answer today.
+  - heading "When to run" [level=3]
+  - term: Schedule
+  - definition: Weekdays at 8:00 AM
+  - term: Time zone
+  - definition: New York America/New_York
+  - term: Next run
+  - definition: Tomorrow, Tue Nov 17, 8:00 AM New York time
+  - term: Runs in
+  - definition: A new conversation each time
+  - term: Results
+  - definition: Kept with the run
+  - term: Triggers
+  - definition: Its schedule only. This gateway's webhooks start a bot directly, not a routine.
+  - region "Runs":
+    - heading "Runs" [level=3]
+    - list "Runs":
+      - listitem:
+        - button "today 8:00 AM, Succeeded · 2.6 s · 200 tokens": Today 8:00 AM Succeeded · 2.6 s · 200 tokens
+      - listitem:
+        - button "yesterday 4:40 AM, started by hand, Succeeded · 3.1 s · 214 tokens": Yesterday 4:40 AM · started by hand Succeeded · 3.1 s · 214 tokens
+      - listitem:
+        - 'button "Nov 14 8:00 AM, Failed: Channel is required (no configured channels detected)."': "Nov 14 8:00 AM Failed: Channel is required (no configured channels detected)."
+      - listitem:
+        - button "Nov 13 8:00 AM, Skipped": Nov 13 8:00 AM Skipped
+      - listitem:
+        - button "Nov 12 8:00 AM, Succeeded · 2.6 s · 200 tokens": Nov 12 8:00 AM Succeeded · 2.6 s · 200 tokens
+      - listitem:
+        - button "Nov 11 8:00 AM, Succeeded · 2.6 s · 200 tokens": Nov 11 8:00 AM Succeeded · 2.6 s · 200 tokens
+    - paragraph: Clawtrate shows the 20 runs that finished most recently. By default the gateway keeps 7 days of runs, and each run's conversation for 24 hours; it can be set to keep them longer.
+  - status
+  - alertdialog "Delete Morning digest?":
+    - heading "Delete Morning digest?" [level=2]
+    - paragraph: It won't run again, and Clawtrate can't show its runs afterwards. Its last run was today at 8:00 AM.
+    - button "Cancel"
+    - button "Delete"
+- status

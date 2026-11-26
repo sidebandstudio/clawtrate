@@ -116,7 +116,7 @@ export function Settings({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <SafeAreaView edges={["bottom"]} style={{ flex: 1, backgroundColor: c.bg }}>
+      <SafeAreaView edges={["bottom", "left", "right"]} style={{ flex: 1, backgroundColor: c.bg }}>
         <View
           style={{
             flexDirection: "row",
@@ -137,8 +137,11 @@ export function Settings({
             <CloseIcon color={c.text} />
           </RoundButton>
         </View>
+        {/* Each page has its own key, so each opens at its start: one scroll view
+            for both would open the licenses as far down as Settings was. */}
         {licenses ? (
           <ScrollView
+            key="licenses"
             testID="licenses"
             contentContainerStyle={{ padding: S["space-4"], gap: S["space-4"] }}
           >
@@ -155,6 +158,7 @@ export function Settings({
           </ScrollView>
         ) : (
           <ScrollView
+            key="settings"
             testID="settings"
             contentContainerStyle={{ padding: S["space-4"], gap: S["space-4"] }}
           >

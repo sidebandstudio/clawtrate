@@ -2,15 +2,29 @@
 // untrusted `unknown` values: a field with the wrong type is ignored rather than
 // trusted, so a newer gateway adding or changing fields cannot crash the UI.
 
+import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
+import { isOtherToolSession } from "./origins.ts";
+import {
+  gatewayPreviewOf,
+  rowIdempotencyKey,
+  UPDATE_NOTICE_KEY_PREFIX,
+  updateNoticeLine,
+  updateNoticeRunId,
+  updateNoticeText,
+  type UpdateNoticeScope,
+} from "./update-notice.ts";
 import type {
   Bot,
   Task,
   TaskContext,
+  TaskStarter,
   TaskStatus,
   ToolResult,
   TranscriptBlock,
   TranscriptItem,
+  Transcript,
+  ChatFile,
   ChatPicture,
   SentAttachment,
 } from "./types.ts";
@@ -49,6 +63,8 @@ export function mapAgents(result: unknown): Bot[] {
   const record = asRecord(result);
   if (!record) return [];
   const defaultId = str(record.defaultId);
+  // With no owner the gateway still names a `defaultId`: only its first bot (F-562).
+  const ownerless = record.selectionRequired === true;
   const bots: Bot[] = [];
   for (const entry of arr(record.agents)) {
     const agent = asRecord(entry);
@@ -64,10 +80,17 @@ export function mapAgents(result: unknown): Bot[] {
       theme: str(identity.theme),
       model: str(model?.primary) ?? (typeof agent.model === "string" ? agent.model : null),
       isDefault: id === defaultId,
+      ...(ownerless && id === defaultId ? { ownerless: true } : {}),
     });
   }
   return bots.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
 }
+
+/**
+ * The run id the gateway gives a bot's turn that reports on a task it started, or on a follow-up
+ * it sent there: `announce:v1:<task key>:<that task's run id>` (OpenClaw 2026.10.6).
+ */
+export const REPORT_RUN_PREFIX = "announce:v1:";
 
 /** `agent:<id>:<rest>` keys carry their agent; other keys fall back to the row's agentId. */
 export function botIdFromSessionKey(key: string): string | null {
@@ -176,11 +199,16 @@ export function isExcludedSessionKey(key: string): boolean {
   return !isTaskSession({ key });
 }
 
+/** The bot a session row belongs to: its own `agentId`, else the one its key names. */
+export function rowBotOf(key: string, row: RawRecord): string | null {
+  return str(row.agentId) ?? botIdFromSessionKey(key);
+}
+
 /** One session row to a task, or null for rows the sidebar should not show. */
 export function mapSessionRow(row: RawRecord): Task | null {
   const key = sessionRowKey(row);
   if (!key || !isTaskSession(row)) return null;
-  const botId = str(row.agentId) ?? botIdFromSessionKey(key);
+  const botId = rowBotOf(key, row);
   if (!botId) return null;
   const channel = externalChannelOf(row);
   return {
@@ -201,8 +229,35 @@ export function mapSessionRow(row: RawRecord): Task | null {
     ...(row.markedUnreadAt !== undefined ? { unreadMarker: num(row.markedUnreadAt) } : {}),
     ...contextOf(row),
     ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
+    ...(isOtherToolSession(row) ? { otherTool: true as const } : {}),
     ...(channel ? { channel } : {}),
+    ...startedByOf(row),
   };
+}
+
+/**
+ * Who started a task a bot started with `sessions_spawn`, only from the gateway's own fields:
+ * `createdVia: "spawn"`, and `spawnedBy`, the task it was started from, whose bot started it
+ * (the gateway's `createdActor` names the same bot). Nothing the bot wrote, its label or brief,
+ * counts.
+ */
+function startedByOf(row: RawRecord): { startedBy: TaskStarter } | Record<string, never> {
+  if (row.createdVia !== "spawn") return {};
+  const fromKey = str(row.spawnedBy);
+  const botId = fromKey ? botIdFromSessionKey(fromKey) : null;
+  return fromKey && botId ? { startedBy: { botId, fromKey } } : {};
+}
+
+/**
+ * When a bot started the task in `chat.history`'s `sessionInfo`, the time the gateway created it
+ * (`createdAt`), so `mapHistory` can find the brief; null for any other task, and when the
+ * history read does not reach the task's first row (`hasMore`).
+ */
+export function startedTaskSince(history: unknown): number | null {
+  const record = asRecord(history);
+  const info = asRecord(record?.sessionInfo);
+  if (!info || info.createdVia !== "spawn" || record?.hasMore === true) return null;
+  return num(info.createdAt);
 }
 
 /**
@@ -227,17 +282,19 @@ export function sessionRowsFromList(result: unknown): RawRecord[] {
 
 /**
  * Group tasks under their bot: pinned first, then newest first. Chats from an
- * external channel are left out unless `showChannelChats`, so nothing derived
- * from the list (a bot's preview, unread, recency, the badge) counts them.
+ * external channel are left out unless `showChannelChats`, and sessions another
+ * tool opened unless `showOtherToolSessions`, so nothing derived from the list
+ * (a bot's preview, unread, recency, the badge) counts them.
  */
 export function groupTasks(
   rows: Iterable<RawRecord>,
-  options: { showChannelChats?: boolean } = {},
+  options: { showChannelChats?: boolean; showOtherToolSessions?: boolean } = {},
 ): Record<string, Task[]> {
   const grouped: Record<string, Task[]> = {};
   for (const row of rows) {
     const task = mapSessionRow(row);
     if (!task || (task.channel && options.showChannelChats !== true)) continue;
+    if (task.otherTool && options.showOtherToolSessions !== true) continue;
     (grouped[task.botId] ??= []).push(task);
   }
   for (const tasks of Object.values(grouped)) {
@@ -301,35 +358,172 @@ function assistantPictures(content: unknown): ChatPicture[] {
   });
 }
 
+/** The longest preview of a file-only message kept (`TranscriptItem.filesPreview`): two sidebar lines. */
+const MAX_FILES_PREVIEW_CHARS = 200;
+
+/** The longest file name shown or offered for saving, in UTF-8 bytes: what macOS, Linux and Windows file systems all take. */
+export const MAX_FILE_NAME_BYTES = 255;
+
+/** As much of `text` as fits in `bytes` UTF-8 bytes, cut between characters. */
+function fitBytes(text: string, bytes: number): string {
+  let out = "";
+  let used = 0;
+  for (const char of text) {
+    const size = utf8Length(char);
+    if (used + size > bytes) break;
+    out += char;
+    used += size;
+  }
+  return out;
+}
+
+/**
+ * A file name a gateway gave, safe to show and to offer for saving: its last
+ * path part only, with control, format (zero-width, direction, soft hyphen,
+ * tag) and separator characters and lone surrogates taken out, at most
+ * `MAX_FILE_NAME_BYTES` UTF-8 bytes, cut between characters with its extension
+ * kept, so the name shown is the name saved. "File" when nothing is left.
+ */
+export function cleanFileName(raw: unknown): string {
+  const last = (typeof raw === "string" ? raw : "").split(/[/\\]/).at(-1) ?? "";
+  const name = last
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, "")
+    .trim()
+    .replace(/^\.+$/, "");
+  if (!name) return "File";
+  if (utf8Length(name) <= MAX_FILE_NAME_BYTES) return name;
+  const dot = name.lastIndexOf(".");
+  const extension = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : "";
+  const room = MAX_FILE_NAME_BYTES - utf8Length("…") - utf8Length(extension);
+  return `${fitBytes(name.slice(0, name.length - extension.length), room)}…${extension}`;
+}
+
+/** A media type as the gateway names it, lower-cased, or null for anything else. */
+const mediaType = (value: unknown): string | null => {
+  const type = str(value);
+  return type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null;
+};
+
+/** Blocks the gateway hands a file over in (OpenClaw 2026.10.6, `buildManagedMediaBlock`). */
+const KNOWN_FILES = new Set(["attachment", "audio", "video"]);
+
+/** Blocks of a bot's message that are never a file it hands over. */
+const NOT_FILES = new Set([
+  "text",
+  "thinking",
+  "redacted_thinking",
+  "toolCall",
+  "tool_use",
+  "image",
+]);
+
+/**
+ * The files that aren't pictures a bot's message hands over (F-115), in its
+ * order: `attachment` blocks (documents), `audio` and `video` blocks, any other
+ * block that names an artifact, and `attachment_error` blocks, which name a
+ * file the gateway couldn't hand over. A block missing a field still gives a
+ * file, from what it has. The address a block names is never kept, so never used.
+ */
+function assistantFiles(content: unknown): ChatFile[] {
+  return arr(content).flatMap((part) => {
+    const block = asRecord(part);
+    const type = str(block?.type);
+    if (!block || !type || NOT_FILES.has(type)) return [];
+    const failed = type === "attachment_error";
+    const fact = type === "attachment" || failed ? (asRecord(block.attachment) ?? {}) : block;
+    const artifactId = failed ? null : str(fact.artifactId);
+    // A block of a kind the gateway names files with is a row even without an id; another needs one.
+    if (!failed && !KNOWN_FILES.has(type) && !artifactId) return [];
+    const size = num(fact.sizeBytes);
+    return [
+      {
+        artifactId,
+        name: cleanFileName(str(fact.label) ?? str(fact.fileName) ?? str(fact.title)),
+        mimeType: mediaType(fact.mimeType),
+        sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
+      },
+    ];
+  });
+}
+
 /** Most files one message may carry (`chat.send`'s own limit, as `attachments.ts` keeps it). */
 const MAX_SENT_ATTACHMENTS = 20;
 const MAX_SENT_NAME_CHARS = 255;
 
-/**
- * The files a person's row carried: the gateway's `__openclaw.media` entries, in
- * their order, by name, type and size. The `media://inbound` reference an entry
- * names is the gateway's own and is never kept, so never used.
- */
-function sentAttachments(info: RawRecord): SentAttachment[] {
-  return arr(info.media)
+/** A person's row's `__openclaw.media` entries, in order: the same list for its files and their references. */
+const sentFacts = (info: RawRecord): RawRecord[] =>
+  arr(info.media)
     .slice(0, MAX_SENT_ATTACHMENTS)
     .flatMap((entry) => {
       const fact = asRecord(entry);
-      if (!fact) return [];
-      // An entry with no name is still a file the message carried.
-      const name = str(fact.fileName) ?? (fact.kind === "image" ? "Picture" : "File");
-      const size = num(fact.sizeBytes);
-      const type = str(fact.contentType);
-      return [
-        {
-          fileName:
-            name.length > MAX_SENT_NAME_CHARS ? `${name.slice(0, MAX_SENT_NAME_CHARS - 1)}…` : name,
-          mimeType:
-            type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null,
-          sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
-        },
-      ];
+      return fact ? [fact] : [];
     });
+
+/**
+ * The files a person's row carried: the gateway's `__openclaw.media` entries, in
+ * their order, by name, type and size. The `media://inbound` reference an entry
+ * names stays in the host (`sentSources`), never in the view.
+ */
+function sentAttachments(info: RawRecord): SentAttachment[] {
+  return sentFacts(info).flatMap((fact) => {
+    // An entry with no name is still a file the message carried.
+    const name = str(fact.fileName) ?? (fact.kind === "image" ? "Picture" : "File");
+    const size = num(fact.sizeBytes);
+    const type = str(fact.contentType);
+    return [
+      {
+        fileName:
+          name.length > MAX_SENT_NAME_CHARS ? `${name.slice(0, MAX_SENT_NAME_CHARS - 1)}…` : name,
+        mimeType: type && /^[\w.+-]{1,64}\/[\w.+-]{1,128}$/.test(type) ? type.toLowerCase() : null,
+        sizeBytes: size !== null && Number.isInteger(size) && size >= 0 ? size : null,
+      },
+    ];
+  });
+}
+
+/** The longest reference kept, and the most kept for one task: as many as its history shows files. */
+export const MAX_INBOUND_REF_CHARS = 512;
+export const MAX_SENT_SOURCES = 40;
+
+/**
+ * A person's attachment as their row names it (`__openclaw.media[].url`), exactly
+ * `media://inbound/<id>`: one segment that isn't `.` or `..`, with no `/`, `\`, `?`, `#`, `%`,
+ * space or control character, so nothing is decoded and nothing else is named. Null otherwise;
+ * an entry's `path`, or any other address, is never one.
+ */
+export function inboundRef(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > MAX_INBOUND_REF_CHARS) return null;
+  // eslint-disable-next-line no-control-regex
+  const match = /^media:\/\/inbound\/([^/\\?#%\s\u0000-\u001f\u007f]+)$/.exec(value);
+  return match && match[1] !== "." && match[1] !== ".." ? value : null;
+}
+
+/**
+ * Each file's reference on a person's own rows (`inboundRef`), by the key a row is asked for
+ * under (its idempotency key, or else its id) and the file's place among the row's files:
+ * `${rowKey}\u0000${index}`. Never a bot's or the gateway's row, and never an entry without a
+ * reference in that exact form. The newest `MAX_SENT_SOURCES` are kept, as the state keeps the
+ * newest files. The host keeps these (`readSentPicture`); the view never has them.
+ */
+export function sentSources(messages: unknown): Map<string, string> {
+  const sources = new Map<string, string>();
+  const rows = new Set<string>();
+  for (const entry of [...arr(messages)].reverse()) {
+    const message = asRecord(entry);
+    if (message?.role !== "user" || gatewayTurnText(message)) continue;
+    const info = meta(message);
+    const rowKey = str(info.idempotencyKey) ?? str(message.idempotencyKey) ?? str(info.id);
+    // The first row of a key, newest first, is the one its message shows.
+    if (!rowKey || rowKey.length > MAX_INBOUND_REF_CHARS || rows.has(rowKey)) continue;
+    rows.add(rowKey);
+    const facts = sentFacts(info);
+    for (let index = facts.length - 1; index >= 0; index -= 1) {
+      if (sources.size >= MAX_SENT_SOURCES) return sources;
+      const ref = inboundRef(facts[index]!.url);
+      if (ref) sources.set(`${rowKey}\u0000${index}`, ref);
+    }
+  }
+  return sources;
 }
 
 function assistantBlocks(content: unknown): TranscriptBlock[] {
@@ -411,13 +605,42 @@ function gatewayTurnText(message: RawRecord): string | null {
     : "The gateway started a turn by itself";
 }
 
+/** The row's own time (`timestamp`, kept as written when a row is copied) is at or after `since`. */
+function isWrittenSince(message: RawRecord, since: number | null): boolean {
+  const written = num(message.timestamp);
+  return since !== null && written !== null && written >= since;
+}
+
+/**
+ * How soon after the gateway created a task its brief is stored: it writes the brief as it
+ * creates the task (30 to 332 ms on OpenClaw 2026.10.6). A first row stored later is not the
+ * brief: a transcript the gateway started over by itself (a daily or idle reset) keeps the task's
+ * creation time, and its first row is the person's.
+ */
+export const BRIEF_WINDOW_MS = 30_000;
+
 /**
  * `chat.history` messages to display items. Consecutive assistant messages of
  * one run (tool rounds) become a single assistant turn, and each tool result is
  * attached to the call that produced it.
  */
-export function mapHistory(messages: unknown): TranscriptItem[] {
+export function mapHistory(
+  messages: unknown,
+  options: {
+    /**
+     * In a task a bot started, when the gateway created it (`startedTaskSince`). The first row
+     * it stored from then on, of any role, is the bot's brief when it is a user row, a turn's own
+     * input (`<run>:user`), stored within `BRIEF_WINDOW_MS` of then: the gateway writes the brief
+     * as the task's first turn, and a forked task's copied rows keep the earlier times they were
+     * written. A reset's row, stored after the task was made, or a row with no time ends the
+     * search: nothing after it is the brief.
+     */
+    startedAt?: number | null;
+  } = {},
+): TranscriptItem[] {
   const items: TranscriptItem[] = [];
+  const startedAt = options.startedAt ?? null;
+  let briefSought = startedAt !== null;
   let currentRun: string | null = null;
   // The user rows between two assistant rows can all join at the same tool boundary.
   let precedingRun: string | null = null;
@@ -425,6 +648,12 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
   const pendingCalls = new Map<string, Extract<TranscriptBlock, { kind: "tool-call" }>>();
   /** The item each pending call is in, so a cut result marks it. */
   const callItems = new Map<string, TranscriptItem>();
+  /** The update notice keys rows were stored under so far: only the first can be the notice. */
+  const noticeKeys = new Set<string>();
+  /** The latest time of any row so far, for what a notice comes after. */
+  let latestAt: number | null = null;
+  /** A row so far had no time: what a later notice comes after is not known. */
+  let timeUnknown = false;
 
   arr(messages).forEach((entry, index) => {
     const message = asRecord(entry);
@@ -432,9 +661,24 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
     const info = meta(message);
     const id = `${str(info.id) ?? `row-${index}`}:${index}`;
     const timestamp = num(message.timestamp) ?? num(info.recordTimestampMs);
+    const before = timeUnknown ? null : latestAt;
+    if (timestamp === null) timeUnknown = true;
+    else if (latestAt === null || timestamp > latestAt) latestAt = timestamp;
     const kind = str(info.kind);
+    const storedKey = rowIdempotencyKey(message);
+    const firstOfKey =
+      storedKey?.startsWith(UPDATE_NOTICE_KEY_PREFIX) === true && !noticeKeys.has(storedKey);
+    if (firstOfKey) noticeKeys.add(storedKey!);
     // The gateway cut this row to its display length.
     const cutByGateway = info.truncated === true;
+    // The first row the task stored itself, of any role (a reset's row too), ends the search for
+    // the brief; so does a row with no time, which could be the task's own or a copied one.
+    let first = false;
+    if (briefSought && num(message.timestamp) === null) briefSought = false;
+    else if (briefSought && isWrittenSince(message, startedAt)) {
+      briefSought = false;
+      first = message.role === "user";
+    }
 
     if (kind && SYSTEM_ROW_TEXT[kind]) {
       precedingRun = null;
@@ -473,6 +717,10 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
+        const brief =
+          first &&
+          idempotencyKey?.endsWith(":user") === true &&
+          num(message.timestamp)! - startedAt! <= BRIEF_WINDOW_MS;
         const user: TranscriptItem = {
           id,
           role: "user",
@@ -484,6 +732,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(brief ? { brief: true as const } : {}),
         };
         items.push(user);
         if (precedingRun !== null) pendingUsers.push(user);
@@ -496,6 +745,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         }
         const runId = str(info.runId);
         const pictures = assistantPictures(message.content);
+        const files = assistantFiles(message.content);
         const prompt = pictures.length > 0 ? imagePrompt(runId, items) : null;
         for (const picture of pictures) picture.prompt = prompt;
         if (runId !== null && runId === precedingRun) {
@@ -510,9 +760,24 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           item = previous;
         } else {
           // An empty row starts no turn: a later row of its run gets one of its own, never the last.
-          if (blocks.length === 0 && pictures.length === 0) return;
+          if (blocks.length === 0 && pictures.length === 0 && files.length === 0) return;
           currentRun = runId;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
+          if (runId?.startsWith(REPORT_RUN_PREFIX)) item.reportRunId = runId;
+          // A row that names no run, not even as a reply kept after an abort, is no run's reply.
+          if (runId === null && str(asRecord(message.openclawAbort)?.runId) === null) {
+            item.runless = true;
+          }
+          // Perhaps the gateway's update notice: the first row with its key, never a later one.
+          const updateRunId = firstOfKey ? updateNoticeRunId(message) : null;
+          if (updateRunId) {
+            item.updateRunId = updateRunId;
+            // Unknown when an earlier row had no time: then no read is proof of reading it.
+            if (before !== null) item.updateNoticeAfter = before;
+            // The row's own time, never the store's: what the line's rule compares.
+            const written = num(message.timestamp);
+            if (written !== null) item.updateNoticeWrittenAt = written;
+          }
           items.push(item);
         }
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
@@ -526,6 +791,23 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           return true;
         });
         if (added.length > 0) item.pictures = [...(item.pictures ?? []), ...added];
+        // Files likewise: once each, where it first came; one the gateway couldn't hand over has no id.
+        const handed = new Set((item.files ?? []).map((file) => file.artifactId));
+        const more = files.filter((file) => {
+          if (file.artifactId !== null && handed.has(file.artifactId)) return false;
+          handed.add(file.artifactId);
+          if (rowId) file.messageId = rowId;
+          return true;
+        });
+        if (more.length > 0) item.files = [...(item.files ?? []), ...more];
+        // When the item's last row with text or files had files only: their names, for the sidebar.
+        if (blocks.some((block) => block.kind === "text" && block.text.trim()))
+          delete item.filesPreview;
+        else if (files.length > 0)
+          item.filesPreview = files
+            .map((file) => file.name)
+            .join(", ")
+            .slice(0, MAX_FILES_PREVIEW_CHARS);
         if (cutByGateway) item.truncated = true;
         if (rowId) {
           for (const block of blocks)
@@ -618,4 +900,143 @@ function historyFacts(details: unknown): Record<string, unknown> | null {
     };
   }
   return Object.keys(out).length ? out : null;
+}
+
+/** The start of a message read for a preview in place of the gateway's: more than two lines show. */
+const MAX_PREVIEW_SOURCE_CHARS = 400;
+
+/**
+ * A task's preview when its loaded history ends with a bot's message that is only files (F-115):
+ * that message's files' names. The gateway lists the last row with text, the one before it, so
+ * only that preview, or none, is replaced; any other is the gateway's.
+ */
+export function taskWithFilePreview(task: Task, transcript: Transcript | undefined): Task {
+  const items = transcript?.items ?? [];
+  const last = items.at(-1);
+  const preview = last?.role === "assistant" ? last.filesPreview : undefined;
+  if (!preview) return task;
+  let before: string | null = null;
+  for (let index = items.length - 1; index >= 0 && before === null; index -= 1) {
+    const text = items[index]!.blocks.findLast(
+      (block) => block.kind === "text" && block.text.trim(),
+    );
+    if (text?.kind === "text") before = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
+  }
+  if (task.preview !== null && task.preview !== before) return task;
+  return preview === task.preview ? task : { ...task, preview };
+}
+
+/** Every listed task as `taskWithFilePreview` shows it, by bot. */
+export function tasksWithFilePreviews(
+  tasksByBot: Record<string, Task[]>,
+  transcripts: Record<string, Transcript>,
+): Record<string, Task[]> {
+  let changed = false;
+  const shown: Record<string, Task[]> = {};
+  for (const [botId, tasks] of Object.entries(tasksByBot)) {
+    shown[botId] = tasks.map((task) => {
+      const named = taskWithFilePreview(task, transcripts[task.key]);
+      if (named !== task) changed = true;
+      return named;
+    });
+  }
+  return changed ? shown : tasksByBot;
+}
+
+/**
+ * When a task's loaded history ends with an update line (`updateNoticeLine`) and its listed
+ * preview is the one the gateway makes of that notice (`gatewayPreviewOf`): the item before the line, or null when there is none. Undefined otherwise:
+ * the listed row then has something newer, or the line is not this device's to draw.
+ */
+function beforeUpdateNotice(
+  task: Task,
+  transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
+): TranscriptItem | null | undefined {
+  const items = transcript?.items ?? [];
+  const last = items.at(-1);
+  if (!last || last.truncated === true || task.preview === null) return undefined;
+  if (!updateNoticeLine(last, task.key, scope)) return undefined;
+  const listed = gatewayPreviewOf(updateNoticeText(last));
+  if (listed === null || plainPreview(listed) !== task.preview) return undefined;
+  return items.at(-2) ?? null;
+}
+
+/**
+ * A task's preview in the sidebar when its listed preview is the update notice its loaded history
+ * ends with (F-590): the text of the last item before it (null when none has text, so the title
+ * shows). The notice is not what the bot last said.
+ * No time is changed, so the order is the gateway's.
+ */
+export function taskWithoutUpdateNotice(
+  task: Task,
+  transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
+): Task {
+  if (beforeUpdateNotice(task, transcript, scope) === undefined) return task;
+  const items = transcript!.items;
+  let preview: string | null = null;
+  for (let index = items.length - 2; index >= 0 && preview === null; index -= 1) {
+    const item = items[index]!;
+    // An earlier update line is not what the bot said either.
+    if (item.role === "system" || updateNoticeLine(item, task.key, scope)) continue;
+    // A bot's message that is only files reads as their names, as the rail shows it (F-115).
+    if (item.role === "assistant" && item.filesPreview) {
+      preview = item.filesPreview;
+      continue;
+    }
+    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
+    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
+  }
+  return preview === task.preview ? task : { ...task, preview };
+}
+
+/** Every listed task as `taskWithoutUpdateNotice` shows it, by bot. */
+export function tasksWithoutUpdateNotices(
+  tasksByBot: Record<string, Task[]>,
+  transcripts: Record<string, Transcript>,
+  scope: UpdateNoticeScope,
+): Record<string, Task[]> {
+  if (!scope.updated?.length || scope.mainKey === null) return tasksByBot;
+  let changed = false;
+  const shown: Record<string, Task[]> = {};
+  for (const [botId, tasks] of Object.entries(tasksByBot)) {
+    shown[botId] = tasks.map((task) => {
+      const quiet = taskWithoutUpdateNotice(task, transcripts[task.key], scope);
+      if (quiet !== task) changed = true;
+      return quiet;
+    });
+  }
+  return changed ? shown : tasksByBot;
+}
+
+/**
+ * For a viewer that keeps its own memory of what it read (a read-only connection), when it read a
+ * task through, past an update notice that is all that came since: when the task's listed preview
+ * is the notice its loaded history ends with, and the viewer read the task at or after the latest
+ * row before it (`updateNoticeAfter`, so every row of a merged turn; both are the gateway's times),
+ * the task's own time. Otherwise `seenAt`. On a
+ * connection that writes, the gateway keeps unread, and the notice doesn't raise it: writing it
+ * moves only the row's `updatedAt` (OpenClaw 2026.10.6, `deriveSessionUnread`).
+ */
+export function seenThroughUpdateNotice(
+  task: Task,
+  seenAt: number | undefined,
+  transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
+): number | undefined {
+  if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
+  if (beforeUpdateNotice(task, transcript, scope) === undefined) return seenAt;
+  // Back through earlier update lines (two updates with nothing between them) to the first: what
+  // came before it is what the viewer must have read.
+  const items = transcript!.items;
+  let first = items.length - 1;
+  while (first > 0 && updateNoticeLine(items[first - 1], task.key, scope)) first -= 1;
+  if (first === 0) {
+    // Nothing loaded before the line: the conversation had nothing else only if it is all loaded.
+    return transcript!.hasMore ? seenAt : task.updatedAt;
+  }
+  const after = items[first]!.updateNoticeAfter;
+  if (after === undefined || seenAt < after) return seenAt;
+  return task.updatedAt;
 }

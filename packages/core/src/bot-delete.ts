@@ -165,6 +165,8 @@ export type BotDeleteContext = {
   admin(): boolean;
   /** Whether the window that asked is still there: a delete is sent only while it is. */
   wanted(): boolean;
+  /** Right before `agents.delete` is sent, after the last check: what `deleted` goes by. */
+  sending(): void;
   /** The gateway answered `ok` for this bot: what this host still held for it goes, at once. */
   deleted(botId: string): void;
 };
@@ -210,6 +212,15 @@ const plainId = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.trim() === value;
 
 /** Whether an `agents.list` answer is whole enough to decide on, or to show as the bot list. */
+/** Every bot id a whole `agents.list` answer lists, system agents too; null when it isn't whole. */
+export function rosterIds(result: unknown): Set<string> | null {
+  try {
+    return new Set(roster(result).agents.map((agent) => agent.id as string));
+  } catch {
+    return null;
+  }
+}
+
 export function wholeRoster(result: unknown): boolean {
   try {
     roster(result);
@@ -459,6 +470,7 @@ export async function deleteBot(
       kind: "not-sent",
       message: "The window that asked for this delete closed. Nothing was sent.",
     };
+  ctx.sending();
   let sent: Promise<unknown>;
   try {
     sent = ctx.request("agents.delete", { agentId: botId, deleteFiles });

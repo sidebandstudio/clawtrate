@@ -8,7 +8,7 @@
 //
 // With CLAWTRATE_ACCOUNT_SHOTS=<folder outside the repository>, it also saves
 // screenshots of what it checked there, at 1440 and 390 px in both themes.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,10 +16,11 @@ import { join } from "node:path";
 import { choiceFromPicture } from "../packages/core/src/avatar.ts";
 import { ACCOUNT_CLIENTS, SIGNIN_CHOICES } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
-import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { TERMINAL_CHAT_STATES, type OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { ACCOUNTS, test } from "./accounts-instance.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
-const INSTANCE = process.env.CLAWTRATE_E2E_ACCOUNTS!;
+const INSTANCE = ACCOUNTS;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const SHOTS = process.env.CLAWTRATE_ACCOUNT_SHOTS ?? null;
 /** A made-up key for the scripted API-key sign-in: its account is `acme:typed`. */
@@ -130,7 +131,9 @@ function hostFiles(dir: string): string {
   return text;
 }
 
-test.beforeAll(async ({ browser }) => {
+test.beforeAll(async ({ accountsInstance, browser }) => {
+  // Started by the first of the accounts instance's specs this worker runs (accounts-instance.ts).
+  expect(accountsInstance).toBe(INSTANCE);
   test.setTimeout(240_000);
   expect(INSTANCE, "this run's accounts instance").toMatch(/^e2e-[0-9a-f]{8}-acct$/);
   const row = listInstances().find((each) => each.name === INSTANCE);
@@ -385,6 +388,16 @@ test("F-520: a bot made in New bot starts as itself: no first-run sequence, its 
   await expect
     .poll(async () => (await requestsFor("agent:maple:main")).length, { timeout: 60_000 })
     .toBeGreaterThan(0);
+  // The run ends before this check sends anything of its own: a message queued as a turn
+  // settles can meet the gateway's "placement authority changed" race (see scenario-check.ts).
+  await admin.waitFor(
+    "the end of Maple's first run",
+    (event) =>
+      event.event === "chat" &&
+      (event.payload as { sessionKey?: string }).sessionKey === "agent:maple:main" &&
+      TERMINAL_CHAT_STATES.includes(String((event.payload as { state?: string }).state)),
+    60_000,
+  );
   await expect
     .poll(async () => (await workspaceFile("maple", "BOOTSTRAP.md")).missing, { timeout: 30_000 })
     .toBe(true);
@@ -457,6 +470,15 @@ test("F-552: a bot made in New bot with no name takes one in the chat, and is re
   await field.fill("can i name u");
   await field.press("Enter");
   await ran(1);
+  // That turn has ended before the next message goes. Sent while the app still has the run as
+  // active, the message would steer it, and the gateway can refuse a steer that reaches the run as
+  // it ends ("Session … placement authority changed"). Steering isn't what this check is about.
+  await expect(
+    page.getByRole("region", { name: "Transcript" }).getByText("It has no reply written for:"),
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("button", { name: "Stop New bot" })).toHaveCount(0, {
+    timeout: 60_000,
+  });
   // The scripted model makes the bot's own edit; what is asserted is the file, the card and the config.
   await field.fill("#take-name Johnny");
   await field.press("Enter");

@@ -1,8 +1,0 @@
-- main:
-  - button "Back"
-  - heading "On this computer" [level=2]
-  - heading "Clawtrate couldn't tell what is on this computer" [level=3]
-  - paragraph: This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.
-  - button "Use Advanced"
-  - button "Look again"
-  - paragraph: On this computer

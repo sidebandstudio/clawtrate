@@ -1737,8 +1737,26 @@ button.reaction {
 }
 
 .sent-file-note {
+  display: flex;
   flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
   color: var(--text-muted);
+}
+
+/* A picture on its way from the gateway: its place, quietly, with nothing to read (#469). */
+.sent-picture-loading {
+  aspect-ratio: 4 / 3;
+}
+
+/* Try again keeps its edge on the file row's inset background. */
+.sent-file-retry {
+  background: var(--bg);
+}
+
+.sent-file-retry:hover {
+  background: color-mix(in srgb, var(--bg) 92%, var(--text));
 }
 
 /* A picture opened larger, over the whole app. */
@@ -1784,4 +1802,97 @@ button.reaction {
   font: inherit;
   font-size: var(--text-sm);
   cursor: pointer;
+}
+
+/* A file a bot handed over that isn't a picture (F-115), under its message. */
+.bot-files {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 2px;
+}
+
+.bot-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  width: min(100%, 420px);
+  padding: 8px 8px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  font-size: var(--text-sm);
+}
+
+.bot-file > svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.bot-file-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bot-file-name {
+  overflow-wrap: anywhere;
+}
+
+.bot-file-details {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.bot-file-note {
+  flex-basis: 100%;
+  color: var(--text-muted);
+}
+
+/* Empty, it stays in the page (and the accessibility tree) without taking room. */
+.bot-file-note:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.bot-file {
+  position: relative;
+}
+
+.bot-file[data-state="failed"] .bot-file-note {
+  color: var(--danger, var(--text-muted));
+}
+
+/* The gateway's notice of an update this device saw succeed (F-590): Clawtrate's quiet line,
+   centred, with the gateway's own sentence one step away. */
+.update-line {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.update-line .event-details {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.update-line .event-details > summary.event-line {
+  margin-top: 0;
+}
+
+.update-line .event-body {
+  max-width: min(640px, 100%);
+}
+
+.update-line-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
 }

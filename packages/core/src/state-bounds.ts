@@ -5,7 +5,15 @@
 // `docs/decisions.md` states the same numbers. All lengths are JSON
 // characters (`bounds.ts`).
 
+import type { OpenClawUpdate } from "./gateway-update.ts";
+import {
+  MAX_UPDATE_NOTE_CHARS,
+  MAX_UPDATE_REASON_CHARS,
+  type OpenClawUpdateState,
+  type UpdateRunView,
+} from "./openclaw-update.ts";
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
+import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
 import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
@@ -20,6 +28,7 @@ import {
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
+  type PickerCut,
   type GatewayAccount,
   type KeyProvider,
   type LockCheck,
@@ -67,6 +76,7 @@ import {
   type Bound,
 } from "./bounds.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
+import { MAX_START_TASKS_REASON_CHARS, type StartTasks } from "./start-tasks.ts";
 import {
   MAX_BUDGET_ID_CHARS,
   MAX_BUDGETS,
@@ -153,6 +163,7 @@ import type {
   ConnectionError,
   ConnectionState,
   GatewayStamp,
+  ReadStamp,
   DiscoveryState,
   MessageReaction,
   PairingRequest,
@@ -161,11 +172,13 @@ import type {
   SendLimits,
   Task,
   TaskContext,
+  TaskStarter,
   TaskCreation,
   ToolResult,
   Transcript,
   TranscriptBlock,
   TranscriptItem,
+  ChatFile,
   ChatPicture,
   NameProposal,
   SentAttachment,
@@ -247,6 +260,9 @@ export const MAX_HISTORY_BLOCKS = 300;
 /** Pictures a bot's turn hands over, and across a task's history page (`ChatPicture`). */
 export const MAX_PICTURES_PER_ITEM = 8;
 export const MAX_HISTORY_PICTURES = 16;
+/** Other files a bot's turn hands over (`ChatFile`), and across a task's history page. */
+export const MAX_FILES_PER_ITEM = 20;
+export const MAX_HISTORY_FILES = 40;
 /** Files a person's message names (`SentAttachment`), and across a task's history page. */
 export const MAX_ATTACHMENTS_PER_ITEM = 20;
 export const MAX_HISTORY_ATTACHMENTS = 40;
@@ -591,6 +607,13 @@ const picture = object<ChatPicture>()({
   sizeBytes: NUMBER,
   messageId: ID,
 });
+const chatFile = object<ChatFile>()({
+  artifactId: ID,
+  name: text(MAX_FILE_NAME_CHARS),
+  mimeType: NAME,
+  sizeBytes: NUMBER,
+  messageId: ID,
+});
 const sentAttachment = object<SentAttachment>()({
   fileName: text(MAX_FILE_NAME_CHARS),
   mimeType: NAME,
@@ -603,6 +626,8 @@ const item = flagged<TranscriptItem>()({
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
   pictures: list(MAX_PICTURES_PER_ITEM, picture, { pool: "pictures" }),
+  files: list(MAX_FILES_PER_ITEM, chatFile, { pool: "files" }),
+  filesPreview: NAME,
   attachments: list(MAX_ATTACHMENTS_PER_ITEM, sentAttachment, { pool: "attachments" }),
   truncated: FLAG,
   messageId: ID,
@@ -612,6 +637,12 @@ const item = flagged<TranscriptItem>()({
     sender: NAME,
   }),
   idempotencyKey: ID,
+  runless: FLAG,
+  brief: FLAG,
+  reportRunId: ID,
+  updateRunId: ID,
+  updateNoticeAfter: NUMBER,
+  updateNoticeWrittenAt: NUMBER,
   steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
@@ -655,6 +686,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
     pools: {
       blocks: MAX_HISTORY_BLOCKS,
       pictures: MAX_HISTORY_PICTURES,
+      files: MAX_HISTORY_FILES,
       attachments: MAX_HISTORY_ATTACHMENTS,
     },
   }),
@@ -671,6 +703,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   // Names and a root are ids: a cut one would name another tool or folder.
   builtinTools: list(MAX_BUILTIN_TOOLS, id(MAX_TOOL_NAME_CHARS)),
   workspaceRoot: id(MAX_STEP_PATH_CHARS),
+  startTasks: object<StartTasks>()({ can: FLAG, reason: text(MAX_START_TASKS_REASON_CHARS) }),
   reactions: map(MAX_REACTED_MESSAGES, MAX_ID_CHARS, list(MAX_REACTIONS_PER_MESSAGE, reaction)),
   loadedAt: NUMBER,
 });
@@ -701,7 +734,9 @@ const connection = object<ConnectionState>()({
   status: ENUM,
   gatewayUrl: text(MAX_GATEWAY_URL_CHARS),
   gatewayId: ID,
+  gatewayName: NAME,
   serverVersion: NAME,
+  openclawUpdate: object<OpenClawUpdate>()({ current: NAME, latest: NAME, channel: NAME }),
   protocol: NUMBER,
   scopes: list(MAX_SCOPES, NAME),
   requestedScopes: list(MAX_SCOPES, NAME),
@@ -729,7 +764,9 @@ const connection = object<ConnectionState>()({
 const discovery = object<DiscoveryState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
+  detail: text(MAX_MESSAGE_LINE_CHARS),
   partial: FLAG,
+  tasksRead: object<ReadStamp>()({ gatewayId: ID, target: NUMBER, connectedAt: NUMBER }),
 });
 const bot = flagged<Bot>()({
   id: ID,
@@ -739,6 +776,7 @@ const bot = flagged<Bot>()({
   theme: NAME,
   model: NAME,
   isDefault: FLAG,
+  ownerless: FLAG,
 });
 const nameProposal = object<NameProposal>()({
   botId: ID,
@@ -747,6 +785,35 @@ const nameProposal = object<NameProposal>()({
   stamp: object<NameProposal["stamp"]>()({ gatewayId: ID, target: NUMBER }),
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
+});
+const updateRun = object<UpdateRunView>()({
+  runId: ID,
+  gatewayId: ID,
+  mine: FLAG,
+  from: NAME,
+  to: NAME,
+  phase: ENUM,
+  outcome: ENUM,
+  reason: text(MAX_UPDATE_REASON_CHARS),
+  note: text(MAX_UPDATE_NOTE_CHARS),
+  reported: NAME,
+});
+const openclawUpdating = object<OpenClawUpdateState>()({
+  run: updateRun,
+  updated: list(
+    MAX_UPDATED_RUNS,
+    object<UpdatedRun>()({ gatewayId: ID, runId: ID, to: NAME, at: NUMBER, succeededAt: NUMBER }),
+  ),
+  checkingKept: FLAG,
+  starting: FLAG,
+  blocked: object<NonNullable<OpenClawUpdateState["blocked"]>>()({
+    reason: text(MAX_UPDATE_REASON_CHARS),
+    note: text(MAX_UPDATE_NOTE_CHARS),
+  }),
+  error: text(MAX_UPDATE_NOTE_CHARS),
+  looking: FLAG,
+  lookFailed: FLAG,
+  held: object<NonNullable<OpenClawUpdateState["held"]>>()({ gatewayId: ID, to: NAME }),
 });
 const task = flagged<Task>()({
   key: ID,
@@ -764,7 +831,9 @@ const task = flagged<Task>()({
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
+  otherTool: FLAG,
   channel: NAME,
+  startedBy: object<TaskStarter>()({ botId: ID, fromKey: ID }),
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
 const sidebarId = id(MAX_SIDEBAR_ID_CHARS);
@@ -895,6 +964,7 @@ const SESSION_ROW_FIELDS = [
   "classification",
   "contextTokens",
   "createdAt",
+  "createdVia",
   "derivedTitle",
   "displayName",
   "groupChannel",
@@ -1055,6 +1125,7 @@ const catalogModel = object<CatalogModel>()({
   levels: list(MAX_EFFORT_LEVELS, ENUM),
   defaultLevel: ENUM,
 });
+const pickerCut = object<PickerCut>()({ provider: ID, total: NUMBER });
 const storedOrder = object<StoredOrder>()({
   ids: list(MAX_ORDER_IDS, ID),
   stored: FLAG,
@@ -1140,6 +1211,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   readAt: NUMBER,
+  readOn: object<ReadStamp>()({ gatewayId: ID, target: NUMBER, connectedAt: NUMBER }),
   labels: FLAG,
   defaultModel: ID,
   mainShared: FLAG,
@@ -1147,6 +1219,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   methods: list(MAX_SIGNIN_METHODS, signInMethod),
   keyProviders: list(MAX_KEY_PROVIDERS, keyProvider),
   models: list(MAX_CATALOG_MODELS, catalogModel),
+  modelsCut: list(MAX_KEY_PROVIDERS, pickerCut),
   bindings: list(MAX_BOTS, binding),
   signIn,
   creation: botCreation,
@@ -1284,8 +1357,12 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   checkIns: CHECK_INS,
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
+  voiceChanges: NUMBER,
+  showOtherToolSessions: FLAG,
+  showGatewayBot: FLAG,
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
+  openclawUpdating,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

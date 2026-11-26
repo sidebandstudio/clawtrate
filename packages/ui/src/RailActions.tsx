@@ -9,6 +9,7 @@ import type { ArchivedList, ArchivedTask, Bot, Task } from "@clawtrate/core";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -16,19 +17,32 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { useBridge } from "./bridge.tsx";
+import { useBridge, useClawtrateState } from "./bridge.tsx";
+import type { ShownStamp } from "./stamp.ts";
 import { rowTime } from "./format.ts";
 import { ChevronIcon } from "./icons.tsx";
 
 // The dialog -----------------------------------------------------------------------
 
 export type DialogSpec = {
+  /** The bot this dialog acts on: if it leaves the gateway's list, the dialog closes. */
+  botId?: string;
   title: string;
   body: ReactNode;
   /** The confirming action. */
   confirm: { label: string; tone?: "danger" };
-  /** A name to type (a new section). */
-  field?: { label: string; placeholder?: string; maxLength: number };
+  /**
+   * A name to type (a new section). `initial` fills it, selected; `optional`
+   * lets it be confirmed empty; `hint` is said under it.
+   */
+  field?: {
+    label: string;
+    placeholder?: string;
+    maxLength: number;
+    initial?: string;
+    optional?: boolean;
+    hint?: string;
+  };
   /** Runs the action; a refusal stays in the dialog as its error. */
   onConfirm: (value: string) => Promise<void>;
   /** Where focus goes when the dialog closes without acting. */
@@ -49,16 +63,15 @@ export function RailDialog({
   onClose: (acted: boolean) => void;
 }) {
   const ref = useRef<HTMLElement>(null);
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(spec.field?.initial ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const dialog = ref.current;
-    (
-      dialog?.querySelector<HTMLElement>(".rail-dialog-field input") ??
-      dialog?.querySelector<HTMLElement>('[data-role="cancel"]')
-    )?.focus();
+    const field = dialog?.querySelector<HTMLInputElement>(".rail-dialog-field input");
+    (field ?? dialog?.querySelector<HTMLElement>('[data-role="cancel"]'))?.focus();
+    field?.select();
   }, []);
 
   const cancel = () => {
@@ -69,7 +82,7 @@ export function RailDialog({
 
   const confirm = async () => {
     if (busy) return;
-    if (spec.field && !value.trim()) {
+    if (spec.field && !spec.field.optional && !value.trim()) {
       setError(`${spec.field.label} is empty.`);
       return;
     }
@@ -148,8 +161,14 @@ export function RailDialog({
               spellCheck={false}
               disabled={busy}
               aria-invalid={error ? true : undefined}
+              aria-describedby={spec.field.hint ? "rail-dialog-hint" : undefined}
               onChange={(event) => setValue(event.target.value)}
             />
+            {spec.field.hint && (
+              <span id="rail-dialog-hint" className="rail-dialog-hint">
+                {spec.field.hint}
+              </span>
+            )}
           </label>
         )}
         {error && (
@@ -288,6 +307,7 @@ export function ArchivedGroup({
   open,
   onToggle,
   onMenu,
+  shown: drawnOn,
   now,
 }: {
   bot: Bot;
@@ -297,22 +317,41 @@ export function ArchivedGroup({
   gone: ReadonlyMap<string, number | null>;
   open: boolean;
   onToggle: () => void;
-  onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
+  /** A row's menu gets the stamp of the read the row came from (`ShownStamp`). */
+  onMenu: (
+    task: ArchivedTask,
+    trigger: HTMLElement,
+    x: number,
+    y: number,
+    shown: ShownStamp,
+  ) => void;
+  /** Where the rail is drawn now: each read keeps it, and a new target reads again. */
+  shown: ShownStamp;
   now: number;
 }) {
   const bridge = useBridge();
-  const [list, setList] = useState<ArchivedList | null>(null);
+  // Where the rows shown were read: a row read on one connection acts there and nowhere else.
+  const [list, setList] = useState<(ArchivedList & { shown: ShownStamp }) | null>(null);
+  const asked = useRef(drawnOn);
+  useLayoutEffect(() => {
+    asked.current = drawnOn;
+  });
+  const target = drawnOn.target;
   const [error, setError] = useState<string | null>(null);
   const keys = tasks.map((task) => task.key).join("\n");
   const goneKeys = [...gone].map(([key, at]) => `${key} ${at}`).join("\n");
+  // What the switches let the group list: a change reads it again (F-519, F-563).
+  const state = useClawtrateState();
+  const shownKinds = `${state.showChannelChats === true}:${state.showOtherToolSessions === true}`;
 
   useEffect(() => {
     if (!open) return;
     let live = true;
+    const shown = asked.current;
     bridge.invoke({ type: "listArchived", botId: bot.id }).then(
       (next) => {
         if (!live) return;
-        setList(next);
+        setList({ ...next, shown });
         setError(null);
       },
       (failure: unknown) =>
@@ -321,7 +360,7 @@ export function ArchivedGroup({
     return () => {
       live = false;
     };
-  }, [open, bridge, bot.id, keys, goneKeys]);
+  }, [open, bridge, bot.id, keys, goneKeys, shownKinds, target]);
   // Hidden only while the gateway still lists that same archive of the task.
   const shown = list && {
     ...list,
@@ -339,6 +378,7 @@ export function ArchivedGroup({
       event.currentTarget,
       fromKeyboard ? rect.left + 40 : event.clientX,
       fromKeyboard ? rect.bottom - 6 : event.clientY,
+      list?.shown ?? drawnOn,
     );
   };
 

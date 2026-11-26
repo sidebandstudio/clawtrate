@@ -1,4 +1,4 @@
-// Feed addresses and the release date are compiled into the main bundle.
+// Feed addresses, the release date and the commit are compiled into the main bundle.
 import { DesktopUpdateService, type UpdateServiceOptions } from "./service.ts";
 
 import { macInstaller } from "../mac-install.ts";
@@ -40,11 +40,16 @@ export const BUILD_FEED_ADDRESS: string | null =
 export const BUILD_RELEASE_DATE: string | null =
   typeof __CLAWTRATE_RELEASE_DATE__ === "string" ? __CLAWTRATE_RELEASE_DATE__ : null;
 
+declare const __CLAWTRATE_COMMIT__: string | null | undefined;
+/** The commit the build was made from, shown for support. */
+export const BUILD_COMMIT: string | null =
+  typeof __CLAWTRATE_COMMIT__ === "string" ? __CLAWTRATE_COMMIT__ : null;
+
 /** Only the packager can choose the sources and date used in the running app. */
 export function startDesktopUpdates(
   options: Omit<
     UpdateServiceOptions,
-    "feeds" | "releaseDate" | "loopbackHttpForTests" | "installer"
+    "feeds" | "releaseDate" | "commit" | "loopbackHttpForTests" | "installer"
   >,
 ) {
   const { version, packaged, platform, arch, downloadDir, store, changed } = options;
@@ -59,5 +64,6 @@ export function startDesktopUpdates(
     installer: buildInstaller(platform, arch, packaged),
     feeds: { stable: BUILD_FEED_ADDRESS, nightly: BUILD_NIGHTLY_FEED_ADDRESS },
     releaseDate: BUILD_RELEASE_DATE,
+    commit: BUILD_COMMIT,
   });
 }

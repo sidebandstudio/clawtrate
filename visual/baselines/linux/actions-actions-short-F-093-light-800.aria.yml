@@ -1,0 +1,110 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - list:
+    - listitem:
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
+      - list "Otto's tasks":
+        - listitem:
+          - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
+        - listitem:
+          - button "Disk almost full on the media box"
+        - listitem:
+          - button "Weekly backup check, unread": Weekly backup check
+        - listitem:
+          - button "Certificate renewal warning"
+        - listitem:
+          - button "Router firmware"
+        - listitem:
+          - button "Printer offline again"
+        - listitem:
+          - button "Show all 14"
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research, primary bot":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
+    - listitem:
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
+    - listitem:
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
+  - status
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "Otto, Disk almost full on the media box. Show details.": Otto ·Disk almost full on the media box
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:10 PM
+    - paragraph: Is last night's backup log there, and did it finish?
+    - toolbar "Message actions":
+      - button "More"
+    - group: Read backup-2026-11-15.log 6 lines
+    - group:
+      - text: Ran tail tail -n 2 logs/backup-2026-11-15.log
+      - tablist "Detail view":
+        - tab "Readable"
+        - tab "Raw" [selected]
+      - tabpanel "Raw":
+        - region "What the gateway sent":
+          - term: Tool
+          - definition:
+            - text: exec
+            - button "Copy tool name"
+          - paragraph: Arguments
+          - button "Copy arguments"
+          - text: "{ \"command\": \"tail -n 2 logs/backup-2026-11-15.log\", \"workdir\": \"~/house\" }"
+          - paragraph: Result
+          - button "Copy result"
+          - text: "{ \"role\": \"toolResult\", \"toolCallId\": \"call_1_02\", \"toolName\": \"exec\", \"content\": [ { \"type\": \"text\", \"text\": \"03:25:03 backup: finished ok\\n03:25:03 backup: next run 2026-11-17 02:14\" } ], \"isError\": false, \"details\": { \"status\": \"completed\", \"exitCode\": 0, \"exitSignal\": null, \"exitReason\": \"exit\", \"durationMs\": 100, \"aggregated\": \"\", \"noOutputTimedOut\": false, \"cwd\": \"~/house\" }, \"timestamp\": 1794867002700, \"__openclaw\": { \"id\": \"row-5\", \"runId\": \"run-1\" } }"
+          - paragraph:
+            - button "Show all 27 lines"
+          - paragraph: Timing
+          - term: Started
+          - definition: not reported
+          - term: Ended
+          - definition: not reported
+          - term: Took
+          - definition: not reported
+          - paragraph: Identifiers
+          - term: Tool call
+          - definition:
+            - text: call_1_02
+            - button "Copy tool call id"
+          - term: Run
+          - definition:
+            - text: run-1
+            - button "Copy run id"
+          - term: Session
+          - definition:
+            - text: agent:otto:disk-space
+            - button "Copy session id"
+    - paragraph: Yes. The log is there, and the backup finished at 3:25 AM. The next run is tonight at 2:14.
+    - toolbar "Message actions":
+      - button "More"
+    - group: Worked 2 actions
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

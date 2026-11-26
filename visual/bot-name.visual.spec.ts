@@ -100,6 +100,138 @@ test.describe("bot name behaviour", () => {
     await expect(page.locator(".title-pill-name")).toHaveText("New bot");
   });
 
+  test("F-552: a Not now for a card read on an earlier connection announces nothing", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark");
+    await expect(card(page)).toBeVisible();
+    // The connection moves on while the card is still on screen: the engine ignores its answer.
+    await page.evaluate(() => {
+      const { clawtrateFixture } = window as unknown as {
+        clawtrateFixture: {
+          setState(f: (s: { connection: { target: number } }) => unknown): void;
+        };
+      };
+      clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, target: state.connection.target + 1 },
+      }));
+    });
+    await card(page).getByRole("button", { name: "Not now" }).click();
+    await expect.poll(async () => (await sent(page)).length).toBe(1);
+    await expect(card(page).getByRole("button", { name: "Not now" })).toBeEnabled();
+    await expect(page.getByTestId("announcer")).not.toHaveText(/keeps its name/);
+  });
+
+  test("F-552: the fixture's Not now refuses a card being renamed and stamps that name no gateway, as the engine does (#512)", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark");
+    await expect(card(page)).toBeVisible();
+    const notNow = (change: { status?: string; gatewayId?: null }) =>
+      page.evaluate((change) => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: {
+              getState(): ClawtrateState;
+              setState(f: (s: ClawtrateState) => ClawtrateState): void;
+              invoke(command: unknown): Promise<{ declined: boolean }>;
+            };
+          }
+        ).clawtrateFixture;
+        fixture.setState((state) => {
+          const gatewayId = "gatewayId" in change ? null : state.connection.gatewayId;
+          const stamp = { gatewayId, target: state.connection.target };
+          return {
+            ...state,
+            connection: { ...state.connection, gatewayId },
+            botNames: state.botNames!.map((each) => ({
+              ...each,
+              stamp,
+              status: (change.status ?? "open") as "open",
+            })),
+          };
+        });
+        const state = fixture.getState();
+        return fixture.invoke({
+          type: "declineBotName",
+          botId: "new-bot",
+          name: "Johnny",
+          stamp: { gatewayId: state.connection.gatewayId, target: state.connection.target },
+        });
+      }, change);
+    expect(await notNow({ status: "renaming" })).toEqual({ declined: false });
+    expect(await notNow({ gatewayId: null })).toEqual({ declined: false });
+    await expect(card(page)).toBeVisible();
+  });
+
+  test("F-552: a refused Rename announces what happened in the engine's words, and the fixture refuses a card from another connection (#471)", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark");
+    await expect(card(page)).toBeVisible();
+    // The connection moves on while the card is still on screen: its Rename is refused.
+    await page.evaluate(() =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, target: state.connection.target + 1 },
+      })),
+    );
+    await card(page).getByRole("button", { name: "Rename" }).click();
+    await expect(page.getByTestId("announcer")).toHaveText(
+      "This name was found on another gateway, so nothing was sent.",
+    );
+    await expect(page.locator(".title-pill-name")).toHaveText("New bot");
+  });
+
+  test("F-552: the fixture's Rename refuses a card being renamed and stamps that name no gateway, as the engine does (#471)", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark");
+    await expect(card(page)).toBeVisible();
+    const rename = (change: { status?: string; gatewayId?: null }) =>
+      page.evaluate((change) => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: {
+              getState(): ClawtrateState;
+              setState(f: (s: ClawtrateState) => ClawtrateState): void;
+              invoke(command: unknown): Promise<unknown>;
+            };
+          }
+        ).clawtrateFixture;
+        fixture.setState((state) => {
+          const gatewayId = "gatewayId" in change ? null : state.connection.gatewayId;
+          return {
+            ...state,
+            connection: { ...state.connection, gatewayId },
+            botNames: state.botNames!.map((each) => ({
+              ...each,
+              stamp: { gatewayId, target: state.connection.target },
+              status: (change.status ?? "open") as "open",
+            })),
+          };
+        });
+        const state = fixture.getState();
+        return fixture
+          .invoke({
+            type: "acceptBotName",
+            botId: "new-bot",
+            name: "Johnny",
+            stamp: { gatewayId: state.connection.gatewayId, target: state.connection.target },
+          })
+          .then(
+            () => "renamed",
+            (error: Error) => error.message,
+          );
+      }, change);
+    expect(await rename({ status: "renaming" })).toBe("That name is no longer waiting for you.");
+    expect(await rename({ gatewayId: null })).toBe(
+      "This name was found on another gateway, so nothing was sent.",
+    );
+    await expect(page.locator(".title-pill-name")).toHaveText("New bot");
+  });
+
   test("F-552: without admin the card says so and offers no Rename and no access request", async ({
     page,
   }) => {

@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   processIdentity,
   processVerdict,
@@ -75,8 +75,12 @@ export function readRecord(path: string): RunRecord | null {
             entry?.name === `e2e-${record.run}-other` ||
             entry?.name === `e2e-${record.run}-acct` ||
             entry?.name === `e2e-${record.run}-computer` ||
+            // The bot voice check's own instance (e2e/bot-voice.spec.ts).
+            entry?.name === `e2e-${record.run}-voice` ||
             // The setup checks' own instance, recorded by e2e/setup.spec.ts.
-            entry?.name === `e2e-${record.run}-setup`) &&
+            entry?.name === `e2e-${record.run}-setup` ||
+            // The skill-review instance, recorded by e2e/skill-notes.spec.ts.
+            entry?.name === `e2e-${record.run}-skills`) &&
           typeof entry.runId === "string" &&
           /^[0-9a-f]{48}$/.test(entry.runId),
       ) &&
@@ -248,85 +252,4 @@ function forgetFinishedCleanUps(dir: string, identify: Identify): void {
     if (isProc(runner) && processVerdict(runner.pid, runner.identity, identify).state === "dead")
       rmSync(mark, { force: true });
   }
-}
-
-/** `playwright test` options (1.65.1) that take a value, so the value is not read as a file filter. */
-const VALUE_OPTIONS = new Set([
-  "--add-reporter",
-  "--browser",
-  "-c",
-  "--config",
-  "--global-timeout",
-  "-g",
-  "--grep",
-  "-G",
-  "--grep-invert",
-  "--last-failed-file",
-  "--max-failures",
-  "--output",
-  "--repeat-each",
-  "--reporter",
-  "--retries",
-  "--run-agents",
-  "--shard",
-  "--test-list",
-  "--test-list-invert",
-  "--timeout",
-  "--trace",
-  "--tsconfig",
-  "--ui-host",
-  "--ui-port",
-  "--update-source-method",
-  "-j",
-  "--workers",
-]);
-/** Options whose value is optional: they take the next argument unless it is another option. */
-const OPTIONAL_VALUE_OPTIONS = new Set([
-  "--debug",
-  "--only-changed",
-  "--shuffle",
-  "-u",
-  "--update-snapshots",
-]);
-/** `--project <project-name...>` takes every argument up to the next option. */
-const LIST_OPTIONS = new Set(["--project"]);
-
-/**
- * Whether this `playwright test` run may run `file`: true unless it names file filters and
- * none matches it (Playwright reads each filter, less a `:line[:column]` suffix, as a pattern
- * against the file's path).
- */
-export function runIncludes(argv: readonly string[], file: string): boolean {
-  const start = argv.indexOf("test");
-  const args = start === -1 ? [] : argv.slice(start + 1);
-  const filters: string[] = [];
-  const isOption = (arg: string | undefined) => arg !== undefined && arg.startsWith("-");
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "--") break;
-    if (arg.startsWith("-")) {
-      // Playwright's only valueless short test flag is -x. In a group, -xj takes the next
-      // argument as its worker count, while -xj1 already carries its value.
-      const option = arg.replace(/^-x+/, "-");
-      if (VALUE_OPTIONS.has(option)) i++;
-      else if (OPTIONAL_VALUE_OPTIONS.has(option) && !isOption(args[i + 1])) i++;
-      else if (LIST_OPTIONS.has(option)) while (i + 1 < args.length && !isOption(args[i + 1])) i++;
-      continue;
-    }
-    filters.push(/^(.*?):(\d+):?(\d+)?$/.exec(arg)?.[1] ?? arg);
-  }
-  if (filters.length === 0) return true;
-  const path = resolve(file);
-  const posixPath = path.split(sep).join("/");
-  return filters.some((filter) => {
-    try {
-      const explicit = /^\/(.*)\/([gi]*)$/.exec(filter);
-      const pattern = explicit ? new RegExp(explicit[1]!, explicit[2]) : new RegExp(filter, "i");
-      if (pattern.test(path)) return true;
-      pattern.lastIndex = 0;
-      return posixPath !== path && pattern.test(posixPath);
-    } catch {
-      return path.includes(filter) || posixPath.includes(filter);
-    }
-  });
 }

@@ -1,0 +1,13 @@
+- status
+- main:
+  - button "Back"
+  - heading "Connecting" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Making a one-time code, failed": Making a one-time code
+    - listitem "Requesting read access, waiting": Requesting read access
+    - listitem "Loading your bots, waiting": Loading your bots
+  - alert:
+    - paragraph: Couldn't make a one-time code. OpenClaw exited with code 1.
+  - button "Try again"
+  - paragraph: Connecting
