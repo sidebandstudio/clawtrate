@@ -179,6 +179,16 @@ test("F-480 #663 #664: a message the gateway couldn't run says why, after a relo
   // The bot's row says its latest run failed.
   await expect(botRow()).toHaveAccessibleName(/^Wren, a run failed\b/, { timeout: 20_000 });
 
+  // Change account opens the bot's Account page in the Work pane.
+  await line.getByRole("button", { name: "Change account" }).click();
+  await expect(page.getByRole("tab", { name: "Settings" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  const settings = page.getByRole("tabpanel", { name: "Settings" });
+  await expect(settings.getByRole("heading", { name: "Account" })).toBeVisible();
+  await expect(settings).toContainText("Wren's account was disconnected");
+
   // Reloaded, the task opened again: the line is rebuilt from the gateway's history.
   await page.reload();
   await expect(botRow()).toBeVisible({ timeout: 30_000 });
@@ -202,16 +212,6 @@ test("F-480 #663 #664: a message the gateway couldn't run says why, after a relo
   await expect(botRow(other)).toBeVisible({ timeout: 30_000 });
   await lineFromHistory(other);
   await expect(botRow(other)).toHaveAccessibleName(/^Wren, a run failed\b/, { timeout: 20_000 });
-
-  // Change account opens the bot's Account page in the Work pane.
-  await line.getByRole("button", { name: "Change account" }).click();
-  await expect(page.getByRole("tab", { name: "Settings" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  const settings = page.getByRole("tabpanel", { name: "Settings" });
-  await expect(settings.getByRole("heading", { name: "Account" })).toBeVisible();
-  await expect(settings).toContainText("Wren's account was disconnected");
 
   // The bot fixed on the gateway, the message sent again: a reply, and the mark gone at once.
   await setModel("acme/dev-1@acme:work");
