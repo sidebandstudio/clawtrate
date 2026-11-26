@@ -112,7 +112,15 @@ export class WaitingIndex {
   /** Each task's latest run as the events report it: its id, when, and whether it was stopped or failed. */
   private readonly runs = new Map<
     string,
-    { runId: string; at: number; stopped: boolean; stopSeq: number; failed: boolean }
+    {
+      runId: string;
+      at: number;
+      stopped: boolean;
+      stopSeq: number;
+      failed: boolean;
+      /** Its lifecycle started and hasn't ended: an older run's late end says nothing now. */
+      active: boolean;
+    }
   >();
   /** Counts the run ends seen as stopped, in the order they arrived: each task keeps its latest. */
   private stops = 0;
@@ -171,6 +179,7 @@ export class WaitingIndex {
           stopped: false,
           stopSeq: latest?.stopSeq ?? 0,
           failed: false,
+          active: true,
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return latest?.stopped === true || latest?.failed === true;
@@ -202,6 +211,7 @@ export class WaitingIndex {
           stopSeq: stopped ? (this.stops += 1) : (latest?.stopSeq ?? 0),
           // Its `chat` error may have come first: the same run's lifecycle end keeps it.
           failed: latest?.runId === runId && latest.failed,
+          active: false,
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return changed || stopped || latest?.stopped === true;
@@ -223,6 +233,9 @@ export class WaitingIndex {
     const state = payload.state;
     if (!key || !runId || (state !== "error" && state !== "final")) return false;
     const latest = this.runs.get(key);
+    // Another run of the task is going: this is an older run's late end, and the newer one's own
+    // end will say how the task stands.
+    if (latest && latest.runId !== runId && latest.active) return false;
     // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
     const failed = state === "error" && payload.suppressErrorNotice !== true;
     if (latest?.runId === runId && latest.failed === failed) return false;
@@ -233,6 +246,7 @@ export class WaitingIndex {
       stopped: false,
       stopSeq: latest?.stopSeq ?? 0,
       failed,
+      active: false,
     });
     cap(this.runs, MAX_WAITING_SESSIONS);
     return true;

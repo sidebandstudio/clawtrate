@@ -553,4 +553,23 @@ describe("the rules underneath", () => {
     expect(index.failedAt(KEY)).not.toBeNull();
     expect(index.failedAt(OTHER)).toBeNull();
   });
+
+  it("an older run's late chat end says nothing while a newer run of the task is going", () => {
+    const index = new WaitingIndex();
+    index.onAgent(
+      { sessionKey: KEY, runId: "r2", stream: "lifecycle", ts: 2_000, data: { phase: "start" } },
+      2_000,
+    );
+    expect(index.onChat({ sessionKey: KEY, runId: "r1", state: "error" }, 2_100)).toBe(false);
+    expect(index.failedAt(KEY)).toBeNull();
+    // Its own end then speaks for the task.
+    index.onAgent(
+      { sessionKey: KEY, runId: "r2", stream: "lifecycle", ts: 3_000, data: { phase: "end" } },
+      3_000,
+    );
+    expect(index.failedAt(KEY)).toBeNull();
+    // With no run going, a message failed before running is the task's latest outcome.
+    expect(index.onChat({ sessionKey: KEY, runId: "r3", state: "error" }, 4_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(4_000);
+  });
 });
