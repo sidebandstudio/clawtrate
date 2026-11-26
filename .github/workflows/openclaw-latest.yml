@@ -121,6 +121,12 @@ jobs:
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # One report at a time for main, whichever event started the run: the push and nightly runs
+    # have concurrency groups of their own, and two reports at once could each create an issue,
+    # or comment on one the other just closed. A waiting report is replaced by a newer one.
+    concurrency:
+      group: openclaw-latest-report
+      cancel-in-progress: false
     permissions:
       issues: write
     env:
