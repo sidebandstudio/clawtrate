@@ -385,3 +385,158 @@ describe("bounds", () => {
     ).toBe("C");
   });
 });
+
+describe("fix round: runs the store can't vouch for", () => {
+  const typed = (n: number) => ({
+    runId: `r${n}`,
+    sessionKey: `agent:pip:s${n}`,
+    agentId: "pip",
+    trigger: "user",
+    channel: "webchat",
+  });
+
+  it("an unknown run is C with read from outside on", () => {
+    expect(originOf(null, owner, known)).toMatchObject({ origin: "C", read: "lost" });
+    expect(originOf({ lost: true }, owner, known)).toMatchObject({ origin: "C", read: "lost" });
+    expect(originOf(null, owner, { versionKnown: false })).toMatchObject({ read: "lost" });
+  });
+
+  it("a run refused at the bound is lost, and its next prompt doesn't admit it fresh", () => {
+    const store = new RunOrigins({ limits: { ...LIMITS, runs: 1 } });
+    store.sawPrompt(typed(1));
+    expect(store.sawPrompt(typed(2))).toBeNull();
+    store.sawEnd({ runId: "r1" });
+    expect(store.sawPrompt(typed(2))).toBeNull();
+    expect(store.sawCall({ toolName: "write", runId: "r2", toolCallId: "c" }, {})).toMatchObject({
+      lost: true,
+    });
+  });
+
+  it("a run first seen at a call (under way before the plugin saw it start) is lost for good", () => {
+    const store = new RunOrigins();
+    expect(
+      store.sawCall({ toolName: "web_fetch", runId: "r9", toolCallId: "c" }, {}),
+    ).toMatchObject({ lost: true });
+    expect(store.sawPrompt({ ...typed(9), runId: "r9" })).toBeNull();
+    expect(originOf(store.lookup("r9"), owner, known)).toMatchObject({ origin: "C", read: "lost" });
+  });
+});
+
+describe("fix round: tasks a bot started", () => {
+  const pip = {
+    runId: "p1",
+    sessionKey: "agent:pip:main",
+    agentId: "pip",
+    trigger: "user",
+    channel: "webchat",
+  };
+
+  it("a hidden task's run is a task on both versions, by its session's form", () => {
+    const hidden = {
+      runId: "h1",
+      sessionKey: "agent:pip:subagent:3f2c",
+      agentId: "pip",
+      trigger: "user",
+      channel: "webchat",
+    };
+    expect(new RunOrigins().sawPrompt(hidden)!.kind).toBe("task");
+  });
+
+  it("a task's first run, before the spawn's result names its session, is a task and carries what its starter read", () => {
+    const store = new RunOrigins();
+    const parent = store.sawPrompt(pip)!;
+    store.markRead(parent, "web", "web_search");
+    store.sawSpawn(parent, "marlow");
+    const task = store.sawPrompt({
+      runId: "t1",
+      sessionKey: "agent:marlow:dashboard:9",
+      agentId: "marlow",
+      trigger: "user",
+      channel: "webchat",
+    })!;
+    expect(task.kind).toBe("task");
+    expect(task.readOutside).toMatchObject({ source: "web", tool: "web_search" });
+    // Its later runs too, by the session the spawn took.
+    expect(
+      store.sawPrompt({
+        runId: "t2",
+        sessionKey: "agent:marlow:dashboard:9",
+        agentId: "marlow",
+        trigger: "user",
+        channel: "webchat",
+      })!.kind,
+    ).toBe("task");
+    // The bot's own main conversation is never taken for a task.
+    store.sawSpawn(parent, "marlow");
+    expect(
+      store.sawPrompt({
+        runId: "m1",
+        sessionKey: "agent:marlow:main",
+        agentId: "marlow",
+        trigger: "user",
+        channel: "webchat",
+      })!.kind,
+    ).toBe("typed");
+  });
+
+  it("the spawn's result marks the task's session, and runs already in it", () => {
+    const store = new RunOrigins();
+    const parent = store.sawPrompt(pip)!;
+    store.markRead(parent, "file", "read");
+    const early = store.sawPrompt({
+      runId: "t1",
+      sessionKey: "agent:pip:dashboard:1",
+      agentId: "pip",
+      trigger: "user",
+      channel: "webchat",
+    })!;
+    expect(early.kind).toBe("typed");
+    store.sawSpawned(parent, "agent:pip:dashboard:1");
+    expect(early.kind).toBe("task");
+    expect(early.readOutside).toMatchObject({ source: "file" });
+  });
+
+  it("a spawn's wait ends after a minute", () => {
+    let now = 0;
+    const store = new RunOrigins({ now: () => now });
+    store.sawSpawn(store.sawPrompt(pip), "pip");
+    now = LIMITS.spawnWaitMs + 1;
+    expect(
+      store.sawPrompt({
+        runId: "x",
+        sessionKey: "agent:pip:other",
+        agentId: "pip",
+        trigger: "user",
+        channel: "webchat",
+      })!.kind,
+    ).toBe("typed");
+  });
+});
+
+describe("fix round: steers", () => {
+  it("any message joining a chat app's run marks it; one joining a typed run is counted", () => {
+    const store = new RunOrigins();
+    const chat = store.sawPrompt({
+      runId: "c1",
+      sessionKey: "agent:pip:discord:g1",
+      agentId: "pip",
+      trigger: "user",
+      channel: "discord",
+    })!;
+    store.sawMessage(
+      { sessionKey: "agent:pip:discord:g1", message: { role: "user", content: "x" } },
+      {},
+    );
+    expect(chat.readOutside).toMatchObject({ source: "steer" });
+    const typed = store.sawPrompt({
+      runId: "t1",
+      sessionKey: "agent:pip:main",
+      agentId: "pip",
+      trigger: "user",
+      channel: "webchat",
+    })!;
+    store.sawMessage({ sessionKey: "agent:pip:main", message: { role: "user", content: "x" } }, {});
+    expect(typed.readOutside).toBeNull();
+    expect(typed.steers).toBe(1);
+  });
+});

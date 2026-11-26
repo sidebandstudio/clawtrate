@@ -1,0 +1,29 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:38 PM
+    - paragraph: Clear the build cache in the background and tell me when it's done.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Started. I'll tell you when it finishes.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: The gateway started a turn by itself
+    - group:
+      - text: Text that came with it
+      - paragraph: Written by whatever started this turn (a command, a bot or another app), not by the gateway or Clawtrate.
+      - paragraph: "Exec completed (5e1f9a3b, code 0, 41s): removed 1,204 cache files freed 12.4 GB in /var/cache/builds"
+    - paragraph: "The cache is clear: 12.4 GB freed."
+    - toolbar "Message actions":
+      - button "More"
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

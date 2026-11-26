@@ -28,6 +28,7 @@ import {
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
+  type ModelAllowlist,
   type PickerCut,
   type GatewayAccount,
   type KeyProvider,
@@ -68,6 +69,7 @@ import {
   json,
   list,
   map,
+  MAX_CUT_PATHS,
   object,
   scalar,
   text,
@@ -266,6 +268,16 @@ export const MAX_HISTORY_FILES = 40;
 /** Files a person's message names (`SentAttachment`), and across a task's history page. */
 export const MAX_ATTACHMENTS_PER_ITEM = 20;
 export const MAX_HISTORY_ATTACHMENTS = 40;
+
+/**
+ * History's list of the files a person's message carried may have been cut to its bound (the
+ * newest messages keep theirs first): then whether the message had files isn't known (#686). A
+ * full list of cut paths may have let that one go.
+ */
+export function attachmentsCut(item: { cut?: string[] }): boolean {
+  const cut = item.cut ?? [];
+  return cut.length >= MAX_CUT_PATHS || cut.some((path) => path.startsWith("attachments"));
+}
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */
@@ -376,6 +388,8 @@ const runError = object<RunError>()({
   message: text(MAX_ERROR_JSON_CHARS),
   kind: NAME,
   raw: object<RunErrorRaw>()({ holds: ENUM, chars: NUMBER }),
+  beforeReply: FLAG,
+  quiet: FLAG,
 });
 const runEnding = object<RunEnding>()({
   stopReason: NAME,
@@ -421,6 +435,9 @@ export const RUN: Bound = flagged<Run>()({
   omittedTools: NUMBER,
   omittedToolsAtEnd: NUMBER,
   endFromRows: FLAG,
+  ranInHistory: FLAG,
+  startSaid: FLAG,
+  anchorKeyed: FLAG,
   preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
@@ -644,6 +661,7 @@ const item = flagged<TranscriptItem>()({
   updateNoticeAfter: NUMBER,
   updateNoticeWrittenAt: NUMBER,
   steered: FLAG,
+  gatewayEvent: FLAG,
 });
 const reaction = object<MessageReaction>()({
   emoji: id(MAX_EMOJI_CHARS),
@@ -981,6 +999,7 @@ const SESSION_ROW_FIELDS = [
   "sessionId",
   "sessionKey",
   "spawnedBy",
+  "startedAt",
   "status",
   "subject",
   "totalTokens",
@@ -1126,6 +1145,11 @@ const catalogModel = object<CatalogModel>()({
   defaultLevel: ENUM,
 });
 const pickerCut = object<PickerCut>()({ provider: ID, total: NUMBER });
+const modelAllowlist = object<ModelAllowlist>()({
+  whole: list(MAX_KEY_PROVIDERS, ID),
+  wildcards: FLAG,
+  prefixWildcards: FLAG,
+});
 const storedOrder = object<StoredOrder>()({
   ids: list(MAX_ORDER_IDS, ID),
   stored: FLAG,
@@ -1220,6 +1244,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   keyProviders: list(MAX_KEY_PROVIDERS, keyProvider),
   models: list(MAX_CATALOG_MODELS, catalogModel),
   modelsCut: list(MAX_KEY_PROVIDERS, pickerCut),
+  modelAllowlist,
   bindings: list(MAX_BOTS, binding),
   signIn,
   creation: botCreation,
@@ -1280,6 +1305,7 @@ export const CHECK_INS: Bound = object<CheckInsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   stamp: object<GatewayStamp>()({ gatewayId: ID, target: NUMBER }),
+  model: ENUM,
   scheduler: FLAG,
   readBotIds: list(MAX_BOTS, ID),
   jobs: list(MAX_BOTS, checkInJob),

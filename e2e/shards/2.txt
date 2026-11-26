@@ -1,5 +1,7 @@
 # CI's second e2e shard: see 1.txt.
 accounts.spec.ts
+model-refresh.spec.ts
+not-run.spec.ts
 machines.spec.ts
 check-ins.spec.ts
 scenarios.spec.ts

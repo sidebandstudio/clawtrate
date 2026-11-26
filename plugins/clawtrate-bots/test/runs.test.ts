@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createHooks } from "../lib/hooks.js";
-import { versionKnown } from "../lib/runs.js";
+import { madeSession, versionKnown } from "../lib/runs.js";
 
 type Json = Record<string, unknown>;
 type Handler = (event: Json, ctx: Json) => unknown;
@@ -225,6 +225,65 @@ describe("the read tools", () => {
     h.fire("before_prompt_build", {}, typed);
     expect(await h.tool("clawtrate_here", { ...toolCtx, runId: "r1" }, "never-seen")).toMatch(
       /^In Clawtrate: can't tell yet/,
+    );
+  });
+});
+
+describe("fix round", () => {
+  it("a spawn's result marks its session a task, from details or the result's JSON text", async () => {
+    expect(
+      madeSession({ details: { status: "accepted", childSessionKey: "agent:pip:dashboard:1" } }),
+    ).toBe("agent:pip:dashboard:1");
+    expect(
+      madeSession({ content: [{ type: "text", text: '{"sessionKey":"agent:marlow:x"}' }] }),
+    ).toBe("agent:marlow:x");
+    expect(madeSession({ content: [{ type: "text", text: "not json" }] })).toBeNull();
+    const h = host();
+    h.fire("before_prompt_build", {}, typed);
+    h.fire("before_tool_call", call("web_search", { query: "q" }), toolCtx);
+    h.fire("before_tool_call", call("sessions_spawn", { task: "#x" }, "c2"), toolCtx);
+    h.fire(
+      "after_tool_call",
+      {
+        ...call("sessions_spawn", { task: "#x" }, "c2"),
+        result: { details: { childSessionKey: "agent:pip:dashboard:7" } },
+      },
+      toolCtx,
+    );
+    h.fire(
+      "before_prompt_build",
+      {},
+      {
+        runId: "t1",
+        sessionKey: "agent:pip:dashboard:7",
+        agentId: "pip",
+        trigger: "user",
+        channel: "webchat",
+      },
+    );
+    expect(await h.runGet("t1")).toMatchObject({ kind: "task", readOutside: { source: "web" } });
+  });
+
+  it("an after_tool_call for a run never seen starting makes it lost", async () => {
+    const h = host();
+    h.fire("after_tool_call", call("web_fetch", { url: "x" }), toolCtx);
+    h.fire("before_prompt_build", {}, typed);
+    expect(await h.runGet("r1")).toEqual({ runId: "r1", known: false });
+  });
+
+  it("clawtrate_tasks lists the tasks it started under other bots", async () => {
+    const h = host({
+      sessions: [
+        {
+          sessionKey: "agent:marlow:dashboard:2",
+          entry: { label: "Review the route", spawnedBy: "agent:pip:main", updatedAt: 5 },
+        },
+      ],
+    });
+    h.fire("before_prompt_build", {}, typed);
+    h.fire("before_tool_call", call("clawtrate_tasks", {}, "c2"), toolCtx);
+    expect(await h.tool("clawtrate_tasks", toolCtx, "c2")).toMatch(
+      /«Review the route»: state unknown, started by you/,
     );
   });
 });

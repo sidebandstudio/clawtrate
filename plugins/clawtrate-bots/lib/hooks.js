@@ -121,7 +121,7 @@ export function createHooks(api, options = {}) {
       }
       return held ? { block: true, blockReason: SAID.failed } : undefined;
     }
-    runs.afterDecision(run, event, !decision.block);
+    runs.afterDecision(run, event, !decision.block, ctx);
     if (decision.block) return { block: true, blockReason: decision.reason };
     if (decision.approval)
       return {

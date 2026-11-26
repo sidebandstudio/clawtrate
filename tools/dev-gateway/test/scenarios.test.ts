@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createCodingAgent, SEND_MESSAGE_TEXT, THREAD_URL_BASE } from "../src/coding-agent-mcp.ts";
 import {
   createHarness,
+  resultSays,
   RunView,
   runCheck,
   SCENARIO_CHECKS,
@@ -421,6 +422,52 @@ describe("a check cannot skip a run", () => {
         view.expectEnd("final", "");
       },
     });
+  });
+});
+
+describe("a tool call that fails unexpectedly", () => {
+  const refused = {
+    content: [{ type: "text", text: '{"status":"error","error":"no room"}' }],
+    details: { status: "error", error: "no room" },
+  };
+
+  it("says the result's status and error, or its text when it has no details", () => {
+    expect(resultSays(refused)).toBe('its status is "error", its error "no room"');
+    expect(resultSays({ content: [{ type: "text", text: "boom" }] })).toBe('its text is "boom"');
+    expect(resultSays({})).toBe("it has no details or text");
+  });
+
+  it("names the error in the check's failure", () => {
+    const tool = (phase: string, extra: Record<string, unknown>) => ({
+      event: "agent",
+      payload: {
+        runId: "r1",
+        stream: "tool",
+        data: { phase, name: "sessions_spawn", toolCallId: "c1", ...extra },
+      },
+    });
+    const op = {
+      events: [
+        tool("start", { args: {} }),
+        tool("result", { isError: true, result: refused }),
+        {
+          event: "agent",
+          payload: {
+            runId: "r1",
+            stream: "item",
+            data: { kind: "tool", phase: "start", toolCallId: "c1" },
+          },
+        },
+      ].map((e, i) => ({ ...e, seq: i + 1, at: 0 })),
+    } as unknown as OperatorSession;
+    const view = new RunView(op, "r1", "agent:pip:x", 0);
+    expect(() =>
+      view.expectCalls([
+        { name: "sessions_spawn", args: {}, isError: false, details: {}, content: [], title: "" },
+      ]),
+    ).toThrow(
+      'call 1 (sessions_spawn) isError: expected false, got true; its status is "error", its error "no room"',
+    );
   });
 });
 

@@ -32,6 +32,17 @@ import {
   readPickerCuts,
   readProviderCatalog,
   type ModelList,
+  checksHostedList,
+  declaredModels,
+  MAX_CATALOG_MODELS,
+  MAX_KEY_PROVIDERS,
+  MAX_REFRESH_ERROR_CHARS,
+  effectiveAllowlist,
+  limitsProvider,
+  readModelAllowlist,
+  readModelRefresh,
+  REFRESH_MODELS_MS,
+  type ModelRefresh,
   readIntent,
   readKeyProviders,
   readMethods,
@@ -58,10 +69,14 @@ import {
   type SignInState,
   type StoredOrder,
 } from "./accounts.ts";
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
+import { cleanLine } from "./gateway-names.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
-import type { ReadStamp } from "./types.ts";
+import { sameStamp, type GatewayStamp, type ReadStamp } from "./types.ts";
 
 /** What the engine needs from the client. */
 /** Why the accounts read shows no answer: its connection ended before it finished. */
@@ -78,6 +93,8 @@ export type AccountsContext = {
    * (`readAgain`, with the client's waits).
    */
   readAgain<T>(read: () => Promise<T>, current: () => boolean): Promise<T>;
+  /** How long a Refresh may take from the press, whole: `REFRESH_MODELS_MS` unless a test sets it. */
+  refreshMs?: number;
   get(): AccountsState;
   update(change: (accounts: AccountsState) => AccountsState): void;
   /** The bots the client lists: ids, names, which is the default, and their pictures. */
@@ -159,6 +176,9 @@ export type CreateBotInput = {
   effort: string | null;
 };
 
+/** Why a Refresh's answer is not given: it would be another gateway's, or another connection's. */
+const MODELS_GATEWAY_CHANGED = "The gateway changed while its models were looked for.";
+
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** The longest picture New bot sends. */
@@ -208,6 +228,12 @@ export class AccountsEngine {
   private finishing: AccountsState["creation"] = null;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
+  /** The Refresh under way (#565), which a second press of the same provider shares. */
+  private refreshing: {
+    provider: string;
+    stamp: GatewayStamp;
+    promise: Promise<ModelRefresh>;
+  } | null = null;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
   private signInAbort: AbortController | null = null;
   /**
@@ -231,8 +257,11 @@ export class AccountsEngine {
       this.loadAgain = true;
       return this.loading;
     }
+    const refreshing = this.refreshing?.promise;
     this.loading = (async () => {
       try {
+        // Never alongside a Refresh: the gateway refuses the picker beside the account reads.
+        if (refreshing) await refreshing.catch(() => {});
         do {
           this.loadAgain = false;
           await this.readAll();
@@ -264,11 +293,21 @@ export class AccountsEngine {
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
     try {
       const bots = ctx.bots();
+      // Every read asked is answered before the account read ends, a failed one too: a Refresh
+      // waiting for it never asks the picker beside a read still out (#565).
+      let failure: { error: unknown } | null = null;
+      const settle = <T>(read: Promise<T>) =>
+        read.catch((error: unknown) => {
+          failure ??= { error };
+          return null;
+        });
       const [config, views, prefs] = await Promise.all([
-        ctx.readAgain(() => ctx.request("config.get", {}), current).then(asRecord),
-        this.readViews(bots.map((bot) => bot.id)),
+        settle(ctx.readAgain(() => ctx.request("config.get", {}), current).then(asRecord)),
+        settle(this.readViews(bots.map((bot) => bot.id))),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
       ]);
+      if (failure) throw (failure as { error: unknown }).error;
+      if (views === null) return;
       // Checked before the preferences are read: another gateway's must never refill the maps
       // the reset cleared.
       if (resets !== this.resets) return;
@@ -364,14 +403,167 @@ export class AccountsEngine {
     return list;
   }
 
+  /**
+   * Refresh in the Model menu (#565): ask the gateway to look for one provider's models again,
+   * `models.list {agentId, provider, refresh: true}` (read access) for the default bot, the
+   * picker's scope, and put the answer's rows in place of the provider's picker rows. Only a
+   * person's press asks; a second press while one runs shares its answer. The answer is the
+   * screen's alone, and is refused, not given, unless the gateway and connection `stamp` names
+   * are the ones it was asked on and still are when it comes back.
+   */
+  refreshModels(provider: string, stamp: GatewayStamp): Promise<ModelRefresh> {
+    const running = this.refreshing;
+    if (running) {
+      // Shared only with a press for the same provider on the same gateway and target.
+      if (running.provider === provider && sameStamp(running.stamp, stamp)) return running.promise;
+      if (running.provider === provider) return Promise.reject(new Error(MODELS_GATEWAY_CHANGED));
+      return Promise.reject(
+        new Error("Clawtrate is already looking for another provider's models."),
+      );
+    }
+    const promise: Promise<ModelRefresh> = this.lookAgain(provider, stamp).finally(() => {
+      if (this.refreshing?.promise === promise) this.refreshing = null;
+      if (this.pickerRead === waited) this.pickerRead = null;
+    });
+    // Create waits for the whole refresh, its config read included, rather than overlap it.
+    const waited = promise.catch(() => null);
+    this.pickerRead = waited;
+    this.refreshing = { provider, stamp, promise };
+    return promise;
+  }
+
+  private async lookAgain(provider: string, stamp: GatewayStamp): Promise<ModelRefresh> {
+    const { ctx } = this;
+    // What is new or gone is against the menu the person pressed in: taken now, before any wait,
+    // so an account read the refresh waits for can't bring a model in first and hide it.
+    const pressed = ctx.get();
+    const before = pressed.models.filter((m) => m.provider === provider).map((m) => m.id);
+    const cutBefore = pressed.modelsCut.find((c) => c.provider === provider)?.total ?? null;
+    // One deadline for the whole press: the wait for an account read, the config read and the
+    // gateway's look share it, and nothing is asked once it has passed.
+    const deadline = Date.now() + (ctx.refreshMs ?? REFRESH_MODELS_MS);
+    const left = () => deadline - Date.now();
+    const late: ModelRefresh = { status: "error", error: "The gateway didn't answer in time." };
+    // An account read under way finishes first: the gateway refuses the picker beside it.
+    const loading = this.loading;
+    if (loading) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = await Promise.race([
+        loading.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, left()));
+        }),
+      ]);
+      clearTimeout(timer);
+      if (!done) return late;
+    }
+    const resets = this.resets;
+    const readOn = ctx.readStamp();
+    const gone = () => {
+      const now = ctx.readStamp();
+      return (
+        resets !== this.resets ||
+        !ctx.connected() ||
+        !sameStamp(now, readOn) ||
+        now.connectedAt !== readOn.connectedAt
+      );
+    };
+    // The menu's rows were read on this gateway, and the press was made on it.
+    const shown = ctx.get().readOn;
+    if (!ctx.connected() || !sameStamp(stamp, readOn) || !sameStamp(shown, readOn))
+      throw new Error(MODELS_GATEWAY_CHANGED);
+    const bots = ctx.bots();
+    const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
+    let answer: unknown;
+    let config: RawRecord | null;
+    try {
+      // The config says whether the gateway declares the provider's models, and which models
+      // its list for bots names; asked first, as the picker is never asked beside it.
+      if (left() <= 0) return late;
+      // A config read given up on was given the time left, so the deadline has passed, though
+      // the wall clock may read a millisecond or more earlier than the request's timer.
+      let timedOut = false;
+      config = await ctx
+        .request("config.get", {}, { timeoutMs: left() })
+        .then(asRecord, (error) => {
+          timedOut = error instanceof GatewayProtocolRequestTimeoutError;
+          return null;
+        });
+      if (gone()) throw new Error(MODELS_GATEWAY_CHANGED);
+      if (timedOut || left() <= 0) return late;
+      const asked = ctx.request(
+        "models.list",
+        { agentId: defaultBot, provider, refresh: true },
+        { timeoutMs: left() },
+      );
+      answer = await asked;
+    } catch (error) {
+      if (gone()) throw new Error(MODELS_GATEWAY_CHANGED, { cause: error });
+      if (error instanceof Error && error.message === MODELS_GATEWAY_CHANGED) throw error;
+      const words =
+        error instanceof GatewayProtocolRequestTimeoutError
+          ? "The gateway didn't answer in time."
+          : this.scrub(errorText(error));
+      return { status: "error", error: cleanLine(words, MAX_REFRESH_ERROR_CHARS) };
+    }
+    if (gone()) throw new Error(MODELS_GATEWAY_CHANGED);
+    const found = readModelRefresh(
+      answer,
+      provider,
+      before,
+      declaredModels(config, provider),
+      checksHostedList(config),
+      // The rows are the default bot's picker, so its own list, or the default, filters them.
+      limitsProvider(effectiveAllowlist(config, defaultBot), provider),
+    );
+    let result: ModelRefresh | null = null;
+    ctx.update((a) => {
+      // Only into the rows read on this same gateway.
+      if (!sameStamp(a.readOn, readOn)) return a;
+      const at = a.models.findIndex((m) => m.provider === provider);
+      const others = a.models.filter((m) => m.provider !== provider);
+      const kept = found.rows.slice(0, Math.max(0, MAX_CATALOG_MODELS - others.length));
+      const models =
+        at < 0
+          ? [...others, ...kept]
+          : [
+              ...a.models.slice(0, at),
+              ...kept,
+              ...a.models.slice(at).filter((m) => m.provider !== provider),
+            ];
+      const cut = a.modelsCut.filter((c) => c.provider !== provider);
+      if (kept.length < found.rows.length) cut.push({ provider, total: found.rows.length });
+      result = found.compare(
+        kept.map((m) => m.id),
+        cutBefore,
+      );
+      return {
+        ...a,
+        models,
+        modelsCut: cut.slice(0, MAX_KEY_PROVIDERS),
+        ...(config ? { modelAllowlist: readModelAllowlist(config) } : {}),
+      };
+    });
+    if (result === null) throw new Error(MODELS_GATEWAY_CHANGED);
+    return result;
+  }
+
   private async readViews(botIds: string[]): Promise<Map<string, BotView>> {
     const views = new Map<string, BotView>();
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
     for (let i = 0; i < botIds.length; i += ACCOUNT_READ_CONCURRENCY) {
       const chunk = botIds.slice(i, i + ACCOUNT_READ_CONCURRENCY);
-      const answers = await Promise.all(
+      // Every request of the chunk is answered before a failure ends the read, so nothing of it
+      // is still out when a Refresh that waits for the read asks (#565); no later chunk starts.
+      const settled = await Promise.allSettled(
         chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
       );
+      const failed = settled.find((each) => each.status === "rejected");
+      if (failed) throw failed.reason;
+      const answers = settled.map((each) => (each as PromiseFulfilledResult<unknown>).value);
       for (let j = 0; j < chunk.length; j += 1) {
         const view = readBotView(answers[j]);
         // Not a reading: the last good one stands, and the screens say why there is none.
@@ -440,6 +632,7 @@ export class AccountsEngine {
       methods: readMethods(anyView?.capabilities ?? []),
       keyProviders: readKeyProviders(anyView),
       models: catalog,
+      modelAllowlist: readModelAllowlist(config),
       bindings,
     };
   }
@@ -1411,6 +1604,9 @@ export class AccountsEngine {
     // The picker read already under way is answered before anything is written: a new bot's
     // writes and first task never overlap it (the gateway refuses them alongside each other).
     await this.pickerRead;
+    // And a Refresh under way, whole: an account read can take the picker's place in the wait
+    // while the refresh it held back is still to ask (#565).
+    await this.refreshing?.promise.catch(() => {});
     return this.boundTo(binding, (ctx, mark) => this.create(ctx, input, mark));
   }
 
