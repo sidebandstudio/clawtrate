@@ -260,6 +260,23 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     client.stop();
   });
 
+  it("the press's own read is the one its line and the announcement name, however the clock moves", async () => {
+    const { client, accounts, press } = await locked();
+    // Every reading of the clock a millisecond later than the last.
+    let tick = Date.now();
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => (tick += 1));
+    try {
+      await press();
+    } finally {
+      spy.mockRestore();
+    }
+    const clear = accounts().clear!;
+    expect(clear.status).toBe("cleared");
+    expect(clear.checkedSeq).toBe(otto(accounts()).evidence.readSeq);
+    expect(clear.checkedAt).toBe(otto(accounts()).evidence.checkedAt);
+    client.stop();
+  });
+
   it("on one clock tick: a Check now that finds the order back takes the Unlocked line away", async () => {
     const { client, fake, accounts, press } = await locked();
     const restore = fixedClock();

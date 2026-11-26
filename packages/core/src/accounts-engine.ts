@@ -557,8 +557,8 @@ export class AccountsEngine {
     before: BotBinding,
     ctx: AccountsContext,
     seq: number = this.nextSeq(),
+    at: number = ctx.now(),
   ): Promise<BotView | null> {
-    const at = ctx.now();
     const [answer, config] = await Promise.all([
       ctx.request("models.authStatus", { agentId: botId, refresh: true }),
       ctx.request("config.get", {}).then(asRecord),
@@ -716,7 +716,8 @@ export class AccountsEngine {
     try {
       // The connection the press was sent on, still: a read on another says nothing of this one.
       check();
-      after = await this.readOrder(botId, before, ctx, afterSeq);
+      // Its number and time are the ones the line and the announcement name, one each.
+      after = await this.readOrder(botId, before, ctx, afterSeq, afterAt);
     } catch (error) {
       // As Check now says a failed read: the last confirmation stands, with its time.
       ctx.update((a) =>
