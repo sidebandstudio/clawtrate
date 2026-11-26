@@ -101,7 +101,7 @@ describe("why the gateway couldn't run a message, from its own words", () => {
     // Its words carry the gateway's store path: they are never shown, the kind is.
     expect(
       notRunCause(
-        'No API key found for provider "globex". Auth store: /home/someone/.openclaw/agents/otto/auth.json.',
+        'No API key found for provider "globex". Auth store: /var/lib/gateway/agents/otto/auth.json.',
       ),
     ).toEqual({ kind: "no-account", words: null });
   });
