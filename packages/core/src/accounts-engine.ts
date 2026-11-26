@@ -920,11 +920,17 @@ export class AccountsEngine {
       publish({ status: "unsent", error: providerNotListed(provider) });
       return;
     }
+    // Any attempt begun after it, shown or failed, for any provider: the press goes on only while
+    // what the page took last still shows the bot's own stored order for `provider` naming
+    // `account` alone. A failed read may have moved the bot without a reading of that order.
+    const newer =
+      latest !== undefined &&
+      Math.max(latest.evidence.attemptSeq ?? 0, latest.evidence.readSeq ?? 0) > firstSeq;
     const superseded =
-      latest?.evidence.readSeq != null &&
-      latest.evidence.readSeq > firstSeq &&
+      newer &&
       !(
         latest.provider === provider &&
+        latest.evidence.providerRead &&
         latest.order?.stored === true &&
         latest.order.ids.length === 1 &&
         latest.order.ids[0] === account
@@ -968,13 +974,16 @@ export class AccountsEngine {
       // As Check now says a failed read.
       this.readFailed(ctx, botId, afterSeq, "failed", this.scrub(errorText(error)));
     }
-    // What the gateway's reads say of the order since the send: the read after it when the page
-    // took it, answered by the gateway the press was sent to and listing the provider; when the
-    // page took a newer one instead, or the read after failed, the newest read the page shows,
-    // only when it began after the send, is the newest attempt (none failed since) and is as
-    // good. Anything else is no reading: the press can't say the order is gone.
+    // What the gateway's reads say of the order since the send: the read after it while the page
+    // still shows it as its newest, answered by the gateway the press was sent to and listing the
+    // provider; when the page took a newer one instead (before the read after, or between its
+    // publishing and now), or the read after failed, the newest read the page shows, only when it
+    // began after the send, is the newest attempt (none failed since) and is as good. Anything
+    // else is no reading: the press can't say the order is gone.
+    const now = base.get().bindings.find((each) => each.botId === botId)?.evidence;
+    const newest = now?.readSeq === afterSeq && now.attemptSeq === afterSeq;
     const decided = ((): { gone: boolean; seq: number; at: number | null } | null => {
-      if (after?.applied) {
+      if (after?.applied && newest) {
         const { view, gateway } = after;
         if (gatewayId === null || gateway !== gatewayId || !view.providers.includes(provider))
           return null;
@@ -2616,7 +2625,8 @@ function answeredBy(began: ReadStamp, ended: ReadStamp): string | null {
  * to, and finds no stored order for its provider: the press becomes `cleared` with that read's
  * number and time, and the bot's evidence forgets the lock at once, so the page never shows
  * "Unlocked" beside "The lock is gone". A change with no press behind it keeps its warning, and a
- * read of a gateway not yet named, or of another, settles nothing.
+ * read of a gateway not yet named, or of another, settles nothing, nor does one a newer attempt
+ * has failed after.
  */
 function settleClear(a: AccountsState): AccountsState {
   const clear = a.clear;
@@ -2632,6 +2642,8 @@ function settleClear(a: AccountsState): AccountsState {
     !binding ||
     seq === null ||
     seq <= clear.sentSeq ||
+    // The newest attempt for the bot: one that failed since leaves the press as it was.
+    binding.evidence.attemptSeq !== seq ||
     clear.gatewayId === null ||
     binding.evidence.readGateway !== clear.gatewayId ||
     !binding.evidence.providerRead ||

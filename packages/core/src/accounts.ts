@@ -1264,7 +1264,7 @@ export function retainedOrder(binding: BotBinding): string | null {
  * each began (`readSeq`, never the clock): as it ended, with the time of the read that settled it.
  * An unsure ending (`unanswered`, `unread`, `kept`) becomes `cleared` when a read begun after the
  * send, answered by the gateway the press was sent to, lists its provider and finds no stored order
- * for it. A `cleared` one is shown no more (null) once a read
+ * for it, while no newer attempt has failed. A `cleared` one is shown no more (null) once a read
  * begun after its own finds a stored order there again: the line never says the order is gone
  * above a page that shows it.
  */
@@ -1291,6 +1291,7 @@ export function clearShown(
     same &&
     !stored &&
     seq !== null &&
+    binding.evidence.attemptSeq === seq &&
     clear.sentSeq !== null &&
     seq > clear.sentSeq
   )
