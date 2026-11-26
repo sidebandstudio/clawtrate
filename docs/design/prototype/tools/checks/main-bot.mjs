@@ -235,6 +235,8 @@ await check(
     await page.getByRole("button", { name: "ChatGPT in the browser" }).click();
     await page.locator(".mb-msg.is-bot").first().waitFor();
     await has(page, '[data-testid="account-step"]', "Signed in with ChatGPT in the browser.");
+    // The Main Bot's model follows the account, before the opening goes.
+    await has(page, '[data-testid="model-line"]', "Clawtrate Main Bot now runs on OpenAI");
     await has(page, ".mb-msg.is-bot", "what would you like to call me?");
   },
 );
@@ -342,6 +344,19 @@ await check(
     await send(page, "Can you help me fix a test instead?");
     await page.getByText("Happy to help with that instead.").waitFor();
     assert.equal(await page.getByTestId("card-task").count(), 0);
+    // A Skip while the name is being taken: the name stays, no further tour
+    // question, and a message written meanwhile is still answered.
+    await open("", "full");
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    await page.evaluate(() => (window.mbHold = true));
+    await send(page, "Maple");
+    await send(page, "I need help with code");
+    await page.getByTestId("skip").click();
+    await page.evaluate(() => (window.mbHold = false));
+    await page.getByTestId("named-line").waitFor();
+    await page.getByText("Happy to help. What would you like to do?").waitFor();
+    assert.equal(await title(page), "Maple");
+    assert.equal(await page.getByText("What would you like a hand with?").count(), 0);
     // Undo pressed twice changes the name back once.
     await open("at=named", "full");
     await page.getByTestId("named-line").waitFor();
@@ -350,7 +365,11 @@ await check(
     await undo.click();
     await undo.click();
     await page.evaluate(() => (window.mbHold = false));
-    await page.getByText("Back to Clawtrate Main Bot").waitFor();
+    await page
+      .getByTestId("named-line")
+      .filter({ hasText: "Back to Clawtrate Main Bot" })
+      .waitFor();
+    assert.equal(await title(page), "Clawtrate Main Bot");
     // Open task opens the task.
     await open("at=task");
     await page.getByTestId("card-task").waitFor();
@@ -360,6 +379,43 @@ await check(
     );
     if (width !== "phone")
       assert.equal(await page.getByTestId("rail-task").getAttribute("aria-current"), "true");
+  },
+);
+
+await check(
+  "MB-14 the page follows what happened: a finished first run, an undone bring-in, focus, a Skip before the hello or during the task",
+  async ({ page, open }) => {
+    // A device without full control has its composer once the first run is over.
+    await open("device=limited&existing=1");
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    assert.equal(await page.locator("#mb-input").count(), 1);
+    // The greeting after an undone bring-in doesn't say it picked anything up.
+    await open("from=juniper&opening=failed");
+    await page.getByTestId("from-line").getByRole("button", { name: "Undo" }).click();
+    await page.getByText("Removed what came from Juniper.").waitFor();
+    await page.getByRole("button", { name: "Try again" }).click();
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    assert.doesNotMatch(await text(page, ".mb-msg.is-bot"), /picked up what Juniper knew/);
+    // Focus on Show stays there when the hello redraws the conversation.
+    await open("", "full");
+    await page.locator('[data-act="brief"]').focus();
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.act), "brief");
+    // A Skip before the hello: no answer is posted in the person's name.
+    await open("at=done", "full");
+    await page.getByTestId("skip").click();
+    await page.getByText("Sure, no tour.").waitFor();
+    await page.waitForTimeout(1500);
+    assert.equal(await page.locator(".mb-msg.is-user").count(), 1);
+    // A Skip while the task works: its result and file still come, no wrap-up.
+    await open("at=helped", "full");
+    await page.getByText("Want me to show you how I work here?").waitFor();
+    await send(page, "Sure");
+    await page.getByTestId("card-task").waitFor();
+    await page.getByTestId("skip").click();
+    await page.getByTestId("card-file").waitFor();
+    await page.waitForTimeout(1200);
+    assert.equal(await page.getByText("That's the tour.").count(), 0);
   },
 );
 

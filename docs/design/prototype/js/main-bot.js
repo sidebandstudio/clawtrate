@@ -478,12 +478,14 @@
     });
     say(typed ? `Renamed to ${read.name}` : `${before} renamed itself to ${read.name}`);
     render();
-    // Skipped while the name was being taken: the name stays, the tour doesn't go on.
-    if (!tour.active || tour.step !== "naming") return;
-    tour.step = "help";
-    await botSays(
-      `${read.name} it is. What would you like a hand with? Anything from your week to your code.`,
-    );
+    // Skipped while the name was being taken: the name stays, the tour doesn't
+    // go on, and what the person wrote meanwhile is still answered.
+    if (tour.active && tour.step === "naming") {
+      tour.step = "help";
+      await botSays(
+        `${read.name} it is. What would you like a hand with? Anything from your week to your code.`,
+      );
+    }
     const waiting = waitingForName;
     waitingForName = [];
     for (const text of waiting) await reply(text);
@@ -544,7 +546,21 @@
       });
       render();
       await wait(900);
-      Object.assign(card, { text: `Signed in with ${t.textContent}.`, note: "" });
+      // The stand-in's default model is a provider none of these buttons signs
+      // in to, so the Main Bot's model follows the account (bots.md §4, §11).
+      const provider = {
+        "ChatGPT in the browser": "OpenAI",
+        "GitHub Copilot": "GitHub Copilot",
+        OpenRouter: "OpenRouter",
+        "Use an API key": "OpenAI",
+      }[t.textContent];
+      const how = t.textContent === "Use an API key" ? "an API key" : t.textContent;
+      Object.assign(card, { text: `Signed in with ${how}.`, note: "" });
+      items.push({
+        kind: "line",
+        testid: "model-line",
+        text: `${mainBot().name} now runs on ${provider}, from the next run.`,
+      });
       state.account = "ok";
       render();
       return opening();
