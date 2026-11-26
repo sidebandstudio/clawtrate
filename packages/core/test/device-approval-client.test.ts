@@ -1,7 +1,10 @@
 // The client and the device approval engine (setup-effortless.md §5): an admin connection lists
 // the waiting requests, an event reads them again, and a close takes them with it.
 import { describe, expect, it } from "vitest";
+import { sha256Hex } from "../src/bytes.ts";
 import { ClawtrateClient } from "../src/client.ts";
+import { pairCode, rawPublicKey } from "../src/device-approval.ts";
+import { gatewayStamp } from "../src/types.ts";
 import { ADMIN_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -68,6 +71,42 @@ describe("waiting devices on the client", () => {
     await client.readDeviceRequests();
     expect(gateway.calls("device.pair.list")).toEqual([]);
     expect(client.state.deviceRequests?.requests ?? []).toEqual([]);
+    client.stop();
+  });
+
+  it("approves nothing on a decision read older than a Machines read that shows a shared code", async () => {
+    // A request with a real key, so it offers codes; listed twice, its two copies share a code.
+    const waiting = { ...row("r1"), deviceId: sha256Hex(rawPublicKey(KEY_B64)!) };
+    const { client, gateway } = await adminClient([waiting]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
+    gateway.handlers["node.list"] = () => ({ nodes: [] });
+    gateway.handlers["config.get"] = () => ({ config: {}, hash: "h1" });
+    await until(() => client.state.deviceRequests?.requests[0]?.blocked === null);
+    let reads = 0;
+    let releaseDecision: () => void = () => {};
+    gateway.handlers["device.pair.list"] = async () => {
+      const read = (reads += 1);
+      // The decision's read again answers only after the Machines read's newer reply.
+      if (read === 1) await new Promise<void>((resolve) => (releaseDecision = resolve));
+      return { pending: read === 1 ? [waiting] : [waiting, { ...waiting, ts: 0 }], paired: [] };
+    };
+    await until(() => client.state.connection.gatewayId === "gw-a");
+    const { listedOn } = client.state.deviceRequests!;
+    const decision = client.approveDevice(
+      "r1",
+      pairCode(KEY_B64, "r1")!,
+      ["operator.read"],
+      listedOn,
+      gatewayStamp(client.state.connection),
+    );
+    await until(() => reads === 1);
+    await client.readMachines();
+    expect(reads).toBe(2);
+    releaseDecision();
+    const outcome = await decision;
+    expect(gateway.calls("device.pair.approve")).toEqual([]);
+    expect(outcome).toEqual({ kind: "not-allowed" });
+    expect(client.state.deviceRequests?.requests[0]?.blocked).toBe("same-code");
     client.stop();
   });
 

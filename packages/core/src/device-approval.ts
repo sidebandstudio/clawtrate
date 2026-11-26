@@ -500,25 +500,45 @@ export class DeviceApprovals {
   }
 
   /**
-   * The only way this engine sends `device.pair.list`: the send is numbered, and its pending
-   * rows are applied (published, collisions recorded) if no newer reply was applied on this
-   * connection, whichever path asked: the list read, a decision's read again, or the read of a
-   * paired device. `applied` says whether this reply was; `paired` is null when the reply has no
-   * paired list. A source check holds that no other call sends the method from here
+   * The only way the app sends `device.pair.list`: the send is numbered, and its pending rows are
+   * applied (published, collisions recorded) if no newer reply was applied on this connection,
+   * whichever path asked: the list read, a decision's read again, the read of a paired device, or
+   * Settings, Machines (`listDevices`). Only a connection with admin applies them, and only a
+   * reply with a pending list: one without changes nothing. `applied` says whether this reply
+   * was; `paired` is null when the reply has no paired list; `reply` is the gateway's answer as
+   * it came. A source check holds that nothing else sends the method
    * (`apps/desktop/test/device-pair-list-callers.test.ts`).
    */
   private async list(): Promise<{
-    seq: number;
     applied: boolean;
     pending: unknown[];
     paired: unknown[] | null;
+    reply: unknown;
   }> {
     const seq = (this.sent += 1);
     const epoch = this.epoch;
-    const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
-    const pending = Array.isArray(answer.pending) ? answer.pending : [];
-    const applied = epoch === this.epoch && this.applyNewest(seq, pending);
-    return { seq, applied, pending, paired: Array.isArray(answer.paired) ? answer.paired : null };
+    const reply = await this.ctx.request("device.pair.list", {});
+    const answer = asRecord(reply) ?? {};
+    const pending = Array.isArray(answer.pending) ? answer.pending : null;
+    const applied =
+      epoch === this.epoch &&
+      pending !== null &&
+      this.ctx.admin() &&
+      this.applyNewest(seq, pending);
+    return {
+      applied,
+      pending: pending ?? [],
+      paired: Array.isArray(answer.paired) ? answer.paired : null,
+      reply,
+    };
+  }
+
+  /**
+   * `device.pair.list` for Settings, Machines: the same numbered send, its waiting requests
+   * applied by the same rules, and the gateway's whole answer, as it came, for the caller.
+   */
+  async listDevices(): Promise<unknown> {
+    return (await this.list()).reply;
   }
 
   /**

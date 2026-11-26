@@ -1,8 +1,9 @@
 // Who sends `device.pair.list` (docs/design/setup-effortless.md §5, "The reads are ordered").
 // The device approval engine numbers every send of it and applies every reply, so an older
-// decision can't act after a newer reply from any of its paths. That holds only while its one
-// function, `list()`, is the only place it sends the method: this reads the source of every
-// package and app and fails for any other sender, so a new one is looked at on purpose.
+// decision can't act after a newer reply from any path, Settings, Machines included (it asks
+// through `listDevices`). That holds only while its one function, `list()`, is the only place
+// the app sends the method: this reads the source of every package and app and fails for any
+// other sender.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,17 +11,8 @@ import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 
-/** Each file allowed to send the method, how many times, and why. */
-const SENDERS: Record<string, { count: number; why: string }> = {
-  "packages/core/src/device-approval.ts": {
-    count: 1,
-    why: "`list()`, the one numbered send whose reply is applied",
-  },
-  "packages/core/src/machines.ts": {
-    count: 4,
-    why: "Settings, Machines: its own paired-device list, rename and removal; it never reads or decides waiting requests",
-  },
-};
+/** The one sender: `list()`, whose send is numbered and whose reply is applied. */
+const SENDERS: Record<string, number> = { "packages/core/src/device-approval.ts": 1 };
 
 function sources(dir: string): string[] {
   const out: string[] = [];
@@ -40,8 +32,8 @@ function sources(dir: string): string[] {
  */
 const SEND = /\brequest\s*(?:<[^>]*>)?\(\s*["'`]device\.pair\.list["'`]/g;
 
-describe("device.pair.list's senders", () => {
-  it("are the approval engine's one numbered function, and the places listed with their reason", () => {
+describe("device.pair.list's sender", () => {
+  it("is the approval engine's one numbered function alone", () => {
     const found: Record<string, number> = {};
     for (const top of ["packages", "apps"]) {
       for (const file of sources(join(root, top))) {
@@ -49,8 +41,6 @@ describe("device.pair.list's senders", () => {
         if (count > 0) found[relative(root, file)] = count;
       }
     }
-    expect(found).toEqual(
-      Object.fromEntries(Object.entries(SENDERS).map(([file, { count }]) => [file, count])),
-    );
+    expect(found).toEqual(SENDERS);
   });
 });

@@ -1950,6 +1950,7 @@ export class ClawtrateClient {
     readOnly: () => this.options.readOnly === true,
     bots: () => this.state.bots.map((bot) => ({ id: bot.id, name: bot.name })),
     readStatus: (botId, send) => this.accounts.readStatus(botId, send),
+    listDevices: () => this.deviceApprovals.listDevices(),
     latestTask: (botId) => {
       const tasks = this.state.tasksByBot[botId] ?? [];
       let latest: { key: string; at: number } | null = null;

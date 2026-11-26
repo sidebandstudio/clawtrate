@@ -127,6 +127,7 @@ function setup(options: Options = {}) {
     onEvent: (event: string, payload: unknown) => real.onEvent(event, payload),
     refresh: () => real.refresh(),
     takePrompt: (id: string) => real.takePrompt(id),
+    listDevices: () => real.listDevices(),
     approve: (id: string, code: string, scopes: readonly string[], listedOn?: number) =>
       real.approve(id, code, scopes, listedOn ?? state?.listedOn ?? 0),
     refuse: (id: string, why: "not-mine" | "none-match", listedOn?: number) =>
@@ -397,6 +398,44 @@ describe("approving a waiting device", () => {
     await t.settle();
     expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
     expect(t.request(x.requestId as string).blocked).toBe("same-code");
+  });
+
+  it("changes nothing with a reply that has no pending list, and approves nothing on one", async () => {
+    const [x, y] = [pendingRow(), pendingRow()];
+    const t = await listed([x, y], { sameCode: [x.requestId as string, y.requestId as string] });
+    const id = x.requestId as string;
+    expect(t.request(id).blocked).toBe("same-code");
+    t.answers["device.pair.list"] = () => ({ paired: [] });
+    await t.engine.refresh();
+    expect(
+      t
+        .state()
+        .requests.map((each) => each.requestId)
+        .sort(),
+    ).toEqual([x.requestId, y.requestId].sort());
+    expect(await t.engine.approve(id, codeOf(x), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
+    // The collision it would have pruned is still remembered once y is gone.
+    delete t.answers["device.pair.list"];
+    t.gw.pending = [x];
+    await t.engine.refresh();
+    expect(t.request(id).blocked).toBe("same-code");
+  });
+
+  it("gives Settings, Machines the whole reply, applied like any read, and only with admin", async () => {
+    const row = pendingRow();
+    const t = await listed([]);
+    t.gw.pending = [row];
+    t.gw.paired = [pairedOf(pendingRow())];
+    expect(await t.engine.listDevices()).toEqual({ pending: [row], paired: t.gw.paired });
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
+    // Without admin (a pairing-only connection, or setup) the reply is the caller's alone.
+    t.gw.pending = [];
+    t.setAdmin(false);
+    await t.engine.listDevices();
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
   });
 
   it("changes nothing with a reply older than one already applied", async () => {
