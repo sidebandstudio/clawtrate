@@ -128,22 +128,31 @@ export const MAX_GUIDES_HISTORY_BOTS = 512;
 /** Tries of a history save against another device's save at the same time (`conflict`). */
 const GUIDES_HISTORY_ATTEMPTS = 3;
 
-type HistoryRead = { known: true; history: GuidesHistory; raw: unknown } | { known: false };
+/**
+ * `kept: false`: the gateway keeps no preferences for this connection (`no_durable_identity`, or
+ * any status but ok), so there is no history to read or write. A failed read, or a value that
+ * isn't one, is neither: the history may say something this device can't see.
+ */
+type HistoryRead =
+  { known: true; history: GuidesHistory; raw: unknown } | { known: false; kept: boolean };
 
 /** The history the gateway holds, as read now; never guessed when it can't be read. */
 export async function readGuidesHistory(request: Request): Promise<HistoryRead> {
-  const answer = rec(
-    await request("users.prefs.get", { keys: [GUIDES_HISTORY_KEY] }).catch(() => null),
+  const answer = await request("users.prefs.get", { keys: [GUIDES_HISTORY_KEY] }).then(
+    rec,
+    () => null,
   );
-  // `no_durable_identity`, an unknown method, a failure: the history isn't known.
-  if (answer.status !== "ok") return { known: false };
+  // A failure, or an answer that isn't one: the history isn't known.
+  if (answer === null || typeof answer.status !== "string") return { known: false, kept: true };
+  // `no_durable_identity`: the gateway keeps none for this connection.
+  if (answer.status !== "ok") return { known: false, kept: false };
   const entries = rec(answer.entries);
   const raw = Object.hasOwn(entries, GUIDES_HISTORY_KEY) ? entries[GUIDES_HISTORY_KEY] : null;
   // None yet: no device of this person has recorded a bot on this gateway.
   if (raw === null || raw === undefined)
     return { known: true, history: { bots: [], full: false }, raw: null };
   const fields = rec(raw);
-  if (fields.v !== 1 || !Array.isArray(fields.bots)) return { known: false };
+  if (fields.v !== 1 || !Array.isArray(fields.bots)) return { known: false, kept: true };
   const bots = fields.bots
     .filter((bot): bot is string => typeof bot === "string" && bot !== "")
     .slice(0, MAX_GUIDES_HISTORY_BOTS);
@@ -680,6 +689,12 @@ export function withdrawnRecord(change: GuidesChange): GuidesRecord | null {
 
 /** Said when the switch can't be changed because this device couldn't save it: nothing was done. */
 export const GUIDES_NOT_SAVED = "Couldn't save this on this device, so nothing was changed.";
+/**
+ * Said when the gateway's history couldn't record a removal before it: the section would be gone
+ * with nothing saying it was taken out on purpose, so another device could add it again.
+ */
+export const GUIDES_HISTORY_NOT_SAVED =
+  "It's off, but the gateway couldn't record that Clawtrate is taking its section out, so nothing was taken out.";
 /** Said when this device's record can't be read: it may say off, so nothing is changed. */
 export const GUIDES_NOT_READ = "Couldn't read this on this device, so nothing was changed.";
 /** Said when a row's Remove comes while the switch is on: Clawtrate would add it back. */
@@ -787,15 +802,24 @@ export async function applyGuidesChange(
       : () => GUIDES_LONG_CHARS;
   /**
    * The gateway's history after this change: the bots that held a marked section added to it.
-   * Turning the switch on starts it again from the bots that hold the section after it, as it
-   * does this device's record: the person asked for it on every bot. A history that can't be
-   * read isn't written; a save that fails leaves it as it was, and nothing is said.
+   * Turning the switch on starts it again, for the bots on this change's list, from those that
+   * hold the section after it, as it does this device's record: the person asked for it on every
+   * bot. A bot not on that list (one this connection isn't shown, or one another device recorded
+   * since) keeps its entry, from the history as read at each try. A history that can't be read
+   * isn't written; a save that fails leaves it as it was, and nothing is said. A removal is
+   * recorded before it, below.
    */
   const finish = async <T>(result: T): Promise<T> => {
     if (history.known)
       await saveGuidesHistory(request, history, (was) =>
         change.action === "switch" && change.on
-          ? { bots: [...kept].filter((bot) => onList.has(bot)), full: false }
+          ? {
+              bots: [
+                ...[...kept].filter((bot) => onList.has(bot)),
+                ...was.bots.filter((bot) => !onList.has(bot)),
+              ],
+              full: false,
+            }
           : { bots: [...was.bots, ...held], full: was.full },
       );
     return result;
@@ -808,8 +832,37 @@ export async function applyGuidesChange(
       const limit = limits(bots);
       return limit === null || guidesWouldBeCut(next, limit) ? null : next;
     };
+  /**
+   * A removal is recorded on the gateway before any file changes: the folders among `groups` whose
+   * file holds a marked section go into its history first, so another device knows the section
+   * was taken out on purpose. If that save fails, or the history can't be read, nothing is
+   * removed (null), and the change says so; a gateway that keeps no history for this connection
+   * has none to record. Only the folders recorded are changed after.
+   */
+  async function recordRemoval(groups: string[][]): Promise<string[][] | null> {
+    const holding: string[][] = [];
+    for (const bots of groups) {
+      // A file that can't be read now may hold one: it is recorded, and its change says why it failed.
+      const found = await readFile(request, bots[0]!).then(
+        ({ content }) => findSection(content).kind,
+        () => "unread" as const,
+      );
+      if (found !== "none") holding.push(bots);
+    }
+    if (holding.length === 0 || (!history.known && !history.kept)) return holding;
+    if (!history.known) return null;
+    const saved = await saveGuidesHistory(request, history, (was) => ({
+      bots: [...was.bots, ...holding.flat()],
+      full: was.full,
+    }));
+    return saved ? holding : null;
+  }
   if (change.action === "remove") {
-    for (const bots of folders.filter((group) => group.some((bot) => change.bots.includes(bot))))
+    const recorded = await recordRemoval(
+      folders.filter((group) => group.some((bot) => change.bots.includes(bot))),
+    );
+    if (recorded === null) return { record, errors: [GUIDES_HISTORY_NOT_SAVED], wrote, missing };
+    for (const bots of recorded)
       await each(bots, (file, found) => {
         // A section that changed since Settings read it isn't Clawtrate's to take out: said, so
         // nothing announces it as gone.
@@ -819,7 +872,7 @@ export async function applyGuidesChange(
           );
         return found.kind === "ours" ? withoutSection(file) : null;
       });
-    return finish({ record, errors, wrote, missing });
+    return { record, errors, wrote, missing };
   }
   if (change.action === "add" || change.action === "replace") {
     const asked = change.action === "add" ? change.bots : [change.bot];
@@ -856,9 +909,14 @@ export async function applyGuidesChange(
     return finish({ record: onRecord(), errors, wrote, missing });
   }
   if (!on) {
-    for (const bots of folders)
+    // Off is already saved on this device: if the gateway can't record the removal first, the
+    // sections stay, and their rows say so, with Remove.
+    const recorded = await recordRemoval(folders);
+    if (recorded === null)
+      return { record: offRecord(), errors: [GUIDES_HISTORY_NOT_SAVED], wrote, missing };
+    for (const bots of recorded)
       await each(bots, (file, found) => (found.kind === "ours" ? withoutSection(file) : null));
-    return finish({ record: { on: false, bots: [] }, errors, wrote, missing });
+    return { record: offRecord(), errors, wrote, missing };
   }
   // On, by the switch or by itself: every folder this device never knew the section in gets it,
   // unless its file doesn't exist yet or that would make it too long; an older one is brought up

@@ -322,6 +322,14 @@ const ALLOWED: Record<string, string> = {
     "one call; a reason per bot of the one agents.list it read, returned in the record",
   "packages/core/src/guides.ts:applyGuidesChange>missing":
     "one call; the folders of the one agents.list it read, returned to the caller",
+  "packages/core/src/guides.ts:applyGuidesChange>elsewhere":
+    "one call; at most MAX_GUIDES_HISTORY_BOTS (512) bot ids of the one gateway history it read, dropped when it returns",
+  "packages/core/src/guides.ts:applyGuidesChange>held":
+    "one call; the bot ids of the one agents.list it read, saved to the gateway's history and dropped when it returns",
+  "packages/core/src/guides.ts:recordRemoval>holding":
+    "one call; the folders of the one agents.list its change read, returned to that change",
+  "packages/core/src/guides.ts:readGuidesLimits>shown":
+    "one call; the bot ids of the one agents.list its caller read, held by the limit function that call returns",
 };
 
 describe("the source keeps no collection outside the registry", () => {

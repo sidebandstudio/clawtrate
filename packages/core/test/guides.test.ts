@@ -33,6 +33,8 @@ import {
   withSection,
   fitGuidesHistory,
   GUIDES_HISTORY_KEY,
+  GUIDES_HISTORY_NOT_SAVED,
+  offRecord,
   MAX_GUIDES_HISTORY_BYTES,
 } from "../src/guides.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
@@ -70,7 +72,13 @@ function fakeFiles(
   const sets: { agentId: string; content: string }[] = [];
   const faults = { conflicts: 0, refuse: new Set<string>(), unavailable: 0 };
   /** The person's preferences on the gateway (`users.prefs`); `prefs.answer` other than ok: kept none. */
-  const prefs = { entries: new Map<string, unknown>(), answer: "ok" as string, sets: 0 };
+  const prefs = {
+    entries: new Map<string, unknown>(),
+    answer: "ok" as string,
+    sets: 0,
+    /** A save the gateway fails, as it does when its store is busy. */
+    failSets: false,
+  };
   const folder = (agentId: string) => workspaces[agentId] ?? agentId;
   const request = async (method: string, params: unknown) => {
     const p = params as Record<string, unknown>;
@@ -135,6 +143,7 @@ function fakeFiles(
       };
     }
     if (method === "users.prefs.set") {
+      if (prefs.failSets) throw new Error("database is locked");
       if (prefs.answer !== "ok") return { status: prefs.answer };
       const expected = (p.expectedEntries ?? {}) as Record<string, unknown>;
       for (const [key, value] of Object.entries(expected))
@@ -658,6 +667,77 @@ describe("the switch and the rows' changes", () => {
     await applyGuidesChange(files.request, null, { action: "switch", on: true });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
     expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+  });
+
+  it("turning it on keeps a bot another device recorded meanwhile, when its save tries again", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    // Another device records Otto (not on this change's list) just before this change saves.
+    const request = files.request;
+    let once = true;
+    const racing: (method: string, params: unknown) => Promise<unknown> = (method, params) => {
+      if (method === "users.prefs.set" && once) {
+        once = false;
+        files.prefs.entries.set(GUIDES_HISTORY_KEY, { v: 1, bots: ["otto"] });
+      }
+      return request(method, params);
+    };
+    await applyGuidesChange(racing, offRecord(), { action: "switch", on: true });
+    expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip", "otto"] });
+  });
+
+  it("a removal is recorded on the gateway first: when that fails, nothing is taken out, and it says so", async () => {
+    for (const change of [
+      { action: "switch", on: false },
+      { action: "remove", bots: ["pip"] },
+    ] as GuidesChange[]) {
+      const files = fakeFiles({ pip: withSection(BOT_FILE) });
+      files.prefs.failSets = true;
+      const record = change.action === "remove" ? offRecord() : { on: true, bots: ["pip"] };
+      const result = await applyGuidesChange(files.request, record, change);
+      expect(files.sets, change.action).toEqual([]);
+      expect(files.store.get("pip"), change.action).toBe(withSection(BOT_FILE));
+      expect(result.errors, change.action).toEqual([GUIDES_HISTORY_NOT_SAVED]);
+      // While off, its row still has the section, with Remove, to try again.
+      const [folder] = await readGuideFolders(files.request, offRecord());
+      expect(folder?.state, change.action).toBe("current");
+    }
+    // A gateway that keeps no preferences for this connection has no history to record into.
+    const none = fakeFiles({ pip: withSection(BOT_FILE) });
+    none.prefs.answer = "no_durable_identity";
+    await applyGuidesChange(
+      none.request,
+      { on: true, bots: ["pip"] },
+      { action: "switch", on: false },
+    );
+    expect(none.store.get("pip")).toBe(BOT_FILE);
+  });
+
+  it("a removal recorded on the gateway whose write then fails leaves nothing that puts it back by itself", async () => {
+    const files = fakeFiles({ pip: withSection(BOT_FILE) });
+    files.faults.refuse.add("pip");
+    const off = await applyGuidesChange(
+      files.request,
+      { on: true, bots: ["pip"] },
+      {
+        action: "switch",
+        on: false,
+      },
+    );
+    // The history says Pip had it; the section is still there, and the change says why.
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+    expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+    expect(off.errors).toEqual(["pip: Workspace document exceeds its write bound"]);
+    // This device is off, so nothing is added; its row says the section is still there.
+    const [folder] = await readGuideFolders(files.request, off.record);
+    expect(folder?.state).toBe("current");
+    // The person's Remove takes it out once the gateway lets it; then a device that never saw the
+    // gateway doesn't add it again by itself.
+    files.faults.refuse.clear();
+    await applyGuidesChange(files.request, off.record, { action: "remove", bots: ["pip"] });
+    expect(files.store.get("pip")).toBe(BOT_FILE);
+    await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(files.store.get("pip")).toBe(BOT_FILE);
   });
 
   it("by itself, adds nothing to a folder whose history the gateway can't say; turning it on, or Add, still does", async () => {
