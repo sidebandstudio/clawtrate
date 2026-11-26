@@ -132,7 +132,9 @@ test.beforeAll(async ({ accountsInstance, browser }) => {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-not-run-"));
   const started = startHost(INSTANCE, STATIC, data);
   started.gated.release();
-  host = { child: started.host, url: await started.url, data };
+  // Kept before the wait, so a start that never answers is still stopped and removed.
+  host = { child: started.host, url: "", data };
+  host.url = await started.url;
   page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
   await page.goto(host.url);
   await page.getByRole("button", { name: "Use the development gateway" }).click();
@@ -199,7 +201,8 @@ test("F-480 #663 #664: a message the gateway couldn't run says why, after a relo
   const data = mkdtempSync(join(tmpdir(), "clawtrate-not-run-second-"));
   const started = startHost(INSTANCE, STATIC, data);
   started.gated.release();
-  second = { child: started.host, url: await started.url, data };
+  second = { child: started.host, url: "", data };
+  second.url = await started.url;
   const other = await (
     await browser.newContext({ viewport: { width: 1440, height: 900 } })
   ).newPage();
