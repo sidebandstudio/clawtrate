@@ -238,7 +238,11 @@ export class WaitingIndex {
     if (latest && latest.runId !== runId && latest.active) return false;
     // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
     const failed = state === "error" && payload.suppressErrorNotice !== true;
-    if (latest?.runId === runId && latest.failed === failed) return false;
+    if (latest?.runId === runId && latest.failed === failed) {
+      // Its terminal: the run is no longer going, even if its lifecycle end never arrives.
+      if (latest.active) this.runs.set(key, { ...latest, active: false });
+      return false;
+    }
     this.runs.delete(key);
     this.runs.set(key, {
       runId,
