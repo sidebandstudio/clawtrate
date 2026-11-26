@@ -5,6 +5,8 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   assembleFreshStart,
+  assembleGenesis,
+  signGenesis,
   encodeRemovalNotice,
   GatewayDeviceKey,
   ListSecretKey,
@@ -20,6 +22,7 @@ import {
   verifyList,
   type JoiningDevice,
 } from "../src/index.ts";
+import { signList } from "../src/keys.ts";
 import { signAdd } from "../src/list.ts";
 import {
   appended,
@@ -236,6 +239,58 @@ describe("a fresh start", () => {
     // A member whose list moved on past the head it names: a fresh start of an older list.
     const moved = held.state.append(signRemoval(mac.listKey, held.state, mac.device.listKey));
     expectCode(() => moved.freshStart(fresh.entry), "stale_head");
+  });
+
+  it("naming the member's very head, must carry exactly its devices", () => {
+    const { world, held } = threeDevices();
+    const fresh = assembleFreshStart(
+      held.state,
+      signFreshStart(world.connector, held.state),
+      signFreshStart(world.gatewayDevice.listKey, held.state),
+    ).entry;
+    // Drop the last carried device (the phone: its record and its 32-byte "added by"), lower the
+    // count, and sign again with the connector's and the gateway device's keys.
+    const phoneBytes = 4 * 32 + 1 + 2 + "iPhone".length + 32;
+    const body = fresh.slice(0, fresh.length - 128 - phoneBytes);
+    const countAt = body.length - (4 * 32 + 1 + 2 + "Device 2".length + 32) - 1;
+    body[countAt] = body[countAt]! - 1;
+    const fewer = Uint8Array.of(
+      ...body,
+      ...signList(world.connector, body),
+      ...signList(world.gatewayDevice.listKey, body),
+    );
+    expectCode(() => held.state.freshStart(fewer), "bad_chain");
+  });
+
+  it("signed by another member as if it were the gateway's own device is refused", () => {
+    // A list with the same connector whose first device is the Mac, grown to the same length:
+    // its fresh start is signed by the connector and the Mac.
+    const { world, mac, held } = threeDevices();
+    const fields = {
+      context: CONTEXT,
+      connectorKey: world.connector.publicKey,
+      device: mac.device,
+    };
+    const other = assembleGenesis(
+      fields,
+      signGenesis(world.connector, fields),
+      signGenesis(mac.listKey, fields),
+    );
+    let otherHeld: Held = { state: other.state, entries: [other.entry] };
+    otherHeld = appended(
+      otherHeld,
+      signAdd(mac.listKey, otherHeld.state, makeDevice(30).device, TRANSCRIPT),
+    );
+    otherHeld = appended(
+      otherHeld,
+      signAdd(mac.listKey, otherHeld.state, makeDevice(31).device, TRANSCRIPT),
+    );
+    const fresh = assembleFreshStart(
+      otherHeld.state,
+      signFreshStart(world.connector, otherHeld.state),
+      signFreshStart(mac.listKey, otherHeld.state),
+    ).entry;
+    expectCode(() => held.state.freshStart(fresh), "not_permitted");
   });
 
   it("is signed only by the connector and the gateway machine's own device", () => {

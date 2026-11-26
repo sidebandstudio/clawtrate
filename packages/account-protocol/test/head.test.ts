@@ -27,6 +27,7 @@ import {
   verifyList,
   verifyRefusal,
 } from "../src/index.ts";
+import { signList } from "../src/keys.ts";
 import { signAdd } from "../src/list.ts";
 import {
   addDevice,
@@ -221,6 +222,64 @@ describe("rotations bound to the head", () => {
     expectCode(() => openRotation(me, two.state, right, world.secret), "bad_chain");
   });
 
+  it("a rotation for another head with the same devices is refused for its head", () => {
+    // The phone is removed by the account page and put back: the same devices, another head.
+    const { world, mac, phone, two } = grown();
+    const byPage = appended(
+      two,
+      signRemovalNotice(
+        world.connector,
+        two.state,
+        encodeRemovalNotice(CONTEXT, phone.device.listKey),
+      ),
+    );
+    const back = appended(byPage, signRestore(mac.listKey, byPage.state, phone.device.listKey));
+    const rotation = rotateListSecret(
+      world.connector,
+      back.state,
+      world.secret,
+      ListSecret.fromBytes(fill(32, 0xe1), 1),
+      RANDOM,
+    );
+    expectCode(
+      () =>
+        openRotation(
+          { listKey: mac.device.listKey, sealKey: mac.sealKey },
+          two.state,
+          rotation,
+          world.secret,
+        ),
+      "bad_chain",
+    );
+  });
+
+  it("a rotation the connector signed without one device's share is refused", () => {
+    const { world, mac, two } = grown();
+    const rotation = rotateListSecret(
+      world.connector,
+      two.state,
+      world.secret,
+      ListSecret.fromBytes(fill(32, 0xe1), 1),
+      RANDOM,
+    );
+    // Drop the last share (112 bytes), lower the count, and sign again with the connector's key.
+    const signedEnd = rotation.length - 64;
+    const body = rotation.slice(0, signedEnd - 112);
+    const countAt = 33 + 32 + 4 + 4 + 32 + 4;
+    body[countAt] = body[countAt]! - 1;
+    const short = Uint8Array.of(...body, ...signList(world.connector, body));
+    expectCode(
+      () =>
+        openRotation(
+          { listKey: mac.device.listKey, sealKey: mac.sealKey },
+          two.state,
+          short,
+          world.secret,
+        ),
+      "bad_chain",
+    );
+  });
+
   it("a restore rotates too, and the device put back opens the new secret", () => {
     const { world, mac, phone, two } = grown();
     const byPage = appended(
@@ -268,6 +327,20 @@ describe("the first secret", () => {
     const { two, mac } = grown();
     expectCode(
       () => sealFirstSecret(world.connector, two.state, world.secret, RANDOM),
+      "bad_chain",
+    );
+    // A first secret held up against a list that has grown since its first entry.
+    const grownWorld = appended(
+      world,
+      signAdd(gateway.listKey, world.state, makeDevice(7).device, TRANSCRIPT),
+    );
+    expectCode(
+      () =>
+        openFirstSecret(
+          { listKey: gateway.device.listKey, sealKey: gateway.sealKey },
+          grownWorld.state,
+          message,
+        ),
       "bad_chain",
     );
     expectCode(
