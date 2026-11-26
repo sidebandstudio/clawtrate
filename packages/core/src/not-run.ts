@@ -100,6 +100,37 @@ function kindOf(text: string): NotRunKind {
 }
 
 /**
+ * What this client saw of the run that only a run that started can send: a lifecycle start, an
+ * action or a reasoning block (`steps`, from `tool`, `item` tool and `thinking` events), reply
+ * text (an `assistant` or `chat` delta, or a `chat` final), text beside a call (an `item`
+ * preamble), or an approval or question it waited on. A lifecycle `model` or `fallback_step`, a
+ * `run_status` or a `chat` status is not: the gateway sends those for a message it then fails
+ * before any run of it starts (an unknown model, OpenClaw 2026.10.6).
+ */
+function startSeen(
+  run: Pick<
+    Run,
+    | "reportedStartAt"
+    | "steps"
+    | "text"
+    | "preambles"
+    | "pendingCards"
+    | "suspendedCards"
+    | "closedCards"
+  >,
+): boolean {
+  return (
+    run.reportedStartAt !== null ||
+    run.steps.length > 0 ||
+    run.text !== "" ||
+    (run.preambles?.length ?? 0) > 0 ||
+    run.pendingCards.length > 0 ||
+    run.suspendedCards.length > 0 ||
+    run.closedCards.length > 0
+  );
+}
+
+/**
  * The gateway failed this run's message before any run of it started: history says so (its
  * "run-failed-before-reply" row), or the run, followed live here, failed with nothing reported
  * started, no action and no reply text. A run history rebuilt has no start of its own to go by,
@@ -108,18 +139,22 @@ function kindOf(text: string): NotRunKind {
 export function neverRan(
   run: Pick<
     Run,
-    "state" | "error" | "origin" | "reportedStartAt" | "steps" | "text" | "ranInHistory"
+    | "state"
+    | "error"
+    | "origin"
+    | "reportedStartAt"
+    | "steps"
+    | "text"
+    | "ranInHistory"
+    | "preambles"
+    | "pendingCards"
+    | "suspendedCards"
+    | "closedCards"
   >,
 ): boolean {
   if (run.state !== "failed" || run.error?.quiet === true) return false;
   if (run.error?.beforeReply === true) return true;
-  return (
-    run.origin !== "history" &&
-    run.ranInHistory !== true &&
-    run.reportedStartAt === null &&
-    run.steps.length === 0 &&
-    run.text === ""
-  );
+  return run.origin !== "history" && run.ranInHistory !== true && !startSeen(run);
 }
 
 /**
@@ -135,8 +170,6 @@ export function neverStarted(run: Run): boolean {
     run.bound &&
     // History holds a row of it (a reply whose events this client missed): it ran.
     run.ranInHistory !== true &&
-    run.reportedStartAt === null &&
-    run.steps.length === 0 &&
-    run.text === ""
+    !startSeen(run)
   );
 }

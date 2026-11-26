@@ -638,3 +638,123 @@ describe("the rules underneath", () => {
     expect(index.failedAt(KEY)).toBe(4_000);
   });
 });
+
+describe("#686: a failure sits only under the message its run is known to have started from", () => {
+  /** The gateway's row for a message it failed before any run of it started (2026.11.10's form). */
+  const failedRow = (runId: string) => ({
+    role: "custom",
+    customType: "run-failed-before-reply",
+    display: true,
+    timestamp: T0 + 400,
+    content: "Your request couldn't be completed.",
+    openclawRunError: { runId, summary: "Your request couldn't be completed." },
+    __openclaw: { id: `c-${runId}`, seq: 3, runId },
+  });
+  const replyRow = (runId: string) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "Here it is." }],
+    stopReason: "stop",
+    timestamp: T0 + 500,
+    __openclaw: { id: `a-${runId}`, seq: 4, runId },
+  });
+  const textOf = (items: Array<{ id: string; blocks: unknown[] }>, id: string | null) =>
+    items
+      .find((item) => item.id === id)
+      ?.blocks.map((block) => (block as { text?: string }).text ?? "")
+      .join("");
+
+  it("two quick sends, the first failed at dispatch: its line stays under it after history is read", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    const { client, transcript } = await openTask({ gateway });
+    const first = client.sendMessage(KEY, "first");
+    await until(() => transcript().runs[0]?.bound === true);
+    gateway.emit("chat", {
+      runId: first,
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "This saved login isn't available.",
+    });
+    await until(() => transcript().runs[0]?.state === "failed");
+    const second = client.sendMessage(KEY, "second");
+    await until(() => transcript().runs.find((run) => run.id === second)?.bound === true);
+    // History as the gateway wrote it: both messages, then the first's failure, then the reply.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        userRow(first, "first"),
+        userRow(second, "second"),
+        failedRow(first),
+        replyRow(second),
+      ],
+      hasMore: false,
+    });
+    gateway.emit("session.message", { sessionKey: KEY, messageSeq: 4 });
+    await until(() => transcript().items.length >= 3 && transcript().outbox.length === 0);
+    const failed = transcript().runs.find((run) => run.id === first)!;
+    expect(failed.state).toBe("failed");
+    expect(neverRan(failed)).toBe(true);
+    // Under the first message, and what Try again sends is that message.
+    expect(textOf(transcript().items, failed.anchorItemId)).toBe("first");
+    client.stop();
+  });
+});
+
+describe("only a run that started sends these, so each says it ran (#686)", () => {
+  it("a preamble with the lifecycle start missed, then a failure: not a message the gateway couldn't run", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    const { client, transcript } = await openTask({ gateway });
+    const id = client.sendMessage(KEY, "hello");
+    await until(() => transcript().runs[0]?.bound === true);
+    gateway.emit(
+      "agent",
+      agentEvent(id, 2, "item", {
+        kind: "preamble",
+        itemId: "p1",
+        phase: "update",
+        progressText: "Reading the log first.",
+      }),
+    );
+    await until(() => (transcript().runs[0]?.preambles?.length ?? 0) === 1);
+    gateway.emit("chat", {
+      runId: id,
+      sessionKey: KEY,
+      seq: 3,
+      state: "error",
+      errorMessage: "provider down",
+    });
+    await until(() => transcript().runs[0]?.state === "failed");
+    const run = transcript().runs[0]!;
+    expect(run).toMatchObject({ reportedStartAt: null, text: "", steps: [] });
+    expect(neverRan(run)).toBe(false);
+    expect(neverStarted({ ...run, state: "completed", outcomeKnown: false, error: null })).toBe(
+      false,
+    );
+    client.stop();
+  });
+
+  it("each kind of evidence counts; a model choice or a status before the failure does not", () => {
+    const bare = {
+      state: "failed" as const,
+      error: { message: "boom", kind: null },
+      origin: "local" as const,
+      reportedStartAt: null,
+      steps: [],
+      text: "",
+      pendingCards: [],
+      suspendedCards: [],
+      closedCards: [],
+    };
+    // Lifecycle `model` and `run_status` set these: the gateway sends them for a message it fails.
+    expect(neverRan({ ...bare, model: "nope/dev-1", phase: "queued" } as typeof bare)).toBe(true);
+    const card = { id: "ap-1", kind: "approval" as const, since: T0 };
+    for (const evidence of [
+      { reportedStartAt: T0 },
+      { text: "Here" },
+      { preambles: [{ id: "p1", text: "Reading", ended: false, beforeCall: null }] },
+      { pendingCards: [card] },
+      { suspendedCards: [card] },
+      { closedCards: [{ ...card, reason: "resolved" as const }] },
+    ])
+      expect(neverRan({ ...bare, ...evidence })).toBe(false);
+  });
+});
