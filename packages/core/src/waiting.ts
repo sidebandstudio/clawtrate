@@ -1,5 +1,5 @@
-// Which tasks wait for the person, and whose latest run was stopped, across
-// every bot, for the rail (F-021, F-057). One source of truth per task:
+// Which tasks wait for the person, and whose latest run was stopped or failed,
+// across every bot, for the rail (F-021, F-057). One source of truth per task:
 //
 // - A task whose runs the engine holds (it follows the task) is described by
 //   those runs, the same state the conversation shows (`hold`, from
@@ -15,7 +15,9 @@
 //   run's end never marks a task stopped after a newer run started. A run
 //   stopped with `chat.abort` leaves the gateway's row no status, so the end's
 //   reason, read as the gateway reads it (`classifyLifecycleTerminal`), is the
-//   only word for it.
+//   only word for it. So does a message OpenClaw 2026.11.10 fails before any
+//   run of it starts (#663): its `chat` error is the only word for that, until a
+//   later run of the task starts or ends (#664).
 //
 // Times are the gateway's own (`ts` on events, `createdAtMs` on questions), so a
 // row the gateway lists as idle clears only the markers older than the row.
@@ -35,10 +37,10 @@ const MARKER_PREFIX_CHARS = 13;
 /** JSON characters one kept marker can take: its id, and its kind, run id and time. */
 export const WAITING_MARKER_CHARS =
   MAX_WAITING_ID_CHARS + MARKER_PREFIX_CHARS + MAX_WAITING_ID_CHARS + 64;
-/** JSON characters one entry of the latest-run map can take: its key, run id, time and flag. */
-export const WAITING_RUN_CHARS = 2 * MAX_WAITING_ID_CHARS + 96;
-/** JSON characters one held task can take: its key, a waiting kind and two times. */
-export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 96;
+/** JSON characters one entry of the latest-run map can take: its key, run id, time, mark and flags. */
+export const WAITING_RUN_CHARS = 2 * MAX_WAITING_ID_CHARS + 128;
+/** JSON characters one held task can take: its key, a waiting kind and three times. */
+export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 128;
 
 export type WaitingKind = "approval" | "question";
 
@@ -49,7 +51,11 @@ type Marker = { kind: WaitingKind; runId: string | null; since: number };
 export type Waiting = { kind: WaitingKind; since: number };
 
 /** A task as its held runs describe it. */
-export type HeldTask = { waiting: Waiting | null; stoppedAt: number | null };
+export type HeldTask = {
+  waiting: Waiting | null;
+  stoppedAt: number | null;
+  failedAt: number | null;
+};
 
 const str = (value: unknown): string | null =>
   typeof value === "string" && value.length > 0 && jsonTextLength(value) <= MAX_WAITING_ID_CHARS
@@ -59,7 +65,7 @@ const str = (value: unknown): string | null =>
 const time = (value: unknown, fallback: number): number =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
 
-/** What a held task's runs say: a run waiting on a card, or a latest run that was stopped. */
+/** What a held task's runs say: a run waiting on a card, or a latest run that was stopped or failed. */
 export function fromActivity(activity: Pick<TaskActivity, "runs">): HeldTask {
   const runs = activity.runs;
   const active = runs.find(
@@ -80,12 +86,15 @@ export function fromActivity(activity: Pick<TaskActivity, "runs">): HeldTask {
   }
   const stoppedAt =
     !active && latest?.state === "stopped" ? (latest.endedAt ?? latest.startedAt ?? 0) : null;
-  return { waiting, stoppedAt };
+  const failedAt =
+    !active && latest?.state === "failed" ? (latest.endedAt ?? latest.startedAt ?? 0) : null;
+  return { waiting, stoppedAt, failedAt };
 }
 
 const sameHeld = (a: HeldTask | undefined, b: HeldTask): boolean =>
   a !== undefined &&
   a.stoppedAt === b.stoppedAt &&
+  a.failedAt === b.failedAt &&
   a.waiting?.kind === b.waiting?.kind &&
   a.waiting?.since === b.waiting?.since;
 
@@ -97,10 +106,10 @@ function cap<V>(map: Map<string, V>, max: number): void {
 export class WaitingIndex {
   /** Session key to its markers by id, in the order tasks began waiting. */
   private readonly sessions = new Map<string, Map<string, Marker>>();
-  /** Each task's latest run as the events report it: its id, when, and whether it was stopped. */
+  /** Each task's latest run as the events report it: its id, when, and whether it was stopped or failed. */
   private readonly runs = new Map<
     string,
-    { runId: string; at: number; stopped: boolean; stopSeq: number }
+    { runId: string; at: number; stopped: boolean; stopSeq: number; failed: boolean }
   >();
   /** Counts the run ends seen as stopped, in the order they arrived: each task keeps its latest. */
   private stops = 0;
@@ -153,9 +162,15 @@ export class WaitingIndex {
         const latest = this.runs.get(key);
         if (latest?.runId === runId) return false;
         this.runs.delete(key);
-        this.runs.set(key, { runId, at: ts, stopped: false, stopSeq: latest?.stopSeq ?? 0 });
+        this.runs.set(key, {
+          runId,
+          at: ts,
+          stopped: false,
+          stopSeq: latest?.stopSeq ?? 0,
+          failed: false,
+        });
         cap(this.runs, MAX_WAITING_SESSIONS);
-        return latest?.stopped === true;
+        return latest?.stopped === true || latest?.failed === true;
       }
       case "waiting-approval": {
         const id = str(data.approvalId) ?? str(data.id) ?? `run:${runId}`;
@@ -182,6 +197,8 @@ export class WaitingIndex {
           at: ts,
           stopped,
           stopSeq: stopped ? (this.stops += 1) : (latest?.stopSeq ?? 0),
+          // Its `chat` error may have come first: the same run's lifecycle end keeps it.
+          failed: latest?.runId === runId && latest.failed,
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return changed || stopped || latest?.stopped === true;
@@ -189,6 +206,43 @@ export class WaitingIndex {
       default:
         return false;
     }
+  }
+
+  /**
+   * A `chat` event. Its error is the word that the run failed, the only one when the gateway
+   * failed the message before any run of it started (OpenClaw 2026.11.10 leaves the row no
+   * status then); its final is the word that the run succeeded. Returns whether the rail's word
+   * may have changed.
+   */
+  onChat(payload: RawRecord, at: number): boolean {
+    const key = str(payload.sessionKey);
+    const runId = str(payload.runId);
+    const state = payload.state;
+    if (!key || !runId || (state !== "error" && state !== "final")) return false;
+    const latest = this.runs.get(key);
+    const failed = state === "error";
+    if (latest?.runId === runId && latest.failed === failed) return false;
+    this.runs.delete(key);
+    this.runs.set(key, {
+      runId,
+      at: latest?.runId === runId ? latest.at : at,
+      stopped: false,
+      stopSeq: latest?.stopSeq ?? 0,
+      failed,
+    });
+    cap(this.runs, MAX_WAITING_SESSIONS);
+    return true;
+  }
+
+  /**
+   * The gateway's row says the task's latest run started at `startedAt`: a failure it reported
+   * before then is no longer the task's latest outcome.
+   */
+  settleFailure(key: string, startedAt: number | null): boolean {
+    const latest = this.runs.get(key);
+    if (!latest?.failed || startedAt === null || startedAt <= latest.at) return false;
+    this.runs.set(key, { ...latest, failed: false });
+    return true;
   }
 
   /** `question.requested`. */
@@ -319,5 +373,13 @@ export class WaitingIndex {
     if (held) return held.stoppedAt;
     const latest = this.runs.get(key);
     return latest?.stopped ? latest.at : null;
+  }
+
+  /** When the task's latest run failed, or null when it did not (or a newer run started). */
+  failedAt(key: string): number | null {
+    const held = this.held.get(key);
+    if (held) return held.failedAt;
+    const latest = this.runs.get(key);
+    return latest?.failed ? latest.at : null;
   }
 }

@@ -1270,6 +1270,10 @@ function withAlarm(state: ClawtrateState): ClawtrateState {
 /** The share of the arithmetic bound past which the alarm says it is near. */
 export const ALARM_FRACTION = 0.8;
 
+/** A finite number, or null. */
+const numberOr = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
 function withLive(transcript: Transcript): Transcript {
   const active = transcript.runs.find((run) => isActive(run.state));
   const live = active ? { runId: active.id, text: active.text } : null;
@@ -9792,6 +9796,8 @@ export class ClawtrateClient {
       for (const [index, task] of tasks.entries()) {
         // A row with no active run ends what waited before it; a newer marker stays.
         if (task.status !== "running") this.waiting.settle(task.key, task.updatedAt);
+        // A run the row says started after a failure: the failure is no longer the latest (#664).
+        this.waiting.settleFailure(task.key, numberOr(this.rows.get(task.key)?.startedAt));
         const waiting = this.waiting.waitingFor(task.key);
         if (waiting) {
           tasks[index] = {
@@ -9806,6 +9812,13 @@ export class ClawtrateClient {
         ) {
           // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
           tasks[index] = { ...task, status: "stopped" };
+        } else if (
+          (task.status === "idle" || task.status === "done") &&
+          this.waiting.failedAt(task.key) !== null
+        ) {
+          // A message OpenClaw 2026.11.10 failed before running it leaves the row no status: its
+          // `chat` error, or the task's runs, said so (#663, #664).
+          tasks[index] = { ...task, status: "failed" };
         }
       }
       if (this.showChannelChats && this.showOtherToolSessions) continue;
@@ -10419,9 +10432,19 @@ export class ClawtrateClient {
         if (typeof key === "string" && this.tracked(key)) this.scheduleHistory(key);
         return;
       }
-      case "chat":
+      case "chat": {
+        const payload = asRecord(event.payload);
+        if (payload) {
+          const before = this.keptKeys();
+          // The gateway's time for it, as its row last gave it: what a later run's start is
+          // compared with (`settleFailure`).
+          const key = typeof payload.sessionKey === "string" ? payload.sessionKey : "";
+          const at = numberOr(this.rows.get(capId(key, MAX_ID_CHARS))?.updatedAt) ?? this.now();
+          if (this.waiting.onChat(payload, at)) this.waitingChanged(before);
+        }
         this.handleChat(event);
         return;
+      }
       case "agent": {
         const payload = asRecord(event.payload);
         if (payload) {

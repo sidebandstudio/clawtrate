@@ -376,6 +376,7 @@ const runError = object<RunError>()({
   message: text(MAX_ERROR_JSON_CHARS),
   kind: NAME,
   raw: object<RunErrorRaw>()({ holds: ENUM, chars: NUMBER }),
+  beforeReply: FLAG,
 });
 const runEnding = object<RunEnding>()({
   stopReason: NAME,
@@ -981,6 +982,7 @@ const SESSION_ROW_FIELDS = [
   "sessionId",
   "sessionKey",
   "spawnedBy",
+  "startedAt",
   "status",
   "subject",
   "totalTokens",
