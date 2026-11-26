@@ -47,7 +47,7 @@ test.describe("bots know how Clawtrate works", () => {
     await expect(toggle).toHaveAttribute("aria-checked", "true");
     await expect(toggle).toBeEnabled();
     await expect(pane.locator("#bot-guides-note")).toHaveText(
-      "Clawtrate keeps a short section at the top of each bot's AGENTS.md that tells it how to talk to you and what a task is in Clawtrate.",
+      "Clawtrate keeps a short section at the top of the AGENTS.md of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate.",
     );
     // Read it shows exactly what is written: the marker lines and the notice too.
     await pane.getByText("Read it").click();
@@ -144,7 +144,7 @@ test.describe("bots know how Clawtrate works", () => {
     expect(await changes(page)).toEqual([]);
   });
 
-  test("F-566: off, a file that still holds a section has a row, and Remove takes it out", async ({
+  test("F-566: off, a file that still holds a section has a row, and its Remove takes it out of that bot only", async ({
     page,
   }) => {
     const pane = await guidesPane(page, "&access=admin&guides=offleft");
@@ -153,9 +153,48 @@ test.describe("bots know how Clawtrate works", () => {
     await expect(otto).toContainText("Still has Clawtrate's section.");
     // Off wins: a changed section is shown, never replaced.
     await expect(pane.getByTestId("bot-guide-marlow").getByRole("button")).toHaveText(["Show"]);
-    await otto.getByRole("button", { name: "Remove" }).click();
+    // The row's button says which bot it is for.
+    const remove = otto.getByRole("button", { name: "Remove" });
+    await expect(remove).toHaveAccessibleDescription("Otto");
+    await remove.click();
     await expect(otto).toHaveCount(0);
-    expect(await changes(page)).toEqual([{ action: "switch", on: false }]);
+    expect(await changes(page)).toEqual([{ action: "remove", bots: ["otto"] }]);
+    await expect(page.getByText("Taken out of Otto")).toBeAttached();
+  });
+
+  test("F-566: a file that doesn't exist yet waits for the gateway, and a refused write says why, each with Add", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=new");
+    const pip = pane.getByTestId("bot-guide-pip");
+    await expect(pip).toContainText(
+      "Pip's AGENTS.md doesn't exist yet. The gateway makes it on Pip's next run, and Clawtrate adds the section after that.",
+    );
+    const otto = pane.getByTestId("bot-guide-otto");
+    await expect(otto).toContainText(
+      "The gateway refused Clawtrate's change to Otto's AGENTS.md, so Clawtrate doesn't try again by itself. The gateway said: Workspace document exceeds its write bound",
+    );
+    await expect(otto.getByRole("button", { name: "Add" })).toHaveAccessibleDescription("Otto");
+    await pip.getByRole("button", { name: "Add" }).click();
+    await expect(pip).toHaveCount(0);
+    expect(await changes(page)).toEqual([{ action: "add", bots: ["pip"] }]);
+  });
+
+  test("F-566: when this device's record can't be read, the switch isn't shown as on or off, and nothing can be changed", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=unreadable");
+    const toggle = pane.getByRole("switch", SWITCH);
+    await expect(pane.getByTestId("bot-guides-state")).toHaveText(
+      "Couldn't read this on this device.",
+    );
+    await expect(toggle).toBeDisabled();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    // Rows still say what the files hold, with nothing that writes.
+    const otto = pane.getByTestId("bot-guide-otto");
+    await expect(otto.getByRole("button")).toHaveText(["Show"]);
+    for (const name of ["Add", "Update", "Replace", "Remove"])
+      await expect(pane.getByRole("button", { name, exact: true })).toHaveCount(0);
   });
 
   test("F-566: without admin access, one sentence says so, and nothing can be sent", async ({
@@ -242,6 +281,8 @@ for (const size of [WIDE, PHONE]) {
         ["off", "&access=admin&guides=off"],
         ["mixed", "&access=admin&guides=mixed"],
         ["odd", "&access=admin&guides=odd"],
+        ["new", "&access=admin&guides=new"],
+        ["unreadable", "&access=admin&guides=unreadable"],
       ] as const) {
         test(`F-566: the guides, ${name}`, async ({ page }) => {
           const pane = await guidesPane(page, query, theme);

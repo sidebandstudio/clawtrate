@@ -80,6 +80,18 @@ export function guideRow(
     case "none":
       if (!on) return null;
       if (!folder.utf8) return { words: notUtf8, action: null };
+      // The gateway writes its own instructions into a missing file on the bot's next run, and
+      // only while it is missing: Clawtrate waits for that.
+      if (folder.missing)
+        return {
+          words: `${label}'s AGENTS.md doesn't exist yet. The gateway makes it on ${label}'s next run, and Clawtrate adds the section after that.`,
+          action: can("add"),
+        };
+      if (folder.refused !== null)
+        return {
+          words: `The gateway refused Clawtrate's change to ${label}'s AGENTS.md, so Clawtrate doesn't try again by itself. The gateway said: ${folder.refused}`,
+          action: can("add"),
+        };
       return { words: folder.long ? long : "Not added yet.", action: can("add") };
   }
 }
@@ -200,7 +212,10 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
       </div>
     );
   const folders = shown.folders;
-  const on = guidesOn(shown.record);
+  // This device's record couldn't be read: whether the switch is on isn't known, so it isn't
+  // shown as either, and nothing can be changed until it can be read.
+  const unreadable = shown.unreadable;
+  const on = !unreadable && guidesOn(shown.record);
   /** Whether each of these bots' folders reads this version now, as read back. */
   const allCurrent = (read: BotGuidesAnswer, ids: string[]) =>
     ids.length > 0 &&
@@ -213,7 +228,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
     });
   const rows = folders.flatMap((folder) => {
     const label = list(names(bots, folder.bots));
-    const row = guideRow(folder, label, on, admin);
+    const row = guideRow(folder, label, on, admin && !unreadable);
     return row ? [{ folder, label, ...row }] : [];
   });
   return (
@@ -222,7 +237,9 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
         <div className="b-row">
           <span className="b-row-main">
             <span id="bot-guides-label">Bots know how Clawtrate works</span>
-            <small data-testid="bot-guides-state">{on ? "On" : "Off"}</small>
+            <small data-testid="bot-guides-state">
+              {unreadable ? "Couldn't read this on this device." : on ? "On" : "Off"}
+            </small>
           </span>
           <button
             type="button"
@@ -233,7 +250,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
             aria-describedby="bot-guides-note"
             aria-busy={guides.busy || undefined}
             aria-disabled={guides.busy || undefined}
-            disabled={!admin}
+            disabled={!admin || unreadable}
             data-testid="bot-guides-switch"
             onClick={() => {
               if (!guides.busy) turn(!on);
@@ -242,8 +259,8 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
         </div>
       </div>
       <p className="b-hint" id="bot-guides-note">
-        Clawtrate keeps a short section at the top of each bot's <code>AGENTS.md</code> that tells
-        it how to talk to you and what a task is in Clawtrate.
+        Clawtrate keeps a short section at the top of the <code>AGENTS.md</code> of each bot on this
+        gateway that tells it how to talk to you and what a task is in Clawtrate.
         {!admin &&
           " This connection doesn't have admin access, so Clawtrate can't add or remove it from here."}
       </p>
@@ -260,11 +277,15 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
         <ul className="bot-guides-list" aria-labelledby="bot-guides-label">
           {rows.map(({ folder, label, words, action }) => {
             const key = folder.bots.join(",");
+            // Each button says which bot it is for, to a screen reader too.
+            const named = `bot-guide-name-${folder.bots[0]}`;
             return (
               <li key={key} data-testid={`bot-guide-${folder.bots[0]}`} data-state={folder.state}>
                 <span className="bot-guides-row">
-                  {label}
-                  {folder.bots.length > 1 && " (one shared folder)"}
+                  <span id={named}>
+                    {label}
+                    {folder.bots.length > 1 && " (one shared folder)"}
+                  </span>
                   <small>{words}</small>
                 </span>
                 {action && (
@@ -275,6 +296,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                         className="button"
                         data-size="sm"
                         aria-expanded={showing === key}
+                        aria-describedby={named}
                         onClick={() => setShowing(showing === key ? null : key)}
                       >
                         {showing === key ? "Hide" : "Show"}
@@ -285,9 +307,23 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                         type="button"
                         className="button"
                         data-size="sm"
+                        aria-describedby={named}
                         disabled={guides.busy}
                         onClick={() => {
-                          if (action === "remove") return turn(false);
+                          if (action === "remove")
+                            return void guides
+                              .change({ action: "remove", bots: folder.bots })
+                              .then(
+                                (read) =>
+                                  read &&
+                                  read.errors.length === 0 &&
+                                  !read.folders.some(
+                                    (f) =>
+                                      f.bots.includes(folder.bots[0]!) &&
+                                      (f.state === "current" || f.state === "older"),
+                                  ) &&
+                                  announce(`Taken out of ${label}`),
+                              );
                           void guides
                             .change(
                               action === "replace"

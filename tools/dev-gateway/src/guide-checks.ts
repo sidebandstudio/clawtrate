@@ -233,10 +233,16 @@ export const GUIDE_CHECKS: GuideCheck[] = [
       const others = (Array.isArray(listed) ? listed : [])
         .map((agent) => String(rec(agent).id))
         .filter((id) => id !== BOT);
+      // Each one is read first: one that can't be read can't be put back, so nothing is turned
+      // off. A missing file stays missing: turning it off only takes the section out of a file.
       const before = new Map<string, string>();
       for (const id of others) {
-        const file = await readFile(h, id).catch(() => null);
-        if (file) before.set(id, file.content);
+        const file = rec(
+          rec(await h.admin.request("agents.files.get", { agentId: id, name: GUIDES_FILE })).file,
+        );
+        if (file.missing === true) continue;
+        expect(typeof file.content === "string", `${id}'s AGENTS.md couldn't be read before`);
+        before.set(id, file.content as string);
       }
       try {
         const { errors } = await applyGuidesChange(request, null, { action: "switch", on: false });
@@ -246,16 +252,23 @@ export const GUIDE_CHECKS: GuideCheck[] = [
         expect(after.hash === world.original!.hash, "the file's hash isn't what it was");
         world.original = null;
       } finally {
+        // Every file is tried, whatever one of them does; then any that wasn't put back fails.
+        const left: string[] = [];
         for (const [id, content] of before) {
-          const now = await readFile(h, id).catch(() => null);
-          if (now && now.content !== content)
-            await h.admin.request("agents.files.set", {
-              agentId: id,
-              name: GUIDES_FILE,
-              content,
-              expectedHash: now.hash,
-            });
+          try {
+            const now = await readFile(h, id);
+            if (now.content !== content)
+              await h.admin.request("agents.files.set", {
+                agentId: id,
+                name: GUIDES_FILE,
+                content,
+                expectedHash: now.hash,
+              });
+          } catch (error) {
+            left.push(`${id} (${String(error)})`);
+          }
         }
+        expect(left.length === 0, `not put back as they were: ${left.join(", ")}`);
       }
     },
   },

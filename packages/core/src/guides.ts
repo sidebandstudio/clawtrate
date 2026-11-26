@@ -27,15 +27,58 @@ export const GUIDES_VERSION = 1;
  */
 export const GUIDES_PINNED_SHA256 = "3b11747ce00c0e53";
 /**
- * Where OpenClaw 2026.10.6 starts cutting a long `AGENTS.md` out of a prompt by default
- * (`bootstrapMaxChars`). Clawtrate doesn't read the gateway's own setting, so it says "may".
+ * Where OpenClaw (2026.10.6 and 2026.11.10) starts cutting a long `AGENTS.md` out of a prompt
+ * when its config sets no limit (`bootstrapMaxChars`): what Clawtrate uses when the config can't
+ * be read (`guidesLimit`).
  */
 export const GUIDES_LONG_CHARS = 20_000;
+/** The gateway's default for all of a prompt's instruction files together (`bootstrapTotalMaxChars`). */
+export const GUIDES_TOTAL_CHARS = 60_000;
 /**
  * Whether a file may be cut from a prompt: its length without trailing whitespace, as the gateway
- * measures it, past `GUIDES_LONG_CHARS`.
+ * measures it, past `limit`.
  */
-export const guidesWouldBeCut = (file: string) => file.trimEnd().length > GUIDES_LONG_CHARS;
+export const guidesWouldBeCut = (file: string, limit = GUIDES_LONG_CHARS) =>
+  file.trimEnd().length > limit;
+
+/**
+ * The length past which the gateway cuts a bot's `AGENTS.md` from its prompt, from `config.get`'s
+ * answer, as OpenClaw 2026.10.6 and 2026.11.10 resolve it (`resolveBootstrapCharLimit`): the bot's
+ * own `bootstrapMaxChars` (its entry under `agents.entries`, or in `agents.list`), else
+ * `agents.defaults`', else 20,000; a positive number only, rounded down. `AGENTS.md` comes first in
+ * the prompt, so it also gets no more than `bootstrapTotalMaxChars`, resolved the same way.
+ */
+export function guidesLimit(answer: unknown, botId: string): number {
+  const agents = rec(rec(rec(answer).config).agents);
+  const id = botId.toLowerCase();
+  const entries = rec(agents.entries);
+  const keyed = Object.keys(entries).find((key) => key.toLowerCase() === id);
+  const entry = rec(
+    keyed !== undefined
+      ? entries[keyed]
+      : Array.isArray(agents.list)
+        ? agents.list.find((each) => String(rec(each).id).toLowerCase() === id)
+        : undefined,
+  );
+  const limit = (key: string, fallback: number) => {
+    const raw = entry[key] ?? rec(agents.defaults)[key];
+    return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+  };
+  return Math.min(
+    limit("bootstrapMaxChars", GUIDES_LONG_CHARS),
+    limit("bootstrapTotalMaxChars", GUIDES_TOTAL_CHARS),
+  );
+}
+
+/**
+ * Each folder's limit (`guidesLimit`, the least of its bots'), from one `config.get`; 20,000 for
+ * every folder when the config can't be read.
+ */
+export async function readGuidesLimits(request: Request): Promise<(bots: string[]) => number> {
+  const answer = await request("config.get", {}).catch(() => null);
+  return (bots) =>
+    answer === null ? GUIDES_LONG_CHARS : Math.min(...bots.map((bot) => guidesLimit(answer, bot)));
+}
 /** The second line of the section: whose it is, and where it is turned off. */
 export const GUIDES_NOTICE =
   "<!-- Added by Clawtrate, which keeps it current. Turn it off in Clawtrate: Settings, Conversation. -->";
@@ -54,8 +97,6 @@ const hash = (text: string) => sha256Hex(utf8Bytes(text));
 const INNER = `${GUIDES_NOTICE}\n${GUIDES_TEXT}\n`;
 /** The whole section, as Clawtrate writes it, ending with a line break. */
 export const GUIDES_SECTION = `<!-- clawtrate:guides begin v${GUIDES_VERSION} sha256=${hash(INNER)} -->\n${INNER}${END}\n`;
-/** What the section adds to each prompt, with the blank line after it. */
-export const GUIDES_SIZE = GUIDES_SECTION.length + 1;
 /** The most of a changed section's text an answer carries, for Show. */
 export const MAX_CHANGED_SECTION_CHARS = 16_384;
 
@@ -212,6 +253,13 @@ export type GuideFolder = {
   long: boolean;
   /** The file is plain UTF-8 text. When it isn't, its state is still read, and nothing writes. */
   utf8: boolean;
+  /**
+   * The file doesn't exist yet. The gateway makes it from its own template on the bot's next run,
+   * only while it is missing, so Clawtrate never makes it by itself.
+   */
+  missing: boolean;
+  /** The gateway refused Clawtrate's own write of this file, and why: not tried again by itself. */
+  refused: string | null;
   /** The text between the markers of a changed section, for Show, cut to its bound. */
   changedText: string | null;
   error: string | null;
@@ -227,16 +275,31 @@ export type GuidesRecord = {
    * purpose by someone, so it reads `removed` and isn't added to again by itself.
    */
   bots: string[];
+  /**
+   * Bots whose file the gateway refused Clawtrate's own write of, with the gateway's reason (cut
+   * to `MAX_REFUSED_CHARS`): not tried again by itself until the person adds it or turns the
+   * switch on.
+   */
+  refused?: Record<string, string>;
 };
 
 /** Where this device keeps its record for a gateway, by the gateway's identity. */
 export const guidesKey = (gatewayId: string) => `clawtrate.guides.${gatewayId}`;
+/**
+ * Where this device keeps the switch for gateways it has no record of: saved off when the person
+ * turns the switch off anywhere, deleted when they turn it on.
+ */
+export const GUIDES_DEFAULT_KEY = "clawtrate.guides.default";
+/** The most of a gateway's reason for a refused write a record keeps. */
+export const MAX_REFUSED_CHARS = 300;
 
 /** The guides as Settings shows them: read now, never assumed. */
 export type BotGuides = {
   folders: GuideFolder[];
   /** This device's record for this gateway, or null before any: the switch reads on then. */
   record: GuidesRecord | null;
+  /** This device's record couldn't be read: whether the switch is on isn't known. */
+  unreadable: boolean;
   /** The voice plugin adds its own voice guide (on, its hook permitted). */
   voicePlugin: boolean;
   /** What failed in the change this answers, one sentence per file. */
@@ -245,14 +308,17 @@ export type BotGuides = {
 export type BotGuidesAnswer = BotGuides & { stamp: GatewayStamp };
 
 export class GuideConflictError extends Error {}
+/** The gateway's own refusal of a write, for a reason other than a changed file. */
+export class GuideRefusedError extends Error {}
 
 /** A bot's `AGENTS.md`: its text and the hash a write is held to, or missing. */
 async function readFile(
   request: Request,
   agentId: string,
-): Promise<{ content: string; held: Raw; utf8: boolean }> {
+): Promise<{ content: string; held: Raw; utf8: boolean; missing: boolean }> {
   const file = rec(rec(await request("agents.files.get", { agentId, name: GUIDES_FILE })).file);
-  if (file.missing === true) return { content: "", held: { expectedMissing: true }, utf8: true };
+  if (file.missing === true)
+    return { content: "", held: { expectedMissing: true }, utf8: true, missing: true };
   if (typeof file.content !== "string" || !isHash(file.hash))
     throw new Error(`The gateway did not return ${agentId}'s ${GUIDES_FILE} and its revision.`);
   // The gateway hashes the bytes and decodes them as UTF-8: bytes that aren't come back as
@@ -262,6 +328,7 @@ async function readFile(
     content: file.content,
     held: { expectedHash: file.hash },
     utf8: hash(file.content) === file.hash.toLowerCase(),
+    missing: false,
   };
 }
 
@@ -273,26 +340,28 @@ const conflict = (error: unknown) =>
 /**
  * Change one bot's file by `next`, read now and held to the hash read: `next` returns the new
  * text, or null to leave it. A file that isn't plain UTF-8 is never written: the change fails,
- * or with `skipNotUtf8` (Clawtrate's own changes) it is left without a word. A write refused
- * because the file changed meanwhile reads it again and tries once more. Answers whether anything
- * was written, and what the file held.
+ * or with `byItself` (Clawtrate's own changes) it is left without a word. With `byItself`, a
+ * missing file is left too: the gateway writes its own template into it only while it is missing.
+ * A write refused because the file changed meanwhile reads it again and tries once more; one the
+ * gateway refuses for another reason fails as `GuideRefusedError`. Answers whether anything was
+ * written, what the file held, and whether it was missing.
  */
 export async function changeGuideFile(
   request: Request,
   agentId: string,
   next: (file: string, found: FoundSection) => string | null,
-  options: { skipNotUtf8?: boolean } = {},
-): Promise<{ written: boolean; found: FoundSection }> {
+  options: { byItself?: boolean } = {},
+): Promise<{ written: boolean; found: FoundSection; missing: boolean }> {
   for (let attempt = 0; ; attempt += 1) {
-    const { content, held, utf8 } = await readFile(request, agentId);
+    const { content, held, utf8, missing } = await readFile(request, agentId);
     const found = findSection(content);
-    if (!utf8 && options.skipNotUtf8) return { written: false, found };
+    if (options.byItself && (missing || !utf8)) return { written: false, found, missing };
     if (!utf8)
       throw new Error(
         `${agentId}'s ${GUIDES_FILE} isn't plain UTF-8 text, so Clawtrate can't change it.`,
       );
     const wanted = next(content, found);
-    if (wanted === null || wanted === content) return { written: false, found };
+    if (wanted === null || wanted === content) return { written: false, found, missing };
     try {
       const result = rec(
         await request("agents.files.set", {
@@ -304,13 +373,16 @@ export async function changeGuideFile(
       );
       if (result.ok !== true)
         throw new Error(`The gateway did not confirm ${agentId}'s ${GUIDES_FILE} was saved.`);
-      return { written: true, found };
+      return { written: true, found, missing };
     } catch (error) {
       if (attempt === 0 && conflict(error)) continue;
       if (conflict(error))
         throw new GuideConflictError(
           `${GUIDES_FILE} kept changing while Clawtrate wrote it, so it was left as it is.`,
         );
+      // The gateway's own answer (it carries the gateway's code), not a lost connection.
+      if (typeof rec(error).gatewayCode === "string" && rec(error).retryable !== true)
+        throw new GuideRefusedError(error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -329,16 +401,25 @@ export function guideFolders(agents: unknown): string[][] {
   return [...groups.values()];
 }
 
-/** The state of each folder's file, read now; `record` tells removed from never there. */
+/**
+ * The state of each folder's file, read now; `record` tells removed from never there, and keeps
+ * the gateway's refusals. Whether a file is long goes by the gateway's own limit for its bots.
+ */
 export async function readGuideFolders(
   request: Request,
   record: GuidesRecord | null,
 ): Promise<GuideFolder[]> {
-  const folders = guideFolders(await request("agents.list", {}));
+  const [listed, limits] = await Promise.all([
+    request("agents.list", {}),
+    readGuidesLimits(request),
+  ]);
+  const folders = guideFolders(listed);
+  const refusedOf = (bots: string[]) =>
+    bots.map((bot) => record?.refused?.[bot]).find((reason) => reason !== undefined) ?? null;
   return Promise.all(
     folders.map(async (bots): Promise<GuideFolder> => {
       try {
-        const { content, utf8 } = await readFile(request, bots[0]!);
+        const { content, utf8, missing } = await readFile(request, bots[0]!);
         const found = findSection(content);
         const state: GuideState =
           found.kind === "ours"
@@ -355,8 +436,10 @@ export async function readGuideFolders(
           state,
           replaceable: found.kind === "changed" && found.replaceable,
           moved: found.kind === "changed" && found.moved,
-          long: guidesWouldBeCut(withSection(content)),
+          long: guidesWouldBeCut(withSection(content), limits(bots)),
           utf8,
+          missing,
+          refused: state === "none" ? refusedOf(bots) : null,
           changedText:
             found.kind === "changed" ? found.text.slice(0, MAX_CHANGED_SECTION_CHARS) : null,
           error: null,
@@ -369,6 +452,8 @@ export async function readGuideFolders(
           moved: false,
           long: false,
           utf8: true,
+          missing: false,
+          refused: null,
           changedText: null,
           error: error instanceof Error ? error.message : String(error),
         };
@@ -378,21 +463,34 @@ export async function readGuideFolders(
 }
 
 /**
- * A record as this device stored it, or null when it isn't one. A record from before the switch
- * (#542: the bots added with the person's yes, and "New bots too") reads as on when it holds any
- * yes, and as off when it holds none: "Not now", "Remove from all bots", or "New bots too" turned
- * off with nothing added. An update never turns a no into a yes.
+ * A record as this device stored it, or null when it isn't one: the caller treats that as a record
+ * it can't read, never as no record. `on: false` is off whatever else is there. A record left by
+ * the card before the switch (#542: the bots added with the person's yes, and "New bots too") is
+ * read as on, with its bots: one that holds no yes can't tell a dismissed card from a removal,
+ * and bots know how Clawtrate works by default.
  */
 export function parseGuidesRecord(value: string | null): GuidesRecord | null {
   if (value === null) return null;
   try {
-    const raw = rec(JSON.parse(value));
-    const bots = Array.isArray(raw.bots)
-      ? raw.bots.filter((bot): bot is string => typeof bot === "string").slice(0, 512)
+    const raw = JSON.parse(value) as unknown;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const fields = rec(raw);
+    if (fields.on === false) return offRecord();
+    const bots = Array.isArray(fields.bots)
+      ? fields.bots.filter((bot): bot is string => typeof bot === "string").slice(0, 512)
       : null;
     if (!bots) return null;
-    if (typeof raw.on === "boolean") return { on: raw.on, bots };
-    return typeof raw.newBots === "boolean" ? { on: raw.newBots || bots.length > 0, bots } : null;
+    if (fields.on === true) {
+      const refused = Object.entries(rec(fields.refused)).filter(
+        (pair): pair is [string, string] => typeof pair[1] === "string",
+      );
+      return refused.length > 0
+        ? { on: true, bots, refused: Object.fromEntries(refused.slice(0, 512)) }
+        : { on: true, bots };
+    }
+    return fields.on === undefined && typeof fields.newBots === "boolean"
+      ? { on: true, bots }
+      : null;
   } catch {
     return null;
   }
@@ -401,9 +499,11 @@ export function parseGuidesRecord(value: string | null): GuidesRecord | null {
 /**
  * A change to the guides:
  * - `switch`: the person's one switch. On adds the section to every bot that has none and that
- *   this device never knew it on, and brings older ones up to date, as `auto` does. Off takes it
- *   out of every file it is in as Clawtrate wrote it, and nothing is added after; a changed one
- *   is left as it is.
+ *   this device never knew it on, and brings older ones up to date, as `auto` does, trying again
+ *   the files the gateway refused. Off takes it out of every file it is in as Clawtrate wrote it,
+ *   and nothing is added after; a changed one is left as it is.
+ * - `remove`: a row's Remove while the switch is off: the section out of these bots' files (and
+ *   the bots sharing their folders) only.
  * - `add`: the person's Add on one row: the section for these bots (and the bots sharing their
  *   folders), a removed one's or a long file's included; an older one is brought up to date and a
  *   changed one is left. Only while the switch is on.
@@ -415,9 +515,13 @@ export function parseGuidesRecord(value: string | null): GuidesRecord | null {
 export type GuidesChange =
   | { action: "switch"; on: boolean }
   | { action: "add"; bots: string[] }
+  | { action: "remove"; bots: string[] }
   /** `shown`: the changed section as Settings read it (`changedText`); nothing else is replaced. */
   | { action: "replace"; bot: string; shown: string }
   | { action: "auto"; bot?: string };
+
+/** The record of a switch turned off: it holds no bots. */
+export const offRecord = (): GuidesRecord => ({ on: false, bots: [] });
 
 /** The switch as this device holds it: on until the person turns it off. */
 export const guidesOn = (record: GuidesRecord | null) => record?.on ?? true;
@@ -428,13 +532,16 @@ export const guidesOn = (record: GuidesRecord | null) => record?.on ?? true;
  * no bots, so nothing reads as removed and nothing is added while it lasts.
  */
 export function withdrawnRecord(change: GuidesChange): GuidesRecord | null {
-  return change.action === "switch" && !change.on ? { on: false, bots: [] } : null;
+  return change.action === "switch" && !change.on ? offRecord() : null;
 }
 
 /** Said when the switch can't be changed because this device couldn't save it: nothing was done. */
 export const GUIDES_NOT_SAVED = "Couldn't save this on this device, so nothing was changed.";
 /** Said when this device's record can't be read: it may say off, so nothing is changed. */
 export const GUIDES_NOT_READ = "Couldn't read this on this device, so nothing was changed.";
+/** Said when a row's Remove comes while the switch is on: Clawtrate would add it back. */
+export const GUIDES_ON =
+  '"Bots know how Clawtrate works" is on, so the section stays. Turn it off to take it out.';
 /** Said when files were changed on the gateway but this device couldn't record which. */
 export const GUIDES_NOT_RECORDED =
   "The bots' files were changed, but this device couldn't record which, so it can't tell later whether one of these sections was removed on purpose.";
@@ -450,51 +557,101 @@ export async function applyGuidesChange(
   request: Request,
   record: GuidesRecord | null,
   change: GuidesChange,
-): Promise<{ record: GuidesRecord | null; errors: string[] }> {
+): Promise<{
+  record: GuidesRecord | null;
+  errors: string[];
+  /** Whether any file was written. */
+  wrote: boolean;
+  /** Folders Clawtrate's own change left because their file doesn't exist yet. */
+  missing: string[][];
+}> {
   const on = change.action === "switch" ? change.on : guidesOn(record);
-  // Off wins: nothing is added or replaced while it is off, whoever asks.
-  if (!on && change.action !== "switch")
-    return { record, errors: change.action === "auto" ? [] : [GUIDES_OFF] };
+  // Off wins: nothing is added or replaced while it is off, whoever asks. A row's Remove is for
+  // a switch that is off: while it is on, the section would only come back.
+  if (!on && change.action !== "switch" && change.action !== "remove")
+    return {
+      record,
+      errors: change.action === "auto" ? [] : [GUIDES_OFF],
+      wrote: false,
+      missing: [],
+    };
+  if (on && change.action === "remove")
+    return { record, errors: [GUIDES_ON], wrote: false, missing: [] };
   const folders = guideFolders(await request("agents.list", {}));
   const errors: string[] = [];
   const kept = new Set(on ? (record?.bots ?? []) : []);
   /** Only bots still on the gateway's list are kept, so the record holds no deleted bot's id. */
   const onList = new Set(folders.flat());
   const listed = (bots: string[]) => bots.filter((bot) => onList.has(bot));
+  // Refusals are kept only for Clawtrate's own change: the switch turned on, or the person's own
+  // Add for those bots, tries again.
+  const refused = new Map(change.action === "auto" ? Object.entries(record?.refused ?? {}) : []);
+  if (change.action === "add" && on)
+    for (const [bot, reason] of Object.entries(record?.refused ?? {}))
+      if (!change.bots.includes(bot)) refused.set(bot, reason);
+  const missing: string[][] = [];
+  let wrote = false;
+  /** The record this change leaves, while the switch is on. */
+  const onRecord = (): GuidesRecord => {
+    const left = [...refused].filter(([bot]) => onList.has(bot));
+    return left.length > 0
+      ? { on: true, bots: listed([...kept]), refused: Object.fromEntries(left) }
+      : { on: true, bots: listed([...kept]) };
+  };
   /** Change one folder's file; whether it holds Clawtrate's section, or any marked one, after. */
   const each = async (
     bots: string[],
     next: (file: string, found: FoundSection) => string | null,
-    background = false,
+    byItself = false,
   ): Promise<{ ours: boolean; marked: boolean }> => {
     try {
-      const { written, found } = await changeGuideFile(request, bots[0]!, next, {
-        skipNotUtf8: background,
-      });
-      const ours = written || (found.kind === "ours" && found.current);
-      return { ours, marked: ours || found.kind !== "none" };
+      const result = await changeGuideFile(request, bots[0]!, next, { byItself });
+      if (result.missing && byItself) missing.push(bots);
+      if (result.written) wrote = true;
+      const ours = result.written || (result.found.kind === "ours" && result.found.current);
+      return { ours, marked: ours || result.found.kind !== "none" };
     } catch (error) {
-      errors.push(`${bots.join(", ")}: ${error instanceof Error ? error.message : String(error)}`);
+      const reason = error instanceof Error ? error.message : String(error);
+      if (byItself && error instanceof GuideRefusedError)
+        for (const bot of bots) refused.set(bot, reason.slice(0, MAX_REFUSED_CHARS));
+      errors.push(`${bots.join(", ")}: ${reason}`);
       return { ours: false, marked: false };
     }
   };
-  /** What Clawtrate writes by itself never takes a file past the length the gateway keeps whole. */
-  const fits = (next: string, background: boolean) =>
-    !background || !guidesWouldBeCut(next) ? next : null;
-  const addOrUpdate = (background: boolean) => (file: string, found: FoundSection) =>
-    found.kind === "none" || (found.kind === "ours" && !found.current)
-      ? fits(withSection(file), background)
-      : null;
+  // What Clawtrate writes by itself never takes a file past the length the gateway keeps whole:
+  // the gateway's own limit for the folder's bots, read once for the change.
+  const limits =
+    change.action === "auto" || (change.action === "switch" && change.on)
+      ? await readGuidesLimits(request)
+      : () => GUIDES_LONG_CHARS;
+  const addOrUpdate =
+    (byItself: boolean, bots: string[]) => (file: string, found: FoundSection) => {
+      if (found.kind !== "none" && !(found.kind === "ours" && !found.current)) return null;
+      const next = withSection(file);
+      return byItself && guidesWouldBeCut(next, limits(bots)) ? null : next;
+    };
+  if (change.action === "remove") {
+    for (const bots of folders.filter((group) => group.some((bot) => change.bots.includes(bot))))
+      await each(bots, (file, found) => (found.kind === "ours" ? withoutSection(file) : null));
+    return { record, errors, wrote, missing };
+  }
   if (change.action === "add" || change.action === "replace") {
     const asked = change.action === "add" ? change.bots : [change.bot];
     const chosen = folders.filter((group) => group.some((bot) => asked.includes(bot)));
     if (change.action === "replace" && chosen.length === 0)
-      return { record, errors: [`${change.bot} isn't on the gateway's list of bots.`] };
+      return {
+        record,
+        errors: [`${change.bot} isn't on the gateway's list of bots.`],
+        wrote,
+        missing,
+      };
+    if (change.action === "replace")
+      for (const [bot, reason] of Object.entries(record?.refused ?? {})) refused.set(bot, reason);
     for (const bots of chosen) {
       const { ours } = await each(
         bots,
         change.action === "add"
-          ? addOrUpdate(false)
+          ? addOrUpdate(false, bots)
           : (file, found) => {
               if (found.kind !== "changed" || !found.replaceable) return null;
               // Changed again since the person was shown it: what they'd replace isn't what they saw.
@@ -507,19 +664,21 @@ export async function applyGuidesChange(
       );
       if (ours) for (const bot of bots) kept.add(bot);
     }
-    return { record: { on: true, bots: listed([...kept]) }, errors };
+    return { record: onRecord(), errors, wrote, missing };
   }
   if (!on) {
     for (const bots of folders)
       await each(bots, (file, found) => (found.kind === "ours" ? withoutSection(file) : null));
-    return { record: { on: false, bots: [] }, errors };
+    return { record: { on: false, bots: [] }, errors, wrote, missing };
   }
   // On, by the switch or by itself: every folder this device never knew the section in gets it,
-  // unless that would make the file too long; an older one is brought up to date. A folder it knew
-  // the section in and that has none now was cleared on purpose, so it is left. Every folder that
-  // holds a marked section now is recorded, so this device knows if it goes.
+  // unless its file doesn't exist yet or that would make it too long; an older one is brought up
+  // to date. A folder it knew the section in and that has none now was cleared on purpose, so it
+  // is left, as is one whose write the gateway refused before. Every folder that holds a marked
+  // section now is recorded, so this device knows if it goes.
   const only = change.action === "auto" ? change.bot : undefined;
   for (const bots of folders.filter((group) => only === undefined || group.includes(only))) {
+    if (bots.some((bot) => refused.has(bot))) continue;
     // A section seen on an earlier attempt of this change, and gone on the retry, was just
     // removed by someone: it is left, as one this device knew.
     let known = bots.some((bot) => kept.has(bot));
@@ -527,11 +686,11 @@ export async function applyGuidesChange(
       bots,
       (file, found) => {
         if (found.kind !== "none") known = true;
-        return found.kind === "none" && known ? null : addOrUpdate(true)(file, found);
+        return found.kind === "none" && known ? null : addOrUpdate(true, bots)(file, found);
       },
       true,
     );
     if (marked || known) for (const bot of bots) kept.add(bot);
   }
-  return { record: { on: true, bots: listed([...kept]) }, errors };
+  return { record: onRecord(), errors, wrote, missing };
 }

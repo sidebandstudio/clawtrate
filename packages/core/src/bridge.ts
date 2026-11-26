@@ -154,7 +154,7 @@ export type BridgeCommand =
   | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** Clawtrate's guides in the bots' `AGENTS.md`, read now (guides.ts). */
   | { type: "readBotGuides" }
-  /** The switch, or a row's Add or Replace, on the gateway `stamp` names (admin). */
+  /** The switch, or a row's Add, Replace or Remove, on the gateway `stamp` names (admin). */
   | { type: "changeBotGuides"; change: GuidesChange; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
@@ -887,9 +887,10 @@ function guidesChange(value: unknown): GuidesChange {
       if (typeof change.on !== "boolean") throw new Error("invalid guides change");
       return { action: "switch", on: change.on };
     case "add":
+    case "remove":
       if (!Array.isArray(change.bots) || change.bots.length > 512)
         throw new Error("invalid guides change");
-      return { action: "add", bots: change.bots.map(botId) };
+      return { action: change.action, bots: change.bots.map(botId) };
     case "replace":
       if (typeof change.shown !== "string" || change.shown.length > MAX_CHANGED_SECTION_CHARS)
         throw new Error("invalid guides change");

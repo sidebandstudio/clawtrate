@@ -9,6 +9,10 @@
 //                  instructions too long to add it by itself
 //   guides=odd     the switch on: Otto's markers out of shape, Marlow's section moved from the
 //                  top, Pip's file not plain UTF-8, Quartermaster's file unreadable
+//   guides=new     the switch on: Pip's AGENTS.md doesn't exist yet, and the gateway refused
+//                  Clawtrate's write of Otto's; the rest have it
+//   guides=unreadable  this device's record can't be read: Otto's file still has a changed
+//                  section, the rest have it
 //   guides=voice   every bot has it, and the voice plugin adds its own guide
 //   guides=fail    the read fails
 //   guidesave=fail a change writes nothing: every file kept changing while it was written
@@ -52,6 +56,20 @@ export function guidesCommands(
       quartermaster: "none",
     },
     odd: { main: "current", marlow: "changed", otto: "changed", pip: "none", quartermaster: null },
+    new: {
+      main: "current",
+      marlow: "current",
+      otto: "none",
+      pip: "none",
+      quartermaster: "current",
+    },
+    unreadable: {
+      main: "current",
+      marlow: "current",
+      otto: "changed",
+      pip: "current",
+      quartermaster: "current",
+    },
   };
   const states = new Map<string, GuideState | null>(
     BOTS.map((bot) => [
@@ -68,6 +86,11 @@ export function guidesCommands(
       ? { on: false, bots: [] }
       : { on: true, bots: param === "mixed" ? ["main", "marlow", "otto", "pip"] : BOTS };
   const voicePlugin = param === "voice";
+  const unreadable = param === "unreadable";
+  const missing = new Set(param === "new" ? ["pip"] : []);
+  const refused = new Map(
+    param === "new" ? [["otto", "Workspace document exceeds its write bound"]] : [],
+  );
   const notUtf8 = (bot: string) => param === "odd" && bot === "pip";
   const long = (bot: string) => param === "mixed" && (bot === "quartermaster" || bot === "marlow");
   const folders = (): GuideFolder[] =>
@@ -78,6 +101,8 @@ export function guidesCommands(
       moved: states.get(bot) === "changed" && param === "odd" && bot === "marlow",
       long: long(bot),
       utf8: !notUtf8(bot),
+      missing: states.get(bot) === "none" && missing.has(bot),
+      refused: states.get(bot) === "none" ? (refused.get(bot) ?? null) : null,
       changedText:
         states.get(bot) === "changed"
           ? GUIDES_SECTION.replace("Lead with the answer", "Lead with a short joke")
@@ -86,7 +111,8 @@ export function guidesCommands(
     }));
   const answer = (errors: string[] = []): BotGuidesAnswer => ({
     folders: folders(),
-    record,
+    record: unreadable ? null : record,
+    unreadable,
     voicePlugin,
     errors,
     stamp: stampNow(),
@@ -98,6 +124,7 @@ export function guidesCommands(
     if (command.type === "readBotGuides") return answer();
     const { change } = command;
     if (!canAdmin()) throw new Error("Changing the bots' instructions needs admin access.");
+    if (unreadable) return answer(["Couldn't read this on this device, so nothing was changed."]);
     // Off is saved first, whatever the files do after.
     if (change.action === "switch" && !change.on) record = { on: false, bots: [] };
     if (save === "fail")
@@ -111,13 +138,24 @@ export function guidesCommands(
       for (const bot of BOTS) if (ours(bot) && !notUtf8(bot)) states.set(bot, "none");
     } else if (change.action === "switch") {
       for (const bot of BOTS)
-        if (!notUtf8(bot) && !long(bot) && ["none", "older"].includes(states.get(bot) ?? ""))
+        if (
+          !notUtf8(bot) &&
+          !long(bot) &&
+          !missing.has(bot) &&
+          ["none", "older"].includes(states.get(bot) ?? "")
+        )
           states.set(bot, "current");
+      refused.clear();
       record = { on: true, bots: BOTS.filter((bot) => states.get(bot) !== "none") };
+    } else if (change.action === "remove") {
+      for (const bot of change.bots) if (ours(bot) && !notUtf8(bot)) states.set(bot, "none");
     } else if (change.action === "add") {
-      for (const bot of change.bots)
+      for (const bot of change.bots) {
         if (!notUtf8(bot) && ["none", "removed", "older"].includes(states.get(bot) ?? ""))
           states.set(bot, "current");
+        missing.delete(bot);
+        refused.delete(bot);
+      }
       record = { on: true, bots: [...new Set([...record.bots, ...change.bots])] };
     } else if (change.action === "replace") {
       if (states.get(change.bot) === "changed" && param !== "odd")

@@ -2,7 +2,7 @@
 // replace and remove, each bot's state, the switch and the rows' changes, Clawtrate's own change
 // with nothing asked, and the client's guards. The gateway's half is the guide checks of
 // `pnpm scenarios` (guides-checks.ts).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
 import { VOICE_GUIDE, WHERE_GUIDE } from "../src/guide-text.ts";
 import { VOICE_GET } from "../src/voice.ts";
@@ -11,14 +11,16 @@ import {
   GUIDES_NOT_READ,
   GUIDES_NOT_RECORDED,
   GUIDES_NOT_SAVED,
+  GUIDES_DEFAULT_KEY,
   GUIDES_OFF,
+  GUIDES_ON,
+  guidesLimit,
   findSection,
   GUIDES_LONG_CHARS,
   GUIDES_PINNED_SHA256,
   GUIDES_VERSION,
   GUIDES_NOTICE,
   GUIDES_SECTION,
-  GUIDES_SIZE,
   GUIDES_TEXT,
   guidesKey,
   MAX_CHANGED_SECTION_CHARS,
@@ -30,13 +32,15 @@ import {
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import type { BotGuidesAnswer, GuidesChange } from "../src/guides.ts";
-import { grantingGateway, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, openTask } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { FAST } from "./client-harness.ts";
 import { URL_A } from "./client-harness.ts";
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
+/** What the section adds to each prompt, with the blank line after it. */
+const GUIDES_SIZE = GUIDES_SECTION.length + 1;
 const BOT_FILE = "# AGENTS.md\n\nYou help with the house.\n- Be brief.\n";
 
 /** A section of another version, as Clawtrate wrote it: its marker's hash matches its text. */
@@ -51,6 +55,8 @@ function fakeFiles(
   workspaces: Record<string, string> = {},
   /** The hash of a file's bytes on disk, where they aren't the UTF-8 of its text. */
   bytesHash: Record<string, string> = {},
+  /** What `config.get` answers; without it, the gateway doesn't answer it. */
+  config?: Record<string, unknown>,
 ) {
   const store = new Map(Object.entries(files));
   const hashOf = (key: string, content: string) => bytesHash[key] ?? hash(content);
@@ -60,7 +66,12 @@ function fakeFiles(
   const request = async (method: string, params: unknown) => {
     const p = params as Record<string, unknown>;
     if (method === "agents.list")
-      return { agents: Object.keys(files).map((id) => ({ id, workspace: `/w/${folder(id)}` })) };
+      return {
+        defaultId: Object.keys(files)[0] ?? "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: Object.keys(files).map((id) => ({ id, workspace: `/w/${folder(id)}` })),
+      };
     const key = folder(p.agentId as string);
     const content = store.get(key) ?? null;
     if (method === "agents.files.get")
@@ -73,7 +84,11 @@ function fakeFiles(
     if (method === "agents.files.set") {
       const held =
         content === null ? p.expectedMissing === true : p.expectedHash === hashOf(key, content);
-      if (faults.refuse.has(key)) throw new Error("Workspace document exceeds its write bound");
+      // The gateway's own refusal: it carries the gateway's code, as the protocol client's does.
+      if (faults.refuse.has(key))
+        throw Object.assign(new Error("Workspace document exceeds its write bound"), {
+          gatewayCode: "INVALID_REQUEST",
+        });
       if (!held || faults.conflicts > 0) {
         faults.conflicts = Math.max(0, faults.conflicts - 1);
         throw Object.assign(new Error("file changed"), {
@@ -85,6 +100,7 @@ function fakeFiles(
       sets.push({ agentId: p.agentId as string, content: p.content as string });
       return { ok: true };
     }
+    if (method === "config.get" && config) return { config, hash: "h" };
     throw new Error(`unknown method ${method}`);
   };
   return { request, store, sets, faults };
@@ -101,7 +117,6 @@ describe("the section", () => {
     expect(GUIDES_SECTION.split(VOICE_GUIDE)).toHaveLength(2);
     expect(GUIDES_SECTION.split(WHERE_GUIDE)).toHaveLength(2);
     // It is in every run's prompt: bounded, and said in Settings.
-    expect(GUIDES_SIZE).toBe(GUIDES_SECTION.length + 1);
     expect(GUIDES_SIZE).toBeLessThanOrEqual(3_200);
   });
 
@@ -203,6 +218,8 @@ describe("the bots' states", () => {
         moved: false,
         long: false,
         utf8: true,
+        missing: false,
+        refused: null,
         changedText: null,
         error: "missing scope: operator.read",
       },
@@ -214,7 +231,12 @@ describe("the switch and the rows' changes", () => {
   it("a row's Add adds to its bots only, once per shared folder, and records them", async () => {
     const files = fakeFiles({ pip: BOT_FILE, shared: BOT_FILE, otto: BOT_FILE }, { shared: "pip" });
     const result = await applyGuidesChange(files.request, null, { action: "add", bots: ["pip"] });
-    expect(result).toEqual({ record: { on: true, bots: ["pip", "shared"] }, errors: [] });
+    expect(result).toEqual({
+      record: { on: true, bots: ["pip", "shared"] },
+      errors: [],
+      wrote: true,
+      missing: [],
+    });
     expect(files.sets).toHaveLength(1);
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
     expect(files.store.get("otto")).toBe(BOT_FILE);
@@ -329,6 +351,8 @@ describe("the switch and the rows' changes", () => {
     expect(await applyGuidesChange(nothing, off, { action: "auto" })).toEqual({
       record: off,
       errors: [],
+      wrote: false,
+      missing: [],
     });
     for (const change of [
       { action: "add", bots: ["pip"] },
@@ -337,6 +361,8 @@ describe("the switch and the rows' changes", () => {
       expect(await applyGuidesChange(nothing, off, change)).toEqual({
         record: off,
         errors: [GUIDES_OFF],
+        wrote: false,
+        missing: [],
       });
   });
 
@@ -385,19 +411,158 @@ describe("the switch and the rows' changes", () => {
       on: false,
       bots: [],
     });
-    for (const bad of [null, "", "{", "[]", JSON.stringify({ bots: ["pip"] })])
-      expect(parseGuidesRecord(bad)).toBeNull();
+    for (const bad of [
+      null,
+      "",
+      "{",
+      "[]",
+      "{not json",
+      JSON.stringify({ bots: ["pip"] }),
+      JSON.stringify({ on: "no", bots: [] }),
+      JSON.stringify({ on: true }),
+    ])
+      expect(parseGuidesRecord(bad), String(bad)).toBeNull();
+    // Off is off, whatever else is there.
+    for (const off of [{ on: false }, { on: false, bots: "x" }, { on: false, bots: [3] }])
+      expect(parseGuidesRecord(JSON.stringify(off))).toEqual({ on: false, bots: [] });
   });
 
-  it("reads a record from before the switch as off only when it holds no yes, so an update never turns a no into a yes", () => {
+  it("reads every record left by the card before the switch as on, with the bots it added", () => {
     const old = (bots: string[], newBots: boolean) =>
       parseGuidesRecord(JSON.stringify({ bots, newBots }));
-    // "Not now", "Remove from all bots", or New bots too turned off with nothing added.
-    expect(old([], false)).toEqual({ on: false, bots: [] });
-    // Any yes: bots it added, or New bots too.
+    // "Not now", "Remove from all bots", or New bots too turned off with nothing added: the same
+    // bytes, which can't be told apart. Bots know how Clawtrate works by default.
+    expect(old([], false)).toEqual({ on: true, bots: [] });
     expect(old(["pip"], false)).toEqual({ on: true, bots: ["pip"] });
     expect(old([], true)).toEqual({ on: true, bots: [] });
     expect(old(["pip"], true)).toEqual({ on: true, bots: ["pip"] });
+  });
+
+  it("takes the gateway's own limit for a bot's AGENTS.md, as OpenClaw resolves it", () => {
+    const answer = (agents: Record<string, unknown>) => ({ config: { agents }, hash: "h" });
+    expect(guidesLimit({}, "pip")).toBe(GUIDES_LONG_CHARS);
+    expect(guidesLimit(answer({ defaults: { bootstrapMaxChars: 10_000 } }), "pip")).toBe(10_000);
+    // The bot's own value comes first, from either roster shape, by its id in any case.
+    const own = { bootstrapMaxChars: 8_000 };
+    expect(
+      guidesLimit(
+        answer({ defaults: { bootstrapMaxChars: 10_000 }, entries: { Pip: own } }),
+        "pip",
+      ),
+    ).toBe(8_000);
+    expect(guidesLimit(answer({ list: [{ id: "pip", ...own }] }), "pip")).toBe(8_000);
+    expect(guidesLimit(answer({ list: [{ id: "otto", ...own }] }), "pip")).toBe(GUIDES_LONG_CHARS);
+    // Never more than the total for all instruction files, which AGENTS.md comes first in.
+    expect(
+      guidesLimit(
+        answer({ defaults: { bootstrapMaxChars: 50_000, bootstrapTotalMaxChars: 30_000 } }),
+        "pip",
+      ),
+    ).toBe(30_000);
+    expect(guidesLimit(answer({ defaults: { bootstrapMaxChars: 90_000 } }), "pip")).toBe(60_000);
+    // Only a positive number counts, rounded down.
+    for (const bad of [0, -5, "9000", null, Number.NaN])
+      expect(guidesLimit(answer({ defaults: { bootstrapMaxChars: bad } }), "pip")).toBe(
+        GUIDES_LONG_CHARS,
+      );
+    expect(guidesLimit(answer({ defaults: { bootstrapMaxChars: 9_999.9 } }), "pip")).toBe(9_999);
+  });
+
+  it("by itself, never writes a file past the gateway's own lowered limit; the person's Add still can", async () => {
+    // 8,000 characters fit a limit of 10,000 whole today; with the section they wouldn't.
+    const file = `# Pip\n${"x".repeat(8_000)}\n`;
+    const config = { agents: { defaults: { bootstrapMaxChars: 10_000 } } };
+    for (const change of [{ action: "auto" }, { action: "switch", on: true }] as GuidesChange[]) {
+      const files = fakeFiles({ pip: file }, {}, {}, config);
+      await applyGuidesChange(files.request, null, change);
+      expect(files.sets, change.action).toEqual([]);
+    }
+    const [folder] = await readGuideFolders(fakeFiles({ pip: file }, {}, {}, config).request, null);
+    expect(folder?.long).toBe(true);
+    // At the default limit it fits, and is written.
+    const plain = fakeFiles({ pip: file });
+    await applyGuidesChange(plain.request, null, { action: "auto" });
+    expect(plain.sets).toHaveLength(1);
+    const asked = fakeFiles({ pip: file }, {}, {}, config);
+    await applyGuidesChange(asked.request, null, { action: "add", bots: ["pip"] });
+    expect(asked.sets).toHaveLength(1);
+  });
+
+  it("by itself, never makes a file that doesn't exist yet, and doesn't record the bot; the person's Add does", async () => {
+    for (const change of [
+      { action: "auto" },
+      { action: "auto", bot: "pip" },
+      { action: "switch", on: true },
+    ] as GuidesChange[]) {
+      const files = fakeFiles({ pip: null, otto: BOT_FILE });
+      const result = await applyGuidesChange(files.request, null, change);
+      expect(files.store.get("pip"), change.action).toBeNull();
+      expect(result.missing, change.action).toEqual([["pip"]]);
+      expect(result.record?.bots).not.toContain("pip");
+    }
+    const [folder] = await readGuideFolders(fakeFiles({ pip: null }).request, null);
+    expect(folder).toMatchObject({ state: "none", missing: true });
+    const asked = fakeFiles({ pip: null });
+    await applyGuidesChange(asked.request, null, { action: "add", bots: ["pip"] });
+    expect(asked.store.get("pip")).toBe(withSection(""));
+  });
+
+  it("by itself, doesn't try again a file whose write the gateway refused, and says why; Add and the switch try again", async () => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
+    files.faults.refuse.add("pip");
+    const first = await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(first.record).toEqual({
+      on: true,
+      bots: ["otto"],
+      refused: { pip: "Workspace document exceeds its write bound" },
+    });
+    const [folder] = await readGuideFolders(files.request, first.record);
+    expect(folder).toMatchObject({
+      state: "none",
+      refused: "Workspace document exceeds its write bound",
+    });
+    // Not tried again by itself: no write is even asked.
+    let asked = 0;
+    const counting = (method: string, params: unknown) => {
+      if (method === "agents.files.set") asked += 1;
+      return files.request(method, params);
+    };
+    const again = await applyGuidesChange(counting, first.record, { action: "auto" });
+    expect(asked).toBe(0);
+    expect(again.record).toEqual(first.record);
+    // A conflict, or a lost connection, isn't a refusal.
+    const lost = fakeFiles({ pip: BOT_FILE });
+    lost.faults.conflicts = 2;
+    expect((await applyGuidesChange(lost.request, null, { action: "auto" })).record).toEqual({
+      on: true,
+      bots: [],
+    });
+    // The person's Add, and the switch turned on, try again, and forget it once written.
+    files.faults.refuse.delete("pip");
+    const added = await applyGuidesChange(files.request, first.record, {
+      action: "add",
+      bots: ["pip"],
+    });
+    expect(added.record).toEqual({ on: true, bots: ["otto", "pip"] });
+    const switched = fakeFiles({ pip: BOT_FILE });
+    await applyGuidesChange(switched.request, first.record, { action: "switch", on: true });
+    expect(switched.sets.map((set) => set.agentId)).toEqual(["pip"]);
+  });
+
+  it("a row's Remove takes the section out of that row's bot only, and only while the switch is off", async () => {
+    const files = fakeFiles({ pip: withSection(BOT_FILE), otto: withSection(BOT_FILE) });
+    const on = await applyGuidesChange(files.request, null, { action: "remove", bots: ["pip"] });
+    expect(on.errors).toEqual([GUIDES_ON]);
+    expect(files.sets).toEqual([]);
+    const off = await applyGuidesChange(
+      files.request,
+      { on: false, bots: [] },
+      { action: "remove", bots: ["pip"] },
+    );
+    expect(off.errors).toEqual([]);
+    expect(off.record).toEqual({ on: false, bots: [] });
+    expect(files.store.get("pip")).toBe(BOT_FILE);
+    expect(files.store.get("otto")).toBe(withSection(BOT_FILE));
   });
 });
 
@@ -418,7 +583,8 @@ describe("the guides in the client", () => {
     );
     const get = storage.get.bind(storage);
     storage.get = (key: string) => {
-      if (key === guidesKey("gw-a")) storage.guideReads += 1;
+      if (key.startsWith("clawtrate.guides.") && key !== GUIDES_DEFAULT_KEY)
+        storage.guideReads += 1;
       return get(key);
     };
     return storage;
@@ -445,8 +611,11 @@ describe("the guides in the client", () => {
     gateway: { dropAll(): void },
     storage?: { guideReads: number },
   ) => {
+    // The client's own decision after a connect (`keepGuides`), watched where no record is read.
+    const spy = vi.spyOn(client as unknown as { keepGuides: () => Promise<void> }, "keepGuides");
     const was = client.state.connection.connectedAt;
     const reads = storage?.guideReads ?? 0;
+    const decided = spy.mock.results.length;
     gateway.dropAll();
     await until(
       () =>
@@ -454,7 +623,11 @@ describe("the guides in the client", () => {
         client.state.connection.connectedAt !== was,
     );
     if (storage) await until(() => storage.guideReads > reads);
-    else await new Promise<void>((resolve) => setTimeout(resolve, 300));
+    else {
+      // No change of Clawtrate's own starts: wait until the connect has decided so.
+      await until(() => spy.mock.results.length > decided);
+      await spy.mock.results.at(-1)?.value;
+    }
     return client.readBotGuides();
   };
 
@@ -475,17 +648,18 @@ describe("the guides in the client", () => {
     withFiles(gateway, files);
     try {
       const read = await reconnect(client, gateway, storage);
-      expect(read.folders.map((f) => [f.bots.join("+"), f.state])).toEqual([
-        ["pip+shared", "current"],
-        ["otto", "current"],
+      expect(read.folders.map((f) => [f.bots.join("+"), f.state, f.missing])).toEqual([
+        ["pip+shared", "current", false],
+        // Otto's file doesn't exist yet: the gateway makes it on Otto's next run, so it's left.
+        ["otto", "none", true],
       ]);
       expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
-      expect(files.store.get("otto")).toBe(withSection(""));
-      expect(files.sets).toHaveLength(2);
-      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "shared", "otto"] });
+      expect(files.store.get("otto")).toBeNull();
+      expect(files.sets).toHaveLength(1);
+      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "shared"] });
       // Again on the next connect: nothing left to write.
       await reconnect(client, gateway, storage);
-      expect(files.sets).toHaveLength(2);
+      expect(files.sets).toHaveLength(1);
     } finally {
       client.stop();
     }
@@ -644,9 +818,9 @@ describe("the guides in the client", () => {
   });
 
   it("a row's Add changes the files first and records them last, and says so truly when it can't record it", async () => {
-    // Pip's section was removed outside Clawtrate; Otto never had one (this connect's own change
-    // came before the files could be read).
-    const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
+    // Pip's section was removed outside Clawtrate; Otto's file doesn't exist yet, so Clawtrate's
+    // own change leaves it, and only the person's Add makes it.
+    const files = fakeFiles({ pip: BOT_FILE, otto: null });
     const storage = diskFull({ on: true, bots: ["pip"] });
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
@@ -658,7 +832,7 @@ describe("the guides in the client", () => {
       expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
       expect(pip.errors).toEqual([]);
       const otto = await client.changeBotGuides({ action: "add", bots: ["otto"] }, pip.stamp);
-      expect(files.store.get("otto")).toBe(withSection(BOT_FILE));
+      expect(files.store.get("otto")).toBe(withSection(""));
       expect(otto.errors).toEqual([GUIDES_NOT_RECORDED]);
       expect(otto.folders.map((f) => f.state)).toEqual(["current", "current"]);
     } finally {
@@ -705,7 +879,7 @@ describe("the guides in the client", () => {
       const { client, gateway } = await openTask(options);
       withFiles(gateway, files);
       try {
-        // No change of Clawtrate's own starts here, so there is nothing to wait for.
+        // No change of Clawtrate's own starts here: wait for the connect to decide so.
         const shown = await reconnect(client, gateway);
         for (const change of [
           { action: "add", bots: ["pip"] },
@@ -738,6 +912,177 @@ describe("the guides in the client", () => {
       viewer.dispose();
       await expect(change).rejects.toThrow(/withdrawn/);
       expect(files.sets).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("adds the section to a file the gateway made after a run ended, once per bot per connection", async () => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: null });
+    const storage = adminStorage();
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    const endRun = (run: string) =>
+      gateway.emit("agent", agentEvent(run, 1, "lifecycle", { phase: "end" }, "agent:otto:main"));
+    try {
+      await reconnect(client, gateway, storage);
+      expect(files.store.get("otto")).toBeNull();
+      // Otto's run ends before the gateway made the file: read once, still missing, left.
+      const reads = storage.guideReads;
+      endRun("run-1");
+      await until(() => storage.guideReads > reads);
+      await client.readBotGuides();
+      expect(files.store.get("otto")).toBeNull();
+      // The gateway made it on that run; another run's end doesn't read it again here.
+      files.store.set("otto", "# Otto's template\n");
+      const after = storage.guideReads;
+      endRun("run-2");
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      expect(storage.guideReads).toBe(after);
+      expect(files.store.get("otto")).toBe("# Otto's template\n");
+      // The next connect reads it again, and adds the section to the gateway's own file.
+      await reconnect(client, gateway, storage);
+      expect(files.store.get("otto")).toBe(withSection("# Otto's template\n"));
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("adds the section to a file the gateway made once a run of the bot ends, with no reconnect", async () => {
+    const files = fakeFiles({ otto: null });
+    const storage = adminStorage();
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      await reconnect(client, gateway, storage);
+      files.store.set("otto", "# Otto's template\n");
+      gateway.emit(
+        "agent",
+        agentEvent("run-1", 1, "lifecycle", { phase: "end" }, "agent:otto:main"),
+      );
+      await until(() => files.store.get("otto") === withSection("# Otto's template\n"));
+      expect(recordIn(storage)).toEqual({ on: true, bots: ["otto"] });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("when the gateway names itself late on the connection, adds the section then, with no reconnect", async () => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE });
+    const storage = adminStorage();
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    // The connect's read and the change's own read are refused; the client's next ask answers.
+    let refusals = 0;
+    gateway.handlers["gateway.identity.get"] = () => {
+      if (refusals < 2) {
+        refusals += 1;
+        throw new Error("not ready");
+      }
+      return { deviceId: "gw-a" };
+    };
+    try {
+      gateway.dropAll();
+      await until(() => refusals === 2);
+      await until(() => files.sets.length === 2, 8_000);
+      expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "otto"] });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("adds the section to a bot made outside Clawtrate while the app is open, with no reconnect", async () => {
+    const listed: Record<string, string | null> = { pip: withSection(BOT_FILE) };
+    const files = fakeFiles(listed);
+    const storage = adminStorage();
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      await reconnect(client, gateway, storage);
+      expect(files.sets).toEqual([]);
+      // The gateway's CLI makes Juniper; the gateway says its config changed.
+      listed.juniper = BOT_FILE;
+      files.store.set("juniper", BOT_FILE);
+      gateway.emit("config.changed", {});
+      await until(() => files.store.get("juniper") === withSection(BOT_FILE));
+      expect(files.sets.map((set) => set.agentId)).toEqual(["juniper"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("takes a stored value that isn't a record as unreadable: nothing is written, it is left, and Settings doesn't guess", async () => {
+    for (const stored of [
+      "{not json",
+      JSON.stringify({ on: "no", bots: [] }),
+      JSON.stringify({ on: false }),
+    ]) {
+      const files = fakeFiles({ pip: BOT_FILE });
+      const storage = adminStorage();
+      await storage.set(guidesKey("gw-a"), stored);
+      const { client, gateway } = await openTask({ storage });
+      withFiles(gateway, files);
+      try {
+        const read = await reconnect(client, gateway, storage);
+        expect(files.sets, stored).toEqual([]);
+        expect(storage.data.get(guidesKey("gw-a")), stored).toBe(stored);
+        // `{"on":false}` is read as the off it says; the others can't be read at all.
+        const off = stored === JSON.stringify({ on: false });
+        expect(read.unreadable, stored).toBe(!off);
+        if (!off) {
+          const after = await client.changeBotGuides({ action: "switch", on: true }, read.stamp);
+          expect(after.errors).toEqual([GUIDES_NOT_READ]);
+          expect(files.sets).toEqual([]);
+        }
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
+  it("off on one gateway is off on a gateway this device hasn't seen; on clears it; a gateway's own record wins", async () => {
+    const storage = adminStorage();
+    const files = fakeFiles({ pip: withSection(BOT_FILE) });
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const shown = await reconnect(client, gateway, storage);
+      await client.changeBotGuides({ action: "switch", on: false }, shown.stamp);
+      expect(JSON.parse(storage.data.get(GUIDES_DEFAULT_KEY)!)).toEqual({ on: false, bots: [] });
+      // Another gateway, never seen: its bots are left, and its switch reads off.
+      const other = fakeFiles({ otto: BOT_FILE });
+      withFiles(gateway, other);
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-b" });
+      const there = await reconnect(client, gateway, storage);
+      expect(other.sets).toEqual([]);
+      expect(there.record).toEqual({ on: false, bots: [] });
+      expect(storage.data.has(guidesKey("gw-b"))).toBe(false);
+      // Turned on there: the default goes, and that gateway's own record says on.
+      const on = await client.changeBotGuides({ action: "switch", on: true }, there.stamp);
+      expect(storage.data.has(GUIDES_DEFAULT_KEY)).toBe(false);
+      expect(on.folders[0]?.state).toBe("current");
+      // A gateway with a record of its own keeps it whatever the default says.
+      await storage.set(GUIDES_DEFAULT_KEY, JSON.stringify({ on: false, bots: [] }));
+      other.store.set("otto", BOT_FILE);
+      await storage.set(guidesKey("gw-b"), JSON.stringify({ on: true, bots: [] }));
+      await reconnect(client, gateway, storage);
+      expect(other.store.get("otto")).toBe(withSection(BOT_FILE));
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("says files changed only when one was written: an Add that found it already there, unsaved, says nothing changed", async () => {
+    const files = fakeFiles({ pip: withSection(BOT_FILE) });
+    const storage = diskFull({ on: true, bots: [] });
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const shown = await client.readBotGuides();
+      const after = await client.changeBotGuides({ action: "add", bots: ["pip"] }, shown.stamp);
+      expect(files.sets).toEqual([]);
+      expect(after.errors).toEqual([GUIDES_NOT_SAVED]);
     } finally {
       client.stop();
     }
@@ -826,6 +1171,41 @@ describe("the guides in the client", () => {
       await ahead;
       await expect(waiting).rejects.toThrow(/withdrawn/);
       expect(files.sets.map((set) => set.agentId)).toEqual(["pip"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("sends nothing for a change whose viewer went away while this device's record was being read", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const storage = adminStorage();
+    await storage.set(guidesKey("gw-a"), JSON.stringify({ on: true, bots: ["pip"] }));
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      const shown = await client.readBotGuides();
+      let release = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let reading = false;
+      const get = storage.get;
+      storage.get = async (key: string) => {
+        if (key === guidesKey("gw-a") && !reading) {
+          reading = true;
+          await held;
+        }
+        return get(key);
+      };
+      const viewer = createBridgeSession(client);
+      const change = viewer.apply({
+        type: "changeBotGuides",
+        change: { action: "add", bots: ["pip"] },
+        stamp: shown.stamp,
+      });
+      await until(() => reading);
+      viewer.dispose();
+      release();
+      await expect(change).rejects.toThrow(/withdrawn/);
+      expect(files.sets).toEqual([]);
     } finally {
       client.stop();
     }

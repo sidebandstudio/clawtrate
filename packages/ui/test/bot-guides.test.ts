@@ -9,6 +9,7 @@ import { afterChange, forConnection, guideRow } from "../src/BotGuides.tsx";
 const read = (gatewayId: string | null, target: number): BotGuidesAnswer => ({
   folders: [],
   record: null,
+  unreadable: false,
   voicePlugin: false,
   errors: [],
   stamp: { gatewayId, target },
@@ -41,6 +42,8 @@ describe("a bot's row", () => {
     moved: false,
     long: false,
     utf8: true,
+    missing: false,
+    refused: null,
     changedText: null,
     error: null,
     ...over,
@@ -85,6 +88,19 @@ describe("a bot's row", () => {
         action: null,
       });
     expect(row({ state: "current", utf8: false }, false)?.action).toBeNull();
+    // A file that doesn't exist yet: the gateway makes it first; Add is the person's own choice.
+    expect(row({ state: "none", missing: true })).toEqual({
+      words:
+        "Pip's AGENTS.md doesn't exist yet. The gateway makes it on Pip's next run, and Clawtrate adds the section after that.",
+      action: "add",
+    });
+    // A write the gateway refused: said, with its reason, and not tried again by itself.
+    expect(row({ state: "none", refused: "Workspace document exceeds its write bound" })).toEqual({
+      words:
+        "The gateway refused Clawtrate's change to Pip's AGENTS.md, so Clawtrate doesn't try again by itself. The gateway said: Workspace document exceeds its write bound",
+      action: "add",
+    });
+    expect(row({ state: "none", missing: true }, false)).toBeNull();
     expect(row({ state: null, error: "missing scope: operator.read" })).toEqual({
       words: "Couldn't read its instructions file. missing scope: operator.read",
       action: null,
