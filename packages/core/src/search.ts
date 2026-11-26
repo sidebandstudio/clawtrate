@@ -8,7 +8,7 @@
 import { cutText } from "./bounds.ts";
 import { establishFolder } from "./files.ts";
 import { asRecord, botIdFromSessionKey, type RawRecord } from "./mapping.ts";
-import { snippetWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
+import { markerTextOut, snippetWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
 import { MAX_ID_CHARS } from "./state-bounds.ts";
 import { MAX_TASK_LABEL_CHARS } from "./task-actions.ts";
 
@@ -208,13 +208,14 @@ function wordsMatch(text: string, query: string): boolean {
 /**
  * The gateway indexes the model's copy of a person's message, so a message sent from Clawtrate
  * is found and shown with the marker after its words (`send-marker.ts`). The person's view is
- * their words: the marker comes off the snippet (`snippetWithoutMarker`). A hit is left out only
- * when the snippet held the marker whole and the words left match nothing of the query, so the
- * marker is all it matched; in every other case it stays.
+ * their words: the marker comes off the snippet (`snippetWithoutMarker`). A hit is left out when
+ * the snippet, with every exact run of the marker's own text taken out (`markerTextOut`), has no
+ * match left for the query: the marker is all it showed matching. In every other case it stays.
  */
 function personSnippet(snippet: string, query: string): string | null {
-  const { text, whole } = snippetWithoutMarker(snippet);
-  return !whole || wordsMatch(text, query) ? text : null;
+  const { rest, found } = markerTextOut(snippet);
+  if (found && !wordsMatch(rest, query)) return null;
+  return snippetWithoutMarker(snippet).text;
 }
 
 /**

@@ -231,9 +231,63 @@ export function snippetWithoutMarker(snippet: string): { text: string; whole: bo
   const ending: Ending = capped
     ? { ellipsis: "…", how: "cut" }
     : boundary
-      ? { ellipsis: boundary, how: "excerpt" }
+      ? // An excerpt stops at the end of a word: its last word is whole.
+        { ellipsis: boundary, how: "excerpt", atSpace: true }
       : { ellipsis: "", how: "whole" };
   return takeMarker(snippet, lead, ending);
+}
+
+/** The marker's sentences: its own words, then the JSON after the second's colon. */
+const MARKER_SENTENCES = [MARKER_SENTENCE, MARKER_AS_SEARCHED.slice(MARKER_SENTENCE.length + 1)];
+
+/**
+ * A search snippet with every exact run of the marker's own text taken out, for telling whether
+ * the person's words match the query, and whether there was any. A run is the marker whole, a
+ * whole sentence of it, or a long start or a long end of it at the snippet's edge or at an
+ * excerpt's "…": at least its first or last three words (`LONG_PIECE`), from a word's start. A
+ * shorter start may be the person's own next word and is left in.
+ */
+export function markerTextOut(snippet: string): { rest: string; found: boolean } {
+  let found = false;
+  const segments = fold(snippet)
+    .split(/\s*…\s*/)
+    .map((segment) => {
+      let rest = segment.trim();
+      // At the segment's edges first, where a start or an end of the marker runs whole: a
+      // segment ends where the excerpt or the snippet does, at a word's end.
+      const long = (piece: string) => piece.length >= LONG_PIECE - 1;
+      for (let at = 0; at < rest.length; at += 1) {
+        if (at > 0 && rest[at - 1] !== " ") continue;
+        const piece = rest.slice(at);
+        if (long(piece) && MARKER_AS_SEARCHED.startsWith(piece)) {
+          found = true;
+          rest = rest.slice(0, at).trim();
+          break;
+        }
+      }
+      for (let end = rest.length; end > 0; end -= 1) {
+        if (end < rest.length && rest[end] !== " ") continue;
+        const piece = rest.slice(0, end);
+        const start = MARKER_AS_SEARCHED.length - piece.length;
+        if (
+          long(piece) &&
+          MARKER_AS_SEARCHED.endsWith(piece) &&
+          MARKER_AS_SEARCHED[start - 1] === " "
+        ) {
+          found = true;
+          rest = rest.slice(end).trim();
+          break;
+        }
+      }
+      // Then the marker whole, or a whole sentence of it, wherever it is.
+      for (const run of [MARKER_AS_SEARCHED, ...MARKER_SENTENCES]) {
+        if (!rest.includes(run)) continue;
+        found = true;
+        rest = rest.split(run).join(" ").replace(/ +/g, " ").trim();
+      }
+      return rest;
+    });
+  return { rest: segments.join(" … "), found };
 }
 
 /**
