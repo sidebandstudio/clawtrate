@@ -10467,7 +10467,7 @@ export class ClawtrateClient {
         // so, and Try again subscribes again (`reloadSession`).
         status: live ? "ready" : "error",
         items,
-        interSession: interSessionMessages(messages),
+        interSession: interSessionMessages(messages, items),
         // Reactions leave with the history they belonged to (F-283).
         ...(current.reactions ? { reactions: reactionsShown(current.reactions, items) } : {}),
         error: live ? null : LIVE_UPDATES_NOT_STARTED,
