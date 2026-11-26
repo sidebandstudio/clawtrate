@@ -1,8 +1,8 @@
 // The scenario-check job in ci.yml runs on a pull request only when the pull request changes a
 // file the check uses: one of the changes job's SCENARIOS_PATHS (#693). This checks that list
-// against `pnpm scenarios`: every file it reaches through imports, every plugin it loads and the
-// OpenClaw pins of the code it runs. The import walk stops at packages/: the e2e job tests the
-// app's own code on every change.
+// against `pnpm scenarios`: every file it reaches through imports, every plugin it loads, the
+// OpenClaw pins of the code it runs, and the root manifest and lockfile it installs from. The
+// import walk stops at packages/: the e2e job tests the app's own code on every change.
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -64,6 +64,11 @@ describe("the scenario check's gate", () => {
       expect(readFileSync(join(ROOT, file), "utf8"), file).toContain('"@openclaw/gateway-client"');
       expect(covered.has(file), file).toBe(true);
     }
+  });
+
+  it("lists the root manifest and lockfile, which decide what the job installs", () => {
+    for (const file of ["package.json", "pnpm-lock.yaml"])
+      expect(covered.has(file), file).toBe(true);
   });
 
   it("lists no path that matches nothing", () => {
