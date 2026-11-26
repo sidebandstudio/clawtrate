@@ -548,6 +548,8 @@ export class DeviceApprovals {
   private applyNewest(seq: number, rows: unknown[]): boolean {
     if (seq < this.applied) return false;
     this.applied = seq;
+    // Any list applied, whoever read it, ends a run of failed reads.
+    this.failures = 0;
     this.apply(rows);
     return true;
   }
@@ -562,27 +564,31 @@ export class DeviceApprovals {
     const epoch = this.epoch;
     this.reading = true;
     this.lastReadAt = this.ctx.now();
-    let failed = false;
+    // `list()` numbers this send, before its first await: the next number.
+    const seq = this.sent + 1;
+    let outcome: "read" | "failed" | "older" = "read";
     try {
       await this.list();
       if (epoch !== this.epoch) return;
-      this.failures = 0;
     } catch (error) {
-      if (epoch === this.epoch) {
+      // A failure is ordered like a reply: one older than a list already applied (a decision's
+      // read, Machines') publishes nothing and is tried again by nothing.
+      if (epoch === this.epoch && seq > this.applied) {
         this.patch({ error: errorText(error) });
-        failed = true;
-      }
+        outcome = "failed";
+      } else outcome = "older";
     } finally {
       if (epoch === this.epoch) {
         this.reading = false;
         if (this.again) {
           this.again = false;
           this.schedule();
-        } else if (failed && this.failures < READ_RETRIES) {
-          // A request may be waiting that no read has shown yet: try again, a few times.
-          this.schedule(READ_GAP_MS * 4 ** this.failures);
+        } else if (outcome === "failed") {
+          // A request may be waiting that no read has shown yet: try again, a few times. Then the
+          // last list read stays shown, with the error, until an event, a hello or a refresh.
+          if (this.failures < READ_RETRIES) this.schedule(READ_GAP_MS * 4 ** this.failures);
           this.failures += 1;
-        } else if (this.state.requests.length > 0) this.schedule(REREAD_MS);
+        } else if (outcome === "read" && this.state.requests.length > 0) this.schedule(REREAD_MS);
       }
     }
   }

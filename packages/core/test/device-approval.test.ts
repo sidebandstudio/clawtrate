@@ -592,19 +592,23 @@ describe("approving a waiting device", () => {
     expect(await t.engine.refuse(id, "none-match")).toEqual({ kind: "none-match" });
     t.advance(4 * 60_000);
     expect(await t.engine.refuse(id, "none-match")).toEqual({ kind: "not-allowed" });
-    // The quiet minutes run from the first pick: the refused one started none.
-    t.advance(60_000);
-    const next = pendingRow();
-    t.gw.pending = [next, row];
+    // "I didn't start this" still denies it, while it is listed and still picked for.
     await t.engine.refresh();
-    t.gw.pending = [next];
-    await t.engine.refresh();
-    expect(t.state().prompt).toBe(next.requestId);
-    // "I didn't start this" still denies a request picked for.
-    t.gw.pending = [next, row];
-    await t.engine.refresh();
+    expect(t.request(id).spent).toBe(true);
     expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "denied" });
     expect(t.calls).toContain("device.pair.reject");
+    // The quiet minutes run from the first pick: the refused one started none.
+    const first = pendingRow();
+    const u = await listed([first]);
+    const firstId = first.requestId as string;
+    expect(await u.engine.refuse(firstId, "none-match")).toEqual({ kind: "none-match" });
+    u.advance(4 * 60_000);
+    expect(await u.engine.refuse(firstId, "none-match")).toEqual({ kind: "not-allowed" });
+    u.advance(60_000);
+    const next = pendingRow();
+    u.gw.pending = [next];
+    await u.engine.refresh();
+    expect(u.state().prompt).toBe(next.requestId);
   });
 
   it("compares and removes the paired device read once after a lost answer", async () => {
@@ -1131,6 +1135,51 @@ describe("the waiting requests", () => {
       await t.engine.refresh();
       expect(t.state().prompt).toBe(next.requestId);
     }
+  });
+
+  it("publishes no failure older than a list a decision read, and tries it again never", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    t.answers["device.pair.list"] = async () => {
+      // A background read, sent first, fails last.
+      await new Promise<void>((resolve) => (failRead = resolve));
+      throw new Error("timed out");
+    };
+    let failRead: () => void = () => {};
+    void t.engine.refresh();
+    await t.settle();
+    // The decision's read, sent later, answers first: a good list in which the request now
+    // shares its code, so nothing is approved and nothing more is read.
+    t.answers["device.pair.list"] = () => ({ pending: [row, { ...row, ts: 0 }], paired: [] });
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    const shown = t.state();
+    failRead();
+    await t.settle();
+    expect(t.state()).toBe(shown);
+    expect(t.state().error).toBeNull();
+    expect(t.delays()).toEqual([]);
+  });
+
+  it("stops after four retries, keeping the last list read, though requests were waiting", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.list"] = () => {
+      throw new Error("timed out");
+    };
+    const waits: Array<number | undefined> = [];
+    for (let i = 0; i < 8; i += 1) {
+      waits.push(...t.delays());
+      await t.fire();
+    }
+    // The 30-second read, then the four retries, then nothing until an event, hello or refresh.
+    expect(waits).toEqual([30_000, 1_000, 4_000, 16_000, 64_000]);
+    expect(t.delays()).toEqual([]);
+    // What the person sees: the last list read, and the read's failure.
+    expect(t.state()).toMatchObject({ error: "timed out" });
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
   });
 
   it("tries a failed read again, four times, each four times later, and polls no empty list", async () => {

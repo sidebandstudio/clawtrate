@@ -9942,6 +9942,9 @@ export class ClawtrateClient {
       // it was setup's is published, if it was this connection's.
       const held = this.setupUpdate;
       if (held?.generation === generation) this.setConnection({ openclawUpdate: held.update });
+      // Waiting devices start as on a hello: with admin the list is read now, so a request
+      // already waiting is listed without an event.
+      this.deviceApprovals.onHello();
     }
     if (setup) this.setupUpdate = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:

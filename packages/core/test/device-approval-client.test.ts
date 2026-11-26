@@ -110,6 +110,38 @@ describe("waiting devices on the client", () => {
     client.stop();
   });
 
+  it("lists a request already waiting once setup ends on the same connection, with no event", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["device.pair.list"] = () => ({ pending: [row("r1")], paired: [] });
+    // The first read of bots, which ends setup, answers when the test says.
+    const bots = gateway.handlers["agents.list"]!;
+    let endSetup: () => void = () => {};
+    const ended = new Promise<void>((resolve) => (endSetup = resolve));
+    gateway.handlers["agents.list"] = async (params) => {
+      await ended;
+      return bots(params);
+    };
+    const host = { ...testHost(gateway, memoryStorage()), secureCredentials: async () => true };
+    const client = new ClawtrateClient(host, FAST);
+    await client.start();
+    await client.connectWithSetupCode({
+      url: SETUP_URL,
+      bootstrapToken: "setup-bootstrap-0123456789abcdefghijklmnopqrstuvw",
+      expiresAtMs: Date.now() + 600_000,
+    });
+    await until(() => gateway.calls("agents.list").length === 1);
+    expect(client.state.connection.canAdmin).toBe(true);
+    // While setup lasts, nothing is listed.
+    expect(gateway.calls("device.pair.list")).toEqual([]);
+    const connects = gateway.connects.length;
+    endSetup();
+    await until(() => client.state.deviceRequests?.requests.length === 1);
+    expect(client.state.deviceRequests?.access).toBe("admin");
+    // The same connection, and no event or refresh asked for it.
+    expect(gateway.connects).toHaveLength(connects);
+    client.stop();
+  });
+
   it("forgets them when the person suspends the connection", async () => {
     const { client } = await adminClient([row("r1")]);
     await until(() => client.state.deviceRequests?.requests.length === 1);
