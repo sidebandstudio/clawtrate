@@ -614,6 +614,10 @@ describe.skipIf(!mac)(
         expect(readFileSync(join(home, "commands"), "utf8").split("prove-private").length).toBe(
           tries,
         );
+        // The connection stays the person's: setup is over, and the gateway stays saved.
+        expect(setup.current.phase).toBe("done");
+        expect(client.state.connection.status).toBe("error");
+        expect(await client.savedSettings()).toMatchObject({ route: ".openclaw" });
       } finally {
         client.stop();
         await server.close();
