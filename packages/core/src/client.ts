@@ -428,6 +428,8 @@ export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose aga
 
 /** Deferred Stops of an archive or a delete kept for their runs' aborts (`deferredStops`). */
 export const MAX_DEFERRED_STOPS = 32;
+/** A resend of a message the gateway refused the marker on, held by a question that opened meanwhile. */
+const HELD_FOR_QUESTION = Symbol("held for a question");
 /** Why a deferred Stop was given up: every place for its check is held by a Stop still waiting. */
 const TOO_MANY_STOPS =
   "Too many Stops are waiting for their runs to start, so nothing was sent for this one. Try again in a moment.";
@@ -4469,6 +4471,22 @@ export class ClawtrateClient {
         // A Stop withdrew it, or it went away, while the refusal was on its way: nothing more.
         const now = this.outgoing(key, messageId);
         if (!now || now.steer === "withdrawn") throw error;
+        // A question opened meanwhile holds the resend, as it holds any send: the gateway would
+        // take a plain message as its answer. It goes, without the marker, once the question
+        // settles; the refused frame started nothing.
+        const current = this.state.transcripts[key];
+        const currentRun = current ? activeRun(current) : undefined;
+        if (current && questionPending(current, currentRun)) {
+          this.updateActivity(key, (activity) =>
+            updateMessage(activity, messageId, {
+              status: "held",
+              unmarked: true,
+              leftAt: null,
+              runId: currentRun?.id ?? null,
+            }),
+          );
+          return HELD_FOR_QUESTION;
+        }
         // Anything else pressed meanwhile is as it would be had the gateway taken the first
         // frame. The refused frame started nothing, and a Stop asked for meanwhile waits for an
         // answer that names the run: the resend's, which is aborted then (below), as before the
@@ -4487,7 +4505,9 @@ export class ClawtrateClient {
         const left = updateMessage(activity, messageId, { leftAt: this.now() });
         return joins ? registerSteerAlias(left, messageId, joins) : left;
       });
-      result = asRecord(await sent);
+      const answer = await sent;
+      if (answer === HELD_FOR_QUESTION) return;
+      result = asRecord(answer);
     } catch (error) {
       this.noteMissingScope(error);
       // A Stop withdrew it while the answer was on its way: it stays Not sent.

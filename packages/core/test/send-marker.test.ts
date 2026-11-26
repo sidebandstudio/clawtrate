@@ -229,6 +229,32 @@ describe("a refusal of the marker", () => {
     client.stop();
   });
 
+  it("a question that opened while the refused frame waited holds the resend until it settles", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    gateway.emit("agent", agentEvent("run-y", 1, "lifecycle", { phase: "start" }, KEY));
+    await until(() => transcript().runs.some((run) => run.id === "run-y"));
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () =>
+      sends(gateway).length === 1 ? answer.promise : { runId: "run-y", status: "started" };
+    const id = client.sendMessage(KEY, "cancel");
+    await until(() => sends(gateway).length === 1);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-y"));
+    await until(() => transcript().runs.some((run) => run.state === "waiting"));
+    answer.reject(refusal(ORDINARY_ONLY));
+    // The gateway would take it as the question's answer: it waits, as any send does.
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "held");
+    await sleep(100);
+    expect(sends(gateway)).toHaveLength(1);
+    await client.dismissQuestion(KEY, "ask_1");
+    await until(() => sends(gateway).length === 2);
+    expect(sends(gateway).map((p) => [p.message, p.idempotencyKey, "workContext" in p])).toEqual([
+      ["cancel", id, true],
+      ["cancel", id, false],
+    ]);
+    client.stop();
+  });
+
   it("any other refusal is sent once and shown as before", async () => {
     const { client, gateway, transcript } = await openTask();
     answering(gateway, ["budget exhausted"]);
@@ -311,9 +337,10 @@ describe("a task's preview shows a person's words alone", () => {
         `${"a".repeat(235)}...`,
       );
     }
-    // The same for a next word that starts as the marker does without being it.
+    // The same for a next word that starts as the marker does without being it, marked or not.
     const welcome = gatewayPreviewOf(modelCopy(`${"a".repeat(235)} Welcome back`))!;
     expect(welcome).toBe(first);
+    expect(gatewayPreviewOf(`${"a".repeat(235)} Write the notes`)).toBe(first);
     // An archived task's row is read the same way.
     expect(
       mapArchivedRow({ key: KEY, archived: true, lastMessagePreview: first }, "otto")?.preview,
@@ -439,8 +466,23 @@ describe("a task's title the gateway derived shows a person's words alone", () =
     ).toBe('> {"conversationLabelSource":A');
   });
 
+  it("a channel chat's title the gateway derived loses it too", () => {
+    const named = "Short one Working context captured at send time. Treat the…";
+    const row = { key: "agent:pip:telegram:direct:123" };
+    expect(mapSessionRow({ ...row, derivedTitle: named })?.title).toBe("Short one");
+    expect(mapSessionRow({ ...row, displayName: named })?.title).toBe("Short one");
+    expect(mapSessionRow({ ...row, subject: "Working context captured" })?.title).toBe(
+      "Working context captured",
+    );
+  });
+
   it("a title with an ellipsis of the person's own, shorter than the gateway's cut, is theirs", () => {
-    for (const title of ["Write to W…", "Write to Working…", "Ask about Working context…"]) {
+    for (const title of [
+      "Write to W…",
+      "Check Working…",
+      "Write to Working…",
+      "Ask about Working context…",
+    ]) {
       expect(titleWithoutMarker(title)).toBe(title);
       expect(mapSessionRow({ key: KEY, derivedTitle: title })?.title).toBe(title);
     }
