@@ -5,11 +5,13 @@
 
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
+import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { checkLength, concat, copy, Reader, utf8, Writer } from "./bytes.ts";
+import { checkLength, concat, copy, equalBytes, Reader, utf8, Writer } from "./bytes.ts";
 import { fail } from "./errors.ts";
 import { hpkeOpen, hpkeSeal } from "./hpke.ts";
 import {
+  deriveFromListKey,
   ListPublicKey,
   sealSecretBytes,
   signList,
@@ -25,7 +27,8 @@ import {
   MAX_MEMBERS,
   MAX_NAME_BYTES,
 } from "./limits.ts";
-import { MAX_ENTRY_BYTES, decodeList, encodeList, type ListState } from "./list.ts";
+import { verifyCard, type Card } from "./card.ts";
+import { MAX_ENTRY_BYTES, decodeList, encodeList, verifyList, type ListState } from "./list.ts";
 import {
   checkContext,
   expectContext,
@@ -53,8 +56,7 @@ let secretBytes!: (secret: ListSecret) => Uint8Array;
 
 export class ListSecret {
   readonly #bytes: Uint8Array;
-  /** Which secret this is: the first is 0, and each rotation raises it by one. */
-  readonly epoch: number;
+  readonly #epoch: number;
 
   static {
     secretBytes = (secret) => secret.#bytes;
@@ -62,7 +64,13 @@ export class ListSecret {
 
   private constructor(bytes: Uint8Array, epoch: number) {
     this.#bytes = bytes;
-    this.epoch = epoch;
+    this.#epoch = epoch;
+    Object.freeze(this);
+  }
+
+  /** Which secret this is: the first is 0, and each rotation raises it by one. */
+  get epoch(): number {
+    return this.#epoch;
   }
 
   /** `random` is 32 bytes from the system's random source. */
@@ -96,20 +104,49 @@ function aad(header: Uint8Array, context: ListContext): Uint8Array {
   return concat(utf8(TAG.listSealed), header, context.gatewayId, context.accountId);
 }
 
+/**
+ * The synthetic nonce: the first 24 bytes of HMAC-SHA256, keyed with HKDF-SHA256 of the secret
+ * (info: the `list seal nonce` tag), over the tag, the version, kind and epoch, the gateway and
+ * account ids, the caller's 32 random bytes and the plaintext. A repeated random value then
+ * gives a repeated nonce only for an identical plaintext, which reveals that the two are equal
+ * and nothing else.
+ */
+function syntheticNonce(
+  secret: ListSecret,
+  kind: SealedKind,
+  context: ListContext,
+  random: Uint8Array,
+  plaintext: Uint8Array,
+): Uint8Array {
+  const key = hkdf(sha256, secretBytes(secret), undefined, utf8(TAG.listSealNonce), 32);
+  const message = new Writer()
+    .label(TAG.listSealNonce)
+    .u8(SEALED_VERSION)
+    .u8(KINDS[kind])
+    .u32(secret.epoch)
+    .fixed(context.gatewayId, 16, "gateway id")
+    .fixed(context.accountId, 16, "account id")
+    .fixed(random, 32, "random")
+    .finish();
+  return hmac(sha256, key, concat(message, plaintext)).subarray(0, 24);
+}
+
 function seal(
   secret: ListSecret,
   kind: SealedKind,
   context: ListContext,
   plaintext: Uint8Array,
-  nonce: Uint8Array,
-) {
+  random: Uint8Array,
+): Uint8Array {
   const checked = checkContext(context);
+  const ownRandom = copy(checkLength(random, 32, "the random bytes"));
   if (plaintext.length > MAX_PLAINTEXT[kind]) fail("too_large", `the ${kind} is over its bound`);
+  const nonce = syntheticNonce(secret, kind, checked, ownRandom, plaintext);
   const header = new Writer()
     .u8(SEALED_VERSION)
     .u8(KINDS[kind])
     .u32(secret.epoch)
-    .fixed(checkLength(nonce, 24, "a nonce"), 24, "nonce")
+    .fixed(nonce, 24, "nonce")
     .finish();
   const ciphertext = xchacha20poly1305(aeadKey(secret), nonce, aad(header, checked)).encrypt(
     plaintext,
@@ -121,9 +158,10 @@ function open(
   secret: ListSecret,
   kind: SealedKind,
   context: ListContext,
-  sealed: Uint8Array,
+  input: Uint8Array,
 ): Uint8Array {
   const checked = checkContext(context);
+  const sealed = copy(input);
   if (sealed.length > HEADER_BYTES + MAX_PLAINTEXT[kind] + 16)
     fail("too_large", `the sealed ${kind} is over its bound`);
   const reader = new Reader(sealed);
@@ -143,18 +181,18 @@ function open(
   }
 }
 
-/** Seals a whole list. `nonce` is 24 random bytes. */
+/** Seals a whole list. `random` is 32 random bytes; the nonce is derived from it (above). */
 export function sealList(
   secret: ListSecret,
   context: ListContext,
   entries: readonly Uint8Array[],
-  nonce: Uint8Array,
-) {
-  return seal(secret, "list", context, encodeList(entries), nonce);
+  random: Uint8Array,
+): Uint8Array {
+  return seal(secret, "list", context, encodeList(entries.map(copy)), random);
 }
 
-/** Opens a sealed list. The entries still need `verifyList`. */
-export function openList(
+/** For this package only: a sealed list's entries, before they are verified. */
+export function openListEntries(
   secret: ListSecret,
   context: ListContext,
   sealed: Uint8Array,
@@ -162,38 +200,45 @@ export function openList(
   return decodeList(open(secret, "list", context, sealed));
 }
 
-/** Seals the signed card. `nonce` is 24 random bytes. */
+/** Opens a sealed list and verifies it from its first entry. */
+export function openList(secret: ListSecret, context: ListContext, sealed: Uint8Array): ListState {
+  return verifyList(context, openListEntries(secret, context, sealed));
+}
+
+/** Seals the signed card. `random` is 32 random bytes. */
 export function sealCard(
   secret: ListSecret,
   context: ListContext,
   card: Uint8Array,
-  nonce: Uint8Array,
-) {
-  return seal(secret, "card", context, card, nonce);
+  random: Uint8Array,
+): Uint8Array {
+  return seal(secret, "card", context, copy(card), random);
 }
 
-/** Opens a sealed card. The card still needs `verifyCard`. */
-export function openCard(secret: ListSecret, context: ListContext, sealed: Uint8Array): Uint8Array {
-  return open(secret, "card", context, sealed);
+/** Opens a sealed card and verifies it against the list's connector key and gateway. */
+export function openCard(secret: ListSecret, state: ListState, sealed: Uint8Array): Card {
+  const context = state.context;
+  return verifyCard(open(secret, "card", context, sealed), state.connectorKey, context.gatewayId);
 }
 
-/** Seals one entry on its way to the connector. `nonce` is 24 random bytes. */
+/** Seals one entry on its way to the connector. `random` is 32 random bytes. */
 export function sealEntry(
   secret: ListSecret,
   context: ListContext,
   entry: Uint8Array,
-  nonce: Uint8Array,
-) {
-  return seal(secret, "entry", context, entry, nonce);
+  random: Uint8Array,
+): Uint8Array {
+  return seal(secret, "entry", context, copy(entry), random);
 }
 
-/** Opens a sealed entry. The entry still needs `ListState.append`. */
+/** Opens a sealed entry and appends it to `state`: the connector's list after it, or a refusal. */
 export function openEntry(
   secret: ListSecret,
-  context: ListContext,
+  state: ListState,
   sealed: Uint8Array,
-): Uint8Array {
-  return open(secret, "entry", context, sealed);
+): { entry: Uint8Array; state: ListState } {
+  const entry = open(secret, "entry", state.context, sealed);
+  return Object.freeze({ entry, state: state.append(entry) });
 }
 
 const ROTATION_PURPOSE = 2;
@@ -211,40 +256,56 @@ function rotationInfo(context: ListContext, epoch: number, recipient: ListPublic
 
 /**
  * The connector seals a new list secret to every current device member and signs the whole.
- * `random` is 32 random bytes per device member, in the order of `state.devices()`.
+ * `held` is the secret it replaces: the new one must have a higher epoch and other bytes, so a
+ * removed device's old secret never opens what is sealed after. `random` is 32 random bytes;
+ * each share's HPKE ephemeral is hedged from it (see `rotationEphemeral`).
  */
 export function rotateListSecret(
   connector: ListSecretKey,
   state: ListState,
-  secret: ListSecret,
+  held: ListSecret,
+  next: ListSecret,
   random: Uint8Array,
 ): Uint8Array {
   if (!connector.publicKey.equals(state.connectorKey))
     fail("not_permitted", "only the connector rotates the secret");
+  if (next.epoch <= held.epoch) fail("stale_secret", "the new secret's epoch is not higher");
+  if (equalBytes(secretBytes(next), secretBytes(held)))
+    fail("stale_secret", "the new secret is the one held");
   const devices = state.devices();
   if (devices.length === 0) fail("bad_target", "no device is left to seal the secret to");
-  checkLength(random, 32 * devices.length, "the random bytes for each device");
+  const ownRandom = copy(checkLength(random, 32, "the random bytes"));
   const context = state.context;
   const writer = new Writer().label(LABEL.listSecret);
   writeContext(writer, context);
-  writer.u32(secret.epoch).u8(devices.length);
-  devices.forEach((member, i) => {
-    const info = rotationInfo(context, secret.epoch, member.key);
-    const ikm = random.subarray(32 * i, 32 * (i + 1));
+  writer.u32(next.epoch).u8(devices.length);
+  for (const member of devices) {
+    const info = rotationInfo(context, next.epoch, member.key);
+    const ikm = rotationEphemeral(connector, ownRandom, info);
     const { enc, ciphertext } = hpkeSeal(
       member.device!.sealKey.bytes,
       info,
       new Uint8Array(0),
-      secretBytes(secret),
+      secretBytes(next),
       ikm,
     );
     writer
       .fixed(member.key.bytes, 32, "recipient")
       .fixed(enc, 32, "enc")
       .fixed(ciphertext, 48, "sealed secret");
-  });
+  }
   const signed = writer.finish();
   return concat(signed, signList(connector, signed));
+}
+
+/**
+ * A share's HPKE ephemeral input: HKDF-SHA256 of the connector key's random bytes, salted with
+ * the caller's random, with the `rotation ephemeral` tag and the share's HPKE info as info. A
+ * repeated or predictable random still gives a value no one without the connector's key can
+ * compute, and a different one for each share.
+ */
+function rotationEphemeral(connector: ListSecretKey, random: Uint8Array, info: Uint8Array) {
+  return deriveFromListKey(connector, random, concat(utf8(TAG.rotationEphemeral), info), 32);
 }
 
 /**
@@ -257,7 +318,7 @@ export function openRotation(
   bytes: Uint8Array,
   held: ListSecret,
 ): ListSecret {
-  const reader = new Reader(bytes);
+  const reader = new Reader(copy(bytes));
   reader.label(LABEL.listSecret);
   const context = readContext(reader);
   const epoch = reader.u32();
@@ -290,5 +351,7 @@ export function openRotation(
     new Uint8Array(0),
     share.ciphertext,
   );
+  if (equalBytes(plaintext, secretBytes(held)))
+    fail("stale_secret", "the new secret is the one held");
   return ListSecret.fromBytes(plaintext, epoch);
 }

@@ -2,8 +2,10 @@
 
 /** Device members on one list at once, not counting the connector. */
 export const MAX_MEMBERS = 32;
-/** Entries in one list, the first included. */
-export const MAX_ENTRIES = 1024;
+/** Adds and restores are refused once a list holds this many entries; removals never are. */
+export const GROWTH_LIMIT = 1024;
+/** Entries in one list, the first included: the growth limit, then a removal of every device. */
+export const MAX_ENTRIES = GROWTH_LIMIT + MAX_MEMBERS;
 /** A device's or the gateway's name, in UTF-8 bytes. */
 export const MAX_NAME_BYTES = 64;
 /** Addresses on the gateway's card. */

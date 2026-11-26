@@ -7,7 +7,7 @@ import { checkLength, concat, copy, equalBytes, hex, Reader, taggedHash, Writer 
 import { fail } from "./errors.ts";
 import { ListPublicKey, signList, verifyEd25519, type ListSecretKey } from "./keys.ts";
 import { LABEL, TAG } from "./labels.ts";
-import { MAX_ENTRIES, MAX_MEMBERS } from "./limits.ts";
+import { GROWTH_LIMIT, MAX_ENTRIES, MAX_MEMBERS } from "./limits.ts";
 import {
   checkContext,
   expectContext,
@@ -162,9 +162,15 @@ function decodeEntry(bytes: Uint8Array): DecodedEntry {
   return { entry, signed, signatures };
 }
 
-/** Reads an entry without checking it against a list. Its signatures are not checked either. */
-export function readEntry(bytes: Uint8Array): Entry {
-  return decodeEntry(bytes).entry;
+/** Reads an entry without checking it against a list or checking its signatures. */
+export function readEntryUnverified(bytes: Uint8Array): Entry {
+  return freezeEntry(decodeEntry(copy(bytes)).entry);
+}
+
+function freezeEntry(entry: Entry): Entry {
+  if ("device" in entry) Object.freeze(entry.device);
+  Object.freeze(entry.context);
+  return Object.freeze(entry);
 }
 
 /** The hash the next entry names as `prev`, over the whole entry with its signatures. */
@@ -198,23 +204,33 @@ interface StateData {
   readonly head: Uint8Array;
   readonly members: ReadonlyMap<string, Member>;
   readonly removed: ReadonlyMap<string, Removal>;
-  /** Every key and pin any device has had on the list, by kind. */
+  /**
+   * Every key the list has held, of any kind and in any role (the connector's included), and
+   * every TLS pin. No key may appear twice, so one key can never act in two roles.
+   */
   readonly seen: ReadonlySet<string>;
 }
 
+/** A record's keys and pin as `seen` holds them. Every key shares one namespace. */
 function seenKeys(device: DeviceRecord): string[] {
   return [
-    `list:${hex(device.listKey.bytes)}`,
-    `seal:${hex(device.sealKey.bytes)}`,
+    `key:${hex(device.listKey.bytes)}`,
+    `key:${hex(device.sealKey.bytes)}`,
+    `key:${hex(device.gatewayDeviceKey.bytes)}`,
     `tls:${hex(device.tlsPin)}`,
-    `gateway:${hex(device.gatewayDeviceKey.bytes)}`,
   ];
 }
 
-/** A member as a caller gets it: its own copy, so changing it can't change the state. */
+/** Refuses a record that uses one key twice: its list key as its OpenClaw key, say. */
+function requireDistinct(keys: readonly string[]): void {
+  if (new Set(keys).size !== keys.length) fail("duplicate_key", "one key in two roles");
+}
+
+/** A member as a caller gets it: its own frozen copy, so changing it can't change the state. */
 function detach(member: Member): Member {
-  const device = member.device && { ...member.device, tlsPin: copy(member.device.tlsPin) };
-  return { ...member, device };
+  const device =
+    member.device && Object.freeze({ ...member.device, tlsPin: copy(member.device.tlsPin) });
+  return Object.freeze({ ...member, device });
 }
 
 /** What a list says after a given entry. Immutable: `append` returns a new state. */
@@ -223,13 +239,14 @@ export class ListState {
 
   private constructor(data: StateData) {
     this.#data = data;
+    Object.freeze(this);
   }
 
   get context(): ListContext {
-    return {
+    return Object.freeze({
       gatewayId: copy(this.#data.context.gatewayId),
       accountId: copy(this.#data.context.accountId),
-    };
+    });
   }
 
   get connectorKey(): ListPublicKey {
@@ -263,7 +280,7 @@ export class ListState {
 
   removal(key: ListPublicKey): Removal | undefined {
     const removal = this.#data.removed.get(hex(key.bytes));
-    return removal && { ...removal, member: detach(removal.member) };
+    return removal && Object.freeze({ ...removal, member: detach(removal.member) });
   }
 
   /** The current members whose entry `key` signed: what removing `key` offers to remove too. */
@@ -279,18 +296,22 @@ export class ListState {
     fail("not_member", "the signer is not on the list");
   }
 
-  /** Refuses a device record any of whose keys the list holds or has held. */
+  /**
+   * Refuses a device record that uses one key twice, or any of whose keys or pin the list holds
+   * or has held in any role.
+   */
   requireNew(device: DeviceRecord): void {
-    if (device.listKey.equals(this.#data.connectorKey))
-      fail("duplicate_key", "a key already on the list");
-    for (const key of seenKeys(device)) {
+    const keys = seenKeys(device);
+    requireDistinct(keys);
+    for (const key of keys) {
       if (this.#data.seen.has(key)) fail("duplicate_key", "a key already on the list");
     }
   }
 
   /** Starts a list from its first entry, checked in full. */
-  static fromGenesis(context: ListContext, bytes: Uint8Array): ListState {
+  static fromGenesis(context: ListContext, input: Uint8Array): ListState {
     const expected = checkContext(context);
+    const bytes = copy(input);
     const { entry, signed, signatures } = decodeEntry(bytes);
     if (entry.type !== "genesis") fail("bad_chain", "a list starts with its first entry");
     if (!verifyEd25519(entry.connectorKey.bytes, signed, signatures[0]!)) {
@@ -302,8 +323,8 @@ export class ListState {
     expectContext(entry.context, expected);
     if (entry.seq !== 0 || !equalBytes(entry.prev, ZERO_HASH))
       fail("bad_chain", "the first entry is not first");
-    if (entry.connectorKey.equals(entry.device.listKey))
-      fail("duplicate_key", "one key in two roles");
+    const connectorSeen = `key:${hex(entry.connectorKey.bytes)}`;
+    requireDistinct([connectorSeen, ...seenKeys(entry.device)]);
     const connector: Member = {
       key: entry.connectorKey,
       role: "connector",
@@ -328,7 +349,7 @@ export class ListState {
         [hex(device.key.bytes), device],
       ]),
       removed: new Map(),
-      seen: new Set(seenKeys(entry.device)),
+      seen: new Set([connectorSeen, ...seenKeys(entry.device)]),
     });
   }
 
@@ -337,8 +358,9 @@ export class ListState {
    * checks: the bytes, the signature, the gateway and account, the position, the signer, and
    * what the signer's role allows.
    */
-  append(bytes: Uint8Array): ListState {
+  append(input: Uint8Array): ListState {
     const data = this.#data;
+    const bytes = copy(input);
     const { entry, signed, signatures } = decodeEntry(bytes);
     if (entry.type === "genesis") fail("bad_chain", "a second first entry");
     if (!verifyEd25519(entry.signer.bytes, signed, signatures[0]!)) {
@@ -348,7 +370,10 @@ export class ListState {
     if (entry.seq !== data.length || !equalBytes(entry.prev, data.head)) {
       fail("bad_chain", "the entry does not follow the list's latest entry");
     }
-    if (data.length >= MAX_ENTRIES) fail("list_full", "the list holds its most entries");
+    // Only growth is bounded: a removal is never refused for size, so a device can always be
+    // removed. At most MAX_MEMBERS removals can follow the growth limit.
+    if (entry.type !== "remove" && data.length >= GROWTH_LIMIT)
+      fail("list_full", "the list holds its most entries");
     const signer = this.requireMember(entry.signer);
     const members = new Map(data.members);
     const removed = new Map(data.removed);
@@ -447,7 +472,10 @@ export function signGenesis(key: ListSecretKey, fields: GenesisFields): Uint8Arr
   return signList(key, encodeSigned(genesisEntry(fields)));
 }
 
-/** Puts the first entry together from its two signatures, and checks it. */
+/**
+ * Puts the first entry together from its two signatures and checks it. The state it returns is
+ * the list's: a first entry with both signatures is the whole list.
+ */
 export function assembleGenesis(
   fields: GenesisFields,
   connectorSignature: Uint8Array,
@@ -459,17 +487,18 @@ export function assembleGenesis(
     checkLength(connectorSignature, 64, "a signature"),
     checkLength(deviceSignature, 64, "a signature"),
   );
-  return { entry, state: ListState.fromGenesis(fields.context, entry) };
+  return Object.freeze({ entry, state: ListState.fromGenesis(fields.context, entry) });
 }
 
-function signEntry(
-  signer: ListSecretKey,
-  state: ListState,
-  fields: Entry,
-): { entry: Uint8Array; state: ListState } {
+/**
+ * Signs an entry and checks that it would follow `state`. Returns only the entry: whether it is
+ * on the list is the connector's to decide when it appends it.
+ */
+function signEntry(signer: ListSecretKey, state: ListState, fields: Entry): Uint8Array {
   const signed = encodeSigned(fields);
   const entry = concat(signed, signList(signer, signed));
-  return { entry, state: state.append(entry) };
+  state.append(entry);
+  return entry;
 }
 
 /** For the join only: the entry that adds a device after a right pick. Not exported from the package. */
@@ -478,7 +507,7 @@ export function signAdd(
   state: ListState,
   device: DeviceRecord,
   joinTranscript: Uint8Array,
-): { entry: Uint8Array; state: ListState } {
+): Uint8Array {
   return signEntry(signer, state, {
     context: state.context,
     seq: state.length,
@@ -490,12 +519,33 @@ export function signAdd(
   });
 }
 
-/** A member removes `target`, itself included. The connector signs this for a removal on the gateway's machine. */
+/** A device member removes `target`, itself included. The connector uses `signRemovalOnGatewayMachine`. */
 export function signRemoval(
   signer: ListSecretKey,
   state: ListState,
   target: ListPublicKey,
-): { entry: Uint8Array; state: ListState } {
+): Uint8Array {
+  if (signer.publicKey.equals(state.connectorKey))
+    fail("not_permitted", "the connector removes with signRemovalOnGatewayMachine");
+  return memberRemoval(signer, state, target);
+}
+
+/**
+ * The connector removes `target` for an action on the gateway's machine (a device removed there
+ * by other means, say). Never for a request that came through the service: that is
+ * `signRemovalNotice`.
+ */
+export function signRemovalOnGatewayMachine(
+  connector: ListSecretKey,
+  state: ListState,
+  target: ListPublicKey,
+): Uint8Array {
+  if (!connector.publicKey.equals(state.connectorKey))
+    fail("not_permitted", "only the connector removes on the gateway's machine");
+  return memberRemoval(connector, state, target);
+}
+
+function memberRemoval(signer: ListSecretKey, state: ListState, target: ListPublicKey): Uint8Array {
   return signEntry(signer, state, {
     context: state.context,
     seq: state.length,
@@ -512,7 +562,7 @@ export function signRestore(
   signer: ListSecretKey,
   state: ListState,
   target: ListPublicKey,
-): { entry: Uint8Array; state: ListState } {
+): Uint8Array {
   return signEntry(signer, state, {
     context: state.context,
     seq: state.length,
@@ -534,12 +584,12 @@ export function decodeRemovalNotice(bytes: Uint8Array): {
   context: ListContext;
   target: ListPublicKey;
 } {
-  const reader = new Reader(bytes);
+  const reader = new Reader(copy(bytes));
   reader.label(LABEL.removalNotice);
   const context = readContext(reader);
   const target = ListPublicKey.fromBytes(reader.fixed(32, "target"));
   reader.end();
-  return { context, target };
+  return Object.freeze({ context: Object.freeze(context), target });
 }
 
 /**
@@ -550,7 +600,7 @@ export function signRemovalNotice(
   connector: ListSecretKey,
   state: ListState,
   notice: Uint8Array,
-): { entry: Uint8Array; state: ListState } {
+): Uint8Array {
   const { context, target } = decodeRemovalNotice(notice);
   expectContext(context, state.context);
   return signEntry(connector, state, {
@@ -586,7 +636,7 @@ export function decodeList(bytes: Uint8Array): Uint8Array[] {
 
 /** For the join only: reads an entry other than the first and checks its one signature. */
 export function readSignedEntry(bytes: Uint8Array): Entry {
-  const { entry, signed, signatures } = decodeEntry(bytes);
+  const { entry, signed, signatures } = decodeEntry(copy(bytes));
   if (entry.type === "genesis") fail("malformed", "not an entry one member signs");
   if (!verifyEd25519(entry.signer.bytes, signed, signatures[0]!)) {
     fail("bad_signature", "the entry's signature does not verify");

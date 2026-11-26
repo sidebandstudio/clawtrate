@@ -71,17 +71,38 @@ describe("a session request", () => {
   });
 
   it("takes only an origin as its audience and a path as its path", () => {
-    for (const audience of [
-      "https://a.dev:8443",
-      "http://127.0.0.1:8787",
-      "http://localhost",
-      "http://[::1]:1",
-    ]) {
+    for (const audience of ["https://a.dev:8443", "https://a.dev:65535", "https://192.0.2.1"]) {
       expect(() => signSessionRequest(key, { ...fields, audience, issuedAtMs: NOW })).not.toThrow();
+    }
+    // Plain http on loopback only for a development build, never by default.
+    for (const audience of ["http://127.0.0.1:8787", "http://localhost", "http://[::1]:1"]) {
+      expectCode(
+        () => signSessionRequest(key, { ...fields, audience, issuedAtMs: NOW }),
+        "malformed",
+      );
+      const request = signSessionRequest(key, {
+        ...fields,
+        audience,
+        issuedAtMs: NOW,
+        development: true,
+      });
+      expect(
+        verifySessionRequest(request, {
+          ...fields,
+          audience,
+          nowMs: NOW,
+          development: true,
+        }).equals(key.publicKey),
+      ).toBe(true);
+      expectCode(
+        () => verifySessionRequest(request, { ...fields, audience, nowMs: NOW }),
+        "malformed",
+      );
     }
     for (const audience of [
       "http://accounts.clawtrate.dev",
       "https://accounts.clawtrate.dev:08",
+      "https://accounts.clawtrate.dev:99999",
       "accounts.clawtrate.dev",
       "https://accounts.clawtrate.dev/",
       "https://A.dev",

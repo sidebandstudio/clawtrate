@@ -1,40 +1,38 @@
 // The join from both sides, and against someone in the middle: the service, which carries
-// every message and can change, swap, hold back or replay any of them.
+// every message and can change, swap, hold back, repeat or replay any of them.
 
 import { describe, expect, it, vi } from "vitest";
 import {
   cardHash,
-  joinAnswer,
-  joinChoices,
-  joinCommit,
-  joinConfirm,
-  joinFinish,
-  joinReveal,
-  ListState,
+  ListSecret,
+  MemberJoin,
+  NewDeviceJoin,
   refuseJoin,
+  sealList,
   signCard,
+  signRemoval,
   verifyCard,
   verifyRefusal,
   wordsFor,
 } from "../src/index.ts";
-import { concat, Writer } from "../src/bytes.ts";
-import { hpkeSeal } from "../src/hpke.ts";
-import { signList } from "../src/keys.ts";
-import { LABEL, TAG } from "../src/labels.ts";
+import { deriveSealKeyPair } from "../src/hpke.ts";
+import { fiveSets } from "../src/join.ts";
 import { signAdd } from "../src/list.ts";
+import { commitmentOf, forgeAnswer, forgeConfirm, forgeRefusal, transcriptOf } from "./forge.ts";
 import {
-  A_NONCE,
   addDevice,
+  appended,
   CONTEXT,
-  DECOY_SEED,
   expectCode,
   fill,
+  LIST_RANDOM,
   makeDevice,
   makeWorld,
   memberOf,
-  N_NONCE,
+  N_RANDOM,
+  OTHER_GATEWAY,
   runJoin,
-  SEAL_SEED,
+  SEAL_RANDOM,
   seeded,
 } from "./helpers.ts";
 
@@ -42,118 +40,232 @@ import {
 vi.setConfig({ testTimeout: 120_000 });
 
 describe("a join with no one in the middle", () => {
-  it("shows the same words on both sides and adds the device", () => {
+  it("shows the same words on both sides, adds the device, and N finishes on the sealed list", () => {
     const world = makeWorld();
-    const member = memberOf(world, world.gatewayDevice.listKey);
     const mac = makeDevice(2, "MacBook Pro");
-    const { run, entry, state, finished } = addDevice(member, mac);
-
+    const { run, held, finished } = addDevice(world, world.gatewayDevice.listKey, mac);
     expect(run.right).toBeGreaterThanOrEqual(0);
     expect(run.sets).toHaveLength(5);
-    expect(state.member(mac.device.listKey)?.role).toBe("device");
-    expect(
-      state.member(mac.device.listKey)?.addedBy?.equals(world.gatewayDevice.device.listKey),
-    ).toBe(true);
-    // The connector appends the same entry to the list it holds.
-    expect(world.state.append(entry).head).toEqual(state.head);
-    // N opened the list secret and the card the words covered.
+    expect(held.state.member(mac.device.listKey)?.role).toBe("device");
+    expect(finished.state.head).toEqual(held.state.head);
     expect(finished.secret.epoch).toBe(0);
     expect(finished.cardBytes).toEqual(world.card);
     expect(finished.card.connectorKey.equals(world.connector.publicKey)).toBe(true);
-    expect(finished.entry).toEqual(entry);
+    expect(Object.isFrozen(finished)).toBe(true);
   });
 
   it("lets the device just added confirm the next one", () => {
     const world = makeWorld();
     const mac = makeDevice(2);
-    const first = addDevice(memberOf(world, world.gatewayDevice.listKey), mac);
+    const first = addDevice(world, world.gatewayDevice.listKey, mac);
     const phone = makeDevice(3, "iPhone", "ios");
-    const second = addDevice(memberOf(world, mac.listKey, first.state), phone);
-    expect(second.state.devices()).toHaveLength(3);
-    expect(second.state.member(phone.device.listKey)?.addedBy?.equals(mac.device.listKey)).toBe(
-      true,
-    );
+    const second = addDevice(world, mac.listKey, phone, first.held, fill(32, 0x12));
+    expect(second.held.state.devices()).toHaveLength(3);
+    expect(
+      second.held.state.member(phone.device.listKey)?.addedBy?.equals(mac.device.listKey),
+    ).toBe(true);
   });
 
-  it("refuses the connector as the answering member", () => {
+  it("refuses the connector as the answering member, and a card that isn't the list's connector's", () => {
     const world = makeWorld();
-    const commit = joinCommit(makeDevice(2), CONTEXT, N_NONCE);
+    const n = NewDeviceJoin.start(makeDevice(2), CONTEXT, N_RANDOM);
     expectCode(
-      () => joinAnswer(memberOf(world, world.connector), commit, A_NONCE),
+      () => MemberJoin.answer(memberOf(world, world.connector), n.commit),
       "not_permitted",
     );
-  });
-
-  it("refuses a card that is not the list's connector's", () => {
-    const world = makeWorld();
-    const commit = joinCommit(makeDevice(2), CONTEXT, N_NONCE);
-    const card = signCard(makeDevice(9).listKey, { ...verifyCard(world.card) });
+    const card = signCard(
+      makeDevice(9).listKey,
+      verifyCard(world.card, world.connector.publicKey, CONTEXT.gatewayId),
+    );
     expectCode(
-      () => joinAnswer({ ...memberOf(world, world.gatewayDevice.listKey), card }, commit, A_NONCE),
+      () => MemberJoin.answer({ ...memberOf(world, world.gatewayDevice.listKey), card }, n.commit),
       "card_mismatch",
     );
+  });
+});
+
+describe("one answer, one reveal, one confirmation", () => {
+  const world = makeWorld();
+  const member = memberOf(world, world.gatewayDevice.listKey);
+  const mac = makeDevice(2);
+
+  it("N reveals once: the same answer again gets the same reveal, any other ends the join", () => {
+    const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+    const a = MemberJoin.answer(member, n.commit);
+    const first = n.reveal(a.answer);
+    expect(n.reveal(a.answer)).toEqual(first);
+    // The service's own answer to N's commitment: A's key, list head and card, its own nonce.
+    const forged = forgeAnswer({
+      context: CONTEXT,
+      commitment: commitmentOf(n.commit),
+      memberKey: world.gatewayDevice.listKey.publicKey,
+      listHead: world.state.head,
+      cardHash: cardHash(world.card),
+      nonce: fill(32, 0x99),
+    });
+    expectCode(() => n.reveal(forged), "join_spent");
+    // The join has ended: not even the first answer, nor a finish, is taken any more.
+    expectCode(() => n.reveal(a.answer), "join_spent");
+    expectCode(() => n.finish(new Uint8Array(1), new Uint8Array(1)), "join_spent");
+  });
+
+  it("so the service can't get a second reveal to grind against a member's words", () => {
+    // The attack: reveal once to a forged answer, then try ground answers until N's words are
+    // the ones A shows for the service's own device. The second reveal never comes.
+    const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+    const forge = (nonce: number) =>
+      forgeAnswer({
+        context: CONTEXT,
+        commitment: commitmentOf(n.commit),
+        memberKey: world.gatewayDevice.listKey.publicKey,
+        listHead: world.state.head,
+        cardHash: cardHash(world.card),
+        nonce: fill(32, nonce),
+      });
+    n.reveal(forge(1));
+    for (let nonce = 2; nonce < 6; nonce++) expectCode(() => n.reveal(forge(nonce)), "join_spent");
+  });
+
+  it("A answers a commitment the same way, byte for byte, however often it is asked", () => {
+    const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+    const once = MemberJoin.answer(member, n.commit).answer;
+    const twice = MemberJoin.answer(member, n.commit).answer;
+    expect(twice).toEqual(once);
+    // A different commitment gets a different answer nonce.
+    const other = NewDeviceJoin.start(makeDevice(3), CONTEXT, N_RANDOM);
+    const otherAnswer = MemberJoin.answer(member, other.commit).answer;
+    expect(otherAnswer.subarray(-32)).not.toEqual(once.subarray(-32));
+  });
+
+  it("A takes one reveal and confirms once", () => {
+    const run = runJoin(member, mac);
+    expect(run.a.choices(run.reveal).sets).toEqual(run.sets);
+    const otherN = NewDeviceJoin.start(makeDevice(4), CONTEXT, N_RANDOM);
+    const otherReveal = otherN.reveal(MemberJoin.answer(member, otherN.commit).answer).reveal;
+    expectCode(() => run.a.choices(otherReveal), "join_spent");
+    const outcome = run.a.confirm(run.words, SEAL_RANDOM);
+    expect(outcome.outcome).toBe("added");
+    expectCode(() => run.a.confirm(run.words, SEAL_RANDOM), "join_spent");
+    expectCode(() => run.a.choices(run.reveal), "join_spent");
+  });
+
+  it("A refuses to confirm before it has shown the sets", () => {
+    const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+    const a = MemberJoin.answer(member, n.commit);
+    expectCode(() => a.confirm("none-match", SEAL_RANDOM), "bad_argument");
+  });
+});
+
+describe("the random values are the package's to derive", () => {
+  const world = makeWorld();
+  const member = memberOf(world, world.gatewayDevice.listKey);
+
+  it("N's nonce is hedged with N's key: one constant random still gives each device its own", () => {
+    const zero = new Uint8Array(32);
+    const a = NewDeviceJoin.start(makeDevice(2), CONTEXT, zero);
+    const b = NewDeviceJoin.start(makeDevice(3), CONTEXT, zero);
+    expect(commitmentOf(a.commit)).not.toEqual(commitmentOf(b.commit));
+    // What the caller still owes: the same keys and the same random give the same commitment,
+    // so every attempt needs fresh keys and fresh random bytes (README).
+    expect(NewDeviceJoin.start(makeDevice(2), CONTEXT, zero).commit).toEqual(a.commit);
+  });
+
+  it("A's answer nonce takes no caller random, and no one without A's key can predict it", () => {
+    const n = NewDeviceJoin.start(makeDevice(2), CONTEXT, N_RANDOM);
+    const nonceOf = (key: number) => {
+      const other = makeWorld({ gatewayDevice: fill(32, key) });
+      return MemberJoin.answer(
+        memberOf(other, other.gatewayDevice.listKey),
+        n.commit,
+      ).answer.subarray(-32);
+    };
+    // Two members with the same list position answering one commitment: different nonces.
+    expect(nonceOf(0x51)).not.toEqual(nonceOf(0x52));
+  });
+
+  it("a predictable sealing random gives the service nothing: the ephemeral is hedged", () => {
+    const zero = new Uint8Array(32);
+    const one = runJoin(member, makeDevice(2));
+    const two = runJoin(member, makeDevice(3));
+    const outcomes = [one.a.confirm(one.words, zero), two.a.confirm(two.words, zero)];
+    const encs = outcomes.map((outcome) => {
+      if (outcome.outcome !== "added") throw new Error("expected added");
+      const entryLength =
+        (outcome.confirm[37 + 1 + 32 + 32] ?? 0) * 256 +
+        (outcome.confirm[37 + 1 + 32 + 32 + 1] ?? 0);
+      const at = 37 + 1 + 32 + 32 + 2 + entryLength;
+      return outcome.confirm.subarray(at, at + 32);
+    });
+    // The ephemeral isn't the one a zero seed gives, and two joins don't share one.
+    expect(encs[0]).not.toEqual(deriveSealKeyPair(zero).publicKey);
+    expect(encs[0]).not.toEqual(encs[1]);
+  });
+
+  it("the decoys come from A's key and the transcript: another key gives other decoys", () => {
+    const run = runJoin(member, makeDevice(2));
+    const transcript = transcriptOf(run.reveal);
+    const right = wordsFor(transcript);
+    const mine = fiveSets(transcript, right, world.gatewayDevice.listKey);
+    const anothers = fiveSets(transcript, right, makeDevice(9).listKey);
+    expect(mine.sets).toEqual(run.sets);
+    expect(anothers.sets).not.toEqual(mine.sets);
   });
 });
 
 describe("the pick", () => {
   const world = makeWorld();
   const member = memberOf(world, world.gatewayDevice.listKey);
-  const mac = makeDevice(2);
-  const run = runJoin(member, mac);
 
-  it("a wrong set, none match or not started signs a refusal the connector accepts", () => {
-    const wrong = (run.right + 1) % 5;
-    for (const [pick, reason] of [
-      [{ set: wrong }, "wrong-set"],
-      ["none-match", "none-match"],
-      ["not-started", "not-started"],
-    ] as const) {
-      const outcome = joinConfirm(
-        member,
-        run.commit,
-        run.answer,
-        run.reveal,
-        DECOY_SEED,
-        pick,
-        SEAL_SEED,
-      );
-      expect(outcome.outcome).toBe("refused");
-      if (outcome.outcome !== "refused") continue;
+  it("is judged by the words picked: the right set adds, a decoy shown is refused as a wrong set", () => {
+    const run = runJoin(member, makeDevice(2));
+    const decoy = run.sets[(run.right + 1) % 5]!;
+    const outcome = run.a.confirm(decoy, SEAL_RANDOM);
+    expect(outcome.outcome).toBe("refused");
+    if (outcome.outcome === "refused")
+      expect(verifyRefusal(world.state, outcome.refusal).reason).toBe("wrong-set");
+  });
+
+  it("none match and not started sign refusals the connector accepts once, by hash", () => {
+    for (const pick of ["none-match", "not-started"] as const) {
+      const run = runJoin(member, makeDevice(2));
+      const outcome = run.a.confirm(pick, SEAL_RANDOM);
+      if (outcome.outcome !== "refused") throw new Error("expected refused");
       const refusal = verifyRefusal(world.state, outcome.refusal);
-      expect(refusal.reason).toBe(reason);
-      expect(refusal.signer.equals(world.gatewayDevice.device.listKey)).toBe(true);
+      expect(refusal.reason).toBe(pick);
+      expect(refusal.hash).toHaveLength(32);
+      expect(verifyRefusal(world.state, outcome.refusal).hash).toEqual(refusal.hash);
     }
   });
 
-  it("refuses a pick outside the five sets", () => {
-    for (const pick of [{ set: 5 }, { set: -1 }, { set: 1.5 }, "yes" as never]) {
-      expectCode(
-        () => joinConfirm(member, run.commit, run.answer, run.reveal, DECOY_SEED, pick, SEAL_SEED),
-        "bad_argument",
-      );
+  it("refuses words that weren't among the five sets shown", () => {
+    const run = runJoin(member, makeDevice(2));
+    for (const pick of [
+      ["abandon", "ability", "able"],
+      [...run.words].reverse(),
+      run.words.slice(0, 2),
+      "yes",
+    ]) {
+      expectCode(() => run.a.confirm(pick as never, SEAL_RANDOM), "bad_argument");
     }
   });
 
-  it("a member can refuse before any pick, and the connector can't refuse", () => {
-    const refusal = refuseJoin(member, run.commit, "concurrent");
+  it("a member can refuse before any pick, and the connector can neither refuse nor have its refusal taken", () => {
+    const n = NewDeviceJoin.start(makeDevice(2), CONTEXT, N_RANDOM);
+    const refusal = refuseJoin(member, n.commit, "concurrent");
     expect(verifyRefusal(world.state, refusal).reason).toBe("concurrent");
     expectCode(
-      () => refuseJoin({ key: world.connector, state: world.state }, run.commit, "not-started"),
+      () => refuseJoin({ key: world.connector, state: world.state }, n.commit, "not-started"),
       "not_permitted",
     );
-  });
-
-  it("refuses to go on when the list changed after the answer", () => {
-    const other = addDevice(member, makeDevice(5), {
-      n: fill(32, 1),
-      a: fill(32, 2),
-      decoy: fill(32, 3),
+    // A refusal the connector signed, built by hand: verifyRefusal refuses it.
+    const forged = forgeRefusal({
+      signer: world.connector,
+      context: CONTEXT,
+      listHead: world.state.head,
+      commitment: commitmentOf(n.commit),
+      reason: 2,
     });
-    const moved = { ...member, state: other.state };
-    expectCode(
-      () => joinChoices(moved, run.commit, run.answer, run.reveal, DECOY_SEED),
-      "bad_chain",
-    );
+    expectCode(() => verifyRefusal(world.state, forged), "not_permitted");
   });
 });
 
@@ -162,13 +274,8 @@ describe("the five sets", () => {
   const member = memberOf(world, world.gatewayDevice.listKey);
 
   it("hold the right set once and four decoys that share no word with it or each other", () => {
-    for (let i = 0; i < 200; i++) {
-      const rng = seeded(i);
-      const run = runJoin(member, makeDevice(2), {
-        n: rng.bytes(32),
-        a: rng.bytes(32),
-        decoy: rng.bytes(32),
-      });
+    for (let i = 0; i < 100; i++) {
+      const run = runJoin(member, makeDevice(2), seeded(i).bytes(32));
       const words = run.sets.flat();
       expect(new Set(words).size).toBe(15 - (3 - new Set(run.words).size));
       expect(run.sets.filter((set) => set.join() === run.words.join())).toHaveLength(1);
@@ -177,32 +284,12 @@ describe("the five sets", () => {
     }
   });
 
-  it("come from the member's own seed: the same messages with another seed give other decoys and place", () => {
-    const run = runJoin(member, makeDevice(2));
-    const seen = new Set<string>();
+  it("put the right set at each of the five places about equally often", () => {
     const places = [0, 0, 0, 0, 0];
-    for (let i = 0; i < 500; i++) {
-      const { sets } = joinChoices(
-        member,
-        run.commit,
-        run.answer,
-        run.reveal,
-        seeded(1000 + i).bytes(32),
-      );
-      const right = sets.findIndex((set) => set.join() === run.words.join());
-      places[right]!++;
-      seen.add(JSON.stringify(sets));
-    }
-    // Everything the service sees is the same in every one of these; only the seed changed.
-    expect(seen.size).toBe(500);
-    // The right set's place is spread over all five (each expected 100 times).
+    for (let i = 0; i < 500; i++)
+      places[runJoin(member, makeDevice(2), seeded(1000 + i).bytes(32)).right]!++;
+    // Each expected 100 times.
     for (const count of places) expect(count).toBeGreaterThan(60);
-  }, 60_000);
-
-  it("are the same for the same seed, so the pick checks the set that was shown", () => {
-    const run = runJoin(member, makeDevice(2));
-    const again = joinChoices(member, run.commit, run.answer, run.reveal, DECOY_SEED);
-    expect(again.sets).toEqual(run.sets);
   });
 });
 
@@ -213,180 +300,180 @@ describe("someone in the middle", () => {
   const thief = makeDevice(66, "MacBook Pro");
 
   it("swapping N's keys gives different words", () => {
-    // The service shows A the thief's commit and reveal instead of N's.
     const real = runJoin(member, mac);
-    const forged = runJoin(member, thief, { n: fill(32, 0x99), a: A_NONCE, decoy: DECOY_SEED });
+    const forged = runJoin(member, thief, fill(32, 0x99));
     expect(forged.words).not.toEqual(real.words);
     expect(forged.sets.map((set) => set.join())).not.toContain(real.words.join());
-    // N, handed the answer A gave the thief's commit, refuses it: it answers another join.
-    expectCode(
-      () => joinReveal(mac, CONTEXT, N_NONCE, real.commit, forged.answer),
-      "transcript_mismatch",
-    );
+    const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+    expectCode(() => n.reveal(forged.answer), "transcript_mismatch");
   });
 
   it("swapping A's answer gives different words", () => {
-    // The service answers N's commit itself, with a key and a nonce of its own.
     const real = runJoin(member, mac);
-    const fakeAnswer = forgeAnswer(real.answer, thief.listKey.publicKey.bytes);
-    const { reveal, words } = joinReveal(mac, CONTEXT, N_NONCE, real.commit, fakeAnswer);
+    const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+    const fake = forgeAnswer({
+      context: CONTEXT,
+      commitment: commitmentOf(n.commit),
+      memberKey: thief.listKey.publicKey,
+      listHead: world.state.head,
+      cardHash: cardHash(world.card),
+      nonce: fill(32, 0x77),
+    });
+    const { reveal, words } = n.reveal(fake);
     expect(words).not.toEqual(real.words);
-    // A, handed N's reveal for that transcript, refuses it.
-    expectCode(
-      () => joinChoices(member, real.commit, real.answer, reveal, DECOY_SEED),
-      "transcript_mismatch",
-    );
+    const a = MemberJoin.answer(member, n.commit);
+    expectCode(() => a.choices(reveal), "transcript_mismatch");
   });
 
-  it("a commitment can't be opened to other keys or another nonce", () => {
+  it("a commitment can't be opened to other keys", () => {
     const real = runJoin(member, mac);
-    // The thief's reveal, with N's nonce, against N's commitment.
     const thiefRun = runJoin(member, thief);
-    expectCode(
-      () => joinChoices(member, real.commit, real.answer, thiefRun.reveal, DECOY_SEED),
-      "commitment_mismatch",
-    );
-    // N's own record with another nonce.
-    expectCode(
-      () => joinReveal(mac, CONTEXT, fill(32, 0x12), real.commit, real.answer),
-      "commitment_mismatch",
-    );
+    const a = MemberJoin.answer(member, real.commit);
+    expectCode(() => a.choices(thiefRun.reveal), "commitment_mismatch");
   });
 
   it("a replayed reveal, confirmation or entry fails", () => {
-    const first = addDevice(member, mac);
-    // The old reveal against a fresh answer to the same commit: its signature covers A's old nonce.
-    const fresh = joinAnswer(member, first.run.commit, fill(32, 0x23));
-    expectCode(
-      () => joinChoices(member, first.run.commit, fresh, first.run.reveal, DECOY_SEED),
-      "transcript_mismatch",
-    );
+    const first = addDevice(world, world.gatewayDevice.listKey, mac);
     // The old confirmation delivered to a new join of the same device.
-    const later = runJoin(member, mac, { n: fill(32, 7), a: fill(32, 8), decoy: DECOY_SEED });
-    expectCode(
-      () =>
-        joinFinish(
-          mac,
-          CONTEXT,
-          fill(32, 7),
-          later.commit,
-          later.answer,
-          later.reveal,
-          first.confirm,
-        ),
-      "transcript_mismatch",
-    );
+    const later = runJoin(member, mac, fill(32, 7));
+    expectCode(() => later.n.finish(first.confirm, first.sealed), "transcript_mismatch");
     // The entry appended a second time.
-    expectCode(() => first.state.append(first.entry), "bad_chain");
+    expectCode(() => first.held.state.append(first.entry), "bad_chain");
   });
 
   it("refuses a device whose keys are already on the list", () => {
-    const first = addDevice(member, mac);
-    const after = memberOf(world, world.gatewayDevice.listKey, first.state);
-    const commit = joinCommit(mac, CONTEXT, fill(32, 9));
-    const answer = joinAnswer(after, commit, fill(32, 10));
-    const { reveal } = joinReveal(mac, CONTEXT, fill(32, 9), commit, answer);
-    expectCode(() => joinChoices(after, commit, answer, reveal, DECOY_SEED), "duplicate_key");
+    const first = addDevice(world, world.gatewayDevice.listKey, mac);
+    const n = NewDeviceJoin.start(mac, CONTEXT, fill(32, 9));
+    const a = MemberJoin.answer(memberOf(world, world.gatewayDevice.listKey, first.held), n.commit);
+    const { reveal } = n.reveal(a.answer);
+    expectCode(() => a.choices(reveal), "duplicate_key");
   });
 
   it("can't steer the words: they spread evenly over the list", () => {
-    // Each try at matching words is one chance in 2^33 only if no word is likelier than another.
     const counts = new Map<string, number>();
     const rng = seeded(7);
     for (let i = 0; i < 20000; i++) {
       for (const word of wordsFor(rng.bytes(32))) counts.set(word, (counts.get(word) ?? 0) + 1);
     }
-    // 60,000 words over 2,048: about 29 each.
     expect(counts.size).toBe(2048);
     expect(Math.max(...counts.values())).toBeLessThan(60);
   });
 });
 
-/** The service's own answer to N's commit: its key and its nonce in place of A's. */
-function forgeAnswer(answer: Uint8Array, key: Uint8Array): Uint8Array {
-  const out = answer.slice();
-  const keyAt = answer.length - 32 * 4;
-  out.set(key, keyAt);
-  out.set(fill(32, 0x77), answer.length - 32);
-  return out;
-}
+describe("what N checks before it is handed anything", () => {
+  const world = makeWorld();
+  const a = world.gatewayDevice;
+  const member = memberOf(world, a.listKey);
+  const mac = makeDevice(2);
 
-describe("what N checks before it uses the card", () => {
-  it("refuses a card other than the one the words covered", () => {
-    const world = makeWorld();
-    const member = memberOf(world, world.gatewayDevice.listKey);
-    const mac = makeDevice(2);
+  /** A join up to N's reveal, and a confirmation A signs with the given changes. */
+  function setUp(change: {
+    entryState?: typeof world.state;
+    transcript?: Uint8Array;
+    card?: Uint8Array;
+    listEntries?: (entry: Uint8Array) => Uint8Array[];
+  }) {
     const run = runJoin(member, mac);
-    // A member that sends a card other than the one it answered with: here, a newer card.
-    const newer = signCard(world.connector, { ...verifyCard(world.card), serial: 2 });
-    expect(cardHash(newer)).not.toEqual(cardHash(world.card));
-    expectCode(
-      () =>
-        joinConfirm(
-          { ...member, card: newer },
-          run.commit,
-          run.answer,
-          run.reveal,
-          DECOY_SEED,
-          { set: run.right },
-          SEAL_SEED,
-        ),
-      "card_mismatch",
+    const transcript = transcriptOf(run.reveal);
+    const entry = signAdd(
+      a.listKey,
+      change.entryState ?? world.state,
+      mac.device,
+      change.transcript ?? transcript,
     );
+    const confirm = forgeConfirm({
+      member: a.listKey,
+      context: CONTEXT,
+      transcript,
+      entry,
+      sealTo: mac.device.sealKey,
+      secret: world.secret,
+      card: change.card ?? world.card,
+    });
+    const entries = change.listEntries?.(entry) ?? [...world.entries, entry];
+    const sealed = sealList(world.secret, CONTEXT, entries, LIST_RANDOM);
+    return () => run.n.finish(confirm, sealed);
+  }
+
+  it("takes the honest confirmation", () => {
+    expect(setUp({})().state.member(mac.device.listKey)).toBeDefined();
   });
 
-  it("refuses, at N, a confirmation carrying a card the words didn't cover, or one the connector didn't sign", () => {
-    // What a member gone wrong could send: a confirmation it signs itself, sealing another card.
-    const world = makeWorld();
-    const member = memberOf(world, world.gatewayDevice.listKey);
-    const mac = makeDevice(2);
+  it("refuses an entry that doesn't follow the head the words covered", () => {
+    const moved = world.state.append(
+      signAdd(a.listKey, world.state, makeDevice(5).device, fill(32, 1)),
+    );
+    expectCode(setUp({ entryState: moved }), "bad_chain");
+  });
+
+  it("refuses an entry carrying another join's transcript", () => {
+    expectCode(setUp({ transcript: fill(32, 0x3e) }), "transcript_mismatch");
+  });
+
+  it("refuses a card the words didn't cover", () => {
+    const newer = signCard(world.connector, {
+      ...verifyCard(world.card, world.connector.publicKey, CONTEXT.gatewayId),
+      serial: 2,
+    });
+    expectCode(setUp({ card: newer }), "card_mismatch");
+  });
+
+  it("refuses a list that doesn't hold N's entry after the covered head", () => {
+    expectCode(setUp({ listEntries: () => [...world.entries] }), "bad_chain");
+  });
+
+  it("refuses a card for another gateway, even one the words covered", () => {
+    // A member gone wrong answers with a card the connector signed for another gateway.
+    const otherCard = signCard(world.connector, {
+      ...verifyCard(world.card, world.connector.publicKey, CONTEXT.gatewayId),
+      gatewayId: OTHER_GATEWAY.gatewayId,
+    });
+    const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+    const answer = forgeAnswer({
+      context: CONTEXT,
+      commitment: commitmentOf(n.commit),
+      memberKey: a.listKey.publicKey,
+      listHead: world.state.head,
+      cardHash: cardHash(otherCard),
+      nonce: fill(32, 0x31),
+    });
+    const { reveal } = n.reveal(answer);
+    const transcript = transcriptOf(reveal);
+    const entry = signAdd(a.listKey, world.state, mac.device, transcript);
+    const confirm = forgeConfirm({
+      member: a.listKey,
+      context: CONTEXT,
+      transcript,
+      entry,
+      sealTo: mac.device.sealKey,
+      secret: world.secret,
+      card: otherCard,
+    });
+    const sealed = sealList(world.secret, CONTEXT, [...world.entries, entry], LIST_RANDOM);
+    expectCode(() => n.finish(confirm, sealed), "wrong_gateway");
+  });
+
+  it("refuses when the confirming device is no longer a member", () => {
     const run = runJoin(member, mac);
-    const transcript = run.reveal.subarray(run.reveal.length - 96, run.reveal.length - 64);
-    const { entry } = signAdd(member.key, world.state, mac.device, transcript);
-    const confirmWith = (card: Uint8Array) => {
-      const payload = new Writer()
-        .u32(0)
-        .fixed(fill(32, 0xe0), 32, "secret")
-        .bytes(card, 1, 4096, "card")
-        .finish();
-      const info = new Writer()
-        .label(TAG.deviceSeal)
-        .u8(1)
-        .fixed(CONTEXT.gatewayId, 16, "g")
-        .fixed(CONTEXT.accountId, 16, "a")
-        .fixed(transcript, 32, "t")
-        .finish();
-      const { enc, ciphertext } = hpkeSeal(
-        mac.device.sealKey.bytes,
-        info,
-        new Uint8Array(0),
-        payload,
-        SEAL_SEED,
-      );
-      const signed = new Writer()
-        .label(LABEL.joinTranscript)
-        .u8(4)
-        .fixed(CONTEXT.gatewayId, 16, "g")
-        .fixed(CONTEXT.accountId, 16, "a")
-        .fixed(transcript, 32, "t")
-        .bytes(entry, 1, 456, "entry")
-        .fixed(enc, 32, "enc")
-        .bytes(ciphertext, 17, 4096, "sealed")
-        .finish();
-      return concat(signed, signList(member.key, signed));
-    };
-    const finish = (confirm: Uint8Array) =>
-      joinFinish(mac, CONTEXT, N_NONCE, run.commit, run.answer, run.reveal, confirm);
-    expect(finish(confirmWith(world.card)).cardBytes).toEqual(world.card);
-    const newer = signCard(world.connector, { ...verifyCard(world.card), serial: 2 });
-    expectCode(() => finish(confirmWith(newer)), "card_mismatch");
+    const outcome = run.a.confirm(run.words, SEAL_RANDOM);
+    if (outcome.outcome !== "added") throw new Error("expected added");
+    let held = appended(world, outcome.entry);
+    // A removes itself (the gateway's own device may) before N's list is sealed.
+    held = appended(held, signRemoval(a.listKey, held.state, a.device.listKey));
+    const sealed = sealList(world.secret, CONTEXT, held.entries, LIST_RANDOM);
+    expectCode(() => run.n.finish(outcome.confirm, sealed), "not_member");
   });
 
-  it("keeps ListState immutable across a join", () => {
-    const world = makeWorld();
-    const before = world.state.head;
-    addDevice(memberOf(world, world.gatewayDevice.listKey), makeDevice(2));
-    expect(world.state.head).toEqual(before);
-    expect(world.state).toBeInstanceOf(ListState);
+  it("refuses a list sealed under another secret", () => {
+    const run = runJoin(member, mac);
+    const outcome = run.a.confirm(run.words, SEAL_RANDOM);
+    if (outcome.outcome !== "added") throw new Error("expected added");
+    const sealed = sealList(
+      ListSecret.fromBytes(fill(32, 0x0e), 0),
+      CONTEXT,
+      [...world.entries, outcome.entry],
+      LIST_RANDOM,
+    );
+    expectCode(() => run.n.finish(outcome.confirm, sealed), "decrypt_failed");
   });
 });

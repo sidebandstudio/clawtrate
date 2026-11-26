@@ -25,4 +25,13 @@ export const TAG = {
   listSealKey: "clawtrate account list seal key v1\n",
   listSealed: "clawtrate account list sealed v1\n",
   deviceSeal: "clawtrate account device seal v1\n",
+  sessionKey: "clawtrate account session key v1\n",
+  listKey: "clawtrate account list key v1\n",
+  sealKey: "clawtrate account seal key v1\n",
+  newNonce: "clawtrate account join new nonce v1\n",
+  answerNonce: "clawtrate account join answer nonce v1\n",
+  joinEphemeral: "clawtrate account join ephemeral v1\n",
+  rotationEphemeral: "clawtrate account rotation ephemeral v1\n",
+  listSealNonce: "clawtrate account list seal nonce v1\n",
+  refusalHash: "clawtrate account refusal hash v1\n",
 } as const;

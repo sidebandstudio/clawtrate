@@ -7,25 +7,22 @@ import {
   AccountProtocolError,
   assembleGenesis,
   GatewayDeviceKey,
-  joinAnswer,
-  joinChoices,
-  joinCommit,
-  joinConfirm,
-  joinFinish,
-  joinReveal,
   ListSecret,
   ListSecretKey,
+  MemberJoin,
+  NewDeviceJoin,
   SealSecretKey,
+  sealList,
   signCard,
   signGenesis,
   type AccountProtocolErrorCode,
   type DeviceRecord,
   type JoiningDevice,
   type JoinMember,
-  type JoinPick,
   type ListContext,
   type ListState,
   type Platform,
+  type Words,
 } from "../src/index.ts";
 
 export function fill(length: number, byte: number): Uint8Array {
@@ -81,12 +78,21 @@ export function makeDevice(
 
 export const CONNECTOR_SEED = fill(32, 0xc0);
 
-export interface World {
+/** A list as a device holds it: the verified state and the entries it came from. */
+export interface Held {
+  readonly state: ListState;
+  readonly entries: readonly Uint8Array[];
+}
+
+/** The list after one more entry, checked by `append`. */
+export function appended(held: Held, entry: Uint8Array): Held {
+  return { state: held.state.append(entry), entries: [...held.entries, entry] };
+}
+
+export interface World extends Held {
   readonly connector: ListSecretKey;
   readonly gatewayDevice: JoiningDevice;
   readonly genesis: Uint8Array;
-  readonly entries: Uint8Array[];
-  readonly state: ListState;
   readonly card: Uint8Array;
   readonly secret: ListSecret;
 }
@@ -128,66 +134,55 @@ export function makeWorld(
   };
 }
 
-export function memberOf(world: World, key: ListSecretKey, state = world.state): JoinMember {
-  return { key, state, card: world.card, secret: world.secret };
+export function memberOf(world: World, key: ListSecretKey, held: Held = world): JoinMember {
+  return { key, state: held.state, card: world.card, secret: world.secret };
 }
 
 export interface JoinRun {
+  readonly n: NewDeviceJoin;
+  readonly a: MemberJoin;
   readonly commit: Uint8Array;
   readonly answer: Uint8Array;
   readonly reveal: Uint8Array;
-  readonly words: readonly string[];
-  readonly sets: readonly (readonly string[])[];
+  readonly words: Words;
+  readonly sets: readonly Words[];
   readonly right: number;
 }
 
-export const N_NONCE = fill(32, 0x11);
-export const A_NONCE = fill(32, 0x22);
-export const DECOY_SEED = fill(32, 0x33);
-export const SEAL_SEED = fill(32, 0x44);
+export const N_RANDOM = fill(32, 0x11);
+export const SEAL_RANDOM = fill(32, 0x44);
+export const LIST_RANDOM = fill(32, 0x71);
 
 /** Steps 1 to 4 of a join with no one in the middle, and where the right set is. */
-export function runJoin(
-  member: JoinMember,
-  joining: JoiningDevice,
-  nonces = { n: N_NONCE, a: A_NONCE, decoy: DECOY_SEED },
-): JoinRun {
-  const commit = joinCommit(joining, member.state.context, nonces.n);
-  const answer = joinAnswer(member, commit, nonces.a);
-  const { reveal, words } = joinReveal(joining, member.state.context, nonces.n, commit, answer);
-  const { sets } = joinChoices(member, commit, answer, reveal, nonces.decoy);
+export function runJoin(member: JoinMember, joining: JoiningDevice, random = N_RANDOM): JoinRun {
+  const n = NewDeviceJoin.start(joining, member.state.context, random);
+  const commit = n.commit;
+  const a = MemberJoin.answer(member, commit);
+  const answer = a.answer;
+  const { reveal, words } = n.reveal(answer);
+  const { sets } = a.choices(reveal);
   const right = sets.findIndex((set) => set.join(" ") === words.join(" "));
-  return { commit, answer, reveal, words, sets, right };
+  return { n, a, commit, answer, reveal, words, sets, right };
 }
 
-/** A whole join with a right pick; returns the entry, A's new state and what N opened. */
+/**
+ * A whole join with a right pick, the connector's append and N's finish on the list sealed
+ * after it. Returns the entry, the list after it and what N opened.
+ */
 export function addDevice(
-  member: JoinMember,
+  world: World,
+  key: ListSecretKey,
   joining: JoiningDevice,
-  nonces = { n: N_NONCE, a: A_NONCE, decoy: DECOY_SEED },
+  held: Held = world,
+  random = N_RANDOM,
 ) {
-  const run = runJoin(member, joining, nonces);
-  const pick: JoinPick = { set: run.right };
-  const outcome = joinConfirm(
-    member,
-    run.commit,
-    run.answer,
-    run.reveal,
-    nonces.decoy,
-    pick,
-    SEAL_SEED,
-  );
+  const run = runJoin(memberOf(world, key, held), joining, random);
+  const outcome = run.a.confirm(run.words, SEAL_RANDOM);
   if (outcome.outcome !== "added") throw new Error("expected an added outcome");
-  const finished = joinFinish(
-    joining,
-    member.state.context,
-    nonces.n,
-    run.commit,
-    run.answer,
-    run.reveal,
-    outcome.confirm,
-  );
-  return { run, ...outcome, finished };
+  const after = appended(held, outcome.entry);
+  const sealed = sealList(world.secret, CONTEXT, after.entries, LIST_RANDOM);
+  const finished = run.n.finish(outcome.confirm, sealed);
+  return { run, entry: outcome.entry, confirm: outcome.confirm, held: after, sealed, finished };
 }
 
 export function code(action: () => unknown): AccountProtocolErrorCode | "ok" {

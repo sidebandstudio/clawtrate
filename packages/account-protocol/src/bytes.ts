@@ -9,8 +9,11 @@ import { fail } from "./errors.ts";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-/** Control characters and bidirectional formatting characters, refused in every text field. */
-const UNSAFE_TEXT = /[\p{Cc}\p{Bidi_Control}]/u;
+/**
+ * Control characters, bidirectional formatting characters and default-ignorable (invisible)
+ * characters, refused in every text field.
+ */
+const UNSAFE_TEXT = /[\p{Cc}\p{Bidi_Control}\p{Default_Ignorable_Code_Point}]/u;
 
 export function utf8(text: string): Uint8Array {
   return encoder.encode(text);

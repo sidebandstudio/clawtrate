@@ -46,8 +46,10 @@ export type AccountProtocolErrorCode =
   | "bad_time"
   /** A session request answers another challenge, audience or request. */
   | "bad_challenge"
-  /** A new list secret is not newer than the one held. */
-  | "stale_secret";
+  /** A new list secret is not newer than the one held, or has the same bytes. */
+  | "stale_secret"
+  /** A one-shot join was asked for a second answer, reveal, confirmation or finish. */
+  | "join_spent";
 
 export class AccountProtocolError extends Error {
   readonly code: AccountProtocolErrorCode;

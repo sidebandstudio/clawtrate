@@ -82,15 +82,39 @@ export default tseslint.config(
         "require",
         "crypto",
         "performance",
+        "globalThis",
       ],
       "no-restricted-properties": [
         "error",
         { object: "Math", property: "random", message: "randomness comes in as an argument" },
         { object: "Date", property: "now", message: "time comes in as an argument" },
+        { property: "randomSecretKey", message: "randomness comes in as an argument" },
+        { property: "keygen", message: "randomness comes in as an argument" },
+        { property: "getRandomValues", message: "randomness comes in as an argument" },
       ],
       "no-restricted-syntax": [
         "error",
         { selector: "NewExpression[callee.name='Date']", message: "time comes in as an argument" },
+      ],
+    },
+  },
+  {
+    // The account protocol's internals (its raw signers, secret accessors and HPKE) are reachable
+    // only through its index; nothing outside the package may import its `src/` files.
+    files: ["**/*.{ts,tsx,js,mjs,cjs}"],
+    ignores: ["packages/account-protocol/**"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...[
+          "ImportDeclaration",
+          "ExportAllDeclaration",
+          "ExportNamedDeclaration",
+          "ImportExpression",
+        ].map((node) => ({
+          selector: `${node}[source.value=/account-protocol\\u002Fsrc/]`,
+          message: "import @clawtrate/account-protocol, not its src/ files",
+        })),
       ],
     },
   },

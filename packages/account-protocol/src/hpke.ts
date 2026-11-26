@@ -67,6 +67,16 @@ function keySchedule(shared: Uint8Array, info: Uint8Array): { key: Uint8Array; n
   };
 }
 
+/** RFC 9180 section 4.1, Encap with the ephemeral from DeriveKeyPair(ikmE): `enc` and the shared secret. */
+export function encapsulate(
+  recipient: Uint8Array,
+  ikmE: Uint8Array,
+): { enc: Uint8Array; shared: Uint8Array } {
+  const ephemeral = deriveSealKeyPair(ikmE);
+  const enc = ephemeral.publicKey;
+  return { enc, shared: sharedSecret(dh(ephemeral.secretKey, recipient), enc, recipient) };
+}
+
 /** Seals `plaintext` to `recipient` (a checked X25519 public key). Returns `enc` and the ciphertext. */
 export function hpkeSeal(
   recipient: Uint8Array,
@@ -75,9 +85,7 @@ export function hpkeSeal(
   plaintext: Uint8Array,
   ikmE: Uint8Array,
 ): { enc: Uint8Array; ciphertext: Uint8Array } {
-  const ephemeral = deriveSealKeyPair(ikmE);
-  const enc = ephemeral.publicKey;
-  const shared = sharedSecret(dh(ephemeral.secretKey, recipient), enc, recipient);
+  const { enc, shared } = encapsulate(recipient, ikmE);
   const { key, nonce } = keySchedule(shared, info);
   return { enc, ciphertext: chacha20poly1305(key, nonce, aad).encrypt(plaintext) };
 }

@@ -9,16 +9,14 @@ import {
   AccountProtocolError,
   decodeRemovalNotice,
   encodeRemovalNotice,
-  joinChoices,
-  joinConfirm,
-  joinFinish,
-  joinReveal,
   ListSecret,
+  MemberJoin,
+  NewDeviceJoin,
   openCard,
   openEntry,
   openList,
   openRotation,
-  readEntry,
+  readEntryUnverified,
   refuseJoin,
   rotateListSecret,
   sealCard,
@@ -34,15 +32,16 @@ import {
 } from "../src/index.ts";
 import { decodeList, encodeList } from "../src/list.ts";
 import {
+  appended,
   CONTEXT,
-  DECOY_SEED,
   fill,
+  LIST_RANDOM,
   makeDevice,
   makeWorld,
   memberOf,
-  N_NONCE,
+  N_RANDOM,
   runJoin,
-  SEAL_SEED,
+  SEAL_RANDOM,
   seeded,
   toHex,
 } from "./helpers.ts";
@@ -121,18 +120,14 @@ const gateway = world.gatewayDevice;
 const mac = makeDevice(2, "MacBook Pro");
 const member = memberOf(world, gateway.listKey);
 const run = runJoin(member, mac);
-const added = joinConfirm(
-  member,
-  run.commit,
-  run.answer,
-  run.reveal,
-  DECOY_SEED,
-  { set: run.right },
-  SEAL_SEED,
-);
+const added = run.a.confirm(run.words, SEAL_RANDOM);
 if (added.outcome !== "added") throw new Error("expected an added outcome");
-const removal = signRemoval(gateway.listKey, added.state, mac.device.listKey);
-const entries = [world.genesis, added.entry, removal.entry];
+const withMac = appended(world, added.entry);
+const removal = signRemoval(gateway.listKey, withMac.state, mac.device.listKey);
+const entries = [world.genesis, added.entry, removal];
+const sealedWithMac = sealList(world.secret, CONTEXT, withMac.entries, LIST_RANDOM);
+/** A fresh N with the same keys and random: the same commitment, ready for one answer. */
+const freshN = () => NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
 
 describe("seeded fuzzing", () => {
   it("entries, read alone: whatever is accepted reads back as the bytes it came from", () => {
@@ -140,14 +135,14 @@ describe("seeded fuzzing", () => {
     // or carry another signature.
     const reading = (b: Uint8Array, out: unknown) =>
       JSON.stringify(describeValue(out)) + toHex(b.subarray(b.length - 64));
-    const original = reading(added.entry, readEntry(added.entry));
-    fuzz(1, added.entry, readEntry, (b, out) => reading(b, out) !== original);
+    const original = reading(added.entry, readEntryUnverified(added.entry));
+    fuzz(1, added.entry, readEntryUnverified, (b, out) => reading(b, out) !== original);
   }, 120_000);
 
   it("the list, entry by entry and as a whole", () => {
     fuzz(2, world.genesis, (b) => verifyList(CONTEXT, [b]));
     fuzz(3, added.entry, (b) => world.state.append(b));
-    fuzz(4, removal.entry, (b) => added.state.append(b));
+    fuzz(4, removal, (b) => withMac.state.append(b));
     const rng = seeded(5);
     for (let i = 0; i < RUNS; i++) {
       const list = entries.map((entry) => (rng.int(3) === 0 ? mutate(rng, entry) : entry));
@@ -170,7 +165,7 @@ describe("seeded fuzzing", () => {
   }, 120_000);
 
   it("the card, the refusal and the removal notice", () => {
-    fuzz(7, world.card, verifyCard);
+    fuzz(7, world.card, (b) => verifyCard(b, world.connector.publicKey, CONTEXT.gatewayId));
     const refusal = refuseJoin(member, run.commit, "none-match");
     fuzz(8, refusal, (b) => verifyRefusal(world.state, b));
     const notice = encodeRemovalNotice(CONTEXT, mac.device.listKey);
@@ -181,40 +176,38 @@ describe("seeded fuzzing", () => {
   }, 120_000);
 
   it("the join's messages, at the step that reads each", () => {
-    fuzz(10, run.commit, (b) => joinReveal(mac, CONTEXT, N_NONCE, b, run.answer));
+    // A changed commit that A answers gives N an answer to another join.
+    fuzz(10, run.commit, (b) => freshN().reveal(MemberJoin.answer(member, b).answer));
     // A changed answer that N reads still gives a reveal A refuses: the answer's acceptance is A's.
     fuzz(11, run.answer, (b) =>
-      joinChoices(
-        member,
-        run.commit,
-        run.answer,
-        joinReveal(mac, CONTEXT, N_NONCE, run.commit, b).reveal,
-        DECOY_SEED,
-      ),
+      MemberJoin.answer(member, run.commit).choices(freshN().reveal(b).reveal),
     );
-    fuzz(12, run.reveal, (b) => joinChoices(member, run.commit, run.answer, b, DECOY_SEED));
-    fuzz(13, added.confirm, (b) =>
-      joinFinish(mac, CONTEXT, N_NONCE, run.commit, run.answer, run.reveal, b),
-    );
+    fuzz(12, run.reveal, (b) => MemberJoin.answer(member, run.commit).choices(b));
+    fuzz(13, added.confirm, (b) => {
+      const n = freshN();
+      n.reveal(run.answer);
+      return n.finish(b, sealedWithMac);
+    });
   }, 120_000);
 
   it("sealed things and the rotation", () => {
     const secret = world.secret;
-    fuzz(14, sealList(secret, CONTEXT, entries, fill(24, 1)), (b) => openList(secret, CONTEXT, b));
-    fuzz(15, sealCard(secret, CONTEXT, world.card, fill(24, 2)), (b) =>
-      openCard(secret, CONTEXT, b),
+    fuzz(14, sealList(secret, CONTEXT, entries, fill(32, 1)), (b) => openList(secret, CONTEXT, b));
+    fuzz(15, sealCard(secret, CONTEXT, world.card, fill(32, 2)), (b) =>
+      openCard(secret, world.state, b),
     );
-    fuzz(16, sealEntry(secret, CONTEXT, added.entry, fill(24, 3)), (b) =>
-      openEntry(secret, CONTEXT, b),
+    fuzz(16, sealEntry(secret, CONTEXT, added.entry, fill(32, 3)), (b) =>
+      openEntry(secret, world.state, b),
     );
     const rotation = rotateListSecret(
       world.connector,
-      added.state,
+      withMac.state,
+      secret,
       ListSecret.fromBytes(fill(32, 9), 1),
-      fill(64, 3),
+      fill(32, 3),
     );
     fuzz(17, rotation, (b) =>
-      openRotation({ listKey: mac.device.listKey, sealKey: mac.sealKey }, added.state, b, secret),
+      openRotation({ listKey: mac.device.listKey, sealKey: mac.sealKey }, withMac.state, b, secret),
     );
   }, 120_000);
 

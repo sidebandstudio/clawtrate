@@ -6,11 +6,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   encodeRemovalNotice,
-  joinChoices,
-  joinConfirm,
-  joinFinish,
-  joinReveal,
   ListSecret,
+  MemberJoin,
+  NewDeviceJoin,
   openCard,
   openEntry,
   openList,
@@ -31,17 +29,18 @@ import {
   type AccountProtocolErrorCode as Code,
 } from "../src/index.ts";
 import {
+  appended,
   code,
   CONTEXT,
-  DECOY_SEED,
   fill,
   flip,
+  LIST_RANDOM,
   makeDevice,
   makeWorld,
   memberOf,
-  N_NONCE,
+  N_RANDOM,
   runJoin,
-  SEAL_SEED,
+  SEAL_RANDOM,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -100,16 +99,9 @@ describe("tampering with the list", () => {
   const mac = makeDevice(2, "MacBook Pro");
   const member = memberOf(world, gateway.listKey);
   const run = runJoin(member, mac);
-  const added = joinConfirm(
-    member,
-    run.commit,
-    run.answer,
-    run.reveal,
-    DECOY_SEED,
-    { set: run.right },
-    SEAL_SEED,
-  );
+  const added = run.a.confirm(run.words, SEAL_RANDOM);
   if (added.outcome !== "added") throw new Error("expected an added outcome");
+  const withMac = appended(world, added.entry);
   const head = (codes: readonly Code[]): Field[] => [
     ["label", 32, LABEL],
     ...CONTEXT_FIELDS(codes),
@@ -149,9 +141,10 @@ describe("tampering with the list", () => {
 
   it("a removal from the account page and a restore", () => {
     const notice = encodeRemovalNotice(CONTEXT, mac.device.listKey);
-    const removal = signRemovalNotice(world.connector, added.state, notice);
+    const removal = signRemovalNotice(world.connector, withMac.state, notice);
+    const removed = withMac.state.append(removal);
     tamper(
-      removal.entry,
+      removal,
       [
         ...head(SIGNED),
         ["type", 1, ["malformed", "bad_key", "bad_signature"]],
@@ -160,11 +153,11 @@ describe("tampering with the list", () => {
         ["signer", 32, KEY],
         ["signature", 64, SIGNED],
       ],
-      (b) => added.state.append(b),
+      (b) => withMac.state.append(b),
     );
-    const restore = signRestore(gateway.listKey, removal.state, mac.device.listKey);
+    const restore = signRestore(gateway.listKey, removed, mac.device.listKey);
     tamper(
-      restore.entry,
+      restore,
       [
         ...head(SIGNED),
         ["type", 1, ["malformed", "bad_key", "bad_signature"]],
@@ -172,7 +165,7 @@ describe("tampering with the list", () => {
         ["signer", 32, KEY],
         ["signature", 64, SIGNED],
       ],
-      (b) => removal.state.append(b),
+      (b) => removed.append(b),
     );
   });
 
@@ -200,7 +193,7 @@ describe("tampering with the list", () => {
         ["label", 26, LABEL],
         ["gateway id", 16, SIGNED],
         ["serial", 4, SIGNED],
-        ["connector key", 32, KEY],
+        ["connector key", 32, ["bad_key", "card_mismatch"]],
         ["TLS pin", 32, SIGNED],
         ["address count", 1, ["malformed", "too_large"]],
         ["host length", 2, ["malformed", "too_large"]],
@@ -213,16 +206,17 @@ describe("tampering with the list", () => {
         ["name", 10, ["malformed", "bad_signature"]],
         ["signature", 64, SIGNED],
       ],
-      (b) => verifyCard(b),
+      (b) => verifyCard(b, world.connector.publicKey, CONTEXT.gatewayId),
     );
   });
 
   it("a rotation of the list secret", () => {
     const rotation = rotateListSecret(
       world.connector,
-      added.state,
+      withMac.state,
+      world.secret,
       ListSecret.fromBytes(fill(32, 9), 1),
-      fill(64, 3),
+      fill(32, 3),
     );
     const holder = { listKey: mac.device.listKey, sealKey: mac.sealKey };
     const share: Field[] = [
@@ -241,7 +235,7 @@ describe("tampering with the list", () => {
         ...share,
         ["signature", 64, SIGNED],
       ],
-      (b) => openRotation(holder, added.state, b, world.secret),
+      (b) => openRotation(holder, withMac.state, b, world.secret),
     );
   });
 
@@ -253,23 +247,23 @@ describe("tampering with the list", () => {
       ["epoch", 4, ["decrypt_failed"]],
       ["nonce", 24, codes],
     ];
-    const list = sealList(secret, CONTEXT, [world.genesis], fill(24, 1));
+    const list = sealList(secret, CONTEXT, [world.genesis], fill(32, 1));
     tamper(
       list,
       [...sealedHeader(["decrypt_failed"]), ["ciphertext", list.length - 30, ["decrypt_failed"]]],
       (b) => openList(secret, CONTEXT, b),
     );
-    const card = sealCard(secret, CONTEXT, world.card, fill(24, 2));
+    const card = sealCard(secret, CONTEXT, world.card, fill(32, 2));
     tamper(
       card,
       [...sealedHeader(["decrypt_failed"]), ["ciphertext", card.length - 30, ["decrypt_failed"]]],
-      (b) => openCard(secret, CONTEXT, b),
+      (b) => openCard(secret, world.state, b),
     );
-    const entry = sealEntry(secret, CONTEXT, added.entry, fill(24, 3));
+    const entry = sealEntry(secret, CONTEXT, added.entry, fill(32, 3));
     tamper(
       entry,
       [...sealedHeader(["decrypt_failed"]), ["ciphertext", entry.length - 30, ["decrypt_failed"]]],
-      (b) => openEntry(secret, CONTEXT, b),
+      (b) => openEntry(secret, world.state, b),
     );
   });
 });
@@ -279,37 +273,32 @@ describe("tampering with the join", () => {
   const member = memberOf(world, world.gatewayDevice.listKey);
   const mac = makeDevice(2, "MacBook Pro");
   const run = runJoin(member, mac);
-  const added = joinConfirm(
-    member,
-    run.commit,
-    run.answer,
-    run.reveal,
-    DECOY_SEED,
-    { set: run.right },
-    SEAL_SEED,
-  );
+  const added = run.a.confirm(run.words, SEAL_RANDOM);
   if (added.outcome !== "added") throw new Error("expected an added outcome");
+  const sealed = sealList(world.secret, CONTEXT, appended(world, added.entry).entries, LIST_RANDOM);
+  /** A fresh N with the same keys and random: the same commitment, ready for one answer. */
+  const freshN = () => NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
   const label: Field = ["label", 37, LABEL];
   const step: Field = ["step", 1, ["transcript_mismatch"]];
 
-  it("the commit, as N's own check of it finds it", () => {
+  it("the commit, as A answers it and N then finds the answer", () => {
     tamper(
       run.commit,
       [
         label,
         step,
         ...CONTEXT_FIELDS(["wrong_gateway", "wrong_account"]),
-        ["commitment", 32, ["commitment_mismatch"]],
+        ["commitment", 32, ["transcript_mismatch"]],
       ],
-      (b) => joinReveal(mac, CONTEXT, N_NONCE, b, run.answer),
+      (b) => freshN().reveal(MemberJoin.answer(member, b).answer),
     );
   });
 
   it("the answer, refused by N or, where N can't tell, by A", () => {
     // A changed key, list head, card hash or nonce gives N other words and a reveal A refuses.
     const throughBoth = (b: Uint8Array) => {
-      const { reveal } = joinReveal(mac, CONTEXT, N_NONCE, run.commit, b);
-      return joinChoices(member, run.commit, run.answer, reveal, DECOY_SEED);
+      const { reveal } = freshN().reveal(b);
+      return MemberJoin.answer(member, run.commit).choices(reveal);
     };
     tamper(
       run.answer,
@@ -339,7 +328,7 @@ describe("tampering with the join", () => {
         ["transcript hash", 32, ["transcript_mismatch"]],
         ["signature", 64, SIGNED],
       ],
-      (b) => joinChoices(member, run.commit, run.answer, b, DECOY_SEED),
+      (b) => MemberJoin.answer(member, run.commit).choices(b),
     );
   });
 
@@ -360,7 +349,11 @@ describe("tampering with the join", () => {
         ["sealed", sealedLength, SIGNED],
         ["signature", 64, SIGNED],
       ],
-      (b) => joinFinish(mac, CONTEXT, N_NONCE, run.commit, run.answer, run.reveal, b),
+      (b) => {
+        const n = freshN();
+        n.reveal(run.answer);
+        return n.finish(b, sealed);
+      },
     );
   });
 });
@@ -380,7 +373,7 @@ describe("tampering with a session request", () => {
       request,
       [
         ["label", 37, LABEL],
-        ["audience length", 2, ["malformed", "too_large"]],
+        ["audience length", 2, ["malformed", "too_large", "bad_key"]],
         ["audience", 30, ["malformed", "bad_signature"]],
         ["session key", 32, KEY],
         ["challenge", 32, SIGNED],

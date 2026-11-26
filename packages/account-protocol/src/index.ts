@@ -3,6 +3,7 @@
 
 export { AccountProtocolError, type AccountProtocolErrorCode } from "./errors.ts";
 export {
+  GROWTH_LIMIT,
   JOIN_PAUSE_MS,
   MAX_ADDRESSES,
   MAX_AUDIENCE_BYTES,
@@ -31,10 +32,11 @@ export {
   entryHash,
   ListState,
   MAX_ENTRY_BYTES,
-  readEntry,
+  readEntryUnverified,
   signGenesis,
   signRemoval,
   signRemovalNotice,
+  signRemovalOnGatewayMachine,
   signRestore,
   verifyList,
   type Entry,
@@ -44,14 +46,7 @@ export {
   type RemovalOrigin,
   type Role,
 } from "./list.ts";
-export {
-  cardHash,
-  checkCardForList,
-  signCard,
-  verifyCard,
-  type Card,
-  type CardAddress,
-} from "./card.ts";
+export { cardHash, signCard, verifyCard, type Card, type CardAddress } from "./card.ts";
 export {
   ListSecret,
   MAX_CARD_BYTES,
@@ -66,17 +61,14 @@ export {
   sealList,
 } from "./seal.ts";
 export {
-  joinAnswer,
-  joinChoices,
-  joinCommit,
-  joinConfirm,
-  joinFinish,
-  joinReveal,
+  MemberJoin,
+  NewDeviceJoin,
   refuseJoin,
   verifyRefusal,
   wordsFor,
   type JoiningDevice,
   type JoinMember,
+  type JoinResult,
   type JoinOutcome,
   type JoinPick,
   type Refusal,
