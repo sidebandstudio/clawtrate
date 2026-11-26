@@ -408,8 +408,10 @@ export function isJobSummary(value: unknown): boolean {
 /**
  * What a summary carries, put on the routine already held: its name, whether it is on, when it
  * was changed and its run state. Its schedule, instruction, target and delivery stay as held.
+ * `changed`: the event says the job was added or changed, so its definition may differ from the
+ * one held until the job is read.
  */
-function withSummary(held: Routine, value: unknown): Routine {
+function withSummary(held: Routine, value: unknown, changed: boolean): Routine {
   const job = asRecord(value) ?? {};
   const state = asRecord(job.state);
   const enabled = typeof job.enabled === "boolean" ? job.enabled : held.enabled;
@@ -418,8 +420,9 @@ function withSummary(held: Routine, value: unknown): Routine {
     ...held,
     name: str(job.name) ?? held.name,
     enabled,
-    // A paused routine is offered no copy; one turned back on waits for its job to be read.
-    canRecreate: held.canRecreate === true && enabled,
+    // A paused routine is offered no copy; one turned back on, or added or changed (it may now
+    // have a condition the summary doesn't carry), waits for its job to be read.
+    canRecreate: held.canRecreate === true && enabled && !changed,
     updatedAt: num(job.updatedAtMs) ?? held.updatedAt,
     ...(runs
       ? {
@@ -428,6 +431,8 @@ function withSummary(held: Routine, value: unknown): Routine {
           lastEndedAt: runs.lastEndedAt,
           lastStatus: runs.lastStatus,
           runningAt: runs.runningAt,
+          // A summary carries no error: one held is of the run it was held with.
+          ...(runs.lastRunAt !== held.lastRunAt ? { lastError: null } : {}),
         }
       : {}),
   };
@@ -453,7 +458,11 @@ export function applyCronEvent(routines: Routine[], payload: RawRecord): Routine
   const summary = isJobSummary(payload.job);
   const fromJob = summary ? null : parseRoutine(payload.job);
   if (asRecord(payload.job) && !summary && !fromJob) return routines;
-  let next = fromJob ?? (current && summary ? withSummary(current, payload.job) : current);
+  let next =
+    fromJob ??
+    (current && summary
+      ? withSummary(current, payload.job, action === "added" || action === "updated")
+      : current);
   if (!next) return routines;
   const runAt = num(payload.runAtMs);
   if (action === "started") {
@@ -741,6 +750,8 @@ export class RoutinesEngine {
   /** An event arrived while the list was being read: that read may be older than it. */
   private invalidated = false;
   private recheck: ReturnType<typeof setTimeout> | null = null;
+  /** When `recheck` fires: a later read again never puts it off. */
+  private recheckAt = 0;
   /**
    * The last `finished` of a listed routine; `consumed` when its snapshot shows
    * a one-shot the gateway is about to delete. A `removed` of the same job
@@ -884,7 +895,11 @@ export class RoutinesEngine {
   }
 
   private schedule(ms: number): void {
+    const at = Date.now() + ms;
+    // An earlier read again already armed stays; a later one (a running recheck) is brought in.
+    if (this.recheck !== null && this.recheckAt <= at) return;
     this.clearRecheck();
+    this.recheckAt = at;
     this.recheck = setTimeout(() => {
       this.recheck = null;
       void this.load();
@@ -995,9 +1010,20 @@ export class RoutinesEngine {
         job = await this.ctx.request("cron.get", { id });
       } catch (error) {
         if (!current()) return;
-        // The routine stays as the events left it; the list is read again later.
         this.reads.delete(id);
-        if (!notFound(error) && !permanent(error)) this.schedule(RETRY_MS);
+        if (notFound(error)) {
+          // The gateway says the job is gone: so is its routine, whatever event was lost.
+          if (this.loading) this.invalidated = true;
+          this.ctx.update((state) => ({
+            ...state,
+            routines: state.routines.filter((each) => each.id !== id),
+            revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
+          }));
+          return;
+        }
+        // Otherwise the routine stays as the events left it, and the list is read again later
+        // unless the refusal is one another try would get again.
+        if (!permanent(error)) this.schedule(RETRY_MS);
         return;
       } finally {
         this.readsOut -= 1;

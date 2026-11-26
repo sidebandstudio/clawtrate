@@ -642,7 +642,15 @@ const summaryOf = (full: Record<string, unknown>) => {
 };
 
 describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary of the job", () => {
+  /** Every engine a test here makes, closed after it whatever it asserted: a run arms a recheck. */
+  const opened: RoutinesEngine[] = [];
+  const open: typeof engine = (...args) => {
+    const made = engine(...args);
+    opened.push(made.routines);
+    return made;
+  };
   afterEach(() => {
+    for (const each of opened.splice(0)) each.onClose();
     vi.useRealTimers();
   });
   const loaded = (...jobs: Array<Record<string, unknown>>): RoutinesState => ({
@@ -670,7 +678,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("added: the routine is read with cron.get and shown only once it is, never as unknown", async () => {
     const get = heldGets();
-    const { routines, requests, state } = engine({ "cron.get": get.handler }, loaded());
+    const { routines, requests, state } = open({ "cron.get": get.handler }, loaded());
     // The frame `cron.add` makes 2026.11.10 send, as the issue recorded it.
     routines.onEvent({
       jobId: JOB,
@@ -701,7 +709,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("updated: the summary is merged at once, never replacing the schedule or instruction, and the job is read", async () => {
     const get = heldGets();
-    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    const { routines, state } = open({ "cron.get": get.handler }, loaded(job()));
     const renamed = job({
       name: "Weekday digest",
       updatedAtMs: 1_795_046_000_000,
@@ -729,7 +737,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("paused and resumed: on, next run and the copy offer follow the summary, the rest stays", async () => {
     const get = heldGets();
-    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    const { routines, state } = open({ "cron.get": get.handler }, loaded(job()));
     expect(state().routines[0]!.canRecreate).toBe(true);
     const paused = job({ enabled: false }, { nextRunAtMs: undefined });
     routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(paused) });
@@ -754,7 +762,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("removed: the routine goes whatever the event carries, and a read out for it is dropped", async () => {
     const get = heldGets();
-    const { routines, requests, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    const { routines, requests, state } = open({ "cron.get": get.handler }, loaded(job()));
     routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
     await until(() => get.answers.length === 1);
     routines.onEvent({ jobId: JOB, action: "removed", job: summaryOf(job({ name: "Renamed" })) });
@@ -767,7 +775,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
   });
 
   it("a run's started and finished are merged without a read; a summary never adds a routine", async () => {
-    const { routines, requests, state } = engine({}, loaded(job()));
+    const { routines, requests, state } = open({}, loaded(job()));
     routines.onEvent({
       jobId: JOB,
       action: "started",
@@ -827,7 +835,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
       deleteAfterRun: true,
       schedule: { kind: "at", at: "2026-11-20T09:00:00-05:00" },
     });
-    const self = engine({}, loaded(oneShot));
+    const self = open({}, loaded(oneShot));
     self.routines.onEvent({
       jobId: JOB,
       action: "finished",
@@ -842,7 +850,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("a second event while the read is out: one read at a time, and the answer after the latest event is kept", async () => {
     const get = heldGets();
-    const { routines, requests, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    const { routines, requests, state } = open({ "cron.get": get.handler }, loaded(job()));
     routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "First" })) });
     await until(() => get.answers.length === 1);
     routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Second" })) });
@@ -861,7 +869,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
   it("a failed read leaves the routine as the events left it and says nothing of it", async () => {
     vi.useFakeTimers();
     const get = heldGets();
-    const { routines, requests, state } = engine(
+    const { routines, requests, state } = open(
       {
         "cron.get": get.handler,
         "cron.status": () => ({ enabled: true }),
@@ -885,7 +893,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("an added job whose read fails is not shown", async () => {
     const get = heldGets();
-    const { routines, state } = engine({ "cron.get": get.handler }, loaded());
+    const { routines, state } = open({ "cron.get": get.handler }, loaded());
     routines.onEvent({ jobId: JOB, action: "added", job: summaryOf(job()) });
     await until(() => get.answers.length === 1);
     get.answers[0]!.fail(
@@ -902,7 +910,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
   it("a reconnect or a switch while the read is out: its answer does nothing", async () => {
     let target = 0;
     const get = heldGets();
-    const { routines, state } = engine({ "cron.get": get.handler }, loaded(), {
+    const { routines, state } = open({ "cron.get": get.handler }, loaded(), {
       admin: false,
       connected: true,
       target: () => target,
@@ -925,7 +933,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("a run's events while the read is out make its answer stale: a finished run is never undone", async () => {
     const get = heldGets();
-    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    const { routines, state } = open({ "cron.get": get.handler }, loaded(job()));
     routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
     await until(() => get.answers.length === 1);
     routines.onEvent({
@@ -957,7 +965,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
   it("near the cap, a routine read after a summary that no longer fits reads the list, so it is counted", async () => {
     const get = heldGets();
     const many = Array.from({ length: MAX_ROUTINES - 1 }, (_, index) => job({ id: `h${index}` }));
-    const { routines, requests, state } = engine(
+    const { routines, requests, state } = open(
       {
         "cron.get": get.handler,
         "cron.status": () => ({ enabled: true }),
@@ -980,7 +988,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("at the cap, an added summary reads the list, not the job", async () => {
     const many = Array.from({ length: MAX_ROUTINES }, (_, index) => job({ id: `h${index}` }));
-    const { routines, requests } = engine(
+    const { routines, requests } = open(
       {
         "cron.status": () => ({ enabled: true }),
         "cron.list": () => ({ jobs: many, hasMore: false }),
@@ -994,7 +1002,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
   });
 
   it("a finished summary of a job not held reads nothing: a check-in's run is not a missing routine", async () => {
-    const { routines, requests } = engine({}, loaded(job()));
+    const { routines, requests } = open({}, loaded(job()));
     routines.onEvent({
       jobId: heartbeat.id,
       action: "finished",
@@ -1010,7 +1018,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
     const get = heldGets();
     let lists = 0;
     let answerList: (value: unknown) => void = () => {};
-    const { routines, state } = engine(
+    const { routines, state } = open(
       {
         "cron.get": get.handler,
         "cron.status": () => ({ enabled: true }),
@@ -1038,7 +1046,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("an answer that is itself a summary is not applied", async () => {
     const get = heldGets();
-    const { routines, state } = engine({ "cron.get": get.handler }, loaded(job()));
+    const { routines, state } = open({ "cron.get": get.handler }, loaded(job()));
     routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
     await until(() => get.answers.length === 1);
     const merged = state().routines[0];
@@ -1051,7 +1059,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
   it(`reads dropped while out still count: at most ${MAX_ROUTINE_READS} cron.get are out at once`, async () => {
     const get = heldGets();
     let lists = 0;
-    const { routines } = engine(
+    const { routines } = open(
       {
         "cron.get": get.handler,
         "cron.status": () => ({ enabled: true }),
@@ -1080,7 +1088,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("a read out when a write's answer is shown is read again: the older answer never undoes it", async () => {
     const get = heldGets();
-    const { routines, state } = engine(
+    const { routines, state } = open(
       { "cron.get": get.handler, "cron.update": () => job({ enabled: false }) },
       loaded(job()),
       ADMIN,
@@ -1099,7 +1107,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("a read out when the list is shown is read again: the older answer never undoes the list", async () => {
     const get = heldGets();
-    const { routines, state } = engine(
+    const { routines, state } = open(
       {
         "cron.get": get.handler,
         "cron.status": () => ({ enabled: true }),
@@ -1122,7 +1130,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
 
   it("a routine deleted from Clawtrate stays deleted when a read out for it answers", async () => {
     const get = heldGets();
-    const { routines, state } = engine(
+    const { routines, state } = open(
       { "cron.get": get.handler, "cron.remove": () => ({ ok: true, removed: true }) },
       { ...loaded(job()), listedOn: 0 },
       ADMIN,
@@ -1139,7 +1147,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
   it(`at most ${MAX_ROUTINE_READS} jobs are read at once; past it the list is read instead`, async () => {
     const get = heldGets();
     let lists = 0;
-    const { routines } = engine(
+    const { routines } = open(
       {
         "cron.get": get.handler,
         "cron.status": () => ({ enabled: true }),
@@ -1162,7 +1170,7 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
   });
 
   it("2026.10.6's whole job is applied as before, with no read", async () => {
-    const { routines, requests, state } = engine({}, loaded(job()));
+    const { routines, requests, state } = open({}, loaded(job()));
     routines.onEvent({
       jobId: JOB,
       action: "updated",
@@ -1186,8 +1194,93 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
       [],
     );
   });
-});
 
+  it("an added or updated summary offers no copy until its job is read; a run's events keep the offer", async () => {
+    const get = heldGets();
+    const { routines, state } = open({ "cron.get": get.handler }, loaded(job()));
+    expect(state().routines[0]!.canRecreate).toBe(true);
+    routines.onEvent({
+      jobId: JOB,
+      action: "started",
+      runAtMs: 1_000,
+      job: summaryOf(job({}, { runningAtMs: 1_000 })),
+    });
+    expect(state().routines[0]!.canRecreate).toBe(true);
+    // The change may have given the job a condition the summary doesn't carry.
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job()) });
+    expect(state().routines[0]!.canRecreate).toBe(false);
+    await until(() => get.answers.length === 1);
+    get.answers[0]!.answer(job());
+    await until(() => state().routines[0]!.canRecreate === true);
+  });
+
+  it("a newer run in a summary clears the last run's error; the same run keeps it", () => {
+    const failed = job(
+      {},
+      { lastRunAtMs: 10, lastRunStatus: "error", lastError: "The job failed." },
+    );
+    const held = [parseRoutine(failed)!];
+    const same = applyCronEvent(held, {
+      jobId: JOB,
+      action: "scheduled",
+      job: summaryOf(failed),
+    });
+    expect(same[0]).toMatchObject({ lastRunAt: 10, lastError: "The job failed." });
+    const newer = applyCronEvent(held, {
+      jobId: JOB,
+      action: "scheduled",
+      job: summaryOf(job({}, { lastRunAtMs: 20, lastRunStatus: "ok" })),
+    });
+    expect(newer[0]).toMatchObject({ lastRunAt: 20, lastStatus: "ok", lastError: null });
+  });
+
+  it("a second failed read keeps the earlier list retry, and a retry brings a running recheck forward", async () => {
+    vi.useFakeTimers();
+    const lists: number[] = [];
+    const { routines } = open(
+      {
+        "cron.get": () => {
+          throw new Error("request timed out");
+        },
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => {
+          lists.push(Date.now());
+          return { jobs: [job({ id: "a" }), job({ id: "b" }, { runningAtMs: 5 })], hasMore: false };
+        },
+      },
+      loaded(job({ id: "a" }), job({ id: "b" })),
+    );
+    const start = Date.now();
+    routines.onEvent({ jobId: "a", action: "updated", job: summaryOf(job({ id: "a" })) });
+    await vi.advanceTimersByTimeAsync(29_000);
+    routines.onEvent({ jobId: "b", action: "updated", job: summaryOf(job({ id: "b" })) });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lists.map((at) => at - start)).toEqual([RETRY_MS]);
+    // The list marks b running, so a recheck is armed a minute out; a failed read pulls it in.
+    routines.onEvent({ jobId: "a", action: "updated", job: summaryOf(job({ id: "a" })) });
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(lists.map((at) => at - start)).toEqual([RETRY_MS, 2 * RETRY_MS]);
+  });
+
+  it("a read the gateway answers with not-found removes the routine, and reads nothing more", async () => {
+    vi.useFakeTimers();
+    const { routines, requests, state } = open(
+      {
+        "cron.get": (params) => {
+          throw missing(params.id as string);
+        },
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => ({ jobs: [], hasMore: false }),
+      },
+      loaded(job(), job({ id: "j2" })),
+    );
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state().routines.map((each) => each.id)).toEqual(["j2"]);
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(requests.some((each) => each.method === "cron.list")).toBe(false);
+  });
+});
 describe("F-355: a routine's runs", () => {
   it("are at most 20, in the gateway's order: newest finished first", async () => {
     const entries = Array.from({ length: 27 }, (_, index) => runEntry(1_000_000 - index * 60_000));
