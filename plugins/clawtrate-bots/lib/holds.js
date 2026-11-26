@@ -6,24 +6,39 @@
 // record, step 3), so a run typed here is B, and every hold says what it does
 // for B, C and O.
 //
+// Every hold reads a call the way the tool reads it: parameters in either
+// spelling the tool accepts (lib/params.js), paths in every form the file
+// tools expand. Where the plugin can't be sure what a call acts on, it refuses.
+//
 // decide() returns one of:
 //   { pass: true }                               not held, or held and allowed as it is
 //   { pass: true, params, said }                 allowed with its parameters changed
-//   { pass: true, journalRoutine: id }           allowed once the routine's definition is journaled
+//   { pass: true, endsRoutine: id }              a routine ending itself: journaled once it succeeds
 //   { approval: { title, description } }         OpenClaw's own approval, in the chat it came from
 //   { block: true, reason }                      not done, said to the bot
-// Any error while deciding a held call is a refusal (index.js).
+// Any error while deciding a held call is a refusal (lib/hooks.js).
 
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Ambiguous, botOfKey, readFirst, readParam } from "./params.js";
 
 /** The bootstrap files a bot's instructions live in, and the one that holds its name. */
 export const INSTRUCTION_FILES = Object.freeze(["agents.md", "soul.md", "tools.md", "user.md"]);
 export const IDENTITY_FILE = "identity.md";
-const FILE_TOOLS = new Set(["write", "edit", "apply_patch"]);
+/** The check-in's standing instructions, held as the check-in's notes are. */
+export const CHECK_IN_FILE = "heartbeat.md";
+const HELD_FILES = new Set([...INSTRUCTION_FILES, IDENTITY_FILE, CHECK_IN_FILE]);
+/** Tools that write a file by path: the workspace's, and the paired node's (`file_write`). */
+const FILE_TOOLS = new Set(["write", "edit", "apply_patch", "file_write"]);
 const SCHEDULER = new Set(["automations", "cron"]);
 const OPENCLAW_TOOLS = new Set(["openclaw", "plugins", "gateway"]);
 const GATEWAY_READS = new Set(["config.get", "config.schema.lookup"]);
+/** Tools that message another conversation; `conversations_turn` also waits for its reply. */
+const MESSAGE_TOOLS = new Set(["sessions_send", "conversations_send", "conversations_turn"]);
+/** Tools that start work in a session: a task of its own, or of another bot (a hand-off). */
+const HAND_OFF_TOOLS = new Set(["sessions_spawn", "sessions_create"]);
 
 /** Section 7.3's words, and the reasons a hold gives. */
 export const SAID = Object.freeze({
@@ -36,15 +51,14 @@ export const SAID = Object.freeze({
   seenFirst: "It's set up and starts once your person has seen it in Clawtrate.",
   turnedOff: "It's set up but turned off until your person turns it on in Clawtrate.",
   failed: "Not done: Clawtrate couldn't check this call, so it wasn't made.",
-  cantKeep:
-    "Not done: Clawtrate couldn't keep this routine's definition to undo its removal, and nobody is here to ask. Nothing was changed.",
+  ambiguous:
+    "Not done: this call names its target twice, differently, so Clawtrate can't tell what it would change. Nothing was changed.",
 });
 
 /** The scheduler's action, as the tool reads it. */
-const actionOf = (params) =>
-  String(params?.action ?? "")
-    .trim()
-    .toLowerCase();
+const actionOf = (params) => (readParam(params, "action") ?? "").toLowerCase();
+
+const isRecord = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 /**
  * A new routine, stored turned off: `enabled: false` wherever the scheduler
@@ -58,7 +72,6 @@ export function storedOff(params) {
       if (key.trim().toLowerCase() === "enabled") delete record[key];
     record.enabled = false;
   };
-  const isRecord = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
   if (isRecord(next.job) && Object.keys(next.job).length > 0) {
     off(next.job);
     if (isRecord(next.job.data)) off(next.job.data);
@@ -70,11 +83,12 @@ export function storedOff(params) {
 
 /** The paths a file tool call writes, as given: `path` (and its aliases), or a patch's file headers. */
 export function writtenPaths(event) {
-  const params = event?.params ?? {};
+  const params = isRecord(event?.params) ? event.params : {};
   const name = String(event?.toolName ?? "").toLowerCase();
   if (name !== "apply_patch") {
-    const p = params.path ?? params.file_path ?? params.filePath ?? params.file;
-    return typeof p === "string" ? [p] : [];
+    return ["path", "file_path", "filePath", "file", "destination"]
+      .map((key) => params[key])
+      .filter((p) => typeof p === "string");
   }
   const out = new Set(Array.isArray(event?.derivedPaths) ? event.derivedPaths : []);
   const patch = String(params.input ?? params.patch ?? "");
@@ -82,6 +96,32 @@ export function writtenPaths(event) {
     out.add(m[1]);
   for (const m of patch.matchAll(/^\*\*\*\s*Move to:\s*(.+?)\s*$/gim)) out.add(m[1]);
   return [...out];
+}
+
+/**
+ * A path as the file tools expand it (2026.10.6 dist/path-utils-S10YpSZj.mjs:27-43,
+ * dist/sandbox-paths-B9nRw-P0.mjs:20-28, dist/agent-tools.before-tool-call.decision-C9Brjb-Y.mjs:75-81;
+ * the same in 2026.11.10): a malformed `</arg_value>` suffix cut, one leading
+ * `@` dropped, `file://` read as a file URL, `~` as the home folder, and a
+ * relative path taken from the bot's workspace.
+ */
+export function expandPath(raw, cwd) {
+  let path = String(raw);
+  const xml = path.indexOf("</arg_value>");
+  if (xml !== -1) path = path.slice(0, xml);
+  path = path.trim();
+  if (path.startsWith("@")) path = path.slice(1);
+  if (path.toLowerCase().startsWith("file://")) {
+    try {
+      path = fileURLToPath(path);
+    } catch {
+      // the tool keeps it as it is
+    }
+  }
+  const home = process.env.HOME || homedir();
+  if (path === "~") path = home;
+  else if (path.startsWith("~/")) path = join(home, path.slice(2));
+  return isAbsolute(path) ? path : resolve(cwd ?? ".", path);
 }
 
 /** A path resolved as far as it exists, so a link or `..` can't hide a bootstrap file. */
@@ -98,35 +138,42 @@ function real(path) {
 }
 
 /**
- * Which bootstrap file a path is, if any: one of the five at the top of the
- * bot's workspace, compared without case. With no workspace known, any path
- * named like one counts.
+ * Which held file a path is, and whose: one of the bootstrap files or
+ * HEARTBEAT.md at the top of a bot's workspace, compared without case.
+ * `workspaces` maps each bot to its workspace. With no workspace known for
+ * the caller, any path so named counts as its own.
+ *   { file, bot } | null
  */
-export function bootstrapFile(path, workspaceDir) {
-  const file = basename(String(path)).toLowerCase();
-  if (file !== IDENTITY_FILE && !INSTRUCTION_FILES.includes(file)) return null;
-  if (!workspaceDir) return file;
-  const full = real(isAbsolute(path) ? path : join(workspaceDir, path));
-  return dirname(full).toLowerCase() === real(workspaceDir).toLowerCase() ? file : null;
+export function heldFile(raw, caller, workspaces = {}) {
+  const own = workspaces[caller] ?? null;
+  const full = real(expandPath(raw, own));
+  const file = basename(full).toLowerCase();
+  if (!HELD_FILES.has(file)) return null;
+  const dir = dirname(full).toLowerCase();
+  for (const [bot, ws] of Object.entries(workspaces))
+    if (ws && real(ws).toLowerCase() === dir) return { file, bot };
+  return own ? null : { file, bot: caller };
 }
 
-/** The bot a send or a spawn reaches, by `agentId` or an agent session key; null when it can't be told. */
+/**
+ * The bot a message or a hand-off reaches, read as the tool reads it:
+ * `agentId`, else a session key's bot; a label alone, `main`, `current` or
+ * nothing is the caller's own. Null when it can't be told (a bare session id,
+ * or a chat conversation), which counts as another bot.
+ */
 export function targetBot(event, caller) {
-  const p = event?.params ?? {};
+  const p = event?.params;
   const name = String(event?.toolName ?? "").toLowerCase();
-  if (name === "conversations_send") return null;
-  if (typeof p.agentId === "string" && p.agentId.trim()) return p.agentId.trim().toLowerCase();
-  const key = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
-  const scoped = /^agent:([^:]+):/i.exec(key);
-  if (scoped) return scoped[1].toLowerCase();
-  // A label alone looks among the caller's own sessions; "main" is its own.
+  if (name === "conversations_send" || name === "conversations_turn") return null;
+  const agent = readParam(p, "agentId");
+  if (agent) return agent.toLowerCase();
+  if (HAND_OFF_TOOLS.has(name)) return caller;
+  const key = readParam(p, "sessionKey") ?? "";
+  const bot = botOfKey(key);
+  if (bot) return bot;
   if (!key || key === "main" || key === "current") return caller;
-  if (name === "sessions_spawn") return caller;
   return null;
 }
-
-/** The routine a routine's own run is, from its session key (`agent:<bot>:cron:<id>…`). */
-const ownRoutine = (sessionKey) => /^agent:[^:]+:cron:([^:]+)/.exec(sessionKey ?? "")?.[1] ?? null;
 
 /** The reason for a refusal, by why the call isn't the person's ask. */
 function notDone(origin) {
@@ -134,24 +181,32 @@ function notDone(origin) {
   return SAID.notDone;
 }
 
+/** A requester OpenClaw didn't resolve as its owner, on a chat app (not the gateway's own channel). */
+const strangerIn = (requester) =>
+  typeof requester?.channel === "string" &&
+  requester.channel !== "webchat" &&
+  requester.senderIsOwner !== true;
+
 /** Which hold a call is under, or null when it is none of section 3.3's side doors. */
 export function holdOf(event, caller) {
   const name = String(event?.toolName ?? "").toLowerCase();
   if (SCHEDULER.has(name)) {
     const action = actionOf(event.params);
-    return ["add", "update", "remove"].includes(action) ? `scheduler-${action}` : null;
+    if (action === "bind") return "scheduler-update";
+    if (action === "scratch_set") return "notes";
+    if (action === "wake") {
+      const target = targetBot(event, caller);
+      return target === caller ? "scheduler-wake" : "message";
+    }
+    return ["add", "update", "remove", "run"].includes(action) ? `scheduler-${action}` : null;
   }
   if (FILE_TOOLS.has(name)) return "file";
+  if (name === "personal_instructions")
+    return actionOf(event.params) === "set" ? "user-file" : null;
   if (name === "heartbeat_respond")
-    return event.params && "scratch" in event.params ? "notes" : null;
-  if (name === "sessions_send" || name === "conversations_send") {
-    const target = targetBot(event, caller);
-    return target === caller ? null : "message";
-  }
-  if (name === "sessions_spawn") {
-    const target = targetBot(event, caller);
-    return target === caller ? null : "hand-off";
-  }
+    return isRecord(event.params) && "scratch" in event.params ? "notes" : null;
+  if (MESSAGE_TOOLS.has(name)) return targetBot(event, caller) === caller ? null : "message";
+  if (HAND_OFF_TOOLS.has(name)) return targetBot(event, caller) === caller ? null : "hand-off";
   if (OPENCLAW_TOOLS.has(name)) {
     if (name === "gateway" && GATEWAY_READS.has(actionOf(event.params))) return null;
     return "openclaw";
@@ -161,14 +216,35 @@ export function holdOf(event, caller) {
 
 /**
  * The decision for one held call. `run` is the run's record (its kind, its
- * session, its workspace); `reach` the bots in the caller's
- * `subagents.allowAgents`.
+ * session, its routine); `reach` the bots in the caller's
+ * `subagents.allowAgents`; `workspaces` each bot's workspace; `enabled(id)`
+ * whether a routine is on, as far as the plugin knows (null when it doesn't);
+ * `requester` the hook's own requester.
  */
-export function decide({ event, origin, run, caller, reach = [], workspaceDir = null }) {
+export function decide(input) {
+  try {
+    return decideCall(input);
+  } catch (error) {
+    if (error instanceof Ambiguous) return { block: true, reason: SAID.ambiguous };
+    throw error;
+  }
+}
+
+function decideCall({
+  event,
+  origin,
+  run,
+  caller,
+  reach = [],
+  workspaces = {},
+  enabled = () => null,
+  requester,
+}) {
   const hold = holdOf(event, caller);
   if (!hold) return { pass: true };
   const { origin: o, read } = origin;
   const ownerNothingRead = o === "O" && !read;
+  const no = { block: true, reason: notDone(origin) };
 
   switch (hold) {
     case "scheduler-add":
@@ -176,10 +252,21 @@ export function decide({ event, origin, run, caller, reach = [], workspaceDir = 
       if (o === "O") return { pass: true, params: storedOff(event.params), said: SAID.turnedOff };
       if (o === "B" && !read)
         return { pass: true, params: storedOff(event.params), said: SAID.seenFirst };
-      return { block: true, reason: notDone(origin) };
+      return no;
 
     case "scheduler-update":
-      return ownerNothingRead ? { pass: true } : { block: true, reason: notDone(origin) };
+      return ownerNothingRead ? { pass: true } : no;
+
+    case "scheduler-run": {
+      // Firing a routine now acts again: a routine stored turned off waits as
+      // its row says; one already on runs as the bot's own only with nothing read.
+      if (ownerNothingRead) return { pass: true };
+      const id = readFirst(event.params, ["jobId", "id"]);
+      return o === "B" && !read && id && enabled(id) === true ? { pass: true } : no;
+    }
+
+    case "scheduler-wake":
+      return read || o === "C" ? no : { pass: true };
 
     case "scheduler-remove": {
       if (ownerNothingRead)
@@ -190,41 +277,51 @@ export function decide({ event, origin, run, caller, reach = [], workspaceDir = 
               "Your bot wants to delete one of its routines. Its runs stay in its history.",
           },
         };
-      // A routine that ends itself: only that routine, only from its own run,
-      // and only once its whole definition is journaled (index.js does that,
-      // and refuses when it can't).
-      const id = String(event.params?.jobId ?? event.params?.id ?? "");
-      if (run?.kind === "routine" && id && (run.jobId ?? ownRoutine(run.sessionKey)) === id)
-        return { pass: true, journalRoutine: id };
-      return { block: true, reason: notDone(origin) };
+      // A routine may always end itself, from its own run (the gateway refuses
+      // any other routine's id there). The id is read as the tool reads it.
+      const id = readFirst(event.params, ["jobId", "id"]);
+      const own = run?.jobId ?? /^agent:[^:]+:cron:([^:]+)/.exec(run?.sessionKey ?? "")?.[1];
+      if (run?.kind === "routine" && id && own === id) return { pass: true, endsRoutine: id };
+      return no;
     }
 
     case "file": {
-      const files = writtenPaths(event).map((p) => bootstrapFile(p, workspaceDir));
-      if (files.every((f) => f === null)) return { pass: true };
+      const files = writtenPaths(event)
+        .map((p) => heldFile(p, caller, workspaces))
+        .filter((f) => f !== null);
+      if (files.length === 0) return { pass: true };
       if (ownerNothingRead) return { pass: true };
-      // Another bot's files, from a task another bot started in its workspace: clawtrate_bot change.
-      const startedBy = /^agent:([^:]+):/.exec(run?.provenance?.sourceSessionKey ?? "")?.[1];
-      if (run?.kind === "task" && startedBy && startedBy !== caller)
-        return { block: true, reason: notDone(origin) };
-      if (files.some((f) => f !== null && f !== IDENTITY_FILE))
-        return { block: true, reason: notDone(origin) };
-      // Its own IDENTITY.md: done, as the bot's own; not from a chat-app sender who isn't the owner.
-      if (origin.kind === "chat-app" && o !== "O") return { block: true, reason: notDone(origin) };
+      // Another bot's files (by path, or from a task another bot started in
+      // its workspace) are clawtrate_bot's change: not done.
+      const startedBy = botOfKey(run?.provenance?.sourceSessionKey);
+      if (run?.kind === "task" && startedBy && startedBy !== caller) return no;
+      if (files.some((f) => f.bot !== caller)) return no;
+      if (files.some((f) => INSTRUCTION_FILES.includes(f.file))) return no;
+      // The check-in's standing instructions, as its notes: not after reading.
+      if (files.some((f) => f.file === CHECK_IN_FILE) && read) return no;
+      // Its own IDENTITY.md: done, as the bot's own; not from a chat-app
+      // sender who isn't the owner, by the run's record or the hook's own requester.
+      if (files.some((f) => f.file === IDENTITY_FILE)) {
+        if ((origin.kind === "chat-app" && o !== "O") || strangerIn(requester)) return no;
+      }
       return { pass: true };
     }
 
+    case "user-file":
+      // personal_instructions set writes a person's USER.md: the instructions row.
+      return ownerNothingRead ? { pass: true } : no;
+
     case "notes":
-      // A check-in's notes: the bot's own block or not done (3.2). Telling its
-      // own notes from a person's needs Clawtrate's record (a later step).
-      return { block: true, reason: notDone(origin) };
+      // The check-in's notes, and a routine's own notes: not after reading
+      // something from outside; as on plain OpenClaw otherwise.
+      return read ? no : { pass: true };
 
     case "message":
     case "hand-off": {
       if (ownerNothingRead) return { pass: true };
       const target = targetBot(event, caller);
       if (o === "B" && !read && target !== null && reach.includes(target)) return { pass: true };
-      return { block: true, reason: notDone(origin) };
+      return no;
     }
 
     case "openclaw":
@@ -251,17 +348,17 @@ export function describeHolds(origin) {
   if (o === "O")
     return [
       "A new routine is set up turned off until your person turns it on in Clawtrate.",
-      "Changes to your instructions or an existing routine, messages to other bots, and changes to OpenClaw aren't made after you've read something.",
+      "Changes to your instructions or an existing routine, running a routine now, messages to other bots, notes and changes to OpenClaw aren't made after you've read something.",
     ];
   if (o === "B" && !read)
     return [
       "A new routine is set up turned off, and starts once your person has seen it in Clawtrate.",
       "A rename by editing IDENTITY.md is done, shown as your own.",
-      "Changes to your other instructions, an existing routine or your check-in notes, deleting a routine, and changes to OpenClaw aren't made until Clawtrate can confirm your person asked.",
+      "Changes to your other instructions or an existing routine, deleting a routine, and changes to OpenClaw aren't made until Clawtrate can confirm your person asked.",
       "A message or hand-off goes only to bots you can already reach.",
     ];
   return [
     "A rename by editing IDENTITY.md is done, shown as your own.",
-    "New routines, changes to your instructions or routines, messages and hand-offs to other bots, and changes to OpenClaw aren't made from this run.",
+    "New routines, running or changing a routine, changes to your instructions, messages and hand-offs to other bots, and changes to OpenClaw aren't made from this run.",
   ];
 }

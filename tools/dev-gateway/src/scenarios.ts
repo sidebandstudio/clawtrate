@@ -327,6 +327,16 @@ export const KEPT_ROUTINE = { name: "Morning reminder", message: "Remind me to s
 /** The line `#change-instructions` adds to the bot's AGENTS.md. */
 export const INSTRUCTION_LINE = "Always answer in one short paragraph.";
 
+/** The path `#edit-path` names. */
+const editPath = (ctx: PlanContext) =>
+  /#edit-path[ \t]+(\S+)/.exec(ctx.prompt ?? "")?.[1] ?? "AGENTS.md";
+
+/** What `#hand-off-snake` starts under the partner. */
+export const HAND_OFF_SNAKE = {
+  label: "Review the route, snake",
+  task: "Look over the route. Reply in plain text.",
+} as const;
+
 /** The first lines of a tool's latest result, as the bot repeats them. */
 function answerOf(ctx: PlanContext, name: string, lines: number): string {
   const found = [...ctx.results].reverse().find((result) => result.name === name);
@@ -334,7 +344,7 @@ function answerOf(ctx: PlanContext, name: string, lines: number): string {
 }
 
 /** A scheduler call on the kept routine, by the id its latest list found. */
-function routineCall(action: "update" | "remove", extra: Record<string, unknown>): Step {
+function routineCall(action: "update" | "remove" | "run", extra: Record<string, unknown>): Step {
   return {
     kind: "tool-from",
     build: (ctx) => {
@@ -369,6 +379,11 @@ export const HAND_OFF = {
 export const HAND_OFF_HERE = { label: "Where is this", task: "#here" } as const;
 /** What `#hand-off-hidden-here` starts: the same, hidden. */
 export const HAND_OFF_HIDDEN_HERE = { label: "Where is this, hidden", task: "#here" } as const;
+/** What `#hand-off-hidden-hand-off` starts: a hidden task of its own whose brief hands off to the partner. */
+export const HAND_OFF_HIDDEN_ONWARD = {
+  label: "Pass this on, hidden",
+  task: "#hand-off-to-partner",
+} as const;
 export const HAND_OFF_HIDDEN = {
   label: "Check the forecast",
   task: "Check the forecast for Saturday on the ridge. Reply in plain text.",
@@ -862,6 +877,99 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "run-routine",
+    phrase: "run my morning reminder now",
+    summary: `Runs "${KEPT_ROUTINE.name}" now (\`automations\` \`list\`, then \`run\` with \`runMode: force\`).`,
+    steps: () => [
+      tool("automations", { action: "list", includeDisabled: true }),
+      routineCall("run", { runMode: "force" }),
+      (ctx) => [say(routineSaid(ctx, "run"))],
+    ],
+  },
+  {
+    name: "end-routine-mixed",
+    phrase: "end this routine and another",
+    summary:
+      "In a routine's own run: a remove naming another routine with `job_id` (the id after the directive) and its own with `id`.",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const other = /#end-routine-mixed[ \t]+([\w-]+)/.exec(ctx.prompt ?? "")?.[1] ?? "none";
+          const own = /^agent:[^:]+:cron:([^:]+)/.exec(ctx.sessionKey ?? "")?.[1] ?? "none";
+          return tool("automations", { action: "remove", job_id: other, id: own });
+        },
+      },
+      (ctx) => [say(routineSaid(ctx, "ended"))],
+    ],
+  },
+  {
+    name: "hand-off-snake",
+    phrase: "put this in a task for your partner the other way",
+    bots: "Marlow or Pip",
+    summary: `Starts a task under the other bot of the pair with \`sessions_spawn\`, naming it with \`agent_id\` (snake case, which the tool also reads), labelled "${HAND_OFF_SNAKE.label}".`,
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_spawn", { ...HAND_OFF_SNAKE, visible: true, agent_id: partnerOf(ctx) }),
+      },
+      afterSpawn(() => `I started ${HAND_OFF_SNAKE.label}.`),
+    ],
+  },
+  {
+    name: "message-snake",
+    phrase: "message your partner the other way",
+    bots: "Marlow or Pip",
+    summary:
+      "A message to the other bot, naming it with `agent_id`, then one naming its main conversation with `session_key` (snake case, which the tool also reads).",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            agent_id: partnerOf(ctx),
+            message: "#reply Snake one.",
+            timeoutSeconds: 30,
+          }),
+      },
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            session_key: `agent:${partnerOf(ctx)}:main`,
+            message: "#reply Snake two.",
+            timeoutSeconds: 30,
+          }),
+      },
+      say("I sent both."),
+    ],
+  },
+  {
+    name: "edit-path",
+    phrase: "add that to the file at this path",
+    summary: `Adds "${INSTRUCTION_LINE}" after the first line of the file the directive names (\`#edit-path <path>\`): a read, then an edit, both by that path.`,
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) => tool("read", { path: editPath(ctx) }),
+      },
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const read = [...ctx.results].reverse().find((r) => r.name === "read")?.text ?? "";
+          const first = read.split("\n").find((line) => line.trim().length > 0);
+          if (!first) return say(`I couldn't read ${editPath(ctx)}.`);
+          return tool("edit", {
+            path: editPath(ctx),
+            edits: [{ oldText: first, newText: `${first}\n\n${INSTRUCTION_LINE}` }],
+          });
+        },
+      },
+      (ctx) => [say(answerOf(ctx, "edit", 1) || "I edited it.")],
+    ],
+  },
+  {
     name: "end-routine",
     phrase: "end this routine",
     summary:
@@ -1138,6 +1246,16 @@ export const SCENARIOS: Scenario[] = [
     steps: () => [
       spawn(HAND_OFF_HERE, { visible: true }),
       afterSpawn(() => `I started ${HAND_OFF_HERE.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-hidden-hand-off",
+    phrase: "pass this on from a hidden task",
+    bots: "Marlow or Pip, with clawtrate-bots",
+    summary: `Starts a hidden helper of the bot's own labelled "${HAND_OFF_HIDDEN_ONWARD.label}", whose brief is \`#hand-off-to-partner\`: a hand-off from a task.`,
+    steps: () => [
+      spawn(HAND_OFF_HIDDEN_ONWARD),
+      afterSpawn(() => `I started ${HAND_OFF_HIDDEN_ONWARD.label}.`),
     ],
   },
   {

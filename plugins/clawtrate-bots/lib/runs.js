@@ -189,6 +189,8 @@ export function createRuns(api, options = {}) {
       origins.sawSpawned(run, madeSession(event?.result));
     if (readsOutside(event) && run && !run.lost)
       origins.markRead(run, sourceOf(event.toolName), event.toolName);
+    // The holds' own bookkeeping of a call's result (lib/hooks.js).
+    return options.afterToolCall?.(event);
   });
 
   /**

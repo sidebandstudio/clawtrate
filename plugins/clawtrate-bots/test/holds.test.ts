@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   SAID,
-  bootstrapFile,
   decide,
+  expandPath,
+  heldFile,
   describeHolds,
   holdOf,
   storedOff,
@@ -143,7 +144,7 @@ describe("the scheduler", () => {
     });
   });
 
-  it("a routine's own run removing that same routine is let through to be journaled; any other remove from it is not", () => {
+  it("a routine's own run may always end that same routine; any other remove from it is not done", () => {
     const routine = { origin: "C", read: null, kind: "routine" };
     const own = decide({
       event: call("automations", { action: "remove", jobId: "j1" }),
@@ -151,14 +152,14 @@ describe("the scheduler", () => {
       run: { kind: "routine", jobId: "j1" },
       caller: "pip",
     } as never);
-    expect(own).toEqual({ pass: true, journalRoutine: "j1" });
+    expect(own).toEqual({ pass: true, endsRoutine: "j1" });
     const bySession = decide({
       event: call("automations", { action: "remove", id: "j1" }),
       origin: routine,
       run: { kind: "routine", sessionKey: "agent:pip:cron:j1:run:1" },
       caller: "pip",
     } as never);
-    expect(bySession).toEqual({ pass: true, journalRoutine: "j1" });
+    expect(bySession).toEqual({ pass: true, endsRoutine: "j1" });
     const other = decide({
       event: call("automations", { action: "remove", jobId: "j2" }),
       origin: routine,
@@ -182,15 +183,17 @@ describe("the bot's instruction files", () => {
   writeFileSync(join(ws, "AGENTS.md"), "");
   symlinkSync(join(ws, "AGENTS.md"), join(ws, "notes", "alias.md"));
 
-  it("knows a bootstrap file by its path in the workspace, without case, through links and ..", () => {
-    expect(bootstrapFile("AGENTS.md", ws)).toBe("agents.md");
-    expect(bootstrapFile("Soul.MD", ws)).toBe("soul.md");
-    expect(bootstrapFile(join(ws, "IDENTITY.md"), ws)).toBe("identity.md");
-    expect(bootstrapFile("notes/../USER.md", ws)).toBe("user.md");
-    expect(bootstrapFile("notes/AGENTS.md", ws)).toBeNull();
-    expect(bootstrapFile("notes/scratch.md", ws)).toBeNull();
-    // With no workspace known, a name is enough.
-    expect(bootstrapFile("anything/TOOLS.md", null)).toBe("tools.md");
+  it("knows a held file by its path in a bot's workspace, without case, through links and ..", () => {
+    const own = (p: string) => heldFile(p, "pip", { pip: ws });
+    expect(own("AGENTS.md")).toEqual({ file: "agents.md", bot: "pip" });
+    expect(own("Soul.MD")).toEqual({ file: "soul.md", bot: "pip" });
+    expect(own(join(ws, "IDENTITY.md"))).toEqual({ file: "identity.md", bot: "pip" });
+    expect(own("notes/../USER.md")).toEqual({ file: "user.md", bot: "pip" });
+    expect(own("HEARTBEAT.md")).toEqual({ file: "heartbeat.md", bot: "pip" });
+    expect(own("notes/AGENTS.md")).toBeNull();
+    expect(own("notes/scratch.md")).toBeNull();
+    // With no workspace known for the caller, a name is enough.
+    expect(heldFile("anything/TOOLS.md", "pip", {})).toEqual({ file: "tools.md", bot: "pip" });
   });
 
   it("reads what a patch writes, beyond the host's hint", () => {
@@ -204,7 +207,7 @@ describe("the bot's instruction files", () => {
 
   it("instructions: only the owner who read nothing", () => {
     for (const tool of ["write", "edit"]) {
-      expect(outcomes(call(tool, { path: "AGENTS.md" }), { workspaceDir: ws })).toEqual({
+      expect(outcomes(call(tool, { path: "AGENTS.md" }), { workspaces: { pip: ws } })).toEqual({
         B: "not done",
         Bread: "not done",
         O: "done",
@@ -214,12 +217,12 @@ describe("the bot's instruction files", () => {
       });
     }
     expect(
-      on(call("apply_patch", { input: "*** Add File: SOUL.md\n" }), B, { workspaceDir: ws }),
+      on(call("apply_patch", { input: "*** Add File: SOUL.md\n" }), B, { workspaces: { pip: ws } }),
     ).toMatchObject({ block: true });
   });
 
   it("its own IDENTITY.md: done as the bot's own, except from a chat-app sender who isn't the owner", () => {
-    expect(outcomes(call("edit", { path: "IDENTITY.md" }), { workspaceDir: ws })).toEqual({
+    expect(outcomes(call("edit", { path: "IDENTITY.md" }), { workspaces: { pip: ws } })).toEqual({
       B: "done",
       Bread: "done",
       O: "done",
@@ -239,13 +242,15 @@ describe("the bot's instruction files", () => {
           origin: task,
           run,
           caller: "marlow",
-          workspaceDir: ws,
+          workspaces: { marlow: ws },
         } as never),
       ).toMatchObject({ block: true });
   });
 
   it("other files pass", () => {
-    expect(outcomes(call("write", { path: "notes/scratch.md" }), { workspaceDir: ws })).toEqual({
+    expect(
+      outcomes(call("write", { path: "notes/scratch.md" }), { workspaces: { pip: ws } }),
+    ).toEqual({
       B: "done",
       Bread: "done",
       O: "done",
@@ -291,14 +296,14 @@ describe("messages and hand-offs to other bots", () => {
 });
 
 describe("the check-in's notes", () => {
-  it("not done for any origin until the bot's own block can be told from a person's", () => {
+  it("not done after reading something from outside; as on plain OpenClaw otherwise", () => {
     expect(outcomes(call("heartbeat_respond", { scratch: "new notes" }))).toEqual({
-      B: "not done",
+      B: "done",
       Bread: "not done",
-      O: "not done",
+      O: "done",
       Oread: "not done",
-      C: "not done",
-      stranger: "not done",
+      C: "done",
+      stranger: "done",
     });
   });
 });
@@ -341,5 +346,190 @@ describe("what the bot is told", () => {
     expect(describeHolds(Oread).join(" ")).toMatch(/turned off until your person turns it on/);
     expect(describeHolds(B).join(" ")).toMatch(/starts once your person has seen it/);
     expect(describeHolds(C).join(" ")).toMatch(/aren't made from this run/);
+  });
+});
+
+describe("fix round: reading a call as the tool reads it", () => {
+  it("D1: a target in snake_case is the same target", () => {
+    for (const event of [
+      call("sessions_spawn", { task: "t", agent_id: "marlow" }),
+      call("sessions_send", { agent_id: "marlow", message: "m" }),
+      call("sessions_send", { session_key: "agent:marlow:main", message: "m" }),
+    ]) {
+      expect(holdOf(event, "pip")).not.toBeNull();
+      expect(outcomes(event, { reach: ["marlow"] })).toMatchObject({
+        Bread: "not done",
+        C: "not done",
+        B: "done",
+      });
+    }
+  });
+
+  it("D1: two spellings that name different things are refused", () => {
+    const event = call("sessions_send", { agentId: "pip", agent_id: "marlow", message: "m" });
+    expect(on(event, O)).toEqual({ block: true, reason: SAID.ambiguous });
+  });
+
+  it("D2: ~/, file:// and @ forms of a path are expanded as the file tools do", () => {
+    const home = process.env.HOME!;
+    expect(expandPath("~/x/AGENTS.md", "/w")).toBe(join(home, "x/AGENTS.md"));
+    expect(expandPath("file:///w/AGENTS.md", "/x")).toBe("/w/AGENTS.md");
+    expect(expandPath("@AGENTS.md", "/w")).toBe("/w/AGENTS.md");
+    expect(expandPath("AGENTS.md</arg_value>", "/w")).toBe("/w/AGENTS.md");
+  });
+
+  it("D2: the bot's own AGENTS.md by ~/ or file:// is held; another bot's files by absolute path are clawtrate_bot's change", () => {
+    // A home folder of the test's own, as the tools read it ($HOME).
+    const home = mkdtempSync(join(tmpdir(), "clawtrate-bots-home-"));
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    const pip = join(home, "pip");
+    const marlow = join(home, "marlow");
+    mkdirSync(pip);
+    mkdirSync(marlow);
+    const workspaces = { pip, marlow };
+    const tilde = "~/pip/AGENTS.md";
+    expect(on(call("edit", { path: tilde }), B, { workspaces })).toMatchObject({ block: true });
+    expect(on(call("edit", { path: `file://${pip}/AGENTS.md` }), B, { workspaces })).toMatchObject({
+      block: true,
+    });
+    expect(outcomes(call("edit", { path: join(marlow, "IDENTITY.md") }), { workspaces })).toEqual({
+      B: "not done",
+      Bread: "not done",
+      O: "done",
+      Oread: "not done",
+      C: "not done",
+      stranger: "not done",
+    });
+    expect(
+      outcomes(call("file_write", { path: join(pip, "SOUL.md") }), { workspaces }),
+    ).toMatchObject({ B: "not done", O: "done" });
+    process.env.HOME = saved;
+  });
+
+  it("D6: an unknown run's IDENTITY.md write from a chat-app sender who isn't the owner, by the hook's own requester", () => {
+    const ws = mkdtempSync(join(tmpdir(), "clawtrate-bots-holds-"));
+    const unknown = { origin: "C", read: "lost", kind: "unknown" };
+    const event = call("edit", { path: "IDENTITY.md" });
+    expect(
+      decide({
+        event,
+        origin: unknown,
+        run: null,
+        caller: "pip",
+        workspaces: { pip: ws },
+        requester: { channel: "discord", senderIsOwner: false },
+      } as never),
+    ).toMatchObject({ block: true });
+    expect(
+      decide({
+        event,
+        origin: unknown,
+        run: null,
+        caller: "pip",
+        workspaces: { pip: ws },
+        requester: { channel: "webchat", senderIsOwner: true },
+      } as never),
+    ).toEqual({ pass: true });
+  });
+
+  it("HEARTBEAT.md is held as the check-in's notes: not after reading", () => {
+    const ws = mkdtempSync(join(tmpdir(), "clawtrate-bots-holds-"));
+    expect(
+      outcomes(call("write", { path: "HEARTBEAT.md" }), { workspaces: { pip: ws } }),
+    ).toMatchObject({ B: "done", Bread: "not done", C: "done", Oread: "not done" });
+  });
+});
+
+describe("fix round: the scheduler's other actions", () => {
+  it("D4: run fires a routine only with nothing read, for one already on; the owner as on plain OpenClaw", () => {
+    const run = call("automations", { action: "run", jobId: "j1", runMode: "force" });
+    expect(outcomes(run, { enabled: () => false })).toEqual({
+      B: "not done",
+      Bread: "not done",
+      O: "done",
+      Oread: "not done",
+      C: "not done",
+      stranger: "not done",
+    });
+    expect(outcomes(run, { enabled: () => true })).toMatchObject({
+      B: "done",
+      Bread: "not done",
+      C: "not done",
+    });
+    // Not known: as if it were off.
+    expect(outcomes(run, { enabled: () => null })).toMatchObject({ B: "not done" });
+    expect(
+      outcomes(call("automations", { action: "run", job_id: "j1" }), { enabled: () => false }),
+    ).toMatchObject({ B: "not done" });
+  });
+
+  it("wake: not after reading or from C; to another bot, the message row", () => {
+    expect(outcomes(call("automations", { action: "wake", text: "x" }))).toEqual({
+      B: "done",
+      Bread: "not done",
+      O: "done",
+      Oread: "not done",
+      C: "not done",
+      stranger: "not done",
+    });
+    expect(holdOf(call("automations", { action: "wake", agentId: "marlow" }), "pip")).toBe(
+      "message",
+    );
+  });
+
+  it("bind is a change to an existing routine; scratch_set is a routine's notes", () => {
+    expect(holdOf(call("automations", { action: "bind", jobId: "j1" }), "pip")).toBe(
+      "scheduler-update",
+    );
+    expect(outcomes(call("automations", { action: "scratch_set", jobId: "j1" }))).toMatchObject({
+      B: "done",
+      Bread: "not done",
+    });
+  });
+
+  it("D8: a routine's own remove names its job as the tool reads it, and two ids that disagree are refused", () => {
+    const routine = { origin: "C", read: null, kind: "routine" };
+    const run = { kind: "routine", jobId: "j1" };
+    expect(
+      decide({
+        event: call("cron", { action: "remove", job_id: "j1" }),
+        origin: routine,
+        run,
+        caller: "pip",
+      } as never),
+    ).toEqual({ pass: true, endsRoutine: "j1" });
+    expect(
+      decide({
+        event: call("cron", { action: "remove", job_id: "j2", id: "j1" }),
+        origin: routine,
+        run,
+        caller: "pip",
+      } as never),
+    ).toEqual({ block: true, reason: SAID.ambiguous });
+  });
+});
+
+describe("fix round: other tool names", () => {
+  it("D7: conversations_turn is a message to another conversation", () => {
+    expect(
+      outcomes(call("conversations_turn", { conversationId: "x", message: "m" })),
+    ).toMatchObject({ B: "not done", O: "done", C: "not done" });
+  });
+
+  it("sessions_create under another bot is a hand-off; its own is not held", () => {
+    expect(holdOf(call("sessions_create", { agentId: "marlow", message: "m" }), "pip")).toBe(
+      "hand-off",
+    );
+    expect(holdOf(call("sessions_create", { label: "x" }), "pip")).toBeNull();
+  });
+
+  it("personal_instructions set is the USER.md row; get is not held", () => {
+    expect(outcomes(call("personal_instructions", { action: "set", content: "x" }))).toMatchObject({
+      B: "not done",
+      O: "done",
+      Oread: "not done",
+    });
+    expect(holdOf(call("personal_instructions", { action: "get" }), "pip")).toBeNull();
   });
 });

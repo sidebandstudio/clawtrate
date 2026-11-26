@@ -176,23 +176,12 @@ describe("a routine that ends itself", () => {
     state: { lastRunAtMs: 1 },
   };
 
-  it("is done once its definition is journaled, without its run state", async () => {
-    const h = host();
-    h.fire("cron_changed", { action: "started", jobId: "j1", job });
-    h.fire("before_prompt_build", {}, routine);
-    expect(await h.fire("before_tool_call", remove, {})).toBeUndefined();
-    const kept = (await h.ended.lookup("j1:rr")) as Json;
-    expect(kept.definition).toEqual({
-      id: "j1",
-      agentId: "pip",
-      name: "Morning check",
-      schedule: job.schedule,
-      payload: job.payload,
-    });
-    expect(kept.notReported).toContain("delivery");
+  const removed = (result: Json = { details: { ok: true, removed: true } }) => ({
+    ...remove,
+    result,
   });
 
-  it("keeps a definition the gateway reported with absent fields, as JSON", async () => {
+  it("is let through, and journaled only once the removal succeeded, with what the gateway reported", async () => {
     const h = host();
     h.fire("cron_changed", {
       action: "started",
@@ -201,33 +190,122 @@ describe("a routine that ends itself", () => {
     });
     h.fire("before_prompt_build", {}, routine);
     expect(await h.fire("before_tool_call", remove, {})).toBeUndefined();
-    expect(((await h.ended.lookup("j1:rr")) as Json).definition).not.toHaveProperty("description");
+    expect(await h.ended.lookup("j1:rr")).toBeUndefined();
+    await h.fire("after_tool_call", removed(), {});
+    const kept = (await h.ended.lookup("j1:rr")) as Json;
+    expect(kept).toMatchObject({
+      complete: false,
+      notReported: ["delivery", "sessionKey", "deleteAfterRun", "failureAlert"],
+    });
+    expect(kept.definition).toEqual({
+      id: "j1",
+      agentId: "pip",
+      name: "Morning check",
+      schedule: job.schedule,
+      payload: job.payload,
+    });
   });
 
-  it("is not done when its definition isn't known, or is over 64 KiB", async () => {
-    const unknown = host();
-    unknown.fire("before_prompt_build", {}, routine);
-    expect(await unknown.fire("before_tool_call", remove, {})).toEqual({
-      block: true,
-      blockReason: SAID.cantKeep,
+  it("a removal the gateway refused leaves no entry", async () => {
+    const h = host();
+    h.fire("before_prompt_build", {}, routine);
+    await h.fire("before_tool_call", remove, {});
+    await h.fire(
+      "after_tool_call",
+      { ...remove, error: "Automations tool is restricted to the current automation." },
+      {},
+    );
+    expect(await h.ended.lookup("j1:rr")).toBeUndefined();
+  });
+
+  it("the gateway's own report of the removal settles it too", async () => {
+    const h = host();
+    h.fire("before_prompt_build", {}, routine);
+    await h.fire("before_tool_call", remove, {});
+    await h.fire("cron_changed", { action: "removed", jobId: "j1" });
+    expect(await h.ended.lookup("j1:rr")).toMatchObject({
+      jobId: "j1",
+      definition: null,
+      complete: false,
     });
-    const large = host();
-    large.fire("cron_changed", {
+  });
+
+  it("is complete, and can be put back, when the plugin holds its own full copy from the call that made it", async () => {
+    const h = host();
+    const typedRun = {
+      runId: "r1",
+      sessionKey: "agent:pip:main",
+      agentId: "pip",
+      trigger: "user",
+      channel: "webchat",
+    };
+    h.fire("before_prompt_build", {}, typedRun);
+    const fullJob = {
+      name: "Morning check",
+      schedule: job.schedule,
+      payload: job.payload,
+      delivery: { mode: "none" },
+    };
+    const add = {
+      toolName: "automations",
+      params: { action: "add", job: fullJob },
+      runId: "r1",
+      toolCallId: "a1",
+    };
+    const passed = (await h.fire("before_tool_call", add, toolCtx)) as { params: Json };
+    await h.fire(
+      "after_tool_call",
+      { ...add, params: passed.params, result: { details: { id: "j1", enabled: false } } },
+      toolCtx,
+    );
+    h.fire("before_prompt_build", {}, routine);
+    await h.fire("before_tool_call", remove, {});
+    await h.fire("after_tool_call", removed(), {});
+    const kept = (await h.ended.lookup("j1:rr")) as Json;
+    expect(kept).toMatchObject({ complete: true, notReported: [] });
+    expect(kept.definition).toMatchObject({ id: "j1", delivery: { mode: "none" }, enabled: false });
+  });
+
+  it("a definition over 64 KiB is kept as unknown, and the routine still ends", async () => {
+    const h = host();
+    h.fire("cron_changed", {
       action: "updated",
       jobId: "j1",
       job: { ...job, payload: { kind: "agentTurn", message: "x".repeat(DEFINITION_MAX_BYTES) } },
     });
-    large.fire("before_prompt_build", {}, routine);
-    expect(await large.fire("before_tool_call", remove, {})).toEqual({
-      block: true,
-      blockReason: SAID.cantKeep,
+    h.fire("before_prompt_build", {}, routine);
+    expect(await h.fire("before_tool_call", remove, {})).toBeUndefined();
+    await h.fire("after_tool_call", removed(), {});
+    expect(await h.ended.lookup("j1:rr")).toMatchObject({ definition: null, complete: false });
+  });
+
+  it("knows whether a routine is on, for a run of it", async () => {
+    const h = host();
+    h.fire("cron_changed", {
+      action: "added",
+      jobId: "j9",
+      job: { ...job, id: "j9", enabled: false },
     });
-    // A removed routine's definition is forgotten.
-    const gone = host();
-    gone.fire("cron_changed", { action: "added", jobId: "j1", job });
-    gone.fire("cron_changed", { action: "removed", jobId: "j1" });
-    gone.fire("before_prompt_build", {}, routine);
-    expect(await gone.fire("before_tool_call", remove, {})).toMatchObject({ block: true });
+    h.fire("before_prompt_build", {}, typed);
+    expect(
+      await h.fire(
+        "before_tool_call",
+        call("automations", { action: "run", jobId: "j9" }),
+        toolCtx,
+      ),
+    ).toMatchObject({ block: true });
+    h.fire("cron_changed", {
+      action: "updated",
+      jobId: "j9",
+      job: { ...job, id: "j9", enabled: true },
+    });
+    expect(
+      await h.fire(
+        "before_tool_call",
+        call("automations", { action: "run", jobId: "j9" }, "c2"),
+        toolCtx,
+      ),
+    ).toBeUndefined();
   });
 });
 

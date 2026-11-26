@@ -18,6 +18,8 @@
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { GatewayEvent, OperatorSession } from "./operator.ts";
+import { homedir } from "node:os";
+import { join, relative } from "node:path";
 import { HAND_OFF_PARTNER, INSTRUCTION_LINE, KEPT_ROUTINE } from "./scenarios.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -44,6 +46,8 @@ export type BotsContext = {
   clients: Record<BotsClient, OperatorSession>;
   /** `openclaw <args>` under the instance's own profile. */
   cli: (args: string[]) => Promise<{ status: number | null; stdout: string; stderr: string }>;
+  /** The instance's state folder, which holds the bots' workspaces. */
+  stateDir: string;
   log?: (line: string) => void;
 };
 
@@ -626,6 +630,139 @@ export const BOTS_CHECKS: BotsCheck[] = [
     },
   },
   {
+    name: "fix round D1: after reading a page, a hand-off or message naming the other bot in snake_case isn't made",
+    covers: ["#hand-off-snake", "#message-snake"],
+    async run(ctx, world) {
+      const spawn = await turn(
+        ctx,
+        await task(ctx, world, "pip", "snake-spawn"),
+        "#search #hand-off-snake",
+      );
+      expect(
+        spawn.calls.some((c) => c.name === "sessions_spawn" && c.text.includes(NOT_DONE)),
+        `calls: ${show(spawn.calls)}`,
+      );
+      const sent = await turn(
+        ctx,
+        await task(ctx, world, "pip", "snake-send"),
+        "#search #message-snake",
+      );
+      const sends = sent.calls.filter((c) => c.name === "sessions_send");
+      expect(
+        sends.length === 2 && sends.every((c) => c.text.includes(NOT_DONE)),
+        `calls: ${show(sent.calls)}`,
+      );
+    },
+  },
+  {
+    name: "fix round D2: a typed run can't change its AGENTS.md through a ~/ or file:// path",
+    covers: ["#edit-path"],
+    async run(ctx, world) {
+      const file = join(ctx.stateDir, "workspaces", "pip", "AGENTS.md");
+      const before = await fileOf(ctx, "pip", "AGENTS.md");
+      try {
+        for (const path of [`~/${relative(homedir(), file)}`, `file://${file}`]) {
+          const t = await turn(ctx, await task(ctx, world, "pip", "path"), `#edit-path ${path}`);
+          expect(
+            t.calls.some((c) => c.name === "edit" && c.text.includes(NOT_DONE)),
+            `${path}: calls: ${show(t.calls)}`,
+          );
+          expect(
+            !(await fileOf(ctx, "pip", "AGENTS.md")).includes(INSTRUCTION_LINE),
+            `${path}: AGENTS.md changed`,
+          );
+        }
+      } finally {
+        if ((await fileOf(ctx, "pip", "AGENTS.md")) !== before)
+          await ctx.clients.admin.request("agents.files.set", {
+            agentId: "pip",
+            name: "AGENTS.md",
+            content: before,
+          });
+      }
+    },
+  },
+  {
+    name: "fix round D3: after reading a page, the bot's own hidden task can't hand off to another bot",
+    covers: ["#hand-off-hidden-hand-off"],
+    async run(ctx, world) {
+      const t = await turn(
+        ctx,
+        await task(ctx, world, "pip", "onward"),
+        "#search #hand-off-hidden-hand-off",
+      );
+      const spawned = t.calls.find((c) => c.name === "sessions_spawn");
+      const child = /"childSessionKey":\s*"([^"]+)"/.exec(spawned?.text ?? "")?.[1];
+      expect(child, `no task started: ${show(t.calls)}`);
+      const said = await toolAnswer(ctx, child, "sessions_spawn");
+      expect(said.includes(NOT_DONE), `the hidden task's hand-off: ${said.slice(0, 300)}`);
+      const run = rec(
+        await ctx.clients.reader.request("clawtrate-bots.runs.get", { sessionKey: child }),
+      );
+      expect(
+        run.kind === "task" && rec(run.readOutside).source === "web",
+        `the task's run: ${show(run)}`,
+      );
+    },
+  },
+  {
+    name: "fix round D4: a routine stored turned off isn't started by the bot's own run call",
+    covers: ["#run-routine"],
+    async run(ctx, world) {
+      const key = await task(ctx, world, "pip", "run");
+      await turn(ctx, key, "#keep-routine");
+      try {
+        const jobs = await kept(ctx);
+        expect(jobs.length === 1 && jobs[0]!.enabled === false, `routines: ${show(jobs)}`);
+        const ran = await turn(ctx, key, "#run-routine");
+        expect(
+          ran.calls.some((c) => c.name === "automations" && c.text.includes(NOT_DONE)),
+          `calls: ${show(ran.calls)}`,
+        );
+        const runs = rec(
+          await ctx.clients.admin.request("cron.runs", { id: jobs[0]!.id, limit: 5 }),
+        );
+        const entries = (Array.isArray(runs.entries) ? runs.entries : []) as JsonRecord[];
+        expect(entries.length === 0, `the routine ran: ${show(entries)}`);
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
+  {
+    name: "fix round D8: a routine's remove naming another routine as job_id and itself as id is refused, and journals nothing",
+    covers: ["#end-routine-mixed"],
+    async run(ctx, world) {
+      const target = String(
+        rec(
+          await ctx.clients.admin.request("cron.add", {
+            name: KEPT_ROUTINE.name,
+            agentId: "pip",
+            schedule: { kind: "cron", expr: "0 8 * * *" },
+            sessionTarget: "isolated",
+            payload: { kind: "agentTurn", message: KEPT_ROUTINE.message },
+            delivery: { mode: "none" },
+          }),
+        ).id,
+      );
+      try {
+        const own = await routineRun(ctx, world, `#end-routine-mixed ${target}`);
+        await routineFinished(ctx, own);
+        expect(
+          (await routines(ctx)).some((j) => j.id === own),
+          "the routine's own job was removed",
+        );
+        expect((await kept(ctx)).length === 1, "the other routine was removed");
+        const ended = rec(
+          await ctx.clients.reader.request("clawtrate-bots.routines.ended", { jobId: own }),
+        );
+        expect(ended.entry === null, `a journal entry exists: ${show(ended)}`);
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
+  {
     name: `the owner's request in a chat app keeps working: "remind me every morning at eight" sets up the routine at once (stand-in: ${OWNER_STAND_IN})`,
     covers: [],
     async run(ctx, world) {
@@ -697,6 +834,7 @@ async function main(): Promise<number> {
         const r = await inst.runner.run(args);
         return { status: r.status, stdout: String(r.stdout ?? ""), stderr: String(r.stderr ?? "") };
       },
+      stateDir: inst.stateDir,
     });
     console.log(`${passed} of ${passed + failed} bots checks passed`);
     return failed === 0 ? 0 : 1;
