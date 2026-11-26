@@ -33,6 +33,7 @@ import { agentEvent, FAST, openTask, URL_A, URL_B, grantingGateway } from "./cli
 import {
   deferred,
   GatewayError,
+  guidesOff,
   memoryStorage,
   sleep,
   testHost,
@@ -117,15 +118,17 @@ function namingGateway(
 }
 
 const adminStorage = (held: readonly string[] = ADMIN_SCOPES) =>
-  memoryStorage({
-    connection: JSON.stringify({ url: URL_A, token: null }),
-    [tokenKey(URL_A)]: JSON.stringify({
-      token: "device-token",
-      grantedScopes: held,
-      heldScopes: held.filter((scope) => scope !== "operator.admin"),
-      ...(held.includes("operator.admin") ? { adminHeld: true } : {}),
+  guidesOff(
+    memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: held,
+        heldScopes: held.filter((scope) => scope !== "operator.admin"),
+        ...(held.includes("operator.admin") ? { adminHeld: true } : {}),
+      }),
     }),
-  });
+  );
 
 let run = 0;
 function endRun(gateway: ReturnType<typeof namingGateway>["gateway"], key = KEY) {
