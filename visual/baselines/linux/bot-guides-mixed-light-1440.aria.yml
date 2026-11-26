@@ -25,32 +25,27 @@
     - link "Where the guide doesn't reach":
       - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach
     - group: What the guide asks the bots to do
-    - heading "How bots work in Clawtrate" [level=4]
-    - paragraph: Pip and Quartermaster of the Family Calendar and Errands aren't told what a task is in Clawtrate, so a bot asked to put something in a task may not start one.
+    - text: Bots know how Clawtrate works On
+    - switch "Bots know how Clawtrate works" [checked]
     - paragraph:
-      - text: Clawtrate can add a short section, marked as Clawtrate's, to the top of each bot's instructions file (
+      - text: Clawtrate keeps a short section at the top of the
       - code: AGENTS.md
-      - text: "): how to talk to you, and what a task is in Clawtrate. Your bots get it in every conversation, task and routine, including outside Clawtrate. It adds about 3,100 characters to each prompt. Clawtrate keeps it up to date and changes nothing else in the file. Remove it here any time, and Clawtrate takes it out."
+      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate.
     - group: Read it
-    - list "How bots work in Clawtrate":
-      - listitem: Juniper Added
+    - list "Bots know how Clawtrate works":
       - listitem:
-        - checkbox "Marlow An older version. Clawtrate updates it when it connects with admin access." [checked]
-        - text: Marlow An older version. Clawtrate updates it when it connects with admin access.
+        - text: Marlow An older version. Its instructions are long, so Clawtrate doesn't update it by itself.
+        - button "Update"
       - listitem:
         - text: Otto Changed outside Clawtrate, so Clawtrate leaves it as it is.
         - button "Show"
         - button "Replace"
       - listitem:
-        - checkbox "Pip Removed outside Clawtrate. Clawtrate won't add it again unless you ask."
-        - text: Pip Removed outside Clawtrate. Clawtrate won't add it again unless you ask.
+        - text: Pip Removed outside Clawtrate, so Clawtrate doesn't add it again by itself.
+        - button "Add"
       - listitem:
-        - checkbox "Quartermaster of the Family Calendar and Errands Not added" [checked]
-        - text: Quartermaster of the Family Calendar and Errands Not added
-    - checkbox "New bots too, when they're made in Clawtrate" [checked]
-    - text: New bots too, when they're made in Clawtrate
-    - button "Add to 2 bots"
-    - button "Remove from all bots"
+        - text: "Quartermaster of the Family Calendar and Errands Its instructions are long: with this section, the gateway may leave part of them out of Quartermaster of the Family Calendar and Errands's prompt, so Clawtrate doesn't add it by itself."
+        - button "Add"
   - status
 - navigation "Bots":
   - button "Routines"

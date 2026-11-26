@@ -899,7 +899,8 @@ describe("rebuilding from history (F-107, F-093)", () => {
         stopReason: "aborted",
         __openclaw: { id: "a1", seq: 2, runId: "r1" },
       },
-      { role: "user", content: "b", __openclaw: { id: "u2", seq: 3 } },
+      // A failed run sits under the row the gateway keyed for it (`<runId>:user`).
+      { role: "user", content: "b", __openclaw: { id: "u2", seq: 3, idempotencyKey: "r2:user" } },
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "c1", name: "exec", arguments: {} }],
