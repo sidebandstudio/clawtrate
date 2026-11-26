@@ -8,7 +8,9 @@ import { startTasksFrom } from "./start-tasks.ts";
 import {
   applyGuidesChange,
   GUIDES_DEFAULT_KEY,
+  GUIDES_DEFAULT_NOT_SAVED,
   GUIDES_NOT_READ,
+  GUIDES_ON_NOT_RECORDED,
   GUIDES_NOT_RECORDED,
   GUIDES_NOT_SAVED,
   guidesKey,
@@ -7292,6 +7294,11 @@ export class ClawtrateClient {
     this.confirmGatewayIdentity(gatewayId, alive);
     const record =
       gatewayId === null ? null : await this.guidesRecord(gatewayId).catch(() => undefined);
+    // Off only by the device-wide default: this gateway has no choice of its own yet.
+    const inherited =
+      gatewayId !== null &&
+      record?.on === false &&
+      (await this.host.storage.get(guidesKey(gatewayId)).catch(() => "")) === null;
     const request = (method: string, params: unknown) => this.request(method, params);
     const [folders, voice] = await Promise.all([
       readGuideFolders(request, record ?? null),
@@ -7301,6 +7308,7 @@ export class ClawtrateClient {
       folders,
       record: record ?? null,
       unreadable: record === undefined,
+      inherited,
       voicePlugin: voice?.status === "read" && voice.on && voice.hook === "allowed",
       errors: [],
       stamp: { gatewayId: alive() ? gatewayId : null, target },
@@ -7351,24 +7359,29 @@ export class ClawtrateClient {
       this.checkNotWithdrawn(owner);
       // Unreadable: whether the switch is off can't be told, so nothing is changed.
       if (before === undefined) return { record: null, errors: [GUIDES_NOT_READ] };
-      // The switch is saved first, off and on: if it can't be, nothing is changed, so the files
-      // and this device's record never disagree about what the person last asked for. Off holds
-      // from then on: nothing this device does adds a section while it lasts, on this gateway or
-      // on one it has no record of (the device-wide default, saved before this gateway's record).
+      // The switch is saved first, off and on, as this gateway's own choice: if it can't be,
+      // nothing is changed, so the files and this device's record never disagree about what the
+      // person last asked for. Off holds from then on: nothing this device does adds a section
+      // while it lasts. Off is also saved as the device-wide default, so a gateway this device has
+      // no record of reads off too; On changes this gateway only and leaves that default as it
+      // is, so a gateway showing Off by the default keeps it until it is turned on there.
       if (change.action === "switch") {
-        if (!change.on && !(await ok(storage.set(GUIDES_DEFAULT_KEY, JSON.stringify(offRecord())))))
-          return { record: before, errors: [GUIDES_NOT_SAVED] };
         const first = withdrawnRecord(change) ?? { on: true, bots: before?.bots ?? [] };
         if (!(await saveIfChanged(first, before)))
           return { record: before, errors: [GUIDES_NOT_SAVED] };
-        if (change.on)
-          await storage
-            .delete(GUIDES_DEFAULT_KEY)
-            .catch((error: unknown) => this.logFailure("warn", "guides default", error));
+        const unseen =
+          !change.on && !(await ok(storage.set(GUIDES_DEFAULT_KEY, JSON.stringify(offRecord()))))
+            ? [GUIDES_DEFAULT_NOT_SAVED]
+            : [];
         const result = await applyGuidesChange(request, first, change);
+        // A file that doesn't exist yet is read again when a run of its bot ends, as after a connect.
+        if (change.on) this.armGuidesMissing(result.missing.flat(), stamp.target);
         if (change.on && !(await saveIfChanged(result.record, first)))
-          return { ...result, errors: [...result.errors, notSaved(result.wrote)] };
-        return result;
+          return {
+            ...result,
+            errors: [...result.errors, result.wrote ? GUIDES_NOT_RECORDED : GUIDES_ON_NOT_RECORDED],
+          };
+        return { ...result, errors: [...unseen, ...result.errors] };
       }
       // A row's Add, Replace or Remove is saved last, once the files hold it.
       const result = await applyGuidesChange(request, before, change);
@@ -7382,8 +7395,8 @@ export class ClawtrateClient {
 
   /**
    * This device's record for a gateway, or null when it has none. With none, the device-wide
-   * default applies: off once the person turned the switch off on any gateway, until they turn it
-   * on. A read the host's storage refuses, or a stored value that isn't a record, fails: it is
+   * default applies: off once the person turned the switch off on any gateway. Turning it on for
+   * a gateway saves that gateway's own record and leaves the default as it is. A read the host's storage refuses, or a stored value that isn't a record, fails: it is
    * never taken for no record, which reads as on.
    */
   private async guidesRecord(gatewayId: string): Promise<GuidesRecord | null> {
@@ -7485,9 +7498,17 @@ export class ClawtrateClient {
     if (!current()) return;
     if (!named && options.bot === undefined) this.guidesUnnamed = { generation, epoch };
     // Read again once each: not after the read a run's end asked for.
-    if (!options.afterRun)
-      for (const id of missing)
-        if (this.guidesMissing.size < MAX_BOTS) this.guidesMissing.add(capId(id, MAX_ID_CHARS));
+    if (!options.afterRun) this.armGuidesMissing(missing, this.target);
+  }
+
+  /**
+   * The bots whose file didn't exist yet are read again once each when a run of theirs ends, on
+   * the connection now open (`target`), with admin access.
+   */
+  private armGuidesMissing(bots: string[], target: number): void {
+    if (this.target !== target || !this.state.connection.canAdmin || this.options.readOnly) return;
+    for (const id of bots)
+      if (this.guidesMissing.size < MAX_BOTS) this.guidesMissing.add(capId(id, MAX_ID_CHARS));
   }
 
   /** A run of `botId` ended on this connection: once, its file is read again if it was missing. */

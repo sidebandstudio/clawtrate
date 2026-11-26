@@ -2,6 +2,8 @@
 //
 //   (none)         the switch on, as by default, and every bot has the section
 //   guides=off     the switch off, and no bot has it
+//   guides=inherited  as off, but only because the switch was turned off for another gateway on
+//                  this device: this gateway has no choice of its own yet
 //   guides=offleft the switch off, and Otto's section couldn't be taken out; Marlow's was changed
 //                  outside Clawtrate
 //   guides=mixed   the switch on: Juniper current, Marlow older with long instructions, Otto
@@ -47,6 +49,7 @@ export function guidesCommands(
   const param = save ? given!.slice(0, -`+save${save}`.length) || null : given;
   const start: Record<string, Record<string, GuideState | null>> = {
     off: {},
+    inherited: {},
     offleft: { otto: "current", marlow: "changed" },
     mixed: {
       main: "current",
@@ -82,11 +85,12 @@ export function guidesCommands(
     ]),
   );
   let record: GuidesRecord =
-    param === "off" || param === "offleft"
+    param === "off" || param === "offleft" || param === "inherited"
       ? { on: false, bots: [] }
       : { on: true, bots: param === "mixed" ? ["main", "marlow", "otto", "pip"] : BOTS };
   const voicePlugin = param === "voice";
   const unreadable = param === "unreadable";
+  const inherited = param === "inherited";
   const missing = new Set(param === "new" ? ["pip"] : []);
   const refused = new Map(
     param === "new" ? [["otto", "Workspace document exceeds its write bound"]] : [],
@@ -113,6 +117,7 @@ export function guidesCommands(
     folders: folders(),
     record: unreadable ? null : record,
     unreadable,
+    inherited: inherited && !record.on,
     voicePlugin,
     errors,
     stamp: stampNow(),

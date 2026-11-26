@@ -10,8 +10,10 @@
 // between them is used for nothing but showing it. A bot can edit its own file, and so can the
 // person: a section changed or removed outside Clawtrate is shown, never silently restored.
 
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { sha256Hex, utf8Bytes } from "./bytes.ts";
 import { VOICE_GUIDE, WHERE_GUIDE } from "./guide-text.ts";
+import { answerKind } from "./read-again.ts";
 import type { GatewayStamp } from "./types.ts";
 
 /** The file the section goes into: the only one the gateway gives every kind of run. */
@@ -300,6 +302,11 @@ export type BotGuides = {
   record: GuidesRecord | null;
   /** This device's record couldn't be read: whether the switch is on isn't known. */
   unreadable: boolean;
+  /**
+   * Off only because the person turned it off for another gateway on this device (the
+   * device-wide default): this gateway has no choice of its own yet.
+   */
+  inherited?: boolean;
   /** The voice plugin adds its own voice guide (on, its hook permitted). */
   voicePlugin: boolean;
   /** What failed in the change this answers, one sentence per file. */
@@ -338,12 +345,29 @@ const conflict = (error: unknown) =>
   (error instanceof Error && error.message.includes("agent_file_conflict"));
 
 /**
+ * Whether the gateway refused a write for good: its own answer (not a lost connection or a lost
+ * answer), one the app calls lasting (`answerKind`), and not `UNAVAILABLE`. OpenClaw (2026.10.6
+ * and 2026.11.10) sends any error its handler throws as `UNAVAILABLE` with no flag and no reason,
+ * a race with the workspace host and a full or busy disk included: those may pass, so the next
+ * occasion tries again (one read and one write per connect at most), and nothing is remembered.
+ * A refusal such as `INVALID_REQUEST` or `FORBIDDEN` is remembered.
+ */
+export const refusedForGood = (error: unknown) =>
+  error instanceof GatewayProtocolRequestError &&
+  error.gatewayCode !== "UNAVAILABLE" &&
+  answerKind(error) === "lasting";
+
+/** The gateway's reason, as a person reads it: without the "Error: " the message is wrapped in. */
+const refusalReason = (error: unknown) =>
+  (error instanceof Error ? error.message : String(error)).replace(/^(?:Error:\s*)+/, "");
+
+/**
  * Change one bot's file by `next`, read now and held to the hash read: `next` returns the new
  * text, or null to leave it. A file that isn't plain UTF-8 is never written: the change fails,
  * or with `byItself` (Clawtrate's own changes) it is left without a word. With `byItself`, a
  * missing file is left too: the gateway writes its own template into it only while it is missing.
  * A write refused because the file changed meanwhile reads it again and tries once more; one the
- * gateway refuses for another reason fails as `GuideRefusedError`. Answers whether anything was
+ * gateway refuses for good fails as `GuideRefusedError` (`refusedForGood`). Answers whether anything was
  * written, what the file held, and whether it was missing.
  */
 export async function changeGuideFile(
@@ -380,9 +404,7 @@ export async function changeGuideFile(
         throw new GuideConflictError(
           `${GUIDES_FILE} kept changing while Clawtrate wrote it, so it was left as it is.`,
         );
-      // The gateway's own answer (it carries the gateway's code), not a lost connection.
-      if (typeof rec(error).gatewayCode === "string" && rec(error).retryable !== true)
-        throw new GuideRefusedError(error instanceof Error ? error.message : String(error));
+      if (refusedForGood(error)) throw new GuideRefusedError(refusalReason(error));
       throw error;
     }
   }
@@ -542,6 +564,12 @@ export const GUIDES_NOT_READ = "Couldn't read this on this device, so nothing wa
 /** Said when a row's Remove comes while the switch is on: Clawtrate would add it back. */
 export const GUIDES_ON =
   '"Bots know how Clawtrate works" is on, so the section stays. Turn it off to take it out.';
+/** Said when On was saved and nothing written, but which bots hold the section wasn't saved. */
+export const GUIDES_ON_NOT_RECORDED =
+  "It's on, but this device couldn't record which bots hold the section, so it can't tell later whether one was removed on purpose.";
+/** Said when Off was saved for this gateway, but not as the default for gateways not seen yet. */
+export const GUIDES_DEFAULT_NOT_SAVED =
+  "It's off for this gateway, but this device couldn't save it for gateways it hasn't connected to yet.";
 /** Said when files were changed on the gateway but this device couldn't record which. */
 export const GUIDES_NOT_RECORDED =
   "The bots' files were changed, but this device couldn't record which, so it can't tell later whether one of these sections was removed on purpose.";

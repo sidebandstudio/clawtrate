@@ -15,21 +15,16 @@
     - link "Where the guide doesn't reach":
       - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach
     - group: What the guide asks the bots to do
-    - text: Bots know how Clawtrate works Couldn't read this on this device.
-    - switch "Bots know how Clawtrate works" [disabled]
+    - text: "Bots know how Clawtrate works Not known: this device couldn't read whether it's on or off for this gateway."
     - paragraph:
       - text: Clawtrate keeps a short section at the top of the
       - code: AGENTS.md
-      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate.
+      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate. Clawtrate changes nothing in the bots' files until this device can read it again.
     - group: Read it
     - list "Bots know how Clawtrate works":
-      - listitem: Juniper Still has Clawtrate's section.
-      - listitem: Marlow Still has Clawtrate's section.
       - listitem:
         - text: Otto Changed outside Clawtrate, so Clawtrate leaves it as it is.
         - button "Show"
-      - listitem: Pip Still has Clawtrate's section.
-      - listitem: Quartermaster of the Family Calendar and Errands Still has Clawtrate's section.
   - status
 - region "Conversation":
   - button "Back to bots"

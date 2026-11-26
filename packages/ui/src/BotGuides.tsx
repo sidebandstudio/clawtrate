@@ -226,41 +226,63 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
       if (!read || read.errors.length > 0 || guidesOn(read.record) !== next) return;
       announce(`"Bots know how Clawtrate works" is ${next ? "on" : "off"}`);
     });
-  const rows = folders.flatMap((folder) => {
-    const label = list(names(bots, folder.bots));
-    const row = guideRow(folder, label, on, admin && !unreadable);
-    return row ? [{ folder, label, ...row }] : [];
-  });
+  const rows = folders
+    // Unreadable: only the rows whose words hold whether it is on or off (a changed, moved or
+    // unparseable section, a file that isn't UTF-8 or can't be read), none that writes.
+    .filter(
+      (folder) =>
+        !unreadable ||
+        folder.state === "changed" ||
+        folder.state === null ||
+        (!folder.utf8 && (folder.state === "current" || folder.state === "older")),
+    )
+    .flatMap((folder) => {
+      const label = list(names(bots, folder.bots));
+      const row = guideRow(folder, label, on, admin && !unreadable);
+      return row ? [{ folder, label, ...row }] : [];
+    });
   return (
     <div className="bot-guides" data-testid="bot-guides">
       <div className="facts">
         <div className="b-row">
           <span className="b-row-main">
             <span id="bot-guides-label">Bots know how Clawtrate works</span>
-            <small data-testid="bot-guides-state">
-              {unreadable ? "Couldn't read this on this device." : on ? "On" : "Off"}
+            <small data-testid="bot-guides-state" id="bot-guides-state">
+              {unreadable
+                ? "Not known: this device couldn't read whether it's on or off for this gateway."
+                : on
+                  ? "On"
+                  : "Off"}
             </small>
           </span>
-          <button
-            type="button"
-            className="b-switch"
-            role="switch"
-            aria-checked={on}
-            aria-labelledby="bot-guides-label"
-            aria-describedby="bot-guides-note"
-            aria-busy={guides.busy || undefined}
-            aria-disabled={guides.busy || undefined}
-            disabled={!admin || unreadable}
-            data-testid="bot-guides-switch"
-            onClick={() => {
-              if (!guides.busy) turn(!on);
-            }}
-          />
+          {/* Unreadable: no switch at all, neither on nor off, and nothing to press. */}
+          {!unreadable && (
+            <button
+              type="button"
+              className="b-switch"
+              role="switch"
+              aria-checked={on}
+              aria-labelledby="bot-guides-label"
+              aria-describedby="bot-guides-note"
+              aria-busy={guides.busy || undefined}
+              aria-disabled={guides.busy || undefined}
+              disabled={!admin}
+              data-testid="bot-guides-switch"
+              onClick={() => {
+                if (!guides.busy) turn(!on);
+              }}
+            />
+          )}
         </div>
       </div>
       <p className="b-hint" id="bot-guides-note">
         Clawtrate keeps a short section at the top of the <code>AGENTS.md</code> of each bot on this
         gateway that tells it how to talk to you and what a task is in Clawtrate.
+        {unreadable &&
+          " Clawtrate changes nothing in the bots' files until this device can read it again."}
+        {!unreadable &&
+          shown.inherited &&
+          " It's off here because you turned it off for another gateway on this device. Turning it on here changes this gateway only."}
         {!admin &&
           " This connection doesn't have admin access, so Clawtrate can't add or remove it from here."}
       </p>

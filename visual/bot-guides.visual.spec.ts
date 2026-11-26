@@ -23,7 +23,7 @@ async function openPane(page: Page, query: string, theme: "light" | "dark" = "li
 /** The guides block once the files are read. */
 async function guidesPane(page: Page, query: string, theme: "light" | "dark" = "light") {
   const pane = await openPane(page, query, theme);
-  await expect(pane.getByRole("switch", SWITCH)).toBeVisible();
+  await expect(pane.getByText(SWITCH.name, { exact: true })).toBeVisible();
   return pane;
 }
 
@@ -184,17 +184,36 @@ test.describe("bots know how Clawtrate works", () => {
     page,
   }) => {
     const pane = await guidesPane(page, "&access=admin&guides=unreadable");
-    const toggle = pane.getByRole("switch", SWITCH);
+    // No switch at all: neither on nor off, and nothing to press. The words say what it is.
+    await expect(pane.getByRole("switch")).toHaveCount(0);
     await expect(pane.getByTestId("bot-guides-state")).toHaveText(
-      "Couldn't read this on this device.",
+      "Not known: this device couldn't read whether it's on or off for this gateway.",
     );
-    await expect(toggle).toBeDisabled();
-    await expect(toggle).toHaveAttribute("aria-checked", "false");
-    // Rows still say what the files hold, with nothing that writes.
-    const otto = pane.getByTestId("bot-guide-otto");
-    await expect(otto.getByRole("button")).toHaveText(["Show"]);
+    await expect(pane.locator("#bot-guides-note")).toContainText(
+      "Clawtrate changes nothing in the bots' files until this device can read it again.",
+    );
+    // Only the rows whose words hold either way: Otto's changed section, with Show. The bots
+    // that hold Clawtrate's section get no "Still has" row.
+    await expect(pane.getByRole("listitem")).toHaveCount(1);
+    await expect(pane.getByTestId("bot-guide-otto").getByRole("button")).toHaveText(["Show"]);
+    await expect(pane.getByText("Still has Clawtrate's section.")).toHaveCount(0);
     for (const name of ["Add", "Update", "Replace", "Remove"])
       await expect(pane.getByRole("button", { name, exact: true })).toHaveCount(0);
+  });
+
+  test("F-566: a gateway that is off only because of another gateway on this device says so, and On changes it alone", async ({
+    page,
+  }) => {
+    const pane = await guidesPane(page, "&access=admin&guides=inherited");
+    const toggle = pane.getByRole("switch", SWITCH);
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(pane.locator("#bot-guides-note")).toContainText(
+      "It's off here because you turned it off for another gateway on this device. Turning it on here changes this gateway only.",
+    );
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(pane.locator("#bot-guides-note")).not.toContainText("another gateway");
+    expect(await changes(page)).toEqual([{ action: "switch", on: true }]);
   });
 
   test("F-566: without admin access, one sentence says so, and nothing can be sent", async ({
@@ -283,11 +302,12 @@ for (const size of [WIDE, PHONE]) {
         ["odd", "&access=admin&guides=odd"],
         ["new", "&access=admin&guides=new"],
         ["unreadable", "&access=admin&guides=unreadable"],
+        ["inherited", "&access=admin&guides=inherited"],
       ] as const) {
         test(`F-566: the guides, ${name}`, async ({ page }) => {
           const pane = await guidesPane(page, query, theme);
           await pane.scrollIntoViewIfNeeded();
-          await pane.getByRole("switch", SWITCH).scrollIntoViewIfNeeded();
+          await pane.getByText(SWITCH.name, { exact: true }).scrollIntoViewIfNeeded();
           await settle(page);
           await expect(page).toHaveScreenshot(`bot-guides-${name}-${theme}-${size.name}.png`);
         });
