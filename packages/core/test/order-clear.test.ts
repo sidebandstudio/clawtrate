@@ -421,6 +421,37 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     client.stop();
   });
 
+  it("a lock confirmed by a newer read while the press's read is slow keeps its confirmation", async () => {
+    const { client, fake, accounts, press } = await locked();
+    // The press's read after its send: its config answer held.
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let holding = false;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (!holding && fake.gateway.calls("models.authOrderSet").length > 0) {
+        holding = true;
+        await held.promise;
+      }
+      return answer;
+    };
+    const pressed = press();
+    await until(() => holding);
+    // Locked again meanwhile, and confirmed by a newer read.
+    fake.orders.otto = { acme: ["acme:work"] };
+    await client.checkLock("otto");
+    expect(accountWord(otto(accounts()))).toBe("locked");
+    held.resolve();
+    await pressed;
+    expect(clearShown(accounts().clear!, otto(accounts()))).toBeNull();
+    // A later read that fails: the newer confirmation stands.
+    fake.failStatusFor = "otto";
+    await client.checkLock("otto");
+    expect(otto(accounts()).evidence.status).toBe("failed");
+    expect(accountWord(otto(accounts()))).toBe("locked");
+    client.stop();
+  });
+
   it("an accounts load begun before the press that answers last never puts the order back either", async () => {
     const { client, fake, accounts, press } = await locked();
     const get = fake.gateway.handlers["config.get"]!;

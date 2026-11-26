@@ -738,11 +738,13 @@ export class AccountsEngine {
       checkedAt = afterAt;
       // The person's own unlock: not a lock lost, so no "The lock is gone" for it, and no lock to
       // remember either, so a later read that fails doesn't bring "Locked, as of …" back.
+      // Only while the page still shows that read: a newer one that confirmed a lock keeps it.
       ctx.update((a) =>
-        this.patchBinding(a, botId, (b) => ({
-          ...b,
-          evidence: { ...b.evidence, lostAt: null, lastMatchAt: null },
-        })),
+        this.patchBinding(a, botId, (b) =>
+          b.evidence.readSeq === afterSeq
+            ? { ...b, evidence: { ...b.evidence, lostAt: null, lastMatchAt: null } }
+            : b,
+        ),
       );
       publish({ status: "cleared", error: null });
     } else if (refused !== null) publish({ status: "refused", error: refused });
