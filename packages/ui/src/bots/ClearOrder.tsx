@@ -140,7 +140,10 @@ export function ClearOutcome({
     case "unsent":
       return line(
         "warn",
-        `Nothing was sent${clear.error ? `: ${clear.error.replace(/\.$/, "")}` : ""}.`,
+        // The host's own refusal already says nothing was sent; anything else is why.
+        clear.error && /nothing was sent/i.test(clear.error)
+          ? clear.error
+          : `Nothing was sent.${clear.error ? ` ${clear.error}` : ""}`,
         true,
       );
   }

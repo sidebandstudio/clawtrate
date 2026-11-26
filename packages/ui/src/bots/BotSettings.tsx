@@ -837,8 +837,12 @@ export function BotSettings({
       // The button that opened it may be gone with the order: the line that says how it went.
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          if (!rootRef.current?.contains(document.activeElement))
-            focusIn("[data-bs='clear-outcome'], [data-bs-focus]");
+          const root = rootRef.current;
+          if (!root || root.contains(document.activeElement)) return;
+          (
+            root.querySelector<HTMLElement>("[data-bs='clear-outcome']") ??
+            root.querySelector<HTMLElement>("[data-bs-focus]")
+          )?.focus();
         }),
       );
     }

@@ -656,8 +656,7 @@ export class AccountsEngine {
         this.patchBinding(a, botId, (b) => ({ ...b, evidence: { ...b.evidence, lostAt: null } })),
       );
       publish({ status: "cleared", error: null });
-    }
-    else if (refused !== null) publish({ status: "refused", error: refused });
+    } else if (refused !== null) publish({ status: "refused", error: refused });
     else if (lost !== null) publish({ status: "unanswered", error: lost });
     else if (after === null) publish({ status: "unread", error: null });
     else publish({ status: "kept", error: null });

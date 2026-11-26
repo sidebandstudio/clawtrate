@@ -2438,7 +2438,7 @@ for (const [end, words, word] of [
     "Otto's order changed on the gateway while this was open, so Clawtrate sent nothing. The page shows the order as the gateway has it now.",
     "stale",
   ],
-  ["unsent", "Nothing was sent: The gateway says its account status is unavailable.", "locked"],
+  ["unsent", "Nothing was sent. The gateway says its account status is unavailable.", "locked"],
 ] as const)
   test(`F-592: an Unlock that ends ${end} says so, and the page keeps the gateway's read`, async ({
     page,
