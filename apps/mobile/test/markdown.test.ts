@@ -180,7 +180,7 @@ describe("the bot's markdown on iOS", () => {
   it("knows a loopback host in any spelling, IPv6 included", () => {
     for (const url of [
       "http://127.0.0.1/",
-      "http://127.8.9.10:1/",
+      `http://${join4(127, 8, 9, 10)}:1/`,
       "http://localhost/",
       "http://LOCALHOST./",
       "http://app.localhost/",
