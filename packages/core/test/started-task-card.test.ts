@@ -593,3 +593,80 @@ describe("the task list a card may use", () => {
     expect(isTaskStart({ ...step, toolName: "sessions_send" }, step.raw)).toBe(false);
   });
 });
+
+// The parent's rows as OpenClaw 2026.11.10 returns them on a development gateway (#636): each run
+// of the started task that ends gives the parent the gateway's completion row (an assistant row
+// with `phase: "commentary"`, a `subagent_completion` block, no text and no run), and a report
+// turn follows for the task's first run and for each run a person's message started there, but
+// not for one a follow-up started.
+describe("a task a bot starts, with its reports as OpenClaw 2026.11.10 sends them (#636)", () => {
+  const PERSON_RUN = "c9f93737-d68f-4739-a4b8-67224510941c";
+  const FOLLOW_RUN = "729c74da-6ea1-4869-828a-a93ea7e1e6ce";
+  const completion = (at: number, run: string, label?: string) => ({
+    role: "assistant",
+    phase: "commentary",
+    display: true,
+    timestamp: at,
+    subagentCompletions: [{ runId: run, sessionKey: CHILD, ...(label ? { label } : {}) }],
+    __openclaw: { id: `c-${at}`, seq: at - T },
+    content: [{ type: "subagent_completion" }],
+  });
+  const followUp = [
+    user("#follow-up", T + 40_000, "run-f"),
+    call(
+      "run-f",
+      T + 40_900,
+      "call_f",
+      { sessionKey: CHILD, message: "More shade?" },
+      "sessions_send",
+    ),
+    result(
+      "run-f",
+      T + 41_800,
+      "call_f",
+      { runId: FOLLOW_RUN, status: "accepted", sessionKey: CHILD, delivery: { status: "pending" } },
+      false,
+      "sessions_send",
+    ),
+    say("run-f", T + 42_000, "I added that to the task."),
+  ];
+  const rows = [
+    ...startRows(),
+    completion(T + 3_870, CHILD_RUN, LABEL),
+    say(`announce:v1:${CHILD}:${CHILD_RUN}`, T + 4_620, "Compare trail maps finished."),
+    completion(T + 22_270, PERSON_RUN, LABEL),
+    say(`announce:v1:${CHILD}:${PERSON_RUN}`, T + 22_600, "Compare trail maps finished."),
+    ...followUp,
+    completion(T + 46_900, FOLLOW_RUN),
+  ];
+
+  it("ties the card to its own run's report, not to the one after the person's run", () => {
+    const items = mapHistory(rows);
+    const [card] = cards(rows, listed("done"));
+    const first = items.find((item) => item.reportRunId === `announce:v1:${CHILD}:${CHILD_RUN}`);
+    expect(card!.reportedBack).toBe(first!.id);
+    // The report after the person's run is the bot's own turn, shown as one, with its own run.
+    expect(items.filter((item) => item.reportRunId).map((item) => item.reportRunId)).toEqual([
+      `announce:v1:${CHILD}:${CHILD_RUN}`,
+      `announce:v1:${CHILD}:${PERSON_RUN}`,
+    ]);
+    // With only the later report, the card says nothing of a report.
+    const later = rows.filter((row) => row !== rows[startRows().length + 1]);
+    expect(cards(later, listed("done"))[0]!.reportedBack).toBeNull();
+  });
+
+  it("draws nothing for the gateway's completion rows, and makes no run of them", () => {
+    const items = mapHistory(rows);
+    expect(items.some((item) => item.id.startsWith("c-"))).toBe(false);
+    // The same items and runs as without them; an item's id ends with its row's place.
+    const without = rows.filter((row) => !("subagentCompletions" in row));
+    const shown = (list: unknown[]) =>
+      mapHistory(list).map(({ id, ...item }) => [id.replace(/:\d+$/, ""), item]);
+    expect(shown(rows)).toEqual(shown(without));
+    const runs = (list: unknown[]) =>
+      runsFromHistory(list, null, { sessionKey: HERE, now: T + 60_000, raw: new RawTable() }).map(
+        (run) => [run.id, run.state, run.anchorItemId?.replace(/:\d+$/, "")],
+      );
+    expect(runs(rows)).toEqual(runs(without));
+  });
+});

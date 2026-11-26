@@ -179,6 +179,17 @@ export class AccountsGateway {
   refuseCancel = false;
   /** Fail `models.authStatus` for this bot. */
   failStatusFor: string | null = null;
+  /**
+   * Answer `models.authStatus` for this bot with `answer` in place of its status: no payload at
+   * all (`undefined`), or a record with no `providers` list.
+   */
+  blankStatus: { agentId: string; answer: unknown } | null = null;
+  /**
+   * `models.authOrderSet` with no account ids, as OpenClaw 2026.10.6 and 2026.11.10 take it: the
+   * bot's stored order for the provider goes. This runs in its place when set: a refusal, an
+   * answer held, or an answer that leaves the order as it was.
+   */
+  orderSet: ((params: { provider: string; agentId: string }) => unknown) | null = null;
   /** Echo what was typed back in a refusal, as a careless gateway might. */
   echoTyped = false;
   /**
@@ -326,6 +337,7 @@ export class AccountsGateway {
       const { agentId } = params as { agentId: string };
       if (agentId === this.failStatusFor)
         throw new GatewayError({ code: "UNAVAILABLE", message: "status unavailable" });
+      if (agentId === this.blankStatus?.agentId) return this.blankStatus.answer;
       if (this.unavailable)
         return { providers: [], unavailable: { code: "PREPARED_MODEL_AUTH_UNAVAILABLE" } };
       return this.status(agentId);
@@ -443,6 +455,23 @@ export class AccountsGateway {
       if (!this.shared.some((p) => p.id === id))
         this.shared.push({ id, provider, type: "api_key" });
       return { provider, profileId: id };
+    };
+    g.handlers["models.authOrderSet"] = (params) => {
+      const order = params as { provider: string; agentId: string; profileIds?: string[] };
+      if (!this.admin)
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: "missing scope: operator.admin",
+        });
+      if (!this.bots.some((bot) => bot.id === order.agentId))
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: `unknown agent id "${order.agentId}"`,
+        });
+      if (order.profileIds) throw new Error("this fake gateway clears orders only");
+      if (this.orderSet) return this.orderSet(order);
+      delete this.orders[order.agentId]?.[order.provider];
+      return { provider: order.provider, profileIds: null };
     };
     g.handlers["models.authLogout"] = (params) => {
       const { profileIds } = params as { profileIds: string[] };

@@ -48,6 +48,7 @@ const WALKED = new Set([
   "UsageEngine",
   "BotNames",
   "OpenClawUpdates",
+  "DeviceApprovals",
   "MachinesEngine",
   "WaitingIndex",
   "QuietChecks",
