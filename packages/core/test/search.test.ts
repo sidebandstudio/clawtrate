@@ -306,6 +306,30 @@ describe("a person's message found by search shows their words alone (#666)", ()
     );
   });
 
+  it("a task's title the gateway made loses the marker, and a label is kept", async () => {
+    const results = [
+      hit("user", "Short one"),
+      { ...hit("user", "Short one", "m-2"), sessionKey: "agent:otto:b" },
+    ];
+    const { titles } = await searchMessages(
+      gateway({
+        "sessions.search": {
+          results,
+          sessions: [
+            { key: "agent:otto:disk-space", displayName: "Short one\n\nWorking context c" },
+            { key: "agent:otto:b", label: "Working context captured" },
+          ],
+        },
+      }).request,
+      "short",
+      null,
+    );
+    expect(titles).toEqual({
+      "agent:otto:disk-space": "Short one",
+      "agent:otto:b": "Working context captured",
+    });
+  });
+
   it("a message with no marker is as the gateway sent it", async () => {
     const { hits } = await found("tonight", hit("user", "Run it tonight."));
     expect(hits[0]!.snippet).toBe("Run it tonight.");

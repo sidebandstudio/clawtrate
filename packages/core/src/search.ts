@@ -189,7 +189,10 @@ export function readMessageSearch(reply: RawRecord | null, query = ""): MessageS
   for (const raw of Array.isArray(reply?.sessions) ? reply.sessions : []) {
     const row = asRecord(raw);
     const key = exactId(row?.key);
-    const title = str(row?.label) ?? str(row?.displayName);
+    // A title the gateway made from the first message loses the marker, as the task list's does.
+    const named = str(row?.displayName);
+    const title =
+      str(row?.label) ?? (named === null ? null : str(snippetWithoutMarker(named).text));
     if (key && title && hits.some((hit) => hit.sessionKey === key))
       titles[key] = cutText(title, MAX_TASK_LABEL_CHARS);
   }

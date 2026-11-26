@@ -6,9 +6,14 @@ import { describe, expect, it } from "vitest";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { mapSessionRow, plainPreview } from "../src/mapping.ts";
 import { isActive } from "../src/runs.ts";
-import { CLAWTRATE_WORK_CONTEXT, MARKER_AS_SEARCHED, markerRefusal } from "../src/send-marker.ts";
+import {
+  CLAWTRATE_WORK_CONTEXT,
+  MARKER_AS_SEARCHED,
+  markerRefusal,
+  snippetWithoutMarker,
+} from "../src/send-marker.ts";
 import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
-import { GatewayError, until } from "./fake-gateway.ts";
+import { deferred, GatewayError, until } from "./fake-gateway.ts";
 
 type Send = { message: string; idempotencyKey: string; queueMode: string; workContext?: unknown };
 const sends = (gateway: { calls(method: string): unknown[] }) =>
@@ -120,21 +125,21 @@ describe("every route a message leaves by carries the marker", () => {
 });
 
 describe("a refusal of the marker", () => {
-  it("a command or stop word: the same message once more, without it, under the same key", async () => {
+  it("a stop word: the same message once more, without it, under the same key", async () => {
     const { client, gateway, transcript } = await openTask();
     answering(gateway, [ORDINARY_ONLY]);
-    const id = client.sendMessage(KEY, "/status");
+    const id = client.sendMessage(KEY, "exit");
     await until(() => transcript().outbox.find((m) => m.id === id)?.status === "sent");
     expect(sends(gateway)).toEqual([
       expect.objectContaining({
-        message: "/status",
+        message: "exit",
         idempotencyKey: id,
         workContext: { page: "Clawtrate" },
       }),
-      { sessionKey: KEY, message: "/status", idempotencyKey: id, queueMode: "followup" },
+      { sessionKey: KEY, message: "exit", idempotencyKey: id, queueMode: "followup" },
     ]);
     expect(transcript().outbox.find((m) => m.id === id)).toMatchObject({
-      text: "/status",
+      text: "exit",
       unmarked: true,
       error: null,
     });
@@ -254,5 +259,53 @@ describe("a task's title the gateway derived shows a person's words alone", () =
       mapSessionRow({ key: KEY, label: "Working context captured", derivedTitle: named })?.title,
     ).toBe("Working context captured");
     expect(mapSessionRow({ key: KEY, derivedTitle: "Plan the walk" })?.title).toBe("Plan the walk");
+  });
+});
+
+describe("a command, and a Stop before the gateway answered", () => {
+  it("a command goes without the marker at once, in one send, whatever the gateway says of it", async () => {
+    const { client, gateway, transcript } = await openTask();
+    // Were it sent with the marker, this gateway would refuse it in words Clawtrate doesn't know.
+    gateway.handlers["chat.send"] = (params) => {
+      if ((params as Send).workContext) throw refusal("work context is not allowed here");
+      return { runId: `run-${sends(gateway).length}`, status: "started" };
+    };
+    for (const text of ["/status", "!ls"]) {
+      const id = client.sendMessage(KEY, text);
+      await until(() => transcript().outbox.find((m) => m.id === id)?.status === "sent");
+    }
+    expect(sends(gateway).map((p) => [p.message, "workContext" in p])).toEqual([
+      ["/status", false],
+      ["!ls", false],
+    ]);
+    client.stop();
+  });
+
+  it("a Stop pressed while the marked send waited: its refusal ends it, and nothing is sent again", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => answer.promise;
+    const id = client.sendMessage(KEY, "Take your time");
+    await until(() => sends(gateway).length === 1);
+    await client.stopRun(KEY, id);
+    answer.reject(refusal(ORDINARY_ONLY));
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "failed");
+    expect(sends(gateway)).toHaveLength(1);
+    client.stop();
+  });
+});
+
+describe("words the marker also has are a person's own", () => {
+  it("a preview, a title or a snippet that is only such a word keeps it", () => {
+    for (const text of ["Clawtrate", "JSON", "send", "Working context", "sessions:"]) {
+      expect(snippetWithoutMarker(text)).toEqual({ text, cut: false });
+      expect(plainPreview(text)).toBe(text);
+      expect(mapSessionRow({ key: KEY, derivedTitle: text })?.title).toBe(text);
+    }
+    // A snippet that starts inside the marker and runs to its end is the marker's.
+    expect(snippetWithoutMarker(`…other sessions: {"page":"Clawtrate"}`)).toEqual({
+      text: "",
+      cut: true,
+    });
   });
 });

@@ -39,7 +39,7 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
 import { fromBase64, toBase64 } from "./bytes.ts";
-import { markerRefusal } from "./send-marker.ts";
+import { isCommandText, markerRefusal } from "./send-marker.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -3745,7 +3745,7 @@ export class ClawtrateClient {
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
     replyToId?: string,
-    marked = true,
+    marked = !isCommandText(text),
   ) {
     return chatSendParams(
       { sessionKey: key, text, idempotencyKey, queueMode, replyToId: replyToId ?? null },
@@ -4420,8 +4420,11 @@ export class ClawtrateClient {
     let result: RawRecord | null;
     try {
       // It says it comes from Clawtrate (#666), unless the gateway already refused that for this
-      // message, or for every message on this connection.
-      const marked = message.unmarked !== true && !this.markerRefused;
+      // message, or for every message on this connection. A command (`/…`, `!…`) goes without it
+      // at once: the gateway takes the marker only on ordinary chat messages, and `/stop` must
+      // not depend on recognising the gateway's refusal of it.
+      const marked =
+        message.unmarked !== true && !this.markerRefused && !isCommandText(message.text);
       const params = this.sendParams(
         key,
         message.text,
@@ -4453,6 +4456,10 @@ export class ClawtrateClient {
         // A Stop withdrew it, or it went away, while the refusal was on its way: nothing more.
         const now = this.outgoing(key, messageId);
         if (!now || now.steer === "withdrawn") throw error;
+        // A Stop asked for before the gateway took it: the refusal ends it, as it did before the
+        // marker, rather than a resend starting a turn the person already stopped.
+        const run = findRun(this.state.transcripts[key] ?? emptyActivity, messageId);
+        if (run?.state === "stopping") throw error;
         this.updateActivity(key, (activity) =>
           updateMessage(activity, messageId, { unmarked: true }),
         );
