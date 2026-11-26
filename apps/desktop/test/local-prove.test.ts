@@ -374,8 +374,8 @@ int main(int argc, char **argv) {
     const hold = (path: string) => {
       for (const file of held(path)) files.push(openSync(file, "r"));
     };
-    hold(at);
     try {
+      hold(at);
       // The same folder: the proof goes on past it, to the lock, which doesn't name this process.
       expect(await proveLocalGateway(options(at, localPort, { identity: read.identity }))).toEqual(
         refused("named"),
