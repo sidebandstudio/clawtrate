@@ -207,8 +207,15 @@ export async function layout(): Promise<
   return found;
 }
 
-/** Tap the glyphs on a link's first line, inside the scroll view's visible area. */
-export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
+/**
+ * Tap, or touch and hold, a link in the transcript: at the middle of the part of it the scroll
+ * view shows, a little into its glyphs from where its lines start, so a link at the view's edge
+ * is still hit.
+ */
+export async function transcriptLinkTap(
+  pattern: RegExp,
+  press: "tap" | "hold" = "tap",
+): Promise<Step> {
   const stdout = await hierarchy();
   const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
   type Bounds = { x1: number; y1: number; x2: number; y2: number };
@@ -228,12 +235,17 @@ export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
   walk(tree);
   const { viewport, link } = found;
   if (!viewport || !link) throw new Error(`Could not locate ${pattern} in the transcript`);
-  const x = link.x1 + 24;
-  const y = link.y1 + 10;
-  if (x < viewport.x1 || x >= viewport.x2 || y < viewport.y1 || y >= viewport.y2) {
-    throw new Error(`Link ${pattern}: tap (${x}, ${y}) is outside ${JSON.stringify(viewport)}`);
+  const top = Math.max(link.y1, viewport.y1);
+  const bottom = Math.min(link.y2, viewport.y2);
+  const x = link.x1 + Math.min(24, Math.floor((link.x2 - link.x1) / 2));
+  const y = Math.floor((top + bottom) / 2);
+  if (bottom <= top || x < viewport.x1 || x >= viewport.x2) {
+    throw new Error(
+      `Link ${pattern}: ${JSON.stringify(link)} is outside ${JSON.stringify(viewport)}`,
+    );
   }
-  return { tapOn: { point: `${x},${y}` } };
+  const point = { point: `${x},${y}` };
+  return press === "hold" ? { longPressOn: point } : { tapOn: point };
 }
 
 /**
