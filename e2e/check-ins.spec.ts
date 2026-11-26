@@ -7,17 +7,27 @@
 // gateway's own log. The instance's scheduler is off, so no check-in runs on
 // its schedule here: Off is shown by the job the scheduler would run, and by
 // the gateway's own refusal to run it when asked to run it if enabled.
+//
+// An OpenClaw that retired heartbeats (2026.11.5 on, such as 2026.11.10) keeps
+// check-ins as routines, with no setting or job that says which. Against one,
+// this file has the one test that applies there: Check-ins say so for each
+// bot, offer no change with admin, send no `config.patch`, and lead to the
+// bot's routines. The tests registered are those of the version the run's
+// gateway is (`OPENCLAW_BIN`, else the pin), and `beforeAll` checks that the
+// gateway agrees, by the same schema lookup the app makes.
 import { expect, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
 import { createBridgeSession } from "../packages/core/src/bridge.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
 import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { programVersion } from "../tools/dev-gateway/src/pinned.ts";
+import { PINNED_OPENCLAW, shapeOf } from "../tools/dev-gateway/src/versions.ts";
 import { ACCOUNTS, test } from "./accounts-instance.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
@@ -29,6 +39,12 @@ test.describe.configure({ mode: "serial" });
 let host: { child: ChildProcess; url: string; data: string } | null = null;
 let page: Page;
 let admin: OperatorSession;
+/** The run's gateway keeps check-ins as heartbeats (the pin) rather than as routines. */
+const HEARTBEATS = shapeOf(
+  process.env.OPENCLAW_BIN
+    ? (programVersion(resolve(process.env.OPENCLAW_BIN)) ?? "")
+    : PINNED_OPENCLAW,
+).heartbeat;
 
 type Json = Record<string, unknown>;
 type Job = { id: string; agentId: string; enabled: boolean; everyMs: number | undefined };
@@ -116,18 +132,31 @@ test.beforeAll(async ({ accountsInstance, browser }) => {
     [...ACCOUNT_CLIENTS.admin.scopes],
     [...ACCOUNT_CLIENTS.admin.caps],
   );
-  // The gateway's default: only Juniper (main) checks in, every 30 minutes, with no setting of its own.
-  await admin.request("config.patch", {
-    raw: JSON.stringify({
-      agents: {
-        entries: Object.fromEntries(
-          Object.keys(await settings()).map((bot) => [bot, { heartbeat: null }]),
-        ),
+  // The gateway says which it is, as the app reads it: its schema has `agents.defaults.heartbeat` or not.
+  const hasHeartbeats = await admin
+    .request("config.schema.lookup", { path: "agents.defaults.heartbeat" })
+    .then(
+      () => true,
+      (error: Error) => {
+        if (/config schema path not found/.test(error.message)) return false;
+        throw error;
       },
-    }),
-    baseHash: (await admin.request<{ hash: string }>("config.get", {})).hash,
-  });
-  await expect.poll(async () => (await jobs()).map((job) => job.agentId)).toEqual(["main"]);
+    );
+  expect(hasHeartbeats, "the gateway's schema agrees with the version under test").toBe(HEARTBEATS);
+  if (HEARTBEATS) {
+    // The gateway's default: only Juniper (main) checks in, every 30 minutes, with no setting of its own.
+    await admin.request("config.patch", {
+      raw: JSON.stringify({
+        agents: {
+          entries: Object.fromEntries(
+            Object.keys(await settings()).map((bot) => [bot, { heartbeat: null }]),
+          ),
+        },
+      }),
+      baseHash: (await admin.request<{ hash: string }>("config.get", {})).hash,
+    });
+    await expect.poll(async () => (await jobs()).map((job) => job.agentId)).toEqual(["main"]);
+  }
 
   const data = mkdtempSync(join(tmpdir(), "clawtrate-check-ins-"));
   const started = startHost(INSTANCE, STATIC, data);
@@ -151,204 +180,247 @@ test.afterAll(async () => {
   }
 });
 
-test("F-201: below admin the check-ins are read from the gateway's jobs and nothing offers a change; admin is asked for only by the bar's button", async () => {
-  test.setTimeout(120_000);
-  await openCheckIns();
-  await expect(block("main")).toContainText("Checks in every 30 minutes");
-  await expect(block("marlow")).toContainText("No check-ins");
-  // The development gateway's scheduler is off, and the view says what that means.
-  await expect(page.getByTestId("scheduler-off")).toContainText("scheduled check-ins don't run");
-  await expect(page.getByRole("button", { name: /^Change .*'s check-ins$/ })).toHaveCount(0);
-  const bar = page.getByTestId("admin-bar");
-  await expect(bar).toContainText("Changing check-ins needs admin access.");
-  await bar.getByRole("button", { name: "Request admin access" }).click();
-  await expect(bar).toContainText("Waiting for the gateway's owner.", { timeout: 15_000 });
-  await approve();
-  await expect(page.getByTestId("admin-bar")).toContainText("Admin access granted.", {
-    timeout: 30_000,
+// The tests of a gateway with heartbeats (the pin).
+if (HEARTBEATS) {
+  test("F-201: below admin the check-ins are read from the gateway's jobs and nothing offers a change; admin is asked for only by the bar's button", async () => {
+    test.setTimeout(120_000);
+    await openCheckIns();
+    await expect(block("main")).toContainText("Checks in every 30 minutes");
+    await expect(block("marlow")).toContainText("No check-ins");
+    // The development gateway's scheduler is off, and the view says what that means.
+    await expect(page.getByTestId("scheduler-off")).toContainText("scheduled check-ins don't run");
+    await expect(page.getByRole("button", { name: /^Change .*'s check-ins$/ })).toHaveCount(0);
+    const bar = page.getByTestId("admin-bar");
+    await expect(bar).toContainText("Changing check-ins needs admin access.");
+    await bar.getByRole("button", { name: "Request admin access" }).click();
+    await expect(bar).toContainText("Waiting for the gateway's owner.", { timeout: 15_000 });
+    await approve();
+    await expect(page.getByTestId("admin-bar")).toContainText("Admin access granted.", {
+      timeout: 30_000,
+    });
+    await expect(block("marlow").getByRole("button", { name: /^Change / })).toBeVisible();
   });
-  await expect(block("marlow").getByRole("button", { name: /^Change / })).toBeVisible();
-});
 
-test("F-201: Daily for Marlow is one config.patch that also keeps Juniper's check-ins, and once it says saved the gateway's config and jobs show both", async () => {
-  test.setTimeout(120_000);
-  await block("marlow")
-    .getByRole("button", { name: /^Change / })
-    .click();
-  await expect(page.getByTestId("catch-note")).toContainText(
-    "checks in now through the gateway's default",
-  );
-  await page.getByTestId("check-ins-dialog").getByRole("button", { name: "Cancel" }).click();
-  await onePatch(() => save("marlow", /^Daily/));
-  expect(await settings()).toEqual({ main: { every: "30m" }, marlow: { every: "24h" } });
-  expect(
-    (await jobs()).map(({ agentId, enabled, everyMs }) => [agentId, enabled, everyMs]),
-  ).toEqual([
-    ["main", true, 1_800_000],
-    ["marlow", true, 86_400_000],
-  ]);
-  await expect(block("marlow")).toContainText("Checks in daily");
-  await expect(block("main")).toContainText("Checks in every 30 minutes");
-});
-
-test("F-201: As needed for Marlow is one config.patch of every 30m, and once it says saved its job is set to every 30 minutes", async () => {
-  test.setTimeout(120_000);
-  await onePatch(() => save("marlow", /^As needed/));
-  expect(await settings()).toEqual({ main: { every: "30m" }, marlow: { every: "30m" } });
-  expect(
-    (await jobs()).map(({ agentId, enabled, everyMs }) => [agentId, enabled, everyMs]),
-  ).toEqual([
-    ["main", true, 1_800_000],
-    ["marlow", true, 1_800_000],
-  ]);
-  await expect(block("marlow")).toContainText("Checks in every 30 minutes");
-});
-
-test("F-366: Off for Juniper is one config.patch of every 0m; its job stays, disabled, and the gateway declines to run it if enabled", async () => {
-  test.setTimeout(120_000);
-  await block("main")
-    .getByRole("button", { name: /^Change / })
-    .click();
-  await page.getByTestId("check-ins-dialog").getByRole("radio", { name: /^Off/ }).click();
-  await expect(page.getByTestId("off-note")).toContainText(
-    "still reports when a command it started in the background finishes",
-  );
-  await page.getByTestId("check-ins-dialog").getByRole("button", { name: "Cancel" }).click();
-  await onePatch(() => save("main", /^Off/));
-  expect(await settings()).toEqual({ main: { every: "0m" }, marlow: { every: "30m" } });
-  const main = (await jobs()).find((job) => job.agentId === "main")!;
-  expect(main.enabled).toBe(false);
-  // What the scheduler asks of a job: run it if it is enabled. The gateway declines.
-  expect(await admin.request("cron.run", { id: main.id, mode: "if-enabled" })).toMatchObject({
-    ok: true,
-    ran: false,
-    reason: "disabled",
+  test("F-201: Daily for Marlow is one config.patch that also keeps Juniper's check-ins, and once it says saved the gateway's config and jobs show both", async () => {
+    test.setTimeout(120_000);
+    await block("marlow")
+      .getByRole("button", { name: /^Change / })
+      .click();
+    await expect(page.getByTestId("catch-note")).toContainText(
+      "checks in now through the gateway's default",
+    );
+    await page.getByTestId("check-ins-dialog").getByRole("button", { name: "Cancel" }).click();
+    await onePatch(() => save("marlow", /^Daily/));
+    expect(await settings()).toEqual({ main: { every: "30m" }, marlow: { every: "24h" } });
+    expect(
+      (await jobs()).map(({ agentId, enabled, everyMs }) => [agentId, enabled, everyMs]),
+    ).toEqual([
+      ["main", true, 1_800_000],
+      ["marlow", true, 86_400_000],
+    ]);
+    await expect(block("marlow")).toContainText("Checks in daily");
+    await expect(block("main")).toContainText("Checks in every 30 minutes");
   });
-  await expect(block("main")).toContainText("No check-ins");
-  await expect(block("main")).toContainText("doesn't check in on a schedule.");
-  await expect(block("marlow")).toContainText("Checks in every 30 minutes");
-});
 
-test("F-201: closing the viewer or reconnecting before the patch sends nothing, and after it neither turns the outcome into a refusal", async () => {
-  test.setTimeout(120_000);
-  const instance = openInstance(INSTANCE);
-  const connection = readDevConnection(instance.connectionFile)!;
-  const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-check-in-viewers-"));
-  const node = createNodeHost({
-    dataDir,
-    client: {
-      displayName: "Clawtrate check-in viewers",
-      version: "0.0.0",
-      platform: process.platform,
-    },
+  test("F-201: As needed for Marlow is one config.patch of every 30m, and once it says saved its job is set to every 30 minutes", async () => {
+    test.setTimeout(120_000);
+    await onePatch(() => save("marlow", /^As needed/));
+    expect(await settings()).toEqual({ main: { every: "30m" }, marlow: { every: "30m" } });
+    expect(
+      (await jobs()).map(({ agentId, enabled, everyMs }) => [agentId, enabled, everyMs]),
+    ).toEqual([
+      ["main", true, 1_800_000],
+      ["marlow", true, 1_800_000],
+    ]);
+    await expect(block("marlow")).toContainText("Checks in every 30 minutes");
   });
-  let readsToHold = 0;
-  let release: (() => void) | undefined;
-  const client = new ClawtrateClient(
-    {
-      ...node,
-      createWebSocket(url) {
-        const socket = node.createWebSocket(url);
-        const send = socket.send.bind(socket);
-        socket.send = (data) => {
-          if (readsToHold > 0 && JSON.parse(data).method === "config.get" && --readsToHold === 0)
-            release = () => send(data);
-          else send(data);
-        };
-        return socket;
+
+  test("F-366: Off for Juniper is one config.patch of every 0m; its job stays, disabled, and the gateway declines to run it if enabled", async () => {
+    test.setTimeout(120_000);
+    await block("main")
+      .getByRole("button", { name: /^Change / })
+      .click();
+    await page.getByTestId("check-ins-dialog").getByRole("radio", { name: /^Off/ }).click();
+    await expect(page.getByTestId("off-note")).toContainText(
+      "still reports when a command it started in the background finishes",
+    );
+    await page.getByTestId("check-ins-dialog").getByRole("button", { name: "Cancel" }).click();
+    await onePatch(() => save("main", /^Off/));
+    expect(await settings()).toEqual({ main: { every: "0m" }, marlow: { every: "30m" } });
+    const main = (await jobs()).find((job) => job.agentId === "main")!;
+    expect(main.enabled).toBe(false);
+    // What the scheduler asks of a job: run it if it is enabled. The gateway declines.
+    expect(await admin.request("cron.run", { id: main.id, mode: "if-enabled" })).toMatchObject({
+      ok: true,
+      ran: false,
+      reason: "disabled",
+    });
+    await expect(block("main")).toContainText("No check-ins");
+    await expect(block("main")).toContainText("doesn't check in on a schedule.");
+    await expect(block("marlow")).toContainText("Checks in every 30 minutes");
+  });
+
+  test("F-201: closing the viewer or reconnecting before the patch sends nothing, and after it neither turns the outcome into a refusal", async () => {
+    test.setTimeout(120_000);
+    const instance = openInstance(INSTANCE);
+    const connection = readDevConnection(instance.connectionFile)!;
+    const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-check-in-viewers-"));
+    const node = createNodeHost({
+      dataDir,
+      client: {
+        displayName: "Clawtrate check-in viewers",
+        version: "0.0.0",
+        platform: process.platform,
       },
-    },
-    { allowGatewayUrl: (url) => url === connection.url },
-  );
-  const observer = createBridgeSession(client);
-  try {
-    await client.start();
-    await client.connect({ url: connection.url, token: connection.token });
-    await approve();
-    await expect.poll(() => client.state.connection.status, { timeout: 30_000 }).toBe("connected");
-    await observer.apply({ type: "requestAccess", tier: "admin" });
-    await approve();
-    await expect.poll(() => client.state.connection.canAdmin, { timeout: 30_000 }).toBe(true);
-    await expect.poll(() => client.state.discovery.status).toBe("ready");
-    expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
-    // Each draft is stamped by the latest read, as the dialog's is: a Disconnect moves the host
-    // to a new target, and a draft read before it is refused.
-    const draft = (saveId: string, every = "24h", was = "30m") => ({
-      type: "saveCheckIn" as const,
-      saveId,
-      botId: "marlow",
-      stamp: client.state.checkIns!.stamp!,
-      every,
-      prompt: null,
-      was: { every: was, prompt: null },
-      kept: [],
     });
-    const before = patches();
-
-    const first = createBridgeSession(client);
-    readsToHold = 1;
-    const unsent = first.apply(draft("unsent"));
-    await expect.poll(() => release !== undefined).toBe(true);
-    first.dispose();
-    release!();
-    await unsent;
-    expect(patches()).toBe(before);
-    expect(client.state.checkIns?.save).toMatchObject({
-      id: "unsent",
-      status: "failed",
-      error: "The request was withdrawn.",
-    });
-    expect(client.state.connection.status).toBe("connected");
-
-    const second = createBridgeSession(client);
-    release = undefined;
-    readsToHold = 2;
-    const sent = second.apply(draft("sent"));
-    await expect.poll(() => release !== undefined).toBe(true);
-    await expect.poll(patches).toBe(before + 1);
-    second.dispose();
-    expect(client.state.connection.status).toBe("connected");
-    release!();
-    await sent;
-    expect(client.state.checkIns?.save).toMatchObject({ id: "sent", status: "saved" });
-
-    // The same two moments, ended by a reconnect instead of a closed viewer.
-    const reconnect = async () => {
-      expect(client.state.checkIns?.stamp).toBeNull();
-      await observer.apply({ type: "retry" });
+    let readsToHold = 0;
+    let release: (() => void) | undefined;
+    const client = new ClawtrateClient(
+      {
+        ...node,
+        createWebSocket(url) {
+          const socket = node.createWebSocket(url);
+          const send = socket.send.bind(socket);
+          socket.send = (data) => {
+            if (readsToHold > 0 && JSON.parse(data).method === "config.get" && --readsToHold === 0)
+              release = () => send(data);
+            else send(data);
+          };
+          return socket;
+        },
+      },
+      { allowGatewayUrl: (url) => url === connection.url },
+    );
+    const observer = createBridgeSession(client);
+    try {
+      await client.start();
+      await client.connect({ url: connection.url, token: connection.token });
+      await approve();
       await expect
         .poll(() => client.state.connection.status, { timeout: 30_000 })
         .toBe("connected");
+      await observer.apply({ type: "requestAccess", tier: "admin" });
+      await approve();
+      await expect.poll(() => client.state.connection.canAdmin, { timeout: 30_000 }).toBe(true);
+      await expect.poll(() => client.state.discovery.status).toBe("ready");
       expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
-    };
-    const third = createBridgeSession(client);
-    release = undefined;
-    readsToHold = 1;
-    const cut = third.apply(draft("cut-unsent", "30m", "24h"));
-    await expect.poll(() => release !== undefined).toBe(true);
-    await observer.apply({ type: "suspend" });
-    await cut;
-    expect(client.state.checkIns?.save).toMatchObject({ id: "cut-unsent", status: "failed" });
-    await reconnect();
-    expect(patches()).toBe(before + 1);
+      // Each draft is stamped by the latest read, as the dialog's is: a Disconnect moves the host
+      // to a new target, and a draft read before it is refused.
+      const draft = (saveId: string, every = "24h", was = "30m") => ({
+        type: "saveCheckIn" as const,
+        saveId,
+        botId: "marlow",
+        stamp: client.state.checkIns!.stamp!,
+        every,
+        prompt: null,
+        was: { every: was, prompt: null },
+        kept: [],
+      });
+      const before = patches();
 
-    release = undefined;
-    readsToHold = 2;
-    const cutSent = third.apply(draft("cut-sent", "30m", "24h"));
-    await expect.poll(() => release !== undefined).toBe(true);
-    await expect.poll(patches).toBe(before + 2);
-    await observer.apply({ type: "suspend" });
-    await cutSent;
-    expect(client.state.checkIns?.save).toMatchObject({ id: "cut-sent", status: "unknown" });
-    await reconnect();
-    expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(
-      1_800_000,
+      const first = createBridgeSession(client);
+      readsToHold = 1;
+      const unsent = first.apply(draft("unsent"));
+      await expect.poll(() => release !== undefined).toBe(true);
+      first.dispose();
+      release!();
+      await unsent;
+      expect(patches()).toBe(before);
+      expect(client.state.checkIns?.save).toMatchObject({
+        id: "unsent",
+        status: "failed",
+        error: "The request was withdrawn.",
+      });
+      expect(client.state.connection.status).toBe("connected");
+
+      const second = createBridgeSession(client);
+      release = undefined;
+      readsToHold = 2;
+      const sent = second.apply(draft("sent"));
+      await expect.poll(() => release !== undefined).toBe(true);
+      await expect.poll(patches).toBe(before + 1);
+      second.dispose();
+      expect(client.state.connection.status).toBe("connected");
+      release!();
+      await sent;
+      expect(client.state.checkIns?.save).toMatchObject({ id: "sent", status: "saved" });
+
+      // The same two moments, ended by a reconnect instead of a closed viewer.
+      const reconnect = async () => {
+        expect(client.state.checkIns?.stamp).toBeNull();
+        await observer.apply({ type: "retry" });
+        await expect
+          .poll(() => client.state.connection.status, { timeout: 30_000 })
+          .toBe("connected");
+        expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
+      };
+      const third = createBridgeSession(client);
+      release = undefined;
+      readsToHold = 1;
+      const cut = third.apply(draft("cut-unsent", "30m", "24h"));
+      await expect.poll(() => release !== undefined).toBe(true);
+      await observer.apply({ type: "suspend" });
+      await cut;
+      expect(client.state.checkIns?.save).toMatchObject({ id: "cut-unsent", status: "failed" });
+      await reconnect();
+      expect(patches()).toBe(before + 1);
+
+      release = undefined;
+      readsToHold = 2;
+      const cutSent = third.apply(draft("cut-sent", "30m", "24h"));
+      await expect.poll(() => release !== undefined).toBe(true);
+      await expect.poll(patches).toBe(before + 2);
+      await observer.apply({ type: "suspend" });
+      await cutSent;
+      expect(client.state.checkIns?.save).toMatchObject({ id: "cut-sent", status: "unknown" });
+      await reconnect();
+      expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(
+        1_800_000,
+      );
+      expect(patches()).toBe(before + 2);
+      third.dispose();
+    } finally {
+      observer.dispose();
+      client.stop();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+}
+
+// The test of a gateway that keeps check-ins as routines.
+if (!HEARTBEATS) {
+  test("F-201: on an OpenClaw that keeps check-ins as routines, Check-ins say so for each bot, offer no change with admin, send no config.patch and lead to the bot's routines", async () => {
+    test.setTimeout(120_000);
+    const before = patches();
+    await openCheckIns();
+    for (const bot of ["main", "marlow", "otto", "pip"])
+      await expect(block(bot).getByTestId("check-in-text")).toContainText(
+        "This OpenClaw keeps check-ins as routines.",
+      );
+    await expect(page.getByText("No check-ins")).toHaveCount(0);
+    // Below admin nothing asks for admin here: admin can't change them either.
+    await expect(page.getByTestId("admin-bar")).toHaveCount(0);
+    // With admin, granted where something can change, nothing here can change them.
+    const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+    await settingsDialog.getByRole("button", { name: "Accounts", exact: true }).click();
+    await page
+      .getByTestId("admin-bar")
+      .getByRole("button", { name: "Request admin access" })
+      .click();
+    await approve();
+    await expect(page.getByTestId("admin-bar")).toContainText("Admin access granted.", {
+      timeout: 30_000,
+    });
+    await settingsDialog.getByRole("button", { name: "Check-ins", exact: true }).click();
+    await expect(block("marlow").getByTestId("check-in-text")).toContainText(
+      "This OpenClaw keeps check-ins as routines.",
     );
-    expect(patches()).toBe(before + 2);
-    third.dispose();
-  } finally {
-    observer.dispose();
-    client.stop();
-    rmSync(dataDir, { recursive: true, force: true });
-  }
-});
+    await expect(page.getByRole("button", { name: /^Change .*'s check-ins$/ })).toHaveCount(0);
+    await block("marlow").getByRole("button", { name: "Marlow's routines" }).click();
+    await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+    await expect(
+      page.getByTestId("routines-view").getByRole("combobox", { name: "Bots" }),
+    ).toHaveValue("marlow");
+    expect(patches()).toBe(before);
+  });
+}

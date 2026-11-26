@@ -493,6 +493,7 @@ export function BotSettings({
                 provider={provider}
                 anyAccount={binding.mode !== "account"}
                 update={connection.openclawUpdate}
+                announce={announce}
                 model={model}
                 list={mainModels}
                 effort={effortFor(rowFor(accounts, provider, model, mainModels), binding.effort)}
@@ -700,6 +701,7 @@ export function BotSettings({
               accounts={accounts}
               provider={targetProvider}
               update={connection.openclawUpdate}
+              announce={announce}
               model={pickModel}
               list={changeModels}
               effort={effort}

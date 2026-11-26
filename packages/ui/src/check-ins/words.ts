@@ -13,6 +13,9 @@ import {
 
 export type Choice = "off" | "daily" | "asneeded" | "every";
 
+/** A block's sentence on a gateway that keeps check-ins as routines (`CheckInsState.model`). */
+export const AS_ROUTINES = "This OpenClaw keeps check-ins as routines.";
+
 const DAY = 86_400_000;
 const AS_NEEDED = 1_800_000;
 

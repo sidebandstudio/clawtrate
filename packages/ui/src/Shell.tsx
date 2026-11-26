@@ -14,7 +14,15 @@ import {
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
@@ -91,6 +99,7 @@ export function Shell({
   railTop,
   onOpenSettings,
   inert = false,
+  routinesLinkRef,
 }: {
   state: ClawtrateState;
   info: HostInfo;
@@ -104,6 +113,8 @@ export function Shell({
   onOpenSettings: (section?: SettingsSection) => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
+  /** Set to what opens a bot's routines, for Settings, which is outside the shell. */
+  routinesLinkRef?: RefObject<((botId: string) => void) | null>;
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
@@ -519,13 +530,31 @@ export function Shell({
     setRoutines(nav);
     setView("detail");
   };
+  useEffect(() => {
+    if (!routinesLinkRef) return;
+    // openRoutines is redefined each render and reads only refs and setters.
+    routinesLinkRef.current = (botId) => openRoutines({ ...ROUTINES_HOME, bot: botId });
+    return () => {
+      routinesLinkRef.current = null;
+    };
+  });
   const closeRoutines = () => {
     setRoutines(null);
     if (onePane) setView("list");
     const opener = routinesOpener.current;
     routinesOpener.current = null;
     requestAnimationFrame(() => {
-      if (canFocus(opener)) opener.focus();
+      if (canFocus(opener)) return opener.focus();
+      // What opened it is gone (Settings' link to a bot's routines closed with Settings): a
+      // live control of the shell, the rail's Routines button first.
+      const shell = shellRef.current;
+      [
+        shell?.querySelector<HTMLElement>('.rail button[aria-label="Routines"]') ?? null,
+        mainRef.current?.querySelector<HTMLElement>(".conversation h1") ?? null,
+        mainRef.current?.querySelector<HTMLElement>(".composer-input") ?? null,
+      ]
+        .find(canFocus)
+        ?.focus();
     });
   };
   const backToList = useCallback(() => {
