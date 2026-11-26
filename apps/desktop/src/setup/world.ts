@@ -13,6 +13,12 @@ import type { SetupRefusal } from "@clawtrate/core";
 
 /** OpenClaw's default gateway port. A sandboxed run never uses it. */
 export const OPENCLAW_DEFAULT_PORT = 18789;
+/**
+ * The `clawtrate` profile's default port, OpenClaw's `20000 + FNV-1a("clawtrate") % 40000`
+ * (`resolveGatewayPort`, `<openclaw>/dist/paths-BP0DYpE8.mjs` lines 214-224). Local connect
+ * in a sandbox never dials it either.
+ */
+export const CLAWTRATE_PROFILE_DEFAULT_PORT = 22768;
 
 /** The system's own program folders, the start of every program's PATH. */
 const SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
@@ -173,6 +179,37 @@ export function mustSandbox(options: {
     !options.packaged ||
     SANDBOX_MARKERS.some((key) => Object.hasOwn(options.env, key)) ||
     SANDBOX_SWITCHES.some((name) => options.switches(name))
+  );
+}
+
+/**
+ * Whether this process is a packaged app's: Electron's main process, not
+ * started as Electron's default app with a folder to run (`electron .`, as a
+ * development build is). Node, a test runner and the web host never are.
+ */
+export function packagedApp(
+  proc: { versions: { electron?: string }; defaultApp?: boolean } = process,
+): boolean {
+  return typeof proc.versions.electron === "string" && proc.defaultApp !== true;
+}
+
+/**
+ * Whether this process is a person's own launch: a packaged app's (`packagedApp`), with no
+ * sandbox marker variable and no switch that marks a driven app, as `mustSandbox` decides
+ * from the same lists. The home rule and local connect's ports both follow it, whatever a
+ * caller's options say.
+ */
+export function personsLaunch(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+  packaged: () => boolean = packagedApp,
+): boolean {
+  return (
+    packaged() &&
+    !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key)) &&
+    !SANDBOX_SWITCHES.some((name) =>
+      argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`)),
+    )
   );
 }
 
