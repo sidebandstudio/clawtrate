@@ -203,7 +203,7 @@ describe.skipIf(!mac)(
     timeout: 120_000,
   },
   () => {
-    it("is one click: no dialog, the six on a proved socket, the token read afresh, and nothing of it kept", async () => {
+    it("F-602: is one click: no dialog, the six on a proved socket, the token read afresh, and nothing of it kept", async () => {
       const home = newHome();
       const gateway = silentGateway();
       const server = await bridged(gateway);
@@ -220,8 +220,8 @@ describe.skipIf(!mac)(
       const drops = vi.spyOn(HeldToken.prototype, "drop");
       try {
         await client.start({ resume: false });
-        await setup.look();
-        expect(setup.current.phase).toBe("found");
+        await setup.lookAtStart();
+        expect(setup.current).toMatchObject({ phase: "found", unasked: true });
         expect(setup.current.look).toMatchObject({ outcome: "running", port: server.port });
         // The look kept nothing of the token: not in what the interface sees, not in a holder.
         expect(JSON.stringify(setup.current)).not.toContain("token-as-the-look-read-it");
@@ -268,7 +268,7 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("without secure storage, the same Connect asks for read only", async () => {
+    it("F-602: without secure storage, the same Connect asks for read only", async () => {
       const home = newHome();
       const gateway = silentGateway();
       const server = await bridged(gateway);
@@ -284,7 +284,7 @@ describe.skipIf(!mac)(
       const { client, setup } = localApp(local, { secure: false });
       try {
         await client.start({ resume: false });
-        await setup.look();
+        await setup.lookAtStart();
         await setup.connect();
         await until(() => setup.current.phase === "done", 60_000);
         expect((gateway.connects[0] as { scopes: string[] }).scopes).toEqual(["operator.read"]);
@@ -295,7 +295,7 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("sends nothing when the settings name another port than the look found", async () => {
+    it("F-602: sends nothing when the settings name another port than the look found", async () => {
       const home = newHome();
       const gateway = silentGateway();
       const server = await bridged(gateway);
@@ -311,7 +311,7 @@ describe.skipIf(!mac)(
       const { client, setup } = localApp(local);
       try {
         await client.start({ resume: false });
-        await setup.look();
+        await setup.lookAtStart();
         settingsFile(home, ".openclaw", tokenSettings(server.port + 1, "a-gateway-token"));
         await setup.connect();
         expect(setup.current).toMatchObject({ phase: "failed", failure: { kind: "changed" } });
@@ -323,7 +323,7 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("ends the attempt with nothing sent when a socket isn't proved at its dial", async () => {
+    it("F-602: ends the attempt with nothing sent when a socket isn't proved at its dial", async () => {
       const home = newHome();
       const gateway = silentGateway();
       const server = await bridged(gateway);
@@ -339,7 +339,7 @@ describe.skipIf(!mac)(
       const { client, setup, lines } = localApp(local);
       try {
         await client.start({ resume: false });
-        await setup.look();
+        await setup.lookAtStart();
         // Something else holds the port by Connect: the proof refuses it.
         proofFile(home, ".openclaw", "refused lock\n");
         await setup.connect();
@@ -358,7 +358,7 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("sends no credential when a socket proved at its dial isn't proved again before it", async () => {
+    it("F-602: sends no credential when a socket proved at its dial isn't proved again before it", async () => {
       const home = newHome();
       const gateway = silentGateway();
       const server = await bridged(gateway);
@@ -374,7 +374,7 @@ describe.skipIf(!mac)(
       const { client, setup } = localApp(local);
       try {
         await client.start({ resume: false });
-        await setup.look();
+        await setup.lookAtStart();
         // The dial's proof passes once; the one just before the credential refuses.
         proofFile(home, ".openclaw", "refused named\n");
         proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", server.port), true);
@@ -391,7 +391,7 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("says what the look found, and offers only a gateway it proved", async () => {
+    it("F-602: says what the look found, and offers only a gateway it proved", async () => {
       const listening = await bridged(silentGateway());
       const stopped = await freePort();
       const cases: Array<{
@@ -461,7 +461,7 @@ describe.skipIf(!mac)(
           if (entry.proof) proofFile(home, entry.folder ?? ".openclaw", entry.proof(home));
           const { client, setup } = localApp(local);
           try {
-            await setup.look();
+            await setup.lookAtStart();
             const label = JSON.stringify(entry.look);
             expect(setup.current.phase, label).toBe("found");
             expect(setup.current.look, label).toMatchObject(entry.look);
@@ -477,7 +477,7 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("reads nothing in a home that isn't a private folder of the run's own", async () => {
+    it("F-602: reads nothing in a home that isn't a private folder of the run's own", async () => {
       const dir = newHome();
       // A development run that names a home outside the system's temporary root: refused before
       // anything is opened, and the helper never runs.
@@ -489,7 +489,7 @@ describe.skipIf(!mac)(
       };
       const { client, setup } = localApp(local);
       try {
-        await setup.look();
+        await setup.lookAtStart();
         expect(setup.current).toMatchObject({
           phase: "failed",
           failure: { kind: "refused", reason: "home" },
@@ -508,7 +508,7 @@ describe.skipIf(!mac)(
     timeout: 120_000,
   },
   () => {
-    it("F-492: a same-account listener at the settings' port gets no byte, and Connect isn't offered", async () => {
+    it("F-492, F-602: a same-account listener at the settings' port gets no byte, and Connect isn't offered", async () => {
       let bytes = 0;
       let accepted = 0;
       const listener = createServer((socket) => {
@@ -526,7 +526,7 @@ describe.skipIf(!mac)(
       });
       const { client, setup, lines } = localApp({ home, helper, platform, sandboxed: true });
       try {
-        await setup.look();
+        await setup.lookAtStart();
         expect(setup.current.look).toMatchObject({ outcome: "unverified", port });
         expect(accepted).toBe(1);
         expect(bytes).toBe(0);
@@ -558,7 +558,7 @@ describe.skipIf(!BIN || !mac)(
       return (rows ?? []).filter((row) => row.deviceId === deviceId);
     };
 
-    it("one click: paired with all six and no approval; sending, a new bot and the devices ask nothing more", async () => {
+    it("F-602: one click: paired with all six and no approval; sending, a new bot and the devices ask nothing more", async () => {
       const { client, setup, dialog } = localApp({
         home: gateway.home,
         helper,
@@ -567,7 +567,7 @@ describe.skipIf(!BIN || !mac)(
       });
       try {
         await client.start({ resume: false });
-        await setup.look();
+        await setup.lookAtStart();
         expect(setup.current.look).toMatchObject({ outcome: "running", port: gateway.port });
         await setup.connect();
         await until(() => setup.current.phase === "done", 120_000);
@@ -609,7 +609,7 @@ describe.skipIf(!BIN || !mac)(
       }
     });
 
-    it("F-492: a program of the test's own in front of the gateway gets no byte, and Connect isn't offered", async () => {
+    it("F-492, F-602: a program of the test's own in front of the gateway gets no byte, and Connect isn't offered", async () => {
       // A home whose settings name the program's port, with the gateway's own token.
       const port = await freePort();
       const proxy = await standIn(port, gateway.port);
@@ -625,7 +625,7 @@ describe.skipIf(!BIN || !mac)(
       );
       const { client, setup } = localApp({ home, helper, platform, sandboxed: true });
       try {
-        await setup.look();
+        await setup.lookAtStart();
         expect(setup.current.look).toMatchObject({ outcome: "unverified", port });
         expect(proxy.accepted()).toBe(1);
         expect(proxy.bytes()).toBe(0);
@@ -649,11 +649,11 @@ describe.skipIf(!BIN || !mac)(
       await gateway?.remove();
     });
 
-    it("waits on the pairing screen for one approval, for all six, then is connected", async () => {
+    it("F-602: waits on the pairing screen for one approval, for all six, then is connected", async () => {
       const { client, setup } = localApp({ home: gateway.home, helper, platform, sandboxed: true });
       try {
         await client.start({ resume: false });
-        await setup.look();
+        await setup.lookAtStart();
         await setup.connect();
         await until(() => client.state.connection.pairing !== null, 120_000);
         const { requestId, requestedScopes } = client.state.connection.pairing!;

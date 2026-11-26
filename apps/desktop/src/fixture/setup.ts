@@ -25,6 +25,9 @@ const running: SetupLook = {
   others: [],
 };
 
+/** What local connect's look reports: no program, version or service, only the profile and port. */
+const localLook: Partial<SetupLook> = { version: null, listens: null, service: null };
+
 const looked = (look: Partial<SetupLook>): SetupState => ({
   ...initialSetupState,
   phase: "found",
@@ -98,19 +101,37 @@ export const SETUP_STATES: Record<string, SetupState> = {
     version: "2026.10.6",
   }),
   "code-failed-shape": failed("code-failed", { exitCode: 0 }),
+  // A person's Mac app, with local connect (setup-effortless.md §3): `local-` scenes.
+  "local-first": { ...looked({ ...localLook }), unasked: true },
+  "local-unverified": looked({ ...localLook, outcome: "unverified", access: null }),
+  "local-failed": {
+    ...looked({ ...localLook }),
+    phase: "failed",
+    failure: { kind: "unverified", exitCode: null, port: 18789, reason: null },
+  },
 };
 
 export function isSetupState(name: string | null): name is string {
   return name !== null && Object.hasOwn(SETUP_STATES, name);
 }
 
-/** The desktop host, offering setup; `windows` is the same app on Windows. */
+/**
+ * The desktop host, offering setup; `windows` is the same app on Windows. A `local-` scene is a
+ * person's Mac app, with local connect and the Keychain, so a new pairing asks for full control.
+ */
 export function setupInfo(info: HostInfo, name: string): HostInfo {
+  const local = name.startsWith("local-");
   return {
     ...info,
     kind: "desktop",
     devGateway: null,
-    setup: { look: true, pair: true, platform: name === "windows" ? "win32" : "darwin" },
+    ...(local ? { fullControl: true } : {}),
+    setup: {
+      look: true,
+      pair: true,
+      platform: name === "windows" ? "win32" : "darwin",
+      ...(local ? { local: true } : {}),
+    },
   };
 }
 
@@ -152,7 +173,7 @@ export function setupCommand(
       return true;
     }
     case "setupConnect": {
-      setup({ ...current(), phase: "connecting", step: 0, failure: null });
+      setup({ ...current(), phase: "connecting", step: 0, failure: null, unasked: false });
       after(300, () => current().phase === "connecting" && setup({ ...current(), step: 1 }));
       after(600, () => current().phase === "connecting" && setup({ ...current(), step: 2 }));
       after(900, () => {

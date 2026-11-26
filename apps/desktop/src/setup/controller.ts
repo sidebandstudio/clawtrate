@@ -69,8 +69,8 @@ export type SetupControllerOptions = {
    * Local connect (docs/design/setup-effortless.md §3), with the settings
    * reader's parse worker: the look reads OpenClaw's settings, and every socket
    * of a setup connection is dialled by the host and its far end proved, before
-   * its first byte and again before its credential. No shipped host turns it
-   * on yet (`localConnectFor`).
+   * its first byte and again before its credential. Only a person's packaged
+   * Mac app turns it on (`localConnectFor`).
    */
   localConnect?: LocalConnect & { worker: URL };
 };
@@ -117,6 +117,8 @@ export class SetupController implements SetupHost {
   private found: FoundGateway | null = null;
   /** With local connect: what its look found. */
   private localFound: LocalFound | null = null;
+  /** The next look is the host's own, at start (`lookAtStart`). */
+  private unasked = false;
   /** The connection this setup attempt opened, by attempt and address: the only one Back closes. */
   private owned: Owned | null = null;
   /** Closing `owned`, while that is under way: one at a time, for that owner only. */
@@ -265,9 +267,22 @@ export class SetupController implements SetupHost {
     });
   }
 
+  /**
+   * The look the host starts by itself, before the person chooses anything: with local connect
+   * only, whose look reads files and proves a socket and sends nothing. Its result is shown on
+   * the first screen (`SetupState.unasked`).
+   */
+  async lookAtStart(): Promise<void> {
+    if (!this.options.localConnect || this.state.phase !== "idle") return;
+    this.unasked = true;
+    await this.look();
+  }
+
   /** The look with local connect: OpenClaw's settings and one proved socket, nothing sent. */
   private async lookLocally(local: LocalConnect & { worker: URL }, attempt: number): Promise<void> {
-    this.publish({ ...initialSetupState, phase: "looking" });
+    const unasked = this.unasked;
+    this.unasked = false;
+    this.publish({ ...initialSetupState, phase: "looking", unasked });
     let report;
     try {
       report = await lookLocally(
@@ -292,6 +307,7 @@ export class SetupController implements SetupHost {
     this.publish({
       ...initialSetupState,
       phase: "found",
+      unasked,
       look: access ? { ...report.look, access } : report.look,
     });
   }
@@ -595,7 +611,7 @@ export class SetupController implements SetupHost {
     const at = this.now();
     const current = () => attempt === this.attempt;
     const consent = () => current() && this.now() - at <= OPERATION_LIFETIME_MS;
-    this.publish({ ...this.state, phase: "connecting", step: 0, failure: null });
+    this.publish({ ...this.state, phase: "connecting", step: 0, failure: null, unasked: false });
     let token: HeldToken | null = null;
     try {
       token = await readToken(local, local.worker, found);

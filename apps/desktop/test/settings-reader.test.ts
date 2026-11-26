@@ -1033,9 +1033,10 @@ it("a shipped host reaches the reader only through local connect: its look, its 
     );
   });
   // The proof holds the home and runs the helper as the reader does; the look reads settings,
-  // and Connect holds the token it found: local connect, which no shipped host turns on yet
-  // (local-connect.test.ts).
+  // and Connect holds the token it found; the main process names the parse worker's bundled copy
+  // for local connect, which only a person's packaged Mac app turns on (local-connect.test.ts).
   expect(importers.map((file) => relative(ROOT, file).split(sep).join("/")).sort()).toEqual([
+    "apps/desktop/src/main/index.ts",
     "apps/desktop/src/setup/controller.ts",
     "apps/desktop/src/setup/local-look.ts",
     "apps/desktop/src/setup/local-prove.ts",

@@ -606,9 +606,11 @@ export function ConnectScreen({
   const loadingBots = connection.status === "connected" && discovery.status === "loading";
   const settingUp = loadingBots || connection.status === "connecting";
   // The first question, when the host offers setup and no gateway is saved (docs/design/setup.md §3).
-  // A setup the host has under way (another window, or a reload) opens where it stands.
+  // A setup the host has under way (another window, or a reload) opens where it stands; a look the
+  // host started by itself (local connect, at start) opens on the first screen, which offers a
+  // gateway it found and proved.
   const [view, setView] = useState<SetupView>(() =>
-    setup && setup.phase !== "idle" ? "here" : "first",
+    setup && setup.phase !== "idle" && !setup.unasked ? "here" : "first",
   );
   const setupOwns =
     setup !== undefined &&

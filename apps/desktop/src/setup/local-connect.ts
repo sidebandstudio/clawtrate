@@ -9,8 +9,8 @@
 // `provedRouteFor` gives the client its sockets after setup, and after a
 // restart, the same way.
 //
-// No shipped host turns it on yet. When one does, a person's packaged app gets
-// the account's own home; every other run has no default home
+// Only a person's packaged Mac app turns it on (apps/desktop/src/main/index.ts),
+// with the account's own home. Every other run has no default home
 // (`localConnectFor`).
 
 import { connect as dial, type Socket } from "node:net";

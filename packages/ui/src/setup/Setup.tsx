@@ -17,6 +17,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
 import { CommandLine, PRODUCT_NAME, SLOGAN } from "../ConnectScreen.tsx";
+import { FullControlConsent } from "../FullControl.tsx";
 import {
   BackIcon,
   CheckIcon,
@@ -279,6 +280,46 @@ const CONNECT_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
   paired: "This device has a saved pairing for this address. Clawtrate asks for read access.",
 };
 
+/**
+ * With local connect: what Connect does, where this device can't hold full control, or is
+ * already paired there. Where it can, the consent line above Connect says it instead.
+ */
+const LOCAL_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
+  new: "Clawtrate asks for read access. OpenClaw may ask its owner to approve this device.",
+  paired: "This device is already paired with it. Clawtrate connects with that pairing.",
+};
+
+/**
+ * This computer's gateway, proved by the host (local connect): Connect is the one step, with
+ * the consent line above it where this device asks for full control.
+ */
+function LocalConnect({
+  look,
+  full,
+  onConnect,
+}: {
+  look: SetupLook;
+  full: boolean;
+  /** Called as Connect is pressed, before the host is asked. */
+  onConnect?: () => void;
+}) {
+  const send = useCommand();
+  const asksFull = full && look.access !== "paired";
+  const connect = () => {
+    onConnect?.();
+    void send({ type: "setupConnect" });
+  };
+  return (
+    <>
+      {asksFull && <FullControlConsent />}
+      <Actions>
+        <Primary onClick={connect}>Connect</Primary>
+      </Actions>
+      {!asksFull && <Hint>{LOCAL_HINT[look.access ?? "new"]}</Hint>}
+    </>
+  );
+}
+
 /** Other services and profiles the look saw: named, never used. */
 function Others({ others, onAdvanced }: { others: string[]; onAdvanced: () => void }) {
   if (others.length === 0) return null;
@@ -318,18 +359,27 @@ function LookResult({
   onAdvanced,
   onAnother,
   confirming,
+  full,
 }: {
   look: SetupLook;
   offer: NonNullable<HostInfo["setup"]>;
   onAdvanced: () => void;
   onAnother: () => void;
   confirming: boolean;
+  /** This device asks for full control at a new pairing (`HostInfo.fullControl`). */
+  full: boolean;
 }) {
   const send = useCommand();
   const lookAgain = () => void send({ type: "setupLook" });
   const advanced = <Primary onClick={onAdvanced}>Use Advanced</Primary>;
   switch (look.outcome) {
     case "running":
+      if (offer.local)
+        return (
+          <Found mark={<CheckIcon />} tone="ok" heading="OpenClaw is running on this Mac">
+            <LocalConnect look={look} full={full} />
+          </Found>
+        );
       return (
         <Found
           mark={<CheckIcon />}
@@ -619,8 +669,20 @@ const REFUSED: Record<SetupRefusal, string> = {
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
 const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it's OpenClaw on this Mac"];
 
+/** The look's result the first screen offers by itself: this computer's gateway, proved. */
+const offeredHere = (offer: NonNullable<HostInfo["setup"]>, setup: SetupState) =>
+  offer.local === true &&
+  setup.unasked &&
+  setup.phase === "found" &&
+  setup.look?.outcome === "running";
+
 /** A screen's identity, so that a new one takes focus and is announced. */
-function screenKey(view: SetupView, setup: SetupState): string {
+function screenKey(
+  view: SetupView,
+  setup: SetupState,
+  offer: NonNullable<HostInfo["setup"]>,
+): string {
+  if (view === "first" && offeredHere(offer, setup)) return "first:found";
   if (view !== "here") return view;
   return `${setup.phase}:${setup.look?.outcome ?? ""}:${setup.failure?.kind ?? ""}`;
 }
@@ -642,7 +704,7 @@ export function SetupFlow({
   const offer = info.setup!;
   const root = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");
-  const key = screenKey(view, setup);
+  const key = screenKey(view, setup, offer);
   const shown = useRef<string | null>(null);
   useEffect(() => {
     const first = shown.current === null;
@@ -689,7 +751,15 @@ export function SetupFlow({
 
   let body: ReactNode;
   if (view === "first") {
-    body = (
+    body = offeredHere(offer, setup) ? (
+      <FoundHere
+        look={setup.look!}
+        full={info.fullControl === true}
+        onConnect={() => onView("here")}
+        onAnother={another}
+        onAdvanced={advanced}
+      />
+    ) : (
       <FirstScreen offer={offer} onThis={lookHere} onAnother={another} onAdvanced={advanced} />
     );
   } else if (view === "another") {
@@ -797,6 +867,7 @@ export function SetupFlow({
           onAdvanced={advanced}
           onAnother={another}
           confirming={setup.phase === "confirming"}
+          full={info.fullControl === true}
         />
         <Others others={look.others} onAdvanced={advanced} />
       </>
@@ -809,6 +880,43 @@ export function SetupFlow({
         {announced}
       </p>
     </div>
+  );
+}
+
+/**
+ * The first screen when the host's own look found OpenClaw running on this Mac and proved it
+ * (local connect): that gateway first, with Connect, and the other ways below it.
+ */
+function FoundHere({
+  look,
+  full,
+  onConnect,
+  onAnother,
+  onAdvanced,
+}: {
+  look: SetupLook;
+  full: boolean;
+  onConnect: () => void;
+  onAnother: () => void;
+  onAdvanced: () => void;
+}) {
+  return (
+    <>
+      <header className="connect-brand">
+        <img src={logoUrl} alt="" width={56} height={56} />
+        <h1>{PRODUCT_NAME}</h1>
+        <p>{SLOGAN}</p>
+      </header>
+      <h2 className="s-title s-question" id="setup-title" tabIndex={-1} data-s-title>
+        OpenClaw is running on this Mac
+      </h2>
+      {/* Connect goes on to its steps on the screen for this computer. */}
+      <LocalConnect look={look} full={full} onConnect={onConnect} />
+      <p className="s-links">
+        <SmallLink onClick={onAnother}>Another computer</SmallLink>
+        <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
+      </p>
+    </>
   );
 }
 

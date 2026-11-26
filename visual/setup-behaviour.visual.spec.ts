@@ -424,3 +424,50 @@ test("F-493: from the keyboard, Advanced puts focus in the address field, and Ba
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeFocused();
 });
+
+test("F-602: on a Mac whose OpenClaw the host proved, the first screen offers it first: one Connect, nothing to type", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-first", "light");
+  const title = page.getByRole("heading", { name: "OpenClaw is running on this Mac" });
+  await expect(title).toBeVisible();
+  await expect(page.locator("[aria-live=polite]").last()).toHaveText(
+    "OpenClaw is running on this Mac",
+  );
+  await expect(page.getByTestId("full-control-consent")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toHaveCount(0);
+  await expect(page.locator("input")).toHaveCount(0);
+  await expect(page.getByText(/ws:\/\/|18789|openclaw devices|read-only/)).toHaveCount(0);
+  // From the keyboard: what full control means, Connect, then the other ways.
+  await title.focus();
+  for (const name of ["What this means", "Connect", "Another computer", "Advanced"]) {
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name, exact: true })).toBeFocused();
+  }
+  await page.getByRole("button", { name: "What this means" }).click();
+  expect(await sent(page)).toEqual([]);
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  expect(await sent(page)).toEqual(["setupConnect"]);
+  await expect(page.getByRole("heading", { name: "Connecting" })).toBeFocused();
+  await expect(page.getByRole("list", { name: "Steps" }).getByRole("listitem")).toHaveText([
+    "Checking it's OpenClaw on this Mac",
+    "Pairing this Mac",
+    "Loading your bots",
+  ]);
+  await expect(page.getByTestId("bot-list")).toBeVisible();
+});
+
+test("F-602: a gateway local connect couldn't prove isn't offered: it says so, with Advanced and Look again", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-unverified", "light");
+  await expect(page.getByRole("heading", { name: "OpenClaw settings found" })).toBeVisible();
+  await expect(
+    page.getByText(
+      "Clawtrate couldn't verify what is listening at port 18789, so it doesn't connect to it by itself. Use Advanced, or look again.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Use Advanced" }).click();
+  await expect(page.getByPlaceholder("Gateway address")).toBeFocused();
+});

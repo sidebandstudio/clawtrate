@@ -348,7 +348,7 @@ it("the check finds the builder however a host takes it", () => {
     expect(localConnectUses("host.ts", text).join("\n"), text).toContain(`host.ts ${kind} `);
 });
 
-it("no shipped host turns local connect on", () => {
+it("only a person's packaged Mac app turns local connect on", () => {
   const shipped = [
     "apps/desktop/src",
     "apps/mobile/src",
@@ -362,12 +362,31 @@ it("no shipped host turns local connect on", () => {
   const found = shipped.flatMap((file) =>
     localConnectUses(relative(ROOT, file).split(sep).join("/"), readFileSync(file, "utf8")),
   );
-  // Each option's declaration and its reads; nothing sets either, or calls the builder.
-  expect(found.sort()).toEqual([
-    "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect & { worker: URL };",
-    "apps/desktop/src/setup/controller.ts read this.options.localConnect",
-    "apps/desktop/src/setup/controller.ts read this.options.localConnect",
-    "packages/core/src/client.ts PropertySignature localConnect?: (url: string, route: string) => ProvedRoute | null;",
-    "packages/core/src/client.ts read this.options.localConnect",
-  ]);
+  // Each option's declaration and its reads, and the main process's one builder call, which
+  // is a person's packaged Mac app's only (index.ts `LOCAL_CONNECT`).
+  expect(found.sort()).toMatchInlineSnapshot(`
+    [
+      "apps/desktop/src/host/runtime.ts PropertyAssignment localConnect: options.localConnect",
+      "apps/desktop/src/host/runtime.ts PropertySignature localConnect?: ClientOptions["localConnect"];",
+      "apps/desktop/src/host/runtime.ts read options.localConnect",
+      "apps/desktop/src/host/runtime.ts read options.localConnect",
+      "apps/desktop/src/host/runtime.ts string "localConnect"",
+      "apps/desktop/src/main/index.ts PropertyAssignment localConnect: provedRouteFor(LOCAL_CONNECT, (why) => console.log(\`[setup] couldn't verify what is listening (\${why})\`), )",
+      "apps/desktop/src/main/index.ts PropertyAssignment localConnect: { ...LOCAL_CONNECT, worker: new URL("./settings-parse.js", import.meta.url), }",
+      "apps/desktop/src/main/index.ts builder localConnectFor",
+      "apps/desktop/src/main/index.ts call localConnectFor( { packaged: app.isPackaged, env: process.env, switches: hasSwitch }, { // packaging/config.ts \`LOCAL_GATEWAY_HELPER\`, built and signed with the app. helper: join(process.resourcesPath, "..", "Helpers", "ClawtrateLocalGateway"), platform: process.platform, }, )",
+      "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect & { worker: URL };",
+      "apps/desktop/src/setup/controller.ts read this.options.localConnect",
+      "apps/desktop/src/setup/controller.ts read this.options.localConnect",
+      "apps/desktop/src/setup/controller.ts read this.options.localConnect",
+      "packages/core/src/client.ts PropertySignature localConnect?: (url: string, route: string) => ProvedRoute | null;",
+      "packages/core/src/client.ts read this.options.localConnect",
+    ]
+  `);
+  // That one call is made only for a launch resolved as a person's own, on macOS, with the
+  // Keychain; every other launch's LOCAL_CONNECT is null.
+  const main = readFileSync(join(ROOT, "apps/desktop/src/main/index.ts"), "utf8");
+  expect(main).toMatch(
+    /const LOCAL_CONNECT =\s+SETUP\.kind === "production" &&\s+process\.platform === "darwin" &&\s+usesSecureStorage\(.*\)\)\s+\? localConnectFor\(/,
+  );
 });
