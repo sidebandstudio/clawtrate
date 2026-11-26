@@ -197,8 +197,8 @@ function npmPack(
 
 /**
  * The files a `files` list names in `dir`, as paths relative to it: each file,
- * and every file under each folder. Fails on a missing entry, a link, or a
- * name starting with a dot.
+ * and every file under each folder. Fails on a missing entry, a link
+ * anywhere on an entry's path, or a name starting with a dot.
  */
 export function listedFiles(dir: string, entries: string[]): string[] {
   const found: string[] = [];
@@ -215,7 +215,17 @@ export function listedFiles(dir: string, entries: string[]): string[] {
       if (!found.includes(path)) found.push(path);
     } else throw new Error(`${path} is neither a file nor a folder.`);
   };
-  for (const entry of entries) visit(entry.replace(/\/$/, ""));
+  for (const entry of entries) {
+    const path = entry.replace(/\/$/, "");
+    // A link in a parent folder would pull in files from elsewhere, too.
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join("/");
+      if (lstatSync(join(dir, parent), { throwIfNoEntry: false })?.isSymbolicLink())
+        throw new Error(`${parent} is a link, which isn't packed.`);
+    }
+    visit(path);
+  }
   return found;
 }
 

@@ -6,6 +6,7 @@ import {
   cpSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -165,6 +166,20 @@ describe("packing the plugin", { timeout: 60_000 }, () => {
     const linked = pluginCopy();
     symlinkSync(join(linked, "index.js"), join(linked, "lib/link.js"));
     expect(() => packPlugin(linked, temp(), LICENSE)).toThrow("lib/link.js is a link");
+  });
+
+  it("fails on a link in a folder above a listed file", () => {
+    const copy = pluginCopy();
+    renameSync(join(copy, "lib"), join(copy, "real-lib"));
+    symlinkSync(join(copy, "real-lib"), join(copy, "lib"));
+    writeFileSync(
+      join(copy, "package.json"),
+      JSON.stringify({
+        ...IN_REPO,
+        files: ["index.js", "lib/bots.js", "openclaw.plugin.json"],
+      }),
+    );
+    expect(() => packPlugin(copy, temp(), LICENSE)).toThrow("lib is a link");
   });
 
   it("fails when npm packs a file that isn't expected", () => {
