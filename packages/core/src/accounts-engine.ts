@@ -547,34 +547,40 @@ export class AccountsEngine {
     try {
       // The config says whether the gateway declares the provider's models, and which models
       // its list for bots names; asked first, as the picker is never asked beside it.
-      if (left() <= 0) return late;
+      // Each request reads the time left once, both to decide whether to ask and as its timeout,
+      // so none is sent once the deadline has passed.
+      let ms = left();
+      if (ms <= 0) return late;
       // A config read given up on was given the time left, so the deadline has passed, though
       // the wall clock may read a millisecond or more earlier than the request's timer.
       let timedOut = false;
-      config = await ctx
-        .request("config.get", {}, { timeoutMs: left() })
-        .then(asRecord, (error) => {
-          timedOut = error instanceof GatewayProtocolRequestTimeoutError;
-          return null;
-        });
+      config = await ctx.request("config.get", {}, { timeoutMs: ms }).then(asRecord, (error) => {
+        timedOut = error instanceof GatewayProtocolRequestTimeoutError;
+        return null;
+      });
       if (gone()) throw new Error(MODELS_GATEWAY_CHANGED);
-      if (timedOut || left() <= 0) return late;
+      if (timedOut) return late;
+      ms = left();
+      if (ms <= 0) return late;
       const asked = ctx.request(
         "models.list",
         { agentId: defaultBot, provider, refresh: true },
-        { timeoutMs: left() },
+        { timeoutMs: ms },
       );
       answer = await asked;
     } catch (error) {
       if (gone()) throw new Error(MODELS_GATEWAY_CHANGED, { cause: error });
       if (error instanceof Error && error.message === MODELS_GATEWAY_CHANGED) throw error;
+      // A failure handled after the deadline is late too, though its own timer hadn't fired.
       const words =
-        error instanceof GatewayProtocolRequestTimeoutError
+        error instanceof GatewayProtocolRequestTimeoutError || left() <= 0
           ? "The gateway didn't answer in time."
           : this.scrub(errorText(error));
       return { status: "error", error: cleanLine(words, MAX_REFRESH_ERROR_CHARS) };
     }
     if (gone()) throw new Error(MODELS_GATEWAY_CHANGED);
+    // An answer handled after the deadline, before its own timer fired, changes nothing.
+    if (left() <= 0) return late;
     const found = readModelRefresh(
       answer,
       provider,
