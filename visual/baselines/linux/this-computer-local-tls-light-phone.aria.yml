@@ -3,7 +3,7 @@
   - button "Back"
   - heading "On this computer" [level=2]
   - heading "OpenClaw settings found" [level=3]
-  - paragraph: This Mac's OpenClaw uses a secure address. Use Advanced to connect with its address.
+  - paragraph: These settings may require a secure address. Use Advanced to connect with the gateway's address.
   - button "Use Advanced"
   - button "Look again"
   - paragraph: On this computer
