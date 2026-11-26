@@ -25,6 +25,23 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
         await expect(page).toHaveScreenshot(`full-control-what-${theme}-${size.name}.png`);
       });
 
+      test("F-002: a first pairing at a secure address waits for one approval, of all six in plain words", async ({
+        page,
+      }) => {
+        await openFixture(page, "scene=pairing-full", theme);
+        const asks = page.getByRole("list", { name: "This device asks to" }).getByRole("listitem");
+        await expect(asks).toHaveText([
+          "Read bots, tasks and conversations",
+          "Send messages and stop runs",
+          "Decide what a bot asks to run",
+          "Answer a bot's questions",
+          "Change the gateway's settings, bots and accounts",
+          "Approve and remove other devices",
+        ]);
+        await settle(page);
+        await expect(page).toHaveScreenshot(`pairing-full-${theme}-${size.name}.png`);
+      });
+
       test("F-002: a plain ws:// address on another computer is warned about above Connect", async ({
         page,
       }) => {

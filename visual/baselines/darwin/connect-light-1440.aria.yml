@@ -10,5 +10,5 @@
     - textbox "Gateway token, for pairing"
     - button "Connect a gateway"
     - button "Use the development gateway"
-    - paragraph: Clawtrate works with an OpenClaw gateway you already run. It asks for read access only.
+    - paragraph: Clawtrate works with an OpenClaw gateway you already run. This device has no secure storage for a full-control pairing, so it asks for read access only.
   - paragraph: This device a41c9e02 · Web preview 0.1.0
