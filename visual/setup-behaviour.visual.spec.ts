@@ -466,7 +466,7 @@ test("F-602: a gateway local connect couldn't prove isn't offered: it says so, w
   await expect(page.getByRole("heading", { name: "OpenClaw settings found" })).toBeVisible();
   await expect(
     page.getByText(
-      "The program answering at port 18789 isn't the OpenClaw gateway these settings belong to. Clawtrate doesn't connect to it by itself. Use Advanced, or look again.",
+      "Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile. Clawtrate doesn't connect to it by itself. Use Advanced, or look again.",
     ),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);

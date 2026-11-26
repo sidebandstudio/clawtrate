@@ -3,7 +3,7 @@
   - button "Back"
   - heading "On this computer" [level=2]
   - heading "OpenClaw settings found" [level=3]
-  - paragraph: The program answering at port 18789 isn't the OpenClaw gateway these settings belong to. Clawtrate doesn't connect to it by itself. Use Advanced, or look again.
+  - paragraph: Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile. Clawtrate doesn't connect to it by itself. Use Advanced, or look again.
   - button "Use Advanced"
   - button "Look again"
   - paragraph: On this computer
