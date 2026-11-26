@@ -13,6 +13,7 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -24,7 +25,12 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ClawtrateClient, FULL_SCOPES, type ClawtrateHost } from "@clawtrate/core";
+import {
+  ClawtrateClient,
+  FULL_SCOPES,
+  PROOF_REFUSAL_LINES,
+  type ClawtrateHost,
+} from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -546,11 +552,13 @@ describe.skipIf(!mac)("local connect's send gate, with a listener of the test's 
     });
     try {
       await client.start();
-      // Each socket, retries included, is dialled and refused before its first byte.
-      await until(() => refused.length >= 2, 15_000);
+      // The socket is dialled and refused before its first byte, and the connection stops there
+      // with the refusal's words, rather than retrying.
+      await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED", 15_000);
+      expect(client.state.connection.error?.message).toBe(PROOF_REFUSAL_LINES["not-gateway"](port));
       await sleep(500);
-      expect(refused[0]).toBe("lock");
-      expect(accepted).toBeGreaterThanOrEqual(2);
+      expect(refused).toEqual(["lock"]);
+      expect(accepted).toBe(1);
       expect(bytes).toBe(0);
       expect(gateway.sockets).toHaveLength(0);
     } finally {
@@ -801,12 +809,11 @@ describe.skipIf(!BIN || !mac)(
     it("F-492: a same-account process with OpenClaw's own module loaded, but not the gateway, gets no upgrade and no credential", async () => {
       // The pinned module of the very package the gateway runs, mapped into a stand-in of the
       // test's own; then with the profile's lock, and with its database, open as well.
-      const module = join(
-        dirname(realpathSync(BIN!)),
-        "node_modules/@openclaw",
-        `fs-safe-darwin-${process.arch}`,
-        "fs-safe-native.node",
-      );
+      // In OpenClaw's own package (npm's global layout), or beside it (a folder install).
+      const name = join("@openclaw", `fs-safe-darwin-${process.arch}`, "fs-safe-native.node");
+      let pkg = dirname(realpathSync(BIN!));
+      while (!existsSync(join(pkg, "openclaw.mjs")) && dirname(pkg) !== pkg) pkg = dirname(pkg);
+      const module = [join(pkg, "node_modules", name), join(dirname(pkg), name)].find(existsSync)!;
       const lock = join(
         gateway.home,
         FOLDER,

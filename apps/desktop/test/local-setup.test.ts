@@ -16,14 +16,14 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClawtrateClient, FULL_SCOPES, type SetupLook } from "@clawtrate/core";
+import { ClawtrateClient, FULL_SCOPES, PROOF_REFUSAL_LINES, type SetupLook } from "@clawtrate/core";
 import { createNodeHost, STATE_FILE, type SecretBox } from "@clawtrate/core/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { FakeGateway, helloOk, sleep, until } from "../../../packages/core/test/fake-gateway.ts";
 import { localGatewayBuild } from "../packaging/config.ts";
 import { SetupController } from "../src/setup/controller.ts";
-import { provedRouteFor, type LocalConnect } from "../src/setup/local-connect.ts";
+import { localPortAllowed, provedRouteFor, type LocalConnect } from "../src/setup/local-connect.ts";
 import { PROVED_OPENCLAW } from "../src/setup/openclaw-pins.ts";
 import { HeldToken } from "../src/setup/settings-reader.ts";
 import { SetupRefusedError } from "../src/setup/world.ts";
@@ -83,6 +83,7 @@ function standInHelper(dir: string): string {
     [
       "#!/bin/sh",
       `: > "${dir}/ran"`,
+      `echo "$1" >> "${dir}/commands"`,
       `f="${dir}/answer-$1-$2"`,
       'if [ -f "$f.once" ]; then /bin/cat "$f.once"; /bin/rm -f "$f.once"; exit 0; fi',
       '[ -f "$f" ] && exec /bin/cat "$f"',
@@ -107,8 +108,18 @@ const tokenSettings = (port: number, token: string) => ({
   gateway: { mode: "local", port, auth: { mode: "token", token } },
 });
 
-/** What the helper prints for a holder that is this profile's gateway, of `version`. */
-function provedAnswer(home: string, folder: string, port: number, version = "2026.10.6"): Buffer {
+/**
+ * What the helper prints for a holder that is this profile's gateway, of `version`: mapping
+ * that version's own module (`pinned`), another module (`wrong`), or none (`none`, as an install
+ * laid out otherwise, or a runtime that maps no module, is written).
+ */
+function provedAnswer(
+  home: string,
+  folder: string,
+  port: number,
+  version = "2026.10.6",
+  module: "pinned" | "wrong" | "none" = "pinned",
+): Buffer {
   const lock = Buffer.from(
     JSON.stringify({
       pid: 4242,
@@ -118,9 +129,17 @@ function provedAnswer(home: string, folder: string, port: number, version = "202
       startTime: 1795410457,
     }),
   );
-  const pkg = Buffer.from(JSON.stringify({ name: "openclaw", version }));
-  const sha = PROVED_OPENCLAW[version]?.["darwin-arm64"] ?? "0".repeat(64);
-  const header = `proved 4242 1795410457 arm64 ${sha} ${lock.length} ${pkg.length}\n`;
+  const pkg =
+    module === "none"
+      ? Buffer.alloc(0)
+      : Buffer.from(JSON.stringify({ name: "openclaw", version }));
+  const sha =
+    module === "none"
+      ? "-"
+      : module === "wrong"
+        ? "0".repeat(64)
+        : (PROVED_OPENCLAW[version]?.["darwin-arm64"] ?? "1".repeat(64));
+  const header = `proved 4242 1795410457 ${module === "none" ? "none" : "arm64"} ${sha} ${lock.length} ${pkg.length}\n`;
   return Buffer.concat([Buffer.from(header), lock, pkg]);
 }
 
@@ -427,12 +446,34 @@ describe.skipIf(!mac)(
         {
           settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
           proof: () => "refused lock\n",
-          look: { outcome: "unverified", reason: null, port: listening.port },
+          look: { outcome: "unverified", reason: "not-gateway", port: listening.port },
         },
         {
           settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
+          proof: () => "refused account\n",
+          look: { outcome: "unverified", reason: "holder" },
+        },
+        {
+          settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
+          proof: () => "refused helper\n",
+          look: { outcome: "unverified", reason: "unchecked" },
+        },
+        // A pinned version whose module isn't its own is still refused.
+        {
+          settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
+          proof: (home) => provedAnswer(home, ".openclaw", listening.port, "2026.11.10", "wrong"),
+          look: { outcome: "unverified", reason: "not-published" },
+        },
+        // A version without pins, and a holder mapping no module, stand on the lock and the rest.
+        {
+          settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
           proof: (home) => provedAnswer(home, ".openclaw", listening.port, "2026.12.1"),
-          look: { outcome: "unverified", reason: "version" },
+          look: { outcome: "running", port: listening.port },
+        },
+        {
+          settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
+          proof: (home) => provedAnswer(home, ".openclaw", listening.port, "2026.12.1", "none"),
+          look: { outcome: "running", port: listening.port },
         },
         {
           settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
@@ -474,6 +515,108 @@ describe.skipIf(!mac)(
         }
       } finally {
         await listening.close();
+      }
+    });
+
+    it("F-602: outside a person's app, never dials OpenClaw's default ports, before any socket", async () => {
+      // Pure: both profiles' default ports, sandboxed; never refused in a person's app.
+      const sandbox: LocalConnect = { home: "/x", helper: null, platform, sandboxed: true };
+      expect(localPortAllowed(sandbox, 18789)).toBe(false);
+      expect(localPortAllowed(sandbox, 22768)).toBe(false);
+      expect(localPortAllowed(sandbox, 19940)).toBe(true);
+      expect(localPortAllowed({ ...sandbox, sandboxed: false }, 18789)).toBe(true);
+      expect(provedRouteFor(sandbox)("ws://127.0.0.1:18789", ".openclaw")).toBe(null);
+      // A `clawtrate` profile whose settings name no port falls back to its default, 22768: the
+      // look refuses before it dials, and never asks the helper for a proof.
+      const home = newHome();
+      settingsFile(home, ".openclaw-clawtrate", {
+        gateway: { mode: "local", auth: { mode: "token", token: "a-gateway-token" } },
+      });
+      const local: LocalConnect = {
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+      };
+      const { client, setup } = localApp(local);
+      try {
+        await setup.look();
+        expect(setup.current).toMatchObject({
+          phase: "failed",
+          failure: { kind: "refused", reason: "state" },
+        });
+        const commands = readFileSync(join(home, "commands"), "utf8").trim().split("\n");
+        expect(commands).toContain("read-private");
+        expect(commands).not.toContain("prove-private");
+      } finally {
+        client.stop();
+      }
+    });
+
+    it("F-602: asks once more when the first proof found no holder, as a busy gateway can't yet show one", async () => {
+      const home = newHome();
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const local: LocalConnect = {
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+      };
+      settingsFile(home, ".openclaw", tokenSettings(server.port, "a-gateway-token"));
+      proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", server.port));
+      const { client, setup } = localApp(local);
+      try {
+        await client.start({ resume: false });
+        await setup.look();
+        proofFile(home, ".openclaw", "refused holder\n", true);
+        await setup.connect();
+        await until(() => setup.current.phase === "done", 60_000);
+        expect(gateway.connects).toHaveLength(1);
+      } finally {
+        client.stop();
+        await server.close();
+      }
+    });
+
+    it("F-602: a reconnect the proof refuses stops with that refusal's words and the way on, and isn't retried", async () => {
+      const home = newHome();
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const local: LocalConnect = {
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+      };
+      settingsFile(home, ".openclaw", tokenSettings(server.port, "a-gateway-token"));
+      proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", server.port));
+      const { client, setup } = localApp(local);
+      try {
+        await client.start({ resume: false });
+        await setup.look();
+        await setup.connect();
+        await until(() => setup.current.phase === "done", 60_000);
+        // Something that isn't this profile's gateway holds the port now.
+        proofFile(home, ".openclaw", "refused lock\n");
+        gateway.dropAll();
+        await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED", 60_000);
+        expect(client.state.connection.status).toBe("error");
+        expect(client.state.connection.error).toMatchObject({
+          message: PROOF_REFUSAL_LINES["not-gateway"](server.port),
+          hint: "Choose This computer to connect to it again, or use Advanced.",
+        });
+        const tries = readFileSync(join(home, "commands"), "utf8").split("prove-private").length;
+        await sleep(1_500);
+        expect(readFileSync(join(home, "commands"), "utf8").split("prove-private").length).toBe(
+          tries,
+        );
+      } finally {
+        client.stop();
+        await server.close();
       }
     });
 

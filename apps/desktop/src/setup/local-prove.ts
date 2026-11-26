@@ -4,17 +4,22 @@
 //
 // (e) Every process holding the server end of exactly this connection is a
 //     process of this account, and at least one is found.
-// (f) One of them runs Node, has OpenClaw's own native module mapped (pinned by
-//     SHA-256, in a package that is OpenClaw of a version pinned in
-//     openclaw-pins.ts, that version's own module), holds this
-//     profile's gateway lock and state database open, and is the process that
-//     lock names, with this port, this state folder and its start time.
+// (f) One of them, the same process from the scan to the end of the check,
+//     holds this profile's gateway lock and state database open, and is the
+//     process that lock names, with role gateway, this port, this state folder
+//     and its start time.
+// And the pin: where that holder maps OpenClaw's own native module in a package
+// that is OpenClaw of a version pinned in openclaw-pins.ts, the module must be
+// that version's own, by SHA-256. A version without pins (a newer OpenClaw), an
+// install laid out otherwise (a folder install, pnpm, Bun) or no module mapped
+// is proved by (e) and (f) alone, none of which is dropped.
 //
 // On macOS the native helper reads the kernel's facts (libproc). Linux's walk
 // through /proc is setup PR 2a-3's, so nothing is proved there yet. A missing
 // helper, a timeout, denied access or malformed output all mean unverified.
 // The answer is a fixed word: nothing about another process is passed on.
 
+import type { ProofRefusalKind } from "@clawtrate/core";
 import type { FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { PROVED_OPENCLAW } from "./openclaw-pins.ts";
@@ -61,6 +66,15 @@ export const PROVE_REFUSALS = [
 ] as const;
 export type ProveRefusal = (typeof PROVE_REFUSALS)[number];
 type Refused = { proved: false; why: ProveRefusal };
+
+/** What a refusal means for the person (`PROOF_REFUSAL_LINES`). */
+export function refusalKind(why: ProveRefusal): ProofRefusalKind {
+  if (why === "holder" || why === "account") return "holder";
+  if (["node", "module", "lock", "state", "named"].includes(why)) return "not-gateway";
+  if (why === "pin" || why === "package") return "not-published";
+  if (["denied", "failed", "helper", "path", "platform"].includes(why)) return "unchecked";
+  return "folder";
+}
 export type Proof = { proved: true } | Refused;
 
 export type ProveOptions = {
@@ -94,10 +108,13 @@ type Facts = {
   pid: number;
   /** The holder's start, in seconds. */
   start: number;
-  /** The module's package suffix, `darwin-arm64` or `darwin-x64`. */
-  suffix: string;
-  sha256: string;
+  /**
+   * OpenClaw's native module, when the holder maps one: its package suffix (`darwin-arm64`
+   * or `darwin-x64`) and SHA-256, null when its file wasn't the mapped one or couldn't be read.
+   */
+  module: { suffix: string; sha256: string | null } | null;
   lock: Buffer;
+  /** The package.json of the package the module belongs to; empty without one. */
   pkg: Buffer;
 };
 
@@ -126,12 +143,14 @@ export async function proveLocalGateway(options: ProveOptions): Promise<Proof> {
   }
 }
 
-/** The kernel's facts against the pins and the lock. */
+/** The kernel's facts against the pins, where there are pins, and the lock. */
 function judge(facts: Facts, stateDir: string, port: number): Proof {
-  const pkg = parsed(facts.pkg);
-  const version = typeof pkg?.version === "string" ? pkg.version : "";
-  if (pkg?.name !== "openclaw" || !Object.hasOwn(PROVED_OPENCLAW, version)) return no("package");
-  if (PROVED_OPENCLAW[version]![facts.suffix] !== facts.sha256) return no("pin");
+  if (facts.module) {
+    const pkg = parsed(facts.pkg);
+    const version = pkg?.name === "openclaw" && typeof pkg.version === "string" ? pkg.version : "";
+    const pins = Object.hasOwn(PROVED_OPENCLAW, version) ? PROVED_OPENCLAW[version]! : null;
+    if (pins && pins[facts.module.suffix] !== facts.module.sha256) return no("pin");
+  }
   const lock = parsed(facts.lock);
   const named =
     lock !== null &&
@@ -156,7 +175,8 @@ function parsed(bytes: Buffer): Record<string, unknown> | null {
   }
 }
 
-const HEADER = /^proved (\d{1,10}) (\d{1,12}) (arm64|x64) ([0-9a-f]{64}) (\d{1,6}) (\d{1,7})\n/;
+const HEADER =
+  /^proved (\d{1,10}) (\d{1,12}) (arm64|x64|none) ([0-9a-f]{64}|-) (\d{1,6}) (\d{1,7})\n/;
 const HELPER_REFUSAL = /^refused ([a-z]{1,16})\n$/;
 
 /** The helper's facts, or why not. Anything but exactly one of its two forms is `helper`. */
@@ -182,14 +202,18 @@ async function viaHelper(
   if (
     Number(lockLength) > LOCK_LIMIT ||
     Number(pkgLength) > PACKAGE_LIMIT ||
-    output.length !== lockEnd + Number(pkgLength)
+    output.length !== lockEnd + Number(pkgLength) ||
+    // No module: no hash and no package.
+    (arch === "none" && (sha256 !== "-" || Number(pkgLength) !== 0))
   )
     return no("helper");
   return {
     pid: Number(pid),
     start: Number(start),
-    suffix: `darwin-${arch}`,
-    sha256: sha256!,
+    module:
+      arch === "none"
+        ? null
+        : { suffix: `darwin-${arch}`, sha256: sha256 === "-" ? null : sha256! },
     lock: output.subarray(body, lockEnd),
     pkg: output.subarray(lockEnd),
   };

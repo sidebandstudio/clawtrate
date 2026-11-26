@@ -39,6 +39,7 @@ const STATES = [
   // A person's Mac app, with local connect: the first screen with its gateway proved, a gateway
   // it couldn't prove, and a Connect whose socket wasn't proved.
   "local-first",
+  "local-waiting",
   "local-unverified",
   "local-failed",
 ];

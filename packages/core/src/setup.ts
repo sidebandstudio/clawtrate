@@ -29,8 +29,8 @@ export type LookOutcome =
   | "cant-run"
   /**
    * Local connect: OpenClaw's settings name a port where something answers, but
-   * Clawtrate couldn't prove it is this account's OpenClaw (`reason` `version`: an
-   * OpenClaw whose version it can't check).
+   * Clawtrate couldn't prove it is this account's OpenClaw (`reason`: which fact failed,
+   * `ProofRefusalKind`).
    */
   | "unverified"
   | "not-found"
@@ -52,8 +52,28 @@ export type CantTellReason =
   | "read-only"
   /** Local connect: OpenClaw's settings file can't be used here (its form, its sign-in, its rights). */
   | "settings"
-  /** For `unverified`: an OpenClaw version local connect can't check. */
-  | "version";
+  | ProofRefusalKind;
+
+/**
+ * Why local connect's proof refused a socket, by what failed: no holder of this
+ * account's (another account's, or one not yet accepted), a holder that isn't this
+ * profile's gateway, an OpenClaw whose module isn't the one published for its version,
+ * OpenClaw's folder, or the check itself.
+ */
+export type ProofRefusalKind = "holder" | "not-gateway" | "not-published" | "folder" | "unchecked";
+
+/** Each refusal's words for the person, the same on a card and for a refused reconnect. */
+export const PROOF_REFUSAL_LINES: Record<ProofRefusalKind, (port: number | null) => string> = {
+  holder: (port) =>
+    `Clawtrate found no program of yours answering at port ${port}: another account's program may hold it, or OpenClaw is still starting.`,
+  "not-gateway": (port) =>
+    `The program answering at port ${port} isn't the OpenClaw gateway these settings belong to.`,
+  "not-published": (port) =>
+    `The OpenClaw answering at port ${port} isn't the copy published for its version.`,
+  folder: (port) =>
+    `OpenClaw's folder on this Mac can be changed by others, or isn't where Clawtrate expects it, so Clawtrate doesn't check what answers at port ${port}.`,
+  unchecked: (port) => `Clawtrate couldn't check what is answering at port ${port} on this Mac.`,
+};
 
 /** The gateway's service, as the status reports it for this gateway. `none`: it reports no matching unit. */
 export type LookService =
@@ -115,8 +135,8 @@ export type SetupFailure = {
   kind: SetupFailureKind;
   exitCode: number | null;
   port: number | null;
-  /** For `refused`: what was refused. */
-  reason: SetupRefusal | null;
+  /** For `refused`: what was refused; for `unverified`, which fact the proof refused. */
+  reason: SetupRefusal | ProofRefusalKind | null;
 };
 
 export type SetupPhase =

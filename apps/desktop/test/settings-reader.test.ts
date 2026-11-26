@@ -996,6 +996,28 @@ describe("the account's real home", () => {
         () => false,
       ),
     ).toThrow(SetupRefusedError);
+    // A packaged app driven by a debugger or started for a check is no person's either.
+    for (const argv of [["--remote-debugging-port=9222"], ["--inspect"], ["--use-mock-keychain"]])
+      expect(() =>
+        guardHome(
+          synthetic,
+          false,
+          {},
+          () => synthetic,
+          () => true,
+          argv,
+        ),
+      ).toThrow(SetupRefusedError);
+    expect(
+      guardHome(
+        synthetic,
+        false,
+        {},
+        () => synthetic,
+        () => true,
+        ["--no-sandbox"],
+      ),
+    ).toBe(null);
     expect(packagedApp({ versions: {} })).toBe(false);
     expect(packagedApp({ versions: { electron: "41.0.0" }, defaultApp: true })).toBe(false);
     expect(packagedApp({ versions: { electron: "41.0.0" } })).toBe(true);

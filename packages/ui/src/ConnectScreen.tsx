@@ -7,6 +7,7 @@ import type {
   SetupState,
 } from "@clawtrate/core";
 import {
+  LOCAL_ROUTE_ONLY,
   plainRemoteGatewayUrl,
   protectedGatewayUrl,
   SETUP_PAIRING_APPEARED,
@@ -245,7 +246,22 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
   );
 }
 
-function ConnectForm({ connection, info }: { connection: ConnectionState; info: HostInfo }) {
+/** The errors whose way on is This computer: a route's own pairing, a refused proof. */
+const LOCAL_CODES: ReadonlySet<string> = new Set([LOCAL_ROUTE_ONLY, "LOCAL_UNVERIFIED"]);
+
+function ConnectForm({
+  connection,
+  info,
+  onThisComputer,
+}: {
+  connection: ConnectionState;
+  info: HostInfo;
+  /**
+   * Where This computer (local connect) is offered: its way in, for an address whose pairing
+   * belongs to it, or whose socket its proof refused.
+   */
+  onThisComputer?: (() => void) | undefined;
+}) {
   const send = useCommand();
   const [url, setUrl] = useState(connection.gatewayUrl ?? info.devGateway?.url ?? "");
   const [token, setToken] = useState("");
@@ -329,9 +345,15 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             {error.message}
             {error.hint && ` ${error.hint}`}
             {error.code && <span className="form-error-code">{error.code}</span>}
-            <button type="button" className="button" data-size="sm" onClick={tryAgain}>
-              Try again
-            </button>
+            {onThisComputer && error.code !== null && LOCAL_CODES.has(error.code) ? (
+              <button type="button" className="button" data-size="sm" onClick={onThisComputer}>
+                Use This computer
+              </button>
+            ) : (
+              <button type="button" className="button" data-size="sm" onClick={tryAgain}>
+                Try again
+              </button>
+            )}
           </div>
         )}
         {/* Always there, so a screen reader announces the warning when it appears. */}
@@ -612,6 +634,18 @@ export function ConnectScreen({
   const [view, setView] = useState<SetupView>(() =>
     setup && setup.phase !== "idle" && !setup.unasked ? "here" : "first",
   );
+  const command = useCommand();
+  const { forget } = useForget();
+  // This computer, from the address form: the gateway typed there is let go, keeping this
+  // device's pairing, and the look on this computer starts.
+  const thisComputer = () => {
+    const url = connection.gatewayUrl;
+    void (url ? forget(url) : Promise.resolve(true)).then((gone) => {
+      if (!gone) return;
+      setView("here");
+      void command({ type: "setupLook" });
+    });
+  };
   const setupOwns =
     setup !== undefined &&
     (setup.phase === "confirming" ||
@@ -700,7 +734,11 @@ export function ConnectScreen({
             {settingUp ? (
               <SetupPanel connection={connection} loadingBots={loadingBots} />
             ) : (
-              <ConnectForm connection={connection} info={info} />
+              <ConnectForm
+                connection={connection}
+                info={info}
+                onThisComputer={info.setup?.local === true ? thisComputer : undefined}
+              />
             )}
             <p className="connect-foot">
               {connection.deviceId

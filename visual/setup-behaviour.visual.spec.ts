@@ -446,6 +446,8 @@ test("F-602: on a Mac whose OpenClaw the host proved, the first screen offers it
   }
   await page.getByRole("button", { name: "What this means" }).click();
   expect(await sent(page)).toEqual([]);
+  // Past the moment in which Connect ignores presses aimed at what was there before.
+  await page.waitForTimeout(600);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   expect(await sent(page)).toEqual(["setupConnect"]);
   await expect(page.getByRole("heading", { name: "Connecting" })).toBeFocused();
@@ -464,10 +466,41 @@ test("F-602: a gateway local connect couldn't prove isn't offered: it says so, w
   await expect(page.getByRole("heading", { name: "OpenClaw settings found" })).toBeVisible();
   await expect(
     page.getByText(
-      "Clawtrate couldn't verify what is listening at port 18789, so it doesn't connect to it by itself. Use Advanced, or look again.",
+      "The program answering at port 18789 isn't the OpenClaw gateway these settings belong to. Clawtrate doesn't connect to it by itself. Use Advanced, or look again.",
     ),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Use Advanced" }).click();
   await expect(page.getByPlaceholder("Gateway address")).toBeFocused();
+});
+
+test("F-602: while the host looks at start, the first screen waits with nothing to press; Connect then ignores a press in its first moment", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-start", "light");
+  await expect(
+    page.getByRole("heading", { name: "Looking for OpenClaw on this Mac" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button")).toHaveCount(0);
+  const connect = page.getByRole("button", { name: "Connect", exact: true });
+  await connect.waitFor();
+  // A click as it appears was aimed at what was there before: nothing is sent.
+  await connect.click();
+  expect(await sent(page)).toEqual([]);
+  await page.waitForTimeout(600);
+  await connect.click();
+  expect(await sent(page)).toEqual(["setupConnect"]);
+});
+
+test("F-602: a look at start that ends after the first screen's wait doesn't replace the question", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-start-slow", "light");
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible({
+    timeout: 6_000,
+  });
+  // The fixture's host finds the gateway at 4.5 s: the question stays where it is.
+  await page.waitForTimeout(2_500);
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
 });

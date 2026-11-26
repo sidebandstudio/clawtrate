@@ -12,7 +12,12 @@ import type {
   SetupRefusal,
   SetupState,
 } from "@clawtrate/core";
-import { OLDEST_OPENCLAW_VERSION, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
+import {
+  OLDEST_OPENCLAW_VERSION,
+  PROOF_REFUSAL_LINES,
+  TESTED_OPENCLAW_VERSION,
+  type ProofRefusalKind,
+} from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
@@ -305,7 +310,13 @@ function LocalConnect({
 }) {
   const send = useCommand();
   const asksFull = full && look.access !== "paired";
+  // A press that lands as Connect appears was aimed at what was there before: nothing happens.
+  const shownAt = useRef<number | null>(null);
+  useEffect(() => {
+    shownAt.current = performance.now();
+  }, []);
   const connect = () => {
+    if (shownAt.current === null || performance.now() - shownAt.current < CONNECT_ARM_MS) return;
     onConnect?.();
     void send({ type: "setupConnect" });
   };
@@ -346,11 +357,23 @@ const CANT_TELL: Record<string, string> = {
     "Clawtrate can't use OpenClaw's settings on this Mac to connect by itself. Use Advanced.",
 };
 
+/** Which fact local connect's proof refused, when the host said (`ProofRefusalKind`). */
+const proofKind = (reason: string | null): ProofRefusalKind | null =>
+  reason !== null && Object.hasOwn(PROOF_REFUSAL_LINES, reason)
+    ? (reason as ProofRefusalKind)
+    : null;
+
+/** What local connect's proof refused, in its own words, at this port. */
+function refusalWords(reason: string | null, port: number | null): string {
+  const kind = proofKind(reason);
+  return kind
+    ? PROOF_REFUSAL_LINES[kind](port)
+    : `Clawtrate couldn't verify what is listening at port ${port}.`;
+}
+
 /** Why local connect didn't offer a gateway that answered: nothing was sent to it. */
 const unverifiedWords = (look: SetupLook) =>
-  look.reason === "version"
-    ? "This version of OpenClaw is one Clawtrate can't check yet, so it doesn't connect to it by itself. Use Advanced, or look again."
-    : `Clawtrate couldn't verify what is listening at port ${look.port}, so it doesn't connect to it by itself. Use Advanced, or look again.`;
+  `${refusalWords(look.reason, look.port)} Clawtrate doesn't connect to it by itself. Use Advanced, or look again.`;
 
 /** The found card and actions for each result of the look (§6). */
 function LookResult({
@@ -616,7 +639,7 @@ const FAILURES: Record<
   },
   unverified: {
     lead: "",
-    text: () => "Nothing was sent to it. Use Advanced, or look again.",
+    text: () => "No credential was sent to it. Use Advanced, or look again.",
     next: "advanced",
     step: 0,
   },
@@ -669,6 +692,14 @@ const REFUSED: Record<SetupRefusal, string> = {
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
 const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it's OpenClaw on this Mac"];
 
+/** How long Connect ignores presses after it appears: they were aimed at what was there. */
+export const CONNECT_ARM_MS = 500;
+/**
+ * How long the first screen waits, with nothing on it to press, for the host's own look at
+ * start. Then it asks its question, and a result that comes later doesn't take its place.
+ */
+export const START_WAIT_MS = 3_000;
+
 /** The look's result the first screen offers by itself: this computer's gateway, proved. */
 const offeredHere = (offer: NonNullable<HostInfo["setup"]>, setup: SetupState) =>
   offer.local === true &&
@@ -683,6 +714,7 @@ function screenKey(
   offer: NonNullable<HostInfo["setup"]>,
 ): string {
   if (view === "first" && offeredHere(offer, setup)) return "first:found";
+  if (view === "first" && setup.unasked && setup.phase === "looking") return "first:waiting";
   if (view !== "here") return view;
   return `${setup.phase}:${setup.look?.outcome ?? ""}:${setup.failure?.kind ?? ""}`;
 }
@@ -704,7 +736,31 @@ export function SetupFlow({
   const offer = info.setup!;
   const root = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");
-  const key = screenKey(view, setup, offer);
+  // The host's own look at start: the first screen waits for it, with nothing to press, for at
+  // most START_WAIT_MS. Nothing that grants anything appears where another control was: once the
+  // question is on screen, a gateway found later is offered only after This computer.
+  const [waiting, setWaiting] = useState(
+    () => offer.local === true && setup.unasked && setup.phase === "looking",
+  );
+  // Whether the question has been on screen: from then on, no offer takes its place.
+  const [asked, setAsked] = useState(() => !waiting && !offeredHere(offer, setup));
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setTimeout(() => {
+      setWaiting(false);
+      setAsked(true);
+    }, START_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [waiting]);
+  const holding = view === "first" && waiting && setup.unasked && setup.phase === "looking";
+  const offerHere = view === "first" && !asked && offeredHere(offer, setup);
+  const key = holding
+    ? "first:waiting"
+    : offerHere
+      ? "first:found"
+      : view === "first"
+        ? "first"
+        : screenKey(view, setup, offer);
   const shown = useRef<string | null>(null);
   useEffect(() => {
     const first = shown.current === null;
@@ -750,8 +806,10 @@ export function SetupFlow({
   };
 
   let body: ReactNode;
-  if (view === "first") {
-    body = offeredHere(offer, setup) ? (
+  if (holding) {
+    body = <WaitingHere />;
+  } else if (view === "first") {
+    body = offerHere ? (
       <FoundHere
         look={setup.look!}
         full={info.fullControl === true}
@@ -799,7 +857,7 @@ export function SetupFlow({
         <Title id="setup-title">On this computer</Title>
         <Found mark={<WarnIcon />} tone="warn" heading="Looking on this computer is off here">
           <Lede>
-            {`This run can only look in a sandbox. ${PRODUCT_NAME} couldn't use this sandbox because ${REFUSED[setup.failure.reason ?? "file"]} Use Advanced.`}
+            {`This run can only look in a sandbox. ${PRODUCT_NAME} couldn't use this sandbox because ${REFUSED[(setup.failure.reason as SetupRefusal | null) ?? "file"]} Use Advanced.`}
           </Lede>
           <Actions>
             <Primary onClick={advanced}>Use Advanced</Primary>
@@ -817,7 +875,7 @@ export function SetupFlow({
       failure?.kind === "unreachable"
         ? `Nothing answered on port ${failure.port}.`
         : failure?.kind === "unverified"
-          ? `Clawtrate couldn't verify what is listening at port ${failure.port}.`
+          ? refusalWords(failure.reason, failure.port)
           : (copy?.lead ?? "");
     body = (
       <>
@@ -880,6 +938,22 @@ export function SetupFlow({
         {announced}
       </p>
     </div>
+  );
+}
+
+/** The first screen while the host's own look at start runs: nothing to press yet. */
+function WaitingHere() {
+  return (
+    <>
+      <header className="connect-brand">
+        <img src={logoUrl} alt="" width={56} height={56} />
+        <h1>{PRODUCT_NAME}</h1>
+        <p>{SLOGAN}</p>
+      </header>
+      <h2 className="s-title s-question" id="setup-title" tabIndex={-1} data-s-title>
+        Looking for OpenClaw on this Mac
+      </h2>
+    </>
   );
 }
 

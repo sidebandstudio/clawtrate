@@ -13,6 +13,12 @@ import type { SetupRefusal } from "@clawtrate/core";
 
 /** OpenClaw's default gateway port. A sandboxed run never uses it. */
 export const OPENCLAW_DEFAULT_PORT = 18789;
+/**
+ * The `clawtrate` profile's default port, OpenClaw's `20000 + FNV-1a("clawtrate") % 40000`
+ * (`resolveGatewayPort`, `<openclaw>/dist/paths-BP0DYpE8.mjs` lines 214-224). Local connect
+ * in a sandbox never dials it either.
+ */
+export const CLAWTRATE_PROFILE_DEFAULT_PORT = 22768;
 
 /** The system's own program folders, the start of every program's PATH. */
 const SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];

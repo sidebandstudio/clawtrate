@@ -14,10 +14,15 @@
 // (`localConnectFor`).
 
 import { connect as dial, type Socket } from "node:net";
-import type { ProvedRoute, WebSocketLike } from "@clawtrate/core";
+import { PROOF_REFUSAL_LINES, type ProvedRoute, type WebSocketLike } from "@clawtrate/core";
 import { Agent, WebSocket } from "undici";
-import { proveLocalGateway, type ProveRefusal } from "./local-prove.ts";
-import { accountHome, mustSandbox } from "./world.ts";
+import { proveLocalGateway, refusalKind, type ProveRefusal } from "./local-prove.ts";
+import {
+  accountHome,
+  CLAWTRATE_PROFILE_DEFAULT_PORT,
+  mustSandbox,
+  OPENCLAW_DEFAULT_PORT,
+} from "./world.ts";
 
 /** What local connect needs from its host: where to look, the helper, and the home rule. */
 export type LocalConnect = {
@@ -50,10 +55,35 @@ export function localConnectFor(
   return { home, helper: where.helper, platform: where.platform, sandboxed };
 }
 
+/**
+ * Whether local connect may dial this port. Outside a person's packaged app it never dials
+ * one of OpenClaw's default ports, which a settings file that names none falls back to: on a
+ * computer that runs OpenClaw, that is the person's own gateway (as `guardPort` keeps a
+ * sandboxed look away from it). A sandbox's gateway is on a port of its own, named in its file.
+ */
+export function localPortAllowed(local: LocalConnect, port: number): boolean {
+  return (
+    Number.isInteger(port) &&
+    port >= 1 &&
+    port <= 65535 &&
+    !(
+      local.sandboxed &&
+      (port === OPENCLAW_DEFAULT_PORT || port === CLAWTRATE_PROFILE_DEFAULT_PORT)
+    )
+  );
+}
+
 /** Proves the far end of the host's connection from this local port; false sends nothing. */
 export type ProveSocket = (localPort: number) => Promise<boolean>;
 
-/** The proof of one profile's gateway at `port`, its refusals told to `refused` in fixed words. */
+/** How long the proof waits before asking once more, after finding no holder of this account's. */
+export const HOLDER_RETRY_MS = 750;
+
+/**
+ * The proof of one profile's gateway at `port`, its refusals told to `refused` in fixed words.
+ * A gateway under load may not have taken the connection into its table within the helper's
+ * own wait, so finding no holder is asked once more, after a short wait, before it refuses.
+ */
 export function proveFor(
   local: LocalConnect,
   folder: string,
@@ -61,7 +91,12 @@ export function proveFor(
   refused: (why: ProveRefusal) => void = () => {},
 ): ProveSocket {
   return async (localPort) => {
-    const proof = await proveLocalGateway({ ...local, folder, port, localPort });
+    const ask = () => proveLocalGateway({ ...local, folder, port, localPort });
+    let proof = await ask();
+    if (!proof.proved && proof.why === "holder") {
+      await new Promise((done) => setTimeout(done, HOLDER_RETRY_MS));
+      proof = await ask();
+    }
     if (!proof.proved) refused(proof.why);
     return proof.proved;
   };
@@ -79,9 +114,23 @@ export function provedRouteFor(
 ): (url: string, route: string) => ProvedRoute | null {
   return (url, route) => {
     const port = Number(/^ws:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/.exec(url)?.[1]);
-    if (!(port <= 65535)) return null;
-    const sockets = provedSockets(port, proveFor(local, route, port, refused));
-    return { createSocket: sockets.createWebSocket, verify: sockets.verify };
+    if (!localPortAllowed(local, port)) return null;
+    // The latest refusal since a proof last passed, for the client's words (`ProvedRoute.refusal`).
+    let latest: ProveRefusal | null = null;
+    const prove = proveFor(local, route, port, (why) => {
+      latest = why;
+      refused(why);
+    });
+    const sockets = provedSockets(port, async (localPort) => {
+      const proved = await prove(localPort);
+      if (proved) latest = null;
+      return proved;
+    });
+    return {
+      createSocket: sockets.createWebSocket,
+      verify: sockets.verify,
+      refusal: () => (latest === null ? null : PROOF_REFUSAL_LINES[refusalKind(latest)](port)),
+    };
   };
 }
 

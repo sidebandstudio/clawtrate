@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ClawtrateClient,
+  LOCAL_ROUTE_ONLY,
   ROUTE_IDENTITY_CHANGED,
   SETUP_ENDPOINT_CHANGED,
   type ProvedRoute,
@@ -249,7 +250,12 @@ describe("a gateway set up through local connect", () => {
         }
         await client.connect({ url: URL, token: "typed" });
       }
-      await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED");
+      // Said as it is: the pairing belongs to This computer, and that is the way to it.
+      await until(() => client.state.connection.error?.code === LOCAL_ROUTE_ONLY);
+      expect(client.state.connection.error).toMatchObject({
+        message: expect.stringContaining("through This computer") as unknown,
+        hint: "Choose This computer to connect to it.",
+      });
       await sleep(100);
       // The route's own connection, before Disconnect, is the only frame there is.
       expect(gateway.connects).toHaveLength(how === "Disconnect, then a typed connect" ? 1 : 0);
@@ -275,7 +281,7 @@ describe("a gateway set up through local connect", () => {
     const { host: app } = host(gateway, storage);
     const client = new ClawtrateClient(app, FAST);
     await client.start();
-    await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED");
+    await until(() => client.state.connection.error?.code === LOCAL_ROUTE_ONLY);
     await sleep(100);
     expect(gateway.connects).toHaveLength(0);
     client.stop();

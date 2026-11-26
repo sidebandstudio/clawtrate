@@ -5,6 +5,8 @@
 import {
   initialState,
   initialSetupState,
+  LOCAL_ROUTE_ONLY,
+  PROOF_REFUSAL_LINES,
   type ClawtrateBridge,
   type HostInfo,
   type SetupLook,
@@ -14,6 +16,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BridgeProvider } from "../src/bridge.tsx";
+
+/** As React escapes text. */
+const escape = (text: string) => text.replaceAll("'", "&#x27;");
 import { ConnectScreen } from "../src/ConnectScreen.tsx";
 import { CONSENT_LINE } from "../src/FullControl.tsx";
 
@@ -100,9 +105,15 @@ describe("the first screen on a Mac whose OpenClaw the host found and proved", (
     expect(html).toContain("This device is already paired with it.");
   });
 
-  it("while the host looks, and when it found nothing it proved, is the first question", () => {
+  it("while the host looks, waits with nothing to press, so nothing appears under the pointer", () => {
+    const html = render(local(), { ...initialSetupState, phase: "looking", unasked: true });
+    expect(html).toMatch(/<h2[^>]*data-s-title[^>]*>Looking for OpenClaw on this Mac<\/h2>/);
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("Where does OpenClaw run?");
+  });
+
+  it("when the host found nothing it proved, is the first question", () => {
     for (const setup of [
-      { ...initialSetupState, phase: "looking" as const, unasked: true },
       found({ outcome: "unverified", access: null }, true),
       found({ outcome: "not-found", access: null }, true),
     ]) {
@@ -122,20 +133,25 @@ describe("the card for this computer, after This computer", () => {
     nothingToType(html);
   });
 
-  it("F-602: says what couldn't be verified, and the way on", () => {
-    const html = render(local(), found({ outcome: "unverified", access: null }));
-    expect(html).toContain("OpenClaw settings found");
-    expect(html).toContain(
-      `Clawtrate couldn&#x27;t verify what is listening at port ${PORT}, so it doesn&#x27;t connect to it by itself. Use Advanced, or look again.`,
-    );
-    expect(html).toContain("Use Advanced");
-    expect(html).toContain("Look again");
-    expect(html).not.toMatch(/>Connect<\/button>/);
-    const version = render(
-      local(),
-      found({ outcome: "unverified", reason: "version", access: null }),
-    );
-    expect(version).toContain("This version of OpenClaw is one Clawtrate can&#x27;t check yet");
+  it("F-602: says what couldn't be verified, in the words of what failed, and the way on", () => {
+    for (const reason of [
+      "holder",
+      "not-gateway",
+      "not-published",
+      "folder",
+      "unchecked",
+    ] as const) {
+      const html = render(local(), found({ outcome: "unverified", reason, access: null }));
+      expect(html, reason).toContain("OpenClaw settings found");
+      expect(html, reason).toContain(
+        escape(
+          `${PROOF_REFUSAL_LINES[reason](PORT)} Clawtrate doesn't connect to it by itself. Use Advanced, or look again.`,
+        ),
+      );
+      expect(html).toContain("Use Advanced");
+      expect(html).toContain("Look again");
+      expect(html).not.toMatch(/>Connect<\/button>/);
+    }
   });
 
   it("says when OpenClaw's settings can't be used, and when nothing answers", () => {
@@ -149,14 +165,14 @@ describe("the card for this computer, after This computer", () => {
     expect(stopped).not.toContain("Installed program");
   });
 
-  it("a Connect whose socket wasn't proved says so, and that nothing was sent", () => {
+  it("a Connect whose socket wasn't proved says what failed, and that no credential was sent", () => {
     const html = render(local(), {
       ...found(),
       phase: "failed",
-      failure: { kind: "unverified", exitCode: null, port: PORT, reason: null },
+      failure: { kind: "unverified", exitCode: null, port: PORT, reason: "holder" },
     });
-    expect(html).toContain(`Clawtrate couldn&#x27;t verify what is listening at port ${PORT}.`);
-    expect(html).toContain("Nothing was sent to it. Use Advanced, or look again.");
+    expect(html).toContain(escape(PROOF_REFUSAL_LINES.holder(PORT)));
+    expect(html).toContain("No credential was sent to it. Use Advanced, or look again.");
     expect(html).toContain("Checking it&#x27;s OpenClaw on this Mac");
   });
 
@@ -168,5 +184,37 @@ describe("the card for this computer, after This computer", () => {
     );
     expect(html).toContain("Connect read-only");
     expect(html).not.toContain("OpenClaw is running on this Mac");
+  });
+});
+
+describe("an address whose pairing belongs to This computer", () => {
+  const refused = (code: string, local: boolean) =>
+    renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { info: info(local) } as ClawtrateBridge,
+        children: createElement(ConnectScreen, {
+          info: info(local),
+          setup: initialSetupState,
+          connection: {
+            ...initialState.connection,
+            status: "error",
+            gatewayUrl: `ws://127.0.0.1:${PORT}`,
+            error: { code, message: "fixture", hint: null },
+          },
+          discovery: initialState.discovery,
+        }),
+      }),
+    );
+  const info = (on: boolean): HostInfo => ({
+    ...local(),
+    setup: { look: true, pair: true, platform: "darwin", ...(on ? { local: true } : {}) },
+  });
+
+  it("F-602: offers This computer as the way on, where the host has it", () => {
+    for (const code of [LOCAL_ROUTE_ONLY, "LOCAL_UNVERIFIED"]) {
+      expect(refused(code, true), code).toContain(">Use This computer</button>");
+      expect(refused(code, false), code).not.toContain("Use This computer");
+    }
+    expect(refused("UNREACHABLE", true)).not.toContain("Use This computer");
   });
 });

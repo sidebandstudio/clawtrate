@@ -103,12 +103,28 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "code-failed-shape": failed("code-failed", { exitCode: 0 }),
   // A person's Mac app, with local connect (setup-effortless.md §3): `local-` scenes.
   "local-first": { ...looked({ ...localLook }), unasked: true },
-  "local-unverified": looked({ ...localLook, outcome: "unverified", access: null }),
+  // The host's look at start, under way: it finds a gateway in a second, or after the
+  // first screen's wait for it has ended (`SETUP_STEPS`).
+  "local-waiting": { ...initialSetupState, phase: "looking", unasked: true },
+  "local-start": { ...initialSetupState, phase: "looking", unasked: true },
+  "local-start-slow": { ...initialSetupState, phase: "looking", unasked: true },
+  "local-unverified": looked({
+    ...localLook,
+    outcome: "unverified",
+    reason: "not-gateway",
+    access: null,
+  }),
   "local-failed": {
     ...looked({ ...localLook }),
     phase: "failed",
-    failure: { kind: "unverified", exitCode: null, port: 18789, reason: null },
+    failure: { kind: "unverified", exitCode: null, port: 18789, reason: "not-gateway" },
   },
+};
+
+/** What a scene's host publishes later, timed from when the interface first listens. */
+export const SETUP_STEPS: Record<string, Array<{ after: number; setup: SetupState }>> = {
+  "local-start": [{ after: 1_000, setup: { ...looked({ ...localLook }), unasked: true } }],
+  "local-start-slow": [{ after: 4_500, setup: { ...looked({ ...localLook }), unasked: true } }],
 };
 
 export function isSetupState(name: string | null): name is string {

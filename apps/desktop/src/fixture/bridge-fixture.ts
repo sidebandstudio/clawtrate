@@ -93,7 +93,7 @@ import {
   withComputerRuns,
   type ComputerParams,
 } from "./computer.ts";
-import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
+import { isSetupState, setupCommand, setupInfo, SETUP_STATES, SETUP_STEPS } from "./setup.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { voiceCommands, type VoiceParams } from "./voice.ts";
@@ -668,7 +668,14 @@ export function createFixtureBridge(
 } {
   const now = Date.now();
   const setupName = isSetupState(options.setup ?? null) ? options.setup! : null;
-  const { initial: sceneInitial, steps } = scene(setupName ? "connect" : name, now);
+  const { initial: sceneInitial, steps: sceneSteps } = scene(setupName ? "connect" : name, now);
+  const steps = [
+    ...sceneSteps,
+    ...(setupName ? (SETUP_STEPS[setupName] ?? []) : []).map(({ after, setup }) => ({
+      after,
+      change: (state: ClawtrateState) => ({ ...state, setup }),
+    })),
+  ];
   const initial = setupName ? { ...sceneInitial, setup: SETUP_STATES[setupName]! } : sceneInitial;
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };

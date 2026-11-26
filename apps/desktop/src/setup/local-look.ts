@@ -7,8 +7,8 @@
 
 import { connect as dial } from "node:net";
 import type { SetupLook } from "@clawtrate/core";
-import type { LocalConnect } from "./local-connect.ts";
-import { proveLocalGateway, type ProveRefusal } from "./local-prove.ts";
+import { localPortAllowed, proveFor, type LocalConnect } from "./local-connect.ts";
+import { refusalKind, type ProveRefusal } from "./local-prove.ts";
 import type { SettingsProfile } from "./settings-extract.ts";
 import {
   readLocalSettings,
@@ -16,6 +16,7 @@ import {
   type HeldToken,
   type SettingsOutcome,
 } from "./settings-reader.ts";
+import { SetupRefusedError } from "./world.ts";
 
 /** What the look found that Connect may pair with: a profile's folder and its port. */
 export type LocalFound = { profile: SettingsProfile; folder: string; port: number; url: string };
@@ -40,9 +41,6 @@ const empty: Omit<SetupLook, "outcome"> = {
 const folderOf = (profile: SettingsProfile) =>
   SETTINGS_PROFILES.find((entry) => entry.profile === profile)!.folder;
 
-/** The refusals that say the holder is OpenClaw of a version local connect can't check. */
-const VERSION_REFUSALS: readonly ProveRefusal[] = ["package", "pin"];
-
 type Probe = { kind: "stopped" } | { kind: "proved" } | { kind: "refused"; why: ProveRefusal };
 
 /**
@@ -59,8 +57,14 @@ async function probe(local: LocalConnect, folder: string, port: number): Promise
       socket.once("error", () => (clearTimeout(timer), done(false)));
     });
     if (!open) return { kind: "stopped" };
-    const proof = await proveLocalGateway({ ...local, folder, port, localPort: socket.localPort! });
-    return proof.proved ? { kind: "proved" } : { kind: "refused", why: proof.why };
+    let why: ProveRefusal = "failed";
+    const proved = await proveFor(
+      local,
+      folder,
+      port,
+      (refused) => (why = refused),
+    )(socket.localPort!);
+    return proved ? { kind: "proved" } : { kind: "refused", why };
   } finally {
     socket.destroy();
   }
@@ -106,6 +110,8 @@ export async function lookLocally(
     }
     const folder = folderOf(profile);
     const { port } = outcome;
+    // Outside a person's app, never OpenClaw's default ports, before any socket is opened.
+    if (!localPortAllowed(local, port)) throw new SetupRefusedError("state");
     const facts = { ...empty, profile, port };
     const result = await probe(local, folder, port);
     if (cancelled()) return null;
@@ -121,7 +127,7 @@ export async function lookLocally(
       keep(1, {
         ...facts,
         outcome: "unverified",
-        reason: VERSION_REFUSALS.includes(result.why) ? "version" : null,
+        reason: refusalKind(result.why),
       });
   }
   // The closest result; between two alike, the reader's order.
@@ -145,6 +151,10 @@ export async function readToken(
     if (outcome.kind !== "found") continue;
     if (profile === found.profile && outcome.port === found.port) held = outcome.token;
     else outcome.token.drop();
+  }
+  if (held && !localPortAllowed(local, found.port)) {
+    held.drop();
+    throw new SetupRefusedError("state");
   }
   return held;
 }
