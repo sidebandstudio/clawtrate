@@ -522,7 +522,7 @@ describe("the switch and the rows' changes", () => {
     expect(asked.store.get("pip")).toBe(withSection(BOT_FILE));
   });
 
-  it("by itself, writes nothing while the gateway's settings file is invalid, as its answer says", async () => {
+  it("by itself, writes nothing while the gateway's settings file is invalid or not yet applied, as its answer says", async () => {
     // The gateway answers a settings file it can't read or parse with `valid: false` and an empty
     // `config`: every setting reads unset, so its limit would read as 20,000 though it may be lower.
     // 9,500 characters fit a gateway limit of 10,000 whole; with the section they wouldn't.
@@ -536,6 +536,22 @@ describe("the switch and the rows' changes", () => {
       const result = await applyGuidesChange(request, null, change);
       expect(files.sets, change.action).toEqual([]);
       expect(result.record?.bots ?? [], change.action).not.toContain("pip");
+    }
+    // A saved revision the gateway hasn't applied yet: what it runs may still set a lower limit.
+    for (const applied of ["r1", "r2"]) {
+      const files = fakeFiles({ pip: long });
+      const request: typeof files.request = (method, params) =>
+        method === "config.get"
+          ? Promise.resolve({
+              valid: true,
+              config: {},
+              hash: "h",
+              configRevisionHash: "r2",
+              appliedConfigHash: applied,
+            })
+          : files.request(method, params);
+      await applyGuidesChange(request, null, { action: "auto" });
+      expect(files.sets, applied).toHaveLength(applied === "r2" ? 1 : 0);
     }
     // The same file under a valid config that sets no limit is written.
     const valid = fakeFiles({ pip: long }, {}, {}, {});
@@ -1156,6 +1172,9 @@ describe("the guides in the client", () => {
       await expect(
         client.changeBotGuides({ action: "switch", on: false }, shown.stamp),
       ).rejects.toThrow(GUIDES_DEFAULT_NOT_SAVED);
+      await expect(
+        client.changeBotGuides({ action: "switch", on: false }, shown.stamp),
+      ).rejects.toThrow("agents.list failed");
       expect(recordIn(storage)).toEqual({ on: false, bots: [] });
     } finally {
       client.stop();

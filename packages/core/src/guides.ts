@@ -76,14 +76,21 @@ export function guidesLimit(answer: unknown, botId: string): number {
  * Each folder's limit (`guidesLimit`, the least of its bots'), from one `config.get`; null for
  * every folder when the config can't be read: the limit isn't known then, and 20,000 could be
  * more than the gateway keeps whole. A settings file the gateway can't read or parse is answered
- * `valid: false` with an empty `config`, and is not known either. A config that sets no limit
- * gives 20,000, the gateway's own.
+ * `valid: false` with an empty `config`, and is not known either; nor is a saved revision the
+ * gateway hasn't applied yet (`configRevisionHash` not `appliedConfigHash`, where it reports
+ * both): what it runs may still have a lower limit. A config that sets no limit gives 20,000, the
+ * gateway's own.
  */
 export async function readGuidesLimits(
   request: Request,
 ): Promise<(bots: string[]) => number | null> {
+  const known = (read: unknown) => {
+    const { config, valid, configRevisionHash: saved, appliedConfigHash: applied } = rec(read);
+    if (config === undefined || valid === false) return false;
+    return saved === undefined || applied === undefined || saved === applied;
+  };
   const answer = await request("config.get", {}).then(
-    (read) => (rec(read).config === undefined || rec(read).valid === false ? null : read),
+    (read) => (known(read) ? read : null),
     () => null,
   );
   return (bots) =>
