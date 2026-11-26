@@ -261,6 +261,7 @@ function List({
                 they have been read. */}
             {bot === null &&
               checkIns?.status === "ready" &&
+              checkIns.model === "heartbeat" &&
               checkIns.readBotIds?.includes(each.id) &&
               bots.some((held) => held.id === each.id) && (
                 <span className="ci-summary" data-testid="check-in-summary">

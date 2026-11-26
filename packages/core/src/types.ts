@@ -471,6 +471,12 @@ export type TranscriptItem = {
    * that run as a steer (docs/research/steer-stop.md). Present and true only then.
    */
   steered?: boolean;
+  /**
+   * A system item for the gateway's own user row whose text is the event it woke the task with
+   * (`mapHistory`'s `gatewayEvents`): its first block is the line, its second the event's text,
+   * cleaned and bounded (`eventText`). Present and true only then.
+   */
+  gatewayEvent?: true;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
 };
