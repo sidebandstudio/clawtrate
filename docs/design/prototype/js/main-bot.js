@@ -2,12 +2,14 @@
 // Prototype code, not product code.
 //
 // One first run at a time, from the address:
-//   at        start | greeted | named | helped | task | done   (played to that point)
+//   at        start | greeted | named | task | done   (played to that point)
 //   account   none: no model account yet, so the sign-ins come first
 //   name      bot: the bot names itself without the person typing the name
 //   slow      1: the hello doesn't come
 //   opening   unconfirmed: the first message couldn't be confirmed after its resend
-//             failed: the gateway couldn't run the first message (#663, #686's line)
+//             failed: the gateway couldn't run the first message and didn't say why (#686's line)
+//             model: the account couldn't run the bot's model, so the next one it lists is used
+//             nomodel: the account runs none of its listed models (#686's line, no Try again)
 //             taken: someone else wrote first under the first message's key
 //   device    limited: a device without full control while the first run's questions are open
 //   from      juniper: the Main Bot started from what another bot knows
@@ -161,7 +163,7 @@
   let items = [];
   let composer = { value: "" };
   let task = null; // { title, state: "Working" | "Done" }
-  let tour = { active: false, step: "name" }; // name | naming | help | offer | task | over
+  let tour = { active: false, step: "name" }; // name | naming | help | task | over
   let waitingForName = []; // what the person wrote while the name was being taken
 
   function rail() {
@@ -219,7 +221,7 @@
     "Lead, one short message and one question at a time:\n" +
       '1. Ask what they\'d like to call you. When they answer, write that name on the "- Name:" line of your IDENTITY.md and change nothing else there. Clawtrate shows it at once.\n' +
       "2. Ask what they'd like help with. Before you look anything up, add one short note of what they said at the end of your USER.md, and leave the rest of the file as it is.\n" +
-      "3. Offer to show them how you work in Clawtrate, in about a minute. If they say yes, start one task with sessions_spawn and visible: true, with a short label and a full brief, that makes something small and useful for what they said they want help with and saves it as a file. Tell them they can watch it under your name in the sidebar. When its result comes back, hand them the file with a MEDIA: line.\n" +
+      "3. Show them how you work in Clawtrate: start one task with sessions_spawn and visible: true, with a short label and a full brief, that makes something small and useful for what they said they want help with and saves it as a file. Tell them in a sentence that you started it, that they can watch it under your name in the sidebar, and that they can stop or archive it there. When its result comes back, hand them the file with a MEDIA: line.\n" +
       "4. Then tell them they can ask you anything, or ask you to start something in its own task.",
     "If they want to skip, or ask for something else at any point, stop the tour and help with that. Don't ask them to set anything up, and don't mention this message.",
   ].join("\n\n");
@@ -286,6 +288,18 @@
     );
   }
 
+  // On a phone the task opens in place of the conversation, with a way back.
+  function taskView() {
+    const b = mainBot();
+    return (
+      `<section class="mb-conv" data-testid="task-view" aria-label="${esc(task.title)}"><header class="mb-head">` +
+      `<button type="button" class="mb-round mb-back" data-act="close-task" aria-label="${esc(`Back to ${b.name}`)}">‹</button>` +
+      `<span class="mb-pill-name">${esc(task.title)}</span></header><div class="mb-transcript"><div class="mb-transcript-inner">` +
+      `<p class="mb-line">${esc(`${b.name} started this task from Main`)}</p>` +
+      `<p class="mb-line" data-testid="task-view-state">${esc(task.state)}</p></div></div></section>`
+    );
+  }
+
   function render() {
     const focus = document.activeElement?.id;
     const focusAct = document.activeElement?.dataset?.act;
@@ -295,7 +309,9 @@
         ? `<div class="mb-skip-wrap"><button type="button" class="mb-chip" data-act="skip" data-testid="skip">Skip the tour</button></div>`
         : "";
     const pane =
-      `<section class="mb-conv" aria-label="Conversation">${header()}` +
+      phone() && task?.open
+        ? taskView()
+        : `<section class="mb-conv" aria-label="Conversation">${header()}` +
       `<div class="mb-transcript" data-testid="transcript"><div class="mb-transcript-inner">${items.map(item).join("")}</div></div>${skip}` +
       (state.limited
         ? `<p class="mb-line mb-limited" data-testid="limited-line">You can write to your Main Bot here once it's set up.</p></section>`
@@ -382,8 +398,28 @@
       items.push({
         kind: "line",
         testid: "failed-line",
-        text: "The gateway couldn't run this message. Your account can't be used with this bot's model.",
+        text: "The gateway couldn't run this message. The gateway didn't say why.",
         actions: [["Try again", "try-again"]],
+      });
+      return render();
+    }
+    // The account can't run the bot's model: never sent again on it; the next
+    // model the account lists is set, said where the failure shows, and tried once.
+    if (state.opening === "model" || state.opening === "nomodel")
+      items.push({
+        kind: "line",
+        testid: "model-line",
+        text: "Your account couldn't run GPT-5.5 Pro, so your Main Bot now uses GPT-5.5.",
+      });
+    if (state.opening === "nomodel") {
+      items.push({
+        kind: "line",
+        testid: "failed-line",
+        text: `The gateway couldn't run this message. ${mainBot().name} is set to a model that needs a provider API key, but the account it uses is a sign-in. Choose a model that works with that sign-in, or add an API key.`,
+        actions: [
+          ["Change model", "change-model"],
+          ["Change account", "change-account"],
+        ],
       });
       return render();
     }
@@ -412,15 +448,13 @@
 
   // Plays the person's answers up to the point the address asks for.
   async function fastForward() {
-    const order = ["greeted", "named", "helped", "task", "done"];
+    const order = ["greeted", "named", "task", "done"];
     const upTo = order.indexOf(state.at);
     // A Skip pressed meanwhile ends the tour: no scripted answer is posted after it.
     if (upTo < 1 || !tour.active) return;
     await answer(state.selfName ? "You pick one!" : "Maple");
     if (upTo < 2 || !tour.active) return;
-    await answer("Keeping my week organised, and some coding.");
-    if (upTo < 3 || !tour.active) return;
-    await answer("Sure", upTo < 4);
+    await answer("Keeping my week organised, and some coding.", upTo < 3);
   }
 
   // What the stand-in bot does with each answer, by the tour's step.
@@ -446,17 +480,8 @@
       const name = typed ? norm(text.split("\n")[0]).slice(0, 40) : "Scout";
       return takeName(name, typed);
     }
-    if (step === "help") {
-      tour.step = "offer";
-      return botSays(
-        "Got it, I'll remember that. Want me to show you how I work here? It takes about a minute.",
-      );
-    }
-    if (step === "offer") {
-      // Only a clear yes starts the task; anything else ends the tour and is answered.
-      if (/^\s*(sure|yes|yeah|yep|ok|okay|go ahead|show me|please)\b/i.test(text)) return startTask(holdTask);
-      return endTour("Happy to help with that instead.");
-    }
+    // The bot doesn't wait for a yes: it starts the task and says so.
+    if (step === "help") return startTask(holdTask);
     return botSays("I'm on it.");
   }
 
@@ -494,7 +519,7 @@
   async function startTask(hold) {
     tour.step = "task";
     await botSays(
-      "Here's something I can do while we keep talking: I'll put a starter checklist for your week together in its own task. You can watch it under my name in the sidebar.",
+      "Got it, I'll remember that. To show you how I work here, I've started a task that puts a starter checklist for your week together while we keep talking. You can watch it under my name in the sidebar, and stop or archive it there if you don't want it.",
     );
     task = { title: "Week checklist", state: "Working" };
     items.push({ kind: "task" });
@@ -620,7 +645,17 @@
       // task's row in the sidebar is marked as the one open.
       task.open = true;
       render();
+      if (phone()) root.querySelector('[data-act="close-task"]')?.focus();
       return say(`Opened ${task.title}`);
+    }
+    if (act === "close-task") {
+      task.open = false;
+      render();
+      return root.querySelector('[data-act="open-task"]')?.focus();
+    }
+    if (act === "change-model" || act === "change-account") {
+      // The product opens the bot's Model or Account setting (#686).
+      return say(act === "change-model" ? "Opened Model" : "Opened Account");
     }
     if (act === "save-file") {
       const it = items.find((x) => x.kind === "file");

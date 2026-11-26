@@ -142,7 +142,10 @@ await check("MB-03 Undo puts the name back, on the read-back", async ({ page, op
   await open("at=named");
   await page.getByTestId("named-line").waitFor();
   await page.getByTestId("named-line").getByRole("button", { name: "Undo" }).click();
-  await page.getByText("Back to Clawtrate Main Bot").waitFor();
+  await page
+    .getByTestId("named-line")
+    .filter({ hasText: "Back to Clawtrate Main Bot" })
+    .waitFor();
   assert.equal(await title(page), "Clawtrate Main Bot");
   if (width !== "phone")
     assert.equal(await railName(page, "clawtrate-main-bot", width), "Clawtrate Main Bot");
@@ -242,7 +245,7 @@ await check(
 );
 
 await check(
-  "MB-08 a failed, slow, unconfirmed or taken opening, and a start from another bot, each say so plainly",
+  "MB-08 a failed, slow, unconfirmed or taken opening, a model the account can't run, and a start from another bot, each say so plainly",
   async ({ page, open }) => {
     await open("opening=failed");
     await has(page, '[data-testid="failed-line"]', "The gateway couldn't run this message.");
@@ -254,6 +257,23 @@ await check(
     await page.getByRole("button", { name: "Try again" }).click();
     await page.locator(".mb-msg.is-bot").first().waitFor();
     assert.equal(await page.getByTestId("failed-line").count(), 0);
+    // A model the account can't run is never tried again: the next one it lists is.
+    await open("opening=model");
+    await has(
+      page,
+      '[data-testid="model-line"]',
+      "Your account couldn't run GPT-5.5 Pro, so your Main Bot now uses GPT-5.5.",
+    );
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    assert.equal(await page.getByTestId("failed-line").count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Try again" }).count(), 0);
+    // None of its models runs: #686's line with its two ways, and no Try again.
+    await open("opening=nomodel");
+    await has(page, '[data-testid="failed-line"]', "The gateway couldn't run this message.");
+    for (const name of ["Change model", "Change account"])
+      assert.equal(await page.getByRole("button", { name }).count(), 1, name);
+    assert.equal(await page.getByRole("button", { name: "Try again" }).count(), 0);
+    assert.equal(await page.locator(".mb-msg.is-bot").count(), 0);
     await open("slow=1");
     await has(page, '[data-testid="slow-line"]', "Your Main Bot hasn't answered yet.");
     assert.equal(
@@ -322,7 +342,7 @@ await check(
 );
 
 await check(
-  "MB-13 the tour follows the person: a typed skip, a second message while naming, a clear yes, one Undo, Open task",
+  "MB-13 the tour follows the person: a typed skip, a second message while naming, the task started unasked, one Undo, Open task",
   async ({ page, open, width }) => {
     // A typed skip at the name question ends the tour; it doesn't become the name.
     await open("");
@@ -338,12 +358,14 @@ await check(
     await send(page, "Maple");
     await send(page, "I need help with code");
     await page.evaluate(() => (window.mbHold = false));
-    await page.getByText("Want me to show you how I work here?").waitFor();
+    // The help answer starts the task: the bot says it did, and asks for no yes.
+    await page.getByTestId("card-task").waitFor();
     assert.equal(await title(page), "Maple");
-    // Anything but a clear yes at the offer ends the tour and starts no task.
-    await send(page, "Can you help me fix a test instead?");
-    await page.getByText("Happy to help with that instead.").waitFor();
-    assert.equal(await page.getByTestId("card-task").count(), 0);
+    assert.match(
+      await page.locator(".mb-transcript").innerText(),
+      /I've started a task[\s\S]*stop or archive it there/,
+    );
+    assert.equal(await page.getByText("Want me to show you how I work here?").count(), 0);
     // A Skip while the name is being taken: the name stays, no further tour
     // question, and a message written meanwhile is still answered.
     await open("", "full");
@@ -379,6 +401,13 @@ await check(
     );
     if (width !== "phone")
       assert.equal(await page.getByTestId("rail-task").getAttribute("aria-current"), "true");
+    else {
+      // On a phone the task takes the screen, and Back returns to the conversation.
+      await has(page, '[data-testid="task-view"]', "started this task from Main");
+      assert.equal(await page.getByTestId("transcript").count(), 0);
+      await page.getByRole("button", { name: "Back to Maple" }).click();
+      await page.getByTestId("card-task").waitFor();
+    }
   },
 );
 
@@ -408,9 +437,9 @@ await check(
     await page.waitForTimeout(1500);
     assert.equal(await page.locator(".mb-msg.is-user").count(), 1);
     // A Skip while the task works: its result and file still come, no wrap-up.
-    await open("at=helped", "full");
-    await page.getByText("Want me to show you how I work here?").waitFor();
-    await send(page, "Sure");
+    await open("at=named", "full");
+    await page.getByText("What would you like a hand with?").waitFor();
+    await send(page, "Keeping my week organised");
     await page.getByTestId("card-task").waitFor();
     await page.getByTestId("skip").click();
     await page.getByTestId("card-file").waitFor();

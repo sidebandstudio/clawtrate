@@ -25,7 +25,7 @@ Each asks once, plainly, the same way however it is reached: a button in Setting
 ### What a person will notice first
 
 1. **A bot that takes a name is renamed.** "Call yourself Juniper" changes the name at once: the conversation says "Renamed to Juniper · Undo". Today a card asks (F-552).
-2. **The first run asks nothing between Connect and the first reply** except the command question, until section 3 is decided. No Save on the name card, no "bring what Juniper knows" sheet: the Main Bot starts from what the person's existing bot knows and says what it brought, each part with Undo (#493, #495).
+2. **The first run asks nothing between Connect and the first reply**, the command question included: the first run writes no command mode until #675's review of section 3 lands (F1). No Save on the name card, no "bring what Juniper knows" sheet: the Main Bot starts from what the person's existing bot knows and says what it brought, each part with Undo (#493, #495).
 3. **Bots know how Clawtrate works without a card in the sidebar** (#643, already open).
 4. **Archiving a working task, stopping a bot in a task, and restarting to update just happen**, with the facts the confirmation used to carry shown in the line that follows.
 
