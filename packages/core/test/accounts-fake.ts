@@ -11,6 +11,7 @@ import { ClawtrateClient } from "../src/client.ts";
 import {
   FakeGateway,
   GatewayError,
+  guidesOff,
   helloOk,
   memoryStorage,
   testHost,
@@ -674,11 +675,13 @@ export async function accountsClient(
     adminHeld?: boolean;
     /** Read the accounts before returning (the default). */
     read?: boolean;
+    /** Leave the bots' guides on, as a new device has them (`guidesOff`). */
+    guides?: boolean;
   } = {},
 ) {
   const fake = options.gateway ?? new AccountsGateway();
   const scopes = options.scopes ?? ADMIN_SCOPES;
-  const storage = memoryStorage({
+  const stored = memoryStorage({
     connection: JSON.stringify({ url: URL_A, token: null }),
     [tokenKey(URL_A)]: JSON.stringify({
       token: "device-token",
@@ -687,6 +690,7 @@ export async function accountsClient(
       ...((options.adminHeld ?? scopes.includes("operator.admin")) ? { adminHeld: true } : {}),
     }),
   });
+  const storage = options.guides ? stored : guidesOff(stored);
   const client = new ClawtrateClient(testHost(fake.gateway, storage), FAST);
   await client.start();
   await until(() => client.state.discovery.status === "ready");

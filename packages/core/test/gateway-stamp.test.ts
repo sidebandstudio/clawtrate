@@ -21,6 +21,7 @@ import { FAST, URL_A, URL_B } from "./client-harness.ts";
 import {
   deferred,
   FakeGateway,
+  guidesOff,
   helloOk,
   memoryStorage,
   sleep,
@@ -55,11 +56,13 @@ async function twoGateways() {
     heldScopes: ADMIN_SCOPES.filter((scope) => scope !== "operator.admin"),
     adminHeld: true,
   });
-  const storage = memoryStorage({
-    connection: JSON.stringify({ url: URL_A, token: null }),
-    [tokenKey(URL_A)]: record,
-    [tokenKey(URL_B)]: record,
-  });
+  const storage = guidesOff(
+    memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: record,
+      [tokenKey(URL_B)]: record,
+    }),
+  );
   const host = {
     ...testHost(a.gateway, storage),
     createWebSocket: (url: string) => (url === URL_B ? b : a).gateway.createWebSocket(url),

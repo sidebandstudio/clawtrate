@@ -1024,7 +1024,7 @@ export function startProblem(problem: {
 }
 
 /** The end of a process's log, as a failure prints it under its first line. */
-function logSection(owner: string, log: string, tail: string): string {
+export function logSection(owner: string, log: string, tail: string): string {
   return tail
     ? `  the end of ${owner} log, ${log}:\n${tail.replace(/^/gm, "    ")}`
     : `  ${owner} log, ${log}, is empty`;

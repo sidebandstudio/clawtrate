@@ -4,6 +4,7 @@
 // the gateway and connection it was asked on, a second press shares the first,
 // and the config's model list for bots is read with the accounts.
 
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import { parseBridgeCommand } from "../src/bridge.ts";
 import {
@@ -736,7 +737,17 @@ describe("F-588: Refresh, the engine alone", () => {
         return Promise.race([
           answer,
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`${method} timed out`)), ms);
+            timer = setTimeout(
+              () =>
+                reject(
+                  new GatewayProtocolRequestTimeoutError({
+                    method,
+                    timeoutMs: ms,
+                    requestSent: true,
+                  }),
+                ),
+              ms,
+            );
           }),
         ]).finally(() => clearTimeout(timer));
       },
@@ -809,6 +820,27 @@ describe("F-588: Refresh, the engine alone", () => {
     held.resolve();
     await loading;
     await settle();
+    expect(on.asked()).toBe(false);
+  });
+
+  it("F-588: a config read the deadline ended ends the refresh, though the clock reads time left", async () => {
+    const fake = new AccountsGateway();
+    refreshAsked = false;
+    const on = engineOn(fake, 150);
+    await on.engine.load();
+    // The request's timer and the wall clock can disagree by a millisecond or more: the read is
+    // given up on as timed out while Date.now() still reads time before the deadline.
+    fake.gateway.handlers["config.get"] = () => {
+      throw new GatewayProtocolRequestTimeoutError({
+        method: "config.get",
+        timeoutMs: 150,
+        requestSent: true,
+      });
+    };
+    expect(await on.engine.refreshModels("acme", press)).toEqual({
+      status: "error",
+      error: "The gateway didn't answer in time.",
+    });
     expect(on.asked()).toBe(false);
   });
 
