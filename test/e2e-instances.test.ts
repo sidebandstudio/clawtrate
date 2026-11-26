@@ -56,7 +56,12 @@ describe("which end-to-end runs start the accounts instance", () => {
     expect(fixture.replace(/\s+/g, " ")).toContain(
       "whileStarted( start, () => use(ACCOUNTS), () => cleanUp(RECORDS, record, resetInstance), )",
     );
-    for (const file of ["e2e/accounts.spec.ts", "e2e/machines.spec.ts", "e2e/check-ins.spec.ts"]) {
+    for (const file of [
+      "e2e/accounts.spec.ts",
+      "e2e/machines.spec.ts",
+      "e2e/check-ins.spec.ts",
+      "e2e/model-refresh.spec.ts",
+    ]) {
       const { spec, before } = hooks(file);
       expect(spec, file).toContain('import { ACCOUNTS, test } from "./accounts-instance.ts";');
       expect(before, file).toContain("accountsInstance");
