@@ -643,6 +643,11 @@ export type OutgoingMessage = {
    * id answered that it cancelled it, so it never runs, and that id cannot be sent again.
    */
   steer?: "joined" | "withdrawn";
+  /**
+   * The gateway refused the marker that says it comes from Clawtrate (`send-marker.ts`), so it
+   * went without it; sent again, it goes the same way, as the gateway took it.
+   */
+  unmarked?: true;
 };
 
 export type OutgoingAttachmentInfo = { fileName: string; mimeType: string; sizeBytes: number };

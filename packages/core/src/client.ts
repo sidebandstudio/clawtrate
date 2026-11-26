@@ -39,6 +39,7 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
 import { fromBase64, toBase64 } from "./bytes.ts";
+import { markerRefusal } from "./send-marker.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -1463,6 +1464,8 @@ export class ClawtrateClient {
   private generation = 0;
   /** True once the current connection has reached hello at least once. */
   private everConnected = false;
+  /** This connection's gateway refused the marker as a field it doesn't take (`send-marker.ts`). */
+  private markerRefused = false;
   /**
    * The gateway's `hello-ok.server.bootId`: a random id per gateway start, the
    * lifetime of its in-memory `sessions.create` idempotency cache. Null when
@@ -3742,10 +3745,12 @@ export class ClawtrateClient {
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
     replyToId?: string,
+    marked = true,
   ) {
     return chatSendParams(
       { sessionKey: key, text, idempotencyKey, queueMode, replyToId: replyToId ?? null },
       attachments,
+      marked,
     );
   }
 
@@ -4414,6 +4419,9 @@ export class ClawtrateClient {
 
     let result: RawRecord | null;
     try {
+      // It says it comes from Clawtrate (#666), unless the gateway already refused that for this
+      // message, or for every message on this connection.
+      const marked = message.unmarked !== true && !this.markerRefused;
       const params = this.sendParams(
         key,
         message.text,
@@ -4421,16 +4429,35 @@ export class ClawtrateClient {
         message.mode === "steer" ? "steer" : "followup",
         this.attachmentContent.get(messageId)?.files ?? [],
         message.replyToId,
+        marked,
       );
       this.checkSize(params);
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
       const starts = message.mode !== "steer";
-      const sent = this.request("chat.send", params, {
-        onSent: (requestId) => {
-          if (!starts) return;
-          this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
-        },
+      const send = (frame: typeof params) =>
+        this.request("chat.send", frame, {
+          onSent: (requestId) => {
+            if (!starts) return;
+            this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
+          },
+        });
+      const generation = this.generation;
+      const sent = send(params).catch(async (error: unknown) => {
+        // Refused for the marker alone: the same message once more without it, under the same
+        // key, so it is never lost and never delivered twice. Any other refusal is its own.
+        const refused = marked ? markerRefusal(error) : null;
+        if (!refused) throw error;
+        // Learnt for the connection that answered, never for a later one.
+        if (refused === "gateway" && generation === this.generation) this.markerRefused = true;
+        // A Stop withdrew it, or it went away, while the refusal was on its way: nothing more.
+        const now = this.outgoing(key, messageId);
+        if (!now || now.steer === "withdrawn") throw error;
+        this.updateActivity(key, (activity) =>
+          updateMessage(activity, messageId, { unmarked: true }),
+        );
+        const { workContext: _marker, ...unmarked } = params;
+        return send(unmarked as typeof params);
       });
       // The frame has left: from here a Stop no longer parks it. A steer's own run id is its key
       // (the gateway's `clientRunId`), known before the answer: its events, and a Stop's
@@ -9404,6 +9431,8 @@ export class ClawtrateClient {
     const wasConnected = this.everConnected;
     this.everConnected = true;
     this.pairingSeen = null;
+    // A gateway that refused the marker may since have been updated: each connection asks again.
+    this.markerRefused = false;
     // Each connection may act for another person: read who again before marking reactions.
     this.selfId = null;
     // The protocol gives a boot id at most 96 characters; anything else names no start.
