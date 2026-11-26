@@ -26,7 +26,7 @@ import {
   startHost,
   stopChild,
 } from "./global-setup.ts";
-import { cleanUp, saveRecord, type RunRecord } from "./run-record.ts";
+import { cleanUp, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
 
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const ROOT = join(import.meta.dirname, "..");
@@ -56,7 +56,10 @@ const contexts: Array<{ close(): Promise<void> }> = [];
 
 /** A device: a preview host of its own on this file's instance, paired, with `own` in its storage. */
 async function device(browser: Browser, own: Record<string, string> = {}): Promise<Page> {
-  const data = mkdtempSync(join(tmpdir(), "clawtrate-follow-"));
+  const data = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}follow-`));
+  // Recorded before the host starts, so the next run removes it if this one is killed outright.
+  record.dirs.push(data);
+  saveRecord(RECORDS, record);
   if (Object.keys(own).length > 0)
     writeFileSync(join(data, STATE_FILE), `${JSON.stringify(own, null, 2)}\n`, { mode: 0o600 });
   const started = startHost(MINE, STATIC, data);

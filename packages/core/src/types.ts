@@ -601,8 +601,8 @@ export type ClawtrateState = {
   turnLimitMinutes?: number;
   /**
    * "Show external channel chats": whether `tasksByBot` lists chats that came in
-   * through Discord, Telegram and other channels. Off by default; the gateway's choice for this
-   * user once it holds one (`choices.ts`), else kept by the host.
+   * through Discord, Telegram and other channels. Off by default; on when this device turned it on
+   * (kept by the host) or the gateway holds it on for this user (`choices.ts`, `shownChoice`).
    */
   showChannelChats?: boolean;
   /**

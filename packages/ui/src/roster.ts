@@ -308,12 +308,18 @@ export function useRoster(
       ? current.scope
       : null;
   const merging = useRef<string | null>(null);
+  // A merge that failed is tried again, three times at most, each after twice the wait.
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     const merge = latest.current.sync?.merge;
     if (mergeScope === null || merging.current === mergeScope || !merge) return;
     merging.current = mergeScope;
     const done = () => {
       if (merging.current === mergeScope) merging.current = null;
+    };
+    const failed = () => {
+      done();
+      if (retry < 3) setTimeout(() => setRetry(retry + 1), 2_000 * 2 ** retry);
     };
     merge(toSidebar(latest.current.local)).then((merged) => {
       done();
@@ -324,8 +330,8 @@ export function useRoster(
         writePreference(rosterKey(mergeScope), JSON.stringify(next));
         return { scope: now.scope, prefs: next };
       });
-    }, done);
-  }, [mergeScope]);
+    }, failed);
+  }, [mergeScope, retry]);
 
   /** Apply a change where the arrangement lives. Read-only, on the gateway's: nothing to do. */
   const apply = useCallback(

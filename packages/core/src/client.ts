@@ -8136,14 +8136,11 @@ export class ClawtrateClient {
    * held, so the list changes at once, with nothing read again; a bot's main task always shows.
    */
   async setShowChannelChats(on: boolean, options: ChoiceOptions = {}): Promise<void> {
+    // Asked of the gateway shown now: a switch while it waits in line sends it nowhere else.
+    const generation = this.generation;
     return this.inOrder("channelChats", async () => {
-      // On the gateway first when it keeps the person's choices; then kept here, as this device's.
-      await this.changeChoices({ channelChats: on }, options);
-      // Kept first: a choice the host could not keep is not taken.
-      await this.host.storage.set(CHANNEL_CHATS_KEY, String(on));
-      this.preferenceSets.channelChats += 1;
-      this.ownChoices = { ...this.ownChoices, channelChats: on };
-      this.applyChoices();
+      if (generation !== this.generation) throw new Error("Switched to another gateway.");
+      await this.keepChoice(CHANNEL_CHATS_KEY, "channelChats", on, options);
     });
   }
 
@@ -8153,12 +8150,11 @@ export class ClawtrateClient {
    * start, and applied to the rows already held, as `setShowChannelChats` is.
    */
   async setShowOtherToolSessions(on: boolean, options: ChoiceOptions = {}): Promise<void> {
+    // Asked of the gateway shown now: a switch while it waits in line sends it nowhere else.
+    const generation = this.generation;
     return this.inOrder("otherTools", async () => {
-      await this.changeChoices({ otherTools: on }, options);
-      await this.host.storage.set(OTHER_TOOLS_KEY, String(on));
-      this.preferenceSets.otherTools += 1;
-      this.ownChoices = { ...this.ownChoices, otherTools: on };
-      this.applyChoices();
+      if (generation !== this.generation) throw new Error("Switched to another gateway.");
+      await this.keepChoice(OTHER_TOOLS_KEY, "otherTools", on, options);
     });
   }
 
@@ -8169,17 +8165,38 @@ export class ClawtrateClient {
    * on the gateway does.
    */
   async setShowGatewayBot(on: boolean, options: ChoiceOptions = {}): Promise<void> {
+    // Asked of the gateway shown now: a switch while it waits in line sends it nowhere else.
+    const generation = this.generation;
     return this.inOrder("gatewayBot", async () => {
-      await this.changeChoices({ gatewayBot: on }, options);
-      // Kept first: a choice the host could not keep is not taken.
-      await this.host.storage.set(GATEWAY_BOT_KEY, String(on));
-      this.preferenceSets.gatewayBot += 1;
-      this.ownChoices = { ...this.ownChoices, gatewayBot: on };
-      this.applyChoices();
+      if (generation !== this.generation) throw new Error("Switched to another gateway.");
+      await this.keepChoice(GATEWAY_BOT_KEY, "gatewayBot", on, options);
     });
   }
 
   // The person's choices on the gateway (`choices.ts`; docs/decisions.md, "Your choices follow you")
+
+  /**
+   * One list switch: on the gateway first when it keeps the person's choices, then kept here as
+   * this device's. A choice the gateway took stands although this device's copy, a cache then,
+   * couldn't be saved; a choice only this device keeps is not taken unless it is saved.
+   */
+  private async keepChoice(
+    key: string,
+    name: "channelChats" | "otherTools" | "gatewayBot",
+    on: boolean,
+    options: ChoiceOptions,
+  ): Promise<void> {
+    const where = await this.changeChoices({ [name]: on }, options);
+    try {
+      await this.host.storage.set(key, String(on));
+    } catch (error) {
+      if (where !== "gateway") throw error;
+      this.logFailure("warn", "storage.set", error);
+    }
+    this.preferenceSets[name] += 1;
+    this.ownChoices = { ...this.ownChoices, [name]: on };
+    this.applyChoices();
+  }
 
   /**
    * Change choices on the gateway too, once it keeps this user's preferences, and only from a
@@ -8194,6 +8211,8 @@ export class ClawtrateClient {
     change: ChoiceSet,
     options: ChoiceOptions = {},
   ): Promise<"gateway" | "device"> {
+    // A change read on another target is refused before anything is kept, here or there.
+    if (options.stamp) this.requireSameTarget(options.stamp);
     const held = this.state.choices;
     if (held?.status !== "ok") return "device";
     const names = CHOICE_IDS.filter((name) => typeof change[name] === "boolean");

@@ -130,7 +130,10 @@ export async function writeChoices(
       if (typeof change[name] === "boolean" && (mode === "set" || held[name] === undefined))
         on[name] = change[name];
     if (CHOICE_IDS.every((name) => on[name] === held[name])) return { status: "ok", prefs: from };
-    const next: ChoicesPrefs = { on, rev: (from?.rev ?? 0) + 1 };
+    const rev = (from?.rev ?? 0) + 1;
+    // A revision readers would drop can't order anything: nothing is written.
+    if (!Number.isSafeInteger(rev)) throw new Error("These choices can't be changed any more.");
+    const next: ChoicesPrefs = { on, rev };
     if (utf8Length(JSON.stringify(next)) > MAX_CHOICES_BYTES)
       throw new Error("These choices are too large for the gateway to keep.");
     const result = asRecord(

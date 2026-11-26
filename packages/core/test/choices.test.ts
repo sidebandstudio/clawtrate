@@ -400,6 +400,37 @@ describe("F-601: choices follow the person to each device on one gateway", () =>
     client.stop();
   });
 
+  it("F-601: a device's pin of a bot the gateway places in a section isn't merged; a revision readers would drop is never written; a change read on another target keeps nothing", async () => {
+    const merged = mergeSidebars(
+      parseSidebar({ sections: [{ name: "Work", bots: ["otto"] }] }),
+      parseSidebar({ pins: ["otto", "pip"] }),
+    );
+    expect(merged.pins).toEqual(["pip"]);
+    expect(merged.sections).toEqual([{ name: "Work", bots: ["otto"] }]);
+    const ctx = (rev: number) => ({
+      request: async (method: string) =>
+        method === "users.prefs.get"
+          ? { status: "ok", entries: { [CHOICES_PREF_KEY]: { on: {}, rev } } }
+          : { status: "ok" },
+    });
+    await expect(
+      writeChoices(ctx(Number.MAX_SAFE_INTEGER), { commands: true }, "set"),
+    ).rejects.toThrow("can't be changed");
+    await expect(writeChoices(ctx(7), { commands: true }, "set")).resolves.toMatchObject({
+      prefs: { rev: 8 },
+    });
+    const fake = prefsGateway();
+    fake.durable = false;
+    const b = await device(fake);
+    const stale = { ...b.stamp(), target: b.stamp().target + 1 };
+    await expect(b.client.setShowChannelChats(true, { stamp: stale })).rejects.toThrow(
+      CONNECTION_CHANGED,
+    );
+    expect(b.client.state.showChannelChats).toBe(false);
+    expect(b.storage.data.has("show-channel-chats")).toBe(false);
+    b.client.stop();
+  });
+
   it("F-601: the bounds: only known choices, each a boolean; the state keeps them within its bound", async () => {
     expect(
       parseChoices({

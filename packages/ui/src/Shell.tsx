@@ -138,6 +138,8 @@ export function Shell({
       : null;
   const mergedFor = useRef<string | null>(null);
   const mergeTarget = state.connection.target;
+  // A merge that failed is tried again, three times at most, each after twice the wait.
+  const [mergeRetry, setMergeRetry] = useState(0);
   useEffect(() => {
     if (mergeFor === null || mergedFor.current === mergeFor) return;
     mergedFor.current = mergeFor;
@@ -145,9 +147,11 @@ export function Shell({
     if (Object.keys(base).length === 0) return;
     const stamp = { gatewayId: mergeFor, target: mergeTarget };
     send({ type: "mergeChoices", base, stamp }).catch(() => {
-      if (mergedFor.current === mergeFor) mergedFor.current = null;
+      if (mergedFor.current !== mergeFor) return;
+      mergedFor.current = null;
+      if (mergeRetry < 3) setTimeout(() => setMergeRetry(mergeRetry + 1), 2_000 * 2 ** mergeRetry);
     });
-  }, [mergeFor, mergeTarget, send]);
+  }, [mergeFor, mergeTarget, mergeRetry, send]);
 
   // When access arrives, the strip says so for four seconds; the conversation announces it.
   const [tier, setTier] = useState(interactive);

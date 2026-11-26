@@ -88,6 +88,8 @@ function deviceSwitch(
 ): () => [boolean, (shown: boolean) => Promise<void>] {
   const listeners = new Set<() => void>();
   let value: boolean | null = null;
+  /** The latest change asked: an older one answered later doesn't overwrite it. */
+  let asked = 0;
   const fromUrl = () => new URLSearchParams(globalThis.location?.search ?? "").get(key);
   const read = (): boolean => {
     if (value === null) value = (fromUrl() ?? readPreference(key)) === "show";
@@ -111,6 +113,7 @@ function deviceSwitch(
     const url = fromUrl();
     const choose = useCallback(
       async (next: boolean) => {
+        const mine = ++asked;
         const state = bridge?.getState();
         // Where the gateway keeps the person's choices, it hears of the change; a refusal changes nothing.
         if (bridge && state?.choices?.status === "ok")
@@ -119,7 +122,7 @@ function deviceSwitch(
             change: { [choice]: next },
             stamp: gatewayStamp(state.connection),
           });
-        keep(next);
+        if (mine === asked) keep(next);
       },
       [bridge],
     );

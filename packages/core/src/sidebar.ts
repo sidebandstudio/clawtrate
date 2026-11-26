@@ -214,12 +214,14 @@ export function mergeSidebars(gateway: SidebarPrefs, device: SidebarPrefs): Side
     ...gateway.hidden,
     ...device.hidden.filter((id) => !gateway.hidden.includes(id) && !gateway.pins.includes(id)),
   ];
-  const pins = [
-    ...gateway.pins,
-    ...device.pins.filter((id) => !gateway.pins.includes(id) && !hidden.includes(id)),
-  ];
   const sections = gateway.sections.map((section) => ({ ...section, bots: [...section.bots] }));
   const placed = new Set(sections.flatMap((section) => section.bots));
+  const pins = [
+    ...gateway.pins,
+    ...device.pins.filter(
+      (id) => !gateway.pins.includes(id) && !hidden.includes(id) && !placed.has(id),
+    ),
+  ];
   for (const section of device.sections) {
     const bots = section.bots.filter((id) => !placed.has(id));
     if (bots.length === 0) continue;
@@ -259,7 +261,8 @@ export async function mergeSidebar(
     )
       return { status: "ok", prefs: held };
     const next = { ...merged, rev: (held?.rev ?? 0) + 1 };
-    if (sidebarBytes(next) > MAX_SIDEBAR_BYTES) return { status: "ok", prefs: held };
+    if (!Number.isSafeInteger(next.rev) || sidebarBytes(next) > MAX_SIDEBAR_BYTES)
+      return { status: "ok", prefs: held };
     const result = asRecord(
       await ctx.request("users.prefs.set", {
         entries: { [SIDEBAR_PREF_KEY]: next },
