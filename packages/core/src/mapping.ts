@@ -592,12 +592,11 @@ const SYSTEM_ROW_TEXT: Record<string, string> = {
 
 /**
  * A turn the gateway wrote itself: a user row whose `provenance.kind` is
- * `internal_system` (OpenClaw 2026.10.6 and 2026.11.10, `input-provenance`), which a
- * client may set only with admin access. It is never the person's words, so it shows
+ * `internal_system` (OpenClaw 2026.10.6 and 2026.11.10, `input-provenance`). It shows
  * as a line saying what the gateway did. The restart recovery's prompt names a
  * restart the gateway believes happened; the line says only that it resumed a turn.
- * `event` is whether the row's text is the event the gateway woke the task with
- * (`mapHistory`'s `gatewayEvents`) rather than its own prompt to the bot.
+ * `event` is the row's text when it is a system event the gateway woke the task with
+ * (`mapHistory`'s `gatewayEvents`, `isSessionEventRow`), not its own prompt to the bot.
  */
 function gatewayTurn(
   message: RawRecord,
@@ -609,8 +608,27 @@ function gatewayTurn(
     return { line: "The gateway resumed an earlier turn by itself", event: null };
   return {
     line: "The gateway started a turn by itself",
-    event: events ? eventText(textOf(message.content)) : null,
+    event: events && isSessionEventRow(message) ? eventText(textOf(message.content)) : null,
   };
+}
+
+/**
+ * The row the gateway's own session event path writes (OpenClaw 2026.11.10,
+ * `session-event-context.ts`): its delivery names the event's occurrence
+ * (`__openclaw.transport.messageId`), the key it is stored under, and no person sent it
+ * (no `__openclaw.senderId`). The provenance alone is not enough: a client with
+ * `operator.write` can have `agent` write it on a row of its own, which the gateway stores
+ * under `<its key>:user`, with no such delivery and the client's person as its sender.
+ */
+function isSessionEventRow(message: RawRecord): boolean {
+  const info = meta(message);
+  const key = str(message.idempotencyKey);
+  return (
+    key !== null &&
+    str(info.idempotencyKey) === key &&
+    str(asRecord(info.transport)?.messageId) === key &&
+    (info.senderId === undefined || info.senderId === null)
+  );
 }
 
 /** The most of a system event's text kept, in characters: within one block's bound. */

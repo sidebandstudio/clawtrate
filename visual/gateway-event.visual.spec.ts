@@ -22,7 +22,7 @@ const PHONE = SIZES.find((size) => size.phone)!;
 const KEY = "agent:otto:disk-space";
 const EPOCH = NOW.getTime() - 120_000;
 const EVENT =
-  "Exec completed (cleanup-3, code 0) :: removed 1,204 cache files\nfreed 12.4 GB in /var/cache/builds";
+  "Exec completed (5e1f9a3b, code 0, 41s):\nremoved 1,204 cache files\nfreed 12.4 GB in /var/cache/builds";
 
 const rows = [
   {
@@ -101,12 +101,12 @@ for (const size of [WIDE, PHONE]) {
         await woken(page);
         await expect(line(page)).toBeVisible();
         await expect(
-          page.getByTestId("transcript").locator(".msg").filter({ hasText: "cleanup-3" }),
+          page.getByTestId("transcript").locator(".msg").filter({ hasText: "5e1f9a3b" }),
         ).toHaveCount(0);
         await settle(page);
         await expect(page).toHaveScreenshot(`gateway-event-${theme}-${size.name}.png`);
         await line(page).getByText("Event text").click();
-        await expect(line(page).getByText(/^Exec completed \(cleanup-3/)).toBeVisible();
+        await expect(line(page).getByText(/^Exec completed \(5e1f9a3b/)).toBeVisible();
         await settle(page);
         await expect(page).toHaveScreenshot(`gateway-event-open-${theme}-${size.name}.png`);
       });
