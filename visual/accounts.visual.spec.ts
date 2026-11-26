@@ -380,6 +380,31 @@ const SCENES: Scene[] = [
   { name: "bot-account-elsewhere", query: page$("elsewhere"), ready: accountPage },
   { name: "bot-account-unwritten", query: page$("unwritten"), ready: accountPage },
   { name: "bot-account-read-only", query: page$("locked", "read"), ready: accountPage },
+  // OpenClaw 2026.10.10 on changes a bot's account order only while the gateway is stopped.
+  {
+    name: "bot-account-bound-stopped",
+    query: `${page$("bound")}&version=2026.11.10`,
+    ready: accountPage,
+  },
+  {
+    name: "bot-account-stale-stopped",
+    query: `${page$("stale")}&version=2026.11.10`,
+    ready: accountPage,
+  },
+  {
+    name: "bot-account-unlock-stopped",
+    query: `${page$("locked")}&version=2026.11.10`,
+    ready: async (page) => {
+      await accountPage(page);
+      await page.locator("details.b-disclosure", { hasText: "Unlock" }).locator("summary").click();
+      await expect(page.getByTestId("stopped-steps")).toBeVisible();
+    },
+  },
+  {
+    name: "bot-account-retained-stopped",
+    query: `${page$("retained")}&version=2026.11.10`,
+    ready: accountPage,
+  },
   {
     name: "bot-change-account",
     query: page$("locked"),
