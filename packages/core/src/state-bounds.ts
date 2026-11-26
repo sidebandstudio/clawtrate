@@ -801,6 +801,7 @@ const nameRecordChange = object<NameRecordChange>()({
   run: ID,
   asked: FLAG,
   source: ENUM,
+  done: NUMBER,
   undone: NUMBER,
 });
 const updateRun = object<UpdateRunView>()({

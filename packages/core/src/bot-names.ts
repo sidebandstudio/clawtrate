@@ -46,8 +46,8 @@ export const NAME_RECORD_KEY = "clawtrate.changes";
 export const MAX_RECORD_BYTES = 4_096;
 export const MAX_RECORD_CHANGES = 8;
 export const MAX_RECORD_DECLINED = 8;
-/** Bots whose renames the record counts by day, the latest kept. */
-export const MAX_RECORD_COUNTS = 8;
+/** Bots whose renames the record counts today: one per bot the state lists (`MAX_BOTS`). */
+export const MAX_RECORD_COUNTS = 32;
 /** How long Undo is offered, and how long a change is kept. */
 export const UNDO_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /** At most this many renames of one bot are applied in a day. */
@@ -239,6 +239,8 @@ export function parseNameRecord(raw: unknown, now: number): NameRecord {
     if (typeof entry.run !== "string" || !/^[0-9a-f]{16}$/.test(entry.run)) continue;
     const undone = entry.undone;
     if (undone !== undefined && (typeof undone !== "number" || !Number.isFinite(undone))) continue;
+    const done = entry.done;
+    if (done !== undefined && (typeof done !== "number" || !Number.isFinite(done))) continue;
     const source = entry.source;
     changes.push({
       bot: entry.bot,
@@ -249,6 +251,7 @@ export function parseNameRecord(raw: unknown, now: number): NameRecord {
       run: entry.run,
       asked: entry.asked === true,
       source: typeof source === "string" && SOURCES.has(source) ? (source as NameSource) : null,
+      ...(done === undefined ? {} : { done }),
       ...(undone === undefined ? {} : { undone }),
     });
   }
@@ -314,6 +317,13 @@ export function canUndoName(
   return bots.find((bot) => bot.id === change.bot)?.name === change.to;
 }
 
+/**
+ * The changes a bot's settings list: those confirmed done, or undone. A claim whose rename was
+ * never confirmed, left by a lost answer or a device that stopped, is not a rename.
+ */
+export const shownChanges = (changes: readonly NameRecordChange[]) =>
+  changes.filter((each) => each.done !== undefined || each.undone !== undefined);
+
 export type BotNamesContext = {
   request: (method: string, params: unknown) => Promise<unknown>;
   bots: () => Bot[];
@@ -321,6 +331,8 @@ export type BotNamesContext = {
   canRename: () => boolean;
   /** Where a read is made now: the gateway's identity and the host's target (`gatewayStamp`). */
   stamp: () => GatewayStamp;
+  /** The connection's own number, new with each connection, the same gateway's included. */
+  generation: () => number;
   /** Refuse unless `stamp` is still where the host is connected, as every bot write does. */
   sameGateway: (stamp: GatewayStamp) => Promise<void>;
   /** The host's storage: only to forget what the earlier card kept there. */
@@ -343,6 +355,9 @@ export type BotNamesContext = {
 };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** Where a record operation began: the gateway and the very connection it is bound to. */
+type RecordOp = { stamp: GatewayStamp; generation: number };
 
 /** What a rename's line says of whose it was. */
 export type RenameOrigin = { asked: boolean; source: NameSource; run: string };
@@ -489,8 +504,9 @@ export class BotNames {
         ...patch,
       });
     };
-    await this.flushDeclines(stamp);
-    const read = await this.readRecord(stamp);
+    const op: RecordOp = { stamp, generation: this.ctx.generation() };
+    await this.flushDeclines(op);
+    const read = await this.readRecord(op);
     if (epoch !== this.epoch) return;
     if (this.isDeclined(read.record, stamp, botId, name)) return;
     const shown = read.record?.changes.find((each) => each.run === origin.run);
@@ -524,29 +540,33 @@ export class BotNames {
         source: origin.source,
       };
       const day = dayOf(change.at);
-      const claimed = await this.writeRecord(stamp, (record) => {
+      const claimed = await this.writeRecord(op, (record) => {
         if (record.changes.some((each) => each.run === origin.run)) return "taken";
         if (this.isDeclined(record, stamp, botId, name)) return "declined";
         const today = record.changes.filter(
           (each) => each.bot === botId && change.at - each.at < DAY_MS,
         ).length;
         if (Math.max(today, renamesOn(record, botId, day)) >= MAX_RENAMES_PER_DAY) return "limit";
-        const counts = record.counts.filter((each) => !(each.bot === botId && each.day === day));
-        return {
+        // Only today's counts matter for the limit; one that can't be kept refuses the rename.
+        const counts = record.counts.filter((each) => each.day === day && each.bot !== botId);
+        const next = {
           ...record,
           changes: [...record.changes, change],
           counts: [...counts, { bot: botId, day, n: renamesOn(record, botId, day) + 1 }],
         };
+        if (renamesOn(fitNameRecord(next), botId, day) === 0) return "full";
+        return next;
       });
       if (epoch !== this.epoch) return;
       if (claimed === "taken") {
-        const other = (await this.readRecord(stamp)).record?.changes.find(
+        const other = (await this.readRecord(op)).record?.changes.find(
           (each) => each.run === origin.run,
         );
         return other ? this.showChange(other, stamp) : this.drop(botId);
       }
       if (claimed === "declined") return this.drop(botId);
       if (claimed === "limit") return line({ status: "not-done", reason: "limit" });
+      if (claimed === "full") return line({ status: "not-done", reason: "full" });
       if (claimed === "unavailable") return line({ status: "not-done", reason: "no-record" });
       try {
         await this.ctx.request("agents.update", { agentId: botId, name });
@@ -555,7 +575,7 @@ export class BotNames {
         // its answer was lost and the rename may have landed: the entry stays, and the bot's name
         // as the gateway lists it says which.
         if (this.ctx.certainRefusal(error)) {
-          const removed = await this.writeRecord(stamp, (record) => ({
+          const removed = await this.writeRecord(op, (record) => ({
             ...record,
             changes: record.changes.filter((each) => each.run !== origin.run),
           })).catch(() => "unavailable" as const);
@@ -570,6 +590,15 @@ export class BotNames {
       if (epoch !== this.epoch) throw new Error(CONNECTION_CHANGED_AFTER_SEND);
       if (this.ctx.bots().find((each) => each.id === botId)?.name !== name)
         throw new Error(`Rename was sent, but the gateway's bot list doesn't show ${name} yet.`);
+      // Confirmed by the bot list: the record says so, and only then lists it as a rename.
+      await this.writeRecord(op, (record) => ({
+        ...record,
+        changes: record.changes.map((each) =>
+          each.run === origin.run ? { ...each, done: this.ctx.now() } : each,
+        ),
+      })).catch((error: unknown) =>
+        this.ctx.log(`could not mark ${botId}'s rename done: ${errorText(error)}`),
+      );
       line({ status: "renamed" });
     } catch (error) {
       line({
@@ -593,8 +622,9 @@ export class BotNames {
     if (!this.ctx.canRename()) throw new Error("Renaming a bot needs admin access.");
     if (!sameStamp(this.ctx.stamp(), stamp))
       throw new Error("This change was read on another gateway, so nothing was sent.");
+    const op: RecordOp = { stamp, generation: this.ctx.generation() };
     await this.ctx.refreshBots();
-    const { record } = await this.readRecord(stamp);
+    const { record } = await this.readRecord(op);
     const change = record?.changes.find((each) => each.run === run && each.bot === botId);
     if (!record || !change || !canUndoName(change, record.changes, this.ctx.bots(), this.ctx.now()))
       throw new Error("That change can no longer be undone.");
@@ -630,7 +660,7 @@ export class BotNames {
     this.unrecorded.set(`${stamp.gatewayId}\n${botId}`, { stamp, botId, name: change.to, run });
     if (this.unrecorded.size > MAX_NAME_CARDS)
       this.unrecorded.delete(this.unrecorded.keys().next().value!);
-    const kept = await this.flushDeclines(stamp);
+    const kept = await this.flushDeclines(op);
     restore({
       status: "undone",
       error: kept
@@ -643,10 +673,10 @@ export class BotNames {
    * Write the declines Undo couldn't keep on the gateway, for that gateway only: the change marked
    * undone and its name declined. Whether none is left for it.
    */
-  private async flushDeclines(stamp: GatewayStamp): Promise<boolean> {
-    const mine = [...this.unrecorded].filter(([, each]) => sameStamp(each.stamp, stamp));
+  private async flushDeclines(op: RecordOp): Promise<boolean> {
+    const mine = [...this.unrecorded].filter(([, each]) => sameStamp(each.stamp, op.stamp));
     if (mine.length === 0) return true;
-    const result = await this.writeRecord(stamp, (record) => ({
+    const result = await this.writeRecord(op, (record) => ({
       ...record,
       changes: record.changes.map((each) =>
         mine.some(([, kept]) => kept.run === each.run && each.undone === undefined)
@@ -688,8 +718,8 @@ export class BotNames {
   /** The record changed on the gateway: read it again, and let lines follow it. */
   async onPrefsChanged(keys: unknown): Promise<void> {
     if (!Array.isArray(keys) || !keys.includes(NAME_RECORD_KEY)) return;
-    const stamp = this.ctx.stamp();
-    const { record } = await this.readRecord(stamp).catch(() => ({ record: null }));
+    const op: RecordOp = { stamp: this.ctx.stamp(), generation: this.ctx.generation() };
+    const { record } = await this.readRecord(op).catch(() => ({ record: null }));
     for (const line of [...this.lines.values()]) {
       const change = record?.changes.find((each) => each.run === line.run);
       if (change?.undone !== undefined && line.status === "renamed")
@@ -699,7 +729,9 @@ export class BotNames {
 
   /** Read the record on connecting, for the bots' settings. */
   async loadRecord(): Promise<void> {
-    await this.readRecord(this.ctx.stamp()).catch(() => {});
+    await this.readRecord({ stamp: this.ctx.stamp(), generation: this.ctx.generation() }).catch(
+      () => {},
+    );
   }
 
   /** The bot list changed: a line whose bot is gone goes. */
@@ -746,20 +778,23 @@ export class BotNames {
    * A request of the record's, made only while the connection is still the one `stamp` names:
    * an operation begun on one gateway never reads or writes another's record.
    */
-  private async recordRequest(stamp: GatewayStamp, method: string, params: unknown) {
-    if (!sameStamp(this.ctx.stamp(), stamp))
-      throw new Error("The connection changed, so nothing was sent.");
+  private async recordRequest(op: RecordOp, method: string, params: unknown) {
+    if (!this.current(op)) throw new Error("The connection changed, so nothing was sent.");
     return asRecord(await this.ctx.request(method, params));
   }
 
+  /** Whether the connection is still the one the operation began on. */
+  private current(op: RecordOp): boolean {
+    return sameStamp(this.ctx.stamp(), op.stamp) && this.ctx.generation() === op.generation;
+  }
+
   /** The record as the gateway holds it now, with the raw value a write compares against. */
-  private async readRecord(
-    stamp: GatewayStamp,
-  ): Promise<{ record: NameRecord | null; raw: unknown }> {
-    const result = await this.recordRequest(stamp, "users.prefs.get", {
+  private async readRecord(op: RecordOp): Promise<{ record: NameRecord | null; raw: unknown }> {
+    const { stamp } = op;
+    const result = await this.recordRequest(op, "users.prefs.get", {
       keys: [NAME_RECORD_KEY],
     }).catch(() => null);
-    const current = sameStamp(this.ctx.stamp(), stamp);
+    const current = this.current(op);
     if (result?.status !== "ok") {
       if (current) this.ctx.publishRecord(null);
       return { record: null, raw: null };
@@ -777,22 +812,21 @@ export class BotNames {
    * `change` may answer why not instead.
    */
   private async writeRecord<T extends string>(
-    stamp: GatewayStamp,
+    op: RecordOp,
     change: (record: NameRecord) => NameRecord | T,
   ): Promise<"written" | "unavailable" | T> {
     for (let attempt = 0; attempt < RECORD_WRITE_ATTEMPTS; attempt += 1) {
-      const { record, raw } = await this.readRecord(stamp);
+      const { record, raw } = await this.readRecord(op);
       if (!record) return "unavailable";
       const next = change(record);
       if (typeof next === "string") return next;
       const value = fitNameRecord({ ...next, rev: record.rev + 1 });
-      const result = await this.recordRequest(stamp, "users.prefs.set", {
+      const result = await this.recordRequest(op, "users.prefs.set", {
         entries: { [NAME_RECORD_KEY]: value },
         expectedEntries: { [NAME_RECORD_KEY]: raw ?? null },
       });
       if (result?.status === "ok") {
-        if (sameStamp(this.ctx.stamp(), stamp))
-          this.ctx.publishRecord({ stamp, changes: value.changes });
+        if (this.current(op)) this.ctx.publishRecord({ stamp: op.stamp, changes: value.changes });
         return "written";
       }
       if (result?.status !== "conflict") return "unavailable";

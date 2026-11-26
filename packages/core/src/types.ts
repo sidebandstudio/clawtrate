@@ -690,7 +690,7 @@ export type NameLine = {
   source: NameSource;
   status: "renaming" | "renamed" | "undoing" | "undone" | "not-done" | "failed";
   /** Why a rename wasn't made: a name another bot has, the day's limit, no admin, no record. */
-  reason: "taken" | "limit" | "no-admin" | "no-record" | null;
+  reason: "taken" | "limit" | "full" | "no-admin" | "no-record" | null;
   error: string | null;
 };
 
@@ -704,6 +704,8 @@ export type NameRecordChange = {
   run: string;
   asked: boolean;
   source: NameSource;
+  /** When the bot list confirmed the rename; a claim without it never landed, as far as known. */
+  done?: number;
   /** When Undo put the name back, from any device. */
   undone?: number;
 };

@@ -357,8 +357,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   "botNames.sentRuns": {
     max: MAX_SENT_RUNS,
-    // The text as JSON writes it: up to six characters (`\uXXXX`) for each one kept.
-    each: MAX_CHECKED_RUN_CHARS + ID + 6 * MAX_SENT_TEXT_CHARS,
+    // The run id and the text as JSON writes them: up to six characters (`\uXXXX`) for each
+    // one kept, and their quotes.
+    each: 6 * MAX_CHECKED_RUN_CHARS + ID + 6 * MAX_SENT_TEXT_CHARS + 6,
     row: "bookkeeping",
   },
   "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },

@@ -21,6 +21,7 @@ import {
   parseNameRecord,
   plainName,
   runTag,
+  shownChanges,
   UNDO_WINDOW_MS,
   type RunStepFacts,
 } from "../src/bot-names.ts";
@@ -194,6 +195,8 @@ function gateway(options: { prefs?: "ok" | "none"; file?: string } = {}) {
     update: "ok" as "ok" | "refused" | "lost",
     /** `users.prefs.set` answers with an error from now on. */
     prefsDown: false,
+    /** Every `users.prefs.set` the gateway was sent. */
+    sets: 0,
   };
   const request = async (method: string, raw: unknown): Promise<unknown> => {
     const params = raw as Record<string, unknown>;
@@ -216,6 +219,7 @@ function gateway(options: { prefs?: "ok" | "none"; file?: string } = {}) {
         entries: state.record === undefined ? {} : { [NAME_RECORD_KEY]: state.record },
       };
     if (method === "users.prefs.set") {
+      state.sets += 1;
       if (state.prefsDown) return { status: "error" };
       state.meddle?.();
       state.meddle = null;
@@ -238,6 +242,7 @@ function device(
     steps?: RunStepFacts[] | null;
     claim?: () => Promise<void>;
     stamp?: () => GatewayStamp;
+    generation?: () => number;
   } = {},
 ) {
   let lines: NameLine[] = [];
@@ -248,6 +253,7 @@ function device(
     bots: () => gw.state.bots,
     canRename: () => options.admin ?? true,
     stamp: options.stamp ?? (() => STAMP),
+    generation: options.generation ?? (() => 1),
     sameGateway: async () => {},
     storage: memoryStorage(),
     takeRead: () => () => {},
@@ -279,7 +285,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
       expect.objectContaining({ from: "Pip", to: "Juniper", asked: true, status: "renamed" }),
     ]);
     expect(parseNameRecord(gw.state.record, NOW).changes).toEqual([
-      change({ at: NOW, asked: true }),
+      change({ at: NOW, asked: true, done: NOW }),
     ]);
   });
 
@@ -360,20 +366,35 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(lost.state.bots[0]!.name).toBe("Pip");
   });
 
-  it("F-552: a record request is made only on the gateway the operation began on", async () => {
+  it("F-552: a record request is made only on the gateway and the connection the operation began on", async () => {
+    for (const move of ["gateway", "reconnect"] as const) {
+      const gw = gateway();
+      let stamp = STAMP;
+      let generation = 1;
+      const me = device(gw, { stamp: () => stamp, generation: () => generation });
+      gw.state.meddle = () => {
+        // Another device wrote first, and this one has moved on before it retries.
+        gw.state.record = { rev: 9, changes: [], declined: [], counts: [] };
+        if (move === "gateway") stamp = { gatewayId: "gw-b", target: 2 };
+        else generation += 1;
+      };
+      await me.engine.afterRun("pip", "agent:pip:main", "run-1");
+      expect(gw.state.sets, move).toBe(1);
+      expect(gw.state.updates, move).toEqual([]);
+    }
+  });
+
+  it("F-552: a rename is listed in the bot's settings only once the bot list confirmed it", async () => {
     const gw = gateway();
-    let stamp = STAMP;
-    const me = device(gw, { stamp: () => stamp });
-    let sets = 0;
-    gw.state.meddle = () => {
-      sets += 1;
-      // Another device wrote first, and this one has moved to another gateway before it retries.
-      gw.state.record = { rev: 9, changes: [], declined: [], counts: [] };
-      stamp = { gatewayId: "gw-b", target: 2 };
-    };
+    const me = device(gw);
     await me.engine.afterRun("pip", "agent:pip:main", "run-1");
-    expect(sets).toBe(1);
-    expect(gw.state.updates).toEqual([]);
+    const kept = parseNameRecord(gw.state.record, NOW).changes;
+    expect(kept[0]!.done).toBe(NOW);
+    expect(shownChanges(kept)).toHaveLength(1);
+    // A claim left by a rename that never landed, and its removal that didn't get through.
+    expect(shownChanges([change(), change({ run: runTag("run-2"), undone: NOW })])).toEqual([
+      change({ run: runTag("run-2"), undone: NOW }),
+    ]);
   });
 
   it("F-552: not done, and said: no admin, a name another bot has, past three renames today, and no record to keep the way back", async () => {
@@ -406,12 +427,26 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     const e = device(evicted);
     await e.engine.afterRun("pip", "agent:pip:main", "run-1");
     expect(e.lines()[0]).toMatchObject({ status: "not-done", reason: "limit" });
+    // Eight other bots renamed today don't push Pip's count out.
+    const crowded = gateway();
+    crowded.state.record = {
+      rev: 3,
+      changes: [],
+      declined: [],
+      counts: [
+        { bot: "pip", day: dayOf(NOW), n: 3 },
+        ...Array.from({ length: 8 }, (_, n) => ({ bot: `other-${n}`, day: dayOf(NOW), n: 1 })),
+      ],
+    };
+    const c = device(crowded);
+    await c.engine.afterRun("pip", "agent:pip:main", "run-1");
+    expect(c.lines()[0]).toMatchObject({ status: "not-done", reason: "limit" });
 
     const none = gateway({ prefs: "none" });
     const n = device(none);
     await n.engine.afterRun("pip", "agent:pip:main", "run-1");
     expect(n.lines()[0]).toMatchObject({ status: "not-done", reason: "no-record" });
-    expect([taken, busy, evicted, none].flatMap((g) => g.state.updates)).toEqual([]);
+    expect([taken, busy, evicted, crowded, none].flatMap((g) => g.state.updates)).toEqual([]);
   });
 
   it("F-552: Undo puts the name before back, marks the change undone and declines the name, so the same edit doesn't rename the bot again", async () => {
