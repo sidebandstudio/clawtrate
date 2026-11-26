@@ -369,8 +369,12 @@ int main(int argc, char **argv) {
     });
     if (read.kind !== "read") throw new Error(`settings not read: ${JSON.stringify(read)}`);
     expect(read.identity).toBe(identityOf(at));
-    const hold = (path: string) => held(path).map((file) => openSync(file, "r"));
-    let files = hold(at);
+    // Each descriptor is tracked as it opens and dropped as it closes, so cleanup closes each once.
+    const files: number[] = [];
+    const hold = (path: string) => {
+      for (const file of held(path)) files.push(openSync(file, "r"));
+    };
+    hold(at);
     try {
       // The same folder: the proof goes on past it, to the lock, which doesn't name this process.
       expect(await proveLocalGateway(options(at, localPort, { identity: read.identity }))).toEqual(
@@ -378,11 +382,11 @@ int main(int argc, char **argv) {
       );
       // Another private profile put at the same path, with its own lock and database, held
       // open by the same holder: refused for the folder, whatever its files say.
-      for (const fd of files) closeSync(fd);
+      for (const fd of files.splice(0)) closeSync(fd);
       renameSync(join(at, FOLDER), join(at, "earlier"));
       const other = home();
       renameSync(join(other, FOLDER), join(at, FOLDER));
-      files = hold(at);
+      hold(at);
       expect(await proveLocalGateway(options(at, localPort, { identity: read.identity }))).toEqual(
         refused("replaced"),
       );

@@ -82,7 +82,8 @@ describe("the card for this computer, after This computer", () => {
       );
       expect(html).toContain("Use Advanced");
       expect(html).toContain("Look again");
-      expect(html).not.toMatch(/>Connect<\/button>/);
+      // No button that connects, whatever its words after "Connect" ("Connect read-only").
+      expect(html, reason).not.toMatch(/>\s*Connect[^<]*<\/button>/);
     }
   });
 
