@@ -25,6 +25,7 @@ import {
   profileHash,
   SCRIPTED_ACCOUNTS,
 } from "./accounts.ts";
+import { logSection, logTail } from "./cli.ts";
 import type { OperatorSession } from "./operator.ts";
 import type { FailureStatus, RequestRecord } from "./scripted-accounts.ts";
 import { MARKER_FILE } from "./state-guard.ts";
@@ -271,15 +272,42 @@ const profileIds = (view: ProviderView | undefined) =>
 type WizardStep = JsonRecord & { id: string; type: string };
 type WizardAnswer = { done: boolean; status?: string; error?: string; step?: WizardStep };
 
+/** The gateway's detail code for a wizard call on a sign-in it no longer holds. */
+const WIZARD_NOT_FOUND = "WIZARD_NOT_FOUND";
+
+/** A wizard call the gateway refused: which call, on which sign-in, answering which step. */
+export class WizardRefusal extends AccountCheckFailure {
+  /** The gateway's detail code, such as `WIZARD_NOT_FOUND`. */
+  readonly code: unknown;
+  constructor(method: string, sessionId: string, stepId: string | undefined, error: unknown) {
+    super(
+      `${method} on sign-in ${sessionId}${stepId ? `, answering step ${stepId}` : ""}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    this.code = rec(rec(error).details).code;
+  }
+}
+
+async function wizardCall<T>(
+  h: AccountHarness,
+  method: "wizard.next" | "wizard.cancel",
+  sessionId: string,
+  answer?: { stepId: string; value: unknown },
+): Promise<T> {
+  try {
+    return await h.admin.request<T>(method, { sessionId, ...(answer ? { answer } : {}) });
+  } catch (error) {
+    throw new WizardRefusal(method, sessionId, answer?.stepId, error);
+  }
+}
+
 async function wizardNext(
   h: AccountHarness,
   sessionId: string,
   answer?: { stepId: string; value: unknown },
 ): Promise<WizardAnswer> {
-  return h.admin.request<WizardAnswer>("wizard.next", {
-    sessionId,
-    ...(answer ? { answer } : {}),
-  });
+  return wizardCall<WizardAnswer>(h, "wizard.next", sessionId, answer);
 }
 
 /** A note the client must acknowledge before the sign-in goes on, as a client does. */
@@ -897,7 +925,7 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         );
       expect(second !== "started", "a second sign-in started while one was running");
       h.observe(`a second sign-in while one runs: "${second}"`);
-      await cancelAndCheck(h, first);
+      h.observe(`API key cancelled: ${canonical(await cancelAndCheck(h, first))}`);
       await expectPipAccounts(h, before, ["acme:keyok"]);
     },
   },
@@ -1268,19 +1296,45 @@ async function browserSignIn(
   return { end: next.done ? next : await stepToEnd(h, sessionId), steps: [...steps], pasteStep };
 }
 
+/** A `wizard.next` with no answer, or "wizard not found" when the gateway no longer holds the sign-in. */
+async function nextOrGone(h: AccountHarness, sessionId: string): Promise<WizardAnswer | "gone"> {
+  return wizardNext(h, sessionId).catch((error: unknown) => {
+    if (error instanceof WizardRefusal && error.code === WIZARD_NOT_FOUND) return "gone";
+    throw error;
+  });
+}
+
 /**
- * Cancel a sign-in that waits, and assert both what `wizard.cancel` answers
- * and the terminal answer the next `wizard.next` gives.
+ * Cancel a sign-in that waits, and assert what `wizard.cancel` answers and
+ * that the gateway then lets the sign-in go.
+ *
+ * `wizard.cancel` answers at once and drops the sign-in only once its runner
+ * and its setup lock have settled (OpenClaw 2026.10.6,
+ * `server-methods/wizard.ts`). So the next `wizard.next` gets the terminal
+ * answer when it comes first, or "wizard not found" when the drop does; which
+ * one is timing. A `wizard.next` that gets the terminal answer drops the
+ * sign-in itself before it answers, so the one after it always gets "wizard
+ * not found".
  */
-async function cancelAndCheck(h: AccountHarness, sessionId: string): Promise<JsonRecord> {
-  const cancel = await h.admin.request<JsonRecord>("wizard.cancel", { sessionId });
+export async function cancelAndCheck(h: AccountHarness, sessionId: string): Promise<JsonRecord> {
+  const cancel = await wizardCall<JsonRecord>(h, "wizard.cancel", sessionId);
   same(cancel, { status: "cancelled", error: "cancelled" }, "what wizard.cancel answers");
-  const next = await wizardNext(h, sessionId);
-  const after = { done: next.done, status: next.status, error: next.error, step: next.step };
+  const next = await nextOrGone(h, sessionId);
+  const after =
+    next === "gone"
+      ? "wizard not found"
+      : { done: next.done, status: next.status, error: next.error, step: next.step };
+  if (next !== "gone") {
+    same(
+      after,
+      { done: true, status: "cancelled", error: "cancelled", step: undefined },
+      `the sign-in's terminal answer after the cancel (sign-in ${sessionId})`,
+    );
+  }
   same(
-    after,
-    { done: true, status: "cancelled", error: "cancelled", step: undefined },
-    "the sign-in's terminal answer after the cancel",
+    await nextOrGone(h, sessionId),
+    "gone",
+    `a wizard.next after the sign-in ended (sign-in ${sessionId})`,
   );
   return { cancel, after };
 }
@@ -1308,7 +1362,12 @@ async function expectPipAccounts(h: AccountHarness, before: string[], approved: 
 /** Run the account checks. One line per check; notes and differences for the report. */
 export async function runAccountChecks(
   h: Omit<AccountHarness, "observe" | "differ">,
-  options: { log?: (line: string) => void; only?: (check: AccountCheck) => boolean } = {},
+  options: {
+    log?: (line: string) => void;
+    only?: (check: AccountCheck) => boolean;
+    /** The instance's gateway log, whose end a failed check prints, since the reset removes it. */
+    gatewayLog?: string;
+  } = {},
 ): Promise<{ passed: number; failed: number; notes: string[]; differences: string[] }> {
   const log = options.log ?? console.log;
   const notes: string[] = [];
@@ -1328,6 +1387,10 @@ export async function runAccountChecks(
     } catch (error) {
       failed += 1;
       log(`FAIL  ${check.name}: ${error instanceof Error ? error.message : String(error)}`);
+      const gatewayLog = options.gatewayLog;
+      if (gatewayLog) {
+        log(logSection("the development gateway's", gatewayLog, logTail(gatewayLog, 20)));
+      }
     }
   }
   return { passed, failed, notes, differences };
