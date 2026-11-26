@@ -7,7 +7,9 @@ import {
   initialState,
   INTERACTIVE_SCOPES,
   newRun,
+  LIVE_UPDATES_NOT_STARTED,
   READ_SCOPES,
+  type ClawtrateState,
   type ConnectionState,
   type OutgoingMessage,
   type QuestionCard,
@@ -19,6 +21,7 @@ import { describe, expect, it } from "vitest";
 import { canWrite } from "../src/access.ts";
 import { messageRefusal, refusalFor, size } from "../src/Composer.tsx";
 import { stoppedWithLines } from "../src/LiveTurn.tsx";
+import { liveFlags, type SyncPhase } from "../src/StatusStrip.tsx";
 import {
   composerFor,
   currentRun,
@@ -611,5 +614,123 @@ describe("a stop after timeouts (F-101)", () => {
     expect(
       endingOf(run({ state: "stopped", stopRequestedAt: 1, stoppedForTimeouts: 3 })),
     ).toMatchObject({ kind: "stopped", timeouts: 3 });
+  });
+});
+
+describe("#592: once the connection is up, nothing says offline, whatever the loads are doing", () => {
+  const up = {
+    ...initialState,
+    connection: { ...initialState.connection, status: "connected" as const, connectedAt: NOW },
+  };
+  const thinking = run();
+  const open = transcript([thinking], { loadedAt: NOW + 1 });
+  const key = open.sessionKey;
+  const otto = { bot: "Otto", chosen: null };
+  /** What the composer and the run line say with the flags the shell gives them (`liveFlags`). */
+  function says(state: ClawtrateState, phase: SyncPhase, taskKey: string | null = key) {
+    const { connected, current } = liveFlags(state, phase, taskKey);
+    return {
+      connected,
+      composer: composerFor(open, { ...otto, connected }),
+      line: statusLineFor(thinking, (taskKey && state.transcripts[taskKey]) || open, {
+        connected,
+        current,
+        interactive: true,
+      }),
+    };
+  }
+  /** The open task as it was before the drop: loaded before this connection's hello. */
+  const before = { ...open, loadedAt: NOW - 1 };
+
+  it("bots and tasks being tried again after a drop: the composer can send and nothing says offline or reconnecting", () => {
+    const loading = {
+      ...up,
+      discovery: { ...up.discovery, status: "loading" as const },
+      transcripts: { [key]: before },
+    };
+    const { connected, composer, line } = says(loading, "dropped");
+    expect(connected).toBe(true);
+    expect(composer).toMatchObject({ offline: false, placeholder: "Message Otto", mode: "steer" });
+    expect(composer.stoppable).toBe(thinking);
+    // The open task hasn't loaded again yet: its live work is last seen, and that is all.
+    expect(line.phrase).toBe("Catching up. Last seen thinking");
+    expect(line.phrase).not.toMatch(/Reconnecting|Offline/);
+  });
+
+  it("bots and tasks failed, or tried again after Retry now, with the open task loaded: everything is live", () => {
+    for (const status of ["error", "loading"] as const) {
+      const state = {
+        ...up,
+        discovery: { ...up.discovery, status, error: null },
+        transcripts: { [key]: open },
+      };
+      const { composer, line } = says(state, "dropped");
+      expect(composer).toMatchObject({ offline: false, placeholder: "Message Otto" });
+      expect(line.phrase).not.toMatch(/Reconnecting|Last seen|Catching up/);
+      expect(line.state).not.toBe("blocked");
+    }
+  });
+
+  it("the open task failed to sync with the connection up: nothing says offline", () => {
+    const failed = {
+      ...up,
+      transcripts: { [key]: { ...before, status: "error" as const, error: "timed out" } },
+    };
+    const { composer, line } = says(failed, "dropped");
+    expect(composer.offline).toBe(false);
+    expect(composer.placeholder).not.toMatch(/Offline/);
+    // The run from before the drop is not shown as live: it is what was last seen.
+    expect(line.phrase).toBe("Last seen thinking");
+    expect(line.state).toBe("blocked");
+  });
+
+  it("the open task's live updates didn't start: its run is last seen, with or without a drop, and the composer sends", () => {
+    for (const phase of ["none", "dropped"] as const) {
+      const task: Transcript = { ...open, status: "error", error: LIVE_UPDATES_NOT_STARTED };
+      const unsubscribed = { ...up, transcripts: { [key]: task } };
+      const { connected, current } = liveFlags(unsubscribed, phase, key);
+      expect({ connected, current }, phase).toEqual({ connected: true, current: false });
+      const line = statusLineFor(thinking, task, {
+        connected,
+        current,
+        interactive: true,
+      });
+      expect(line.phrase, phase).toBe("Last seen thinking");
+      expect(composerFor(open, { ...otto, connected }).placeholder).toBe("Message Otto");
+    }
+  });
+
+  it("a task switched to after the open one synced: a history from before this connection is last seen until it loads again", () => {
+    for (const phase of ["synced", "none"] as const) {
+      // Kept from before the connection came back: its runs are what was last seen.
+      const stale = says({ ...up, transcripts: { [key]: before } }, phase);
+      expect(stale.line.phrase, phase).toBe("Catching up. Last seen thinking");
+      expect(stale.composer.offline, phase).toBe(false);
+      // Loaded since: live.
+      expect(says({ ...up, transcripts: { [key]: open } }, phase).line.state, phase).not.toBe(
+        "blocked",
+      );
+      // Not loaded yet: nothing on screen is from before, so nothing flashes "last seen".
+      const fresh = { ...open, loadedAt: null };
+      expect(liveFlags({ ...up, transcripts: { [key]: fresh } }, phase, key), phase).toEqual({
+        connected: true,
+        current: true,
+      });
+    }
+  });
+
+  it("while the connection is down, the composer and the run line say so", () => {
+    for (const status of ["reconnecting", "connecting", "error", "disconnected"] as const) {
+      const down = {
+        ...up,
+        connection: { ...up.connection, status },
+        transcripts: { [key]: open },
+      };
+      const { connected, composer, line } = says(down, "dropped");
+      expect(connected).toBe(false);
+      expect(composer.placeholder).toBe("Offline. Messages send when you reconnect.");
+      expect(line.phrase).toBe("Reconnecting. Last seen thinking");
+    }
+    expect(liveFlags(up, "none", null)).toEqual({ connected: true, current: true });
   });
 });

@@ -14,6 +14,7 @@ import {
 } from "../src/client.ts";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { READ_AGAIN_TRIES } from "../src/read-again.ts";
 import {
   deferred,
   FakeGateway,
@@ -29,7 +30,7 @@ import {
 
 const URL = "ws://127.0.0.1:19940";
 const CODE = "setup-bootstrap-0123456789abcdefghijklmnopqrstuvw";
-const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
+const FAST = { reconnect: { initialMs: 20, maxMs: 40 }, readAgainMs: 5 };
 const LATER = () => Date.now() + 600_000;
 
 type ConnectParams = {
@@ -971,8 +972,8 @@ describe("what a setup connection publishes", () => {
     let reads = 0;
     gateway.handlers["agents.list"] = async (params) => {
       await gate.promise;
-      // "fail": the first read fails, and a retry's read succeeds.
-      if (bots === "fail" && reads++ === 0)
+      // "fail": the first read and every try again fail, and a retry's read succeeds.
+      if (bots === "fail" && reads++ <= READ_AGAIN_TRIES)
         throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
       return list(params);
     };
