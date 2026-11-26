@@ -74,22 +74,22 @@ function draw(transcript: Transcript): string {
     invoke: () => Promise.reject(new Error("not in this test")),
     send: () => Promise.reject(new Error("not in this test")),
   } as unknown as ClawtrateBridge;
-  const scope = createElement(
-    ActionScope,
-    {
-      taskKey: KEY,
-      transcript,
-      engineRuns: [run],
-      lost: false,
-      readOnly: true,
-      ctx: readingContextOf(transcript),
-    },
-    ...transcript.items.map((item) => createElement(ItemFeed, { key: item.id, itemId: item.id })),
-    createElement(RunFeed, {
-      runId: RUN,
-      reply: (each: Run) => createElement(RunReply, { run: each }),
-    }),
-  );
+  const scope = createElement(ActionScope, {
+    taskKey: KEY,
+    transcript,
+    engineRuns: [run],
+    lost: false,
+    readOnly: true,
+    ctx: readingContextOf(transcript),
+    children: [
+      ...transcript.items.map((item) => createElement(ItemFeed, { key: item.id, itemId: item.id })),
+      createElement(RunFeed, {
+        key: "run",
+        runId: RUN,
+        reply: (each: Run) => createElement(RunReply, { run: each }),
+      }),
+    ],
+  });
   return renderToStaticMarkup(
     createElement(BridgeProvider, {
       bridge,
