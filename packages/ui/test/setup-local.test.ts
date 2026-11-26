@@ -168,7 +168,7 @@ describe("the card for this computer, after This computer", () => {
     expect(html).toContain("OpenClaw settings found");
     expect(html).toContain(
       escape(
-        "This Mac's OpenClaw uses a secure address. Use Advanced to connect with its address.",
+        "These settings may require a secure address. Use Advanced to connect with the gateway's address.",
       ),
     );
     expect(html).toContain(">Use Advanced</button>");

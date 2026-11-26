@@ -28,7 +28,13 @@ import {
 import { createNodeHost, STATE_FILE, type SecretBox } from "@clawtrate/core/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { FakeGateway, helloOk, sleep, until } from "../../../packages/core/test/fake-gateway.ts";
+import {
+  deferred,
+  FakeGateway,
+  helloOk,
+  sleep,
+  until,
+} from "../../../packages/core/test/fake-gateway.ts";
 import { leaveLook, thisComputer } from "../../../packages/ui/src/this-computer.ts";
 import { localGatewayBuild } from "../packaging/config.ts";
 import { SetupController } from "../src/setup/controller.ts";
@@ -1082,6 +1088,156 @@ describe.skipIf(!mac)(
       } finally {
         run.app.client.stop();
         await run.server.close();
+      }
+    });
+
+    it("F-602: Use This computer, then Connect at the same address: the new connection is setup's, and setup reaches done", async () => {
+      const run = await refusedThenStaged("replaced");
+      const phases: string[] = [];
+      const stop = run.app.client.store.subscribe((state) => {
+        const phase = state.setup?.phase;
+        if (phase && phases.at(-1) !== phase) phases.push(phase);
+      });
+      try {
+        await run.press();
+        expect(run.app.setup.current.look).toMatchObject({ outcome: "running" });
+        // The connection still says how the refused reconnect ended, at this same address.
+        expect(run.app.client.state.connection).toMatchObject({
+          gatewayUrl: run.url,
+          status: "error",
+          error: { code: "LOCAL_UNVERIFIED" },
+        });
+        phases.length = 0;
+        await run.session.apply({ type: "setupConnect" });
+        // The earlier connection's refusal isn't this attempt's: setup follows the new one to
+        // done, and the app opens (`App.tsx` unstages the look once setup is done and connected).
+        await until(() => run.app.setup.current.phase === "done", 60_000);
+        expect(run.app.client.state.connection.status).toBe("connected");
+        expect(run.app.client.state.discovery.status).toBe("ready");
+        expect(phases).not.toContain("failed");
+        expect(run.app.setup.current.failure).toBe(null);
+      } finally {
+        stop();
+        run.app.client.stop();
+        await run.server.close();
+      }
+    });
+
+    /**
+     * After a refused reconnect, Use This computer finds a second gateway of this account's
+     * (the settings name another port now), and Connect pairs with it: its first paired hello
+     * saves it in place of the earlier one.
+     */
+    async function secondGateway(why: "lock" | "replaced", gateway = silentGateway()) {
+      const run = await refusedThenStaged(why);
+      const server = await bridged(gateway);
+      settingsFile(run.home, ".openclaw", tokenSettings(server.port, "a-gateway-token"));
+      proofFile(run.home, ".openclaw", provedAnswer(run.home, ".openclaw", server.port));
+      const url = `ws://127.0.0.1:${server.port}`;
+      return { ...run, second: { gateway, server, url } };
+    }
+
+    for (const roster of ["slow", "error"] as const)
+      it(`F-602: Use This computer, Connect to another gateway, and Back while its bots ${roster === "slow" ? "load" : "couldn't be read"}: the gateway it saved stays saved`, async () => {
+        const gateway = silentGateway();
+        const listing = deferred<unknown>();
+        gateway.handlers["agents.list"] =
+          roster === "slow"
+            ? () => listing.promise
+            : () => {
+                throw new Error("the bots couldn't be listed");
+              };
+        const run = await secondGateway("lock", gateway);
+        try {
+          await run.press();
+          expect(run.app.setup.current.look).toMatchObject({
+            outcome: "running",
+            port: run.second.server.port,
+          });
+          await run.session.apply({ type: "setupConnect" });
+          await until(() => run.app.client.state.connection.status === "connected", 60_000);
+          // The paired hello saved the new gateway in place of the earlier one.
+          let saved = await run.app.client.savedSettings();
+          for (let waited = 0; saved?.url !== run.second.url && waited < 15_000; waited += 50) {
+            await sleep(50);
+            saved = await run.app.client.savedSettings();
+          }
+          expect(saved).toMatchObject({ url: run.second.url, route: ".openclaw@1:1", token: null });
+          if (roster === "slow") {
+            expect(run.app.setup.current.phase).toBe("connecting");
+            expect(run.app.client.state.discovery.status).toBe("loading");
+          } else {
+            await until(() => run.app.setup.current.failure?.kind === "bots", 60_000);
+          }
+          // Back, as the Connecting screen's Back sends it: the choice already saved stays, with
+          // this device's pairing there, and the connection stays open.
+          await run.session.apply({ type: "setupCancel" });
+          await until(() => run.app.setup.current.phase === "found", 15_000);
+          await sleep(500);
+          // (Its gateway's identity may have been saved with it since, as after every first hello.)
+          expect(await run.app.client.savedSettings()).toMatchObject({
+            url: run.second.url,
+            route: ".openclaw@1:1",
+            token: null,
+          });
+          expect(await run.app.client.hasDeviceToken(run.second.url)).toBe(true);
+          expect(run.app.client.state.connection).toMatchObject({
+            status: "connected",
+            gatewayUrl: run.second.url,
+          });
+          listing.resolve({
+            defaultId: "main",
+            agents: [{ id: "main", identity: { name: "Juniper" } }],
+          });
+        } finally {
+          run.app.client.stop();
+          await run.server.close();
+          await run.second.server.close();
+        }
+      });
+
+    it("F-602: Use This computer, Connect to a gateway that asks its owner, then Use another gateway: the earlier gateway is selected again, with its ways on", async () => {
+      const gateway = new FakeGateway();
+      gateway.connectReply = () => ({
+        ok: false,
+        error: {
+          code: "NOT_PAIRED",
+          message: "device pairing required",
+          details: { code: "PAIRING_REQUIRED", requestId: "req-1" },
+        },
+      });
+      const run = await secondGateway("lock", gateway);
+      try {
+        await run.press();
+        await run.session.apply({ type: "setupConnect" });
+        await until(() => run.app.client.state.connection.status === "pairing", 60_000);
+        expect(run.app.client.state.connection.gatewayUrl).toBe(run.second.url);
+        expect(run.app.setup.current.phase).toBe("connecting");
+        // Use another gateway, as the pairing screen sends it.
+        await run.session.apply({ type: "disconnect", gatewayUrl: run.second.url });
+        // The earlier gateway is selected again, still saved, and setup no longer holds the
+        // screen on Connecting (`setupHolds`): its card is shown, whose Back is the way back.
+        await until(() => run.app.client.state.connection.status === "disconnected", 15_000);
+        expect(run.app.client.state.connection.gatewayUrl).toBe(run.url);
+        await until(() => run.app.setup.current.phase === "found", 15_000);
+        expect(await run.app.client.savedSettings()).toEqual(run.record);
+        expect(await run.app.client.hasDeviceToken(run.url)).toBe(true);
+        // Back from the look, and the earlier gateway's Try again reconnects it by its route.
+        await run.session.apply(leaveLook(run.app.setup.current));
+        expect(run.app.client.state.connection).toMatchObject({
+          status: "disconnected",
+          gatewayUrl: run.url,
+        });
+        settingsFile(run.home, ".openclaw", tokenSettings(run.server.port, "a-gateway-token"));
+        proofFile(run.home, ".openclaw", provedAnswer(run.home, ".openclaw", run.server.port));
+        await run.session.apply({ type: "retry" });
+        await until(() => run.app.client.state.connection.status === "connected", 60_000);
+        expect(run.app.client.state.connection.gatewayUrl).toBe(run.url);
+        expect(await run.app.client.savedSettings()).toEqual(run.record);
+      } finally {
+        run.app.client.stop();
+        await run.server.close();
+        await run.second.server.close();
       }
     });
 

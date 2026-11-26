@@ -755,11 +755,21 @@ export class SetupController implements SetupHost {
   ): void {
     this.stopWatching();
     let seen = false;
+    // The connection as it stood when this attempt began. With local connect, Connect may go to
+    // the address the connection already shows, ended in an error (a reconnect the check refused,
+    // then This computer): the client publishes the new target before the new connection's own
+    // state, still with that error. Only once the new connection has opened (`connecting` or
+    // `reconnecting`, its target, no error) does what the connection says speak for this attempt.
+    const before = this.options.client.state.connection;
+    let opened = !local;
     const check = (state: ClawtrateState) => {
       if (attempt !== this.attempt) return;
       const { connection, discovery } = state;
       // Let go from elsewhere ("Use another gateway" on the pairing screen): this attempt is over.
-      if (seen && connection.status === "idle" && connection.gatewayUrl === null) {
+      // With local connect, the client selects the earlier gateway again when an attempt not yet
+      // paired is let go: that selection isn't this attempt's, and ends it too.
+      const restored = local && !this.options.client.isSelected(selection);
+      if (seen && ((connection.status === "idle" && connection.gatewayUrl === null) || restored)) {
         this.stopWatching();
         this.attempt += 1;
         this.owned = null;
@@ -773,8 +783,21 @@ export class SetupController implements SetupHost {
       // Only this selection's own connection speaks for this attempt: another choice of the
       // same address, or one refused meanwhile, says nothing about it.
       if (connection.gatewayUrl !== url || !this.options.client.isSelected(selection)) return;
+      if (!opened) {
+        if (
+          connection.target === before.target ||
+          connection.error !== null ||
+          (connection.status !== "connecting" && connection.status !== "reconnecting")
+        )
+          return;
+        opened = true;
+      }
       seen = true;
       if (connection.status === "connected") {
+        // With local connect, the first paired hello saved this gateway in place of the earlier
+        // one (core's `replacing`): from here the connection is the person's choice, kept. Back or
+        // a new look while its bots load leaves it as it is; it is no longer setup's to close.
+        if (local) this.owned = null;
         // Ready only for this selection's own read: one left from an earlier selection of the
         // same address isn't this connection's.
         if (discovery.status === "ready" && this.options.client.readyFor(selection)) {
