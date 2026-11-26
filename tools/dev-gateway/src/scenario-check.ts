@@ -59,6 +59,7 @@ import {
   reviewsDraftPdf,
 } from "./scripted-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
+import { shape, toolJson } from "./versions.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
 import { COMPUTER_CHECKS } from "./computer-checks.ts";
 import { RULES_CHECKS } from "./rules-checks.ts";
@@ -175,7 +176,7 @@ export class RunView {
       const callItems = items.filter((e) => this.data(e).toolCallId === id);
       same(
         callItems.map((e) => [this.data(e).phase, this.data(e).name, this.data(e).title]),
-        callItems.map((e) => [this.data(e).phase, call.name, call.title]),
+        callItems.map((e) => [this.data(e).phase, call.name, itemTitle(call.name, call.title)]),
         `${where} item names and titles`,
       );
       same(
@@ -325,7 +326,11 @@ export class RunView {
         e.event === "chat"
           ? `chat ${String(rec(e.payload).state)}`
           : `agent ${String(rec(e.payload).stream)}`;
-      checkShape(e.event === "chat" ? ChatEventSchema : AgentEventSchema, e.payload, kind);
+      checkShape(
+        e.event === "chat" ? ChatEventSchema : AgentEventSchema,
+        kind === "chat error" ? withoutExtraErrorDetail(e.payload) : e.payload,
+        kind,
+      );
     }
   }
 }
@@ -518,6 +523,23 @@ export async function drainSessions(
 }
 
 /**
+ * A chat error as the pinned schema can check it: the `errorDetail` keys the running version adds
+ * (versions.ts) are noted as undeclared and set aside. Any other key still fails.
+ */
+function withoutExtraErrorDetail(payload: unknown): unknown {
+  const detail = rec(rec(payload).errorDetail);
+  const extra = shape().extraErrorDetail.filter((key) => Object.hasOwn(detail, key));
+  if (extra.length === 0) return payload;
+  const seen = UNDECLARED_FIELDS.get("chat error") ?? new Set<string>();
+  for (const key of extra) seen.add(`errorDetail.${key}`);
+  UNDECLARED_FIELDS.set("chat error", seen);
+  return {
+    ...rec(payload),
+    errorDetail: Object.fromEntries(Object.entries(detail).filter(([k]) => !extra.includes(k))),
+  };
+}
+
+/**
  * Top-level fields the gateway sent that the published schema does not
  * declare, by event kind. The published event schemas are closed, so these
  * are reported rather than failed: see "What the scenario check observed".
@@ -666,7 +688,7 @@ async function recordFamily(
   expect(itemStart && itemEnd, `${tool} item start and end`);
   same(
     [view.data(itemStart).kind, view.data(itemStart).title, view.data(itemEnd).status],
-    ["tool", expected.title, "completed"],
+    ["tool", itemTitle(tool, expected.title), "completed"],
     `${tool} item kind, title and status`,
   );
   const data = view.data(end);
@@ -686,7 +708,7 @@ async function recordFamily(
   same(row.details !== undefined, expected.historyDetails, `${tool} history keeps details`);
   const hints = [
     `item.kind "tool"`,
-    `item.title "${expected.title}"`,
+    `item.title "${itemTitle(tool, expected.title)}"`,
     ...(data.commandBearing === true ? ["commandBearing true"] : []),
     ...(typeof details.mcpServer === "string"
       ? [`details.mcpServer "${details.mcpServer}", mcpTool "${String(details.mcpTool)}"`]
@@ -792,11 +814,11 @@ function textsLike(expected: (string | Check)[]) {
   };
 }
 
-/** A tool result whose text is its details as indented JSON. */
+/** A tool result whose text is its details as JSON, in the running version's form. */
 const jsonText =
   (where: string, details: () => unknown): Check =>
   (value) =>
-    same(value, JSON.stringify(details(), null, 2), `${where} text is its details as JSON`);
+    same(value, toolJson(details()), `${where} text is its details as JSON`);
 
 async function fileCall(
   h: Harness,
@@ -871,6 +893,22 @@ function fileChangeCall(
 }
 
 /** An exec of one of the shell bot's commands, with the parts of its details that vary checked. */
+/**
+ * An exec result's details as the running version gives them, from 2026.10.6's: 2026.11.10 keeps
+ * the output only in the text, and says why a timed-out command failed in `message`.
+ */
+function execDetails(details: Record<string, unknown>, text: unknown): Record<string, unknown> {
+  const { aggregated, ...rest } = details;
+  return {
+    ...rest,
+    ...(shape().execOutputInDetails && "aggregated" in details ? { aggregated } : {}),
+    ...(shape().execTimeoutMessage && details.failureKind !== undefined
+      ? { message: (value: unknown, where: string) => same(value, text, where) }
+      : {}),
+    cwd: matchesPattern(/\/workspaces\/otto$/),
+  };
+}
+
 function execCall(
   args: Record<string, unknown>,
   result: {
@@ -886,7 +924,7 @@ function execCall(
     args,
     isError: result.isError,
     content: textsLike(result.content),
-    details: detailsLike({ ...result.details, cwd: matchesPattern(/\/workspaces\/otto$/) }),
+    details: detailsLike(execDetails(result.details, result.content[0])),
     title: result.title,
     ...(result.status ? { status: result.status } : {}),
   };
@@ -906,7 +944,7 @@ function askCall(
     name: "ask_user",
     args,
     isError: false,
-    content: [`${lines.join("\n")}\n\n${JSON.stringify(details, null, 2)}`],
+    content: [`${lines.join("\n")}\n\n${toolJson(details)}`],
     details,
     title: `Ask User ${args.questions[0]!.question}`,
   };
@@ -964,10 +1002,7 @@ function sendMessageCall(directive: string, message: string): CallExpectation {
     content: (texts: string[], where: string) =>
       same(
         texts,
-        [
-          `structuredContent:\n${JSON.stringify(sortedKeys(structured), null, 2)}`,
-          SEND_MESSAGE_TEXT,
-        ],
+        [`structuredContent:\n${toolJson(sortedKeys(structured))}`, SEND_MESSAGE_TEXT],
         `${where} content`,
       ),
     title: "Coder Send Message",
@@ -978,7 +1013,7 @@ const slowTaskCall = (seconds: number): CallExpectation => ({
   name: `${CODING_AGENT_SERVER}__slow_task`,
   args: { seconds },
   isError: false,
-  content: [`structuredContent:\n${JSON.stringify({ seconds, status: "done" }, null, 2)}`],
+  content: [`structuredContent:\n${toolJson({ seconds, status: "done" })}`],
   details: {
     mcpServer: CODING_AGENT_SERVER,
     mcpTool: "slow_task",
@@ -986,6 +1021,13 @@ const slowTaskCall = (seconds: number): CallExpectation => ({
   },
   title: "Coder Slow Task",
 });
+
+/** The owner profile 2026.11.10 names on a routine. */
+const OWNER_PROFILE = (value: unknown, where: string) =>
+  expect(
+    typeof value === "string" && value.length > 0,
+    `${where} must be a profile id, found ${JSON.stringify(value)}`,
+  );
 
 /** The routine the #schedule scenario creates, as the gateway returns it. */
 function routineDetails(sessionKey: string): Record<string, unknown> {
@@ -1002,6 +1044,7 @@ function routineDetails(sessionKey: string): Record<string, unknown> {
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "Reminder: check the trail conditions." },
+    ...(shape().routineOwnerProfile ? { ownerProfileId: OWNER_PROFILE } : {}),
     state: { nextRunAtMs: Date.parse("2035-01-01T09:00:00.000Z") },
     updatedAtMs: isNumberAtLeast(1),
     configRevision: matchesPattern(/^sha256:\S+$/),
@@ -1073,8 +1116,8 @@ export const EXPECTED_EFFECTIVE_TOOLS = [
   "write",
 ].sort();
 
-const SCHEDULE_RESULT_SHAPE =
-  "content text; details {id: string, owner: {…}, agentId: string, sessionKey: string, name: string, enabled: boolean, deleteAfterRun: boolean, createdAtMs: number, schedule: {…}, sessionTarget: string, wakeMode: string, payload: {…}, state: {…}, updatedAtMs: number, configRevision: string, nextRunAtMs: number, deliveryPreview: {…}}";
+const scheduleResultShape = () =>
+  `content text; details {id: string, owner: {…}, agentId: string, sessionKey: string, name: string, enabled: boolean, deleteAfterRun: boolean, createdAtMs: number, schedule: {…}, sessionTarget: string, wakeMode: string, payload: {…}, ${shape().routineOwnerProfile ? "ownerProfileId: string, " : ""}state: {…}, updatedAtMs: number, configRevision: string, nextRunAtMs: number, deliveryPreview: {…}}`;
 const SCHEDULE_HISTORY_DETAILS = true;
 
 /** The check that runs only on an instance with the stand-in image provider. */
@@ -1082,6 +1125,36 @@ export const IMAGE_CHECK = "a picture from the image tool";
 export const SEND_PICTURE_CHECK = "a picture sent with the message tool";
 export const SEND_KEYED_CHECK = "a message sent with a key of the skill note's shape";
 const IMAGE_CALL_TITLE = "Image Generation";
+
+/**
+ * The title of a tool's item. 2026.10.6 names the call's arguments (`Read from AGENTS.md`), as
+ * each expectation gives it. 2026.11.10 names the tool alone: its progress label when it has
+ * one, otherwise its display title, which for a tool without an entry is its name in words.
+ */
+const BARE_TITLES: Record<string, string> = {
+  read: "Read",
+  write: "Write",
+  edit: "Edit",
+  exec: "Exec",
+  ask_user: "Ask User",
+  web_search: "Web Search",
+  sessions_list: "Sessions",
+  sessions_send: "Send to session",
+  sessions_spawn: "Start subagent",
+  sessions_history: "Read session history",
+  image_generate: IMAGE_CALL_TITLE,
+  message: "Message",
+};
+function itemTitle(tool: string, withArguments: string): string {
+  if (shape().titlesWithArguments) return withArguments;
+  return (
+    BARE_TITLES[tool] ??
+    tool
+      .split(/_+/)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ")
+  );
+}
 
 export type ScenarioCheck = {
   name: string;
@@ -1256,6 +1329,12 @@ const TASK_LIST_PARAMS = {
 const startedKey = (botId: string, visible: boolean) =>
   new RegExp(`^agent:${botId}:${visible ? "dashboard" : "subagent"}:[0-9a-f-]{36}$`);
 
+/** The `createdActor` of a task a bot started on a person's turn (versions.ts). */
+const creatorOf = (bot: string) =>
+  shape().spawnedTaskCreator === "bot"
+    ? { type: "agent", id: bot }
+    : { type: "human", id: "gateway-owner" };
+
 /** How the gateway titles a sessions_spawn call's item. */
 const spawnTitle = (args: JsonRecord) =>
   args.agentId
@@ -1288,6 +1367,7 @@ function spawnCall(
           ? // A hidden helper runs on the bot's own model, in a context of its own.
             {
               ...common,
+              ...(shape().hiddenSpawnLabel ? { label: args.label } : {}),
               context: "isolated",
               note: matchesPattern(/completion events/),
               modelApplied: true,
@@ -1452,12 +1532,19 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["assistant", isAgent("assistant")],
         ["chat final", isChat("final")],
       ]);
-      const last = view.agent("thinking").at(-1)!;
-      same(
-        view.data(last).text,
-        "The user wants to see reasoning first. I will reason briefly, then answer.",
-        "cumulative reasoning",
-      );
+      const reasoning =
+        "The user wants to see reasoning first. I will reason briefly, then answer.";
+      const thinking = view.agent("thinking").map((e) => view.data(e));
+      if (shape().thinkingPersisted) {
+        // 2026.11.10 ends the reasoning item with a note that it was saved, which has no text.
+        const saved = thinking.pop();
+        same(
+          [saved?.phase, Object.keys(saved ?? {}).sort()],
+          ["persisted", ["itemId", "messageId", "messageRunId", "phase"]],
+          "the reasoning's last event",
+        );
+      }
+      same(thinking.at(-1)!.text, reasoning, "cumulative reasoning");
       const history = await h
         .op("plain")
         .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: view.sessionKey });
@@ -1487,7 +1574,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       // Observed: the gateway asks the model twice more for a visible answer,
       // within the same run, then ends the run in an error.
       same(view.lifecycle("start").length, 3, "model attempts in the run");
-      same(view.agent("assistant").length, 0, "assistant events");
+      same(
+        view.agent("assistant").map((e) => view.data(e)),
+        [],
+        "assistant events",
+      );
       expect(view.agent("thinking").length > 0, "reasoning was streamed");
       same(view.terminal.state, "error", "the run's end");
       const error = view.lifecycle("error")[0];
@@ -1495,11 +1586,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(rec(view.data(error).terminalReply).disposition, "empty", "terminalReply disposition");
       view.expectCalls([]);
       view.expectEnd("error", null);
-      same(
-        view.terminal.errorMessage,
-        "⚠️ Agent couldn't generate a response. Please try again.",
-        "the error message",
-      );
+      same(view.terminal.errorMessage, shape().emptyReplyError, "the error message");
     },
   },
   {
@@ -1677,7 +1764,16 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       first.expectCalls([]);
       first.expectEnd("final", scriptedFinalText("#slow 12"));
       second.expectCalls([]);
-      second.expectEnd("final", scriptedFinalText("#text"));
+      if (shape().queuedFinalMessage) second.expectEnd("final", scriptedFinalText("#text"));
+      else {
+        // 2026.11.10 ends the queued turn with no message: its reply is on the agent stream alone.
+        same(second.terminal.message, undefined, "the queued turn's final message");
+        let streamed = "";
+        for (const d of second.agent("assistant").map((e) => second.data(e)))
+          streamed = typeof d.text === "string" ? d.text : streamed + String(d.delta ?? "");
+        same(streamed, scriptedFinalText("#text"), "the queued turn's streamed reply");
+        second.expectEnd("final", null);
+      }
     },
   },
   {
@@ -1710,7 +1806,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       // one block, the rendering of the structured content.
       same(
         slow.content.map((p) => p.text),
-        [`structuredContent:\n${JSON.stringify({ seconds: 15, status: "done" }, null, 2)}`],
+        [`structuredContent:\n${toolJson({ seconds: 15, status: "done" })}`],
         "a duplicate server text is dropped",
       );
       same(
@@ -1876,13 +1972,13 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         args: scriptedArgs("#approve", "exec", SHELL_BOT),
         title: "Exec list files (in .)",
         argsShape: "{command: string, workdir: string}",
-        resultShape:
-          "content text; details {status: string, exitCode: number, exitSignal: null, exitReason: string, durationMs: number, aggregated: string, noOutputTimedOut: boolean, cwd: string}",
+        resultShape: `content text; details {status: string, exitCode: number, exitSignal: null, exitReason: string, durationMs: number, ${shape().execOutputInDetails ? "aggregated: string, " : ""}noOutputTimedOut: boolean, cwd: string}`,
         historyDetails: true,
       });
+      const output = await listing(h, SHELL_BOT);
       same(
-        [result.text, result.details.aggregated],
-        [await listing(h, SHELL_BOT), await listing(h, SHELL_BOT)],
+        shape().execOutputInDetails ? [result.text, result.details.aggregated] : [result.text],
+        shape().execOutputInDetails ? [output, output] : [output],
         "the command's output is the workspace listing",
       );
       // The rule is reused: the same command in the same folder runs without asking.
@@ -1980,7 +2076,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       view.expectCalls([
         execCall(scriptedArgs("#approve-once", "exec", SHELL_BOT) as JsonRecord, {
           isError: true,
-          content: [deniedText],
+          content: [deniedText + shape().execDeclinedNote],
           details: {
             status: "failed",
             exitCode: null,
@@ -2072,7 +2168,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         execCall(scriptedArgs("#exec-timeout", "exec", SHELL_BOT) as JsonRecord, {
           isError: true,
           content: [
-            "Command timed out after 1 seconds.\n\nThe command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
+            `Command timed out after 1 seconds.\n\nThe command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. ${shape().execTimeoutAdvice}`,
           ],
           details: {
             status: "failed",
@@ -2122,7 +2218,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           name: "exec",
           args: scriptedArgs("#approve", "exec", "pip"),
           isError: true,
-          content: [JSON.stringify(refusal, null, 2)],
+          content: [toolJson(refusal)],
           details: refusal,
           title: "Exec list files (in .)",
         },
@@ -2520,7 +2616,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       );
       same(
         result.content[0]!.text,
-        `structuredContent:\n${JSON.stringify(sortedKeys(structured), null, 2)}`,
+        `structuredContent:\n${toolJson(sortedKeys(structured))}`,
         "the structured content rendered as text",
       );
       same(result.content[1]!.text, SEND_MESSAGE_TEXT, "the server's own text");
@@ -2703,7 +2799,13 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const view = await h.run("plain", key, `#reply-to ${parent}`);
       view.expectCalls([await lsCall(h, "main")]);
       const answer = `This answers ${parent}.`;
-      view.expectEnd("final", answer);
+      // 2026.11.10 joins the text beside the call to the answer in the final message.
+      view.expectEnd(
+        "final",
+        shape().preambleItems
+          ? answer
+          : `I will look first, then answer that message.\n\n${answer}`,
+      );
       const text = (row: JsonRecord) =>
         (Array.isArray(row.content) ? (row.content as JsonRecord[]) : [])
           .map((part) => (part.type === "text" ? String(part.text) : ""))
@@ -3119,12 +3221,15 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
                     ["main", "other", false],
                     `${at}[${i}]`,
                   );
-                  matchesPattern(/^agent:…\S+$/)(row.key, `${at}[${i}].key`);
+                  matchesPattern(shape().shortSessionKeys ? /^agent:…\S+$/ : /^agent:main:\S+$/)(
+                    row.key,
+                    `${at}[${i}].key`,
+                  );
                   matchesPattern(UUID)(row.sessionId, `${at}[${i}].sessionId`);
                 }
               },
               hasMore: true,
-              nextOffset: 5,
+              nextOffset: shape().sessionsOffsetCountsRead ? isNumberAtLeast(5) : 5,
               limitApplied: 5,
             })(d, where);
           },
@@ -3188,7 +3293,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         title: "Automations",
         argsShape:
           "{action: string, job: {name: string, schedule: {…}, sessionTarget: string, wakeMode: string, payload: {…}}}",
-        resultShape: SCHEDULE_RESULT_SHAPE,
+        resultShape: scheduleResultShape(),
         historyDetails: SCHEDULE_HISTORY_DETAILS,
       });
       same(
@@ -3196,12 +3301,18 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "I created the routine and removed it again."],
         "the run's end",
       );
-      // The same message from a paired client: the gateway does not offer the tool.
-      const asUser = await h.run("plain", await h.session("main", "schedule-user"), "#schedule");
-      const refused = asUser.tool("result", "automations").map((e) => rec(asUser.data(e).result));
-      expect(refused.length > 0, "the paired client's run called automations");
-      for (const r of refused) {
-        same((r.content as JsonRecord[])[0]?.text, "Tool automations not found", "the refusal");
+      // The same message from a paired client: 2026.10.6 does not offer the tool there;
+      // 2026.11.10 does, and the routine is made and removed as in the owner's run.
+      const userKey = await h.session("main", "schedule-user");
+      const asUser = await h.run("plain", userKey, "#schedule");
+      const userResults = asUser
+        .tool("result", "automations")
+        .map((e) => rec(asUser.data(e).result));
+      expect(userResults.length > 0, "the paired client's run called automations");
+      if (!shape().pairedAutomations) {
+        for (const r of userResults) {
+          same((r.content as JsonRecord[])[0]?.text, "Tool automations not found", "the refusal");
+        }
       }
       let routine: JsonRecord | undefined;
       const addArgs = scriptedArgs("#schedule", "automations");
@@ -3222,20 +3333,54 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           name: "automations",
           args: { action: "remove", jobId: added.id },
           isError: false,
-          content: [JSON.stringify({ ok: true, removed: true }, null, 2)],
+          content: [toolJson({ ok: true, removed: true })],
           details: { ok: true, removed: true },
           title: "Automations",
         },
       ]);
       view.expectEnd("final", "I created the routine and removed it again.");
-      asUser.expectCalls([
-        refusedCall("automations", addArgs),
-        refusedCall("automations", { action: "remove", jobId: "unknown" }),
-      ]);
-      asUser.expectEnd(
-        "final",
-        "The routine could not be set up here; the gateway offers routines only to its owner.",
-      );
+      if (shape().pairedAutomations) {
+        const made = rec(
+          JSON.parse((userResults[0]!.content as JsonRecord[])[0]!.text as string) as unknown,
+        );
+        let userRoutine: JsonRecord | undefined;
+        asUser.expectCalls([
+          {
+            name: "automations",
+            args: addArgs,
+            isError: false,
+            details: (d: JsonRecord | undefined, where: string) => {
+              userRoutine = d;
+              same(
+                [rec(d).name, rec(rec(d).schedule).at, rec(d).agentId, rec(d).sessionKey],
+                ["Scripted reminder", "2035-01-01T09:00:00.000Z", "main", userKey],
+                `${where} routine`,
+              );
+            },
+            content: (texts: string[], where: string) =>
+              textsLike([jsonText(where, () => userRoutine)])(texts, where),
+            title: "Automations",
+          },
+          {
+            name: "automations",
+            args: { action: "remove", jobId: made.id },
+            isError: false,
+            content: [toolJson({ ok: true, removed: true })],
+            details: { ok: true, removed: true },
+            title: "Automations",
+          },
+        ]);
+        asUser.expectEnd("final", "I created the routine and removed it again.");
+      } else {
+        asUser.expectCalls([
+          refusedCall("automations", addArgs),
+          refusedCall("automations", { action: "remove", jobId: "unknown" }),
+        ]);
+        asUser.expectEnd(
+          "final",
+          "The routine could not be set up here; the gateway offers routines only to its owner.",
+        );
+      }
     },
   },
   {
@@ -3255,7 +3400,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         result.content.map((p) => p.text),
         [
           "Progress card updated (rev 1, 3/3 done)",
-          JSON.stringify({ revision: 1, steps: { completed: 3, total: 3 } }, null, 2),
+          toolJson({ revision: 1, steps: { completed: 3, total: 3 } }),
         ],
         "the progress card result",
       );
@@ -3272,7 +3417,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           isError: false,
           content: [
             "Progress card updated (rev 1, 3/3 done)",
-            JSON.stringify({ revision: 1, steps: { completed: 3, total: 3 } }, null, 2),
+            toolJson({ revision: 1, steps: { completed: 3, total: 3 } }),
           ],
           details: { revision: 1, steps: { completed: 3, total: 3 } },
           title: "Progress Card",
@@ -3303,16 +3448,25 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       expect(row, "the started task is in the task list");
       same(
         [row.agentId, row.label, row.createdVia, row.spawnedBy, rec(row.createdActor).type],
-        ["pip", HAND_OFF.label, "spawn", key, "agent"],
+        ["pip", HAND_OFF.label, "spawn", key, creatorOf("pip").type],
         "the started task's row",
       );
-      same(rec(row.createdActor).id, "pip", "the bot that started it");
+      same(rec(row.createdActor).id, creatorOf("pip").id, "who the gateway says started it");
       same(row.sendDisabledReason ?? null, null, "the person can write in it");
       await checkBrief(h, started.key, started.firstRun, HAND_OFF.task);
-      // The person writes in it, and the bot answers there; no report goes back for that.
+      // The person writes in it, and the bot answers there. No report goes back for that on
+      // 2026.10.6; 2026.11.10 sends one, as for the first run.
       const yours = await h.run("plain", started.key, "#text");
       yours.expectCalls([]);
       yours.expectEnd("final", scriptedFinalText("#text"));
+      if (shape().reportsPersonsRun)
+        await wakeOf(
+          h,
+          view,
+          started.key,
+          yours.runId,
+          startedTaskReply({ label: HAND_OFF.label, visible: true }),
+        );
       // A bot's task labels are its own and unique: the same label again is refused.
       const again = await h.run("plain", await h.session("pip", "hand-off-again"), "#hand-off");
       const error = `label already in use: ${HAND_OFF.label}`;
@@ -3413,15 +3567,41 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       await h.wait(answer, 60_000);
       answer.expectCalls([]);
       answer.expectEnd("final", scriptedFinalText("#text"));
-      // Its answer reports back too, named by the task's label, not the follow-up's text.
-      await wakeOf(h, follow, started.key, sent, report);
+      // On 2026.10.6 its answer reports back too, named by the task's label, not the follow-up's
+      // text. 2026.11.10 runs no report turn for it: the task it came from gets a row that names
+      // the finished run, with no text.
+      if (shape().reportsFollowUpRun) await wakeOf(h, follow, started.key, sent, report);
+      else {
+        const noted = await h
+          .op("plain")
+          .waitFor(
+            `the completion of ${started.key}'s run ${sent} in ${key}`,
+            (e) =>
+              e.event === "session.message" &&
+              rec(e.payload).sessionKey === key &&
+              JSON.stringify(rec(rec(e.payload).message).subagentCompletions) ===
+                JSON.stringify([{ runId: sent, sessionKey: started.key }]),
+            60_000,
+            follow.from,
+          );
+        const message = rec(rec(noted.payload).message);
+        same(
+          [message.role, message.phase, message.content],
+          ["assistant", "commentary", [{ type: "subagent_completion" }]],
+          "the completion's row",
+        );
+      }
       const history = await h
         .op("plain")
         .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: started.key });
       const forwarded = history.messages.filter((m) => rec(m.provenance).kind === "inter_session");
       same(
         forwarded.map((m) => [m.role, rec(m.provenance).sourceSessionKey, m.content]),
-        [["assistant", key, FOLLOW_UP_MESSAGE]],
+        [
+          // 2026.11.10 marks the brief as sent from the task it came from, too.
+          ...(shape().briefFromTask ? [["user", key, HAND_OFF.task]] : []),
+          ["assistant", key, FOLLOW_UP_MESSAGE],
+        ],
         "the follow-up in the started task",
       );
     },
@@ -3456,7 +3636,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       expect(row, "the partner's task is in the task list");
       same(
         [row.agentId, row.label, row.createdVia, row.spawnedBy, rec(row.createdActor).id],
-        [RECIPIENT, HAND_OFF_PARTNER.label, "spawn", key, "pip"],
+        [RECIPIENT, HAND_OFF_PARTNER.label, "spawn", key, creatorOf("pip").id],
         "the partner's task: listed under Marlow, started by Pip from Pip's task",
       );
       await checkBrief(h, started.key, started.firstRun, HAND_OFF_PARTNER.task);
@@ -3511,7 +3691,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       pairedRun.expectEnd("final", scriptedFinalText("#text"));
       same(
         await h.offeredTools(paired),
-        withImages(EXPECTED_OFFERED_TOOLS),
+        withImages(
+          shape().pairedAutomations
+            ? [...EXPECTED_OFFERED_TOOLS, "automations"].sort()
+            : EXPECTED_OFFERED_TOOLS,
+        ),
         "tools offered in a paired client's run",
       );
       const ownerKey = await h.session("main", "offered-owner");
@@ -3539,7 +3723,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         withImages(EXPECTED_EFFECTIVE_TOOLS),
         "tools.effective available tools",
       );
-      for (const tool of DENIED_TOOLS.filter(
+      for (const tool of [...DENIED_TOOLS, ...shape().extraDeniedTools].filter(
         (t) => !(h.images && t === "image_generate") && !(h.messageTool && t === "message"),
       )) {
         const row = tools.find((t) => t.id === tool);
@@ -3551,7 +3735,10 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         .request<{ groups?: { tools?: JsonRecord[] }[] }>("tools.catalog", { agentId: "main" });
       same(
         (catalog.groups ?? []).flatMap((g) => (g.tools ?? []).map((t) => String(t.id))).sort(),
-        [...GATEWAY_TOOLS].sort(),
+        [
+          ...GATEWAY_TOOLS.filter((tool) => !shape().removedGatewayTools.includes(tool)),
+          ...shape().addedGatewayTools,
+        ].sort(),
         "tools.catalog tool ids",
       );
     },
@@ -3604,6 +3791,51 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           { ok: true },
           `the response to ${where}`,
         );
+        if (!shape().heartbeat) {
+          // 2026.11.10 has no heartbeat: the event is the prompt of an ordinary turn, not marked
+          // as the gateway's own, and the task's history keeps it as a user row.
+          const began = await op.waitFor(
+            `the turn after ${where}`,
+            (e) =>
+              e.event === "agent" &&
+              rec(e.payload).sessionKey === key &&
+              rec(e.payload).stream === "lifecycle" &&
+              rec(rec(e.payload).data).phase === "start",
+            30_000,
+            from,
+          );
+          const runId = String(rec(began.payload).runId);
+          // An ordinary turn, ended in a final. An event that names a scenario's phrase plays that
+          // scenario, as the same phrase from a person does; any other gets no tool call.
+          const turn = await h.wait(new RunView(op, runId, key, from));
+          const phrase = /please show your work/.test(wake.text);
+          turn.expectCalls(
+            phrase ? [await lsCall(h, "main"), await fileCall(h, "main", "AGENTS.md")] : [],
+          );
+          turn.expectEnd("final", phrase ? scriptedFinalText("#steps") : null);
+          same(
+            op.events
+              .filter((e) => e.seq > from && rec(e.payload).runId === runId)
+              .some((e) => rec(e.payload).isHeartbeat === true),
+            false,
+            `a heartbeat mark after ${where}`,
+          );
+          const added = (await history()).slice(before.length);
+          const content = added[0]?.[1];
+          same(
+            [
+              added[0]?.[0],
+              typeof content === "string"
+                ? content
+                : (Array.isArray(content) ? (content as JsonRecord[]) : [])
+                    .map((part) => String(part.text ?? ""))
+                    .join(""),
+            ],
+            ["user", wake.text],
+            `the first row the turn after ${where} adds`,
+          );
+          continue;
+        }
         // The gateway's turn: a run marked as a heartbeat.
         const began = await op.waitFor(
           `the gateway's own turn after ${where}`,
@@ -3644,6 +3876,12 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           `messages in the task after ${where}`,
         );
         same(await history(), before, `the task's history after ${where}`);
+      }
+      if (!shape().heartbeat) {
+        h.observe(
+          "On 2026.11.10 a wake with a system event runs an ordinary turn whose prompt is the event, not marked isHeartbeat, and the task's history keeps the event as a user row.",
+        );
+        return;
       }
       h.observe(
         "A wake with a system event runs a turn the gateway writes itself: the heartbeat prompt, then the event as a runtime context block; a command's completion event gets the completion prompt instead. Its agent events are lifecycle only and marked isHeartbeat. Answered with NO_REPLY, it ends with terminalReply.disposition silent and a chat final without a message, and adds nothing to the task's history.",
@@ -3778,6 +4016,56 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const asked = await question(h, key);
       await answer(h, asked, { route: ["Lake loop"] });
       await h.wait(view);
+      const besideCall = "I thought it over first. This is the answer that follows the reasoning.";
+      const reply = "Thanks. You answered:\n\n- route: Lake loop";
+      const calls = [
+        sendMessageCall("#think #mcp #ask", "Add a dark mode toggle to the settings page."),
+        askCall("#ask", "pip", { route: ["Lake loop"] }),
+      ];
+      if (!shape().preambleItems) {
+        // 2026.11.10: text in the same model message as a tool call is on the assistant stream,
+        // as an item of its own (`itemId`), and the final message joins every text of the run.
+        const mcpStart = (e: GatewayEvent) =>
+          isTool("start", `${CODING_AGENT_SERVER}__send_message`)(e);
+        view.inOrder([
+          ["thinking", isAgent("thinking")],
+          ["assistant", isAgent("assistant")],
+          ["MCP call", isTool("result", `${CODING_AGENT_SERVER}__send_message`)],
+          ["ask_user", isTool("result", "ask_user")],
+          ["chat final", isChat("final")],
+        ]);
+        const before = (match: (e: GatewayEvent) => boolean) =>
+          view.events.slice(0, view.events.findIndex(match));
+        const rebuild = (events: GatewayEvent[]) => {
+          let text = "";
+          for (const d of events.map((e) => view.data(e)))
+            text = typeof d.text === "string" ? d.text : text + String(d.delta ?? "");
+          return text;
+        };
+        const firstItem = view.data(view.agent("assistant")[0]!).itemId;
+        same(
+          rebuild(
+            before(mcpStart).filter(
+              (e) => isAgent("assistant")(e) && view.data(e).itemId === firstItem,
+            ),
+          ),
+          besideCall,
+          "the text beside the MCP call",
+        );
+        same(
+          rebuild(before(mcpStart).filter(isAgent("thinking"))),
+          "The user wants to see reasoning first. I will reason briefly, then answer.\nThis is a coding change. I will hand it to the coding agent.",
+          "two reasoning steps in one message join with a newline",
+        );
+        // The thread this run's MCP call returned, as the coding agent named it.
+        const url = String(
+          rec(view.result(`${CODING_AGENT_SERVER}__send_message`).details.structuredContent).url,
+        );
+        const joined = `${besideCall}\n\nThe coding agent picked it up: ${url}\n\n${reply}`;
+        view.expectCalls(calls);
+        view.expectEnd("final", joined);
+        return;
+      }
       // Observed: text in the same model message as a tool call is not on the
       // assistant stream; it arrives as an item of kind "preamble".
       const preamble = (e: GatewayEvent) =>
@@ -3804,12 +4092,9 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "The user wants to see reasoning first. I will reason briefly, then answer.\nThis is a coding change. I will hand it to the coding agent.",
         "two reasoning steps in one message join with a newline",
       );
-      same(view.finalText(), "Thanks. You answered:\n\n- route: Lake loop", "the reply");
-      view.expectCalls([
-        sendMessageCall("#think #mcp #ask", "Add a dark mode toggle to the settings page."),
-        askCall("#ask", "pip", { route: ["Lake loop"] }),
-      ]);
-      view.expectEnd("final", "Thanks. You answered:\n\n- route: Lake loop");
+      same(view.finalText(), reply, "the reply");
+      view.expectCalls(calls);
+      view.expectEnd("final", reply);
     },
   },
   // Only on an instance started with `--with-images` (IMAGE_CHECK), never on the scenario instance.
@@ -3844,38 +4129,70 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "final",
         "I asked for the picture. It will arrive in this task when it is ready.",
       );
-      // The gateway's own turn in the same task delivers the picture, named for the task.
-      const done = await h
-        .op("plain")
-        .waitFor(
-          "the gateway's turn that delivers the picture",
-          (e) =>
-            isChat("final")(e) &&
-            rec(e.payload).sessionKey === key &&
-            String(rec(e.payload).runId).startsWith(`image_generate:${task}:ok:`),
-          60_000,
+      let block: JsonRecord | undefined;
+      if (!shape().pictureTurn) {
+        // 2026.11.10 writes the picture into the task as a row of its own, named for the task,
+        // with no turn and no text.
+        const row = await h
+          .op("plain")
+          .waitFor(
+            "the row that delivers the picture",
+            (e) =>
+              e.event === "session.message" &&
+              rec(e.payload).sessionKey === key &&
+              String(rec(rec(e.payload).message).idempotencyKey).startsWith(
+                `image_generate:${task}:ok:`,
+              ),
+            60_000,
+            view.from,
+          );
+        const message = rec(rec(row.payload).message);
+        same([message.role, message.model], ["assistant", "delivery-mirror"], "the picture's row");
+        const content = Array.isArray(message.content) ? (message.content as JsonRecord[]) : [];
+        same(
+          content.map((part) => part.type),
+          ["image"],
+          "the picture row's blocks",
+        );
+        block = content[0];
+      } else {
+        // The gateway's own turn in the same task delivers the picture, named for the task.
+        const done = await h
+          .op("plain")
+          .waitFor(
+            "the gateway's turn that delivers the picture",
+            (e) =>
+              isChat("final")(e) &&
+              rec(e.payload).sessionKey === key &&
+              String(rec(e.payload).runId).startsWith(`image_generate:${task}:ok:`),
+            60_000,
+            view.from,
+          );
+        const delivered = new RunView(
+          h.op("plain"),
+          String(rec(done.payload).runId),
+          key,
           view.from,
         );
-      const delivered = new RunView(h.op("plain"), String(rec(done.payload).runId), key, view.from);
-      delivered.expectCalls([]);
-      delivered.expectEnd("final", null);
-      expect(
-        delivered.finalText().startsWith("Here is the picture you asked for."),
-        `the delivering turn's text: ${delivered.finalText()}`,
-      );
-      // The block can land after the turn's end: history is read until it is there.
-      let block: JsonRecord | undefined;
-      for (let attempt = 0; attempt < 40 && !block; attempt += 1) {
-        const history = await h
-          .op("plain")
-          .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key });
-        block = history.messages
-          .filter((m) => m.role === "assistant" && rec(m.__openclaw).runId === delivered.runId)
-          .flatMap((m) => (Array.isArray(m.content) ? (m.content as JsonRecord[]) : []))
-          .find((part) => part.type === "image");
-        if (!block) await sleep(500);
+        delivered.expectCalls([]);
+        delivered.expectEnd("final", null);
+        expect(
+          delivered.finalText().startsWith("Here is the picture you asked for."),
+          `the delivering turn's text: ${delivered.finalText()}`,
+        );
+        // The block can land after the turn's end: history is read until it is there.
+        for (let attempt = 0; attempt < 40 && !block; attempt += 1) {
+          const history = await h
+            .op("plain")
+            .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key });
+          block = history.messages
+            .filter((m) => m.role === "assistant" && rec(m.__openclaw).runId === delivered.runId)
+            .flatMap((m) => (Array.isArray(m.content) ? (m.content as JsonRecord[]) : []))
+            .find((part) => part.type === "image");
+          if (!block) await sleep(500);
+        }
       }
-      expect(block, "the delivering turn's message has an image block");
+      expect(block, "the delivering message has an image block");
       same(
         [block.mimeType, block.width, block.height, typeof block.artifactId],
         ["image/png", 256, 256, "string"],
@@ -3887,7 +4204,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       });
       expect(
         new RegExp(
-          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/[0-9a-f-]+/full\\?mediaTicket=v1\\.[A-Za-z0-9._~-]+$`,
+          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/[0-9a-f-]+/full\\?mediaTicket=${shape().mediaTicket}$`,
         ).test(String(download.url)),
         `the download's path: ${String(download.url)}`,
       );
@@ -3926,7 +4243,19 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           title: `Message ${PICTURE_PATH}`,
         },
       ]);
-      view.expectEnd("final", SEND_PICTURE_AFTER);
+      if (shape().messageSendEndsTurn) {
+        // 2026.11.10 ends the turn with the visible send: the model is not asked again, and the
+        // run's reply is the sent text, with no final message.
+        const end = view.lifecycle("end")[0];
+        expect(end, "the run's lifecycle end");
+        same(
+          [view.data(end).stopReason, rec(view.data(end).terminalReply).text],
+          ["toolUse", SEND_PICTURE_TEXT],
+          "how the run ended",
+        );
+        same(view.terminal.message, undefined, "the final message");
+        view.expectEnd("final", null);
+      } else view.expectEnd("final", SEND_PICTURE_AFTER);
       // The gateway's reply in the task: a row of its own in the run, with the text and the picture.
       const history = await h
         .op("plain")
@@ -3954,7 +4283,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       });
       expect(
         new RegExp(
-          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/${String(block.artifactId).slice(-36)}/full\\?mediaTicket=v1\\.[A-Za-z0-9._~-]+$`,
+          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/${String(block.artifactId).slice(-36)}/full\\?mediaTicket=${shape().mediaTicket}$`,
         ).test(String(download.url)),
         `the download's path: ${String(download.url)}`,
       );
@@ -4076,7 +4405,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       });
       expect(
         new RegExp(
-          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/${String(files[0]!.artifactId).slice(-36)}/full\\?mediaTicket=v1\\.[A-Za-z0-9._~-]+$`,
+          `^/api/chat/media/outgoing/${encodeURIComponent(key)}/${String(files[0]!.artifactId).slice(-36)}/full\\?mediaTicket=${shape().mediaTicket}$`,
         ).test(String(download.url)),
         `the download's path: ${String(download.url)}`,
       );
@@ -4317,6 +4646,9 @@ export async function prepareRecipient(h: Harness): Promise<void> {
   // The plain client also follows every session, so it receives session.tool
   // for runs it did not start; the questions client deliberately does not.
   await h.op("plain").request("sessions.subscribe", {});
+  // On a seeded instance an earlier check may have left a run of the recipient's still ending
+  // (a stopped turn it was messaged into); this message would wait behind it.
+  expect(await drain(h, [RECIPIENT_SESSION]), `${RECIPIENT_SESSION} stayed busy`);
   const opened = await h.run("plain", RECIPIENT_SESSION, "#reply");
   opened.expectCalls([]);
   opened.expectEnd("final", RECIPIENT_REPLY);

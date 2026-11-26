@@ -137,9 +137,9 @@ function lastResult(ctx: PlanContext, name: string): Record<string, unknown> | n
   if (!found) return null;
   // The JSON may be the whole text, or follow a summary, or be followed by
   // the tool's own text: try each object that starts a line, up to each "}"
-  // that ends one.
+  // that ends one. Indented over several lines (2026.10.6) or on one (2026.11.10).
   const starts = [...found.text.matchAll(/^\{/gm)].map((m) => m.index);
-  const ends = [...found.text.matchAll(/^\}/gm)].map((m) => m.index + 1).reverse();
+  const ends = [...found.text.matchAll(/\}$/gm)].map((m) => m.index + 1).reverse();
   for (const start of starts) {
     for (const end of [found.text.length, ...ends]) {
       if (end <= start) continue;

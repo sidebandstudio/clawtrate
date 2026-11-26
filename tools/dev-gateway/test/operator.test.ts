@@ -79,7 +79,7 @@ function helloOk() {
   return {
     type: "hello-ok",
     protocol: 4,
-    server: { version: "test", connId: "conn-1", bootId: "boot-1" },
+    server: { version: "2026.10.6", connId: "conn-1", bootId: "boot-1" },
     features: { methods: [], events: [] },
     snapshot: { uptimeMs: 1 },
     auth: { role: "operator", scopes: ["operator.admin"] },

@@ -145,7 +145,11 @@ function harness(
     now,
     log: (_level: string, line: string) => void logs.push(line),
   };
-  const client = new ClawtrateClient(host, { reconnect: { initialMs: 20, maxMs: 40 } });
+  const client = new ClawtrateClient(host, {
+    reconnect: { initialMs: 20, maxMs: 40 },
+    // A read the gateway may answer if asked again waits 5 ms, not seconds, to be asked again.
+    readAgainMs: 5,
+  });
   const snapshots: string[] = [];
   client.store.subscribe((state: ClawtrateState) => snapshots.push(JSON.stringify(state)));
   const theWorld = options.world ?? world();

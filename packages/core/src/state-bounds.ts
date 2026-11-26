@@ -764,6 +764,7 @@ const connection = object<ConnectionState>()({
 const discovery = object<DiscoveryState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
+  detail: text(MAX_MESSAGE_LINE_CHARS),
   partial: FLAG,
   tasksRead: object<ReadStamp>()({ gatewayId: ID, target: NUMBER, connectedAt: NUMBER }),
 });

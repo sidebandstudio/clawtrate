@@ -294,10 +294,21 @@ async function stepToEnd(h: AccountHarness, sessionId: string): Promise<WizardAn
 
 async function startSignIn(h: AccountHarness, choice: string, bot: string): Promise<string> {
   const sessionId = `accounts-${randomUUID()}`;
-  const started = await h.admin.request<JsonRecord>("models.authLogin", {
-    sessionId,
-    authChoice: choice,
-    agentId: bot,
+  const start = () =>
+    h.admin.request<JsonRecord>("models.authLogin", {
+      sessionId,
+      authChoice: choice,
+      agentId: bot,
+    });
+  // 2026.11.10 limits how often sign-ins start, and says when to try again: these checks start
+  // many in a row, so a refusal of exactly that kind waits as long as it says, once.
+  const started = await start().catch(async (error: unknown) => {
+    const wait = /^rate limit exceeded for models\.authLogin; retry after (\d+)s$/.exec(
+      error instanceof Error ? error.message : "",
+    );
+    if (!wait) throw error;
+    await new Promise((resolve) => setTimeout(resolve, Number(wait[1]) * 1000 + 250));
+    return start();
   });
   same([started.sessionId, started.done], [sessionId, false], "models.authLogin's answer");
   return sessionId;

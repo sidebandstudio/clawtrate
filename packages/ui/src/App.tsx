@@ -121,10 +121,10 @@ export function App({
     firstControl()?.focus();
   }, [screen]);
   // One flag for the whole window: while the connection is anything but
-  // connected, and after a reconnect until the open task has caught up,
-  // nothing that stands for the gateway's work moves; it is last seen.
-  const [caughtUp, setCaughtUp] = useState(true);
-  const lost = status !== "connected" || !caughtUp;
+  // connected, nothing that stands for the gateway's work moves; it is last
+  // seen. A load still being tried, or one that failed, is not a lost
+  // connection (#592).
+  const lost = status !== "connected";
   const waitingMessages = restartWaitingMessages(state);
   const openUpdates = () => openSettings("updates");
   // Settings' Check-ins lead to a bot's routines, which the shell shows (#604).
@@ -184,7 +184,6 @@ export function App({
             }
             onOpenSettings={openSettings}
             inert={settingsOpen}
-            onCaughtUp={setCaughtUp}
             routinesLinkRef={routinesLink}
           />
         </OpenOpenClawUpdates.Provider>
