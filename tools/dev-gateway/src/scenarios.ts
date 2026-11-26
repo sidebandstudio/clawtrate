@@ -322,10 +322,42 @@ function message(recipientDirective: string, request: string, timeoutSeconds: nu
   ];
 }
 
+/** The routine `#keep-routine` sets up, and `#move-routine` and `#remove-routine` find by name. */
+export const KEPT_ROUTINE = { name: "Morning reminder", message: "Remind me to stretch." } as const;
+/** The line `#change-instructions` adds to the bot's AGENTS.md. */
+export const INSTRUCTION_LINE = "Always answer in one short paragraph.";
+
 /** The first lines of a tool's latest result, as the bot repeats them. */
 function answerOf(ctx: PlanContext, name: string, lines: number): string {
   const found = [...ctx.results].reverse().find((result) => result.name === name);
   return found ? found.text.split("\n").slice(0, lines).join("\n") : "";
+}
+
+/** A scheduler call on the kept routine, by the id its latest list found. */
+function routineCall(action: "update" | "remove", extra: Record<string, unknown>): Step {
+  return {
+    kind: "tool-from",
+    build: (ctx) => {
+      const listed = lastResult(ctx, "automations");
+      const jobs = Array.isArray(listed?.jobs) ? (listed.jobs as Record<string, unknown>[]) : [];
+      const id = jobs.find((job) => job.name === KEPT_ROUTINE.name)?.id;
+      return typeof id === "string"
+        ? tool("automations", { action, jobId: id, ...extra })
+        : say(`I have no routine called ${KEPT_ROUTINE.name}.`);
+    },
+  };
+}
+
+/** What the bot says after a scheduler call: whether it ran, and the routine's state when it says. */
+function routineSaid(ctx: PlanContext, done: string): string {
+  const found = [...ctx.results].reverse().find((result) => result.name === "automations");
+  if (!found) return "";
+  const result = lastResult(ctx, "automations");
+  if (!result) return `The scheduler answered: ${found.text.split("\n")[0]}`;
+  const job = rec(result.job ?? result);
+  if (typeof job.enabled === "boolean")
+    return `${KEPT_ROUTINE.name} is ${done}, ${job.enabled ? "turned on" : "turned off"}.`;
+  return `The scheduler answered: ${JSON.stringify(result).slice(0, 200)}`;
 }
 
 /** What `#hand-off` and its siblings ask the gateway to start: a label and a brief, as a bot writes them. */
@@ -791,6 +823,85 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "keep-routine",
+    phrase: "remind me every morning at eight",
+    summary: `Sets up a routine and keeps it (\`automations\` \`add\`): "${KEPT_ROUTINE.name}", every day at 8:00, in a session of its own. Then says whether it is on, or what the gateway or a plugin answered. The scheduler offers the tool only in runs started as its owner.`,
+    steps: () => [
+      tool("automations", {
+        action: "add",
+        job: {
+          name: KEPT_ROUTINE.name,
+          schedule: { kind: "cron", expr: "0 8 * * *" },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: KEPT_ROUTINE.message },
+        },
+      }),
+      (ctx) => [say(routineSaid(ctx, "set up"))],
+    ],
+  },
+  {
+    name: "move-routine",
+    phrase: "move my morning reminder",
+    summary: `Moves "${KEPT_ROUTINE.name}" to 9:00 (\`automations\` \`list\`, then \`update\`).`,
+    steps: () => [
+      tool("automations", { action: "list", includeDisabled: true }),
+      routineCall("update", { job: { schedule: { kind: "cron", expr: "0 9 * * *" } } }),
+      (ctx) => [say(routineSaid(ctx, "moved"))],
+    ],
+  },
+  {
+    name: "remove-routine",
+    phrase: "delete my morning reminder",
+    summary: `Deletes "${KEPT_ROUTINE.name}" (\`automations\` \`list\`, then \`remove\`).`,
+    steps: () => [
+      tool("automations", { action: "list", includeDisabled: true }),
+      routineCall("remove", {}),
+      (ctx) => [say(routineSaid(ctx, "deleted"))],
+    ],
+  },
+  {
+    name: "end-routine",
+    phrase: "end this routine",
+    summary:
+      "In a routine's own run: removes that routine, by the id its session's key names, as a one-off routine does when its work is done; `#end-routine <id>` names another routine instead.",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          // A routine's own run is in the session `agent:<bot>:cron:<id>:run:<run>`; an id
+          // after the directive names another routine instead.
+          const named = /#end-routine[ \t]+([\w-]+)/.exec(ctx.prompt ?? "")?.[1];
+          const id = named ?? /^agent:[^:]+:cron:([^:]+)/.exec(ctx.sessionKey ?? "")?.[1];
+          return id
+            ? tool("automations", { action: "remove", jobId: id })
+            : say("This isn't a routine's run.");
+        },
+      },
+      (ctx) => [say(routineSaid(ctx, "ended"))],
+    ],
+  },
+  {
+    name: "change-instructions",
+    phrase: "add that to your instructions",
+    summary: `Adds a line to its own AGENTS.md ("${INSTRUCTION_LINE}"): a read, then an edit of its first line.`,
+    steps: () => [
+      tool("read", { path: "AGENTS.md" }),
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const read = [...ctx.results].reverse().find((r) => r.name === "read")?.text ?? "";
+          const first = read.split("\n").find((line) => line.trim().length > 0);
+          if (!first) return say("My instructions file is empty.");
+          return tool("edit", {
+            path: "AGENTS.md",
+            edits: [{ oldText: first, newText: `${first}\n\n${INSTRUCTION_LINE}` }],
+          });
+        },
+      },
+      (ctx) => [say(answerOf(ctx, "edit", 1) || "I added it to my instructions.")],
+    ],
+  },
+  {
     name: "schedule",
     phrase: "schedule a reminder",
     summary:
@@ -1008,6 +1119,14 @@ export const SCENARIOS: Scenario[] = [
     summary:
       "A message to the other bot, which asks Clawtrate's plugin where it is (`#here`): the answer for a run another bot's message started.",
     steps: () => message("#here", "Where are you?", 30),
+  },
+  {
+    name: "message-keep-routine",
+    phrase: "ask your partner to remind me",
+    bots: "Marlow or Pip",
+    summary:
+      "A message to the other bot, which then tries to set up a routine (`#keep-routine`): a routine from a run another bot's message started.",
+    steps: () => message("#keep-routine", "Could you remind them every morning?", 30),
   },
   {
     name: "hand-off-here",

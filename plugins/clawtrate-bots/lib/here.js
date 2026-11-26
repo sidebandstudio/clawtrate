@@ -67,7 +67,7 @@ export function readLine(origin) {
 /**
  * clawtrate_here: where this is, this conversation, the bot as Clawtrate shows
  * it, and what changes do from here. `holds` is the list of what each kind of
- * change does for this run's origin, in words, once the holds are in.
+ * change does for this run's origin, in words (lib/holds.js describes it).
  * It returns no text a bot wrote (no name, no title): until Clawtrate's record
  * of who set each field exists, the plugin can't tell the person's from a
  * bot's (4.3), so nothing here is outside content.
