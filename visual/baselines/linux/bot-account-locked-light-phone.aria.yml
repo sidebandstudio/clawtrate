@@ -91,7 +91,7 @@
     - paragraph: "Locked. Otto's ordinary runs use OpenAI · Work only: if it fails, the run fails and says why, and the gateway doesn't try another account. A run started with another account named still goes round it."
     - status: Checked with the gateway at 5:40 PM.
     - button "Check now"
-    - group: Unlock
+    - button "Unlock…"
     - group: What a lock doesn't cover
     - button "Change account"
   - status
