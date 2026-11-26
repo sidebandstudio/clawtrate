@@ -4,7 +4,7 @@
   - region "Approve this device":
     - heading "Approve this device" [level=2]
     - paragraph: 127.0.0.1:18789 has not seen this device before. Approve it once on the gateway's machine and Clawtrate connects by itself.
-    - paragraph: On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices, or run this there.
+    - paragraph: On the computer running OpenClaw, open http://127.0.0.1:18789, go to Settings › Devices and approve this device. If that page asks to approve the browser first, or that computer has no browser, run this there instead.
     - code: openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55
     - button "Copy approve command"
     - status

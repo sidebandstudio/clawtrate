@@ -8,8 +8,8 @@
     - textbox "Gateway address": ws://openclaw-box.lan:18789
     - text: Gateway token, for pairing
     - textbox "Gateway token, for pairing"
-    - note: This address would send the gateway token and your conversations without encryption. Use a secure address (wss://) if the gateway has one.
+    - paragraph: "This connection isn't protected: unless the network between the two computers protects it, anyone on the path can read it, the gateway token included, and take over the session. Use a secure address (wss://) if the gateway has one."
     - button "Connect a gateway"
     - button "Use the development gateway"
-    - paragraph: Clawtrate works with an OpenClaw gateway you already run. This device has no secure storage for a full-control pairing, so it asks for read access only.
+    - paragraph: Clawtrate works with an OpenClaw gateway you already run. This build of Clawtrate doesn't keep its credentials in the system's secure storage, so it asks for read access only.
   - paragraph: This device a41c9e02 · Web preview 0.1.0
