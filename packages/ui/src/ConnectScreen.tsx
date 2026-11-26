@@ -345,13 +345,12 @@ function ConnectForm({
             {error.message}
             {error.hint && ` ${error.hint}`}
             {error.code && <span className="form-error-code">{error.code}</span>}
-            {onThisComputer && error.code !== null && LOCAL_CODES.has(error.code) ? (
+            <button type="button" className="button" data-size="sm" onClick={tryAgain}>
+              Try again
+            </button>
+            {onThisComputer && error.code !== null && LOCAL_CODES.has(error.code) && (
               <button type="button" className="button" data-size="sm" onClick={onThisComputer}>
                 Use This computer
-              </button>
-            ) : (
-              <button type="button" className="button" data-size="sm" onClick={tryAgain}>
-                Try again
               </button>
             )}
           </div>
@@ -635,7 +634,7 @@ export function ConnectScreen({
     setup && setup.phase !== "idle" && !setup.unasked ? "here" : "first",
   );
   const command = useCommand();
-  const { forget } = useForget();
+  const { forget, failure: thisComputerFailure } = useForget();
   // This computer, from the address form: the gateway typed there is let go, keeping this
   // device's pairing, and the look on this computer starts.
   const thisComputer = () => {
@@ -651,7 +650,11 @@ export function ConnectScreen({
     (setup.phase === "confirming" ||
       setup.phase === "connecting" ||
       setup.phase === "failed" ||
-      (setup.phase === "done" && connection.status !== "connected") ||
+      // A setup that finished stops speaking for the connection once it ends in an error: a
+      // refused reconnect says why, with its ways on, on the form below.
+      (setup.phase === "done" &&
+        connection.status !== "connected" &&
+        connection.status !== "error") ||
       // A saved pairing gone or appeared under setup's connection: its card asks again.
       (setup.phase === "found" &&
         (connection.error?.code === SETUP_PAIRING_GONE ||
@@ -739,6 +742,11 @@ export function ConnectScreen({
                 info={info}
                 onThisComputer={info.setup?.local === true ? thisComputer : undefined}
               />
+            )}
+            {thisComputerFailure && (
+              <div className="form-error" role="alert" data-testid="forget-problem">
+                {thisComputerFailure}
+              </div>
             )}
             <p className="connect-foot">
               {connection.deviceId

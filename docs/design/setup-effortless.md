@@ -188,18 +188,17 @@ What 2026.10.6 offers, checked against the source and, where it could work, live
 1. **(e) The accepted end.** Find every holder of the server end of this exact connection, by its four-tuple `127.0.0.1:<port> → 127.0.0.1:<our local port>`.
    - At least one holder must be found, and every holder must be a process of this account.
    - The macOS kernel returns `EPERM` for another account's or root's descriptors to an ordinary caller (XNU `proc_security_policy`, cited by the review), so their holders are invisible and the check fails closed.
-2. **(f) The listening program.** For that holder's PID, the kernel's own facts must all match. None of them come from the process's own arguments, which OpenClaw overwrites anyway: the live gateway's argument list read `openclaw-gateway`.
-   - **Executable.** The executable the kernel reports (`proc_pidpath`) is a Node binary.
-   - **OpenClaw's native module.** Its mapped code includes OpenClaw's own native module, `node_modules/@openclaw/fs-safe-<platform>-<arch>/fs-safe-native.node`, inside a package whose `package.json` is `openclaw` 2026.10.6. The module's SHA-256 equals the value Clawtrate pins for that version and architecture, from the published `@openclaw/fs-safe-*@0.25.0` packages that 2026.10.6 depends on exactly (`<openclaw>/package.json` lines 1843-1844). The module is ad-hoc signed with no team, so its code signature proves nothing and the hash is what binds it.
+2. **(f) A match with this account's OpenClaw profile.** For that holder's PID, the kernel's own facts must all match. None of them come from the process's own arguments, which OpenClaw overwrites anyway: the live gateway's argument list read `openclaw-gateway`. As built, there is no check of the executable (a gateway run by Bun, as the OpenClaw Mac app's, would fail one), and the module is a consistency check only:
+   - **OpenClaw's native module, where the app has a pin.** If the holder maps a file laid out as `node_modules/@openclaw/fs-safe-<platform>-<arch>/fs-safe-native.node` inside a package whose `package.json` names a version with pins (2026.10.6, 2026.11.10), the module's SHA-256 must equal that version's pin, from the published `@openclaw/fs-safe-*` packages it depends on exactly. The module is ad-hoc signed with no team, so its code signature says nothing. This check authenticates nothing: the package's `package.json` and the module's path are files the holder's own account can write, so a holder with no module, an unreadable one, or one whose package names another version skips it.
    - **The profile's files.** It holds open descriptors on the profile's `tmp/openclaw-<uid>/gateway.state.lock` and `state/openclaw.sqlite`. Each is matched by device and inode against Clawtrate's own no-follow open of the same file.
    - **The lock names it.** The lock is OpenClaw's compatibility projection of its gateway owner (`<openclaw>/docs/gateway/gateway-lock.md`), owner-only, read with the reader's rules. It must name this PID, role `gateway`, this port and this profile's state folder, with a `startTime` equal to the kernel's start time for the PID, to within a second.
 3. **Bounds.**
    - Both checks run in a small helper off the main thread, with a 2 s deadline and bounded output. On macOS the helper uses libproc (`proc_pidfdinfo`, `proc_pidpath`, region and vnode info), as `lsof` does. On Linux it reads `/proc/net/tcp`, `/proc/<pid>/exe`, `/proc/<pid>/maps` and `/proc/<pid>/fd`.
    - A missing helper, a timeout, denied access or malformed output all mean unverified, and nothing is sent.
    - Every socket is checked, retries and reconnects included, whether it would carry the shared token or this device's own token.
-4. **When nothing proves the peer,** nothing is sent. The card stays at "OpenClaw settings found" with "Clawtrate couldn't verify what is listening at port ‹port›." It offers Look again and the address route, without filling in its token.
+4. **When a check fails,** no credential is sent. The card stays at "OpenClaw settings found" and says which check failed (`PROOF_REFUSAL_LINES`). It offers Look again and the address route, without filling in its token.
 
-**Live, on a development gateway of this checkout's (`exec` in the probe).**
+**Live, on a development gateway of this checkout's (`exec` in the probe), when this design was written** (before the executable check was dropped and the pin made conditional).
 
 - **Two direct connections to the gateway passed every check**, in 326 and 534 ms with `lsof`, with nothing sent. The facts:
   - the executable was a Node binary;
@@ -208,15 +207,16 @@ What 2026.10.6 offers, checked against the source and, where it could work, live
   - the lock named the PID, role `gateway`, the port, the state folder and the kernel's start time.
 - **A same-account TCP proxy that forwarded every byte to the gateway was refused** in 637 ms, with nothing sent. (e) alone would have passed it. The proxy had full access to the profile's files, and was refused anyway: it mapped no OpenClaw module, held neither file, and isn't the process the lock names.
 
-**What (e) and (f) prove.** At the moment of the check, the server end of Clawtrate's connection is held only by processes of this account. One of them is a Node process that:
+**What (e) and (f) establish.** At the moment of the check, the server end of Clawtrate's connection is held by processes of this account the helper can see, and one of them:
 
-- has OpenClaw 2026.10.6's own native module loaded;
 - has this profile's gateway lock and state database open;
-- is the process this profile's OpenClaw records as its running gateway, with the same start time.
+- is the process this profile's lock names as its running gateway, with the same start time.
 
-A process that can't open the profile's 0700 folder (a sandboxed proxy, the case the review built) can't hold those descriptors, and is refused.
+That is, the connection matches this account's OpenClaw profile. A process that can't open the profile's 0700 folder (a sandboxed proxy, the case the review built) can't hold those descriptors, and is refused. The stated limits, what this defends against and what it doesn't, are in `docs/decisions.md`, "Local connect's proof".
 
-**What they don't prove:**
+**What they don't establish:**
+
+- **Which program is running.** A process of this same account that can write the profile's files can satisfy (e) and (f); such a process can already read the shared token and the gateway's pairing state, and replace the gateway. OpenClaw offers no way today for a gateway to prove itself from a source such a process can't write.
 
 - **That the JavaScript running is unmodified OpenClaw.** Node loads scripts and closes them. A process of this account with write access to the package, or the power to inject into the gateway, could change what runs. Such a process could read the token anyway.
 - **That no other holder exists.** An unprivileged scan can't see a duplicate of the accepted socket held by another account. One could exist only if a holder of this account passed it on (`SCM_RIGHTS`, inheritance).
@@ -291,7 +291,7 @@ The look only reads files and proves sockets, so it runs before the person answe
 
 1. **Settings found, not yet proved:** a card "OpenClaw settings found", with "Port 18789 · default profile · version 2026.10.6" under it. The version comes from OpenClaw's own `package.json`. The look then opens one socket, runs the send gate on it, sends nothing, and closes it. The result is a discovery hint for the card; Connect checks again on its own sockets.
 2. **Proved:** the card says "OpenClaw is running on this Mac", with **Connect** and the consent line of §2 above it. Below it, quieter, is "Another computer".
-3. **Connect** shows steps in place of the button: "Reading OpenClaw's settings", "Checking it's OpenClaw on this Mac", "Pairing this Mac", "Loading your bots". This takes one to three seconds. Each socket is proved again (above).
+3. **Connect** shows steps in place of the button: "Reading OpenClaw's settings", "Checking it matches OpenClaw's settings", "Pairing this Mac", "Loading your bots". This takes one to three seconds. Each socket is proved again (above).
 
 Clicking Connect is the consent. There is no second dialog. On this Mac the count is **1 click, 0 commands, 0 approvals**, with OpenClaw's defaults (TLS off, through (e) and (f)) and with TLS on (through the pin). It changes nothing in OpenClaw.
 

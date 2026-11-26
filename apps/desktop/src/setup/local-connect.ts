@@ -22,6 +22,7 @@ import {
   CLAWTRATE_PROFILE_DEFAULT_PORT,
   mustSandbox,
   OPENCLAW_DEFAULT_PORT,
+  personsLaunch,
 } from "./world.ts";
 
 /** What local connect needs from its host: where to look, the helper, and the home rule. */
@@ -60,16 +61,20 @@ export function localConnectFor(
  * one of OpenClaw's default ports, which a settings file that names none falls back to: on a
  * computer that runs OpenClaw, that is the person's own gateway (as `guardPort` keeps a
  * sandboxed look away from it). A sandbox's gateway is on a port of its own, named in its file.
+ * "A person's packaged app" is this process's own launch (`personsLaunch`), the home rule's
+ * classification, and the caller's `sandboxed` as well: either one refuses the defaults.
  */
-export function localPortAllowed(local: LocalConnect, port: number): boolean {
+export function localPortAllowed(
+  local: LocalConnect,
+  port: number,
+  launch: () => boolean = personsLaunch,
+): boolean {
+  const defaults = port === OPENCLAW_DEFAULT_PORT || port === CLAWTRATE_PROFILE_DEFAULT_PORT;
   return (
     Number.isInteger(port) &&
     port >= 1 &&
     port <= 65535 &&
-    !(
-      local.sandboxed &&
-      (port === OPENCLAW_DEFAULT_PORT || port === CLAWTRATE_PROFILE_DEFAULT_PORT)
-    )
+    !(defaults && (local.sandboxed || !launch()))
   );
 }
 

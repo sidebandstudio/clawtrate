@@ -452,7 +452,7 @@ test("F-602: on a Mac whose OpenClaw the host proved, the first screen offers it
   expect(await sent(page)).toEqual(["setupConnect"]);
   await expect(page.getByRole("heading", { name: "Connecting" })).toBeFocused();
   await expect(page.getByRole("list", { name: "Steps" }).getByRole("listitem")).toHaveText([
-    "Checking it's OpenClaw on this Mac",
+    "Checking it matches OpenClaw's settings",
     "Pairing this Mac",
     "Loading your bots",
   ]);
@@ -504,3 +504,33 @@ test("F-602: a look at start that ends after the first screen's wait doesn't rep
   await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
 });
+
+test("F-602: a gateway offered within the first screen's wait stays offered after the wait would have ended", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-start", "light");
+  const connect = page.getByRole("button", { name: "Connect", exact: true });
+  await connect.waitFor();
+  // The fixture's host proved the gateway at 1 s; the wait would have ended at 3 s.
+  await page.waitForTimeout(3_200);
+  await expect(connect).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "OpenClaw is running on this Mac" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toHaveCount(0);
+});
+
+for (const key of ["Enter", "Space"])
+  test(`F-602: ${key} held as Connect appears presses nothing`, async ({ page }) => {
+    await openFixture(page, "setup=local-start", "light");
+    await page.keyboard.down(key);
+    const connect = page.getByRole("button", { name: "Connect", exact: true });
+    await connect.waitFor();
+    await page.waitForTimeout(300);
+    await page.keyboard.up(key);
+    expect(await sent(page)).toEqual([]);
+    // The new screen's title took focus, not Connect.
+    await expect(
+      page.getByRole("heading", { name: "OpenClaw is running on this Mac" }),
+    ).toBeFocused();
+  });

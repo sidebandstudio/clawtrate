@@ -677,8 +677,8 @@ const CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
 };
 /** And with local connect (setup-effortless.md §3). */
 const LOCAL_CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
-  new: ["Checking it's OpenClaw on this Mac", "Pairing this Mac", "Loading your bots"],
-  paired: ["Checking it's OpenClaw on this Mac", "Connecting this Mac", "Loading your bots"],
+  new: ["Checking it matches OpenClaw's settings", "Pairing this Mac", "Loading your bots"],
+  paired: ["Checking it matches OpenClaw's settings", "Connecting this Mac", "Loading your bots"],
 };
 
 /** Why a run that must look in a sandbox couldn't use the one it was given, in words. */
@@ -690,7 +690,7 @@ const REFUSED: Record<SetupRefusal, string> = {
   pairing: "it pairs only in its pairing scenario.",
 };
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
-const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it's OpenClaw on this Mac"];
+const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it matches OpenClaw's settings"];
 
 /** How long Connect ignores presses after it appears: they were aimed at what was there. */
 export const CONNECT_ARM_MS = 500;
@@ -739,21 +739,29 @@ export function SetupFlow({
   // The host's own look at start: the first screen waits for it, with nothing to press, for at
   // most START_WAIT_MS. Nothing that grants anything appears where another control was: once the
   // question is on screen, a gateway found later is offered only after This computer.
-  const [waiting, setWaiting] = useState(
-    () => offer.local === true && setup.unasked && setup.phase === "looking",
+  // The first screen's wait for the host's own look at start, resolved exactly once: to the
+  // offer, when the look proved a gateway in time, or to the question, at its end or after
+  // START_WAIT_MS, whichever comes first. The timer ends with the wait, so an offer shown in
+  // time stays; and once the question is shown, no offer takes its place.
+  const [initial, setInitial] = useState<"waiting" | "offer" | "question">(() =>
+    offer.local === true && setup.unasked && setup.phase === "looking"
+      ? "waiting"
+      : offeredHere(offer, setup)
+        ? "offer"
+        : "question",
   );
-  // Whether the question has been on screen: from then on, no offer takes its place.
-  const [asked, setAsked] = useState(() => !waiting && !offeredHere(offer, setup));
+  if (initial === "waiting" && !(setup.unasked && setup.phase === "looking"))
+    setInitial(offeredHere(offer, setup) ? "offer" : "question");
   useEffect(() => {
-    if (!waiting) return;
-    const timer = setTimeout(() => {
-      setWaiting(false);
-      setAsked(true);
-    }, START_WAIT_MS);
+    if (initial !== "waiting") return;
+    const timer = setTimeout(
+      () => setInitial((now) => (now === "waiting" ? "question" : now)),
+      START_WAIT_MS,
+    );
     return () => clearTimeout(timer);
-  }, [waiting]);
-  const holding = view === "first" && waiting && setup.unasked && setup.phase === "looking";
-  const offerHere = view === "first" && !asked && offeredHere(offer, setup);
+  }, [initial]);
+  const holding = view === "first" && initial === "waiting";
+  const offerHere = view === "first" && initial === "offer" && offeredHere(offer, setup);
   const key = holding
     ? "first:waiting"
     : offerHere

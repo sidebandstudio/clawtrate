@@ -7,6 +7,7 @@
 
 import {
   INTERACTIVE_SCOPES,
+  LOCAL_ROUTE_ONLY,
   scopeSatisfied,
   type AccountsState,
   type Bot,
@@ -83,8 +84,23 @@ export function gatewayState(connection: ConnectionState): string {
   }
 }
 
+/**
+ * Whether the connection ended because This computer's check refused it, or the address is
+ * This computer's own, on a host that offers This computer: its way on is offered here too.
+ */
+export function thisComputerWayOn(connection: ConnectionState, info: HostInfo): boolean {
+  const code = connection.error?.code;
+  return (
+    info.setup?.local === true &&
+    connection.gatewayUrl !== null &&
+    (code === "LOCAL_UNVERIFIED" || code === LOCAL_ROUTE_ONLY)
+  );
+}
+
 /** The pane's error line: pairing rejected or expired, unreachable, protocol incompatible. */
-function gatewayProblem(connection: ConnectionState): { title: string; message: string } | null {
+export function gatewayProblem(
+  connection: ConnectionState,
+): { title: string; message: string } | null {
   const error = connection.error;
   if (!error) return null;
   if (error.code === "PROTOCOL_MISMATCH") {
@@ -94,6 +110,13 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
     return { title: failureTitle(error.code), message: error.message };
   }
   if (connection.status === "connected") return null;
+  // This computer's check refused the connection, or the address is This computer's own:
+  // nothing was unreachable, and no credential went.
+  if (error.code === "LOCAL_UNVERIFIED" || error.code === LOCAL_ROUTE_ONLY)
+    return {
+      title: "Not connected",
+      message: [error.message, error.hint].filter(Boolean).join(" "),
+    };
   return {
     title: "Can't reach the gateway",
     message: [error.message, error.hint].filter(Boolean).join(" "),
@@ -1116,6 +1139,22 @@ export function Settings({
             }}
           >
             Use another gateway
+          </button>
+        )}
+        {gatewayUrl && thisComputerWayOn(connection, info) && (
+          <button
+            type="button"
+            className="button"
+            onClick={() => {
+              // As Use another gateway, then the look on this computer starts at once.
+              void forget(gatewayUrl).then((forgotten) => {
+                if (!forgotten) return;
+                onClose();
+                void send({ type: "setupLook" });
+              });
+            }}
+          >
+            Use This computer
           </button>
         )}
       </div>

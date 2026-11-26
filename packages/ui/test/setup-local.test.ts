@@ -20,6 +20,7 @@ import { BridgeProvider } from "../src/bridge.tsx";
 /** As React escapes text. */
 const escape = (text: string) => text.replaceAll("'", "&#x27;");
 import { ConnectScreen } from "../src/ConnectScreen.tsx";
+import { gatewayProblem, thisComputerWayOn } from "../src/Settings.tsx";
 import { CONSENT_LINE } from "../src/FullControl.tsx";
 
 const PORT = 19940;
@@ -173,7 +174,7 @@ describe("the card for this computer, after This computer", () => {
     });
     expect(html).toContain(escape(PROOF_REFUSAL_LINES.holder(PORT)));
     expect(html).toContain("No credential was sent to it. Use Advanced, or look again.");
-    expect(html).toContain("Checking it&#x27;s OpenClaw on this Mac");
+    expect(html).toContain("Checking it matches OpenClaw&#x27;s settings");
   });
 
   it("without local connect, the card is as it was", () => {
@@ -216,5 +217,67 @@ describe("an address whose pairing belongs to This computer", () => {
       expect(refused(code, false), code).not.toContain("Use This computer");
     }
     expect(refused("UNREACHABLE", true)).not.toContain("Use This computer");
+  });
+});
+
+describe("the words of a refusal", () => {
+  it("say which check failed, and never what program holds the port", () => {
+    expect(PROOF_REFUSAL_LINES.holder(PORT)).toBe(
+      `Clawtrate couldn't confirm who holds the connection at port ${PORT}.`,
+    );
+    expect(PROOF_REFUSAL_LINES["not-gateway"](PORT)).toBe(
+      `Clawtrate couldn't match what is listening at port ${PORT} to this account's OpenClaw profile.`,
+    );
+    expect(PROOF_REFUSAL_LINES["not-published"](PORT)).toBe(
+      `Clawtrate couldn't check this version's module for what is listening at port ${PORT}.`,
+    );
+    for (const line of Object.values(PROOF_REFUSAL_LINES).map((words) => words(PORT)))
+      expect(line).not.toMatch(/isn't the OpenClaw|isn't the copy|is OpenClaw|another gateway/);
+  });
+});
+
+describe("a reconnect refused after setup finished", () => {
+  const refusal = PROOF_REFUSAL_LINES["not-gateway"](PORT);
+  const connection = {
+    ...initialState.connection,
+    status: "error" as const,
+    gatewayUrl: `ws://127.0.0.1:${PORT}`,
+    error: {
+      code: "LOCAL_UNVERIFIED",
+      message: refusal,
+      hint: "Choose This computer to connect to it again, or use Advanced.",
+    },
+  };
+
+  it("F-602: with no bots kept, the first screen says why, with its ways on, not setup's old steps", () => {
+    const html = renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { info: local() } as ClawtrateBridge,
+        children: createElement(ConnectScreen, {
+          info: local(),
+          setup: { ...found(), phase: "done", step: 2 },
+          connection,
+          discovery: initialState.discovery,
+        }),
+      }),
+    );
+    expect(html).toContain(escape(refusal));
+    expect(html).toContain(">Try again</button>");
+    expect(html).toContain(">Use This computer</button>");
+    expect(html).not.toContain("Loading your bots");
+  });
+
+  it("F-602: with bots kept, Settings says the same, and offers This computer", () => {
+    expect(gatewayProblem(connection)).toEqual({
+      title: "Not connected",
+      message: `${refusal} Choose This computer to connect to it again, or use Advanced.`,
+    });
+    expect(thisComputerWayOn(connection, local())).toBe(true);
+    expect(
+      thisComputerWayOn(connection, {
+        ...local(),
+        setup: { look: true, pair: true, platform: "darwin" },
+      }),
+    ).toBe(false);
   });
 });
