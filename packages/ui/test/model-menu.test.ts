@@ -182,8 +182,11 @@ describe("F-588: Refresh in the Model menu", () => {
   it("F-588: the menu's line is what was found and, when nothing new was, the most specific reason; the rest is one step away", () => {
     const limits =
       "The gateway's config names which of OpenAI's models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.";
-    const lines = (change: Partial<ModelRefresh>, list: string | null = null, typed = true) =>
-      refreshLines(refreshSentences(done(change), "OpenAI", update, false, typed), list);
+    const lines = (
+      change: Partial<Extract<ModelRefresh, { status: "done" }>>,
+      list: string | null = null,
+      typed = true,
+    ) => refreshLines(refreshSentences(done(change), "OpenAI", update, false, typed), list);
     // Found something: the line says it, and the rest is behind "More".
     expect(lines({ added: ["a"], addedCount: 1, outcome: "unavailable" }, limits)).toEqual({
       line: "New: a.",
