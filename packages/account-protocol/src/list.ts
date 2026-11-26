@@ -8,7 +8,7 @@
 
 import { checkLength, concat, copy, equalBytes, hex, Reader, taggedHash, Writer } from "./bytes.ts";
 import { fail } from "./errors.ts";
-import { Head, requireNotOlder, verifyHead } from "./head.ts";
+import { type Head, requireNotOlder, verifyHead } from "./head.ts";
 import { ListPublicKey, signList, verifyEd25519, type ListSecretKey } from "./keys.ts";
 import { LABEL, TAG } from "./labels.ts";
 import { GROWTH_LIMIT, MAX_ENTRIES, MAX_MEMBERS, MAX_NAME_BYTES } from "./limits.ts";
@@ -827,7 +827,6 @@ export function verifyList(
   headBytes: Uint8Array,
   held: Head | null,
 ): { state: ListState; head: Head } {
-  if (held !== null) Head.check(held);
   if (entries.length === 0) fail("malformed", "a list has at least its first entry");
   if (entries.length > MAX_ENTRIES) fail("too_large", "the list is over its bound");
   const own = entries.map(copy);

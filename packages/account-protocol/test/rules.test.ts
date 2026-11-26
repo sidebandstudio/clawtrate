@@ -411,6 +411,17 @@ describe("re-linking the gateway's own device", () => {
         ),
       "bad_signature",
     );
+    // The connector's signature right, the device's by another current device: refused.
+    expectCode(
+      () =>
+        assembleRelink(
+          alone.state,
+          mac.device.listKey,
+          signRelink(world.connector, alone.state, mac.device.listKey),
+          signRelink(world.connector, alone.state, mac.device.listKey),
+        ),
+      "bad_signature",
+    );
     const relinked = alone.state.append(
       assembleRelink(
         alone.state,

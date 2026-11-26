@@ -487,9 +487,9 @@ export class NewDeviceJoin {
 
   /**
    * Step 1: a new join for N. `random` is 32 bytes from the system's random source. Refused while
-   * N's own pause after a refused word back lasts.
+   * N's own pause after a refused word back lasts, and for a list key a join has already started
+   * from in this running program (`join_spent`): an attempt never outlives its object.
    */
-  /** Every list key a join has started from in this running program: a second start is refused. */
   static start(
     device: JoiningDevice,
     context: ListContext,
@@ -1189,7 +1189,10 @@ function refusal(
  * A member refuses a join without a pick: "I didn't start this" before the sets are shown, or
  * two joins at once (which ends both and pauses nothing). Only a current device member can
  * refuse. `pauseUntilMs` is when the member may answer a join again (null for two joins at
- * once); its app keeps it and passes it back as `clock.pausedUntilMs`.
+ * once). For "I didn't start this" the member's app ends its open join (`MemberJoin.end`), sends
+ * the refusal to the connector (directly when it is connected to the gateway, through the
+ * service otherwise), keeps `pauseUntilMs` and passes it back as `clock.pausedUntilMs`, and
+ * tells the person to secure their Google or GitHub account.
  */
 export function refuseJoin(
   member: { readonly key: ListSecretKey; readonly state: ListState },
