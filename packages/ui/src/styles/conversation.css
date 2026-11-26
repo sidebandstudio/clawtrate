@@ -1896,3 +1896,12 @@ button.reaction {
   overflow-wrap: anywhere;
   color: var(--text-muted);
 }
+
+/* A system event the gateway woke a task with (#637): the same quiet line, its text kept as
+   written, line breaks included. */
+.gateway-event-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--text-muted);
+}
