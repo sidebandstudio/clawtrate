@@ -53,6 +53,7 @@ const PACKED_FILES = [
   "lib/hooks.js",
   "lib/ledger.js",
   "lib/origins.js",
+  "lib/params.js",
   "lib/records.js",
   "lib/runs.js",
   "openclaw.plugin.json",
