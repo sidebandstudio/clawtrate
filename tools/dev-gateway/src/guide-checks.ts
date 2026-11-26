@@ -1,5 +1,5 @@
 // The guide checks: Clawtrate's guides as a marked section at the top of a bot's AGENTS.md
-// (packages/core/src/guides.ts, #532, #544), on the scenario check's instance, with the account
+// (packages/core/src/guides.ts, #532, #544, #628), on the scenario check's instance, with the account
 // checks' admin client. Each check asserts from the gateway's own answers and from the scripted
 // model's record of the system prompt each session's latest request carried. Pip's file is put
 // back as it was at the end, whatever happens.
@@ -76,6 +76,29 @@ function once(prompt: string, where: string): void {
     expect(count(prompt, text) === 1, `${name} is in ${where} ${count(prompt, text)} times`);
 }
 
+/**
+ * The bots whose `AGENTS.md` the switch-off check snapshots and puts back: one per workspace
+ * folder, and none in `bot`'s own, whose file is `bot`'s and is put back from its original.
+ */
+export function otherFolders(agents: unknown, bot: string): string[] {
+  const rows = (Array.isArray(rec(agents).agents) ? (rec(agents).agents as unknown[]) : []).map(
+    rec,
+  );
+  const folder = (row: JsonRecord) =>
+    typeof row.workspace === "string" && row.workspace !== ""
+      ? row.workspace
+      : `bot:${String(row.id)}`;
+  const own = rows.find((row) => row.id === bot);
+  const seen = new Set(own ? [folder(own)] : []);
+  const ids: string[] = [];
+  for (const row of rows) {
+    if (row.id === bot || seen.has(folder(row))) continue;
+    seen.add(folder(row));
+    ids.push(String(row.id));
+  }
+  return ids;
+}
+
 export type GuideCheck = { name: string; run(h: GuideHarness, world: World): Promise<void> };
 type World = { original: { content: string; hash: string } | null };
 
@@ -85,11 +108,8 @@ export const GUIDE_CHECKS: GuideCheck[] = [
     async run(h, world) {
       world.original = await readFile(h);
       const request = (method: string, params: unknown) => h.admin.request(method, params);
-      const { errors } = await applyGuidesChange(request, null, {
-        action: "add",
-        bots: [BOT],
-        newBots: false,
-      });
+      // Clawtrate's own change, as after a connect with admin access, kept to Pip: nothing asked.
+      const { errors } = await applyGuidesChange(request, null, { action: "auto", bot: BOT });
       expect(errors.length === 0, `the write failed: ${errors.join("; ")}`);
       const after = await readFile(h);
       expect(
@@ -152,9 +172,8 @@ export const GUIDE_CHECKS: GuideCheck[] = [
       const original = await readFile(h, PARTNER);
       try {
         const { errors } = await applyGuidesChange(request, null, {
-          action: "add",
-          bots: [PARTNER],
-          newBots: false,
+          action: "auto",
+          bot: PARTNER,
         });
         expect(errors.length === 0, `the write failed: ${errors.join("; ")}`);
         const key = `agent:${PARTNER}:guides-hand-off-${randomUUID().slice(0, 8)}`;
@@ -229,15 +248,48 @@ export const GUIDE_CHECKS: GuideCheck[] = [
     },
   },
   {
-    name: "removing the section gives the file back byte for byte, with its earlier hash",
+    name: "turning it off gives the file back byte for byte, with its earlier hash",
     async run(h, world) {
       const request = (method: string, params: unknown) => h.admin.request(method, params);
-      const { errors } = await applyGuidesChange(request, null, { action: "remove" });
-      expect(errors.length === 0, `the removal failed: ${errors.join("; ")}`);
-      const after = await readFile(h);
-      expect(after.content === world.original!.content, "the file isn't what it was");
-      expect(after.hash === world.original!.hash, "the file's hash isn't what it was");
-      world.original = null;
+      // Off takes the section out of every bot: each other bot's file is put back as it was.
+      const others = otherFolders(await h.admin.request("agents.list", {}), BOT);
+      // Each one is read first: one that can't be read can't be put back, so nothing is turned
+      // off. A missing file stays missing: turning it off only takes the section out of a file.
+      const before = new Map<string, string>();
+      for (const id of others) {
+        const file = rec(
+          rec(await h.admin.request("agents.files.get", { agentId: id, name: GUIDES_FILE })).file,
+        );
+        if (file.missing === true) continue;
+        expect(typeof file.content === "string", `${id}'s AGENTS.md couldn't be read before`);
+        before.set(id, file.content as string);
+      }
+      try {
+        const { errors } = await applyGuidesChange(request, null, { action: "switch", on: false });
+        expect(errors.length === 0, `the removal failed: ${errors.join("; ")}`);
+        const after = await readFile(h);
+        expect(after.content === world.original!.content, "the file isn't what it was");
+        expect(after.hash === world.original!.hash, "the file's hash isn't what it was");
+        world.original = null;
+      } finally {
+        // Every file is tried, whatever one of them does; then any that wasn't put back fails.
+        const left: string[] = [];
+        for (const [id, content] of before) {
+          try {
+            const now = await readFile(h, id);
+            if (now.content !== content)
+              await h.admin.request("agents.files.set", {
+                agentId: id,
+                name: GUIDES_FILE,
+                content,
+                expectedHash: now.hash,
+              });
+          } catch (error) {
+            left.push(`${id} (${String(error)})`);
+          }
+        }
+        expect(left.length === 0, `not put back as they were: ${left.join(", ")}`);
+      }
     },
   },
 ];
@@ -252,6 +304,18 @@ export async function runGuideChecks(
   let passed = 0;
   let failed = 0;
   try {
+    // The gateway makes a bot's AGENTS.md on its first run, and Clawtrate never makes it by
+    // itself: a bot that hasn't run yet (an instance where no check ran before) gets one turn.
+    for (const bot of [BOT, PARTNER]) {
+      const file = rec(
+        rec(await h.admin.request("agents.files.get", { agentId: bot, name: GUIDES_FILE })).file,
+      );
+      if (file.missing !== true) continue;
+      const key = `agent:${bot}:guides-first-${randomUUID().slice(0, 8)}`;
+      await h.admin.request("sessions.messages.subscribe", { key });
+      await h.admin.terminal(String((await h.admin.send(key, "#text")).runId));
+      log(`note  ${bot} ran once, so the gateway made its ${GUIDES_FILE}`);
+    }
     for (const check of GUIDE_CHECKS) {
       try {
         await check.run(h, world);
