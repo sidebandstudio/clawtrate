@@ -4,10 +4,7 @@ A gateway on another computer installs Clawtrate's bots plugin from npm, as `@cl
 
 ## What it does
 
-The workflow starts only by hand, on `main`, and a run from any other branch does nothing. It takes two inputs:
-
-- `mode`: `publish` or `bootstrap`.
-- `commit`: a full 40-character commit on `main`. It is empty by default, which means `main`'s head. The workflow refuses a commit that isn't an ancestor of `main`.
+The workflow starts only by hand, on `main`. Its one input is `mode`: `publish` or `bootstrap`. There is no commit to choose. Both jobs check out the run's own commit, which is `main`'s head when the run started, and run the script from that commit. Each job first checks that the run's ref is exactly `refs/heads/main`. A job's `if:` alone would let `refs/heads/Main` through, because GitHub compares there without case. Pack then checks that the commit is on `main`, read fresh from the repository.
 
 It runs on GitHub's standard Linux runner, with Node 26.13.0 and its npm 11.20.0, each pinned. Trusted publishing needs Node 22.14.0 or later and npm 11.5.1 or later ([npm's documentation](https://docs.npmjs.com/trusted-publishers), last edited 2026-10-06). The workflow can only read the repository. The one job that publishes also gets `id-token: write` and runs in the `npm` environment. It uses no secret.
 
@@ -15,25 +12,78 @@ It runs on GitHub's standard Linux runner, with Node 26.13.0 and its npm 11.20.0
 
 ## `publish`
 
-1. The **Pack** job checks out `commit` and packs `plugins/clawtrate-bots`. It packs a copy of the folder with the repository's `LICENSE` and a `package.json` without `private`. The in-repo `package.json` keeps `private`, so nobody can publish it from a checkout by accident. It already has the scoped name and the `files` list, which leaves out the tests and the development gateway's contract file. Packing fails when that `package.json` has any dependency, has a version that isn't an exact `x.y.z`, or has no `files` list, and when the tarball lacks the plugin's manifest or the code it runs. The job uploads the tarball as the `package` artifact and prints its name, version and `sha512-…` integrity.
-2. The **Publish** job checks that the tarball is still the bytes Pack hashed, then asks the registry for that version:
-   - If the registry has no such version, it runs `npm publish <tarball> --provenance --access public`. It then reads `npm view @clawtrate/clawtrate-bots@<version> dist.integrity` back and fails unless it matches.
+1. The **Pack** job packs `plugins/clawtrate-bots`. It copies into a clean folder only the files its `package.json` `files` list names, plus its README, the repository's `LICENSE` and a `package.json` without `private`. Nothing else in the plugin's folder is packed, such as a `.npmrc` of its own. The in-repo `package.json` keeps `private`, so nobody can publish it from a checkout by accident.
+
+   Packing fails when any of these is true:
+   - `package.json` has any dependency, or a `main`, `bin` or `browser` field.
+   - Its version isn't an exact `x.y.z`.
+   - Its `files` list is missing or holds anything but plain relative paths.
+   - It has no `openclaw.extensions`.
+   - `openclaw.plugin.json`'s id isn't the plugin's folder name.
+   - The list leaves out the manifest or a file OpenClaw runs.
+   - A listed folder holds a link or a name starting with a dot.
+   - The tarball's files aren't exactly the expected ones.
+
+   The job uploads the tarball as the `package` artifact and prints its commit, name, version and `sha512-…` integrity.
+
+2. The **Publish** job checks that the tarball is still the bytes Pack hashed, and that its own `package.json` and `openclaw.plugin.json` name the package, version and plugin id Pack reported. Then it asks the registry for that version:
+   - If the registry has no such version, it checks again that the run's commit is on `main`. Then it runs `npm publish <tarball> --provenance --access public` and reads `npm view @clawtrate/clawtrate-bots@<version> dist.integrity` back. It fails unless the two integrities match.
    - If the registry already has it with the same integrity, it publishes nothing and succeeds.
    - If the registry has it with another integrity, it fails. A published version is never replaced, so raise the plugin's version.
-3. Publish puts the name, version, integrity and whether it published now in the summary and in the job's outputs. It uploads `plugins.lock.json` as the `plugins-lock` artifact, with the package, version, integrity and plugin id. A release reads this file to write the plugin's version and integrity into the signed app. That step is not built yet. A release has to dispatch this workflow, not call it with `workflow_call`. npm checks a trusted publisher against "the calling workflow's name instead of the workflow that actually contains the publish command" ([npm's troubleshooting](https://docs.npmjs.com/trusted-publishers)).
+3. Publish puts the commit, name, version, integrity and whether it published now in the summary and in the job's outputs. It uploads `plugins.lock.json` as the `plugins-lock` artifact.
 
-The same commit gives the same tarball. npm gives every file one fixed time and a fixed order, and the npm version is pinned.
+The same files give the same tarball. npm gives every file one fixed time and a fixed order, and the npm version is pinned.
+
+A failed Publish job doesn't prove nothing was published, because npm may have taken the version before a later step failed. Run the workflow again on the same `main`. If the registry has that version with the same integrity, the job publishes nothing and writes the lock.
+
+## The lock
+
+`plugins.lock.json` describes the published bytes. Each entry is read from the tarball's own `package.json` and `openclaw.plugin.json`, not from the checkout:
+
+```json
+{
+  "plugins": [
+    {
+      "name": "@clawtrate/clawtrate-bots",
+      "version": "0.1.0",
+      "integrity": "sha512-…",
+      "pluginId": "clawtrate-bots",
+      "tools": [],
+      "hooks": [],
+      "commit": "<the full commit packed>"
+    }
+  ]
+}
+```
+
+- `integrity` is the registry's `dist.integrity`, which matched the tarball's own.
+- `tools` and `hooks` are what the manifest declares, counted the way OpenClaw 2026.10.6 counts them for its capability review (`buildPluginCapabilitySummary`). `tools` is `contracts.tools` together with the keys of `toolMetadata`, and `hooks` is `hooks`. Both are sorted and empty when the manifest declares none.
+
+The app installs the plugin disabled, compares what `plugins.inspect` reports against the list built into the signed app, and only then enables it. The release that builds that list reads this lock. That step is not built yet.
+
+The release can't call this workflow with `workflow_call`. npm checks a trusted publisher against "the calling workflow's name instead of the workflow that actually contains the publish command" ([npm's troubleshooting](https://docs.npmjs.com/trusted-publishers)). So the release dispatches it on `main`, which packs `main`'s head. A plugin that didn't change keeps its version, and the same files give the same tarball. So the release also packs the plugin from its own release commit and compares that integrity with the lock's. A difference fails the release.
 
 ## `bootstrap`
 
-npm sets up a trusted publisher only on a package that already exists, so its first version has to be published once by hand. `bootstrap` packs that first version: `@clawtrate/clawtrate-bots@0.0.0`, a placeholder with no code. It holds a `package.json` with no `openclaw` entry and a README that says it is a placeholder, so it can't be installed as a plugin. The job uploads it as the `placeholder` artifact and prints its file name and integrity in the summary. It publishes nothing and doesn't get the OIDC token.
+npm sets up a trusted publisher only on a package that already exists, so its first version has to be published once by hand. `bootstrap` packs that first version: `@clawtrate/clawtrate-bots@0.0.0`, a placeholder with no code. It holds a `package.json` with no `openclaw` entry and a README that says it is a placeholder, so it can't be installed as a plugin. The job uploads it as the `placeholder` artifact and prints its commit, file name and integrity in the summary. It publishes nothing and doesn't get the OIDC token.
 
-## After this workflow is on `main`
+## Setting it up
 
-The owner does a one-time setup:
+This is done once, after the workflow is on `main`, in this order:
 
-1. Run `bootstrap` and publish the placeholder by hand.
-2. Set up the trusted publisher on npm. It names this workflow's file name and the `npm` environment.
-3. Within two days, run `publish` once.
+1. **Create the `npm` environment first**, and check it before you register anything with npm. In the repository's settings, add an environment named `npm`. Under deployment branches, choose selected branches with one rule: the branch `main`. It has no secrets. Check it:
 
-The steps are in section 6.9 of the design. Before the first `publish`, GitHub needs the `npm` environment, with deployments limited to the `main` branch, no tag rule and no secrets.
+   ```bash
+   gh api repos/{owner}/{repo}/environments/npm --jq .deployment_branch_policy
+   gh api repos/{owner}/{repo}/environments/npm/deployment-branch-policies --jq '.branch_policies[] | {name, type}'
+   ```
+
+   The first command must print `{"custom_branch_policies":true,"protected_branches":false}`. The second must print one rule, `{"name":"main","type":"branch"}`. This repository's `npm` environment is set up this way.
+
+   This comes first because GitHub creates a missing environment, with no protection, when a workflow job names it. The workflow doesn't check the rule itself. GitHub's documentation lists reading an environment under the Actions permission, and the workflow's token has only `contents: read`.
+
+2. Run `bootstrap` and publish the placeholder by hand.
+3. Set up the trusted publisher on npm. It names this workflow's file name and the `npm` environment.
+4. Within two days, run `publish` once.
+
+Section 6.9 of the design has the exact steps for 2 to 4.

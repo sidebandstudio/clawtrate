@@ -1,21 +1,34 @@
 // The packing and publishing script behind .github/workflows/plugins-publish.yml.
-// Packing runs the real npm, offline; the registry is a stand-in.
+// Packing runs the real npm, offline; the registry and git are stand-ins.
 
-import { cpSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { gunzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   integrityOf,
+  lockEntry,
   needsPublish,
   packPlaceholder,
   packPlugin,
   publishedManifest,
   publishTarball,
+  readTarball,
   registryIntegrity,
   report,
+  requireOnMain,
+  runNpm,
   writeLock,
+  type Git,
   type Npm,
   type Packed,
 } from "../packaging/plugin-npm.ts";
@@ -27,6 +40,19 @@ const IN_REPO = JSON.parse(readFileSync(join(PLUGIN, "package.json"), "utf8")) a
   string,
   unknown
 >;
+const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const PACKED_FILES = [
+  "LICENSE",
+  "README.md",
+  "index.js",
+  "lib/apply.js",
+  "lib/bots.js",
+  "lib/canonical.js",
+  "lib/ledger.js",
+  "lib/records.js",
+  "openclaw.plugin.json",
+  "package.json",
+].map((path) => `package/${path}`);
 
 const dirs: string[] = [];
 const temp = () => {
@@ -38,23 +64,14 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** The files in a .tgz, by path, with their contents. */
-function untar(file: string): Map<string, Buffer> {
-  const tar = gunzipSync(readFileSync(file));
-  const files = new Map<string, Buffer>();
-  for (let at = 0; at + 512 <= tar.length;) {
-    const header = tar.subarray(at, at + 512);
-    const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/s, "");
-    if (name === "") break;
-    const size = Number.parseInt(
-      header.subarray(124, 136).toString("utf8").replace(/\0.*$/s, "").trim(),
-      8,
-    );
-    files.set(name, tar.subarray(at + 512, at + 512 + size));
-    at += 512 + Math.ceil(size / 512) * 512;
-  }
-  return files;
-}
+/** A copy of the plugin's folder, under its own name, to change. */
+const pluginCopy = () => {
+  const copy = join(temp(), "clawtrate-bots");
+  cpSync(PLUGIN, copy, { recursive: true });
+  return copy;
+};
+const json = (bytes: Buffer | undefined) =>
+  JSON.parse(bytes!.toString("utf8")) as Record<string, unknown>;
 
 describe("the published package.json", () => {
   it("is the in-repo one without private", () => {
@@ -71,9 +88,17 @@ describe("the published package.json", () => {
     ["a range", { version: "^0.1.0" }, "exact x.y.z"],
     ["the placeholder's version", { version: "0.0.0" }, "the placeholder's version"],
     ["no files list", { files: undefined }, "files list"],
+    ["a dotfile in the files list", { files: ["index.js", ".npmrc"] }, "plain relative paths"],
+    ["a path out of the folder", { files: ["../index.js"] }, "plain relative paths"],
+    ["a pattern", { files: ["lib/*.js"] }, "plain relative paths"],
+    ["no openclaw entry", { openclaw: undefined }, "openclaw.extensions"],
+    ["no extensions", { openclaw: { extensions: [] } }, "openclaw.extensions"],
     ["a dependency", { dependencies: { leftpad: "1.0.0" } }, "no dependencies"],
     ["a peer dependency", { peerDependencies: { openclaw: "*" } }, "no peerDependencies"],
     ["a dev dependency", { devDependencies: { vitest: "5.1.0" } }, "no devDependencies"],
+    ["a main file", { main: "other.js" }, "no main"],
+    ["a bin", { bin: { tool: "tool.js" } }, "no bin"],
+    ["a browser file", { browser: "browser.js" }, "no browser"],
   ])("refuses %s", (_, change, why) => {
     expect(() => publishedManifest({ ...IN_REPO, ...change }, "clawtrate-bots")).toThrow(why);
   });
@@ -89,48 +114,67 @@ describe("packing the plugin", { timeout: 60_000 }, () => {
       pluginId: "clawtrate-bots",
     });
     expect(packed.integrity).toBe(integrityOf(readFileSync(packed.file)));
-    const files = untar(packed.file);
-    expect([...files.keys()].sort()).toEqual(
-      [
-        "LICENSE",
-        "README.md",
-        "index.js",
-        "lib/apply.js",
-        "lib/bots.js",
-        "lib/canonical.js",
-        "lib/ledger.js",
-        "lib/records.js",
-        "openclaw.plugin.json",
-        "package.json",
-      ].map((path) => `package/${path}`),
-    );
-    const manifest = JSON.parse(files.get("package/package.json")!.toString("utf8")) as Record<
-      string,
-      unknown
-    >;
-    expect(manifest).not.toHaveProperty("private");
+    const files = readTarball(packed.file);
+    expect([...files.keys()].sort()).toEqual(PACKED_FILES);
+    expect(json(files.get("package/package.json"))).not.toHaveProperty("private");
     expect(files.get("package/index.js")).toEqual(readFileSync(join(PLUGIN, "index.js")));
   });
 
   it("gives the same tarball for the same files, whatever their times", () => {
-    const copy = join(temp(), "clawtrate-bots");
-    cpSync(PLUGIN, copy, { recursive: true });
+    const copy = pluginCopy();
     const first = packPlugin(copy, temp(), LICENSE);
     utimesSync(join(copy, "index.js"), new Date(2001, 0, 1), new Date(2001, 0, 1));
-    const second = packPlugin(copy, temp(), LICENSE);
-    expect(second.integrity).toBe(first.integrity);
+    expect(packPlugin(copy, temp(), LICENSE).integrity).toBe(first.integrity);
     writeFileSync(join(copy, "index.js"), `${readFileSync(join(copy, "index.js"), "utf8")}\n`);
     expect(packPlugin(copy, temp(), LICENSE).integrity).not.toBe(first.integrity);
   });
 
-  it("fails when the files list leaves out the code the package runs", () => {
-    const copy = join(temp(), "clawtrate-bots");
-    cpSync(PLUGIN, copy, { recursive: true });
+  it("packs nothing the files list doesn't name, such as a plugin's own .npmrc", () => {
+    const copy = pluginCopy();
+    const clean = packPlugin(copy, temp(), LICENSE);
+    writeFileSync(join(copy, ".npmrc"), "registry=https://registry.example/\n");
+    writeFileSync(join(copy, "stray.js"), "export {};\n");
+    const packed = packPlugin(copy, temp(), LICENSE);
+    expect([...readTarball(packed.file).keys()].sort()).toEqual(PACKED_FILES);
+    expect(packed.integrity).toBe(clean.integrity);
+  });
+
+  it("fails unless the manifest's id is the plugin's own", () => {
+    const copy = pluginCopy();
+    const manifest = json(readFileSync(join(copy, "openclaw.plugin.json")));
+    writeFileSync(
+      join(copy, "openclaw.plugin.json"),
+      JSON.stringify({ ...manifest, id: "clawtrate-other" }),
+    );
+    expect(() => packPlugin(copy, temp(), LICENSE)).toThrow("must have the id clawtrate-bots");
+  });
+
+  it("fails when the files list leaves out the code OpenClaw runs", () => {
+    const copy = pluginCopy();
     writeFileSync(
       join(copy, "package.json"),
       JSON.stringify({ ...IN_REPO, files: ["lib/", "openclaw.plugin.json"] }),
     );
-    expect(() => packPlugin(copy, temp(), LICENSE)).toThrow("The tarball lacks index.js");
+    expect(() => packPlugin(copy, temp(), LICENSE)).toThrow("leaves out index.js");
+  });
+
+  it("fails on a dotfile or a link inside a listed folder", () => {
+    const dotted = pluginCopy();
+    writeFileSync(join(dotted, "lib/.hidden"), "");
+    expect(() => packPlugin(dotted, temp(), LICENSE)).toThrow("lib/.hidden starts with a dot");
+    const linked = pluginCopy();
+    symlinkSync(join(linked, "index.js"), join(linked, "lib/link.js"));
+    expect(() => packPlugin(linked, temp(), LICENSE)).toThrow("lib/link.js is a link");
+  });
+
+  it("fails when npm packs a file that isn't expected", () => {
+    const npm: Npm = (args, cwd) => {
+      const result = runNpm(args, cwd);
+      const [report] = JSON.parse(result.stdout) as { files: { path: string }[] }[];
+      report!.files.push({ path: "extra.js" });
+      return { ...result, stdout: JSON.stringify([report]) };
+    };
+    expect(() => packPlugin(PLUGIN, temp(), LICENSE, npm)).toThrow("extra.js is extra");
   });
 });
 
@@ -140,13 +184,9 @@ describe("packing the placeholder", { timeout: 60_000 }, () => {
     const second = packPlaceholder(PLUGIN, temp());
     expect(first).toMatchObject({ name: "@clawtrate/clawtrate-bots", version: "0.0.0" });
     expect(second.integrity).toBe(first.integrity);
-    const files = untar(first.file);
+    const files = readTarball(first.file);
     expect([...files.keys()].sort()).toEqual(["package/README.md", "package/package.json"]);
-    const manifest = JSON.parse(files.get("package/package.json")!.toString("utf8")) as Record<
-      string,
-      unknown
-    >;
-    expect(manifest).toEqual({
+    expect(json(files.get("package/package.json"))).toEqual({
       name: "@clawtrate/clawtrate-bots",
       version: "0.0.0",
       description: "A placeholder with no code. Install a released version.",
@@ -156,6 +196,49 @@ describe("packing the placeholder", { timeout: 60_000 }, () => {
     expect(files.get("package/README.md")!.toString("utf8")).toContain(
       "placeholder and holds no code",
     );
+  });
+});
+
+describe("checking the commit is on main", () => {
+  const git = (statuses: { fetch?: number; ancestor?: number }) => {
+    const calls: string[][] = [];
+    const run: Git = (args) => {
+      calls.push(args);
+      const status = args[0] === "fetch" ? (statuses.fetch ?? 0) : (statuses.ancestor ?? 0);
+      return { status, stdout: "", stderr: "git said no" };
+    };
+    return { run, calls };
+  };
+
+  it("reads main fresh from origin and asks git whether the commit is on it", () => {
+    const { run, calls } = git({});
+    requireOnMain(COMMIT, ".", run);
+    expect(calls).toEqual([
+      [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--filter=blob:none",
+        "origin",
+        "+refs/heads/main:refs/remotes/origin/main",
+      ],
+      ["merge-base", "--is-ancestor", COMMIT, "refs/remotes/origin/main"],
+    ]);
+  });
+
+  it.each([
+    ["a commit not on main", { ancestor: 1 }, "is not on main"],
+    ["a failed fetch", { fetch: 128 }, "couldn't read origin's main"],
+    ["a commit git can't find", { ancestor: 128 }, "couldn't tell"],
+  ])("fails on %s", (_, statuses, why) => {
+    expect(() => requireOnMain(COMMIT, ".", git(statuses).run)).toThrow(why);
+  });
+
+  it("fails on anything but a full commit", () => {
+    const { run, calls } = git({});
+    expect(() => requireOnMain("main", ".", run)).toThrow("not a full commit");
+    expect(() => requireOnMain("", ".", run)).toThrow("not a full commit");
+    expect(calls).toEqual([]);
   });
 });
 
@@ -203,18 +286,20 @@ describe("reading the registry", () => {
   });
 });
 
-describe("publishing", () => {
-  const tarball = () => {
-    const file = join(temp(), "clawtrate-clawtrate-bots-0.1.0.tgz");
-    writeFileSync(file, "tarball bytes");
-    const packed: Packed = {
-      name: "@clawtrate/clawtrate-bots",
-      version: "0.1.0",
-      integrity: integrityOf(Buffer.from("tarball bytes")),
-      file,
-      pluginId: "clawtrate-bots",
-    };
-    return packed;
+describe("publishing", { timeout: 60_000 }, () => {
+  // Packed once, in a folder of its own that outlives each test's.
+  let fixture: Packed;
+  let fixtureDir: string;
+  beforeAll(() => {
+    fixtureDir = mkdtempSync(join(tmpdir(), "plugin-npm-fixture-"));
+    fixture = packPlugin(PLUGIN, fixtureDir, LICENSE);
+  });
+  afterAll(() => rmSync(fixtureDir, { recursive: true, force: true }));
+  /** A copy of the packed plugin in a folder of its own. */
+  const tarball = (): Packed => {
+    const file = join(temp(), "clawtrate-clawtrate-bots.tgz");
+    copyFileSync(fixture.file, file);
+    return { ...fixture, file };
   };
   /** A registry that lists the version after `delay` views once published, as `listed`. */
   const registry = (state: { on: string | null; delay: number; listed?: string }) => {
@@ -233,66 +318,154 @@ describe("publishing", () => {
     };
     return { npm, calls };
   };
-  const noWait = async () => {};
+  const wait = async () => {};
+  const other = integrityOf(Buffer.from("other"));
 
-  it("publishes a new version with provenance and reads it back", async () => {
+  it("publishes a new version with provenance, after checking main, and reads it back", async () => {
     const packed = tarball();
     const { npm, calls } = registry({ on: null, delay: 2, listed: packed.integrity });
-    await expect(publishTarball(packed, npm, noWait)).resolves.toEqual({
+    const beforePublish = () => calls.push(["checked main"]);
+    await expect(publishTarball(packed, { beforePublish, npm, wait })).resolves.toEqual({
       ...packed,
       published: true,
     });
-    expect(calls.filter((args) => args[0] === "publish")).toEqual([
-      ["publish", packed.file, "--provenance", "--access", "public"],
+    expect(calls.map((args) => args[0])).toEqual([
+      "view",
+      "checked main",
+      "publish",
+      "view",
+      "view",
+      "view",
     ]);
+    expect(calls[2]).toEqual(["publish", packed.file, "--provenance", "--access", "public"]);
+  });
+
+  it("publishes nothing when the commit is no longer on main", async () => {
+    const packed = tarball();
+    const { npm, calls } = registry({ on: null, delay: 0, listed: packed.integrity });
+    const beforePublish = () => {
+      throw new Error("not on main");
+    };
+    await expect(publishTarball(packed, { beforePublish, npm, wait })).rejects.toThrow(
+      "not on main",
+    );
+    expect(calls.map((args) => args[0])).toEqual(["view"]);
   });
 
   it("leaves a version already published with the same integrity", async () => {
     const packed = tarball();
     const { npm, calls } = registry({ on: packed.integrity, delay: 0 });
-    await expect(publishTarball(packed, npm, noWait)).resolves.toEqual({
+    let checked = false;
+    const beforePublish = () => (checked = true);
+    await expect(publishTarball(packed, { beforePublish, npm, wait })).resolves.toEqual({
       ...packed,
       published: false,
     });
     expect(calls.map((args) => args[0])).toEqual(["view"]);
+    expect(checked).toBe(false);
   });
 
   it("never republishes a version the registry has with another integrity", async () => {
     const packed = tarball();
-    const { npm, calls } = registry({ on: integrityOf(Buffer.from("other")), delay: 0 });
-    await expect(publishTarball(packed, npm, noWait)).rejects.toThrow("never replaced");
+    const { npm, calls } = registry({ on: other, delay: 0 });
+    await expect(publishTarball(packed, { beforePublish() {}, npm, wait })).rejects.toThrow(
+      "never replaced",
+    );
     expect(calls.map((args) => args[0])).toEqual(["view"]);
   });
 
   it("fails when the registry lists other bytes after publishing", async () => {
-    const packed = tarball();
-    const { npm } = registry({ on: null, delay: 0, listed: integrityOf(Buffer.from("other")) });
-    await expect(publishTarball(packed, npm, noWait)).rejects.toThrow("not the published");
+    const { npm } = registry({ on: null, delay: 0, listed: other });
+    await expect(publishTarball(tarball(), { beforePublish() {}, npm, wait })).rejects.toThrow(
+      "not the published",
+    );
   });
 
   it("fails when the registry never lists the version", async () => {
     const packed = tarball();
     const { npm } = registry({ on: null, delay: 100, listed: packed.integrity });
-    await expect(publishTarball(packed, npm, noWait)).rejects.toThrow("still doesn't list");
+    await expect(publishTarball(packed, { beforePublish() {}, npm, wait })).rejects.toThrow(
+      "still doesn't list",
+    );
   });
 
   it("publishes nothing when the tarball isn't the one packed", async () => {
     const packed = tarball();
     writeFileSync(packed.file, "changed bytes");
     const { npm, calls } = registry({ on: null, delay: 0 });
-    await expect(publishTarball(packed, npm, noWait)).rejects.toThrow("not the packed");
+    await expect(publishTarball(packed, { beforePublish() {}, npm, wait })).rejects.toThrow(
+      "not the packed",
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("publishes nothing when the tarball holds another package or version", async () => {
+    const { npm, calls } = registry({ on: null, delay: 0 });
+    for (const change of [{ version: "0.2.0" }, { name: "@clawtrate/other" }, { pluginId: "x" }]) {
+      await expect(
+        publishTarball({ ...tarball(), ...change }, { beforePublish() {}, npm, wait }),
+      ).rejects.toThrow("holds @clawtrate/clawtrate-bots@");
+    }
     expect(calls).toEqual([]);
   });
 
   it("fails when npm publish fails", async () => {
-    const packed = tarball();
     const npm: Npm = (args) =>
       args[0] === "publish" ? { status: 1, stdout: "", stderr: "E403" } : notFound;
-    await expect(publishTarball(packed, npm, noWait)).rejects.toThrow("npm publish failed");
+    await expect(publishTarball(tarball(), { beforePublish() {}, npm, wait })).rejects.toThrow(
+      "npm publish failed",
+    );
   });
 });
 
-describe("what a caller reads", () => {
+describe("the lock a release reads", { timeout: 60_000 }, () => {
+  it("describes the packed bytes from the tarball's own manifests, into a folder not yet made", () => {
+    const copy = pluginCopy();
+    const manifest = json(readFileSync(join(copy, "openclaw.plugin.json")));
+    writeFileSync(
+      join(copy, "openclaw.plugin.json"),
+      JSON.stringify({
+        ...manifest,
+        contracts: {
+          ...(manifest.contracts as object),
+          tools: ["clawtrate_here", "clawtrate_bots"],
+        },
+        toolMetadata: { clawtrate_tasks: {}, clawtrate_here: {} },
+        hooks: ["before_tool_call", "agent_end"],
+      }),
+    );
+    const packed = packPlugin(copy, temp(), LICENSE);
+    // The checkout changes after packing; the lock follows the tarball.
+    writeFileSync(join(copy, "openclaw.plugin.json"), JSON.stringify({ ...manifest, id: "other" }));
+    writeFileSync(join(copy, "package.json"), JSON.stringify({ ...IN_REPO, version: "9.9.9" }));
+    const out = join(temp(), "not", "yet");
+    const path = writeLock([lockEntry(packed.file, packed.integrity, COMMIT)], out);
+    expect(path).toBe(join(out, "plugins.lock.json"));
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      plugins: [
+        {
+          name: "@clawtrate/clawtrate-bots",
+          version: IN_REPO.version,
+          integrity: packed.integrity,
+          pluginId: "clawtrate-bots",
+          tools: ["clawtrate_bots", "clawtrate_here", "clawtrate_tasks"],
+          hooks: ["agent_end", "before_tool_call"],
+          commit: COMMIT,
+        },
+      ],
+    });
+  });
+
+  it("lists no tools or hooks for a manifest that declares none", () => {
+    const packed = packPlugin(PLUGIN, temp(), LICENSE);
+    expect(lockEntry(packed.file, packed.integrity, COMMIT)).toMatchObject({
+      tools: [],
+      hooks: [],
+    });
+  });
+});
+
+describe("the job's outputs and summary", () => {
   const result = {
     name: "@clawtrate/clawtrate-bots",
     version: "0.1.0",
@@ -302,12 +475,13 @@ describe("what a caller reads", () => {
     published: true,
   };
 
-  it("writes the job's outputs and summary", () => {
+  it("names the commit packed", () => {
     const dir = temp();
     const env = { GITHUB_OUTPUT: join(dir, "output"), GITHUB_STEP_SUMMARY: join(dir, "summary") };
-    report(result, "Published", env);
+    report(result, COMMIT, "Published", env);
     expect(readFileSync(env.GITHUB_OUTPUT, "utf8")).toBe(
       [
+        `commit=${COMMIT}`,
         "name=@clawtrate/clawtrate-bots",
         "version=0.1.0",
         "integrity=sha512-abc==",
@@ -319,25 +493,12 @@ describe("what a caller reads", () => {
     );
     const summary = readFileSync(env.GITHUB_STEP_SUMMARY, "utf8");
     expect(summary).toContain("## Published");
+    expect(summary).toContain(`| Commit | \`${COMMIT}\` |`);
     expect(summary).toContain("| Integrity | `sha512-abc==` |");
     expect(summary).toContain("| File | `clawtrate-clawtrate-bots-0.1.0.tgz` |");
   });
 
   it("writes nothing outside GitHub Actions", () => {
-    expect(() => report(result, "Published", {})).not.toThrow();
-  });
-
-  it("writes the lock a release reads", () => {
-    const path = writeLock([result], temp());
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
-      plugins: [
-        {
-          package: "@clawtrate/clawtrate-bots",
-          version: "0.1.0",
-          integrity: "sha512-abc==",
-          pluginId: "clawtrate-bots",
-        },
-      ],
-    });
+    expect(() => report(result, COMMIT, "Published", {})).not.toThrow();
   });
 });

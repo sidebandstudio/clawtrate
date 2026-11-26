@@ -1,6 +1,7 @@
 // The plugins publish workflow holds no npm token and gives GitHub's OIDC token
 // to one job only, which runs from the `npm` environment, on main.
 
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -88,13 +89,42 @@ describe("the plugins publish workflow", () => {
     }
   });
 
+  it("packs and publishes the run's own commit, with no commit to choose", () => {
+    const dispatch = flow.on.workflow_dispatch as { inputs: Record<string, unknown> };
+    expect(Object.keys(dispatch.inputs)).toEqual(["mode"]);
+    expect(TEXT).not.toContain("inputs.commit");
+    for (const [, job] of jobs) {
+      const checkouts = job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
+      expect(checkouts.map((step) => step.with?.ref)).toEqual(["${{ github.sha }}"]);
+    }
+  });
+
   it("checks the commit is on main before packing it", () => {
     const pack = flow.jobs.pack!.steps;
-    const check = pack.findIndex((step) => step.id === "commit");
-    expect(pack[check]!.run).toContain('git merge-base --is-ancestor "$COMMIT" origin/main');
-    expect(pack[check]!.run).toContain("^[0-9a-f]{40}$");
+    const check = pack.findIndex(
+      (step) => step.run === "node apps/desktop/packaging/plugin-npm.ts on-main",
+    );
+    expect(check).toBeGreaterThan(-1);
     expect(check).toBeLessThan(pack.findIndex((step) => step.id === "pack"));
-    expect(flow.jobs.publish!.steps[0]!.with?.ref).toBe("${{ needs.pack.outputs.commit }}");
+  });
+
+  it("first checks the ref is exactly main, in every job", () => {
+    for (const [, job] of jobs) {
+      const first = job.steps[0]!;
+      expect(first.name).toBe("Check the run is on main");
+      const run = (ref: string) =>
+        spawnSync("bash", ["-e", "-c", first.run!], {
+          env: { PATH: process.env.PATH, GITHUB_REF: ref },
+        }).status;
+      expect(run("refs/heads/main")).toBe(0);
+      for (const ref of [
+        "refs/heads/Main",
+        "refs/heads/MAIN",
+        "refs/heads/main2",
+        "refs/tags/main",
+      ])
+        expect(run(ref)).not.toBe(0);
+    }
   });
 
   it("publishes only through the script, which reads the registry back", () => {
