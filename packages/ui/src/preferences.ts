@@ -2,7 +2,15 @@
 // can be missing or throw (private windows, blocked site data), and the app must
 // work without it.
 
+import {
+  gatewayStamp,
+  shownChoice,
+  type ChoiceId,
+  type ChoiceSet,
+  type ClawtrateBridge,
+} from "@clawtrate/core";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useOptionalBridge } from "./bridge.tsx";
 
 export function readPreference(key: string): string | null {
   try {
@@ -74,31 +82,74 @@ export function useBubbles(): [BubbleChoice, (choice: BubbleChoice) => void] {
 }
 
 /**
- * A switch kept on this device (conversation.md, 7.11), off by default, stored as
- * `clawtrate.<key>` = "show"; `?<key>=show` overrides the stored choice. One value
- * for the whole window, so Settings, the conversation and the Computer tab change together.
+ * A switch of how conversations are shown (conversation.md, 7.11), off by default. On when this
+ * device turned it on, stored as `clawtrate.<key>` = "show", or when the gateway holds it on for
+ * this user (`state.choices`, `shownChoice`; #639): the gateway's value only ever shows more.
+ * `?<key>=show` overrides both. One value for the whole window, so Settings, the conversation and
+ * the Computer tab change together.
  */
-function deviceSwitch(key: string): () => [boolean, (shown: boolean) => void] {
+function deviceSwitch(
+  key: string,
+  choice: ChoiceId,
+): () => [boolean, (shown: boolean) => Promise<void>] {
   const listeners = new Set<() => void>();
   let value: boolean | null = null;
+  const fromUrl = () => new URLSearchParams(globalThis.location?.search ?? "").get(key);
   const read = (): boolean => {
-    if (value === null) {
-      const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get(key);
-      value = (fromUrl ?? readPreference(key)) === "show";
-    }
+    if (value === null) value = (fromUrl() ?? readPreference(key)) === "show";
     return value;
   };
+  const keep = (next: boolean) => {
+    writePreference(key, next ? "show" : null);
+    value = next;
+    for (const listener of listeners) listener();
+  };
   return function useDeviceSwitch() {
-    const shown = useSyncExternalStore((listener) => {
+    const local = useSyncExternalStore((listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     }, read);
-    const choose = useCallback((next: boolean) => {
-      writePreference(key, next ? "show" : null);
-      value = next;
-      for (const listener of listeners) listener();
-    }, []);
-    return [shown, choose];
+    const bridge = useOptionalBridge();
+    const choices = useSyncExternalStore(
+      useCallback((listener) => bridge?.subscribe(listener) ?? (() => {}), [bridge]),
+      () => bridge?.getState().choices,
+    );
+    const url = fromUrl();
+    const choose = useCallback(
+      (next: boolean) => pressSwitch(choice, next, keep, bridge),
+      [bridge],
+    );
+    return [url === null ? shownChoice(choices, local, choice) : local, choose];
+  };
+}
+
+/**
+ * A press of a conversation switch: kept on this device first, whatever the gateway answers, so
+ * the press always changes what this device keeps and an "on" shows at once. The engine then tells
+ * the gateway, and keeps an "on" it couldn't send for later; only an "off" the gateway still holds
+ * on for every device can be refused, and then it still shows by the gateway's "on".
+ */
+export async function pressSwitch(
+  choice: ChoiceId,
+  next: boolean,
+  keep: (next: boolean) => void,
+  bridge: Pick<ClawtrateBridge, "getState" | "invoke"> | null,
+): Promise<void> {
+  keep(next);
+  const state = bridge?.getState();
+  if (!bridge || !state || state.choices?.status === "unavailable") return;
+  await bridge.invoke({
+    type: "changeChoices",
+    change: { [choice]: next },
+    stamp: gatewayStamp(state.connection),
+  });
+}
+
+/** This device's own conversation switches, for the first-time merge: only those turned on here. */
+export function ownChoices(): ChoiceSet {
+  return {
+    ...(readPreference("commands") === "show" ? { commands: true } : {}),
+    ...(readPreference("thinking") === "show" ? { thinking: true } : {}),
   };
 }
 
@@ -106,13 +157,13 @@ function deviceSwitch(key: string): () => [boolean, (shown: boolean) => void] {
  * "Show commands": the action cards in the conversation, command lines and the
  * Raw view. `?commands=show` overrides the stored choice.
  */
-export const useShowCommands = deviceSwitch("commands");
+export const useShowCommands = deviceSwitch("commands", "commands");
 
 /**
  * "Show thinking": the "Thought" lines in the conversation and the thinking under
  * the status line. `?thinking=show` overrides the stored choice.
  */
-export const useShowThinking = deviceSwitch("thinking");
+export const useShowThinking = deviceSwitch("thinking", "thinking");
 
 /** A set of ids kept as a JSON array in a preference. */
 export function readIdSet(key: string): Set<string> {

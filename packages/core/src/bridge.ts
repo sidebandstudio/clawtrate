@@ -29,6 +29,7 @@ import {
   type SidebarChange,
   type SidebarPrefs,
 } from "./sidebar.ts";
+import { CHOICE_IDS, type ChoiceSet } from "./choices.ts";
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import { MAX_MESSAGE_LINE_CHARS } from "./state-bounds.ts";
 import type { ClawtrateState, GatewayStamp, TranscriptItem } from "./types.ts";
@@ -156,12 +157,15 @@ export type BridgeCommand =
   | { type: "readBotGuides" }
   /** Add, replace or remove them, or answer "Not now", on the gateway `stamp` names (admin). */
   | { type: "changeBotGuides"; change: GuidesChange; stamp: GatewayStamp }
-  /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
-  | { type: "setShowChannelChats"; on: boolean }
+  /**
+   * "Show external channel chats": list chats from Discord, Telegram and other channels, or not.
+   * Kept on the gateway when it keeps the person's choices; `stamp` is where Settings read them.
+   */
+  | { type: "setShowChannelChats"; on: boolean; stamp?: GatewayStamp }
   /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
-  | { type: "setShowOtherToolSessions"; on: boolean }
+  | { type: "setShowOtherToolSessions"; on: boolean; stamp?: GatewayStamp }
   /** "Show the gateway's own bot": list the gateway's default bot beside the others, or not. */
-  | { type: "setShowGatewayBot"; on: boolean }
+  | { type: "setShowGatewayBot"; on: boolean; stamp?: GatewayStamp }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
@@ -447,6 +451,18 @@ export type BridgeCommand =
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
   | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null }
   /**
+   * The first-time merge of this device's arrangement into the gateway's (`mergeSidebar`), made
+   * only while the connection writes. Answers whether it was made.
+   */
+  | { type: "mergeSidebar"; base: SidebarPrefs; stamp: GatewayStamp }
+  /**
+   * Change the person's choices on the gateway (`choices.ts`). Answers `device` when nothing was
+   * sent and the viewer keeps them on this device.
+   */
+  | { type: "changeChoices"; change: ChoiceSet; stamp: GatewayStamp }
+  /** The first-time merge of the viewer's own choices into the gateway's (`mergeChoices`). */
+  | { type: "mergeChoices"; base: ChoiceSet; stamp: GatewayStamp }
+  /**
    * The Computer tab (`computer.ts`). `computerShow` makes this viewer's pane
    * about one of its open tasks and answers the pane's id in
    * `state.computer.panes`; the others act on that pane. Leaving gives
@@ -537,7 +553,13 @@ export type BridgeCommand =
     };
 
 /** What each command answers with. */
-export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "readBotDelete" }
+export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "changeChoices" }
+  ? { kept: "gateway" | "device" }
+  : C extends { type: "mergeSidebar" }
+    ? { merged: boolean }
+    : BridgeResultFirst<C>;
+
+type BridgeResultFirst<C extends BridgeCommand> = C extends { type: "readBotDelete" }
   ? BotDeleteRead
   : C extends { type: "deleteBot" }
     ? BotDeleteOutcome
@@ -1138,6 +1160,22 @@ function oneOf<T extends string>(value: unknown, options: readonly T[], what: st
 }
 
 /** Where a screen was read (`GatewayStamp`): the gateway's identity, or null, and the host's target. */
+/** Some of the person's choices: known names, each on or off, at least one. */
+function choiceSet(value: unknown, empty: boolean): ChoiceSet {
+  const given = record(value, "choices");
+  const out: ChoiceSet = {};
+  for (const [name, on] of Object.entries(given)) {
+    if (!(CHOICE_IDS as readonly string[]).includes(name) || typeof on !== "boolean")
+      throw new Error("invalid choice");
+    out[name as keyof ChoiceSet] = on;
+  }
+  if (!empty && Object.keys(out).length === 0) throw new Error("invalid choice");
+  return out;
+}
+
+const optionalStamp = (value: unknown) =>
+  value === undefined ? {} : { stamp: gatewayStampOf(value) };
+
 function gatewayStampOf(value: unknown): GatewayStamp {
   const stamp = record(value, "gateway stamp");
   return {
@@ -1525,13 +1563,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "setShowChannelChats":
       if (typeof command.on !== "boolean") throw new Error("invalid channel chats setting");
-      return { type: "setShowChannelChats", on: command.on };
+      return { type: "setShowChannelChats", on: command.on, ...optionalStamp(command.stamp) };
     case "setShowOtherToolSessions":
       if (typeof command.on !== "boolean") throw new Error("invalid other tools setting");
-      return { type: "setShowOtherToolSessions", on: command.on };
+      return { type: "setShowOtherToolSessions", on: command.on, ...optionalStamp(command.stamp) };
     case "setShowGatewayBot":
       if (typeof command.on !== "boolean") throw new Error("invalid gateway bot setting");
-      return { type: "setShowGatewayBot", on: command.on };
+      return { type: "setShowGatewayBot", on: command.on, ...optionalStamp(command.stamp) };
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
@@ -1857,6 +1895,24 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         probe: command.probe === true,
       };
     }
+    case "mergeSidebar":
+      return {
+        type: "mergeSidebar",
+        base: parseSidebar(command.base),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "changeChoices":
+      return {
+        type: "changeChoices",
+        change: choiceSet(command.change, false),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "mergeChoices":
+      return {
+        type: "mergeChoices",
+        base: choiceSet(command.base, true),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "changeSidebar":
       return {
         type: "changeSidebar",
@@ -2368,11 +2424,20 @@ class ViewerSession implements BridgeSession {
       case "setBotVoice":
         return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":
-        return client.setShowChannelChats(command.on);
+        return client.setShowChannelChats(command.on, {
+          owner,
+          ...(command.stamp ? { stamp: command.stamp } : {}),
+        });
       case "setShowOtherToolSessions":
-        return client.setShowOtherToolSessions(command.on);
+        return client.setShowOtherToolSessions(command.on, {
+          owner,
+          ...(command.stamp ? { stamp: command.stamp } : {}),
+        });
       case "setShowGatewayBot":
-        return client.setShowGatewayBot(command.on);
+        return client.setShowGatewayBot(command.on, {
+          owner,
+          ...(command.stamp ? { stamp: command.stamp } : {}),
+        });
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":
@@ -2503,6 +2568,14 @@ class ViewerSession implements BridgeSession {
         return client.listArchived(command.botId);
       case "changeSidebar":
         return client.changeSidebar(command.change, command.base, { owner });
+      case "mergeSidebar":
+        return { merged: await client.mergeSidebar(command.base, { owner, stamp: command.stamp }) };
+      case "changeChoices":
+        return {
+          kept: await client.changeChoices(command.change, { owner, stamp: command.stamp }),
+        };
+      case "mergeChoices":
+        return client.mergeChoices(command.base, { owner, stamp: command.stamp });
       case "computerShow":
         client.computerShow(this.viewer, this.mine(command.key));
         return { viewer: this.viewer };

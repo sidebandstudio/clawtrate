@@ -176,6 +176,9 @@ test("F-562: with other bots, the gateway's own bot is absent from the sidebar, 
   expect(own.name, "the seeded gateway's own bot").toBe("Juniper");
   const page = await pairedPage(browser, INSTANCE);
   seeded = page;
+  // The run's other hosts start with the switch on, and the gateway keeps it for every device
+  // (F-601): turned off here, this host's own choice off with it, so the check starts from off.
+  await setShown(page, false);
 
   // Off, the default: the other bots, and no bot starred.
   for (const name of ["Otto", "Marlow", "Pip"]) await expect(botRow(page, name)).toBeVisible();

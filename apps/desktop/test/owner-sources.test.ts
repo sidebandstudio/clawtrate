@@ -21,6 +21,7 @@ const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
   "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
+  "packages/core/src/choices.ts:CHOICE_IDS": "static, the five choices' names",
   "packages/core/src/openclaw-update.ts:UPDATE_PHASES": "static, the gateway's eight update phases",
   "packages/core/src/openclaw-update.ts:RUN_STATUSES": "static, the gateway's five run statuses",
   "packages/core/src/openclaw-update.ts:UPDATE_ASK_WAITS_MS":

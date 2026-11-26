@@ -10,6 +10,7 @@ import type {
 import {
   ACTIVE_RUN_MESSAGE,
   avatarFor,
+  gatewayStamp,
   gatewayAddress,
   MAX_GATEWAY_NAME_CHARS,
 } from "@clawtrate/core";
@@ -66,7 +67,7 @@ import {
   useActionRunner,
   type DialogSpec,
 } from "./RailActions.tsx";
-import { arrange, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
+import { arrange, hiddenWithUnread, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
 import {
   botLabel,
   summarize,
@@ -635,6 +636,11 @@ export function Rail({
       sidebar,
       interactive,
       change: (change, base) => bridge.invoke({ type: "changeSidebar", change, base }),
+      connected: connection.status === "connected",
+      merge: (base) =>
+        bridge
+          .invoke({ type: "mergeSidebar", base, stamp: gatewayStamp(connection) })
+          .then((answer) => answer?.merged === true),
     },
   );
   const [tip, setTip] = useState<Tip | null>(null);
@@ -713,6 +719,9 @@ export function Rail({
     [bots, tasksByBot, roster.prefs],
   );
   const pinnedIds = arranged.pinned.map((bot) => bot.id);
+  // Hidden bots with something new for the person: a mark on the fold, so a hide (which another
+  // device or anything writing to the gateway can make) never keeps a reply or a failure unseen.
+  const hiddenUnread = hiddenWithUnread(arranged.hidden, tasksByBot, selection.unreadSeen);
   const matches = useMemo(
     () =>
       needle
@@ -1628,7 +1637,19 @@ export function Rail({
         : []),
       { kind: "rule" },
       !roster.editable
-        ? { kind: "rule" }
+        ? // A connection that can't change the gateway's arrangement still shows a bot here.
+          hidden && !roster.prefs.shownHere?.includes(bot.id)
+          ? {
+              kind: "item",
+              label: "Show in sidebar",
+              note: "This device only",
+              icon: <EyeIcon />,
+              onSelect: after(() => {
+                roster.showHere(bot.id);
+                setRefocus({ bot: bot.id });
+              }),
+            }
+          : { kind: "rule" }
         : hidden
           ? {
               kind: "item",
@@ -2263,6 +2284,12 @@ export function Rail({
                     <ChevronIcon />
                     Hidden bots
                     <span className="hidden-count">{arranged.hidden.length}</span>
+                    {hiddenUnread > 0 && (
+                      <>
+                        <span className="unread-dot" aria-hidden="true" />
+                        <span className="visually-hidden">, {hiddenUnread} with unread</span>
+                      </>
+                    )}
                   </button>
                   {showHidden && (
                     <ul className="hidden-list" aria-label="Hidden bots">

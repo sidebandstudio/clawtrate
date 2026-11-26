@@ -2732,10 +2732,28 @@ test.beforeEach(async ({ page }, info) => {
     await page.addInitScript(() => localStorage.setItem("clawtrate.commands", "show"));
 });
 
+/**
+ * The default, as a new device sees it: a device's own "Show commands" goes to the run's shared
+ * gateway for every device (F-601), so the checks of the default turn the gateway's off first.
+ */
+async function defaultSwitches(page: Page): Promise<void> {
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
+  for (const name of ["Show commands", "Show thinking"]) {
+    const toggle = settings.getByRole("switch", { name });
+    if ((await toggle.getAttribute("aria-checked")) === "true") await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+  }
+  await page.keyboard.press("Escape");
+  await expect(settings).toHaveCount(0);
+}
+
 test("F-528 F-529 F-530: by default a real run shows no card: the status line names the kind of work, and the run line opens to the actions in plain words", async ({
   page,
 }) => {
   await openShell(page);
+  await defaultSwitches(page);
   await ownTaskOf(page, "pip", "Pip", "Go through the files quietly");
   await composer(page).fill("Go through the workspace. #read-six #slow-tool 8");
   await page.keyboard.press("Enter");
@@ -2766,6 +2784,7 @@ test("F-551: by default a real run shows no thinking and no failed action, which
   page,
 }) => {
   await openShell(page);
+  await defaultSwitches(page);
   const { title } = await ownTaskOf(page, "pip", "Pip", "Think, then look for notes");
   await composer(page).fill("Look for my old notes. #think #tool-fail");
   await page.keyboard.press("Enter");
@@ -2802,6 +2821,12 @@ test("F-551: by default a real run shows no thinking and no failed action, which
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(transcript.locator("details.thought").first()).toBeVisible();
+  // Kept on the run's shared gateway for every device (F-601): put back as it was.
+  await page.keyboard.press("ControlOrMeta+,");
+  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await page.keyboard.press("Escape");
 });
 
 /** The action cards' and folds' lines in a transcript, in order. */

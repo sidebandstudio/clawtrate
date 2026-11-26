@@ -6,11 +6,13 @@
 // inside it, Escape closes it, and focus returns to where it was.
 
 import {
+  gatewayStamp,
   INTERACTIVE_SCOPES,
   scopeSatisfied,
   type AccountsState,
   type Bot,
   type BotVoiceAnswer,
+  type ChoiceId,
   type GatewayStamp,
   type CheckInsState,
   type ConnectionState,
@@ -143,9 +145,10 @@ function DeviceSwitch({
   note: string;
   /** What is announced once it is on, and once it is off. */
   said: [string, string];
-  value: [boolean, (shown: boolean) => void];
+  value: [boolean, (shown: boolean) => Promise<void>];
   announce: (text: string) => void;
 }) {
+  const [error, setError] = useState<string | null>(null);
   return (
     <div className="b-field device-switch">
       <span className="device-switch-row">
@@ -159,14 +162,23 @@ function DeviceSwitch({
           aria-describedby={`${id}-note`}
           data-testid={id}
           onClick={() => {
-            setShown(!shown);
-            announce(shown ? said[1] : said[0]);
+            setError(null);
+            void setShown(!shown).then(
+              () => announce(shown ? said[1] : said[0]),
+              (failure: unknown) =>
+                setError(failure instanceof Error ? failure.message : String(failure)),
+            );
           }}
         />
       </span>
       <p className="b-hint" id={`${id}-note`}>
         {note}
       </p>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -188,7 +200,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
   const toggleOtherTools = () => {
     const on = !showOtherTools;
     setOtherToolsError(null);
-    void send({ type: "setShowOtherToolSessions", on }).then(
+    void send({ type: "setShowOtherToolSessions", on, stamp: gatewayStamp(state.connection) }).then(
       () => announce(on ? "Sessions from other tools shown" : "Sessions from other tools hidden"),
       (failure: unknown) =>
         setOtherToolsError(failure instanceof Error ? failure.message : String(failure)),
@@ -197,14 +209,31 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
   const toggleChannelChats = () => {
     const on = !showChannelChats;
     setChannelError(null);
-    void send({ type: "setShowChannelChats", on }).then(
+    void send({ type: "setShowChannelChats", on, stamp: gatewayStamp(state.connection) }).then(
       () => announce(on ? "Channel chats shown" : "Channel chats hidden"),
       (failure: unknown) =>
         setChannelError(failure instanceof Error ? failure.message : String(failure)),
     );
   };
+  // Said once, where the choices live (#639): only on the gateway's own answer, never after a
+  // read that merely failed. Where it keeps them, they are the same for everyone who connects as
+  // the same user, which on a gateway without roles is everyone paired with it.
+  const perDevice = state.choices?.status === "unavailable";
+  const shared = state.choices?.status === "ok";
   return (
     <>
+      {perDevice && (
+        <p className="b-hint" data-testid="choices-per-device">
+          This gateway doesn&apos;t keep choices for this connection, so the switches here apply to
+          this device only.
+        </p>
+      )}
+      {shared && (
+        <p className="b-hint" data-testid="choices-shared">
+          These switches are the same on every device connected to this gateway, anyone else&apos;s
+          included. One you turn on here stays on here.
+        </p>
+      )}
       <DeviceSwitch
         id="show-commands"
         label="Show commands"
@@ -213,6 +242,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         value={commands}
         announce={announce}
       />
+      <ChoiceWaiting name="commands" />
       <DeviceSwitch
         id="show-thinking"
         label="Show thinking"
@@ -221,6 +251,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         value={thinking}
         announce={announce}
       />
+      <ChoiceWaiting name="thinking" />
       <div className="b-field channel-chats-field">
         <span id="channel-chats-label">Show external channel chats</span>
         <button
@@ -241,6 +272,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         it, which it does unless its <code>session.dmScope</code> setting gives each channel
         conversation its own session, those messages still appear there.
       </p>
+      <ChoiceWaiting name="channelChats" />
       {channelError && (
         <div className="form-error" role="alert">
           {channelError}
@@ -264,6 +296,7 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         with a bot stay out of the task list, its previews and its unread marks. A routine&apos;s
         runs open from Routines. One that is waiting for your approval or answer always shows.
       </p>
+      <ChoiceWaiting name="otherTools" />
       {otherToolsError && (
         <div className="form-error" role="alert">
           {otherToolsError}
@@ -274,15 +307,27 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
   );
 }
 
+/** A choice turned on here that the gateway hasn't taken yet (`choicesPending`): said quietly. */
+function ChoiceWaiting({ name }: { name: ChoiceId }) {
+  const waiting = useClawtrateState().choicesPending?.includes(name) === true;
+  if (!waiting) return null;
+  return (
+    <p className="b-hint" data-testid={`choice-waiting-${name}`}>
+      On here. It reaches your other devices once your gateway takes it.
+    </p>
+  );
+}
+
 /** "Show the gateway's own bot", off by default and kept by the host (F-562). */
 function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
   const send = useCommand();
-  const shown = useClawtrateState().showGatewayBot === true;
+  const state = useClawtrateState();
+  const shown = state.showGatewayBot === true;
   const [error, setError] = useState<string | null>(null);
   const toggle = () => {
     const on = !shown;
     setError(null);
-    void send({ type: "setShowGatewayBot", on }).then(
+    void send({ type: "setShowGatewayBot", on, stamp: gatewayStamp(state.connection) }).then(
       () => announce(on ? "The gateway's own bot shown" : "The gateway's own bot hidden"),
       (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)),
     );
@@ -307,6 +352,7 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
         tools&apos; calls and scheduled runs that name no bot land on it. While you have another
         bot, it stays out of the sidebar unless it is waiting on you.
       </p>
+      <ChoiceWaiting name="gatewayBot" />
       {error && (
         <div className="form-error" role="alert">
           {error}

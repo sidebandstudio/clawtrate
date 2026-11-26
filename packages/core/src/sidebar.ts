@@ -9,6 +9,7 @@
 // `no_durable_identity`, and the rail then keeps its arrangement per device.
 
 import { utf8Length } from "./encoding.ts";
+import { nextRev } from "./choices.ts";
 import { asRecord } from "./mapping.ts";
 
 export const SIDEBAR_PREF_KEY = "clawtrate.sidebar";
@@ -51,10 +52,10 @@ export type SidebarPrefs = {
   /** The manual order of the list. */
   order: string[];
   /**
-   * The arrangement's revision on the gateway: every write raises it by one under the
-   * compare-and-set, so it orders the values the gateway held. The gateway's protocol
-   * gives no version of a preference (`users.prefs.get` answers entries, and
-   * `users.prefs.changed` names keys), so the arrangement carries its own. Absent is 0.
+   * The arrangement's revision: every write raises it above what the gateway holds and what the
+   * writer shows (`nextRev`), so a value always changes when it is written. The gateway gives no
+   * version of a preference. Devices of this version order what they show by when they asked,
+   * not by it (a value at the largest revision, or a reset, can't stop a later one). Absent is 0.
    */
   rev?: number;
 };
@@ -202,6 +203,40 @@ export function applySidebarChange(prefs: SidebarPrefs, change: SidebarChange): 
   }
 }
 
+const emptyArrangement = (prefs: SidebarPrefs) =>
+  prefs.pins.length + prefs.hidden.length + prefs.order.length + prefs.sections.length === 0;
+
+/**
+ * The first time a writing device meets the gateway's arrangement (docs/decisions.md, "Your
+ * choices follow you"): this device's own copy starts the gateway's only while the gateway holds
+ * none. When the gateway already holds one, it wins and nothing is written: the device's copy is
+ * older than anything the person did on the gateway since, so it is never merged in. Within the
+ * gateway's bound, with a compare-and-set against "none". Answers what the gateway holds.
+ */
+export async function mergeSidebar(
+  ctx: Pick<SidebarContext, "request">,
+  base: SidebarPrefs,
+): Promise<SidebarState> {
+  const device = parseSidebar(base);
+  const read = await readRaw(ctx);
+  if (read.status !== "ok")
+    throw new Error("This gateway keeps no preferences for this connection.");
+  const held = read.raw === null || read.raw === undefined ? null : parseSidebar(read.raw);
+  if (held !== null || emptyArrangement(device)) return { status: "ok", prefs: held };
+  const next = { ...device, rev: 1 };
+  if (sidebarBytes(next) > MAX_SIDEBAR_BYTES) return { status: "ok", prefs: null };
+  const result = asRecord(
+    await ctx.request("users.prefs.set", {
+      entries: { [SIDEBAR_PREF_KEY]: next },
+      expectedEntries: { [SIDEBAR_PREF_KEY]: null },
+    }),
+  );
+  if (result?.status === "ok") return { status: "ok", prefs: next };
+  // Another device started it meanwhile: the gateway's is the one now.
+  if (result?.status === "conflict") return readSidebar({ ...ctx, ensureWrite: async () => {} });
+  throw new Error("This gateway keeps no preferences for this connection.");
+}
+
 /** Context: the gateway, and the write tier for a change. */
 export type SidebarContext = {
   request: (method: string, params: unknown) => Promise<unknown>;
@@ -210,7 +245,7 @@ export type SidebarContext = {
 
 /** What the gateway holds now: the parsed arrangement and the raw value to compare against. */
 async function readRaw(
-  ctx: SidebarContext,
+  ctx: Pick<SidebarContext, "request">,
 ): Promise<{ status: "ok"; raw: unknown } | { status: "unavailable" }> {
   const result = asRecord(await ctx.request("users.prefs.get", { keys: [SIDEBAR_PREF_KEY] }));
   if (result?.status !== "ok") return { status: "unavailable" };
@@ -231,6 +266,12 @@ export async function readSidebar(ctx: SidebarContext): Promise<SidebarState> {
   };
 }
 
+/** The arrangement as read with other preferences (`entries` of a `users.prefs.get` answer). */
+export function sidebarFromEntries(entries: Record<string, unknown>): SidebarState {
+  const raw = Object.hasOwn(entries, SIDEBAR_PREF_KEY) ? entries[SIDEBAR_PREF_KEY] : null;
+  return { status: "ok", prefs: raw === null || raw === undefined ? null : parseSidebar(raw) };
+}
+
 /**
  * Apply a change on the gateway. When it holds no arrangement yet, `base`
  * (this device's) is where the change starts, so the first change keeps what
@@ -241,6 +282,8 @@ export async function changeSidebar(
   ctx: SidebarContext,
   change: SidebarChange,
   base: SidebarPrefs | null,
+  /** The revision this device shows (`nextRev`). */
+  shownRev = 0,
 ): Promise<SidebarState> {
   await ctx.ensureWrite();
   for (let attempt = 0; attempt < SIDEBAR_WRITE_ATTEMPTS; attempt += 1) {
@@ -251,7 +294,10 @@ export async function changeSidebar(
       read.raw === null || read.raw === undefined
         ? parseSidebar(base ?? {})
         : parseSidebar(read.raw);
-    const next = { ...applySidebarChange(from, change), rev: (from.rev ?? 0) + 1 };
+    const next = {
+      ...applySidebarChange(from, change),
+      rev: nextRev(from.rev ?? 0, shownRev ?? 0),
+    };
     if (sidebarBytes(next) > MAX_SIDEBAR_BYTES)
       throw new SidebarFullError(
         "The gateway keeps at most 4,096 bytes of arrangement, and this change would pass that. Remove a section or shorten section names first.",

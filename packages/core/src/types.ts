@@ -11,6 +11,7 @@ import type { TaskActivity } from "./runs.ts";
 import type { StartTasks } from "./start-tasks.ts";
 import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
+import type { ChoiceId, ChoicesState } from "./choices.ts";
 import type { SidebarState } from "./sidebar.ts";
 import type { ComputerState } from "./computer.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
@@ -600,7 +601,8 @@ export type ClawtrateState = {
   turnLimitMinutes?: number;
   /**
    * "Show external channel chats": whether `tasksByBot` lists chats that came in
-   * through Discord, Telegram and other channels. Off by default, kept by the host.
+   * through Discord, Telegram and other channels. Off by default; on when this device turned it on
+   * (kept by the host) or the gateway holds it on for this user (`choices.ts`, `shownChoice`).
    */
   showChannelChats?: boolean;
   /**
@@ -610,13 +612,13 @@ export type ClawtrateState = {
   voiceChanges?: number;
   /**
    * "Show sessions from other tools": whether `tasksByBot` lists sessions an API client, a
-   * scheduled run or another tool opened with a bot (`Task.otherTool`). Off by default, kept by
-   * the host.
+   * scheduled run or another tool opened with a bot (`Task.otherTool`). Off by default; on by
+   * the same rule as `showChannelChats`.
    */
   showOtherToolSessions?: boolean;
   /**
    * "Show the gateway's own bot": whether the gateway's default bot is listed beside the
-   * others (`gateway-bot.ts`). Off by default, kept by the host.
+   * others (`gateway-bot.ts`). Off by default; as `showChannelChats`.
    */
   showGatewayBot?: boolean;
   /**
@@ -625,6 +627,16 @@ export type ClawtrateState = {
    * does not read it.
    */
   sidebar?: SidebarState;
+  /**
+   * The person's choices of how things are shown, as the gateway keeps them for this user
+   * (`choices.ts`). Absent where a host does not read them.
+   */
+  choices?: ChoicesState;
+  /**
+   * Choices turned on on this device that the gateway hasn't taken yet: sent after the next read
+   * on a connection that writes (`choices.ts`). Absent or empty when nothing waits.
+   */
+  choicesPending?: ChoiceId[];
   /**
    * The Work pane's Computer tab (`computer.ts`): whether the gateway has the
    * computer plugin, the latest control event of each bot's tab, and each
@@ -772,6 +784,7 @@ export const initialState: ClawtrateState = {
   routines: initialRoutinesState,
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
+  choices: { status: "unknown", prefs: null },
   computer: { plugin: null, control: [], panes: {} },
   usage: initialUsage,
 };

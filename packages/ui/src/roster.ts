@@ -5,6 +5,10 @@
 // writes changes it there. Until it holds one, or where it keeps none (a
 // connection with no durable user), the rail keeps its arrangement per device,
 // and the first change a writing connection makes starts the gateway's from it.
+// The first time a writing connection finds the gateway holding none, this
+// device's own starts it, with nothing to click (`mergeSidebar` in the engine,
+// docs/decisions.md). Once the gateway holds one, this device's copy only
+// mirrors it: an older copy is dropped, never merged back in.
 // The sort order is always this device's own.
 //
 // Bot ids belong to a gateway (every gateway has a `main`), so the arrangement
@@ -21,8 +25,9 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { readPreference, writePreference } from "./preferences.ts";
+import { isUnread, type SeenMap } from "./unread.ts";
 
 export type SortOrder = "recent" | "name" | "manual";
 
@@ -41,7 +46,17 @@ export type RosterPrefs = {
   manual: string[];
   /** The user's sections, each a name and its bots; a bot is in at most one. */
   sections: Array<{ name: string; bots: string[] }>;
+  /** This device has met the gateway's arrangement: its copy is a mirror of it, never sent again. */
+  merged?: true;
+  /**
+   * Bots this device shows although the gateway's arrangement hides them: "Show in sidebar" on a
+   * connection that only reads. This device's own, never sent; at most `MAX_SHOWN_HERE`.
+   */
+  shownHere?: string[];
 };
+
+/** Bots one device may show over the gateway's hides (the arrangement's own bot bound). */
+export const MAX_SHOWN_HERE = 32;
 
 /** The preference key of one gateway's arrangement. */
 export const rosterKey = (scope: string) => `roster:${scope}`;
@@ -101,8 +116,24 @@ function parseRoster(raw: string | null): RosterPrefs {
     sort,
     manual: ids(parsed.manual),
     sections,
+    ...(parsed.merged === true ? { merged: true as const } : {}),
+    ...(ids(parsed.shownHere).length > 0
+      ? { shownHere: ids(parsed.shownHere).slice(0, MAX_SHOWN_HERE) }
+      : {}),
   };
 }
+
+function withoutShownHere(prefs: RosterPrefs, id: string): RosterPrefs {
+  const rest = (prefs.shownHere ?? []).filter((each) => each !== id);
+  const next = { ...prefs };
+  if (rest.length > 0) next.shownHere = rest;
+  else delete next.shownHere;
+  return next;
+}
+
+/** Whether this device arranged anything of its own. */
+const arranged = (prefs: RosterPrefs) =>
+  prefs.pinned.length + prefs.hidden.length + prefs.manual.length + prefs.sections.length > 0;
 
 /** This device's arrangement in the gateway's form, the base of its first change there. */
 export function toSidebar(prefs: RosterPrefs): SidebarPrefs {
@@ -114,16 +145,61 @@ export function toSidebar(prefs: RosterPrefs): SidebarPrefs {
   };
 }
 
-/** The gateway's arrangement, with this device's sort order. */
-function fromSidebar(prefs: SidebarPrefs, sort: SortOrder): RosterPrefs {
+/** The gateway's arrangement, with this device's sort order and the bots it shows of its own. */
+function fromSidebar(prefs: SidebarPrefs, local: RosterPrefs): RosterPrefs {
   return {
     pinned: prefs.pins,
     hidden: prefs.hidden,
-    sort,
+    sort: local.sort,
     manual: prefs.order,
     sections: prefs.sections,
+    ...(local.shownHere ? { shownHere: local.shownHere } : {}),
   };
 }
+
+/**
+ * What this device keeps once it has met the gateway's arrangement: a mirror of it, marked, so
+ * an older copy of its own is dropped rather than merged in, and a reset gateway shows the last
+ * arrangement the person had rather than an older one.
+ */
+export function mirrorOf(gateway: SidebarPrefs, local: RosterPrefs): RosterPrefs {
+  return { ...fromSidebar(gateway, local), merged: true };
+}
+
+/**
+ * Whether this device's own arrangement starts the gateway's: only while the gateway answered
+ * that it holds none, on a connection that writes and is up, and only once per device and gateway
+ * (`merged`, set after it starts or once the device has met the gateway's). A reinstall or a
+ * cleared store has nothing of its own to start it with.
+ */
+export function seedWanted(
+  local: RosterPrefs,
+  gateway: SidebarState | null | undefined,
+  writes: boolean,
+  connected: boolean,
+): boolean {
+  return (
+    gateway?.status === "ok" &&
+    gateway.prefs === null &&
+    writes &&
+    connected &&
+    local.merged !== true &&
+    arranged(local)
+  );
+}
+
+/** Hidden bots with an unread task (a reply, a failed run's end): counted on the "Hidden bots" fold. */
+export function hiddenWithUnread(
+  hidden: Bot[],
+  tasksByBot: Record<string, Task[]>,
+  seen: SeenMap,
+): number {
+  return hidden.filter((bot) => (tasksByBot[bot.id] ?? []).some((task) => isUnread(task, seen)))
+    .length;
+}
+
+/** A task the person has to act on now: a hidden bot with one shows in the list until it doesn't. */
+export const needsYou = (task: Task) => task.status === "waiting" || task.status === "blocked";
 
 /** One change applied to this device's own arrangement. */
 function applyLocal(prefs: RosterPrefs, change: SidebarChange): RosterPrefs {
@@ -194,7 +270,13 @@ export function arrange(
   tasksByBot: Record<string, Task[]>,
   prefs: RosterPrefs,
 ): Arrangement {
-  const hidden = new Set(prefs.hidden);
+  // A hidden bot with something the person has to act on (`needsYou`) shows in the list until it
+  // doesn't: hiding, which any device of the person (or anything that writes to the gateway) can
+  // do, never keeps an approval, a question or a blocked run out of view. One this device shows of
+  // its own (`shownHere`) is listed too.
+  const waits = (id: string) => (tasksByBot[id] ?? []).some(needsYou);
+  const here = new Set(prefs.shownHere ?? []);
+  const hidden = new Set(prefs.hidden.filter((id) => !waits(id) && !here.has(id)));
   const pinnedIds = prefs.pinned.filter((id) => !hidden.has(id));
   const byId = new Map(bots.map((bot) => [bot.id, bot]));
   const pinned = pinnedIds.flatMap((id) => byId.get(id) ?? []);
@@ -242,6 +324,10 @@ export type RosterSync = {
   /** The connection writes: a change goes to the gateway. */
   interactive: boolean;
   change: (change: SidebarChange, base: SidebarPrefs | null) => Promise<void>;
+  /** The connection is up now: the first-time merge waits for it. */
+  connected?: boolean;
+  /** Merge this device's arrangement into the gateway's; answers whether it was merged. */
+  merge?: (base: SidebarPrefs) => Promise<boolean>;
 };
 
 /**
@@ -270,13 +356,52 @@ export function useRoster(
     });
   }, []);
   const gateway = sync?.sidebar?.status === "ok" ? sync.sidebar : null;
+  // Once the gateway holds an arrangement, this device's copy mirrors it (`mirrorOf`): an older
+  // copy of its own is dropped, never merged into the gateway's.
+  if (gateway?.prefs && current.scope !== null) {
+    const mirror = mirrorOf(gateway.prefs, current.prefs);
+    const text = JSON.stringify(mirror);
+    if (text !== JSON.stringify(current.prefs)) {
+      writePreference(rosterKey(current.scope), text);
+      current = { scope: current.scope, prefs: mirror };
+      setHeld(current);
+    }
+  }
   /** Where the arrangement lives: the gateway once it holds one, or once a writing connection would start it. */
   const synced = gateway !== null && (gateway.prefs !== null || sync!.interactive);
-  const prefs = gateway?.prefs ? fromSidebar(gateway.prefs, current.prefs.sort) : current.prefs;
+  const prefs = gateway?.prefs ? fromSidebar(gateway.prefs, current.prefs) : current.prefs;
   const latest = useRef({ sync, synced, local: current.prefs });
   useLayoutEffect(() => {
     latest.current = { sync, synced, local: current.prefs };
   });
+
+  // The first time, with the gateway holding none: this device's own starts it (`seedWanted`).
+  // A start that failed is made again on the next connect.
+  const seedScope =
+    current.scope !== null &&
+    sync?.merge !== undefined &&
+    seedWanted(current.prefs, gateway, sync.interactive, sync.connected === true)
+      ? current.scope
+      : null;
+  const seeding = useRef<string | null>(null);
+  useEffect(() => {
+    const merge = latest.current.sync?.merge;
+    if (seedScope === null || seeding.current === seedScope || !merge) return;
+    seeding.current = seedScope;
+    const done = () => {
+      if (seeding.current === seedScope) seeding.current = null;
+    };
+    merge(toSidebar(latest.current.local)).then((merged) => {
+      done();
+      if (!merged) return;
+      setHeld((now) => {
+        if (now.scope !== seedScope) return now;
+        const next = { ...now.prefs, merged: true as const };
+        writePreference(rosterKey(seedScope), JSON.stringify(next));
+        return { scope: now.scope, prefs: next };
+      });
+    }, done);
+  }, [seedScope]);
 
   /** Apply a change where the arrangement lives. Read-only, on the gateway's: nothing to do. */
   const apply = useCallback(
@@ -301,8 +426,25 @@ export function useRoster(
       [apply, prefs.pinned],
     ),
     setHidden: useCallback(
-      (id: string, hide: boolean) => apply({ op: "hide", botId: id, hidden: hide }),
-      [apply],
+      (id: string, hide: boolean) => {
+        // Hidden again from here: this device no longer shows it of its own.
+        if (hide) update((p) => (p.shownHere?.includes(id) ? withoutShownHere(p, id) : p));
+        return apply({ op: "hide", botId: id, hidden: hide });
+      },
+      [apply, update],
+    ),
+    /**
+     * Show a bot the gateway's arrangement hides, on this device only: for a connection that
+     * can't change the gateway's, so a hide written elsewhere is always one click from undone here.
+     */
+    showHere: useCallback(
+      (id: string) =>
+        update((p) =>
+          p.shownHere?.includes(id) || (p.shownHere?.length ?? 0) >= MAX_SHOWN_HERE
+            ? p
+            : { ...p, shownHere: [...(p.shownHere ?? []), id] },
+        ),
+      [update],
     ),
     /** Move a bot before another in the manual order (null: to the end); `shown` is the list as shown. */
     move: useCallback(

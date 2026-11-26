@@ -25,6 +25,11 @@ export function useBridge(): ClawtrateBridge {
   return bridge;
 }
 
+/** The bridge, or null outside a `BridgeProvider` (a part drawn on its own). */
+export function useOptionalBridge(): ClawtrateBridge | null {
+  return useContext(BridgeContext);
+}
+
 /** The latest state snapshot from the host. */
 export function useClawtrateState(): ClawtrateState {
   const bridge = useBridge();
