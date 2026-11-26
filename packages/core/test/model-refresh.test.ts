@@ -11,6 +11,7 @@ import {
   MAX_REFRESH_NAME_CHARS,
   MAX_REFRESH_NAMES,
   effectiveAllowlist,
+  MAX_KEY_PROVIDERS,
   readModelAllowlist,
 } from "../src/accounts.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
@@ -226,6 +227,21 @@ describe("F-588: Refresh in the Model menu", () => {
     await reading;
     await refreshing;
     expect(fake.gateway.calls("models.list").filter((c) => (c as Json).refresh)).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-588: a refresh's and View more's errors carry no credential this client holds", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    fake.gateway.handlers["models.list"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "busy reading device-token now" });
+    };
+    const refreshed = await client.refreshModels("acme", stampOn("gateway-a", client));
+    expect(refreshed).toMatchObject({ status: "error" });
+    expect(JSON.stringify(refreshed)).not.toContain("device-token");
+    const listed = await client.loadModelCatalog("acme");
+    expect(listed).toMatchObject({ status: "error" });
+    expect(JSON.stringify(listed)).not.toContain("device-token");
     client.stop();
   });
 
@@ -523,20 +539,62 @@ describe("F-588: Refresh in the Model menu", () => {
       const hold = holds[n++];
       return hold ? hold.promise.then(() => config(params)) : config(params);
     };
+    const create = () =>
+      client.createBot({
+        name: "Early",
+        account: null,
+        provider: "acme",
+        model: "dev-1",
+        effort: null,
+        avatar: null,
+      });
+    const reading = client.refreshAccounts();
+    await until(() => n === 1);
+    const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
+    // Create is pressed while the refresh is still queued behind the account read.
+    const creating = create();
+    await settle();
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    holds[0]!.resolve();
+    await reading;
+    await until(() => n === 2);
+    await settle();
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    holds[1]!.resolve();
+    await refreshing;
+    await creating.catch(() => {});
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-588: Create pressed after the account read a refresh waited for, while the refresh reads its config, still waits for it", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    // The account read's config read, then the refresh's, each held until let through.
+    const config = fake.gateway.handlers["config.get"]!;
+    const holds = [deferred<void>(), deferred<void>()];
+    let n = 0;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const hold = holds[n++];
+      return hold ? hold.promise.then(() => config(params)) : config(params);
+    };
+    const create = () =>
+      client.createBot({
+        name: "Early",
+        account: null,
+        provider: "acme",
+        model: "dev-1",
+        effort: null,
+        avatar: null,
+      });
     const reading = client.refreshAccounts();
     await until(() => n === 1);
     const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
     holds[0]!.resolve();
     await reading;
+    // The account read took the picker's wait over; the refresh holds its own config read.
     await until(() => n === 2);
-    const creating = client.createBot({
-      name: "Early",
-      account: null,
-      provider: "acme",
-      model: "dev-1",
-      effort: null,
-      avatar: null,
-    });
+    const creating = create();
     await settle();
     expect(fake.gateway.calls("agents.create")).toEqual([]);
     holds[1]!.resolve();
@@ -865,6 +923,20 @@ describe("F-588: the gateway config's model list for bots", () => {
       wildcards: true,
       prefixWildcards: true,
     });
+  });
+
+  it("F-588: a list whose whole-provider entries aren't all kept says nothing", () => {
+    const others = Array.from({ length: MAX_KEY_PROVIDERS }, (_, i) => `p${i}/*`);
+    // OpenAI's whole entry past the providers kept: OpenAI would read as limited, which the
+    // gateway never said.
+    expect(readModelAllowlist(config({ policy: { allow: [...others, "openai/*"] } }))).toBeNull();
+    expect(
+      readModelAllowlist(config({ policy: { allow: [`${"x".repeat(300)}/*`, "acme/dev-1"] } })),
+    ).toBeNull();
+    // All kept: the list.
+    expect(readModelAllowlist(config({ policy: { allow: others.slice(1) } }))?.whole).toHaveLength(
+      MAX_KEY_PROVIDERS - 1,
+    );
   });
 
   it("F-588: wildcards are read as each version reads them: 2026.11.10 also reads a prefix", () => {

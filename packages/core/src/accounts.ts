@@ -1003,10 +1003,12 @@ export function effectiveAllowlist(
     const wildcard = segmentWildcard(key);
     if (wildcard?.whole) whole.add(wildcard.provider);
   }
+  // A whole-provider entry the bounds below would drop would read as a limit the gateway never
+  // set: then nothing is said of the list.
+  const kept = [...whole].filter((provider) => provider.length <= MAX_PREF_ID_CHARS);
+  if (kept.length !== whole.size || kept.length > MAX_KEY_PROVIDERS) return null;
   return {
-    whole: [...whole]
-      .filter((provider) => provider.length <= MAX_PREF_ID_CHARS)
-      .slice(0, MAX_KEY_PROVIDERS),
+    whole: kept,
     wildcards: keys.some((key) => segmentWildcard(key) !== null),
     prefixWildcards: keys.some((key) => prefixWildcard(key) !== null),
   };

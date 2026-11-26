@@ -363,9 +363,23 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(limited([], "2026.11.6")).toBeNull();
     expect(limited([], "2027.1.1")).toBeNull();
     expect(limited([], null)).toBeNull();
-    // Read as the app reads a gateway's version everywhere (`openClawAtLeast`): exactly that one.
+    // Exactly that release, a leading `v` allowed.
     expect(limited([], "v2026.10.6")).toBe(line);
     expect(limited([], "2026.10.60")).toBeNull();
+    // A prerelease of a version isn't that version.
+    expect(limited([], "2026.11.10-beta.1")).toBeNull();
+    expect(limited([], "2026.10.6-rc.1")).toBeNull();
+    // A provider as the bridge may spell it: core's list is lowercase.
+    expect(
+      allowlistLine(
+        {
+          ...initialAccountsState,
+          modelAllowlist: { whole: ["acme"], wildcards: true, prefixWildcards: true },
+        },
+        "Acme",
+        "2026.10.6",
+      ),
+    ).toBeNull();
     // With a wildcard in the list, a bot set to a model it doesn't name runs on one it names.
     const wild =
       "The gateway's config names which of OpenAI's models it lists and lets a task switch to; a bot set to another model runs on one it names.";
@@ -396,6 +410,9 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(wildcardLimits(at([], false, true), "openai", "2026.11.10")).toBe(true);
     expect(wildcardLimits(at([], false, true), "openai", "2027.1.1")).toBe(true);
     expect(wildcardLimits(at([], false, true), "openai", null)).toBe(true);
+    // A prerelease of 2026.10.6 reads as the broader reading; a provider's case doesn't matter.
+    expect(wildcardLimits(at([], false, true), "openai", "2026.10.6-beta.1")).toBe(true);
+    expect(wildcardLimits(at(["acme"], true), "Acme", "2026.10.6")).toBe(false);
     const nothing: ModelRefresh = {
       status: "done",
       provider: "openai",

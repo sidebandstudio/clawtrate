@@ -14,8 +14,9 @@ import {
   gatewayStamp,
   initialOpenClawUpdate,
   MAX_MODEL_ID_CHARS,
+  MAX_PROVIDER_MODELS,
   modelIdProblem,
-  openClawAtLeast,
+  limitsProvider,
   type AccountsState,
   type CatalogModel,
   type ClawtrateState,
@@ -70,6 +71,9 @@ export function useModelList(provider: string, connection: ConnectionState, show
   const bridge = useBridge();
   const [held, setHeld] = useState<Held | null>(null);
   const [refresh, setRefresh] = useState<HeldRefresh | null>(null);
+  // The models refreshes found the gateway no longer lists, since View more's answer was read:
+  // that answer doesn't offer them again. They go with it, when it is read again or dropped.
+  const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
   const stamp = gatewayStamp(connection);
   const key = heldKey(provider, connection, shown);
   // What was held, or still on its way, goes with the provider or connection it was for, so
@@ -79,6 +83,7 @@ export function useModelList(provider: string, connection: ConnectionState, show
     setHeldFor(key);
     setHeld(null);
     setRefresh(null);
+    setGone(new Set());
   }
   // Only the newest ask's answer is taken: none from before a change, or after the screen goes.
   const asks = useRef(0);
@@ -100,6 +105,7 @@ export function useModelList(provider: string, connection: ConnectionState, show
       if (n === asks.current) setHeld(next);
     };
     setHeld({ status: "loading" });
+    setGone(new Set());
     bridge
       .invoke({ type: "loadModelCatalog", provider })
       .then(keep, (error: unknown) =>
@@ -113,7 +119,11 @@ export function useModelList(provider: string, connection: ConnectionState, show
     const n = ++refreshes.current;
     // View more's answer stays: a model chosen from it keeps its row, and its levels.
     const keep = (next: HeldRefresh) => {
-      if (n === refreshes.current) setRefresh(next);
+      if (n !== refreshes.current) return;
+      setRefresh(next);
+      // At most as many as View more's answer holds.
+      if (next.status === "done" && next.removedIds.length > 0)
+        setGone((was) => new Set([...was, ...next.removedIds].slice(-MAX_PROVIDER_MODELS)));
     };
     setRefresh({ status: "looking" });
     bridge
@@ -133,6 +143,8 @@ export function useModelList(provider: string, connection: ConnectionState, show
     ask,
     /** The last Refresh: under way, or what it found; null when none was pressed. */
     refresh,
+    /** Models refreshes found no longer listed since View more's answer: not offered from it. */
+    gone,
     lookAgain,
   };
 }
@@ -187,7 +199,9 @@ const count = (n: number) => n.toLocaleString("en-US");
  */
 
 /** A menu item's name, as a screen reader says it: its label, else its text. */
-const itemName = (item: HTMLElement) => item.getAttribute("aria-label") ?? item.textContent ?? "";
+/** A menu item as a screen reader tells it apart: its role and its name. */
+const itemName = (item: HTMLElement) =>
+  `${item.getAttribute("role") ?? ""}\n${item.getAttribute("aria-label") ?? item.textContent ?? ""}`;
 
 /** Names in a sentence: "a", "a and b", "a, b and c", and "and 3 more" past the names given. */
 export function namesLine(names: string[], count: number): string {
@@ -382,14 +396,22 @@ export const MODEL_LIMIT_VERSIONS: readonly (readonly [number, number, number])[
   [2026, 11, 10],
 ];
 
-/** The gateway reports exactly this OpenClaw version, read as `openClawAtLeast` reads one. */
+/**
+ * The gateway reports exactly this OpenClaw release, its whole version (a leading `v` allowed).
+ * Not a prerelease of it (`2026.11.10-beta.1`): what the model list limits was established on the
+ * releases only. `openClawAtLeast` reads only the numbers at the start, which is right for "at
+ * least", not here.
+ */
 function isOpenClaw(
   version: string | null,
   [year, month, patch]: readonly [number, number, number],
 ) {
+  const match = /^v?(\d{4})\.(\d{1,2})\.(\d{1,3})$/.exec(version ?? "");
   return (
-    openClawAtLeast(version, year, month, patch) &&
-    !openClawAtLeast(version, year, month, patch + 1)
+    match !== null &&
+    Number(match[1]) === year &&
+    Number(match[2]) === month &&
+    Number(match[3]) === patch
   );
 }
 
@@ -412,7 +434,7 @@ export function wildcardLimits(
   serverVersion: string | null,
 ): boolean {
   const list = accounts.modelAllowlist;
-  return list !== null && hasWildcards(list, serverVersion) && !list.whole.includes(provider);
+  return list !== null && hasWildcards(list, serverVersion) && limitsProvider(list, provider);
 }
 
 /**
@@ -426,7 +448,7 @@ export function allowlistLine(
   serverVersion: string | null,
 ): string | null {
   const list = accounts.modelAllowlist;
-  if (list === null || list.whole.includes(provider)) return null;
+  if (list === null || !limitsProvider(list, provider)) return null;
   if (!MODEL_LIMIT_VERSIONS.some((each) => isOpenClaw(serverVersion, each))) return null;
   const who = providerName(provider);
   // With any wildcard in the list, a bot set to a model it doesn't name runs on the first one it
@@ -491,11 +513,10 @@ export function ModelPair({
   /** The screen's polite announcer: what a Refresh found is said there once. */
   announce: (text: string) => void;
 }) {
-  // The models a refresh found the gateway no longer lists: View more's answer from before it
-  // doesn't offer them again. Only those, not every model that left the picker: a cut at the
-  // picker's bound can push out a model the gateway still lists, and View more keeps it.
-  const gone = new Set(list.refresh?.status === "done" ? list.refresh.removedIds : []);
-  const menu = modelMenu(accounts, provider, model, list.models, gone);
+  // Only the models refreshes found the gateway no longer lists, not every model that left the
+  // picker: a cut at the picker's bound can push out a model the gateway still lists, and View
+  // more keeps it.
+  const menu = modelMenu(accounts, provider, model, list.models, list.gone);
   const who = providerName(provider);
   // An update under way or just ended takes the notice's place, as a quiet line.
   const updateRun = useUpdateRun();
@@ -550,7 +571,7 @@ export function ModelPair({
     const lost = !active || active === document.body;
     if (!item || (!lost && !pairRef.current?.contains(active))) return;
     item.focus();
-    if (focusedItem.current === "Refresh")
+    if (focusedItem.current === "menuitem\nRefresh")
       item.closest("li")?.nextElementSibling?.scrollIntoView?.({ block: "nearest" });
   }, [found, said, announce]);
   // On a phone the field and its buttons can open below the fold.

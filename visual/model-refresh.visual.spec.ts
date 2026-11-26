@@ -310,6 +310,12 @@ test.describe("F-588: Refresh in the Model menu", () => {
     await expect(
       menu(page).getByRole("menuitemradio", { name: "gpt-5.4", exact: true }),
     ).toBeVisible();
+    // A next refresh that finds nothing more gone keeps it hidden.
+    await press(page);
+    await expect(menu(page).getByText(/^Nothing new\./)).toBeVisible();
+    await expect(
+      menu(page).getByRole("menuitemradio", { name: "gpt-5.5-mini", exact: true }),
+    ).toHaveCount(0);
   });
 
   test("F-588: a model a refresh pushed past the menu's bound, still listed, stays under View more", async ({
@@ -343,6 +349,47 @@ test.describe("F-588: Refresh in the Model menu", () => {
     ).toBeVisible();
     await page.waitForTimeout(200);
     await expect(last).toBeFocused();
+  });
+
+  test("F-588: focus goes back to the Refresh action, never to a model of the same name", async ({
+    page,
+  }) => {
+    await openFixture(page, `${SETTINGS}&refresh=slow`, "light");
+    // A model whose id is "Refresh", listed before the action.
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (change: (state: { accounts: { models: unknown[] } }) => unknown) => void;
+          };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        accounts: {
+          ...state.accounts,
+          models: [
+            {
+              provider: "openai",
+              id: "Refresh",
+              name: null,
+              available: true,
+              levels: [],
+              defaultLevel: null,
+            },
+            ...state.accounts.models,
+          ],
+        },
+      })),
+    );
+    await page.getByTestId("model-select").click();
+    await expect(
+      menu(page).getByRole("menuitemradio", { name: "Refresh", exact: true }),
+    ).toBeVisible();
+    await press(page);
+    await releaseRefresh(page);
+    await expect(menu(page).getByText(/^New: /)).toBeVisible();
+    await page.waitForTimeout(200);
+    await expect(refreshRow(page)).toBeFocused();
   });
 
   test("F-588: with View more open, a refresh that adds rows above it keeps focus on Refresh", async ({

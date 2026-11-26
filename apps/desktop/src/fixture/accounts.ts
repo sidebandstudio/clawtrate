@@ -648,18 +648,23 @@ function refreshCatalog(
         }));
         return { ...nothing, added: added.slice(0, 5), addedCount: added.length, outcome: "ready" };
       }
-      case "gone":
+      case "gone": {
+        // Gone once: a second refresh finds nothing more gone.
+        const had = get().models.some((m) => m.provider === provider && m.id === "gpt-5.5-mini");
         put((a) => ({
           ...a,
           models: a.models.filter((m) => !(m.provider === provider && m.id === "gpt-5.5-mini")),
         }));
-        return {
-          ...nothing,
-          removed: ["gpt-5.5-mini"],
-          removedCount: 1,
-          removedIds: ["gpt-5.5-mini"],
-          outcome: "ready",
-        };
+        return had
+          ? {
+              ...nothing,
+              removed: ["gpt-5.5-mini"],
+              removedCount: 1,
+              removedIds: ["gpt-5.5-mini"],
+              outcome: "ready",
+            }
+          : { ...nothing, outcome: "ready" };
+      }
       case "pushed": {
         // A new model first, and the list now past the bound: gpt-5.5-mini, still listed, is
         // pushed out of the menu, and nothing is gone.
