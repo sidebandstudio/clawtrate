@@ -483,11 +483,17 @@ export class AccountsEngine {
       // The config says whether the gateway declares the provider's models, and which models
       // its list for bots names; asked first, as the picker is never asked beside it.
       if (left() <= 0) return late;
+      // A config read given up on was given the time left, so the deadline has passed, though
+      // the wall clock may read a millisecond or more earlier than the request's timer.
+      let timedOut = false;
       config = await ctx
         .request("config.get", {}, { timeoutMs: left() })
-        .then(asRecord, () => null);
+        .then(asRecord, (error) => {
+          timedOut = error instanceof GatewayProtocolRequestTimeoutError;
+          return null;
+        });
       if (gone()) throw new Error(MODELS_GATEWAY_CHANGED);
-      if (left() <= 0) return late;
+      if (timedOut || left() <= 0) return late;
       const asked = ctx.request(
         "models.list",
         { agentId: defaultBot, provider, refresh: true },
