@@ -6,7 +6,12 @@ import type {
   HostInfo,
   SetupState,
 } from "@clawtrate/core";
-import { protectedGatewayUrl, SETUP_PAIRING_APPEARED, SETUP_PAIRING_GONE } from "@clawtrate/core";
+import {
+  plainRemoteGatewayUrl,
+  protectedGatewayUrl,
+  SETUP_PAIRING_APPEARED,
+  SETUP_PAIRING_GONE,
+} from "@clawtrate/core";
 import {
   useEffect,
   useRef,
@@ -152,9 +157,14 @@ export function failureTitle(code: string | null | undefined): string {
   }
 }
 
-/** What a requested scope lets this device do, in plain words. */
+/** What a requested scope lets this device do, in plain words: the six a first pairing asks for. */
 const SCOPE_WORDS: Record<string, string> = {
   "operator.read": "Read bots, tasks and conversations",
+  "operator.write": "Send messages and stop runs",
+  "operator.approvals": "Decide what a bot asks to run",
+  "operator.questions": "Answer a bot's questions",
+  "operator.admin": "Change the gateway's settings, bots and accounts",
+  "operator.pairing": "Approve and remove other devices",
 };
 
 function PairingPanel({ connection }: { connection: ConnectionState }) {
@@ -243,6 +253,8 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   const busy = connection.status === "connecting";
   // On a host that pairs with full control, a protected address asks for it (§2, §4).
   const full = info.fullControl === true && protectedGatewayUrl(url);
+  // Plain ws:// to another computer: said before Connect, so before any token goes.
+  const plain = plainRemoteGatewayUrl(url);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -319,6 +331,12 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             </button>
           </div>
         )}
+        {plain && (
+          <p className="form-warning" role="note" data-testid="plain-address-warning">
+            This address would send the gateway token and your conversations without encryption. Use
+            a secure address (wss://) if the gateway has one.
+          </p>
+        )}
         {full && <FullControlConsent />}
         <div className="actions">
           <button
@@ -348,7 +366,10 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
           {PRODUCT_NAME} works with an OpenClaw gateway you already run.{" "}
           {info.fullControl
             ? "At a secure address (wss://) that isn't localhost, it asks once for full control; at any other address it asks for read access only."
-            : "It asks for read access only."}
+            : info.readOnly
+              ? "It asks for read access only."
+              : // Why there is no single ask here: full control's token is kept only in secure storage.
+                "This device has no secure storage for a full-control pairing, so it asks for read access only."}
         </p>
       </form>
     </section>

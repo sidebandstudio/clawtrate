@@ -8,9 +8,7 @@ This version takes in two independent reviews and the product owner's decision o
 
 ## Why the earlier decision is superseded
 
-The product owner decided this:
-
-> "You have my OK. This is important to me. Approvals are genuine nightmare and defeat the entire purpose of this."
+The product owner decided that repeated approvals defeat the purpose of the app, and gave this design the go-ahead to avoid them.
 
 So two things change on purpose:
 
@@ -86,7 +84,7 @@ The rules that stay:
   | `operator.admin`     | Change gateway configuration, plugins or accounts, manage high-risk operations, and open the gateway terminal where allowed. Satisfies every operator scope, including pairing events. |
   | `operator.pairing`   | Receive pairing events and use pairing methods within the gateway's caller, device, role and scope rules. A pairing-only device token can't approve or remove another device.          |
 
-- **Clawtrate's ladder today**, with full access off (#318 added the six behind `ClientOptions.fullAccess`, which no shipped host sets), has three sources:
+- **Clawtrate's ladder before 2026-11-25**, with full access off (#318 added the six behind `ClientOptions.fullAccess`; the owner's decision of 2026-11-25 removed that switch, `docs/decisions.md`), has three sources:
   - Every connect asks for `operator.read` alone. That comes from `REQUESTED_SCOPES` in `packages/core/src/client.ts`, and `normalizeHeldScopes` in `packages/core/src/scopes.ts` drops admin and pairing.
   - Each later tier is a separate `device.scopes.requestUpgrade`, from the composer and cards, from `bots/parts.tsx` and from `machines/Machines.tsx`.
   - That request always waits, even on loopback (`<openclaw>/dist/devices-mOg4_HQd.mjs` lines 37-110).
@@ -605,7 +603,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
     Replacement: "a setup code gives the device what it asks for, up to the code's ceiling: all six for a full code; read, write, approvals and questions for a limited one."
 
-**The change to `AGENTS.md`, approved by the product owner.** It was made in setup PR 1 (#318), not in this design. It replaced "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." Because #318 puts full access behind a flag that is off, `AGENTS.md` now reads:
+**The change to `AGENTS.md`, approved by the product owner.** It was made in setup PR 1 (#318), not in this design, and replaced again on 2026-11-25 (`docs/decisions.md`, "One pairing, with everything"), when the six became the default. It replaced "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." Because #318 puts full access behind a flag that is off, `AGENTS.md` now reads:
 
 > "First pairings request read access by default. Ask once for the six standard operator scopes (read, write, approvals, questions, admin and pairing) only when the person starts an eligible first pairing and the host allows writes, reports secure credential storage and has full-access pairing enabled. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway."
 

@@ -227,7 +227,8 @@ function pairing(): ClawtrateState {
         deviceId: DEVICE_ID,
         message: "pairing required",
         approveCommand: "openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
-        approveNote: "The gateway's owner runs this on the gateway's machine.",
+        approveNote:
+          "On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices, or run this there.",
         requestedScopes: ["operator.read"],
       },
     },

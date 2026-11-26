@@ -3069,6 +3069,16 @@ textarea {
   flex: none;
 }
 
+/* Plain ws:// to another computer, said above Connect before any token goes. */
+.form-warning {
+  margin: var(--space-3) 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--warn);
+  font-size: var(--text-sm);
+  text-align: left;
+  color: var(--text-muted);
+}
+
 /* The consent line above a pairing card's button (setup-effortless.md §2). */
 .consent {
   margin-top: var(--space-3);

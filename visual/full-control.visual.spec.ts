@@ -1,5 +1,5 @@
-// F-522: the packaged Mac app's address form shows the consent line directly above
-// Connect for a secure address, with "What this means" (docs/design/setup-effortless.md §2),
+// F-522: the address form, on a host with secure storage, shows the consent line directly
+// above Connect for a secure address, with "What this means" (docs/design/setup-effortless.md §2),
 // and a full pairing the gateway granted less says so and asks for nothing (§2, §8). In light
 // and dark, at 1440 px and the phone; reached by keyboard and named for a screen reader.
 import { test, type Page } from "@playwright/test";
@@ -23,6 +23,16 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
         await expect(page.locator(".consent-points")).toBeVisible();
         await settle(page);
         await expect(page).toHaveScreenshot(`full-control-what-${theme}-${size.name}.png`);
+      });
+
+      test("F-002: a plain ws:// address on another computer is warned about above Connect", async ({
+        page,
+      }) => {
+        await openFixture(page, "scene=connect", theme);
+        await page.getByPlaceholder("Gateway address").fill("ws://192.168.1.20:18789");
+        await expect(page.getByTestId("plain-address-warning")).toBeVisible();
+        await settle(page);
+        await expect(page).toHaveScreenshot(`connect-plain-ws-${theme}-${size.name}.png`);
       });
 
       test("F-522: a narrower grant, in Settings", async ({ page }) => {

@@ -62,10 +62,32 @@ describe("the consent line on the address form", () => {
     });
   }
 
-  it("a host without full control keeps its read-only line, at any address", () => {
+  it("a host without secure storage says why it asks for read, in one sentence, at any address", () => {
     const html = form(base, "wss://gateway.example");
     expect(html).not.toContain(CONSENT_LINE);
+    expect(html).toContain(
+      "This device has no secure storage for a full-control pairing, so it asks for read access only.",
+    );
+  });
+
+  it("plain ws:// to another computer is warned about above Connect, before any token goes", () => {
+    const warning =
+      "This address would send the gateway token and your conversations without encryption.";
+    for (const info of [base, { ...base, fullControl: true }]) {
+      const html = form(info, "ws://192.168.1.20:18789");
+      expect(html).toContain(warning);
+      // Above the button: the person reads it before Connect sends anything.
+      expect(html.indexOf(warning)).toBeLessThan(html.indexOf('<div class="actions">'));
+    }
+    for (const url of ["wss://gateway.example", "ws://127.0.0.1:18789", "ws://localhost:18789", ""])
+      expect(form(base, url), url).not.toContain(warning);
+  });
+
+  it("a read-only host keeps its read-only line", () => {
+    const html = form({ ...base, readOnly: true }, "wss://gateway.example");
+    expect(html).not.toContain(CONSENT_LINE);
     expect(html).toContain("It asks for read access only.");
+    expect(html).not.toContain("secure storage");
   });
 });
 

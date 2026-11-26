@@ -65,7 +65,7 @@ export * from "./owners.ts";
 export * from "./remote-bridge.ts";
 export { utf8Length } from "./encoding.ts";
 export * from "./scopes.ts";
-export { protectedGatewayUrl } from "./gateway-url.ts";
+export { plainRemoteGatewayUrl, protectedGatewayUrl } from "./gateway-url.ts";
 export * from "./setup.ts";
 export * from "./bridge.ts";
 export * from "./connect-errors.ts";
