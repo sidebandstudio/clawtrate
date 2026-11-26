@@ -223,6 +223,8 @@ describe("the browser setup the tool writes", () => {
     const spawned: { args: string[]; env: NodeJS.ProcessEnv; cwd: string }[] = [];
     const runner = new OpenclawRunner({
       instance: "alpha",
+      // A stand-in path: the fake spawn below runs it, never an OpenClaw.
+      bin: "/test/openclaw",
       stateDir,
       runFile: testInstance(home, runRoot, "alpha").runFile,
       checkout: FIXTURE_CHECKOUT,

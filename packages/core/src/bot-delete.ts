@@ -165,6 +165,8 @@ export type BotDeleteContext = {
   admin(): boolean;
   /** Whether the window that asked is still there: a delete is sent only while it is. */
   wanted(): boolean;
+  /** Right before `agents.delete` is sent, after the last check: what `deleted` goes by. */
+  sending(): void;
   /** The gateway answered `ok` for this bot: what this host still held for it goes, at once. */
   deleted(botId: string): void;
 };
@@ -468,6 +470,7 @@ export async function deleteBot(
       kind: "not-sent",
       message: "The window that asked for this delete closed. Nothing was sent.",
     };
+  ctx.sending();
   let sent: Promise<unknown>;
   try {
     sent = ctx.request("agents.delete", { agentId: botId, deleteFiles });
