@@ -257,11 +257,19 @@ export function BotSettings({
     setError(null);
     setPick(null);
   }
+  // Settled once its control is drawn: while the accounts are still read there is none yet.
   useEffect(() => {
     if (!request || request.seq !== requestShown) return;
+    const wanted =
+      request.part === "account" ? "[data-bs='change']" : '[data-testid="model-select"]';
+    // Where the control isn't offered (Change account below admin), the page's own heading.
+    const selector = [wanted, "[data-bs-focus]"].find((each) =>
+      rootRef.current?.querySelector(each),
+    );
+    if (!selector) return;
     settleBotSettingsRequest(request);
-    focusIn(request.part === "account" ? "[data-bs='change']" : '[data-testid="model-select"]');
-  }, [request, requestShown, focusIn]);
+    focusIn(selector);
+  });
 
   // The evidence: read when the Account page opens, every 4 seconds while it
   // is open after the lock command was copied, every 30 seconds otherwise.
