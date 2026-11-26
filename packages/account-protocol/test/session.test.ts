@@ -72,6 +72,16 @@ describe("a session request", () => {
 
   it("takes only an origin as its audience and a path as its path", () => {
     for (const audience of [
+      "https://a.dev:8443",
+      "http://127.0.0.1:8787",
+      "http://localhost",
+      "http://[::1]:1",
+    ]) {
+      expect(() => signSessionRequest(key, { ...fields, audience, issuedAtMs: NOW })).not.toThrow();
+    }
+    for (const audience of [
+      "http://accounts.clawtrate.dev",
+      "https://accounts.clawtrate.dev:08",
       "accounts.clawtrate.dev",
       "https://accounts.clawtrate.dev/",
       "https://A.dev",

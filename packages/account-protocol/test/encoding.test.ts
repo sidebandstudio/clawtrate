@@ -20,7 +20,7 @@ import {
 } from "../src/index.ts";
 import { Reader, Writer } from "../src/bytes.ts";
 import { LABEL, TAG } from "../src/labels.ts";
-import { MAX_CARD_BYTES } from "../src/seal.ts";
+import { MAX_CARD_BYTES, MAX_LIST_BYTES } from "../src/seal.ts";
 import { MAX_ENTRY_BYTES } from "../src/list.ts";
 import { assembleGenesis, signCard, signGenesis } from "../src/index.ts";
 import { CONTEXT, expectCode, fill, fromHex, makeDevice, toHex } from "./helpers.ts";
@@ -221,5 +221,13 @@ describe("what the package never does", () => {
       for (const match of text.matchAll(/^let (\w+)/gm))
         expect(match[1]).toMatch(/^(sessionSeed|listSeed|sealSecret|secretBytes)$/);
     }
+  });
+});
+
+describe("the bounds the README states", () => {
+  it("are the numbers the code holds", () => {
+    expect(MAX_CARD_BYTES).toBe(2297);
+    expect(MAX_LIST_BYTES).toBe(468_994);
+    expect(MAX_ENTRY_BYTES).toBe(456);
   });
 });
