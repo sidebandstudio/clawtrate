@@ -424,6 +424,24 @@ describe("approving a waiting device", () => {
     expect(t.request(id).blocked).toBe("same-code");
   });
 
+  it("approves nothing on a decision read with no pending list, for a request that takes a pick", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    expect(t.request(id)).toMatchObject({ blocked: null, spent: false });
+    expect(t.request(id).choices).toContain(codeOf(row));
+    const shown = t.state();
+    const before = t.calls.length;
+    t.answers["device.pair.list"] = () => ({ paired: [] });
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    await t.settle();
+    // The decision's read, then the list read again; no approval, and nothing published.
+    expect(t.calls.slice(before)).toEqual(["device.pair.list", "device.pair.list"]);
+    expect(t.state()).toBe(shown);
+  });
+
   it("gives Settings, Machines the whole reply, applied like any read, and only with admin", async () => {
     const row = pendingRow();
     const t = await listed([]);
