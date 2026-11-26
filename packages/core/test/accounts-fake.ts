@@ -419,7 +419,10 @@ export class AccountsGateway {
     g.handlers["models.authOrderSet"] = (params) => {
       const order = params as { provider: string; agentId: string; profileIds?: string[] };
       if (!this.admin)
-        throw new GatewayError({ code: "INVALID_REQUEST", message: "missing scope: operator.admin" });
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: "missing scope: operator.admin",
+        });
       if (!this.bots.some((bot) => bot.id === order.agentId))
         throw new GatewayError({
           code: "INVALID_REQUEST",

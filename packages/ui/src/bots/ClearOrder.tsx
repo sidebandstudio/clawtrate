@@ -108,7 +108,11 @@ export function ClearOutcome({
         }. Checked with the gateway${at ? ` at ${clock(at)}` : ""}.`,
       );
     case "refused":
-      return line("warn", `The gateway refused to ${doing}: ${clear.error ?? "no reason given"}.`, true);
+      return line(
+        "warn",
+        `The gateway refused to ${doing}: ${clear.error ?? "no reason given"}.`,
+        true,
+      );
     case "unanswered":
       return line(
         "warn",

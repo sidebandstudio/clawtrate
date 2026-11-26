@@ -635,15 +635,13 @@ export class AccountsEngine {
       if (isRefusal(error)) refused = errorText(error);
       else lost = errorText(error);
     }
+    // Null when the read after failed, or the gateway said its status is unavailable.
     let after: BotView | null = null;
-    let unread = false;
     try {
       // The connection the press was sent on, still: a read on another says nothing of this one.
       check();
       after = await this.readOrder(botId, before, ctx);
-      unread = after === null;
     } catch (error) {
-      unread = true;
       // As Check now says a failed read: the last confirmation stands, with its time.
       ctx.update((a) =>
         this.patchBinding(a, botId, (b) => ({
@@ -652,10 +650,16 @@ export class AccountsEngine {
         })),
       );
     }
-    if (clearedIn(after)) publish({ status: "cleared", error: null });
+    if (clearedIn(after)) {
+      // The person's own unlock: not a lock lost, so no "The lock is gone" for it.
+      ctx.update((a) =>
+        this.patchBinding(a, botId, (b) => ({ ...b, evidence: { ...b.evidence, lostAt: null } })),
+      );
+      publish({ status: "cleared", error: null });
+    }
     else if (refused !== null) publish({ status: "refused", error: refused });
     else if (lost !== null) publish({ status: "unanswered", error: lost });
-    else if (unread) publish({ status: "unread", error: null });
+    else if (after === null) publish({ status: "unread", error: null });
     else publish({ status: "kept", error: null });
   }
 

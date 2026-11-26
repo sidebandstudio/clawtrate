@@ -37,6 +37,9 @@
 //                             2026.11.10-beta.1 on the beta channel
 //   version=<version>         the OpenClaw version the gateway runs (default 2026.10.6), such as
 //                             2026.11.10, which changes a bot's account order only while stopped
+//   clear=<status>            how Unlock or Clear order ends (default cleared): refused, unanswered,
+//                             kept, unread, moved (the order is Home's alone), unsent, or hold
+//                             (sending until releaseClear(), then cleared)
 
 import { isUpdateRunScene, type UpdateRunScene } from "./openclaw-update.ts";
 import {
@@ -95,6 +98,8 @@ export type AccountParams = {
   openclawRun: UpdateRunScene | null;
   /** The OpenClaw version the gateway runs, when the address names one. */
   version: string | null;
+  /** How Unlock or Clear order ends, when the address names it. */
+  clear: string | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -142,6 +147,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     version: /^\d{4}\.\d{1,2}\.\d{1,3}$/.test(params.get("version") ?? "")
       ? params.get("version")
       : null,
+    clear: params.get("clear"),
   };
 }
 
@@ -167,6 +173,16 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   openclaw: null,
   openclawRun: null,
   version: null,
+  clear: null,
+};
+
+/** The fixture's endings of an Unlock or Clear that keep the order, with the words each carries. */
+const CLEAR_WORDS: Partial<Record<NonNullable<AccountsState["clear"]>["status"], string | null>> = {
+  refused: "auth profile order is temporarily unavailable",
+  unanswered: "gateway request timeout for models.authOrderSet",
+  kept: null,
+  unread: null,
+  unsent: "The gateway says its account status is unavailable.",
 };
 
 const MINUTE = 60_000;
@@ -1393,6 +1409,59 @@ export function accountCommand(
             resolve(save());
         });
       return Promise.resolve(save());
+    }
+    case "clearBotOrder": {
+      // As the engine ends a press (`clearOrder`): the state from the read after it.
+      const end = params.clear ?? "cleared";
+      const outcome = (status: NonNullable<AccountsState["clear"]>["status"]) =>
+        put((a) => ({
+          ...a,
+          clear: {
+            botId: command.botId,
+            provider: command.provider,
+            kind: command.kind,
+            account: command.account,
+            status,
+            error: CLEAR_WORDS[status] ?? null,
+            at: Date.now(),
+          },
+        }));
+      const order = (ids: string[] | null) =>
+        put((a) => ({
+          ...a,
+          bindings: a.bindings.map((b) =>
+            b.botId === command.botId
+              ? {
+                  ...b,
+                  order: ids ? { ids, stored: true, configured: null } : null,
+                  evidence: {
+                    ...b.evidence,
+                    status: ids ? "other" : "none",
+                    checkedAt: Date.now(),
+                    lostAt: null,
+                  },
+                }
+              : b,
+          ),
+        }));
+      outcome("sending");
+      if (end === "hold")
+        return new Promise<void>((resolve) => {
+          (globalThis as unknown as { releaseClear: () => void }).releaseClear = () => {
+            order(null);
+            outcome("cleared");
+            resolve();
+          };
+        });
+      if (end === "moved") {
+        order(["openai:home"]);
+        outcome("moved");
+      } else if (end in CLEAR_WORDS) outcome(end as keyof typeof CLEAR_WORDS);
+      else {
+        order(null);
+        outcome("cleared");
+      }
+      return Promise.resolve();
     }
     case "removeBotFallbacks":
       put((a) => ({

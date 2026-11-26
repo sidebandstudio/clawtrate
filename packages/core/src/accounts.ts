@@ -903,7 +903,8 @@ export function retainedOrder(binding: BotBinding): string | null {
  * which settles it as `cleared` from the gateway's own read.
  */
 export function clearShown(clear: OrderClear, binding: BotBinding): OrderClear["status"] {
-  const unsure = clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
+  const unsure =
+    clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
   const readSince = binding.evidence.checkedAt !== null && binding.evidence.checkedAt >= clear.at;
   const gone = binding.provider === clear.provider && !binding.order?.stored;
   return unsure && readSince && gone ? "cleared" : clear.status;

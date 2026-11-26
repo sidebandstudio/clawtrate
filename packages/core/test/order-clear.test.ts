@@ -18,7 +18,14 @@ import { ADMIN_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { gatewayStamp } from "../src/types.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
 import { FAST, URL_A, URL_B } from "./client-harness.ts";
-import { deferred, GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  GatewayError,
+  memoryStorage,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 const otto = (state: AccountsState) => state.bindings.find((each) => each.botId === "otto")!;
 
@@ -52,8 +59,7 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     const held = deferred<void>();
     let reads = 0;
     fake.gateway.handlers["models.authStatus"] = async (params) => {
-      if (fake.gateway.calls("models.authOrderSet").length > 0 && reads++ === 0)
-        await held.promise;
+      if (fake.gateway.calls("models.authOrderSet").length > 0 && reads++ === 0) await held.promise;
       return status(params);
     };
     const done = press();
@@ -76,7 +82,8 @@ describe("F-592: Unlock and Clear, over the connection", () => {
       error: null,
     });
     expect(otto(accounts()).order).toBeNull();
-    expect(otto(accounts()).evidence.lostAt).not.toBeNull();
+    // The person's own unlock is not a lock lost: no "The lock is gone" for it.
+    expect(otto(accounts()).evidence).toMatchObject({ status: "none", lostAt: null });
     expect(accountWord(otto(accounts()))).toBe("bound");
     // No restart: the connection the press went on is the one still open.
     expect(fake.gateway.connects).toHaveLength(1);
@@ -101,7 +108,13 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     fake.configuredOrders.acme = ["acme:work"];
     const { client, accounts } = await accountsClient({ gateway: fake });
     expect(accountWord(otto(accounts()))).toBe("locked");
-    await client.clearBotOrder("otto", "acme", "acme:work", "unlock", gatewayStamp(client.state.connection));
+    await client.clearBotOrder(
+      "otto",
+      "acme",
+      "acme:work",
+      "unlock",
+      gatewayStamp(client.state.connection),
+    );
     expect(accounts().clear?.status).toBe("cleared");
     expect(otto(accounts()).order).toMatchObject({ stored: false, configured: "auth-config" });
     expect(otto(accounts()).evidence.status).toBe("configured");
@@ -186,9 +199,9 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     expect(clearShown(kept, otto(accounts()))).toBe("kept");
     // Gone at a read before the press: never counts.
     const gone = { ...otto(accounts()), order: null };
-    expect(clearShown(kept, { ...gone, evidence: { ...gone.evidence, checkedAt: kept.at - 1 } })).toBe(
-      "kept",
-    );
+    expect(
+      clearShown(kept, { ...gone, evidence: { ...gone.evidence, checkedAt: kept.at - 1 } }),
+    ).toBe("kept");
     // Gone at a read since: cleared. A refusal is the gateway's answer and stays one.
     expect(clearShown(kept, gone)).toBe("cleared");
     expect(clearShown({ ...kept, status: "refused" }, gone)).toBe("refused");
@@ -219,7 +232,13 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     fake.orders.otto = { acme: ["acme:work"] };
     const { client, accounts } = await accountsClient({ gateway: fake, scopes: READ_SCOPES });
     await expect(
-      client.clearBotOrder("otto", "acme", "acme:work", "unlock", gatewayStamp(client.state.connection)),
+      client.clearBotOrder(
+        "otto",
+        "acme",
+        "acme:work",
+        "unlock",
+        gatewayStamp(client.state.connection),
+      ),
     ).rejects.toThrow("needs admin access");
     expect(fake.gateway.calls("models.authOrderSet")).toEqual([]);
     expect(accounts().clear).toBeNull();
@@ -290,9 +309,9 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
     const stamp = gatewayStamp(client.state.connection);
     await switchToB();
     await client.refreshAccounts();
-    await expect(client.clearBotOrder("otto", "acme", "acme:work", "unlock", stamp)).rejects.toThrow(
-      CONNECTION_CHANGED,
-    );
+    await expect(
+      client.clearBotOrder("otto", "acme", "acme:work", "unlock", stamp),
+    ).rejects.toThrow(CONNECTION_CHANGED);
     expect(a.gateway.calls("models.authOrderSet")).toEqual([]);
     expect(b.gateway.calls("models.authOrderSet")).toEqual([]);
     expect(b.orders.otto?.acme).toEqual(["acme:work"]);
@@ -402,7 +421,11 @@ describe("F-592: the answer's wait", () => {
         if (method === "models.authStatus") return view();
         if (method === "config.get")
           return {
-            config: { agents: { entries: { otto: { model: { primary: "acme/dev-1@acme:work", fallbacks: [] } } } } },
+            config: {
+              agents: {
+                entries: { otto: { model: { primary: "acme/dev-1@acme:work", fallbacks: [] } } },
+              },
+            },
           };
         if (method === "models.authOrderSet") {
           waits.push(options?.timeoutMs);
