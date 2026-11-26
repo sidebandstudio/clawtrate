@@ -499,8 +499,15 @@ export class DeviceApprovals {
       null) as RawRecord | null;
   }
 
+  /**
+   * No pick for a request this host can't record a pick for: with sixteen spent requests still
+   * waiting, a new wrong pick would go unrecorded and allow a second, so none is taken.
+   */
+  private full(requestId: string): boolean {
+    return !this.spent.has(requestId) && this.spent.size >= MAX_DEVICE_REQUESTS;
+  }
+
   private spend(requestId: string): void {
-    if (this.spent.size >= MAX_DEVICE_REQUESTS) return;
     this.spent.add(requestId);
     this.patch({
       requests: this.state.requests.map((request) =>
@@ -521,7 +528,7 @@ export class DeviceApprovals {
     const shown = this.shown(requestId);
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
-    if (shown.blocked || shown.spent || !shown.choices.includes(code))
+    if (shown.blocked || shown.spent || this.full(requestId) || !shown.choices.includes(code))
       return { kind: "not-allowed" };
     if (code !== pairCode(shown.publicKey)) {
       this.spend(requestId);
@@ -559,16 +566,16 @@ export class DeviceApprovals {
    * On another connection than the approval's, nothing is read or removed: unknown.
    */
   private async check(shown: DeviceRequest, same: () => boolean): Promise<DeviceDecision> {
-    let device: RawRecord | null;
+    let read: { device: RawRecord | null } | null;
     try {
-      device = await this.readPaired(shown.deviceId);
+      read = await this.readPairedOn(shown.deviceId, same);
     } catch {
       return { kind: "unknown" };
     } finally {
       void this.read();
     }
-    if (!same()) return { kind: "unknown" };
-    // Approved, but not listed as paired: what the gateway holds isn't known.
+    // Another connection, or approved but not listed as paired: what the gateway holds isn't known.
+    const device = read?.device;
     if (!device) return { kind: "unknown" };
     const what = pairedDifferences(shown, device);
     if (what.length === 0) return { kind: "approved", deviceId: shown.deviceId };
@@ -580,7 +587,14 @@ export class DeviceApprovals {
           message: "The connection changed before Clawtrate could remove it.",
         };
       await this.ctx.request("device.pair.remove", { deviceId: shown.deviceId });
-      if (await this.readPaired(shown.deviceId))
+      const again = await this.readPairedOn(shown.deviceId, same);
+      if (!again)
+        return {
+          kind: "undo-failed",
+          what,
+          message: "The connection changed before Clawtrate could confirm the removal.",
+        };
+      if (again.device)
         return { kind: "undo-failed", what, message: "The gateway still lists the device." };
       return { kind: "undone", what };
     } catch (error) {
@@ -595,10 +609,23 @@ export class DeviceApprovals {
       null) as RawRecord | null;
   }
 
+  /**
+   * The paired device as read on the decision's own connection: null when that connection is
+   * gone, before the read or by its answer, so nothing read on another gateway decides.
+   */
+  private async readPairedOn(
+    deviceId: string,
+    same: () => boolean,
+  ): Promise<{ device: RawRecord | null } | null> {
+    if (!same()) return null;
+    const device = await this.readPaired(deviceId);
+    return same() ? { device } : null;
+  }
+
   /** The approval's answer was lost: read what the gateway did, and check it as for an answer. */
   private async afterLost(shown: DeviceRequest, same: () => boolean): Promise<DeviceDecision> {
     try {
-      if (same() && (await this.readPaired(shown.deviceId))) return this.check(shown, same);
+      if ((await this.readPairedOn(shown.deviceId, same))?.device) return this.check(shown, same);
     } catch {
       // Not readable either: unknown.
     }
@@ -616,6 +643,7 @@ export class DeviceApprovals {
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
     if (why === "none-match") {
+      if (this.full(requestId)) return { kind: "not-allowed" };
       this.spend(requestId);
       return { kind: "none-match" };
     }

@@ -424,11 +424,12 @@ An earlier version of this section had the approver type a 16-character code and
 - **The request's own code.** The app reads `device.pair.list` again. If the request is gone: "This request is no longer pending." If its key, device id, roles, scopes or origin differ from what was shown, or it became a repair: nothing is approved, and the sheet says what changed. Otherwise `device.pair.approve {requestId}`. An "unknown requestId" answer is "no longer pending"; any other refusal is said as the gateway said it.
 - **Afterwards.** The app reads the paired device. Its key, its roles (exactly `operator`), its scopes and its one live operator token's scopes must be exactly what was shown. Then: "Approved. The device connects in a moment." If any differs, the app removes the pairing at once (`device.pair.remove`) and says what differed; if the removal fails, it says so and where to remove it.
 - **An answer that was lost** is read back the same way: a paired device is checked as above; otherwise "Clawtrate didn't get the gateway's answer, so it can't say whether the device was approved."
-- **Another code** approves nothing: "That isn't this request's code, so nothing was approved." That request takes no other pick on this device. "Deny it" lets the device ask again.
+- **Another code** approves nothing: "That isn't this request's code, so nothing was approved." That request takes no other pick on this device. "Deny it" lets the device ask again. While sixteen requests whose pick approved nothing still wait, no other request takes a pick on this device, so none goes unrecorded.
 - **"None of these match"** sends nothing: "Nothing was approved." "Deny it" follows.
 - **"I didn't start this"** calls `device.pair.reject`: "Denied. The device can ask again."
 - **After a denial** a device on the shared token learns of it on its next connect, which files one more request as it stops (§4). That request is listed, but for five minutes a request from that device doesn't open the sheet by itself on this host.
 - **Several windows and hosts.** Each decision reads the list again, so another window's or host's decision, an expiry or a supersession ends as "no longer pending". The app never names who decided.
+- **One connection.** Every read and write of a decision goes on the connection the sheet was read on. If it changes before the approval is sent, nothing is approved; after, nothing more is read or removed there, and the result is "not known".
 
 ### The waiting device
 

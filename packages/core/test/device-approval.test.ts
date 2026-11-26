@@ -395,6 +395,62 @@ describe("a connection that changes during a decision", () => {
     expect(t.calls).not.toContain("device.pair.remove");
   });
 
+  /** A new connection without admin: its hello reads nothing, so every later read is the decision's. */
+  const reconnect = (t: Awaited<ReturnType<typeof listed>>) => {
+    t.setAdmin(false);
+    t.engine.onHello();
+  };
+  const readsAfter = (t: Awaited<ReturnType<typeof listed>>, method: string) =>
+    t.calls.slice(t.calls.lastIndexOf(method) + 1).filter((call) => call === "device.pair.list");
+
+  it("reads nothing on a new connection after the approval's answer", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.approve"] = () => {
+      t.gw.paired = [pairedOf(row)];
+      reconnect(t);
+      return {};
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "unknown",
+    });
+    expect(readsAfter(t, "device.pair.approve")).toEqual([]);
+  });
+
+  it("reads nothing on a new connection after a lost answer", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.approve"] = () => {
+      t.gw.paired = [pairedOf(row)];
+      reconnect(t);
+      throw new Error("connection closed");
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "unknown",
+    });
+    expect(readsAfter(t, "device.pair.approve")).toEqual([]);
+  });
+
+  it("doesn't confirm a removal on a new connection", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.approve"] = () => {
+      t.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+      return {};
+    };
+    t.answers["device.pair.remove"] = () => {
+      t.gw.paired = [];
+      reconnect(t);
+      return {};
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "undo-failed",
+      what: ["access"],
+      message: "The connection changed before Clawtrate could confirm the removal.",
+    });
+    expect(readsAfter(t, "device.pair.remove")).toEqual([]);
+  });
+
   it("checks and removes nothing on another connection than the approval's", async () => {
     const row = pendingRow();
     const t = await listed([row]);
@@ -454,6 +510,28 @@ describe("the waiting requests", () => {
     t.advance(5_000);
     t.engine.onEvent("device.pair.requested", { requestId: "new" });
     expect(t.delays()).toEqual([0]);
+  });
+
+  it("takes no pick once sixteen spent requests still wait, so none goes unrecorded", async () => {
+    const spent = Array.from({ length: 16 }, (_, i) => pendingRow(newKey(), { ts: i }));
+    const t = await listed(spent);
+    for (const row of spent)
+      expect(await t.engine.refuse(row.requestId as string, "none-match")).toEqual({
+        kind: "none-match",
+      });
+    const fresh = pendingRow(newKey(), { ts: 100 });
+    t.gw.pending = [...spent, fresh];
+    await t.engine.refresh();
+    const id = fresh.requestId as string;
+    expect(t.state().requests.map((each) => each.requestId)).toContain(id);
+    expect(await t.engine.approve(id, wrongOf(t, fresh), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(await t.engine.approve(id, codeOf(fresh), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(await t.engine.refuse(id, "none-match")).toEqual({ kind: "not-allowed" });
+    expect(t.calls).not.toContain("device.pair.approve");
   });
 
   it("keeps a pick spent while its request is past the sixteen shown", async () => {
