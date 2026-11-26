@@ -28,7 +28,13 @@ import { Rail } from "./Rail.tsx";
 import { summarize, useSelection } from "./selection.ts";
 import { useShowCommands } from "./preferences.ts";
 import { unreadCount } from "./unread.ts";
-import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
+import {
+  liveFlags,
+  refreshNoteShown,
+  StatusStrip,
+  stripFor,
+  useSyncPhase,
+} from "./StatusStrip.tsx";
 import { updatingHere, updatingStripWords } from "./bots/update-words.ts";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
@@ -85,7 +91,6 @@ export function Shell({
   railTop,
   onOpenSettings,
   inert = false,
-  onCaughtUp,
 }: {
   state: ClawtrateState;
   info: HostInfo;
@@ -99,8 +104,6 @@ export function Shell({
   onOpenSettings: (section?: SettingsSection) => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
-  /** Whether the open task has caught up since the latest connect: until then work is last seen. */
-  onCaughtUp?: (caughtUp: boolean) => void;
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
@@ -761,12 +764,9 @@ export function Shell({
     [runs, backShown, goBackToFile, setPanel, setWorkTab],
   );
   const phase = useSyncPhase(state, taskKey);
-  // Connected is not caught up: until bots, tasks and the open task have
-  // loaded again after a drop, what is on screen is last seen.
-  const caughtUp = state.connection.status === "connected" && phase !== "dropped";
-  useEffect(() => {
-    onCaughtUp?.(caughtUp);
-  }, [caughtUp, onCaughtUp]);
+  // Connected is not caught up: until the open task has loaded again after a
+  // drop, its live work is last seen. That says nothing about the connection.
+  const { connected: online, current } = liveFlags(state, phase, taskKey);
   // Access arriving reconnects with the new grant: "Access granted" is the
   // news then, unless something failed.
   const connectionStrip = stripFor(state, phase, taskKey);
@@ -930,13 +930,13 @@ export function Shell({
                       />
                     )
                   }
-                  refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+                  refreshNote={refreshNoteShown(state, phase, transcript)}
                   interactive={interactive}
                   connection={state.connection}
                   info={info}
                   granted={granted}
-                  online={state.connection.status === "connected"}
-                  caughtUp={caughtUp}
+                  online={online}
+                  current={current}
                   toggleRef={toggleRef}
                   inert={drawerOpen || inert}
                   onShowComputer={showComputer}

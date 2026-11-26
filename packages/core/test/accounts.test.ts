@@ -35,7 +35,7 @@ import { gatewayStamp } from "../src/types.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { AccountsEngine, identityFile } from "../src/accounts-engine.ts";
+import { ACCOUNTS_READ_CUT_OFF, AccountsEngine, identityFile } from "../src/accounts-engine.ts";
 import { initialAccountsState, modelIdProblem, type AccountsState } from "../src/accounts.ts";
 import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
 import { FAST, stampOn, URL_A } from "./client-harness.ts";
@@ -44,10 +44,13 @@ import {
   deferred,
   GatewayError,
   memoryStorage,
+  sleep,
   testHost,
   tokenKey,
   until,
 } from "./fake-gateway.ts";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { readAgain } from "../src/read-again.ts";
 
 const binding = (state: ClawtrateState["accounts"], botId: string) =>
   state.bindings.find((each) => each.botId === botId)!;
@@ -209,11 +212,18 @@ describe("the Model menu's lists", () => {
   });
 
   /** The engine alone on the fake gateway, so a test can reset it while a read is answered. */
-  function engineOn(fake: AccountsGateway) {
+  function engineOn(
+    fake: AccountsGateway,
+    options: {
+      connected?: () => boolean;
+      readAgain?: <T>(read: () => Promise<T>, current: () => boolean) => Promise<T>;
+    } = {},
+  ) {
     let state: AccountsState = initialAccountsState;
     const engine = new AccountsEngine({
       request: (method, params) =>
         Promise.resolve().then(() => fake.gateway.handlers[method]!(params)),
+      readAgain: options.readAgain ?? ((read) => read()),
       get: () => state,
       update: (change) => {
         state = change(state);
@@ -222,7 +232,7 @@ describe("the Model menu's lists", () => {
         { id: "main", name: "main", isDefault: true, avatarUrl: null },
         { id: "otto", name: "otto", isDefault: false, avatarUrl: null },
       ],
-      connected: () => true,
+      connected: options.connected ?? (() => true),
       admin: () => true,
       refreshBots: () => Promise.resolve(),
       gateway: () => Promise.resolve("gateway-a"),
@@ -268,6 +278,35 @@ describe("the Model menu's lists", () => {
     entries.otto!.model = { primary: "acme/dev-1", fallbacks: [] };
     await engine.load();
     expect(state().bindings.find((b) => b.botId === "otto")).toMatchObject({ suffixLost: false });
+  });
+
+  it("#592: a settings read whose connection closes while it waits to be asked again asks nothing more, and publishes none of that connection's words", async () => {
+    const fake = new AccountsGateway();
+    let connected = true;
+    let asked = 0;
+    const config = fake.gateway.handlers["config.get"]!;
+    fake.gateway.handlers["config.get"] = (params) => {
+      asked += 1;
+      if (asked === 1)
+        throw new GatewayProtocolRequestError({
+          code: "UNAVAILABLE",
+          message: "busy reading clawtrate-dev-key.acme.work",
+        });
+      return config(params);
+    };
+    const { engine, state } = engineOn(fake, {
+      connected: () => connected,
+      readAgain: (read, current) => readAgain(read, current, { firstMs: 40 }),
+    });
+    const loading = engine.load();
+    await until(() => asked === 1);
+    connected = false;
+    await loading;
+    await sleep(80);
+    expect(asked).toBe(1);
+    // Not left loading, and nothing the gateway said is shown.
+    expect(state()).toMatchObject({ status: "error", error: ACCOUNTS_READ_CUT_OFF });
+    expect(JSON.stringify(state())).not.toContain("clawtrate-dev-key");
   });
 
   it("F-478: the default bot's model list answered after a gateway switch publishes nothing", async () => {
